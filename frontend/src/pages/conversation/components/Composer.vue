@@ -1,0 +1,342 @@
+<template>
+  <div class="composer panel">
+    <!-- 附件标签：展示在输入框上方，可移除 -->
+    <div v-if="attachments.length" class="atts">
+      <span v-for="a in attachments" :key="a.id" class="att">
+        <span class="att-name ellipsis">{{ a.name }}</span>
+        <span class="att-size num faint">{{ formatSize(a.size) }}</span>
+        <button type="button" class="att-x" title="移除" @click="removeAtt(a.id)">×</button>
+      </span>
+    </div>
+
+    <textarea
+      ref="inputEl"
+      v-model="text"
+      class="input"
+      rows="3"
+      :placeholder="placeholder"
+      :disabled="disabled"
+      @keydown="onKeydown"
+    />
+
+    <div class="bar">
+      <div class="left">
+        <label class="tool" :class="{ disabled }" title="添加附件">
+          <el-icon><Paperclip /></el-icon><span>附件</span>
+          <input
+            type="file"
+            class="hidden-file"
+            multiple
+            accept=".docx,.txt,.md,.pptx,.pdf"
+            :disabled="disabled"
+            @change="onPickFiles"
+          />
+        </label>
+        <el-popover placement="top-start" :width="320" trigger="click">
+          <template #reference>
+            <button type="button" class="tool" :disabled="disabled">
+              <el-icon><MagicStick /></el-icon><span>提示词</span>
+            </button>
+          </template>
+          <div class="prompts">
+            <div class="micro muted">点击插入到输入框（提示词库接口尚未接入，此处为本地示例）</div>
+            <button
+              v-for="p in LOCAL_PROMPTS"
+              :key="p.title"
+              type="button"
+              class="prompt-item"
+              @click="insertPrompt(p.body)"
+            >
+              <div class="prompt-title">{{ p.title }}</div>
+              <div class="prompt-body micro muted">{{ p.body }}</div>
+            </button>
+          </div>
+        </el-popover>
+        <label v-if="showThinking" class="tool check">
+          <input v-model="thinking" type="checkbox" :disabled="disabled" />
+          <span>思考模式</span>
+        </label>
+      </div>
+
+      <div class="right">
+        <span class="micro muted hint">Enter 发送 · Shift+Enter 换行</span>
+        <el-button
+          v-if="generating"
+          size="small"
+          type="danger"
+          plain
+          @click="emit('stop')"
+        >停止</el-button>
+        <el-button
+          v-else
+          size="small"
+          type="primary"
+          :disabled="disabled || !text.trim()"
+          @click="submit"
+        >发送</el-button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, watch } from 'vue'
+import { MagicStick, Paperclip } from '@element-plus/icons-vue'
+import type { AttachmentDraft } from '../composables/useChatSession'
+
+const props = defineProps<{
+  generating: boolean
+  disabled?: boolean
+  placeholder?: string
+  showThinking?: boolean
+  thinking?: boolean
+}>()
+
+const emit = defineEmits<{
+  send: [text: string, attachments: AttachmentDraft[]]
+  stop: []
+  'update:thinking': [value: boolean]
+}>()
+
+const text = ref('')
+const attachments = ref<AttachmentDraft[]>([])
+const inputEl = ref<HTMLTextAreaElement>()
+const thinking = ref(props.thinking ?? false)
+
+watch(thinking, (v) => emit('update:thinking', v))
+watch(
+  () => props.thinking,
+  (v) => {
+    if (typeof v === 'boolean') thinking.value = v
+  }
+)
+
+/** 本地示例提示词。契约里暂无提示词库列表接口，见报告「契约缺口」 */
+const LOCAL_PROMPTS = [
+  {
+    title: '风险清单',
+    body: '请逐条列出风险点，标注依据编号，并给出可执行的修改建议。'
+  },
+  {
+    title: '对比摘要',
+    body: '请对比两段内容的差异，并用表格总结。'
+  },
+  {
+    title: '通俗解释',
+    body: '请用非技术人员能听懂的语言解释以下概念，并举一个工作中的例子。'
+  }
+]
+
+function insertPrompt(body: string) {
+  text.value = text.value ? `${text.value}\n${body}` : body
+  inputEl.value?.focus()
+}
+
+function formatSize(size: number): string {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function onPickFiles(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = input.files
+  if (!files?.length) return
+  for (const file of Array.from(files)) {
+    attachments.value.push({
+      id: `att_${Date.now().toString(36)}_${attachments.value.length}`,
+      name: file.name,
+      size: file.size
+    })
+  }
+  input.value = ''
+}
+
+function removeAtt(id: string) {
+  attachments.value = attachments.value.filter((a) => a.id !== id)
+}
+
+function submit() {
+  const value = text.value.trim()
+  if (!value || props.generating) return
+  emit('send', value, attachments.value)
+  text.value = ''
+  attachments.value = []
+}
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    e.preventDefault()
+    submit()
+  }
+}
+
+/** 推荐问题点击后填入并发送 */
+function sendText(value: string) {
+  text.value = value
+  submit()
+}
+
+defineExpose({ sendText, focus: () => inputEl.value?.focus() })
+</script>
+
+<style scoped>
+.composer {
+  padding: var(--space-sm) var(--space-md) var(--space-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+  background: var(--color-sunken);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius);
+}
+
+.composer:focus-within {
+  border-color: var(--color-accent);
+}
+
+.atts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+}
+
+.att {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  background: var(--color-surface);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius);
+  padding: var(--space-3xs) var(--space-xs);
+  font-size: var(--text-2xs);
+  max-width: 220px;
+}
+
+.att-name {
+  max-width: 140px;
+}
+
+.att-x {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-muted);
+  font-size: var(--text-md);
+  line-height: 1;
+  padding: 0 var(--space-3xs);
+}
+
+.att-x:hover {
+  color: var(--color-danger);
+}
+
+.input {
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+  color: var(--color-ink);
+  background: transparent;
+  min-height: 56px;
+  padding: 0;
+}
+
+.input::placeholder {
+  color: var(--color-faint);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+
+.left,
+.right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.tool {
+  border: none;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: var(--text-2xs);
+  font-family: inherit;
+  cursor: pointer;
+  padding: var(--space-3xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  position: relative;
+  transition:
+    background var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
+}
+
+.tool:hover:not(.disabled) {
+  background: var(--color-hover);
+  color: var(--color-ink-2);
+}
+
+.tool.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tool.check {
+  cursor: pointer;
+}
+
+.hidden-file {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.hint {
+  margin-right: var(--space-2xs);
+}
+
+.prompts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.prompt-item {
+  text-align: left;
+  border: 1px solid var(--color-rule);
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  padding: var(--space-xs) var(--space-sm);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color var(--dur-micro) var(--ease-out);
+}
+
+.prompt-item:hover {
+  border-color: var(--color-accent-line);
+}
+
+.prompt-title {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.prompt-body {
+  margin-top: var(--space-3xs);
+  line-height: var(--leading-tight);
+}
+</style>

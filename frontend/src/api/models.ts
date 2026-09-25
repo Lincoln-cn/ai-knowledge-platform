@@ -1,0 +1,117 @@
+import { request } from '@/lib/http'
+import type { PageQuery, PageResult } from './types'
+
+/* ────────────────────────── 契约类型 ────────────────────────── */
+
+/** 模型能力三态，决定界面开关如何呈现（思考模式） */
+export type ThinkingMode = 'NONE' | 'TOGGLEABLE' | 'ALWAYS_ON'
+/** 工具调用能力三态。MVP 只声明不接口（V1.0 才可用） */
+export type ToolsMode = 'UNSUPPORTED' | 'SUPPORTED' | 'PARALLEL'
+export type ModelKind = 'chat' | 'embedding'
+export type ModelStatus = '未加载' | '加载中' | '已加载' | '加载失败'
+export type Supplier = '本地推理' | '外部API'
+
+export interface ModelInfo {
+  id: string
+  name: string
+  kind: ModelKind
+  supplier: Supplier
+  /** 基础模型名，同一基础模型可注册多份配置 */
+  baseModel: string
+  status: ModelStatus
+  /** 对话模型：上下文窗口；向量模型为 null */
+  contextWindow: number | null
+  /** 向量模型：输出维度；对话模型为 null。维度与向量表绑定，改则需全量重灌 */
+  dimension: number | null
+  thinking: ThinkingMode
+  tools: ToolsMode
+  /** 是否内置（硬编码不可删） */
+  builtin: boolean
+  remark?: string
+}
+
+/** 从供应商拉取到的可注册基础模型 */
+export interface BaseModelOption {
+  baseModel: string
+  kind: ModelKind
+  supplier: Supplier
+  contextWindow: number | null
+  dimension: number | null
+}
+
+/** 能力探测结果。来源标注是「探测」还是「手工声明」，界面必须区分展示 */
+export interface ModelCapability {
+  thinking: ThinkingMode
+  tools: ToolsMode
+  contextWindow: number | null
+  dimension: number | null
+  source: '探测' | '手工声明'
+}
+
+export interface ProbeBaseModelBody {
+  baseModel: string
+  supplier: Supplier
+  kind: ModelKind
+}
+
+export interface ModelQuery extends PageQuery {
+  kind?: ModelKind
+  status?: ModelStatus
+}
+
+export interface UpsertModelBody {
+  name: string
+  kind: ModelKind
+  supplier: Supplier
+  baseModel: string
+  apiBase?: string
+  apiKey?: string
+  /** 向量维度必须显式下发 */
+  dimension?: number | null
+  thinking?: ThinkingMode
+  tools?: ToolsMode
+  remark?: string
+}
+
+/* ────────────────────────── 接口 ────────────────────────── */
+
+export const listModels = (query: ModelQuery = {}) =>
+  request<PageResult<ModelInfo>>({ method: 'GET', url: '/models', query })
+
+export const listBaseModels = (query: { supplier?: Supplier; kind?: ModelKind } = {}) =>
+  request<BaseModelOption[]>({ method: 'GET', url: '/models/base-models', query })
+
+export const createModel = (body: UpsertModelBody) =>
+  request<ModelInfo>({ method: 'POST', url: '/models', body })
+
+export const updateModel = (id: string, body: Partial<UpsertModelBody>) =>
+  request<ModelInfo>({ method: 'PUT', url: '/models/:id', path: { id }, body })
+
+export const deleteModel = (id: string) =>
+  request<void>({ method: 'DELETE', url: '/models/:id', path: { id } })
+
+/** 触发加载。加载是异步的，返回时的 status 仍是「加载中」 */
+export const loadModel = (id: string) =>
+  request<ModelInfo>({ method: 'POST', url: '/models/:id/load', path: { id } })
+
+/** 能力探测：探测失败不阻断，可由用户手工声明 */
+export const probeModelCapability = (id: string) =>
+  request<ModelCapability>({ method: 'POST', url: '/models/:id/probe', path: { id } })
+
+/**
+ * 按基础模型探测能力。
+ *
+ * 新建模型时 id 还不存在，但能力必须在保存前就填好，
+ * 所以探测必须能在「未保存」状态下发生 —— 这是从旧实现迁移时发现的缺口。
+ */
+export const probeBaseModelCapability = (body: {
+  baseModel: string
+  supplier: Supplier
+  kind: ModelKind
+}) =>
+  request<ModelCapability>({
+    method: 'POST',
+    url: '/models/probe',
+    body,
+    skipAuthRetry: true
+  })

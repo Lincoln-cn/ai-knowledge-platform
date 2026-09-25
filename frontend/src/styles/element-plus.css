@@ -1,0 +1,367 @@
+/**
+ * element-plus.css —— 令牌桥（**本轮最大的一处收益**）。
+ *
+ * 改造前实测：同屏三种蓝在打架 ——
+ *   · 应用令牌        --brand: #2f6fed        （侧栏、链接）
+ *   · Element Plus 默认 --el-color-primary: #409eff（所有按钮/输入/表格，从未被覆盖）
+ *   · 编排模块孤儿覆盖  --el-color-primary: #3370ff（workflow/styles/element-plus.scss，零处 import）
+ * ⇒ 侧栏是 #2f6fed 而画布节点描边是 #409eff。
+ *
+ * 本文件是全工程**唯一**把 --el-* 映射到 design.md 令牌的地方。
+ * 它必须排在 element-plus/dist/index.css **之后** import（同优先级，后者胜）。
+ *
+ * 纪律：页面不许直接写 --el-* / --el-color-primary —— 那等于绕开这套系统。
+ * 本文件里出现的所有颜色与字体都必须是 var(--token)，不得内联。
+ */
+
+:root {
+  /* ── 主色：唯一信号色 ────────────────────────────────────────────────
+     EP 的 light-N 约定 = 混入 N×10% 白。这里用 color-mix 派生，
+     避免手抄一串十六进制（派生值不会说谎）。 */
+  --el-color-primary: var(--color-accent);
+  --el-color-primary-light-3: color-mix(in oklch, var(--color-accent) 70%, var(--color-surface));
+  --el-color-primary-light-5: color-mix(in oklch, var(--color-accent) 50%, var(--color-surface));
+  --el-color-primary-light-7: color-mix(in oklch, var(--color-accent) 30%, var(--color-surface));
+  --el-color-primary-light-8: color-mix(in oklch, var(--color-accent) 20%, var(--color-surface));
+  --el-color-primary-light-9: color-mix(in oklch, var(--color-accent) 10%, var(--color-surface));
+  --el-color-primary-dark-2: color-mix(in oklch, var(--color-accent) 80%, var(--color-ink));
+
+  /* ── 状态语义 ────────────────────────────────────────────────────── */
+  --el-color-success: var(--color-ok);
+  --el-color-success-light-3: color-mix(in oklch, var(--color-ok) 70%, var(--color-surface));
+  --el-color-success-light-5: color-mix(in oklch, var(--color-ok) 50%, var(--color-surface));
+  --el-color-success-light-7: color-mix(in oklch, var(--color-ok) 30%, var(--color-surface));
+  --el-color-success-light-8: color-mix(in oklch, var(--color-ok) 20%, var(--color-surface));
+  --el-color-success-light-9: color-mix(in oklch, var(--color-ok) 10%, var(--color-surface));
+  --el-color-success-dark-2: color-mix(in oklch, var(--color-ok) 80%, var(--color-ink));
+
+  --el-color-warning: var(--color-warn);
+  --el-color-warning-light-3: color-mix(in oklch, var(--color-warn) 70%, var(--color-surface));
+  --el-color-warning-light-5: color-mix(in oklch, var(--color-warn) 50%, var(--color-surface));
+  --el-color-warning-light-7: color-mix(in oklch, var(--color-warn) 30%, var(--color-surface));
+  --el-color-warning-light-8: color-mix(in oklch, var(--color-warn) 20%, var(--color-surface));
+  --el-color-warning-light-9: color-mix(in oklch, var(--color-warn) 10%, var(--color-surface));
+  --el-color-warning-dark-2: color-mix(in oklch, var(--color-warn) 80%, var(--color-ink));
+
+  --el-color-danger: var(--color-danger);
+  --el-color-danger-light-3: color-mix(in oklch, var(--color-danger) 70%, var(--color-surface));
+  --el-color-danger-light-5: color-mix(in oklch, var(--color-danger) 50%, var(--color-surface));
+  --el-color-danger-light-7: color-mix(in oklch, var(--color-danger) 30%, var(--color-surface));
+  --el-color-danger-light-8: color-mix(in oklch, var(--color-danger) 20%, var(--color-surface));
+  --el-color-danger-light-9: color-mix(in oklch, var(--color-danger) 10%, var(--color-surface));
+  --el-color-danger-dark-2: color-mix(in oklch, var(--color-danger) 80%, var(--color-ink));
+
+  /* EP 的 error 与 danger 共用一套 */
+  --el-color-error: var(--color-danger);
+  --el-color-error-light-3: var(--el-color-danger-light-3);
+  --el-color-error-light-5: var(--el-color-danger-light-5);
+  --el-color-error-light-7: var(--el-color-danger-light-7);
+  --el-color-error-light-8: var(--el-color-danger-light-8);
+  --el-color-error-light-9: var(--el-color-danger-light-9);
+  --el-color-error-dark-2: var(--el-color-danger-dark-2);
+
+  /* info 走中性 —— 它不该是第五种彩色 */
+  --el-color-info: var(--color-muted);
+  --el-color-info-light-3: color-mix(in oklch, var(--color-muted) 70%, var(--color-surface));
+  --el-color-info-light-5: color-mix(in oklch, var(--color-muted) 50%, var(--color-surface));
+  --el-color-info-light-7: color-mix(in oklch, var(--color-muted) 30%, var(--color-surface));
+  --el-color-info-light-8: color-mix(in oklch, var(--color-muted) 20%, var(--color-surface));
+  --el-color-info-light-9: color-mix(in oklch, var(--color-muted) 10%, var(--color-surface));
+  --el-color-info-dark-2: color-mix(in oklch, var(--color-muted) 80%, var(--color-ink));
+
+  /* ── 文字 ────────────────────────────────────────────────────────── */
+  --el-text-color-primary: var(--color-ink);
+  --el-text-color-regular: var(--color-ink-2);
+  --el-text-color-secondary: var(--color-muted);
+  --el-text-color-placeholder: var(--color-faint);
+  --el-text-color-disabled: var(--color-faint);
+
+  /* ── 线 ──────────────────────────────────────────────────────────── */
+  --el-border-color: var(--color-rule-strong);
+  --el-border-color-light: var(--color-rule);
+  --el-border-color-lighter: var(--color-rule-2);
+  --el-border-color-extra-light: var(--color-rule-2);
+  --el-border-color-dark: var(--color-rule-strong);
+  --el-border-color-darker: var(--color-muted);
+  --el-border-color-hover: var(--color-muted);
+  --el-border-width: 1px;
+
+  /* ── 填充 ────────────────────────────────────────────────────────── */
+  --el-fill-color: var(--color-sunken);
+  --el-fill-color-light: var(--color-sunken);
+  --el-fill-color-lighter: var(--color-hover);
+  --el-fill-color-extra-light: var(--color-paper);
+  --el-fill-color-dark: var(--color-rule);
+  --el-fill-color-darker: var(--color-rule-strong);
+  --el-fill-color-blank: var(--color-surface);
+
+  /* ── 底 ──────────────────────────────────────────────────────────── */
+  --el-bg-color: var(--color-surface);
+  --el-bg-color-page: var(--color-paper);
+  --el-bg-color-overlay: var(--color-surface-2);
+
+  /* ── 禁用 ────────────────────────────────────────────────────────── */
+  --el-disabled-bg-color: var(--color-sunken);
+  --el-disabled-text-color: var(--color-faint);
+  --el-disabled-border-color: var(--color-rule);
+
+  /* ── 遮罩 ────────────────────────────────────────────────────────── */
+  --el-overlay-color: oklch(24% 0.02 258 / 0.6);
+  --el-overlay-color-light: oklch(24% 0.02 258 / 0.45);
+  --el-overlay-color-lighter: oklch(24% 0.02 258 / 0.3);
+  --el-mask-color: oklch(99.4% 0.002 252 / 0.9);
+
+  /* ── 投影：只用两档。深度主要靠线。 ──────────────────────────────── */
+  --el-box-shadow: var(--shadow-float);
+  --el-box-shadow-light: var(--shadow-whisper);
+  --el-box-shadow-lighter: var(--shadow-whisper);
+  --el-box-shadow-dark: var(--shadow-float);
+
+  /* ── 圆角：紧，像用尺子画的 ──────────────────────────────────────── */
+  --el-border-radius-base: var(--radius);
+  --el-border-radius-small: var(--radius-sm);
+  --el-border-radius-round: var(--radius-pill);
+  --el-border-radius-circle: 50%;
+
+  /* ── 字体与字号 ──────────────────────────────────────────────────── */
+  --el-font-family: var(--font-body);
+  --el-font-size-extra-large: var(--text-lg);
+  --el-font-size-large: var(--text-md);
+  --el-font-size-medium: var(--text-sm);
+  --el-font-size-base: var(--text-sm);
+  --el-font-size-small: var(--text-xs);
+  --el-font-size-extra-small: var(--text-2xs);
+  --el-font-weight-primary: 500;
+
+  /* ── 过渡 ────────────────────────────────────────────────────────── */
+  --el-transition-duration: var(--dur-short);
+  --el-transition-duration-fast: var(--dur-micro);
+  --el-transition-duration-medium: var(--dur-long);
+  --el-transition-function-ease-in-out-bezier: var(--ease-in-out);
+  --el-transition-function-fast-bezier: var(--ease-out);
+  --el-transition-all: all var(--dur-short) var(--ease-out);
+  --el-transition-fade: opacity var(--dur-short) var(--ease-out);
+  --el-transition-md-fade: transform var(--dur-short) var(--ease-out),
+    opacity var(--dur-short) var(--ease-out);
+  --el-transition-fade-linear: opacity var(--dur-micro) linear;
+  --el-transition-border: border-color var(--dur-short) var(--ease-out);
+  --el-transition-box-shadow: box-shadow var(--dur-short) var(--ease-out);
+  --el-transition-color: color var(--dur-short) var(--ease-out);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   组件级校正 —— EP 有些地方不读变量，或读变量的方式不符合本系统。
+   只改观感，不改结构、不改交互。
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── 按钮：把 15px 的宽内边距收到 4pt 刻度上，保留 EP 的三档尺寸 ── */
+.el-button {
+  padding-inline: var(--space-sm);
+  font-weight: 500;
+}
+
+.el-button--small {
+  padding-inline: var(--space-xs);
+}
+
+.el-button--large {
+  padding-inline: var(--space-md);
+}
+
+/* 按钮不要 hover 抬升 —— 每个卡片都浮起来是被点名的模板动作。
+   主按钮靠颜色，次按钮靠边线变色。 */
+.el-button:not(.is-disabled):hover {
+  transform: none;
+}
+
+/* ── 表格：表头做成 mono 小标签；去掉 EP 的投影，分面交给发丝线 ── */
+.el-table {
+  --el-table-border-color: var(--color-rule);
+  --el-table-header-bg-color: var(--color-sunken);
+  --el-table-tr-bg-color: var(--color-surface);
+  --el-table-row-hover-bg-color: var(--color-hover);
+  --el-table-header-text-color: var(--color-muted);
+  --el-table-text-color: var(--color-ink-2);
+  font-size: var(--text-xs);
+}
+
+.el-table th.el-table__cell > .cell {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+  color: var(--color-muted);
+}
+
+.el-table th.el-table__cell {
+  font-weight: 500;
+}
+
+/* EP 给表格裹了一层投影做「浮起」，本系统靠线不靠影 */
+.el-table--border,
+.el-table--group {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.el-table__inner-wrapper::before,
+.el-table__inner-wrapper::after {
+  background-color: var(--color-rule);
+}
+
+/* ── 标签：小、方、平，不用彩色填充 ── */
+.el-tag {
+  --el-tag-border-radius: var(--radius-sm);
+  border-color: var(--color-rule-strong);
+  font-weight: 500;
+}
+
+/* ── 输入 / 选择：1px 线 + 6px 圆角；聚焦只换边色与焦点环 ── */
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 1px var(--color-rule-strong) inset;
+  transition: box-shadow var(--dur-micro) var(--ease-out);
+}
+
+.el-input__wrapper:hover,
+.el-textarea__inner:hover,
+.el-select__wrapper:hover {
+  box-shadow: 0 0 0 1px var(--color-muted) inset;
+}
+
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus,
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--color-accent) inset;
+}
+
+/* ── 下拉/气泡：一层容器 + 一条线，不用厚投影 ── */
+.el-popper.is-light {
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-float);
+}
+
+.el-select-dropdown__item.is-selected {
+  color: var(--color-accent);
+  font-weight: 500;
+}
+
+/* ── 弹窗 ── */
+.el-dialog {
+  --el-dialog-border-radius: var(--radius-lg);
+  border: 1px solid var(--color-rule);
+  box-shadow: var(--shadow-float);
+}
+
+.el-dialog__header {
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--color-rule-2);
+  margin-right: 0;
+}
+
+.el-dialog__title {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.el-dialog__footer {
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--color-rule-2);
+}
+
+/* ── 抽屉 ── */
+.el-drawer {
+  --el-drawer-bg-color: var(--color-surface);
+}
+
+.el-drawer__header {
+  margin-bottom: 0;
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--color-rule);
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+/* ── 提示消息：平、有边、无厚影 ── */
+.el-message {
+  --el-message-border-radius: var(--radius);
+  --el-message-bg-color: var(--color-surface-2);
+  border: 1px solid var(--color-rule);
+  box-shadow: var(--shadow-float);
+}
+
+.el-message-box {
+  --el-messagebox-border-radius: var(--radius-lg);
+  border: 1px solid var(--color-rule);
+  padding: var(--space-md);
+}
+
+.el-message-box__title {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+/* ── 分页 ── */
+.el-pagination {
+  --el-pagination-button-bg-color: transparent;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 选项卡：靠下边线，不靠色块 ── */
+.el-tabs__item {
+  font-weight: 500;
+}
+
+.el-tabs__active-bar {
+  background-color: var(--color-accent);
+  height: 1.5px;
+}
+
+/* ── 开关 / 单选 / 复选：用 accent，不用 EP 默认蓝 ── */
+.el-switch.is-checked .el-switch__core {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.el-checkbox__input.is-checked .el-checkbox__inner,
+.el-radio__input.is-checked .el-radio__inner {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.el-checkbox__input.is-checked + .el-checkbox__label,
+.el-radio__input.is-checked + .el-radio__label {
+  color: var(--color-accent);
+}
+
+/* ── 进度条 / 加载 ── */
+.el-progress-bar__inner {
+  background-color: var(--color-accent);
+}
+
+.el-loading-mask {
+  background-color: oklch(99.4% 0.002 252 / 0.7);
+}
+
+/* ── 空数据：EP 的空态插画与本系统「空态只用排版」相冲，压掉图形 ── */
+.el-empty {
+  padding: var(--space-xl) var(--space-md);
+}
+
+.el-empty__image {
+  display: none;
+}
+
+.el-empty__description p {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}

@@ -1,0 +1,874 @@
+// 字体文件未随工程搬入（旧工程的 woff/ttf/eot/otf 不在仓库里），
+// 不声明 @font-face，避免加载样式后打出一堆 404。
+
+// * {
+//     margin: 0;
+//     padding: 0;
+// }
+
+// html {
+//     height: 100%;
+//     box-sizing: border-box;
+// }
+
+// body {
+//     -moz-osx-font-smoothing: grayscale;
+//     -webkit-font-smoothing: antialiased;
+//     font-family: 'PingFang SC', AlibabaPuHuiTi !important;
+//     font-size: 14px;
+//     font-style: normal;
+//     font-weight: 500;
+//     height: 100%;
+//     margin: 0;
+//     padding: 0;
+//     color: var(--app-text-color);
+// }
+
+// #app {
+//     height: 100%;
+// }
+
+// :focus {
+//     outline: none;
+// }
+
+// a:active {
+//     outline: none;
+// }
+
+// a,
+// a:focus,
+// a:hover {
+//     cursor: pointer;
+//     color: inherit;
+//     text-decoration: none;
+// }
+
+// div:focus {
+//     outline: none;
+// }
+
+// ul {
+//     list-style: none;
+//     margin: 0;
+//     padding: 0;
+// }
+
+// /* 滚动条整体部分 */
+// ::-webkit-scrollbar {
+//     width: 6px; // 纵向滚动条宽度
+//     height: 6px; // 横向滚动条高度
+// }
+
+// /* 滑块 */
+// ::-webkit-scrollbar-thumb {
+//     border-radius: 5px;
+// }
+
+// /* 轨道 */
+// ::-webkit-scrollbar-track {
+//     border-radius: 5px;
+//     background-color: transparent;
+// }
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    margin: 0;
+    padding: 0;
+}
+
+.clearfix:after {
+    content: '';
+    display: block;
+    clear: both;
+}
+
+/* 标题阶梯走令牌。h3 旧值 18px 不在八档内，落到 --text-md。 */
+h1 {
+    font-size: var(--text-xl);
+}
+
+h2 {
+    font-size: var(--text-lg);
+    font-weight: 500;
+}
+
+h3 {
+    font-size: var(--text-md);
+}
+
+h4 {
+    font-size: var(--text-md);
+}
+
+h5 {
+    font-size: var(--text-sm);
+    font-weight: 500;
+}
+
+.bold {
+    font-weight: 600;
+}
+
+.lighter {
+    font-weight: 400;
+}
+
+.w-full {
+    width: 100%;
+}
+
+.h-full {
+    height: 100%;
+}
+
+.w-120 {
+    width: 120px;
+}
+
+.w-240 {
+    width: 240px;
+}
+
+.w-280 {
+    width: 280px;
+}
+
+.w-500 {
+    width: 500px;
+}
+
+.max-w-200 {
+    max-width: 200px;
+}
+
+.mt-4 {
+    margin-top: calc(var(--app-base-px) - 4px);
+}
+
+.mt-8 {
+    margin-top: var(--app-base-px);
+}
+
+.mt-12 {
+    margin-top: calc(var(--app-base-px) + 4px);
+}
+
+.mt-16 {
+    margin-top: calc(var(--app-base-px) * 2);
+}
+
+.mt-20 {
+    margin-top: calc(var(--app-base-px) * 2 + 4px);
+}
+
+.mt-24 {
+    margin-top: calc(var(--app-base-px) * 3);
+}
+
+.mb-4 {
+    margin-bottom: calc(var(--app-base-px) - 4px);
+}
+
+.mb-8 {
+    margin-bottom: var(--app-base-px);
+}
+
+.mb-12 {
+    margin-bottom: calc(var(--app-base-px) + 4px);
+}
+
+.mb-16 {
+    margin-bottom: calc(var(--app-base-px) * 2);
+}
+
+.mb-24 {
+    margin-bottom: calc(var(--app-base-px) * 3);
+}
+
+.ml-4 {
+    margin-left: calc(var(--app-base-px) - 4px);
+}
+
+.ml-8 {
+    margin-left: var(--app-base-px);
+}
+
+.ml-12 {
+    margin-left: calc(var(--app-base-px) + 4px);
+}
+
+.ml-16 {
+    margin-left: calc(var(--app-base-px) * 2);
+}
+
+.ml-24 {
+    margin-left: calc(var(--app-base-px) * 3);
+}
+
+.mr-4 {
+    margin-right: calc(var(--app-base-px) - 4px);
+}
+
+.mr-8 {
+    margin-right: var(--app-base-px);
+}
+
+.mr-12 {
+    margin-right: calc(var(--app-base-px) + 4px);
+}
+
+.mr-16 {
+    margin-right: calc(var(--app-base-px) * 2);
+}
+
+.mr-24 {
+    margin-right: calc(var(--app-base-px) * 3);
+}
+
+.p-8 {
+    padding: var(--app-base-px);
+}
+
+.p-16 {
+    padding: calc(var(--app-base-px) * 2);
+}
+
+.p-24 {
+    padding: calc(var(--app-base-px) * 3);
+}
+
+.p-8-12 {
+    padding: calc(var(--app-base-px)) calc(var(--app-base-px) + 4px);
+}
+
+.p-12-16 {
+    padding: calc(var(--app-base-px) + 4px) calc(var(--app-base-px) * 2);
+}
+
+.p-12-24 {
+    padding: calc(var(--app-base-px) + 4px) calc(var(--app-base-px) * 3);
+}
+
+.p-16-24 {
+    padding: calc(var(--app-base-px) * 2) calc(var(--app-base-px) * 3);
+}
+
+.pt-0 {
+    padding-top: 0;
+}
+
+
+.float-right {
+    float: right;
+}
+
+.flex {
+    display: flex;
+}
+
+.flex-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.flex-between {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.flex-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-content: space-between;
+}
+
+.align-center {
+    align-items: center;
+}
+
+.align-baseline {
+    align-items: baseline;
+}
+
+.justify-center {
+    justify-content: center;
+}
+
+.text-left {
+    text-align: left;
+}
+
+.text-center {
+    text-align: center;
+}
+
+.text-right {
+    text-align: right;
+}
+
+.vertical-middle {
+    vertical-align: middle;
+}
+
+.line-height-22 {
+    line-height: 22px;
+}
+
+.border {
+    border: 1px solid var(--el-border-color);
+}
+
+.border-l {
+    border-left: 1px solid var(--el-border-color);
+}
+
+.border-b {
+    border-bottom: 1px solid var(--el-border-color);
+}
+
+.border-r {
+    border-right: 1px solid var(--el-border-color);
+}
+
+.border-t {
+    border-top: 1px solid var(--el-border-color);
+}
+
+.border-b-light {
+    border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.border-r-4 {
+    border-radius: 4px;
+}
+
+.border-t-dashed {
+    border-top: 1px dashed var(--el-border-color);
+}
+
+.border-primary {
+    border: 1px solid var(--el-color-primary);
+    color: var(--el-color-primary);
+}
+
+.border-none {
+    border: none;
+}
+
+.cursor {
+    cursor: pointer;
+}
+
+.notAllowed {
+    cursor: not-allowed;
+}
+
+/*
+  超出省略号
+*/
+
+/*
+  ⚠️ 这里**故意不定义 `.ellipsis`**。
+  新工程的 `styles/index.css` 已经有一份（`overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap`），而本文件是按页懒加载、**后注入**，同优先级下会把它盖掉。
+  旧版这里写的是 `display:inline-block; max-width:130px` —— 那是旧工程窄栏布局的
+  遗留：`inline-block` 会顶掉使用方的 `display:flex`，`max-width:130px` 会把
+  应用名/介绍/模型名（以及跟在名字后面的类型标签）一整行都卡在 130px，
+  而卡片宽 330px ⇒ 六个模块 21 处出现截断。
+  通用工具类一旦与宿主工程重名，就是这种「看不见的覆盖」。
+*/
+
+/*
+  双行/单行超出省略号 —— ⚠️ 这两条**已收归宿主**（`src/styles/index.css`）。
+  原先它们只在本文件里，而本文件是按页懒加载的 ⇒ 别的页面借用 `.ellipsis-2`
+  在「没访问过编排页」的会话里就是失效的（`assistants/Index.vue` 正是这种情况）。
+  宿主必须自带自己用到的类，故此处删除，语义完全一致，调用点零改动。
+  同 `.ellipsis` 的处理见上方。
+*/
+
+.break-all {
+    word-break: break-all;
+}
+
+.pre-wrap {
+    white-space: pre-wrap;
+}
+
+/*
+  内容部分 自适应高度
+*/
+.main-calc-height {
+    height: var(--app-main-height);
+    box-sizing: border-box;
+}
+
+/*
+  标题前带竖线样式
+*/
+.title-decoration-1 {
+    position: relative;
+    padding-left: var(--space-sm);
+
+    &:before {
+        position: absolute;
+        left: 2px;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 2px;
+        height: 80%;
+        content: '';
+        background: var(--color-accent);
+    }
+}
+
+/* tag */
+.default-tag {
+    background: var(--el-color-primary-light-8);
+    color: var(--el-color-primary);
+    border: none;
+}
+
+.danger-tag {
+    background: var(--tag-danger-bg);
+    color: var(--color-danger);
+    border: none;
+}
+
+.success-tag {
+    background: var(--tag-success-bg);
+    color: var(--el-color-success);
+    border: none;
+}
+
+.warning-tag {
+    background: var(--tag-warning-bg);
+    color: var(--el-color-warning);
+    border: none;
+}
+
+.info-tag {
+    background: var(--app-text-color-light-1);
+    color: var(--app-text-color-secondary);
+    border: none;
+}
+
+/* 旧版是一套紫/蓝专用色（#f2ebfe / #7f3bf5 / #3370ff …）。
+   本系统只有一个信号色，两档都并到 accent 族，靠 soft/line 区分深浅。 */
+.purple-tag {
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    border-color: var(--color-accent-line);
+}
+
+.blue-tag {
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    border-color: var(--color-accent-line);
+}
+
+/*
+  card 无边框无阴影 灰色背景
+*/
+.card-never {
+    background: var(--app-layout-bg-color);
+    border: none;
+}
+
+/*
+   图标旋转90度
+*/
+.rotate-90 {
+    transform: rotateZ(90deg);
+}
+
+.rotate-180 {
+    transform: rotateZ(180deg);
+}
+
+/*
+  表格第一行插入自定义行
+*/
+.table-quick-append {
+    background: var(--color-surface);
+
+    .el-table__append-wrapper {
+        position: absolute;
+        top: 0;
+        border-bottom: var(--el-table-border);
+        width: 100%;
+        height: 49px;
+        box-sizing: border-box;
+        align-items: center;
+        display: flex;
+        padding: 0 12px;
+        background: var(--color-surface);
+        cursor: pointer;
+        z-index: 2;
+
+        &:hover {
+            background: var(--color-hover);
+            z-index: 1;
+        }
+    }
+
+    .el-table__body {
+        margin-top: 49px;
+    }
+}
+
+// checkbox-group 文字在左 input在右
+.app-custom-checkbox-group {
+    line-height: normal;
+
+    .el-checkbox__label {
+        display: none;
+    }
+}
+
+/*
+  头像渐变背景
+*/
+/* 头像底色：紫/蓝/绿/灰四块专用色并到本系统色阶。
+   紫与蓝旧值都是品牌色相，统一走 accent；绿走 ok；灰走 faint。 */
+.avatar-gradient {
+    background: var(--app-avatar-gradient-color);
+}
+
+.avatar-light {
+    background: var(--color-accent-soft);
+}
+
+.avatar-purple {
+    background: var(--color-accent);
+}
+
+.avatar-blue {
+    background: var(--color-accent);
+}
+
+.avatar-green {
+    background: var(--color-ok);
+}
+
+.avatar-grey {
+    background: var(--color-faint);
+}
+
+.success {
+    color: var(--el-color-success);
+}
+
+.danger {
+    color: var(--el-color-danger);
+}
+
+.warning {
+    color: var(--el-color-warning);
+}
+
+.primary {
+    color: var(--el-color-primary);
+}
+
+.info {
+    color: var(--el-color-info);
+}
+
+.color-secondary {
+    color: var(--app-text-color-secondary);
+}
+
+.layout-bg {
+    background: var(--app-layout-bg-color);
+}
+
+.white-bg {
+    background: var(--color-surface);
+}
+
+.app-warning-icon {
+    font-size: var(--text-md);
+    color: var(--app-text-color-secondary);
+}
+
+.dotting {
+    display: inline-block;
+    width: 10px;
+    min-height: 2px;
+    padding-right: 2px;
+    margin-left: 2px;
+    padding-left: 2px;
+    border-left: 2px solid currentColor;
+    border-right: 2px solid currentColor;
+    background-color: currentColor;
+    background-clip: content-box;
+    box-sizing: border-box;
+    -webkit-animation: dot 0.8s infinite step-start both;
+    animation: dot 0.8s infinite step-start both;
+
+    &:before {
+        content: '...';
+    }
+
+    &::before {
+        content: '';
+    }
+}
+
+@-webkit-keyframes dot {
+    25% {
+        border-color: transparent;
+        background-color: transparent;
+    }
+
+    50% {
+        border-right-color: transparent;
+        background-color: transparent;
+    }
+
+    75% {
+        border-right-color: transparent;
+    }
+}
+
+@keyframes dot {
+    25% {
+        border-color: transparent;
+        background-color: transparent;
+    }
+
+    50% {
+        border-right-color: transparent;
+        background-color: transparent;
+    }
+
+    75% {
+        border-right-color: transparent;
+    }
+}
+
+.file-List-card {
+    border-radius: 4px;
+
+    .el-card__body {
+        padding: 8px 16px 8px 12px;
+    }
+}
+
+.card__radio {
+    width: 100%;
+    display: block;
+    line-height: 22px;
+
+    .el-radio {
+        white-space: break-spaces;
+        width: 100%;
+        height: 100%;
+        line-height: 22px;
+        color: var(--app-text-color);
+    }
+
+    :deep(.el-radio__label) {
+        padding-left: 30px;
+        width: 100%;
+    }
+
+    :deep(.el-radio__input) {
+        position: absolute;
+        top: 16px;
+    }
+
+    .active {
+        border: 1px solid var(--el-color-primary);
+    }
+
+    .el-card__body {
+        padding: calc(var(--app-base-px) + 4px) calc(var(--app-base-px) * 2);
+    }
+}
+
+// AI模型选择：添加模型hover样式
+.select-model {
+    .el-select-dropdown__footer {
+        &:hover {
+            background-color: var(--el-fill-color-light);
+        }
+    }
+
+    .model-icon {
+        width: 20px;
+    }
+
+    .check-icon {
+        position: absolute;
+        right: 10px;
+    }
+}
+
+// 段落card
+.paragraph-source-card {
+    height: 210px;
+    width: 100%;
+
+    .active-button {
+        position: absolute;
+        right: 16px;
+        top: 16px;
+    }
+}
+
+// 分段 dialog
+// .paragraph-dialog {
+//     padding: 0;
+
+//     .el-scrollbar {
+//         height: auto !important;
+//     }
+
+//     .el-dialog__header {
+//         padding: 16px 24px;
+//     }
+
+//     .el-dialog__body {
+//         border-top: 1px solid var(--el-border-color);
+//     }
+
+//     .el-dialog__footer {
+//         padding: 16px 24px;
+//         border-top: 1px solid var(--el-border-color);
+//     }
+
+//     .title {
+//         color: var(--app-text-color);
+//     }
+// }
+
+// card 选中样式
+.selected {
+    border: 1px solid var(--el-color-primary) !important;
+
+    &:before {
+        content: '';
+        position: absolute;
+        right: 0;
+        top: 0;
+        border: 14px solid var(--el-color-primary);
+        border-bottom-color: transparent;
+        border-left-color: transparent;
+    }
+
+    &:after {
+        content: '';
+        width: 3px;
+        height: 6px;
+        position: absolute;
+        right: 5px;
+        top: 2px;
+        border: 2px solid var(--color-surface);
+        border-top-color: transparent;
+        border-left-color: transparent;
+        transform: rotate(35deg);
+    }
+
+    &:hover {
+        border: 1px solid var(--el-color-primary);
+    }
+}
+
+.app-card {
+    background: var(--color-surface);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-whisper);
+}
+
+.app-radio-button-group {
+    border: 1px solid var(--app-border-color-dark);
+    border-radius: var(--el-border-radius-base);
+
+    .el-radio-button {
+        padding: 3px;
+    }
+
+    .el-radio-button__inner {
+        border: none !important;
+        border-radius: var(--el-border-radius-base) !important;
+        padding: 5px 8px;
+        font-weight: 400;
+    }
+
+    .el-radio-button__original-radio:checked+.el-radio-button__inner {
+        color: var(--el-color-primary) !important;
+        background: var(--el-color-primary-light-9) !important;
+        border: none !important;
+        box-shadow: none !important;
+        font-weight: 500;
+    }
+}
+
+// 自定义主题
+.custom-header {
+    background: var(--el-color-primary-light-9) !important;
+}
+
+.edit-avatar {
+    position: relative;
+
+    .edit-mask {
+        position: absolute;
+        left: 0;
+        background: color-mix(in oklch, var(--color-ink) 40%, transparent);
+    }
+}
+
+.record-tip-confirm {
+    max-width: 800px !important;
+}
+
+//企业微信
+.wwLogin_qrcode_head {
+    padding: 20px 0 !important;
+}
+
+/*
+  节点配置面板的表单纪律 —— 全局注入（节点是独立 Vue 子应用，scoped 进不去）。
+  标签 12px / 输入 14px / 垂直节奏走 --space-*，17 种节点共用这一套。
+*/
+.workflow-node-container {
+    .el-form-item {
+        margin-bottom: var(--space-md);
+    }
+
+    .el-form-item__label {
+        font-size: var(--text-2xs);
+        font-weight: 500;
+        line-height: var(--leading-tight);
+        color: var(--color-muted);
+        padding-bottom: var(--space-2xs);
+    }
+
+    .el-form-item__content {
+        font-size: var(--text-sm);
+        line-height: var(--leading-tight);
+        color: var(--color-ink-2);
+    }
+
+    /* 「节点设置 / 参数输出」小节标题：accent 左竖条改发丝，避免彩色左条反模式 */
+    .title-decoration-1 {
+        padding-left: var(--space-sm);
+
+        &:before {
+            left: 0;
+            transform: none;
+            width: 2px;
+            height: 1em;
+            background: var(--color-accent);
+            border-radius: var(--radius-xs);
+        }
+    }
+}

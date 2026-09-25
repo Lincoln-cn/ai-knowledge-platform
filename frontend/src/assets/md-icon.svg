@@ -1,0 +1,32 @@
+<svg width="32.000000" height="32.000000" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+	<desc>
+			Created with Pixso.
+	</desc>
+	<defs>
+		<filter id="filter_861_208_dd" x="4.180176" y="5.418457" width="22.651367" height="21.227539" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+			<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+			<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+			<feOffset dx="0" dy="2"/>
+			<feGaussianBlur stdDeviation="1.33333"/>
+			<feComposite in2="hardAlpha" operator="out" k2="-1" k3="1"/>
+			<feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.25 0"/>
+			<feBlend mode="normal" in2="BackgroundImageFix" result="effect_dropShadow_1"/>
+			<feBlend mode="normal" in="SourceGraphic" in2="effect_dropShadow_1" result="shape"/>
+		</filter>
+		<clipPath id="clip861_203">
+			<rect id="画板 128" rx="6.000000" width="32.000000" height="32.000000" transform="translate(0.000000 -3.000000)" fill="white" fill-opacity="0"/>
+		</clipPath>
+		<clipPath id="clip861_202">
+			<rect id="画板 128" rx="6.000000" width="32.000000" height="32.000000" fill="white" fill-opacity="0"/>
+		</clipPath>
+	</defs>
+	<rect id="画板 128" rx="6.000000" width="32.000000" height="32.000000" fill="#535353" fill-opacity="1.000000"/>
+	<g clip-path="url(#clip861_202)">
+		<rect id="画板 128" rx="6.000000" width="32.000000" height="32.000000" transform="translate(0.000000 -3.000000)" fill="#C9C9C9" fill-opacity="1.000000"/>
+		<g clip-path="url(#clip861_203)">
+			<g filter="url(#filter_861_208_dd)">
+				<path id="M" d="M10.05 7.43L8.18 20.64L10.3 20.64L11.7 10.56L13.56 19.09Q13.65 19.55 13.86 19.79Q13.89 19.82 13.91 19.84Q14.13 20.03 14.49 20.05L15.63 20.05L20.25 10.67L18.83 20.64L20.95 20.64L22.83 7.41L19.79 7.41L15.16 16.81L13.25 8.19Q13.18 7.81 12.95 7.62Q12.72 7.43 12.33 7.43L10.05 7.43Z" fill="#FFFFFF" fill-opacity="1.000000" fill-rule="evenodd"/>
+			</g>
+		</g>
+	</g>
+</svg>

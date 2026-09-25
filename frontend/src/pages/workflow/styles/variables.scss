@@ -1,0 +1,55 @@
+:root {
+  /* 编排模块局部变量。值一律指向 design.md 令牌 —— 这一层只是「旧调用点的别名」，
+     不是第二套色板。历史上这里是 26 处内联 hex（#f5f6f7 / #1f2329 / #3370FF…），
+     与宿主 `src/styles/element-plus.css` 的令牌桥并行，就是「同屏三种蓝」的来源之一。 */
+  --app-base-px: var(--space-xs); /* 8px */
+  --app-layout-bg-color: var(--color-paper);
+  --app-text-color: var(--color-ink);
+  /* 10% ink 叠加：hover 底 / 淡阴影色。用 color-mix 保持语义，不写死 rgba */
+  --app-text-color-light-1: color-mix(in oklch, var(--color-ink) 10%, transparent);
+  --app-text-color-secondary: var(--color-muted);
+  --app-text-color-disable: var(--color-faint);
+  --app-input-color-placeholder: var(--color-faint);
+  --app-view-padding: var(--space-lg);
+  --app-view-bg-color: var(--color-surface);
+  --app-border-color-dark: var(--color-rule-strong);
+  --md-bk-hover-color: var(--el-border-color-hover);
+  /** header 组件 */
+  --app-header-height: 56px;
+  --app-header-padding: 0 var(--space-lg);
+  /* 旧值是三段彩色渐变（#ebf1ff/#e5fbf8/#f2ebfe）—— 渐变在本系统里是禁止项。
+     调试抽屉顶栏改为凹槽纯色，靠下边线分面。 */
+  --app-header-bg-color: var(--color-sunken);
+  --app-logo-color: var(--color-accent);
+  /* 旧值是紫→蓝渐变。头像底色改为唯一信号色纯色，不再拉渐变。 */
+  --app-avatar-gradient-color: var(--color-accent);
+
+  /* 计算高度 */
+  --app-main-height: calc(100vh - var(--app-header-height) - var(--app-view-padding) * 2 - 40px);
+
+  /** sidebar 组件 */
+  --sidebar-bg-color: var(--color-surface);
+  --sidebar-width: 240px;
+  /** tag */
+  --tag-default-bg: var(--color-accent-soft);
+  --tag-default-color: var(--color-accent);
+  --tag-success-bg: var(--color-ok-soft);
+  --tag-success-color: var(--color-ok);
+  --tag-warning-bg: var(--color-warn-soft);
+  --tag-warning-color: var(--color-warn);
+  --tag-danger-bg: var(--color-danger-soft);
+
+  /** card */
+  --card-width: 330px;
+  --card-min-height: 166px;
+  --card-min-width: 220px;
+
+  /** setting */
+  --setting-left-width: 280px;
+
+  /** dataset */
+  --create-dataset-height: calc(var(--app-main-height) - 70px);
+
+  /** ai-chat —— 旧值是淡蓝→淡青→灰的多段渐变，改为浮层纯色 */
+  --dialog-bg-gradient-color: var(--color-surface);
+}

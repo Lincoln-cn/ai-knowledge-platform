@@ -1,0 +1,207 @@
+/**
+ * tokens.css —— design.md 的机器可读镜像。
+ *
+ * 这是可移植的那一份：把本文件连同 src/styles/fonts.css 与 src/assets/fonts/ 搬到别的工程，
+ * 就能拿到同一套设计系统（令牌名不变）。运行时入口是 src/styles/index.css，它 @import 本文件。
+ *
+ * 纪律：**页面里的每一个颜色和每一个 font-family 都必须写成 var(--token)。**
+ * 需要新值时，先在这里加一个具名令牌，再去引用 —— 不许在页面里内联 OKLCH / 十六进制（那是系统腐烂的起点）。
+ */
+
+:root {
+  /* ── 表面 ─────────────────────────────────────────────────────────────
+     冷调近白，全部带 252 色相的微量彩度 —— 没有纯白，没有零彩度灰。 */
+  --color-paper: oklch(97.4% 0.004 252); /* 画布底 */
+  --color-surface: oklch(99.4% 0.002 252); /* 卡面 / 浮层（比画布亮一档） */
+  --color-surface-2: oklch(99.8% 0.001 252); /* 压在最上层的浮层：抽屉、弹窗 */
+  --color-sunken: oklch(95.8% 0.005 252); /* 凹槽：表头、输入框、代码块 */
+  --color-hover: oklch(96.8% 0.006 252); /* 行 / 项 hover */
+
+  /* ── 发丝线 ───────────────────────────────────────────────────────────
+     分面靠它，不靠投影。 */
+  --color-rule: oklch(90.5% 0.008 252); /* 主界线 */
+  --color-rule-2: oklch(94% 0.006 252); /* 内部次分隔 */
+  --color-rule-strong: oklch(85% 0.01 252); /* 输入框边、需要更清楚的界线 */
+
+  /* ── 文字 ─────────────────────────────────────────────────────────── */
+  --color-ink: oklch(24% 0.02 258); /* 标题 / 主文本 */
+  --color-ink-2: oklch(38% 0.017 257); /* 正文 */
+  --color-muted: oklch(56% 0.013 256); /* 次要说明、标签 */
+  --color-faint: oklch(68% 0.01 255); /* 占位符、禁用 */
+
+  /* ── 唯一信号色 ──────────────────────────────────────────────────────
+     任一视口用量 ≤ 5%。 */
+  --color-accent: oklch(58% 0.2 256);
+  --color-accent-hover: oklch(52% 0.21 256);
+  --color-accent-ink: oklch(99% 0.005 256);
+  --color-accent-soft: oklch(96% 0.028 256); /* 选中行底 */
+  --color-accent-line: oklch(88% 0.055 256); /* 选中边 */
+  --color-focus: oklch(58% 0.2 256); /* 焦点环 = accent */
+
+  /* ── 状态语义 ────────────────────────────────────────────────────────
+     只用于标签、圆点、行内文字。绝不做大面积填充。 */
+  --color-ok: oklch(55% 0.115 158);
+  --color-ok-soft: oklch(96.5% 0.03 158);
+  --color-warn: oklch(62% 0.13 72);
+  --color-warn-soft: oklch(96.5% 0.035 72);
+  --color-danger: oklch(55% 0.17 27);
+  --color-danger-soft: oklch(96.5% 0.03 27);
+
+  /* ── 深色石墨拍子 ────────────────────────────────────────────────────
+     一页只许出现一次（登录页左栏、公开页页头）。 */
+  --color-graphite: oklch(22% 0.016 260);
+  --color-graphite-2: oklch(27% 0.018 260);
+  --color-graphite-ink: oklch(93% 0.008 260);
+  --color-graphite-muted: oklch(66% 0.012 258);
+  --color-graphite-rule: oklch(33% 0.016 260);
+
+  /* ── 投影 ────────────────────────────────────────────────────────────
+     只用两档。深度主要靠线，投影只是浮层的一点提示。 */
+  --shadow-whisper: 0 1px 2px oklch(24% 0.02 258 / 0.05);
+  --shadow-float: 0 4px 16px oklch(24% 0.02 258 / 0.08);
+
+  /* ── 字体 ───────────────────────────────────────────────────────────
+     Latin 面在前、CJK 面在后 ⇒ 浏览器逐字形回退。
+     见 src/assets/fonts/README.md 与 design.md § Typography。 */
+  --font-cjk: 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'Source Han Sans SC',
+    'Noto Sans CJK SC', sans-serif;
+  --font-display: 'Space Grotesk', var(--font-cjk);
+  --font-body: 'Geist', var(--font-cjk);
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  /* ── 字号阶梯 ────────────────────────────────────────────────────────
+     display 段 1.25 比率；12px 是中文下限。单页最多用 5 档。 */
+  --text-2xs: 0.75rem; /* 12px 元信息 / 密集表格 / mono 标签 */
+  --text-xs: 0.8125rem; /* 13px 次要正文 / 表格 */
+  --text-sm: 0.875rem; /* 14px 正文 / 界面默认 */
+  --text-md: 1rem; /* 16px 强调正文 / 卡片标题 */
+  --text-lg: 1.25rem; /* 20px 区块标题 */
+  --text-xl: 1.5rem; /* 24px 页面标题 */
+  --text-2xl: 2rem; /* 32px 品牌字 */
+  --text-3xl: 2.5rem; /* 40px 仅登录页 */
+
+  /* ── 行高 ────────────────────────────────────────────────────────────
+     ★ 分两档是**必须的**，不是可选优化。
+     第一版只给了 --leading-body: 1.75 并把它套在 body 上，实测后果：
+     编排画布 9 个节点卡各自继承 24.5px 行高（=1.75×14px），
+     每张卡含 3–5 个表单项 ⇒ 节点整体高 1641px，整图被撑到 1004px
+     而可视区只有 795px ⇒ **9 个节点里 2 个被切出可视区**（R26 验收曾是 0）。
+     1.75 对**阅读性正文**是对的（汉字满高、无升降部缓冲），
+     对**表单/表格/节点卡这类密集界面**则是错的 —— 那类界面是"扫"不是"读"。
+
+       --leading-ui    1.6   界面默认：表单、表格、标签、按钮、密集列表
+       --leading-body  1.75  阅读性正文：markdown、消息体、说明段落、提示块（用 `.prose`）
+       --leading-title 1.3   标题
+       --leading-tight 1.5   单行控件内部（配合显式高度用）
+       --leading-display 1.15 display 大字
+     ───────────────────────────────────────────────────────────────────── */
+  --leading-display: 1.15;
+  --leading-title: 1.3;
+  --leading-ui: 1.6;
+  --leading-body: 1.75;
+  --leading-tight: 1.5;
+
+  /* ── 字距 ────────────────────────────────────────────────────────────
+     负字距只许加在纯拉丁 / 数字上 —— 中文会被撞散。 */
+  --tracking-display: -0.02em; /* 仅拉丁 display */
+  --tracking-label: 0.08em; /* mono 全大写小标签 */
+  --tracking-body: 0;
+
+  /* ── 间距（4pt） ──────────────────────────────────────────────────── */
+  --space-3xs: 2px;
+  --space-2xs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 40px;
+  --space-2xl: 64px;
+  --space-3xl: 96px;
+
+  /* ── 圆角（紧，像用尺子画的） ─────────────────────────────────────── */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius: 6px; /* 按钮 / 输入框 / 标签 —— Cobalt 签名 */
+  --radius-lg: 8px; /* 卡片 / 面板 */
+  --radius-pill: 999px; /* 只给头像与圆点 */
+
+  /* ── 动效 ──────────────────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+  --dur-long: 420ms;
+
+  /* ── 层高（六级，不许 freestyle） ─────────────────────────────────── */
+  --z-base: 1;
+  --z-raised: 10;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-modal: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
+  /* 画布内部层 —— LogicFlow 自己把内部覆盖件用到 5000，所以画布里的覆盖件
+     （连线上的删除按钮之类）必须比它高。这一档**只给画布内部件用**，
+     页面级的浮层一律走上面那六档。 */
+  --z-canvas: 6000;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ⚠️ 临时兼容垫片 —— 迁移期专用，**必须删掉**。
+   ═══════════════════════════════════════════════════════════════════════
+
+   本轮把整套令牌词汇改了名（旧工程的名字没有命名空间前缀，无法承载 OKLCH 色阶、
+   字号阶梯、间距刻度、动效令牌四套新东西）：
+
+       旧                      新
+       --brand              →  --color-accent
+       --brand-2            →  --color-accent-hover
+       --brand-soft         →  --color-accent-soft
+       --brand-line         →  --color-accent-line
+       --canvas             →  --color-paper
+       --surface            →  --color-surface
+       --sunken             →  --color-sunken
+       --line               →  --color-rule
+       --line-2             →  --color-rule-2
+       --ink                →  --color-ink
+       --ink-2              →  --color-ink-2
+       --muted              →  --color-muted
+       --ok / --ok-soft     →  --color-ok / --color-ok-soft
+       --warn / --warn-soft →  --color-warn / --color-warn-soft
+       --danger / -soft     →  --color-danger / --color-danger-soft
+       --font               →  --font-body
+       --data               →  --font-mono
+       （--radius / --radius-sm 名字未变）
+
+   改名的那一刻，`src/` 下还有 **350 处**引用着旧名字（实测），
+   而 `var(未定义)` 会让整条声明失效 ⇒ 全工程颜色与间距静默消失。
+   所以先垫一层让树不断，页面在各自的改造批次里逐个迁到新名字。
+
+   ★ 删除触发条件：`python check_design.py --legacy` 报告 **0 处**时，删掉本块。
+     在此之前不要删 —— 也不要在页面里新增任何指向旧名字的引用。
+     留着它超过迁移期，就会变成下一个人不敢删的"历史包袱"。
+     （本工程已有前例：`workflow/styles/element-plus.scss` 就是这样变成孤儿的。）
+   ═══════════════════════════════════════════════════════════════════════ */
+:root {
+  --brand: var(--color-accent);
+  --brand-2: var(--color-accent-hover);
+  --brand-soft: var(--color-accent-soft);
+  --brand-line: var(--color-accent-line);
+  --canvas: var(--color-paper);
+  --surface: var(--color-surface);
+  --sunken: var(--color-sunken);
+  --line: var(--color-rule);
+  --line-2: var(--color-rule-2);
+  --ink: var(--color-ink);
+  --ink-2: var(--color-ink-2);
+  --muted: var(--color-muted);
+  --ok: var(--color-ok);
+  --ok-soft: var(--color-ok-soft);
+  --warn: var(--color-warn);
+  --warn-soft: var(--color-warn-soft);
+  --danger: var(--color-danger);
+  --danger-soft: var(--color-danger-soft);
+  --font: var(--font-body);
+  --data: var(--font-mono);
+}

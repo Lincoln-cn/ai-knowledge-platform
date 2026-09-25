@@ -1,0 +1,4 @@
+// 画布全局样式入口。**必须非 scoped 引入**：
+// LogicFlow 节点跑在独立 Vue 子应用里，拿不到父页 data-v 作用域。
+@use './variables.scss' as *;
+@use './app.scss' as *;

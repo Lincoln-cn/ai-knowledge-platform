@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>知识助理平台</title>
+    <!--
+      首屏底色内联，避免样式表到位前的一帧白闪。
+      值与 tokens.css 的 --color-paper 一致（oklch(97.4% 0.004 252)）。
+      字体不在此处 preload —— 自托管 woff2 与页面同源、单份仅 13–22 KB，
+      font-display: swap 已经够；写死 preload 路径反而会被构建产物哈希打断。
+    -->
+    <style>
+      html {
+        background: oklch(97.4% 0.004 252);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

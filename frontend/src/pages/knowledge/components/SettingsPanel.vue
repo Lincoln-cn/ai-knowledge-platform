@@ -1,0 +1,323 @@
+<template>
+  <div class="settings-panel">
+    <div class="panel form-panel">
+      <h3 class="sec-title">基本信息</h3>
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="96px" class="form">
+        <el-form-item label="名称" prop="name">
+          <el-input v-model="form.name" maxlength="30" show-word-limit :disabled="!canManage" />
+        </el-form-item>
+        <el-form-item label="分类" prop="category">
+          <el-select v-model="form.category" style="width: 220px" :disabled="!canManage">
+            <el-option v-for="c in categories" :key="c.id" :label="c.name" :value="c.name" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="图标">
+          <div class="icon-picks">
+            <button
+              v-for="ic in ICONS"
+              :key="ic"
+              type="button"
+              class="icon-pick"
+              :class="{ on: form.icon === ic }"
+              :disabled="!canManage"
+              @click="form.icon = ic"
+            >{{ ic }}</button>
+          </div>
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="form.description" type="textarea" :rows="3" maxlength="200" show-word-limit :disabled="!canManage" />
+        </el-form-item>
+        <el-form-item label="导入类型">
+          <el-tag size="small" effect="plain">{{ kb.importType === 'local' ? '本地文档' : '在线抓取' }}</el-tag>
+          <span class="hint micro">创建后不可更改（BR-03-01）</span>
+        </el-form-item>
+        <el-form-item label="向量模型">
+          <div class="embedding">
+            <span>{{ kb.embeddingModelName }}</span>
+            <el-tag v-if="kb.embeddingLocked" size="small" type="warning" effect="plain">已锁定</el-tag>
+          </div>
+          <div class="hint micro">
+            <template v-if="kb.embeddingLocked">
+              已有向量化内容，向量模型不可更换（KB-I4）。如需更换请新建知识库。
+            </template>
+            <template v-else>
+              尚无向量化内容，可在下方更换。维度与向量表绑定。
+            </template>
+          </div>
+          <el-select
+            v-if="!kb.embeddingLocked && canManage"
+            v-model="form.embeddingModelId"
+            style="width: 280px; margin-top: 6px"
+            placeholder="更换向量模型"
+          >
+            <el-option v-for="m in embeddingModels" :key="m.id" :label="m.name" :value="m.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="canManage">
+          <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+        </el-form-item>
+      </el-form>
+    </div>
+
+    <div class="panel form-panel">
+      <h3 class="sec-title">检索参数</h3>
+      <el-form label-width="96px" class="form">
+        <el-form-item label="检索模式">
+          <el-radio-group v-model="retrieval.mode" :disabled="!canManage">
+            <el-radio-button value="向量检索">向量</el-radio-button>
+            <el-radio-button value="全文检索">全文</el-radio-button>
+            <el-radio-button value="混合检索">混合</el-radio-button>
+          </el-radio-group>
+          <div class="hint micro">混合模式用 RRF 融合向量与全文结果，召回更稳</div>
+        </el-form-item>
+        <el-form-item label="相似度阈值">
+          <el-slider v-model="retrieval.threshold" :min="0" :max="1" :step="0.05" show-input :disabled="!canManage" style="width: 280px" />
+          <div class="hint micro">先过滤后取 TopN —— 顺序反了会把噪声带进上下文</div>
+        </el-form-item>
+        <el-form-item label="TopN">
+          <el-input-number v-model="retrieval.topN" :min="1" :max="20" :disabled="!canManage" />
+        </el-form-item>
+        <el-form-item label="无引用策略">
+          <el-radio-group v-model="retrieval.noRefStrategy" :disabled="!canManage">
+            <el-radio-button value="拒答">拒答</el-radio-button>
+            <el-radio-button value="自由回答">自由回答</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="canManage">
+          <el-button type="primary" :loading="savingRetrieval" @click="saveRetrieval">保存检索参数</el-button>
+          <el-button @click="loadRetrieval">还原</el-button>
+        </el-form-item>
+      </el-form>
+    </div>
+
+    <div class="panel form-panel danger-zone">
+      <h3 class="sec-title">启停与删除</h3>
+      <div class="row gap-12">
+        <el-button v-if="canManage" size="small" @click="toggleEnabled">
+          {{ kb.enabled ? '停用知识库' : '启用知识库' }}
+        </el-button>
+        <el-button v-if="canManage" size="small" type="danger" @click="remove">删除知识库</el-button>
+        <span class="hint micro">删除会连同文档与分段一并移除，不可恢复</span>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { knowledgeApi, modelsApi, retrievalApi } from '@/api'
+import { ApiError } from '@/api/types'
+import type { KnowledgeBase, KnowledgeCategory } from '@/api/knowledge'
+import type { ModelInfo } from '@/api/models'
+import type { RetrievalParams } from '@/api/retrieval'
+import { PERM } from '@/constants/permissions'
+import { useSessionStore } from '@/stores/session'
+
+const props = defineProps<{ kb: KnowledgeBase }>()
+const emit = defineEmits<{ changed: []; deleted: [] }>()
+
+const session = useSessionStore()
+const canManage = computed(() => session.can(PERM.knowledgeManage))
+
+const ICONS = ['📘', '📗', '📙', '📕', '📒', '📂', '💼', '🏛']
+
+const formRef = ref<FormInstance>()
+const saving = ref(false)
+const savingRetrieval = ref(false)
+const categories = ref<KnowledgeCategory[]>([])
+const embeddingModels = ref<ModelInfo[]>([])
+
+const form = reactive({
+  name: '',
+  category: '',
+  icon: '📘',
+  description: '',
+  embeddingModelId: ''
+})
+
+const retrieval = reactive<RetrievalParams>({
+  mode: '混合检索',
+  threshold: 0.6,
+  topN: 5,
+  noRefStrategy: '拒答'
+})
+
+const rules: FormRules = {
+  name: [{ required: true, message: '请输入知识库名称', trigger: 'blur' }],
+  category: [{ required: true, message: '请选择分类', trigger: 'change' }]
+}
+
+const loadForm = () => {
+  form.name = props.kb.name
+  form.category = props.kb.category
+  form.icon = props.kb.icon
+  form.description = props.kb.description
+  form.embeddingModelId = props.kb.embeddingLocked ? props.kb.embeddingModelId : props.kb.embeddingModelId
+}
+
+const save = async () => {
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
+  saving.value = true
+  try {
+    await knowledgeApi.updateKnowledgeBase(props.kb.id, {
+      name: form.name,
+      category: form.category,
+      icon: form.icon,
+      description: form.description,
+      embeddingModelId: form.embeddingModelId
+    })
+    ElMessage.success('已保存')
+    emit('changed')
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '保存失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+const loadRetrieval = async () => {
+  const params = await retrievalApi.getRetrievalParams(props.kb.id)
+  retrieval.mode = params.mode
+  retrieval.threshold = params.threshold
+  retrieval.topN = params.topN
+  retrieval.noRefStrategy = params.noRefStrategy
+}
+
+const saveRetrieval = async () => {
+  savingRetrieval.value = true
+  try {
+    await retrievalApi.updateRetrievalParams(props.kb.id, {
+      mode: retrieval.mode,
+      threshold: retrieval.threshold,
+      topN: retrieval.topN,
+      noRefStrategy: retrieval.noRefStrategy
+    })
+    ElMessage.success('检索参数已保存')
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '保存失败')
+  } finally {
+    savingRetrieval.value = false
+  }
+}
+
+const toggleEnabled = async () => {
+  const next = !props.kb.enabled
+  if (!next) {
+    await ElMessageBox.confirm(
+      '停用后该知识库不再参与检索。确认停用？',
+      '确认停用知识库',
+      { type: 'warning', confirmButtonText: '停用' }
+    )
+  }
+  await knowledgeApi.setKnowledgeBaseEnabled(props.kb.id, next)
+  ElMessage.success(next ? '已启用' : '已停用')
+  emit('changed')
+}
+
+const remove = async () => {
+  await ElMessageBox.confirm(
+    `删除「${props.kb.name}」将一并移除其全部文档与分段，且不可恢复。确认删除？`,
+    '确认删除知识库',
+    { type: 'warning', confirmButtonText: '删除' }
+  )
+  await knowledgeApi.deleteKnowledgeBase(props.kb.id)
+  ElMessage.success('已删除')
+  emit('deleted')
+}
+
+watch(() => props.kb.id, loadForm)
+
+onMounted(async () => {
+  loadForm()
+  categories.value = await knowledgeApi.listKnowledgeCategories()
+  const models = await modelsApi.listModels({ kind: 'embedding', size: 50 })
+  embeddingModels.value = models.list
+  await loadRetrieval()
+})
+</script>
+
+<style scoped>
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.form-panel {
+  padding: var(--space-md) var(--space-lg);
+}
+
+.sec-title {
+  margin: 0 0 var(--space-md);
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: var(--leading-tight);
+  color: var(--color-ink);
+}
+
+.form {
+  max-width: 560px;
+}
+
+.hint {
+  color: var(--color-muted);
+  line-height: var(--leading-body);
+}
+
+.icon-picks {
+  display: flex;
+  gap: var(--space-2xs);
+  flex-wrap: wrap;
+}
+
+.icon-pick {
+  width: var(--space-xl);
+  height: var(--space-xl);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: var(--text-md);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-micro) var(--ease-out),
+    background var(--dur-micro) var(--ease-out);
+}
+
+.icon-pick:hover {
+  border-color: var(--color-rule-strong);
+  background: var(--color-hover);
+}
+
+.icon-pick.on {
+  border-color: var(--color-accent-line);
+  background: var(--color-accent-soft);
+}
+
+.icon-pick:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.embedding {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--text-sm);
+  line-height: var(--leading-tight);
+}
+
+.danger-zone {
+  border-color: color-mix(in oklch, var(--color-danger) 35%, var(--color-rule));
+}
+
+.danger-zone .sec-title {
+  color: var(--color-danger);
+}
+</style>
