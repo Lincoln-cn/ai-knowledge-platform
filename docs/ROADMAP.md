@@ -60,6 +60,8 @@
 
 ## 阶段 3 · 开源工程化
 
+- [x] **LICENSE 定为 Apache-2.0** + [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) +
+      两份 README 与 `package.json` 的许可字段对齐（✅ 已完成）
 - [ ] **CI**：`vue-tsc` + `build:mock` + 四套 `verify_*.py` + `check_*.py`
       （都是现成的、能直接当 CI 步骤；`check_template_tags.py` 与 `check_design.py` 已支持裸跑）
 - [ ] `docker-compose.yml` + `.env.example`（后端 + pgvector）
@@ -71,13 +73,18 @@
 
 ---
 
-## 需要先拍板：LICENSE 选哪个？
+## LICENSE
 
-- **Apache-2.0** —— 含专利授权条款，企业采用更放心；与已依赖的 LogicFlow 一致
-- **MIT** —— 最宽松、最短，社区最熟
+**已定**：**Apache-2.0** —— `Copyright 2026 Lincoln`，全文见 [`../LICENSE`](../LICENSE)。
 
-两者都允许商用与闭源二次分发。**建议 Apache-2.0**（本项目是平台型、要吸引企业贡献者）。
-需在拍板后再补 `LICENSE` 并同步更新根 `README.md` 的徽章。
+含专利授权条款，允许商用与闭源二次分发。选它而不是 MIT，是因为本项目是**平台型** ——
+预期企业接入内网使用并回馈改动，专利条款能让双方都少一层顾虑（且已依赖的 LogicFlow 同为 Apache-2.0）。
+
+已同步的三处：根 `README.md` 的徽章与「许可证」段 · `frontend/package.json` 的 `license` 字段 ·
+第三方逐项声明 [`../THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md)。
+
+**一处已定的边界**：**不做"内部版 / 开源版"分叉，只维护开源这一个版本**。
+内部参考材料留在本地 `innerdoc/`（被 gitignore，从不进入仓库），不作为第二个版本维护。
 
 ---
 

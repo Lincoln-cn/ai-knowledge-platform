@@ -1,9 +1,15 @@
 {
-  "name": "ai-platform-frontend",
+  "name": "ai-knowledge-platform-frontend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "description": "知识助理平台 · 前端（Vue 3 + Element Plus + Vite + Pinia）",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Lincoln-cn/ai-knowledge-platform.git",
+    "directory": "frontend"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",

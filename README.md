@@ -1,5 +1,8 @@
 # 知识助理平台
 
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/status-frontend%20ready%20%C2%B7%20backend%20planned-lightgrey.svg)](#现在到哪了)
+
 把**企业文档**变成**可问答的知识服务**的平台。
 
 企业里的知识散在合同、制度、报销规定、供应商资料里。想真正用起来，通常要过三关：
@@ -72,7 +75,7 @@ npm run dev          # → http://localhost:5280/
 ## 仓库结构
 
 ```
-ai-plantform/
+ai-knowledge-platform/
 ├─ frontend/     前端工程（Vue 3 + TypeScript + Vite + Element Plus + Pinia）
 ├─ backend/      后端工程（规划中，见 backend/README.md）
 └─ docs/         设计文档
@@ -108,3 +111,18 @@ ai-plantform/
 
 技术选型上有一条明确的取舍：**不用商业基座、不用其 CRUD 模板产物**。
 界面只依赖宽松开源许可的组件（Element Plus、LogicFlow 等），字体自托管（OFL-1.1）。
+
+---
+
+## 许可证
+
+[**Apache-2.0**](LICENSE) —— `Copyright 2026 Lincoln`
+
+含专利授权条款，允许商用与闭源二次分发。选它而不是 MIT，是因为这是个**平台型**项目 ——
+预期会有企业把它接进内网使用并回馈改动，专利条款能让双方都少一层顾虑。
+（顺带一提，编排画布依赖的 LogicFlow 本身就是 Apache-2.0。）
+
+第三方组件的逐项许可（含版本与字体）见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)：
+运行时依赖多为 MIT，`echarts` / `@logicflow/*` 为 Apache-2.0，其渲染引擎 `zrender` 为 BSD-3-Clause；
+三个自托管字面均为 OFL-1.1，中文字形走访客本机字体栈、不引网络字体。
+
