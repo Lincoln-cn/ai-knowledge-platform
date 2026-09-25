@@ -147,7 +147,9 @@ def main() -> int:
             def public_ok():
                 body = goto("/public/pub_ok_demo")
                 check("外部访客" in body or "免登录" in body, "公开页：免登录沉浸页渲染", "")
-                check("侧栏" not in body and "迁移总览" not in body,
+                # ⚠️ 负向断言的「被测词」必须真实存在于壳内页面上，否则恒真。
+                #    R45 起壳内首页是「工作台」（旧词「迁移总览」已全库消失）。
+                check("侧栏" not in body and "工作台" not in body,
                       "公开页：无侧栏（确实挂在顶层而非 shell 下）", "")
 
             def public_expired():

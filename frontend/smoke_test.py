@@ -14,8 +14,43 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 DIST = Path(__file__).resolve().parent / "dist"
+SRC = Path(__file__).resolve().parent / "src"
 PORT = 4205
 BASE = f"http://127.0.0.1:{PORT}/"
+
+
+def assert_dist_fresh() -> None:
+    """先确认 dist/ 不是陈旧产物，否则直接拒跑。
+
+    ⚠️ 本脚本 **serve 的是 dist/，但它不负责构建**。若有人改了 src/ 却没重跑
+    `npm run build:mock`，这里会拿一份旧构建跑完全部断言 —— **并且全绿**。
+
+    实测踩过：dist 比 src 落后 2.5 小时，而 31/31 一路 PASS，
+    其中两条断言甚至在检查一个**已经被删掉的页面**（旧「迁移总览」的 9 行表格）。
+    一个会报假绿的检查比没有检查更坏 —— 它会让人以为自己验过了。
+
+    所以这里宁可拒跑，也不给一份看着漂亮的结果。
+    """
+    if not DIST.exists():
+        raise SystemExit("dist/ 不存在 —— 先跑 `npm run build:mock`（本脚本只用 dist/ 起静态服务）")
+
+    newest_src = max(
+        (p.stat().st_mtime for p in SRC.rglob("*") if p.is_file()),
+        default=0.0,
+    )
+    newest_dist = max(
+        (p.stat().st_mtime for p in DIST.rglob("*") if p.is_file()),
+        default=0.0,
+    )
+    if newest_dist < newest_src:
+        behind = (newest_src - newest_dist) / 60
+        raise SystemExit(
+            f"dist/ 比 src/ 旧 {behind:.0f} 分钟 —— 先跑 `npm run build:mock` 再跑本脚本。\n"
+            f"    （本脚本不构建，只 serve dist/。不检查就会拿旧构建跑出假绿。）"
+        )
+
+
+assert_dist_fresh()
 
 Handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(DIST))
 Handler.log_message = lambda *a, **k: None
@@ -80,40 +115,43 @@ with sync_playwright() as p:
         alert = page.inner_text(".el-alert") if page.locator(".el-alert").count() else ""
         check("不存在" in alert, "账号不存在给出可读原因", alert)
 
-    # ── 4. 正确登录 → 迁移总览 ──
+    # ── 4. 正确登录 → 工作台（产品首页） ──
     def s4():
         page.fill("input[autocomplete='username']", "admin")
         page.fill("input[autocomplete='current-password']", "admin")
         page.click("button:has-text('登录')")
-        page.wait_for_timeout(1400)
+        page.wait_for_timeout(1600)
         body = page.inner_text("body")
-        check("迁移总览" in body, "登录成功进入迁移总览", page.url)
+        check("工作台" in body, "登录成功进入工作台", page.url)
         check("管理员" in body, "登录态来自 /users/me（mock 按令牌识别）", "")
-        rows = page.locator("tbody tr").count()
-        check(rows == 9, "迁移总览列出 9 个目标模块", f"实际 {rows} 行")
+        stats = page.locator(".stat").count()
+        check(stats == 4, "工作台指标条渲染 4 项", f"实际 {stats} 项")
+        apps = page.locator(".app-row").count()
+        check(apps > 0, "工作台列出常用应用", f"实际 {apps} 行")
         rails = page.locator(".rail-item").count()
         check(rails > 0, "侧栏渲染", f"{rails} 项")
 
-    # ── 5. 迁移总览里每个模块的「打开」都必须到得了真实页面 ──
-    #     9 个模块全部迁移完成后，占位页机制已无测试对象；
-    #     改为校验"总览里没有死链、也没有残留占位页"，这是等价且仍然有效的一条。
+    # ── 5. 工作台给出的每个入口都必须到得了真实页面 ──
+    #     原来是验「迁移总览里每个模块的打开」；那一页已被产品首页取代。
+    #     等价且仍然有效的判据是：**工作台上给出来的入口不落空** —— 不死链、不 403。
     def s5():
         page.goto(BASE + "#/", wait_until="networkidle")
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(1300)
         hrefs = page.eval_on_selector_all(
-            "tbody tr a", "els => els.map(e => e.getAttribute('href'))"
+            ".entry, .app-name", "els => els.map(e => e.getAttribute('href'))"
         )
-        check(len(hrefs) == 9, "总览列出 9 个可打开模块", f"实际 {len(hrefs)} 个链接")
+        check(len(hrefs) >= 4, "工作台给出入门入口与常用应用链接", f"实际 {len(hrefs)} 个链接")
         bad = []
         for href in hrefs:
             if not href:
                 continue
             page.goto(BASE + href, wait_until="networkidle")
-            page.wait_for_timeout(850)
+            page.wait_for_timeout(900)
             body = page.inner_text("body")
-            if "尚未迁移" in body or "页面不存在" in body:
+            # 「页面不存在」= 404、「没有访问该页面的权限」= 403
+            if "页面不存在" in body or "没有访问该页面的权限" in body:
                 bad.append(href)
-        check(not bad, "总览每个模块都到得了真实页面（无死链/无残留占位）", f"问题链接: {bad}")
+        check(not bad, "工作台每个入口都到得了真实页面（无死链、无 403）", f"问题链接: {bad}")
 
     # ── 6. 刷新页面 → 登录态仍在，且已迁移页面正常渲染 ──
     def s6():
@@ -180,12 +218,15 @@ with sync_playwright() as p:
               "思考三态在列表可见", "")
 
     def s10b():
-        # 迁移总览是活表：模型管理应已显示「已完成」
-        page.goto(BASE + "#/", wait_until="networkidle")
-        page.wait_for_timeout(1000)
-        row = page.locator("tbody tr", has_text="模型管理").first
-        check("已完成" in row.inner_text(), "迁移总览把模型管理标为已完成", row.inner_text().replace("\n", " "))
-        # 回到模型页，后续步骤都基于它
+        """只做一件事：回到模型页。
+
+        ⚠️ 这里原来还断言「迁移总览把模型管理标为已完成」。那一页已被产品首页取代，
+        而 Playwright 在找不到元素时会**等 30 秒再抛错** ⇒ 这一抛把同函数末尾的
+        「回到 #/models」也跳过了 ⇒ **后面 ⑪–⑯ 六个步骤全部在错的页面上级联超时**。
+
+        教训：一个断言超时不只是"少一条"，当它挡在同一函数里的导航之前，
+        它会连带把后面的步骤全废掉 —— 报出来的 6 个失败里其实只有 1 个是真因。
+        """
         page.goto(BASE + "#/models", wait_until="networkidle")
         page.wait_for_timeout(1300)
 
@@ -265,7 +306,7 @@ with sync_playwright() as p:
 
     step("— 重新登录", relogin)
     step("⑩ 模型管理页面", s10)
-    step("⑩b 迁移总览状态", s10b)
+    step("⑩b 回到模型页", s10b)
     step("⑪ 类型筛选", s11)
     step("⑫ 关键字搜索", s12)
     step("⑬ 加载与自动轮询", s13)
