@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHeader title="模型管理" desc="模型是问答与向量化的底座。能力三态决定界面上开关怎么呈现，不是可选项">
+    <PageHeader title="模型管理" desc="模型是对话与向量化的底座。能力三态决定界面上开关怎么呈现，不是可选项">
       <template #actions>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchList">刷新</el-button>
         <el-button size="small" type="primary" @click="openCreate">添加模型</el-button>

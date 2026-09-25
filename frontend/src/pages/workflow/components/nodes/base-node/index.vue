@@ -27,7 +27,7 @@
                     <div class="flex-between">
                         <div class="flex align-center">
                             <span class="mr-4">文件上传</span>
-                            <el-tooltip effect="dark" content="开启后，问答页面会显示上传文件的按钮。" placement="right">
+                            <el-tooltip effect="dark" content="开启后，对话页面会显示上传文件的按钮。" placement="right">
                                 <WorkFlowIcon iconName="app-warning" class="app-warning-icon"></WorkFlowIcon>
                             </el-tooltip>
                         </div>

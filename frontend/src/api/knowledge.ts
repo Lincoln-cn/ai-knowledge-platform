@@ -1,5 +1,5 @@
 import { request } from '@/lib/http'
-import type { PageQuery, PageResult } from './types'
+import type { Grant, PageQuery, PageResult, ResourceVisibility } from './types'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
@@ -23,6 +23,14 @@ export interface KnowledgeBase {
   segmentCount: number
   charCount: number
   createdAt: string
+  /**
+   * 归属与可见性（07 §3.1 的 `OwnedResource`）。**由后端写入**：创建时自动写
+   * `ownerId = 当前用户` / `visibility = 'private'`，所以契约里没有对应的请求字段。
+   * `ownerId` 不可变 —— 转让是显式动作，不是改个字段。
+   */
+  ownerId?: string
+  visibility?: ResourceVisibility
+  grants?: Grant[]
 }
 
 export interface KnowledgeCategory {
@@ -34,6 +42,8 @@ export interface KnowledgeCategory {
 export interface KnowledgeBaseQuery extends PageQuery {
   category?: string
   enabled?: boolean
+  /** 只看自己名下的（07 §六 阶段 1 的唯一新增查询参数）。不传 = 按数据范围给全部可见的 */
+  mine?: boolean
 }
 
 export interface CreateKnowledgeBaseBody {

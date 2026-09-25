@@ -15,12 +15,21 @@ import { apiKeys, assistants, credentials, sampleBundleDeps, workflowDrafts } fr
 import { models } from '../fixtures/models'
 import { cannedAnswer } from '../fixtures/canned'
 import { promptConfigs } from '../fixtures/prompts'
+import { PERM } from '@/constants/permissions'
+import { currentSubjects, requireVisible, selfId, visiblePredicate } from '../policy'
 
-const findAssistant = (id: string) => {
-  const item = assistants.find((a) => a.id === id)
-  if (!item) throw new ApiError(ErrorCode.NOT_FOUND, '应用不存在')
-  return item
-}
+/**
+ * 单条取数与**写操作前置**共用同一个判定（07 §3.3 硬规矩 1）。
+ * 看不见一律 404（硬规矩 3），不返回 403 —— 403 等于告诉对方"这个 id 存在"。
+ */
+const findAssistant = (id: string, token: string, action: string = PERM.assistantView) =>
+  requireVisible(
+    assistants.find((a) => a.id === id),
+    currentSubjects(token),
+    action,
+    '应用',
+    id
+  )
 
 const modelNameOf = (modelId: string) =>
   models.find((m) => m.id === modelId)?.name ?? ''
@@ -150,14 +159,18 @@ export const assistantRoutes: MockRoute[] = [
   [
     'GET',
     '/assistants',
-    ({ query }) => {
+    ({ query, token }) => {
+      const subjects = currentSubjects(token)
       const keyword = String(query.keyword ?? '')
       const published = query.published === true || query.published === 'true'
       const type = query.type === 'simple' || query.type === 'workflow' ? (query.type as AssistantType) : null
+      // mine=true 只看自己名下的（07 §六 阶段 1 的唯一新增查询参数）
+      const mine = query.mine === true || query.mine === 'true'
 
-      let list = assistants.filter(
-        (a) => !keyword || a.name.includes(keyword) || a.description.includes(keyword)
-      )
+      let list = assistants
+        // 先在数据层过滤再分页：total 必须是"我看得见的条数"
+        .filter(visiblePredicate(subjects, PERM.assistantView, { mine }))
+        .filter((a) => !keyword || a.name.includes(keyword) || a.description.includes(keyword))
       if (query.published !== undefined && query.published !== '') {
         list = list.filter((a) => a.published === published)
       }
@@ -171,7 +184,8 @@ export const assistantRoutes: MockRoute[] = [
   [
     'POST',
     '/assistants',
-    ({ body }) => {
+    ({ body, token }) => {
+      const subjects = currentSubjects(token)
       const input = body as UpsertAssistantBody
       // type 创建时必填且此后不可改（SRS 02 / FR-04）
       if (input.type !== 'simple' && input.type !== 'workflow') {
@@ -207,7 +221,10 @@ export const assistantRoutes: MockRoute[] = [
         quickQuestions: input.quickQuestions,
         callCount: 0,
         tokenCount: 0,
-        satisfaction: null
+        satisfaction: null,
+        // 归属由"后端"写，不从请求体读（07 §六 阶段 1）：ownerId 取主体集合里的本人
+        ownerId: selfId(subjects),
+        visibility: 'private'
       }
       // 引用计数
       for (const pid of created.promptIds) {
@@ -247,7 +264,8 @@ export const assistantRoutes: MockRoute[] = [
   [
     'POST',
     '/assistants/import',
-    ({ body }) => {
+    ({ body, token }) => {
+      const subjects = currentSubjects(token)
       const input = body as {
         bundle: {
           format: string
@@ -293,7 +311,10 @@ export const assistantRoutes: MockRoute[] = [
         quickQuestions: config.quickQuestions,
         callCount: 0,
         tokenCount: 0,
-        satisfaction: null
+        satisfaction: null,
+        // 导入也是新建：归属给导入人，默认 private
+        ownerId: selfId(subjects),
+        visibility: 'private'
       }
       assistants.unshift(created)
       return created
@@ -303,14 +324,14 @@ export const assistantRoutes: MockRoute[] = [
   [
     'GET',
     '/assistants/:id',
-    ({ path }) => findAssistant(path.id)
+    ({ path, token }) => findAssistant(path.id, token)
   ],
 
   [
     'PUT',
     '/assistants/:id',
-    ({ path, body }) => {
-      const app = findAssistant(path.id)
+    ({ path, body, token }) => {
+      const app = findAssistant(path.id, token, PERM.assistantEdit)
       if (app.builtin) {
         throw new ApiError(4006, `「${app.name}」是内置应用，对话设定不可编辑`)
       }
@@ -372,8 +393,8 @@ export const assistantRoutes: MockRoute[] = [
   [
     'DELETE',
     '/assistants/:id',
-    ({ path }) => {
-      const app = findAssistant(path.id)
+    ({ path, token }) => {
+      const app = findAssistant(path.id, token, PERM.assistantEdit)
       if (app.builtin) {
         throw new ApiError(4006, `「${app.name}」是内置应用，不可删除`)
       }
@@ -391,14 +412,14 @@ export const assistantRoutes: MockRoute[] = [
   [
     'GET',
     '/assistants/:id/publish-check',
-    ({ path }) => runPublishCheck(findAssistant(path.id))
+    ({ path, token }) => runPublishCheck(findAssistant(path.id, token))
   ],
 
   [
     'PATCH',
     '/assistants/:id/published',
-    ({ path, body }) => {
-      const app = findAssistant(path.id)
+    ({ path, body, token }) => {
+      const app = findAssistant(path.id, token, PERM.assistantPublish)
       const { published } = body as { published: boolean }
       if (published) {
         const check = runPublishCheck(app)
@@ -419,8 +440,8 @@ export const assistantRoutes: MockRoute[] = [
   [
     'POST',
     '/assistants/:id/debug',
-    ({ path, body }) => {
-      const app = findAssistant(path.id)
+    ({ path, body, token }) => {
+      const app = findAssistant(path.id, token)
       const { question } = body as { question: string }
       if (!question?.trim()) {
         throw new ApiError(4004, '调试问题不能为空')
@@ -442,14 +463,17 @@ export const assistantRoutes: MockRoute[] = [
   [
     'GET',
     '/assistants/:appId/credentials',
-    ({ path }) => ensureCredentials(path.appId)
+    ({ path, token }) => {
+      findAssistant(path.appId, token)
+      return ensureCredentials(path.appId)
+    }
   ],
 
   [
     'POST',
     '/assistants/:appId/credentials',
-    ({ path, body }) => {
-      findAssistant(path.appId)
+    ({ path, body, token }) => {
+      findAssistant(path.appId, token, PERM.assistantEdit)
       const { expiresAt } = body as { expiresAt: string | null }
       const created: AccessCredential = {
         id: `cr${Date.now()}`,
@@ -469,7 +493,8 @@ export const assistantRoutes: MockRoute[] = [
   [
     'PATCH',
     '/assistants/:appId/credentials/:id/enabled',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
+      findAssistant(path.appId, token, PERM.assistantEdit)
       const list = ensureCredentials(path.appId)
       const item = list.find((c) => c.id === path.id)
       if (!item) throw new ApiError(ErrorCode.NOT_FOUND, '访问凭证不存在')
@@ -486,7 +511,8 @@ export const assistantRoutes: MockRoute[] = [
   [
     'POST',
     '/assistants/:appId/credentials/:id/revoke',
-    ({ path }) => {
+    ({ path, token }) => {
+      findAssistant(path.appId, token, PERM.assistantEdit)
       const list = ensureCredentials(path.appId)
       const item = list.find((c) => c.id === path.id)
       if (!item) throw new ApiError(ErrorCode.NOT_FOUND, '访问凭证不存在')
@@ -504,14 +530,17 @@ export const assistantRoutes: MockRoute[] = [
   [
     'GET',
     '/assistants/:appId/api-keys',
-    ({ path }) => ensureApiKeys(path.appId)
+    ({ path, token }) => {
+      findAssistant(path.appId, token)
+      return ensureApiKeys(path.appId)
+    }
   ],
 
   [
     'POST',
     '/assistants/:appId/api-keys',
-    ({ path }) => {
-      findAssistant(path.appId)
+    ({ path, token }) => {
+      findAssistant(path.appId, token, PERM.assistantEdit)
       const created: ApiKeyItem = {
         id: `ak${Date.now()}`,
         key: randToken('sk-ai'),
@@ -529,8 +558,8 @@ export const assistantRoutes: MockRoute[] = [
   [
     'GET',
     '/assistants/:id/export',
-    ({ path, query }) => {
-      const app = findAssistant(path.id)
+    ({ path, query, token }) => {
+      const app = findAssistant(path.id, token)
       const includeDocuments = query.includeDocuments === true || query.includeDocuments === 'true'
       const useMissing = query.demoMissing === true || query.demoMissing === 'true'
       /*

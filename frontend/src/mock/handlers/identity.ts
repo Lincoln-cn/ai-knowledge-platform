@@ -2,15 +2,12 @@ import { ApiError, ErrorCode } from '@/api/types'
 import type { CurrentUser, LoginRequest, User } from '@/api/identity'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
-import { permissions, roles, users } from '../fixtures/identity'
+import { permissions, roles, userFromToken, users } from '../fixtures/identity'
 
 /**
- * 令牌形如 mock_access_u1 —— 与真实 JWT 一样「拿到令牌就能确定是谁」。
- * 不使用模块级变量记登录态：那样一刷新页面登录态就丢了，与真实后端行为不一致。
+ * 「令牌 → 用户」的约定只有一处实现（夹具层），数据权限判定（`mock/policy.ts`）也用它 ——
+ * 两处各写一遍迟早会漂移。
  */
-const userFromToken = (token: string) =>
-  token ? users.find((u) => u.id === token.replace(/^mock_access_/, '')) : undefined
-
 const toCurrentUser = (user: (typeof users)[number]): CurrentUser => ({
   id: user.id,
   username: user.username,

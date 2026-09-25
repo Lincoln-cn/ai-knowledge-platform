@@ -46,7 +46,7 @@
               @keydown="onMenuKeydown($event, itemIndex)"
             >
               <el-icon aria-hidden="true"><component :is="item.icon" /></el-icon>
-              <span class="menu-label">{{ item.label }}</span>
+              <span class="menu-label">{{ navLabel(item, session.dataScope) }}</span>
               <span v-if="activePath === item.path" class="menu-flag">当前</span>
             </router-link>
           </div>
@@ -67,7 +67,7 @@
         <span class="hint-k">K</span>
       </button>
 
-      <el-button type="primary" @click="router.push('/conversation')">开始问答</el-button>
+      <el-button type="primary" @click="router.push('/conversation')">开始对话</el-button>
 
       <el-dropdown @command="onCommand">
         <button class="user">
@@ -104,7 +104,7 @@ import BrandMark from '@/components/BrandMark.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import { APP_TITLE } from '@/config/env'
 import { canReach } from '@/lib/reach'
-import { navGroups } from '@/router/routes'
+import { navGroups, navLabel } from '@/router/routes'
 import { useSessionStore } from '@/stores/session'
 
 const route = useRoute()
@@ -139,8 +139,10 @@ const activeGroup = computed(
 )
 
 /* 菜单只列「进得去」的项。
-   判据走 `canReach()` —— 外壳、命令面板、工作台入口三处共用同一个函数，
+   判据走 `canReach()` —— 外壳、命令面板、403 页、工作台入口共用同一个函数，
    不再各写一份（漂移的表现是「某入口在 A 处隐藏、在 B 处仍可见」）。
+   它同时管两维：权限点（meta.permission）与数据范围（meta.scopeForms，07 §五）——
+   所以消费者看不到「知识库」这一项，而不是进去之后少几个按钮。
    分组空了就连标题一起去掉。 */
 const visibleGroups = computed(() =>
   navGroups

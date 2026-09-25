@@ -1,6 +1,7 @@
 import type { KnowledgeBase, KnowledgeCategory } from '@/api/knowledge'
 import type { DocumentItem, Segment } from '@/api/ingestion'
 import type { RetrievalParams } from '@/api/retrieval'
+import { kbSharedWithChenjun, kbSharedWithUserRole } from './grants'
 
 /**
  * 知识库 / 文档 / 分段 / 检索参数的 mock 数据。
@@ -11,6 +12,8 @@ import type { RetrievalParams } from '@/api/retrieval'
  *  - 超长分段（SEG-I1）与普通分段并存
  *  - 启用/停用知识库、文档、分段
  *  - 空库（用于空态）、已有向量化内容（向量模型锁定 KB-I4）
+ *  - 归属分散在 u1–u4、三种可见性各至少一个（07 §3.1）：这样才验证得出过滤真的生效 ——
+ *    chenjun（普通用户，`dataScope: 'shared'`）看得见 kb1 / kb3 / kb4，看不见 kb2（别人的 private）
  */
 
 const now = '2026-02-13T11:18:37Z'
@@ -37,7 +40,11 @@ export const knowledgeBases: KnowledgeBase[] = [
     documentCount: 4,
     segmentCount: 510,
     charCount: 210800,
-    createdAt: '2026-02-01T09:00:00Z'
+    createdAt: '2026-02-01T09:00:00Z',
+    ownerId: 'u2',
+    // 共享给「普通用户」角色 → 普通用户只读可见
+    visibility: 'shared',
+    grants: kbSharedWithUserRole
   },
   {
     id: 'kb2',
@@ -53,7 +60,10 @@ export const knowledgeBases: KnowledgeBase[] = [
     documentCount: 2,
     segmentCount: 86,
     charCount: 41200,
-    createdAt: '2026-02-03T14:20:00Z'
+    createdAt: '2026-02-03T14:20:00Z',
+    // 别人的 private：只有归属人（u2）与全平台档（ADMIN/KB_OPERATOR/APP_CONFIG）看得见
+    ownerId: 'u2',
+    visibility: 'private'
   },
   {
     id: 'kb3',
@@ -69,7 +79,11 @@ export const knowledgeBases: KnowledgeBase[] = [
     documentCount: 3,
     segmentCount: 220,
     charCount: 98000,
-    createdAt: '2026-02-05T10:30:00Z'
+    createdAt: '2026-02-05T10:30:00Z',
+    ownerId: 'u3',
+    // 共享给 chenjun 本人（`user` 主体，与 kb1 的 `role` 主体并存）→ 演示两种主体都生效
+    visibility: 'shared',
+    grants: kbSharedWithChenjun
   },
   {
     id: 'kb4',
@@ -85,7 +99,10 @@ export const knowledgeBases: KnowledgeBase[] = [
     documentCount: 0,
     segmentCount: 0,
     charCount: 0,
-    createdAt: '2026-02-12T16:00:00Z'
+    createdAt: '2026-02-12T16:00:00Z',
+    // public = 登录用户里人人可见（**不等于免登录**）；持有 knowledge:view 即可见
+    ownerId: 'u1',
+    visibility: 'public'
   }
 ]
 

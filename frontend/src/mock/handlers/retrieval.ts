@@ -1,7 +1,19 @@
 import { ApiError, ErrorCode } from '@/api/types'
 import type { HitItem, HitTestRequest, HitTestResult, RetrievalMode, RetrievalParams } from '@/api/retrieval'
 import type { MockRoute } from '../dispatch'
-import { hitCorpus, retrievalParams } from '../fixtures/knowledge'
+import { hitCorpus, knowledgeBases, retrievalParams } from '../fixtures/knowledge'
+import { PERM } from '@/constants/permissions'
+import { currentSubjects, requireVisible } from '../policy'
+
+/** 检索参数是知识库的一部分：读与写都先问同一个判定（07 §3.3 硬规矩 1） */
+const gateKb = (kbId: string, token: string, action: string) =>
+  requireVisible(
+    knowledgeBases.find((k) => k.id === kbId),
+    currentSubjects(token),
+    action,
+    '知识库',
+    kbId
+  )
 
 /** 不同检索模式的分数偏移与截断策略 —— 让「对比模式」真的能看出差异 */
 const MODE_PROFILE: Record<RetrievalMode, { scoreBoost: number; cutRatio: number; elapsed: number }> = {
@@ -78,13 +90,17 @@ export const retrievalRoutes: MockRoute[] = [
   [
     'GET',
     '/knowledge-bases/:kbId/retrieval',
-    ({ path }) => findParams(path.kbId)
+    ({ path, token }) => {
+      gateKb(path.kbId, token, PERM.knowledgeView)
+      return findParams(path.kbId)
+    }
   ],
 
   [
     'PUT',
     '/knowledge-bases/:kbId/retrieval',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
+      gateKb(path.kbId, token, PERM.knowledgeManage)
       const current = findParams(path.kbId)
       const input = body as Partial<RetrievalParams>
       const next: RetrievalParams = {

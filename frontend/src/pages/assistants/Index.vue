@@ -1,13 +1,15 @@
 <template>
   <div class="page">
     <PageHeader
-      title="应用管理"
-      desc="应用把模型、知识库与提示词组装成可发布的问答服务。简单应用看模型 / 知识库数，编排应用看节点数 / 版本；另有发布态 / 用量 / 满意度"
+      :title="consumer ? '应用广场' : '应用管理'"
+      :desc="consumer
+        ? '这些应用可以直接用来对话。挑一个开始，引用与反馈都在对话页里'
+        : '应用把模型、知识库与提示词组装成可发布的对话服务。简单应用看模型 / 知识库数，编排应用看节点数 / 版本；另有发布态 / 用量 / 满意度'"
     >
       <template #actions>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchList">刷新</el-button>
         <el-button
-          v-if="can(PERM.assistantEdit)"
+          v-if="!consumer && can(PERM.assistantEdit)"
           size="small"
           type="primary"
           @click="openCreate"
@@ -15,10 +17,14 @@
       </template>
     </PageHeader>
 
-    <div class="notice info">
+    <!--
+      操作说明是**建设语汇**的密集地（简单/编排、配置/画布/发布/校验/内置不可改）——
+      对消费者它整块不出现（07 §五 判据 1），而不是留一段读不懂的说明。
+    -->
+    <div v-if="!consumer" class="notice info">
       操作说明：应用分<b>简单</b>（提示词约束）与<b>编排</b>（画布式流程）两档，<b>创建后类型不可改</b>。
       简单应用点<b>配置</b>打开左表单 + 右调试；编排应用点<b>编排</b>进入流程画布（对编排应用而言配置就是画布，所以只有一个入口）；
-      <b>概览</b>看用量、公开凭证、API Key 与导入导出；<b>演示</b>进入问答试效果；<b>发布</b>先跑发布前校验。
+      <b>概览</b>看用量、公开凭证、API Key 与导入导出；<b>演示</b>进入对话试效果；<b>发布</b>先跑发布前校验。
       内置应用不可改对话设定。
     </div>
 
@@ -32,12 +38,27 @@
         @keyup.enter="fetchList"
         @clear="fetchList"
       />
-      <el-select v-model="query.published" size="small" placeholder="全部状态" style="width: 130px" @change="fetchList">
+      <!-- 状态（草稿/已发布）与类型（简单/编排）是建设面的分类，消费者不筛这两个 -->
+      <el-select
+        v-if="!consumer"
+        v-model="query.published"
+        size="small"
+        placeholder="全部状态"
+        style="width: 130px"
+        @change="fetchList"
+      >
         <el-option label="全部状态" value="" />
         <el-option label="已发布" value="true" />
         <el-option label="草稿" value="false" />
       </el-select>
-      <el-select v-model="query.type" size="small" placeholder="全部类型" style="width: 130px" @change="fetchList">
+      <el-select
+        v-if="!consumer"
+        v-model="query.type"
+        size="small"
+        placeholder="全部类型"
+        style="width: 130px"
+        @change="fetchList"
+      >
         <el-option label="全部类型" value="" />
         <el-option label="简单" value="simple" />
         <el-option label="编排" value="workflow" />
@@ -46,14 +67,14 @@
     </div>
 
     <div v-loading="loading" class="grid">
-      <el-card v-for="a in list" :key="a.id" shadow="never" class="app-card">
+      <el-card v-for="a in list" :key="a.id" shadow="never" class="app-card" :class="{ plaza: consumer }">
         <div class="ac-head">
           <span class="ac-icon">{{ a.icon }}</span>
           <div class="ac-title">
             <div class="ac-name-row">
               <span class="h3 ac-name">{{ a.name }}</span>
               <span class="ac-tags">
-                <el-tag size="small" effect="plain" class="ac-type-tag">
+                <el-tag v-if="!consumer" size="small" effect="plain" class="ac-type-tag">
                   {{ a.type === 'workflow' ? '编排' : '简单' }}
                 </el-tag>
                 <el-tag v-if="a.builtin" size="small" effect="plain" type="info">内置</el-tag>
@@ -61,12 +82,17 @@
             </div>
             <div class="micro muted ellipsis-2 ac-desc" :title="a.description">{{ a.description }}</div>
           </div>
-          <el-tag size="small" effect="plain" :type="a.published ? 'success' : 'info'">
+          <el-tag v-if="!consumer" size="small" effect="plain" :type="a.published ? 'success' : 'info'">
             {{ a.published ? '已发布' : '草稿' }}
           </el-tag>
         </div>
 
-        <dl class="ac-facts">
+        <!--
+          「模型 / 知识库数」是配置面，「用量 / 满意度」是运营口径 ——
+          对消费者两者都不是他要看的东西（他要的是「哪个能用」）。
+          所以消费者形态下整块读数不渲染，卡片只剩身份与一个动作。
+        -->
+        <dl v-if="!consumer" class="ac-facts">
           <!--
             编排应用**没有「模型」这一项**（模型在各 AI 节点里，一条流程可以多个），
             所以它的卡片数据与简单应用是两套：
@@ -122,24 +148,31 @@
             对编排应用来说「配置」与「编排」本来就是同一件事 —— 画布就是它的配置面，
             放两个按钮只会让人以为点进去会看到不同的东西。
             主操作（配置/编排）是全卡唯一的 accent 落点，用 primary link。
+            消费者形态下这三个管理动作（配置/概览/发布/删除）都不出现，
+            只剩「开始对话」—— 卡片从"资产条目"变成"能用什么"。
           -->
           <el-button
-            v-if="can(PERM.assistantEdit)"
+            v-if="!consumer && can(PERM.assistantEdit)"
             link size="small"
             type="primary"
             @click="openConfig(a)"
           >{{ a.type === 'workflow' ? '编排' : '配置' }}</el-button>
-          <el-button link size="small" @click="openOverview(a)">概览</el-button>
-          <el-button link size="small" @click="demo(a)">演示</el-button>
+          <el-button v-if="!consumer" link size="small" @click="openOverview(a)">概览</el-button>
           <el-button
-            v-if="can(PERM.assistantPublish)"
+            link
+            size="small"
+            :type="consumer ? 'primary' : undefined"
+            @click="demo(a)"
+          >{{ consumer ? '开始对话' : '演示' }}</el-button>
+          <el-button
+            v-if="!consumer && can(PERM.assistantPublish)"
             link size="small"
             :type="a.published ? 'warning' : 'success'"
             @click="togglePublish(a)"
           >{{ a.published ? '下架' : '发布' }}</el-button>
           <span class="grow" />
           <el-button
-            v-if="can(PERM.assistantEdit) && !a.builtin"
+            v-if="!consumer && can(PERM.assistantEdit) && !a.builtin"
             link size="small" type="danger"
             @click="remove(a)"
           >删除</el-button>
@@ -147,9 +180,21 @@
       </el-card>
 
       <div v-if="!loading && !list.length" class="empty panel">
-        <div class="empty-title">{{ hasFilter ? '当前筛选下没有应用' : '还没有创建任何应用' }}</div>
-        <p class="micro muted">{{ hasFilter ? '换个关键词或清空筛选试试' : '创建第一个应用，开始组装问答服务' }}</p>
-        <el-button v-if="can(PERM.assistantEdit)" size="small" type="primary" @click="openCreate">新建应用</el-button>
+        <div class="empty-title">
+          {{ consumer
+            ? '暂时没有可用的应用'
+            : hasFilter ? '当前筛选下没有应用' : '还没有创建任何应用' }}
+        </div>
+        <p class="micro muted">
+          {{ consumer
+            ? '已经发布的应用会出现在这里，可以拿它直接对话'
+            : hasFilter ? '换个关键词或清空筛选试试' : '创建第一个应用，开始组装对话服务' }}
+        </p>
+        <el-button
+          v-if="!consumer && can(PERM.assistantEdit)"
+          size="small" type="primary"
+          @click="openCreate"
+        >新建应用</el-button>
       </div>
     </div>
 
@@ -187,6 +232,19 @@ import AssistantOverviewDrawer from './components/AssistantOverviewDrawer.vue'
 const router = useRouter()
 const session = useSessionStore()
 const can = (code: string) => session.can(code)
+
+/**
+ * 消费者形态（07 §五）：数据范围 `shared` = 只用别人做好的，不建东西。
+ *
+ * 判据来自 `session.dataScope` **一处**，页面只据此换形态（标题/说明/动作集），
+ * 不在这里另判权限点 —— 权限点回答「能不能做这个动作」，范围回答「这个页面对他是什么」。
+ * 两者会同时为真：消费者本来也没有 `assistant:edit`，但只靠权限点的话，
+ * 页面仍然是「应用管理」那张建设面，只是按钮少几个 —— 那正是本册要治的病。
+ *
+ * ★ 这只是 UX。真正的数据边界在后端按 `dataScope` 过滤（07 §3.3），
+ * 前端少渲染一个按钮不等于后端会拒绝直连接口。
+ */
+const consumer = computed(() => session.dataScope === 'shared')
 
 const list = ref<Assistant[]>([])
 const total = ref(0)
@@ -439,6 +497,12 @@ onMounted(fetchList)
   margin-top: var(--space-sm);
   padding-top: var(--space-xs);
   border-top: 1px solid var(--color-rule-2);
+}
+
+/* 应用广场的卡片没有读数块（那才是建设者要的），得让**卡片头**把剩余高度吃掉 ——
+   否则同一行里描述长短不一会让「开始对话」跳来跳去。 */
+.app-card.plaza .ac-head {
+  flex: 1;
 }
 
 .empty {

@@ -10,14 +10,14 @@
       </div>
       <div class="page-actions">
         <el-button :icon="Refresh" :loading="loading" @click="fetchAll">刷新</el-button>
-        <el-button type="primary" @click="router.push('/conversation')">开始问答</el-button>
+        <el-button type="primary" @click="router.push('/conversation')">开始对话</el-button>
       </div>
     </div>
 
     <!-- 指标条：数字是主角，标签走 mono 小标签 -->
     <div class="stats panel">
       <div class="stat">
-        <span class="stat-k label">问答次数</span>
+        <span class="stat-k label">对话次数</span>
         <span class="stat-v num">{{ fmtCount(overview?.questionCount) }}</span>
       </div>
       <div class="stat">
@@ -53,7 +53,7 @@
         </ul>
         <div v-else class="empty">
           <div class="empty-title">还没有使用记录</div>
-          <span>发布一个应用并问答后，这里会列出最常用的几个</span>
+          <span>发布一个应用并对话后，这里会列出最常用的几个</span>
         </div>
       </section>
 
@@ -111,8 +111,23 @@ import { analyticsApi } from '@/api'
 import type { AnalyticsRange, AssistantRankItem, OverviewMetrics, QualityMetrics } from '@/api/analytics'
 import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/components/InstrumentCard.vue'
 import { canReach } from '@/lib/reach'
+import { navGroups, navLabel } from '@/router/routes'
+import { useSessionStore } from '@/stores/session'
 
 const router = useRouter()
+const session = useSessionStore()
+
+/**
+ * 消费者形态（07 §五）：`shared` 范围 = 只用别人做好的。
+ * 本页对他是「能用什么 + 我该去哪」，不是「平台运营成什么样」。
+ */
+const consumer = computed(() => session.dataScope === 'shared')
+
+/** 「应用广场 / 应用管理」两套叫法只有一处定义，见 `router/routes.ts` 的 `labelByScope` */
+const plazaLabel = computed(() => {
+  const item = navGroups.flatMap((g) => g.items).find((i) => i.path === '/assistants')
+  return item ? navLabel(item, session.dataScope) : '应用广场'
+})
 
 /** 首页固定看近 7 天 —— 需要别的区间去运营看板，那里才是「按区间深看」的地方。 */
 const rangeDays = 7
@@ -148,17 +163,34 @@ const fetchAll = async () => {
 onMounted(fetchAll)
 
 /**
- * 入门入口。**按权限过滤** —— 判据走 `canReach()`（与顶栏、命令面板、路由守卫同源），
+ * 入门入口。**按权限 + 数据范围过滤** —— 判据走 `canReach()`（与顶栏、命令面板、路由守卫同源），
  * 否则无权限的角色会看到通向 403 的入口：那是比「没有入口」更坏的体验。
  */
-const allEntries = [
+const buildEntries = [
   { path: '/knowledge', label: '建知识库', desc: '上传文档、切分入库，供应用检索' },
-  { path: '/assistants', label: '建应用', desc: '把模型、知识库与提示词组装成问答服务' },
-  { path: '/analytics', label: '看运营数据', desc: '问答趋势、应用排行与质量观测' },
+  { path: '/assistants', label: '建应用', desc: '把模型、知识库与提示词组装成对话服务' },
+  { path: '/analytics', label: '看运营数据', desc: '对话趋势、应用排行与质量观测' },
   { path: '/feedback', label: '处理反馈', desc: '用户点赞点踩与处理闭环' }
 ]
 
-const entries = computed(() => allEntries.filter((e) => canReach(router, e.path)))
+/**
+ * 消费者看到的是**另一组入口**，不是同一组里少几项（07 §五 判据 1）。
+ *
+ * 上面四个入口全是「建 / 处理」动作：按 canReach 过滤后消费者只剩「建应用」一项 ——
+ * 那仍然是一个建设入口，读起来还是"工地"。所以整块换成他要的两个动作：去问、看看有什么能用。
+ */
+const consumerEntries = [
+  { path: '/conversation', label: '开始对话', desc: '选一个应用直接提问，答案带引用' },
+  { path: '/assistants', label: '应用广场', desc: '看看现在有哪些应用可以用' }
+]
+
+const entries = computed(() =>
+  (consumer.value ? consumerEntries : buildEntries).map((e) => ({
+    ...e,
+    // 应用广场这一项的叫法与顶栏**同一个来源**（`navLabel`），不在这里再硬编一遍
+    label: e.path === '/assistants' ? plazaLabel.value : e.label
+  })).filter((e) => canReach(router, e.path))
+)
 
 /**
  * 机器回执的读数行 —— 用**本页已经在拉、但此前没展示**的那几个字段：

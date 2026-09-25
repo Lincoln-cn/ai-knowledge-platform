@@ -161,7 +161,7 @@
             <p class="micro muted">
               {{ query.keyword || query.appId || query.status ? '当前筛选下没有反馈' : '还没有任何反馈' }}
             </p>
-            <p class="micro muted">用户在问答页点赞 / 点踩 / 评分后会出现在这里（默认只看待处理）</p>
+            <p class="micro muted">用户在对话页点赞 / 点踩 / 评分后会出现在这里（默认只看待处理）</p>
           </div>
         </template>
       </el-table>

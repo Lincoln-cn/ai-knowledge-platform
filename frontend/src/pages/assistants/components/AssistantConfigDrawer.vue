@@ -8,7 +8,7 @@
   >
     <div class="top-bar">
       <span class="grow micro muted">
-        {{ assistant?.builtin ? '内置应用 · 对话设定只读，仅供问答' : '顶部操作：保存草稿 / 发布' }}
+        {{ assistant?.builtin ? '内置应用 · 对话设定只读，仅供对话' : '顶部操作：保存草稿 / 发布' }}
       </span>
       <el-button
         size="small"

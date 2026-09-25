@@ -1,10 +1,14 @@
 <template>
   <div class="page">
-    <!-- ── 列表态 ── -->
-    <template v-if="!currentKb">
+    <!-- ── 列表态 ──
+         消费者形态（07 §五）：只有卡片，没有详情壳 —— 文档与分段对他不可见（07 §4.2），
+         所以「点进去看」这一层根本不该存在，而不是点进去之后少几块。 -->
+    <template v-if="!openedKb">
       <PageHeader
         title="知识库"
-        desc="知识库是文档、分段与检索的容器。向量模型创建时选定，有向量化内容后锁定"
+        :desc="consumer
+          ? '这些知识库可以被对话直接引用；内容由知识运营维护，你不需要做任何维护动作'
+          : '知识库是文档、分段与检索的容器。向量模型创建时选定，有向量化内容后锁定'"
       >
         <template #actions>
           <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchList">刷新</el-button>
@@ -52,8 +56,8 @@
           :key="kb.id"
           shadow="never"
           class="kb-card"
-          :class="{ off: !kb.enabled }"
-          @click="openDetail(kb.id)"
+          :class="{ off: !kb.enabled, readonly: consumer }"
+          @click="consumer ? undefined : openDetail(kb.id)"
         >
           <div class="kc-head">
             <img
@@ -69,6 +73,7 @@
             </div>
             <span class="grow" />
             <el-switch
+              v-if="!consumer"
               :model-value="kb.enabled"
               size="small"
               @click.stop
@@ -76,27 +81,34 @@
             />
           </div>
 
+          <!-- 消费者只看「有多少文档」，不看分段 / 字数 —— 后两个词属于建设语汇 -->
           <div class="kc-meta micro muted">
             <span><b class="num">{{ kb.documentCount }}</b> 文档</span>
-            <el-divider direction="vertical" />
-            <span><b class="num">{{ kb.segmentCount }}</b> 分段</span>
-            <el-divider direction="vertical" />
-            <span><b class="num">{{ formatChars(kb.charCount) }}</b> 字</span>
+            <template v-if="!consumer">
+              <el-divider direction="vertical" />
+              <span><b class="num">{{ kb.segmentCount }}</b> 分段</span>
+              <el-divider direction="vertical" />
+              <span><b class="num">{{ formatChars(kb.charCount) }}</b> 字</span>
+            </template>
           </div>
 
           <div class="kc-foot">
             <el-tag size="small" effect="plain">{{ kb.category }}</el-tag>
-            <el-tag v-if="kb.embeddingLocked" size="small" type="warning" effect="plain">向量已锁定</el-tag>
+            <el-tag v-if="kb.embeddingLocked && !consumer" size="small" type="warning" effect="plain">向量已锁定</el-tag>
             <span class="grow" />
-            <el-button link size="small" type="danger" @click.stop="remove(kb)">删除</el-button>
+            <el-button v-if="!consumer" link size="small" type="danger" @click.stop="remove(kb)">删除</el-button>
           </div>
         </el-card>
 
         <div v-if="!loading && !list.length" class="empty panel">
           <div class="empty-title">
-            {{ query.keyword || query.category ? '当前筛选下没有知识库' : '还没有知识库' }}
+            {{ consumer
+              ? '暂时没有可用的知识库'
+              : query.keyword || query.category ? '当前筛选下没有知识库' : '还没有知识库' }}
           </div>
-          <p class="micro muted">知识库是文档、分段与检索的容器</p>
+          <p class="micro muted">
+            {{ consumer ? '知识运营发布后，这里会出现可以被对话引用的知识库' : '知识库是文档、分段与检索的容器' }}
+          </p>
           <el-button v-if="canCreate" size="small" type="primary" @click="openCreate">创建第一个知识库</el-button>
         </div>
       </div>
@@ -114,9 +126,9 @@
 
     <!-- ── 详情壳：左菜单 + 内容 ── -->
     <template v-else>
-      <PageHeader :title="currentKb.name" :desc="currentKb.description">
+      <PageHeader :title="openedKb.name" :desc="openedKb.description">
         <template #after-title>
-          <el-tag v-if="!currentKb.enabled" size="small" type="info" effect="plain">已停用</el-tag>
+          <el-tag v-if="!openedKb.enabled" size="small" type="info" effect="plain">已停用</el-tag>
         </template>
         <template #actions>
           <el-button size="small" @click="closeDetail">返回列表</el-button>
@@ -152,21 +164,21 @@
         <main class="content">
           <DocumentPanel
             v-if="activeTab === 'documents'"
-            :kb-id="currentKb.id"
+            :kb-id="openedKb.id"
             @goto-segments="gotoSegments"
           />
           <SegmentPanel
             v-else-if="activeTab === 'segments'"
-            :kb-id="currentKb.id"
+            :kb-id="openedKb.id"
             :initial-document-id="segmentDocId"
           />
           <HitTestPanel
             v-else-if="activeTab === 'hittest'"
-            :kb-id="currentKb.id"
+            :kb-id="openedKb.id"
           />
           <SettingsPanel
             v-else-if="activeTab === 'settings'"
-            :kb="currentKb"
+            :kb="openedKb"
             @changed="onKbChanged"
             @deleted="closeDetail"
           />
@@ -201,6 +213,17 @@ const router = useRouter()
 const session = useSessionStore()
 const canCreate = computed(() => session.can(PERM.knowledgeCreate))
 
+/**
+ * 消费者形态（07 §五）：数据范围 `shared` = 只用别人做好的。
+ *
+ * 判据只有 `session.dataScope` 一处。对消费者，知识库是**只读引用面**：
+ * 没有创建/删除/启停，没有详情壳（文档与分段对他不可见，07 §4.2），
+ * 也不出现「分段 / 向量化 / 上传」这类建设语汇（07 §五 判据 1）。
+ *
+ * ★ 这只是 UX —— 后端按 `dataScope` 过滤列表与写操作前置校验才是边界（07 §3.3）。
+ */
+const consumer = computed(() => session.dataScope === 'shared')
+
 const TABS = [
   { key: 'documents', label: '文档' },
   { key: 'segments', label: '分段' },
@@ -217,6 +240,15 @@ const loading = ref(false)
 const pageSize = 12
 const currentKb = ref<KnowledgeBase | null>(null)
 const segmentDocId = ref<string | undefined>(undefined)
+
+/**
+ * 详情壳（文档 / 分段 / 命中测试 / 设置）里那一个知识库 —— 只有「建设者形态 + 已选中」时非空。
+ *
+ * 消费者即便被直接投喂一个 `?kb=xxx` 深链也只看到列表 —— 否则「入口藏了、URL 还进得去」
+ * 会让他看到满屏建设语汇（07 §五 判据 1），而文档与分段本来就对他不可见（07 §4.2）。
+ * 这里挡的是**页面形态**；数据边界仍在后端。
+ */
+const openedKb = computed(() => (consumer.value ? null : currentKb.value))
 
 const query = reactive({
   keyword: '',
@@ -436,11 +468,11 @@ const remove = async (kb: KnowledgeBase) => {
   await fetchList()
 }
 
-// 路由 query 驱动列表/详情切换
+// 路由 query 驱动列表/详情切换（消费者不切详情，见 `detailOpen`）
 watch(
   () => kbId.value,
   (id) => {
-    if (id) fetchDetail(id)
+    if (id && !consumer.value) fetchDetail(id)
     else {
       currentKb.value = null
       fetchList()
@@ -554,6 +586,16 @@ onBeforeUnmount(() => {
 
 .kb-card.off {
   opacity: 0.6;
+}
+
+/* 消费者形态：卡片是「看一眼」，不是入口 —— 指针不该变手型许诺一个进不去的详情 */
+.kb-card.readonly {
+  cursor: default;
+}
+
+.kb-card.readonly:hover {
+  border-color: var(--color-rule);
+  box-shadow: none;
 }
 
 .kb-card :deep(.el-card__body) {

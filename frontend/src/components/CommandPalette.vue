@@ -150,7 +150,7 @@ const actionGroup = computed<PaletteGroup>(() => {
   const actions: Array<{ label: string; icon: string; path: string; permission?: PermissionCode }> = [
     { label: '建知识库', icon: 'FolderAdd', path: '/knowledge', permission: PERM.knowledgeCreate },
     { label: '建应用', icon: 'Grid', path: '/assistants', permission: PERM.assistantEdit },
-    { label: '开始问答', icon: 'ChatDotRound', path: '/conversation' }
+    { label: '开始对话', icon: 'ChatDotRound', path: '/conversation' }
   ]
   return {
     title: '动作',

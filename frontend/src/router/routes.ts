@@ -1,4 +1,5 @@
 import type { RouteRecordRaw } from 'vue-router'
+import type { DataScope } from '@/api/types'
 import type { PermissionCode } from '@/constants/permissions'
 
 /**
@@ -7,6 +8,10 @@ import type { PermissionCode } from '@/constants/permissions'
  * `permission` 是**路由级门禁**的唯一声明点：守卫拦不拦、侧栏显不显，都只读它。
  * 不给 `NavItem` 另加一个权限字段 —— 那样同一个权限就有两处声明，
  * 迟早会出现「菜单看得见、点进去 403」或反过来的漂移。
+ *
+ * `scopeForms` 是**数据范围**那一维，与 `permission` 同源同上口径（07 §5/§6）：
+ * 声明「本模块在哪些数据范围下**有页面形态**」，未声明 = 任何范围都有。
+ * 它过滤的同样是**入口**，不替代后端的数据可见性判定（07 §3.3 第 2 条）。
  */
 declare module 'vue-router' {
   interface RouteMeta {
@@ -15,6 +20,16 @@ declare module 'vue-router' {
     public?: boolean
     /** 访问本路由所需的权限点；不声明 = 登录即可访问 */
     permission?: PermissionCode
+    /**
+     * 本路由在哪些数据范围下**有形态**（07 §五）。不声明 = 任何范围都有。
+     *
+     * 为什么不是 `minScope: DataScope`：三档是**集合包含**关系（own ⊂ shared ⊂ all），
+     * 而这里要回答的是「这个范围的人，这个页面长什么样」——
+     * 知识库对 `own` 与 `all` 有形态，对纯消费者 `shared` 的形态是「不出现」，
+     * 一句「最低 own」按包含关系读就是「人人都进」，正好读反。
+     * 数组把判据写直白：`['own', 'all']` = 有自己资源的角色与全平台角色都进。
+     */
+    scopeForms?: DataScope[]
   }
 }
 
@@ -28,6 +43,14 @@ export interface NavItem {
   path: string
   label: string
   icon: string
+  /**
+   * 同一路由对不同数据范围的**两种叫法**（07 §五）。
+   *
+   * `/assistants` 对全平台角色是「应用管理」（建设面），对消费者是「应用广场」
+   * （能用什么）—— 同一条路由、同一份数据，两种身份。所以叫法挂在导航项上，
+   * 由 `navLabel()` 统一解析，不在模板里各写一遍判断。
+   */
+  labelByScope?: Partial<Record<DataScope, string>>
 }
 
 export interface NavGroup {
@@ -37,11 +60,16 @@ export interface NavGroup {
 
 export const navGroups: NavGroup[] = [
   {
-    title: '问答与知识',
+    title: '对话与知识',
     items: [
-      { path: '/conversation', label: '问答', icon: 'ChatDotRound' },
+      { path: '/conversation', label: '对话', icon: 'ChatDotRound' },
       { path: '/knowledge', label: '知识库', icon: 'Collection' },
-      { path: '/assistants', label: '应用管理', icon: 'Grid' },
+      {
+        path: '/assistants',
+        label: '应用管理',
+        icon: 'Grid',
+        labelByScope: { own: '应用广场', shared: '应用广场' }
+      },
       { path: '/assistants/prompts', label: '提示词', icon: 'EditPen' }
     ]
   },
@@ -58,6 +86,16 @@ export const navGroups: NavGroup[] = [
     items: [{ path: '/admin', label: '系统管理', icon: 'Setting' }]
   }
 ]
+
+/**
+ * 取导航项在当前数据范围下的叫法 —— 顶栏与命令面板、403 页共用这一个函数。
+ *
+ * 放在这里而不是各调用点：同一项在三处渲染，各自写一遍 scope 判断
+ * 早晚会漂移成「顶栏叫应用广场、命令面板叫应用管理」。
+ */
+export function navLabel(item: NavItem, scope: DataScope): string {
+  return item.labelByScope?.[scope] ?? item.label
+}
 
 /**
  * 页面路由自动发现。

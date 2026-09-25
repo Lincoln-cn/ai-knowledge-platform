@@ -11,6 +11,12 @@
  * 判据**与路由守卫同源**：读 `route.meta.permission`，再问 `session.can()`。
  * 不在这里另存一份权限表 —— 否则菜单与守卫会漂移成「菜单看得见、点进去 403」。
  *
+ * ⚠️ 第二条维度（07 §五/§六）走**同一个入口**：`meta.scopeForms` 声明
+ * 「本模块在哪些数据范围下有页面形态」，与 `meta.permission` 一样只从路由 meta 读、
+ * 一样只在这里判。消费者（`shared`）与建设者（`own`/`all`）的差别由此进入导航，
+ * 而不是让每个页面自己写一遍 `dataScope === ...`。
+ * 它只决定**入口显不显**；数据可见性仍然后端说了算（07 §3.3）。
+ *
  * ⚠️ 为什么 `router` 要当参数传进来：本工程没有全局单例 ——
  * `bootstrap/router.ts` 的 `createAppRouter()` 造一份、`installRouter()` 装上去。
  * 在模块顶层 import 一个实例是不存在的。三处调用点手上都有 `router`。
@@ -19,6 +25,14 @@ import type { Router } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 
 export function canReach(router: Router, path: string): boolean {
-  const need = router.resolve(path).meta.permission
-  return !need || useSessionStore().can(need)
+  const meta = router.resolve(path).meta
+  const session = useSessionStore()
+
+  const need = meta.permission
+  if (need && !session.can(need)) return false
+
+  const forms = meta.scopeForms
+  if (forms && !forms.includes(session.dataScope)) return false
+
+  return true
 }

@@ -19,7 +19,7 @@
             size="small"
             @click="$router.push(item.path)"
           >
-            {{ item.label }}
+            {{ navLabel(item, session.dataScope) }}
           </el-button>
         </div>
       </div>
@@ -32,7 +32,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { navGroups } from '@/router/routes'
+import { canReach } from '@/lib/reach'
+import { navGroups, navLabel } from '@/router/routes'
 import { useSessionStore } from '@/stores/session'
 
 const route = useRoute()
@@ -43,15 +44,14 @@ const session = useSessionStore()
 const deniedPath = computed(() => (route.query.from as string) || route.fullPath)
 const required = computed(() => router.resolve(deniedPath.value).meta.permission ?? '')
 
-/** 同一个过滤口径：能访问的路由才列出来，避免 403 页自己给出死链。 */
-const reachable = computed(() =>
-  navGroups.flatMap((g) =>
-    g.items.filter((i) => {
-      const need = router.resolve(i.path).meta.permission
-      return !need || session.can(need)
-    })
-  )
-)
+/**
+ * 同一个过滤口径：能访问的路由才列出来，避免 403 页自己给出死链。
+ *
+ * 走 `canReach()` 而不是在这里再抄一遍「读 meta.permission + 问 session.can」——
+ * 这里原本就是那第三份拷贝，而它漏掉了数据范围那一维
+ * （结果：消费者的 403 页会递来一个「知识库」按钮）。判据只有一处，就在 `lib/reach.ts`。
+ */
+const reachable = computed(() => navGroups.flatMap((g) => g.items.filter((i) => canReach(router, i.path))))
 </script>
 
 <style scoped>

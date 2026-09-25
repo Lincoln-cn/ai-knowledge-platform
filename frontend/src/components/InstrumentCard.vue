@@ -38,7 +38,7 @@ withDefaults(
 
 <template>
   <section class="instrument">
-    <span class="grain" aria-hidden="true" />
+    <span class="hatch" aria-hidden="true" />
 
     <header class="ins-head">
       <h3 class="ins-name">{{ title }}</h3>
@@ -83,13 +83,22 @@ withDefaults(
   color: var(--color-graphite-ink);
 }
 
-/* 颗粒：art 层的四处合法表面之一。不透明度走令牌（硬上限 0.15），不许在页面里再调高。 */
-.grain {
+/* 蓝图细网：art 层的合法表面之一（design.md § Art layer「★ 石墨带内」），一片。
+   ★ 为什么从 grain 换成 hatch：grain 的形态是"低覆盖率 + 高对比斑点"，
+     它落在石墨上的实测效果只是**把黑整体提亮一点**（关闭前后有料处均差 5.64/255），
+     看不出"颗粒"——一层均匀的纱。hatch 是**有周期的线**，线在不在看得见，
+     而且它本来就允许平铺。
+   ★ 深底上只能 screen：素材是冷蓝，multiply 会在石墨上等于消失。
+   不透明度取硬上限的 0.6 档（= 0.21）：满上限 0.35 实测"关掉纹理前后"均差 2.08/255、
+   峰值 34/255 —— 素材里那两道 256px 的标尺线会在大面板上拉出**像表格/坐标纸**的大格子，
+   读数（才是主角）被压了一层。0.6 档后均差 1.24/255、峰值 21/255，格线仍看得见但不抢。 */
+.hatch {
   position: absolute;
   inset: 0;
-  background-image: var(--art-grain);
+  background-image: var(--art-hatch);
   background-repeat: repeat;
-  opacity: var(--art-opacity-grain);
+  mix-blend-mode: screen;
+  opacity: calc(var(--art-opacity-screen) * 0.6);
   pointer-events: none;
 }
 

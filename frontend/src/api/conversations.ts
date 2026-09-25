@@ -1,6 +1,6 @@
 import { request } from '@/lib/http'
 import type { SourceRef } from './stream-types'
-import type { PageQuery, PageResult } from './types'
+import type { Grant, PageQuery, PageResult, ResourceVisibility } from './types'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
@@ -30,10 +30,19 @@ export interface Conversation {
   appName: string
   turnCount: number
   updatedAt: string
+  /**
+   * 归属与可见性（07 §3.1）。会话是私人对话：默认 `private` + `ownerId = 当前用户`，
+   * 所以"会话只有自己的"由归属判定落地，不靠前端过滤（§4.2 会话一行）。
+   */
+  ownerId?: string
+  visibility?: ResourceVisibility
+  grants?: Grant[]
 }
 
 export interface ConversationQuery extends PageQuery {
   appId?: string
+  /** 只看自己名下的（07 §六 阶段 1）。不传 = 按数据范围给全部可见的 */
+  mine?: boolean
 }
 
 /** 免登录链接的解析结果：应用上下文由凭证决定，客户端无法指定 */

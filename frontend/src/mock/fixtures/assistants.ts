@@ -1,5 +1,6 @@
 import type { AccessCredential, ApiKeyItem, Assistant } from '@/api/assistants'
 import type { WorkflowGraph } from '@/api/workflow'
+import { assistantSharedWithUserRole } from './grants'
 
 /**
  * 应用数据。
@@ -12,6 +13,8 @@ import type { WorkflowGraph } from '@/api/workflow'
  *  - 未挂知识库的应用 → 调试无引用属正常
  *  - 凭证含「已撤销」终态 + 「已停用」可再启用，两套状态必须分清
  *  - API Key 与访问凭证是两套机制，互不替代
+ *  - 归属分散在 u1–u4、三种可见性各至少一个（07 §3.1）：chenjun 看得见 as1 / as2 / as4，
+ *    看不见 as3（别人的 private）与 as5（别人的 private 编排草稿）
  */
 export const assistants: Assistant[] = [
   {
@@ -39,7 +42,10 @@ export const assistants: Assistant[] = [
     quickQuestions: ['这份采购合同有什么风险？', '付款条款是否合规？', '验收标准怎么写？'],
     callCount: 1284,
     tokenCount: 1_862_400,
-    satisfaction: 92
+    satisfaction: 92,
+    // public：登录用户里人人可见（持有 assistant:view 即可），所以普通用户也看得见它
+    ownerId: 'u3',
+    visibility: 'public'
   },
   {
     id: 'as2',
@@ -66,7 +72,11 @@ export const assistants: Assistant[] = [
     quickQuestions: ['差旅住宿标准是多少？', '发票丢失怎么办？'],
     callCount: 652,
     tokenCount: 421_300,
-    satisfaction: 88
+    satisfaction: 88,
+    // 共享给「普通用户」角色：可用，但共享里只给了 assistant:view（不能改配置）
+    ownerId: 'u2',
+    visibility: 'shared',
+    grants: assistantSharedWithUserRole
   },
   {
     id: 'as3',
@@ -94,7 +104,9 @@ export const assistants: Assistant[] = [
     quickQuestions: [],
     callCount: 0,
     tokenCount: 0,
-    satisfaction: null
+    satisfaction: null,
+    ownerId: 'u2',
+    visibility: 'private'
   },
   {
     id: 'as4',
@@ -121,7 +133,10 @@ export const assistants: Assistant[] = [
     quickQuestions: ['公司差旅制度是什么？', '合同审批流程？'],
     callCount: 3560,
     tokenCount: 4_210_000,
-    satisfaction: 90
+    satisfaction: 90,
+    // 内置应用：平台资产，归管理员名下、public（普通用户只能问答，不能改配置）
+    ownerId: 'u1',
+    visibility: 'public'
   },
   {
     id: 'as5',
@@ -150,7 +165,10 @@ export const assistants: Assistant[] = [
     quickQuestions: [],
     callCount: 0,
     tokenCount: 0,
-    satisfaction: null
+    satisfaction: null,
+    // 编排草稿：别人的 private —— 普通用户既看不见、也开不了它的会话
+    ownerId: 'u3',
+    visibility: 'private'
   }
 ]
 

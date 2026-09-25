@@ -1,5 +1,6 @@
 import { ApiError, ErrorCode } from '@/api/types'
 import type { ChatMessage, Conversation } from '@/api/conversations'
+import { PERM } from '@/constants/permissions'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
 import {
@@ -10,21 +11,39 @@ import {
   publicMessages,
   toPublicContext
 } from '../fixtures/conversations'
+import { assistants } from '../fixtures/assistants'
+import { currentSubjects, requireVisible, selfId, visiblePredicate, type SubjectSet } from '../policy'
 
 /**
  * 会话域 mock。
  *
  * 只实现 src/api/conversations.ts 冻结契约里的端点。
  * 赞踩状态写回 fixtures 里的消息对象 —— 与真实后端一样「刷新后仍在」。
+ *
+ * 数据权限（07 §4.2「会话：只有自己的」）：
+ *  - 会话自己没有权限点（13 个权限点全是操作，没有 `conversation:*`），所以读会话按
+ *    `assistant:view` 问 —— 会话挂在应用上（§4.3），共享/公开分支用的就是应用那一套词
+ *  - 会话夹具全部 `private` ⇒ 实际由「归属 + 数据范围」两项决定：全平台档看得见全部，
+ *    其余角色只看得见自己那几条
  */
+
+/**
+ * 会话在权限点里没有自己的点，借用应用的那一个：会话挂在应用上（07 §4.3）。
+ * 只用于让 grants / public 两个分支有同一套词汇可用；夹具里会话全部 private。
+ */
+const CONVERSATION_ACTION = PERM.assistantView
 
 type StoredConversation = Conversation & { app?: (typeof appBriefs)[string] }
 
-const findConv = (id: string): StoredConversation => {
-  const conv = conversations.find((c) => c.id === id)
-  if (!conv) throw new ApiError(ErrorCode.NOT_FOUND, `会话「${id}」不存在或已删除`)
-  return conv
-}
+/** 单条取数与**写操作前置**共用同一个判定（07 §3.3 硬规矩 1）；看不见一律 404（硬规矩 3） */
+const findConv = (id: string, token: string, action: string = CONVERSATION_ACTION): StoredConversation =>
+  requireVisible(
+    conversations.find((c) => c.id === id),
+    currentSubjects(token),
+    action,
+    '会话',
+    id
+  )
 
 const findMessage = (id: string): ChatMessage => {
   for (const list of Object.values(messagesByConv)) {
@@ -32,6 +51,12 @@ const findMessage = (id: string): ChatMessage => {
     if (msg) return msg
   }
   throw new ApiError(ErrorCode.NOT_FOUND, `消息「${id}」不存在`)
+}
+
+/** 附件应用可见性：看得见应用才开得了它的会话，否则应用名会从会话标题里漏出去（07 §4.3） */
+const appVisible = (appId: string, subjects: SubjectSet): boolean => {
+  const app = assistants.find((a) => a.id === appId)
+  return !!app && visiblePredicate(subjects, PERM.assistantView)(app)
 }
 
 /** 附加应用展示信息。契约类型上没有，但页面展示需要 —— 见报告「契约缺口」 */
@@ -45,9 +70,12 @@ export const conversationRoutes: MockRoute[] = [
     'GET',
     '/conversations',
     ({ query, token }) => {
-      if (!token) throw new ApiError(ErrorCode.UNAUTHORIZED, '登录已过期，请重新登录')
+      const subjects = currentSubjects(token)
       const appId = query.appId ? String(query.appId) : ''
+      // mine=true 只看自己名下的（07 §六 阶段 1 的唯一新增查询参数）
+      const mine = query.mine === true || query.mine === 'true'
       const list = conversations
+        .filter(visiblePredicate(subjects, CONVERSATION_ACTION, { mine }))
         .filter((c) => !appId || c.appId === appId)
         .map(withApp)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -58,17 +86,14 @@ export const conversationRoutes: MockRoute[] = [
   [
     'GET',
     '/conversations/:id',
-    ({ path, token }) => {
-      if (!token) throw new ApiError(ErrorCode.UNAUTHORIZED, '登录已过期，请重新登录')
-      return withApp(findConv(path.id))
-    }
+    ({ path, token }) => withApp(findConv(path.id, token))
   ],
 
   [
     'POST',
     '/conversations',
     ({ body, token }) => {
-      if (!token) throw new ApiError(ErrorCode.UNAUTHORIZED, '登录已过期，请重新登录')
+      const subjects = currentSubjects(token)
       const { appId } = (body ?? {}) as { appId?: string }
       const app = appId ? appBriefs[appId] : undefined
       if (appId && !app) {
@@ -78,6 +103,10 @@ export const conversationRoutes: MockRoute[] = [
           '请从智能体广场重新选择应用'
         )
       }
+      // 看不见的应用：连会话也不该开得出来（新会话会带走应用名）
+      if (appId && !appVisible(appId, subjects)) {
+        throw new ApiError(ErrorCode.NOT_FOUND, `应用「${appId}」不存在或已下架`)
+      }
 
       const created: StoredConversation = {
         id: `c${Date.now().toString(36)}`,
@@ -86,7 +115,10 @@ export const conversationRoutes: MockRoute[] = [
         appName: app?.name ?? '通用问答',
         turnCount: 0,
         updatedAt: new Date().toISOString(),
-        app
+        app,
+        // 归属由"后端"写（07 §六 阶段 1）：会话是私人对话，默认 private
+        ownerId: selfId(subjects),
+        visibility: 'private'
       }
       conversations.unshift(created)
       messagesByConv[created.id] = []
@@ -98,8 +130,7 @@ export const conversationRoutes: MockRoute[] = [
     'PATCH',
     '/conversations/:id',
     ({ path, body, token }) => {
-      if (!token) throw new ApiError(ErrorCode.UNAUTHORIZED, '登录已过期，请重新登录')
-      const conv = findConv(path.id)
+      const conv = findConv(path.id, token)
       const { title } = (body ?? {}) as { title?: string }
       if (!title?.trim()) throw new ApiError(4001, '会话名称不能为空')
       conv.title = title.trim()
@@ -112,8 +143,7 @@ export const conversationRoutes: MockRoute[] = [
     'DELETE',
     '/conversations/:id',
     ({ path, token }) => {
-      if (!token) throw new ApiError(ErrorCode.UNAUTHORIZED, '登录已过期，请重新登录')
-      const conv = findConv(path.id)
+      const conv = findConv(path.id, token)
       conversations.splice(conversations.indexOf(conv), 1)
       delete messagesByConv[conv.id]
       return undefined
@@ -124,8 +154,7 @@ export const conversationRoutes: MockRoute[] = [
     'GET',
     '/conversations/:conversationId/messages',
     ({ path, query, token }) => {
-      if (!token) throw new ApiError(ErrorCode.UNAUTHORIZED, '登录已过期，请重新登录')
-      findConv(path.conversationId)
+      findConv(path.conversationId, token)
       const list = messagesByConv[path.conversationId] ?? []
       return paginate(list, query)
     }
@@ -136,13 +165,15 @@ export const conversationRoutes: MockRoute[] = [
    * - 传 'up' / 'down' 覆盖为新值（互斥）
    * - 再点同一项传 null 表示取消
    * 状态写回 fixtures，刷新后仍在。
+   *
+   * 写操作也要过判定：否则"看得见消息、改得了别人的赞踩"就是一条越权路径（§3.3 硬规矩 1）
    */
   [
     'POST',
     '/messages/:messageId/feedback',
     ({ path, body, token }) => {
-      if (!token) throw new ApiError(ErrorCode.UNAUTHORIZED, '登录已过期，请重新登录')
       const msg = findMessage(path.messageId)
+      findConv(msg.conversationId, token)
       if (msg.role !== 'assistant') {
         throw new ApiError(4002, '只能对助手回答进行赞踩')
       }

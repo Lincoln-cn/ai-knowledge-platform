@@ -43,7 +43,7 @@ OUT.mkdir(exist_ok=True)
 #    写成后者会拿到一张 404 页（R45 实测）。
 PAGES = [
     ("overview", "/", "工作台（产品首页）", ".page-head", "工作台"),
-    ("conversation", "/conversation", "问答三栅", ".chat-page", None),
+    ("conversation", "/conversation", "对话三栅", ".chat-page", None),
     ("knowledge", "/knowledge", "知识库列表", ".page-header", "知识库"),
     ("assistants", "/assistants", "应用管理（两档卡片）", ".page-header", "应用管理"),
     ("prompts", "/assistants/prompts", "提示词", ".page-header", "提示词"),

@@ -8,6 +8,47 @@ import type {
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
 import { documents, knowledgeBases, segments } from '../fixtures/knowledge'
+import { PERM } from '@/constants/permissions'
+import { currentSubjects, requireVisible, visibleTo, type SubjectSet } from '../policy'
+
+/**
+ * 文档 / 分段**没有自己的归属字段**（07 §8.1 的三类资源是知识库 / 应用 / 会话），
+ * 所以它们的可见性**继承所属知识库** —— 这正是 §8.4 说的「加一类资源 = 复用同一判定」：
+ * 判定函数一行没改，只是换了个入口问同一个问题。
+ */
+const kbIdOfDoc = (docId: string) => documents.find((d) => d.id === docId)?.kbId
+
+const kbIdOfSeg = (segmentId: string) => {
+  const seg = segments.find((s) => s.id === segmentId)
+  return seg ? kbIdOfDoc(seg.documentId) : undefined
+}
+
+/**
+ * 读写都先问一次同一个判定（§3.3 硬规矩 1）。报错用**子资源**的 label / id：
+ * 让调用方知道"这个文档/分段不存在"，而不是反过来暴露"某个知识库存在但你看不见"。
+ */
+const gateKb = (
+  kbId: string | undefined,
+  token: string,
+  action: string,
+  label: string,
+  id: string
+) =>
+  requireVisible(
+    kbId ? knowledgeBases.find((k) => k.id === kbId) : undefined,
+    currentSubjects(token),
+    action,
+    label,
+    id
+  )
+
+/** 分段列表不带 documentId 时也要过滤：否则"列全部"会横跨我看不见的知识库 */
+const visibleSegments = (subjects: SubjectSet) =>
+  segments.filter((s) => {
+    const kbId = kbIdOfDoc(s.documentId)
+    const kb = kbId ? knowledgeBases.find((k) => k.id === kbId) : undefined
+    return !!kb && visibleTo(kb, subjects, PERM.knowledgeView)
+  })
 
 /** 向量化节拍：每隔一段推进若干分段，让「196/340」这种行内进度真的会动 */
 const EMBED_TICK_MS = 800
@@ -186,8 +227,9 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'GET',
     '/knowledge-bases/:kbId/documents',
-    ({ path, query }) => {
+    ({ path, query, token }) => {
       const kbId = path.kbId
+      gateKb(kbId, token, PERM.knowledgeView, '知识库', kbId)
       const keyword = String(query.keyword ?? '')
       const status = query.status ? String(query.status) : ''
 
@@ -203,10 +245,9 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'POST',
     '/knowledge-bases/:kbId/documents',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
       const kbId = path.kbId
-      const kb = knowledgeBases.find((k) => k.id === kbId)
-      if (!kb) throw new ApiError(ErrorCode.NOT_FOUND, `知识库「${kbId}」不存在`)
+      gateKb(kbId, token, PERM.documentUpload, '知识库', kbId)
 
       // multipart：mock 侧按 body 里的文件名列表构造 DocumentItem
       // 真实后端从 multipart 解析；mock 允许传 { files: [{ name, size }] } 或 FormData 形状
@@ -252,8 +293,9 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'GET',
     '/knowledge-bases/:kbId/ingestion-progress',
-    ({ path }) => {
+    ({ path, token }) => {
       const kbId = path.kbId
+      gateKb(kbId, token, PERM.knowledgeView, '知识库', kbId)
       const docs = documents.filter((d) => d.kbId === kbId)
 
       const stages = ([
@@ -289,8 +331,9 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'PATCH',
     '/documents/:id',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
       const doc = findDoc(path.id)
+      gateKb(doc.kbId, token, PERM.documentUpload, '文档', doc.id)
       const { name } = body as { name?: string }
       if (name?.trim()) doc.name = name.trim()
       doc.updatedAt = new Date().toISOString()
@@ -301,8 +344,9 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'PATCH',
     '/documents/:id/enabled',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
       const doc = findDoc(path.id)
+      gateKb(doc.kbId, token, PERM.documentUpload, '文档', doc.id)
       const { enabled } = body as { enabled: boolean }
       doc.enabled = Boolean(enabled)
       doc.updatedAt = new Date().toISOString()
@@ -313,8 +357,9 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'DELETE',
     '/documents/:id',
-    ({ path }) => {
+    ({ path, token }) => {
       const doc = findDoc(path.id)
+      gateKb(doc.kbId, token, PERM.documentUpload, '文档', doc.id)
       stopEmbedTimer(doc.id)
       documents.splice(documents.indexOf(doc), 1)
       // 连带删掉该文档下的分段
@@ -329,8 +374,9 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'POST',
     '/documents/:id/retry',
-    ({ path }) => {
+    ({ path, token }) => {
       const doc = findDoc(path.id)
+      gateKb(doc.kbId, token, PERM.documentUpload, '文档', doc.id)
       if (doc.status !== '分段失败' && doc.status !== '向量化失败') {
         throw new ApiError(3010, `文档当前状态为「${doc.status}」，无需重试`)
       }
@@ -349,8 +395,9 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'POST',
     '/documents/:id/embedding',
-    ({ path }) => {
+    ({ path, token }) => {
       const doc = findDoc(path.id)
+      gateKb(doc.kbId, token, PERM.documentUpload, '文档', doc.id)
       if (doc.status !== '待向量化') {
         throw new ApiError(
           3011,
@@ -369,16 +416,18 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'POST',
     '/segmentation/preview',
-    ({ body }) => {
+    ({ body, token }) => {
       const input = body as PreviewSegmentationBody & { content?: string }
 
       // 已有文档：取文档下已有分段拼接；上传前：用请求体 content 或内置语料
       let sourceText = input.content ?? ''
       if (input.documentId) {
+        const doc = documents.find((d) => d.id === input.documentId)
+        // 文档存在才判可见性：传了不存在的 documentId 时保持"纯计算预览"的旧行为
+        if (doc) gateKb(doc.kbId, token, PERM.segmentEdit, '文档', doc.id)
         const segs = segments.filter((s) => s.documentId === input.documentId)
         sourceText = segs.map((s) => s.content).join('\n')
         if (!sourceText) {
-          const doc = documents.find((d) => d.id === input.documentId)
           sourceText = doc ? `${doc.name} 的正文内容占位……`.repeat(20) : ''
         }
       }
@@ -390,12 +439,12 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'GET',
     '/segments',
-    ({ query }) => {
+    ({ query, token }) => {
       const documentId = query.documentId ? String(query.documentId) : ''
       const onlyOversized = query.onlyOversized === true || query.onlyOversized === 'true'
       const keyword = String(query.keyword ?? '')
 
-      const list = segments
+      const list = visibleSegments(currentSubjects(token))
         .filter((s) => !documentId || s.documentId === documentId)
         .filter((s) => !keyword || s.title.includes(keyword) || s.content.includes(keyword))
         // SEG-I1：超长 = 字数超过向量模型上限
@@ -408,8 +457,9 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'PUT',
     '/segments/:id',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
       const seg = findSeg(path.id)
+      gateKb(kbIdOfSeg(seg.id), token, PERM.segmentEdit, '分段', seg.id)
       const input = body as { title?: string; content?: string }
       if (input.title !== undefined) seg.title = input.title
       if (input.content !== undefined) {
@@ -425,8 +475,9 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'PATCH',
     '/segments/:id/enabled',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
       const seg = findSeg(path.id)
+      gateKb(kbIdOfSeg(seg.id), token, PERM.segmentEdit, '分段', seg.id)
       const { enabled } = body as { enabled: boolean }
       seg.enabled = Boolean(enabled)
       return seg
@@ -436,8 +487,9 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'DELETE',
     '/segments/:id',
-    ({ path }) => {
+    ({ path, token }) => {
       const seg = findSeg(path.id)
+      gateKb(kbIdOfSeg(seg.id), token, PERM.segmentEdit, '分段', seg.id)
       segments.splice(segments.indexOf(seg), 1)
       touchKbCounters(documents.find((d) => d.id === seg.documentId)?.kbId ?? '')
       return undefined
@@ -447,18 +499,21 @@ export const ingestionRoutes: MockRoute[] = [
   [
     'POST',
     '/segments/batch-move',
-    ({ body }) => {
+    ({ body, token }) => {
       const { segmentIds, targetDocumentId } = body as {
         segmentIds: string[]
         targetDocumentId: string
       }
+      // 目标文档与每个源分段都要过判定：迁移会同时改两边
       const target = findDoc(targetDocumentId)
+      gateKb(target.kbId, token, PERM.segmentEdit, '文档', target.id)
       if (!segmentIds?.length) throw new ApiError(3013, '请先选择要迁移的分段')
 
       let moved = 0
       for (const id of segmentIds) {
         const seg = segments.find((s) => s.id === id)
         if (!seg) continue
+        gateKb(kbIdOfSeg(id), token, PERM.segmentEdit, '分段', id)
         const sourceDocId = seg.documentId
         seg.documentId = targetDocumentId
         seg.embedding = '待向量化'

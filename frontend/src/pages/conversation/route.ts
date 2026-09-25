@@ -12,7 +12,7 @@ export default [
     // 刻意**不声明** permission：问答是本平台的终端用户入口，
     // 四个角色里权限最少的「普通用户」也只有 knowledge:view + assistant:view，
     // 若给它挂任何一个权限点，就等于把他们挡在门外 —— 那是产品事故，不是门禁。
-    meta: { title: '问答' }
+    meta: { title: '对话' }
   }
 ] satisfies RouteRecordRaw[]
 
@@ -28,6 +28,6 @@ export const immersiveRoutes: RouteRecordRaw[] = [
     path: '/public/:token',
     name: 'public-chat',
     component: () => import('./public/Index.vue'),
-    meta: { title: '公开问答', public: true }
+    meta: { title: '公开对话', public: true }
   }
 ]

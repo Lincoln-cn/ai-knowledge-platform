@@ -170,8 +170,11 @@
   --art-empty-1: url('./src/assets/art/schematic-empty-01.png');
   --art-empty-2: url('./src/assets/art/schematic-empty-02.png');
   --art-opacity-wash: 0.6;    /* 浅色纸上的色场（配 multiply） */
-  --art-opacity-screen: 0.35; /* 深色底上的 wash（配 screen） */
+  --art-opacity-screen: 0.35; /* 深色底上的纹理（配 screen） */
   --art-opacity-grain: 0.15;  /* 颗粒 —— 硬上限，再高就成了脏 */
+  /* 页头通栏底的蓝图细网。定得比 grain 还低：它每页都出现，
+     一高就从"表面质感"变成"背景图案"，那是反模式。 */
+  --art-opacity-hatch: 0.12;
 
   /* ── 命令面板（design.md § 命令面板 · Cobalt 签名 5）────────────────
      要盖住抽屉与弹窗（--z-modal 400），但要低于画布内部层（--z-canvas 6000）。 */

@@ -19,7 +19,7 @@
 
         <TopBar
           :title="context.appName"
-          :subtitle="'公开问答 · 免登录'"
+          :subtitle="'公开对话 · 免登录'"
           :public-mode="true"
           :show-kb-link="false"
           @back="onBack"

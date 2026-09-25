@@ -1,6 +1,6 @@
 import { request } from '@/lib/http'
 import type { RetrievalParams } from './retrieval'
-import type { PageQuery, PageResult } from './types'
+import type { Grant, PageQuery, PageResult, ResourceVisibility } from './types'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
@@ -49,6 +49,10 @@ export interface Assistant {
   callCount: number
   tokenCount: number
   satisfaction: number | null
+  /** 归属与可见性（07 §3.1）。由后端写入，创建时 ownerId = 当前用户 / private */
+  ownerId?: string
+  visibility?: ResourceVisibility
+  grants?: Grant[]
 }
 
 /**
@@ -68,6 +72,8 @@ export interface AssistantQuery extends PageQuery {
   published?: boolean
   /** 按类型筛选；不传为全部 */
   type?: AssistantType
+  /** 只看自己名下的（07 §六 阶段 1）。不传 = 按数据范围给全部可见的 */
+  mine?: boolean
 }
 
 /**

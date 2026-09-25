@@ -21,12 +21,14 @@ export const permissions: PermissionItem[] = [
 const all = permissions.map((p) => p.code)
 
 export const roles: Role[] = [
-  { id: 'r1', name: '管理员', code: 'ADMIN', memberCount: 1, permissions: all },
+  // 数据范围（07 §3.2）：ADMIN / KB_OPERATOR / APP_CONFIG 是全平台口径，USER 是「共享档」
+  { id: 'r1', name: '管理员', code: 'ADMIN', memberCount: 1, permissions: all, dataScope: 'all' },
   {
     id: 'r2',
     name: '知识运营',
     code: 'KB_OPERATOR',
     memberCount: 3,
+    dataScope: 'all',
     permissions: [
       PERM.knowledgeView,
       PERM.knowledgeCreate,
@@ -44,6 +46,7 @@ export const roles: Role[] = [
     name: '应用配置',
     code: 'APP_CONFIG',
     memberCount: 2,
+    dataScope: 'all',
     permissions: [
       PERM.knowledgeView,
       PERM.hitTest,
@@ -58,6 +61,8 @@ export const roles: Role[] = [
     name: '普通用户',
     code: 'USER',
     memberCount: 68,
+    // 只看得见「被共享给自己的」+ 公开的（07 §4.2 知识库/应用两行）
+    dataScope: 'shared',
     permissions: [PERM.knowledgeView, PERM.assistantView]
   }
 ]
@@ -104,3 +109,13 @@ export const users: Array<User & { password: string }> = [
     lastLoginAt: '2026-02-13 10:05'
   }
 ]
+
+/**
+ * 令牌形如 `mock_access_u1` —— 与真实 JWT 一样「拿到令牌就能确定是谁」。
+ *
+ * 放在夹具层而不是各 handler 里：数据权限判定（`mock/policy.ts`）与登录态都依赖
+ * "令牌 → 用户"这一条约定，两处各写一遍迟早会漂移。
+ * 不使用模块级变量记登录态：那样一刷新页面登录态就丢了，与真实后端行为不一致。
+ */
+export const userFromToken = (token: string) =>
+  token ? users.find((u) => u.id === token.replace(/^mock_access_/, '')) : undefined

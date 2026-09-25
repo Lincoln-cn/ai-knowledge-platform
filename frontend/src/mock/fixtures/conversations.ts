@@ -10,6 +10,8 @@ import type { SourceRef } from '@/api/stream-types'
  *  - 赞 / 踩 / 未评 —— 互斥且可撤销，刷新后仍在
  *  - 推荐问题、多轮上下文
  *  - 免登录凭证三态：有效 / 过期 / 已撤销
+ *  - 会话全部 `private` 且归属分散在 u1–u4（07 §4.2「会话：只有自己的」）：
+ *    chenjun 只看得见自己的 c2 / c5，其余四个（c1 c3 c4 c6）是别人的
  */
 
 /** 应用展示信息。契约 Conversation 上暂无这些字段，mock 以附加字段带回（见报告「契约缺口」） */
@@ -105,7 +107,9 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     appName: '合同审查助手',
     turnCount: 2,
     updatedAt: iso(0.2 * hour),
-    app: appBriefs.as1
+    app: appBriefs.as1,
+    ownerId: 'u1',
+    visibility: 'private'
   },
   {
     id: 'c2',
@@ -113,7 +117,9 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     appId: null,
     appName: '通用问答',
     turnCount: 1,
-    updatedAt: iso(1.5 * hour)
+    updatedAt: iso(1.5 * hour),
+    ownerId: 'u4',
+    visibility: 'private'
   },
   {
     id: 'c3',
@@ -122,7 +128,9 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     appName: '合同审查助手',
     turnCount: 3,
     updatedAt: iso(5 * hour),
-    app: appBriefs.as1
+    app: appBriefs.as1,
+    ownerId: 'u2',
+    visibility: 'private'
   },
   {
     id: 'c4',
@@ -131,7 +139,9 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     appName: '制度问答',
     turnCount: 1,
     updatedAt: iso(day + 2 * hour),
-    app: appBriefs.as2
+    app: appBriefs.as2,
+    ownerId: 'u3',
+    visibility: 'private'
   },
   {
     id: 'c5',
@@ -139,7 +149,9 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     appId: null,
     appName: '通用问答',
     turnCount: 2,
-    updatedAt: iso(day + 6 * hour)
+    updatedAt: iso(day + 6 * hour),
+    ownerId: 'u4',
+    visibility: 'private'
   },
   {
     id: 'c6',
@@ -148,7 +160,9 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     appName: '合同审查助手',
     turnCount: 1,
     updatedAt: iso(3 * day),
-    app: appBriefs.as1
+    app: appBriefs.as1,
+    ownerId: 'u2',
+    visibility: 'private'
   }
 ]
 

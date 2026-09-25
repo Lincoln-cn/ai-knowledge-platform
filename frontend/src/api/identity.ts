@@ -1,5 +1,5 @@
 import { request } from '@/lib/http'
-import type { PageQuery, PageResult } from './types'
+import type { DataScope, PageQuery, PageResult } from './types'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
@@ -40,6 +40,13 @@ export interface Role {
   code: string
   memberCount: number
   permissions: string[]
+  /**
+   * 数据范围（07 §3.2）。"能不能做这个动作"是权限点，"能看到哪些数据"是这个。
+   * 可选 —— 冻结契约下只加可选字段，前端不读也照常工作。
+   */
+  dataScope?: DataScope
+  /** 范围规则的逃生口（07 §8.3）：结构化规则字符串，MVP 留空且不解析 */
+  dataScopeRule?: string
 }
 
 /** 权限点自描述，供「角色管理」页直接渲染分组勾选 */
