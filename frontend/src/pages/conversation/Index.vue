@@ -5,6 +5,7 @@
       :subtitle="headerSubtitle"
       :app-id="appBrief?.id ?? appId"
       :public-mode="false"
+      :show-share="canShare"
       @back="onBack"
       @share="openShare()"
     />
@@ -34,6 +35,7 @@
           :empty-text="emptyText"
           :bot-icon="appBrief?.icon || 'AI'"
           :active-ref-index="activeRefIndex"
+          :can-share="canShare"
           @cite="onCite"
           @copy="onCopy"
           @feedback="onFeedback"
@@ -84,7 +86,12 @@
       />
     </el-drawer>
 
-    <ShareDialog ref="shareRef" :message-text="shareText" />
+    <ShareDialog
+      ref="shareRef"
+      :conversation-id="shareConversationId"
+      :message-id="shareMessageId"
+      :message-text="shareText"
+    />
 
     <!-- 生成失败横幅：原因 + 下一步，不静默 -->
     <div v-if="chat.streamError.value" class="stream-fail notice err">
@@ -101,6 +108,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { conversationsApi } from '@/api'
 import type { ChatMessage } from '@/api/conversations'
+import { useSessionStore } from '@/stores/session'
+import { PERM } from '@/constants/permissions'
 import TopBar from './components/TopBar.vue'
 import AppInfoBar from './components/AppInfoBar.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
@@ -122,6 +131,7 @@ import {
 
 const route = useRoute()
 const router = useRouter()
+const session = useSessionStore()
 
 const appId = computed(() => (route.query.appId as string) || '')
 const history = useHistoryPanel()
@@ -139,8 +149,13 @@ const drawerVisible = ref(false)
 const wide = ref(true)
 const shareRef = ref<InstanceType<typeof ShareDialog>>()
 const shareText = ref('')
+const shareMessageId = ref<string | null>(null)
 const msgListRef = ref<InstanceType<typeof MessageList>>()
 const composerRef = ref<InstanceType<typeof Composer>>()
+
+/** 分享入口按权限点显隐（03 权限点词汇：assistant:edit） */
+const canShare = computed(() => session.can(PERM.assistantEdit))
+const shareConversationId = computed(() => activeConversation.value?.id ?? null)
 
 /* ── 顶栏 ── */
 
@@ -385,7 +400,13 @@ const onCopy = async (msg: ChatMessage) => {
 }
 
 const openShare = (msg?: ChatMessage) => {
+  // 消息级分享带上 messageId + 正文；顶栏入口是会话级，不带 messageText
   shareText.value = msg?.content ?? ''
+  shareMessageId.value = msg?.id ?? null
+  if (!shareConversationId.value) {
+    ElMessage.warning('请先选择或发送一条消息，再生成分享链接')
+    return
+  }
   shareRef.value?.open()
 }
 
@@ -406,14 +427,28 @@ onMounted(async () => {
 
   const convId = route.query.conversationId as string
   if (convId) {
+    // 深链：不在前 50 条也要打开那一条 —— 直接按 id 取，不再在列表里找
     const found = history.list.value.find((c) => c.id === convId)
     if (found) {
       await openConversation(found)
       return
     }
+    try {
+      const conv = (await conversationsApi.getConversation(convId)) as ConversationEx
+      history.prepend(conv)
+      await openConversation(conv)
+      return
+    } catch (error) {
+      // 真的不存在 / 无权访问：给可读提示并回落到空态，
+      // **不**静默改开「同 appId 第一条」——那会打开别人的会话
+      const { reason, hint } = errText(error, '打开会话失败')
+      ElMessage.error(hint ? `${reason}（${hint}）` : reason)
+      applyAppBrief(null, appId.value || undefined)
+      return
+    }
   }
   if (appId.value) {
-    // 应用模式：从同应用历史会话取一条，或保持空会话并展示应用信息
+    // 应用模式（无深链）：从同应用历史会话取一条，或保持空会话并展示应用信息
     const same = history.list.value.find((c) => c.appId === appId.value)
     if (same) {
       await openConversation(same)

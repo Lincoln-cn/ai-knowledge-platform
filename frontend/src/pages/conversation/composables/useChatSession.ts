@@ -1,6 +1,11 @@
 import { computed, reactive, ref, type Ref } from 'vue'
 import { conversationsApi, streamApi } from '@/api'
-import type { ChatMessage, Conversation, MessageStatus } from '@/api/conversations'
+import type {
+  ChatAttachment,
+  ChatMessage,
+  Conversation,
+  MessageStatus
+} from '@/api/conversations'
 import type { SourceRef, StreamHandle } from '@/api/stream-types'
 import { ApiError } from '@/api/types'
 
@@ -24,16 +29,38 @@ export interface AppBrief {
 
 export type ConversationEx = Conversation & { app?: AppBrief }
 
+/** 契约 ChatMessage.attachments 落盘前后的兼容读写（字段可选） */
+export type ChatMessageEx = ChatMessage & { attachments?: ChatAttachment[] }
+
 export type SourceRefEx = SourceRef & {
   segmentId?: string
   documentId?: string
   kbId?: string
 }
 
+/** 附件上传态。发送时只带上「已就绪」的真实 id，失败的必须能看见原因并移除 */
+export type AttachmentStatus = 'uploading' | 'ready' | 'failed'
+
 export interface AttachmentDraft {
+  /** 上传前是本地临时 id，上传成功后换成服务端真实 id */
   id: string
   name: string
   size: number
+  mime?: string
+  status: AttachmentStatus
+  /** 上传失败的可读原因 */
+  error?: string
+}
+
+export function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** 已生成但正文为空：要给提示，不能留白还照出操作条 */
+export function isEmptyAnswer(msg: ChatMessage): boolean {
+  return msg.role === 'assistant' && msg.status === '已生成' && !msg.content.trim()
 }
 
 export function readAppBrief(raw: unknown): AppBrief | null {
@@ -171,7 +198,7 @@ export interface ChatSessionOptions {
 }
 
 export function useChatSession(options: ChatSessionOptions = {}) {
-  const messages: Ref<ChatMessage[]> = ref([])
+  const messages: Ref<ChatMessageEx[]> = ref([])
   const loadingHistory = ref(false)
   const loadError = ref<{ reason: string; hint?: string } | null>(null)
   const generating = ref(false)
@@ -187,10 +214,13 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     return null
   })
 
-  /** 统一从响应式数组取代理对象再改属性 —— 否则赞踩/流式回调不会触发视图 */
-  const resolveMsg = (msg: ChatMessage): ChatMessage => {
+  /**
+   * 统一从响应式数组取代理对象再改属性 —— 否则赞踩/流式回调不会触发视图。
+   * 返回的可能是本地扩展消息（带 attachments），调用方按 ChatMessageEx 读写。
+   */
+  const resolveMsg = (msg: ChatMessage): ChatMessageEx => {
     const found = messages.value.find((m) => m.id === msg.id)
-    return found ?? msg
+    return (found as ChatMessageEx | undefined) ?? (msg as ChatMessageEx)
   }
 
   const loadHistory = async (conversationId: string) => {
@@ -200,10 +230,10 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     try {
       if (options.credentialToken) {
         const list = await conversationsApi.listPublicMessages(options.credentialToken)
-        messages.value = list.map(toReactiveMessage)
+        messages.value = list.map((m) => toReactiveMessage(m) as ChatMessageEx)
       } else {
         const result = await conversationsApi.listMessages(conversationId, { page: 1, size: 100 })
-        messages.value = result.list.map(toReactiveMessage)
+        messages.value = result.list.map((m) => toReactiveMessage(m) as ChatMessageEx)
       }
     } catch (error) {
       loadError.value = errText(error, '加载消息失败')
@@ -212,11 +242,20 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     }
   }
 
+  /**
+   * 主动停止。sse 保证任何终止路径都恰好一次 onDone（含「已停止」），
+   * 这里先立刻收口呈现（转圈停掉、状态改掉），onDone 再以终态覆盖一遍 —— 两处一致。
+   */
   const stop = () => {
     if (!handle) return
     handle.abort()
     handle = null
     generating.value = false
+    for (const m of messages.value) {
+      if (m.status === '生成中') {
+        m.status = '已停止'
+      }
+    }
   }
 
   interface StartStreamInput {
@@ -280,10 +319,21 @@ export function useChatSession(options: ChatSessionOptions = {}) {
         assistant.durationMs = result.durationMs
         generating.value = false
         handle = null
-        if (result.status === '失败' && !assistant.failReason) {
-          assistant.failReason = '生成失败'
-          assistant.failHint = '请稍后重试；若持续失败请联系管理员'
-          streamError.value = { reason: assistant.failReason, hint: assistant.failHint }
+        if (result.status === '失败') {
+          if (!assistant.failReason) {
+            assistant.failReason = '生成失败'
+            assistant.failHint = '请稍后重试；若持续失败请联系管理员'
+          }
+          streamError.value = {
+            reason: assistant.failReason,
+            hint: assistant.failHint ?? undefined
+          }
+          return
+        }
+        // 空回答：done=已生成但正文为空 —— 给可读提示，不留白、不照出操作条
+        if (result.status === '已生成' && !assistant.content.trim()) {
+          assistant.failReason = '本次没有返回内容'
+          assistant.failHint = '可以点「重新生成」再试一次，或换个问法'
         }
       }
     })
@@ -299,6 +349,8 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     const text = question.trim()
     if (!text || generating.value) return
 
+    // 只带上传就绪的真实 id；失败/上传中的不允许混进请求
+    const ready = attachments.filter((a) => a.status === 'ready' && a.id)
     const userMsg = toReactiveMessage({
       id: `u_${Date.now().toString(36)}`,
       conversationId,
@@ -312,8 +364,16 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       durationMs: 0,
       failReason: null,
       failHint: null,
-      createdAt: new Date().toISOString()
-    })
+      createdAt: new Date().toISOString(),
+      attachments: ready.map(
+        (a): ChatAttachment => ({
+          id: a.id,
+          name: a.name,
+          size: a.size,
+          mime: a.mime
+        })
+      )
+    } as ChatMessageEx)
     const assistantMsg = toReactiveMessage({
       id: `a_${Date.now().toString(36)}`,
       conversationId,
@@ -335,7 +395,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       conversationId,
       question: text,
       assistant: assistantMsg,
-      attachmentIds: attachments.map((a) => a.id)
+      attachmentIds: ready.map((a) => a.id)
     })
   }
 
@@ -345,7 +405,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     const assistant = resolveMsg(input)
     const idx = messages.value.findIndex((m) => m.id === assistant.id)
     if (idx < 0) return
-    let userMsg: ChatMessage | null = null
+    let userMsg: ChatMessageEx | null = null
     for (let i = idx - 1; i >= 0; i -= 1) {
       if (messages.value[i].role === 'user') {
         userMsg = messages.value[i]!
@@ -358,6 +418,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       conversationId: assistant.conversationId,
       question: userMsg.content,
       assistant,
+      attachmentIds: (userMsg.attachments ?? []).map((a) => a.id),
       overwrite: true
     })
   }
@@ -370,7 +431,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     if (generating.value) return
     const assistant = resolveMsg(input)
     const idx = messages.value.findIndex((m) => m.id === assistant.id)
-    let userMsg: ChatMessage | null = null
+    let userMsg: ChatMessageEx | null = null
     for (let i = idx - 1; i >= 0; i -= 1) {
       if (messages.value[i].role === 'user') {
         userMsg = messages.value[i]!
@@ -383,7 +444,8 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     startStream({
       conversationId: assistant.conversationId,
       question,
-      assistant
+      assistant,
+      attachmentIds: (userMsg.attachments ?? []).map((a) => a.id)
     })
   }
 

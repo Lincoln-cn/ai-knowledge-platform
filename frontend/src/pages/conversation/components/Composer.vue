@@ -1,10 +1,14 @@
 <template>
   <div class="composer panel">
-    <!-- 附件标签：展示在输入框上方，可移除 -->
+    <!-- 附件标签：展示在输入框上方，可移除；上传中/失败有可读状态 -->
     <div v-if="attachments.length" class="atts">
-      <span v-for="a in attachments" :key="a.id" class="att">
+      <span v-for="a in attachments" :key="a.id" class="att" :class="a.status">
         <span class="att-name ellipsis">{{ a.name }}</span>
-        <span class="att-size num faint">{{ formatSize(a.size) }}</span>
+        <span class="att-size num faint">{{ formatBytes(a.size) }}</span>
+        <span v-if="a.status === 'uploading'" class="att-stat micro muted">上传中…</span>
+        <span v-else-if="a.status === 'failed'" class="att-stat micro att-fail">
+          {{ a.error || '上传失败' }}
+        </span>
         <button type="button" class="att-x" title="移除" @click="removeAtt(a.id)">×</button>
       </span>
     </div>
@@ -71,7 +75,7 @@
           v-else
           size="small"
           type="primary"
-          :disabled="disabled || !text.trim()"
+          :disabled="disabled || !text.trim() || hasBlockingAtt"
           @click="submit"
         >发送</el-button>
       </div>
@@ -80,9 +84,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { MagicStick, Paperclip } from '@element-plus/icons-vue'
-import type { AttachmentDraft } from '../composables/useChatSession'
+import { ElMessage } from 'element-plus'
+import { conversationsApi } from '@/api'
+import {
+  errText,
+  formatBytes,
+  type AttachmentDraft
+} from '../composables/useChatSession'
 
 const props = defineProps<{
   generating: boolean
@@ -102,6 +112,11 @@ const text = ref('')
 const attachments = ref<AttachmentDraft[]>([])
 const inputEl = ref<HTMLTextAreaElement>()
 const thinking = ref(props.thinking ?? false)
+
+/** 上传中或已失败的附件不允许发出去 —— 发送时只带真实 id */
+const hasBlockingAtt = computed(() =>
+  attachments.value.some((a) => a.status === 'uploading' || a.status === 'failed')
+)
 
 watch(thinking, (v) => emit('update:thinking', v))
 watch(
@@ -132,24 +147,43 @@ function insertPrompt(body: string) {
   inputEl.value?.focus()
 }
 
-function formatSize(size: number): string {
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
-}
-
-function onPickFiles(e: Event) {
+async function onPickFiles(e: Event) {
   const input = e.target as HTMLInputElement
-  const files = input.files
-  if (!files?.length) return
-  for (const file of Array.from(files)) {
-    attachments.value.push({
-      id: `att_${Date.now().toString(36)}_${attachments.value.length}`,
-      name: file.name,
-      size: file.size
-    })
-  }
+  // 先拷贝 FileList 再清 input —— 清 value 在部分浏览器会把 FileList 也抽空
+  const picked = input.files ? Array.from(input.files) : []
   input.value = ''
+  if (!picked.length) return
+
+  for (const file of picked) {
+    const localId = `att_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
+    const draft: AttachmentDraft = {
+      id: localId,
+      name: file.name,
+      size: file.size,
+      mime: file.type || undefined,
+      status: 'uploading'
+    }
+    attachments.value.push(draft)
+
+    try {
+      const uploaded = await conversationsApi.uploadFile(file)
+      // 换成服务端真实 id；若用户已在此期间移除，则不再写回
+      const cur = attachments.value.find((a) => a.id === localId)
+      if (!cur) continue
+      cur.id = uploaded.id
+      cur.name = uploaded.name || file.name
+      cur.size = uploaded.size || file.size
+      cur.mime = uploaded.mime || file.type || undefined
+      cur.status = 'ready'
+      cur.error = undefined
+    } catch (error) {
+      const cur = attachments.value.find((a) => a.id === localId)
+      if (!cur) continue
+      const { reason, hint } = errText(error, '附件上传失败')
+      cur.status = 'failed'
+      cur.error = hint ? `${reason}（${hint}）` : reason
+    }
+  }
 }
 
 function removeAtt(id: string) {
@@ -158,8 +192,14 @@ function removeAtt(id: string) {
 
 function submit() {
   const value = text.value.trim()
-  if (!value || props.generating) return
-  emit('send', value, attachments.value)
+  if (!value || props.generating || hasBlockingAtt.value) return
+  // 只发已就绪的真实附件；失败/上传中的已在按钮上拦住，这里再兜一层
+  const ready = attachments.value.filter((a) => a.status === 'ready')
+  if (attachments.value.some((a) => a.status === 'failed')) {
+    ElMessage.warning('有附件上传失败，请移除后再发送')
+    return
+  }
+  emit('send', value, ready)
   text.value = ''
   attachments.value = []
 }
@@ -216,6 +256,18 @@ defineExpose({ sendText, focus: () => inputEl.value?.focus() })
 
 .att-name {
   max-width: 140px;
+}
+
+.att.uploading {
+  opacity: 0.75;
+}
+
+.att.failed {
+  border-color: color-mix(in oklch, var(--color-danger) 30%, var(--color-rule));
+}
+
+.att-fail {
+  color: var(--color-danger);
 }
 
 .att-x {

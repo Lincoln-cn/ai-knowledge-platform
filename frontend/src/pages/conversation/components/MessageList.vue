@@ -42,11 +42,27 @@
           <div class="msg-body">
             <template v-if="msg.role === 'user'">
               <div class="user-text">{{ msg.content }}</div>
+              <div v-if="attsOf(msg).length" class="msg-atts">
+                <span v-for="a in attsOf(msg)" :key="a.id" class="msg-att">
+                  <span class="att-name ellipsis">{{ a.name }}</span>
+                  <span class="att-size num faint">{{ formatBytes(a.size) }}</span>
+                </span>
+              </div>
             </template>
             <template v-else>
               <div v-if="msg.status === '生成中' && !msg.content" class="thinking">
                 <span class="dot ok" />
                 <span class="micro muted">正在检索并生成…</span>
+              </div>
+              <!-- 空回答：给提示，不渲染一片空白还照出操作条 -->
+              <div v-else-if="isEmptyAnswer(msg)" class="empty-answer notice warn">
+                <div><b>本次没有返回内容。</b></div>
+                <div v-if="msg.failHint" class="micro">{{ msg.failHint }}</div>
+                <div class="fail-actions">
+                  <el-button size="small" type="primary" @click="emit('regenerate', msg)">
+                    重新生成
+                  </el-button>
+                </div>
               </div>
               <AnswerBody
                 v-else
@@ -86,8 +102,11 @@
             </div>
           </div>
 
-          <!-- 操作条 -->
-          <div v-if="msg.role !== 'user' && msg.status !== '生成中'" class="actions">
+          <!-- 操作条：空回答只留提示内的「重新生成」，不照常出整条 -->
+          <div
+            v-if="msg.role !== 'user' && msg.status !== '生成中' && !isEmptyAnswer(msg)"
+            class="actions"
+          >
             <button type="button" class="act" @click="emit('copy', msg)">复制</button>
             <template v-if="!publicMode">
               <button
@@ -108,7 +127,12 @@
               </button>
             </template>
             <button type="button" class="act" @click="emit('regenerate', msg)">重新生成</button>
-            <button type="button" class="act" @click="emit('share', msg)">分享</button>
+            <button
+              v-if="canShare"
+              type="button"
+              class="act"
+              @click="emit('share', msg)"
+            >分享</button>
             <template v-if="msg.status === '已停止'">
               <button type="button" class="act" @click="emit('continue', msg)">继续</button>
             </template>
@@ -140,9 +164,10 @@
 
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
-import type { ChatMessage } from '@/api/conversations'
+import type { ChatAttachment, ChatMessage } from '@/api/conversations'
 import AnswerBody from './AnswerBody.vue'
 import EmptyArt from '@/components/EmptyArt.vue'
+import { formatBytes, isEmptyAnswer } from '../composables/useChatSession'
 
 const props = defineProps<{
   messages: ChatMessage[]
@@ -152,6 +177,8 @@ const props = defineProps<{
   botIcon?: string
   publicMode?: boolean
   activeRefIndex?: number | null
+  /** 分享入口显隐（权限点：assistant:edit） */
+  canShare?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -166,6 +193,10 @@ const emit = defineEmits<{
 }>()
 
 const scroller = ref<HTMLElement>()
+
+/** 契约 ChatMessage.attachments 为可选；缺省空数组 */
+const attsOf = (msg: ChatMessage): ChatAttachment[] =>
+  ((msg as ChatMessage & { attachments?: ChatAttachment[] }).attachments ?? [])
 
 const isLast = (msg: ChatMessage) => msg.id === props.messages[props.messages.length - 1]?.id
 
@@ -251,6 +282,35 @@ defineExpose({ scrollToBottom })
   line-height: var(--leading-body);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.msg-atts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  margin-top: var(--space-xs);
+}
+
+.msg-att {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  max-width: 280px;
+  background: var(--color-sunken);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius);
+  padding: var(--space-3xs) var(--space-xs);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-tight);
+  color: var(--color-ink-2);
+}
+
+.msg-att .att-name {
+  max-width: 160px;
+}
+
+.empty-answer {
+  max-width: 860px;
 }
 
 .thinking {

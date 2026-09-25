@@ -44,6 +44,7 @@
             :empty-text="context.prologue || '开始提问吧'"
             :bot-icon="context.icon || 'AI'"
             :public-mode="true"
+            :can-share="true"
             :active-ref-index="activeRefIndex"
             @cite="onCite"
             @copy="onCopy"

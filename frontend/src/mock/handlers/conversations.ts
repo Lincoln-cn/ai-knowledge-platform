@@ -1,24 +1,41 @@
 import { ApiError, ErrorCode } from '@/api/types'
-import type { ChatMessage, Conversation } from '@/api/conversations'
+import type { ChatMessage, ShareScope } from '@/api/conversations'
 import { PERM } from '@/constants/permissions'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
 import {
   appBriefs,
-  conversations,
-  messagesByConv,
   publicCredentials,
-  publicMessages,
   toPublicContext
 } from '../fixtures/conversations'
 import { assistants } from '../fixtures/assistants'
+import { cannedAnswer } from '../fixtures/canned'
+import {
+  addConversation,
+  appendTurn,
+  conversations,
+  createShare,
+  findConversation,
+  findMessage,
+  listShares,
+  messagesOf,
+  messagesOfShare,
+  findShareByToken,
+  patchConversation,
+  publicMessages,
+  removeConversation,
+  revokeShare,
+  toShareView,
+  type StoredConversation
+} from '../chat-store'
 import { currentSubjects, requireVisible, selfId, visiblePredicate, type SubjectSet } from '../policy'
 
 /**
  * 会话域 mock。
  *
  * 只实现 src/api/conversations.ts 冻结契约里的端点。
- * 赞踩状态写回 fixtures 里的消息对象 —— 与真实后端一样「刷新后仍在」。
+ * 数据本体在 `../chat-store`：那是**可变**的运行时存储（镜像 localStorage），
+ * 而 fixtures 只是种子 —— 所以刷新页面后本轮问答仍在（#4）。
  *
  * 数据权限（07 §4.2「会话：只有自己的」）：
  *  - 会话自己没有权限点（13 个权限点全是操作，没有 `conversation:*`），所以读会话按
@@ -33,25 +50,15 @@ import { currentSubjects, requireVisible, selfId, visiblePredicate, type Subject
  */
 const CONVERSATION_ACTION = PERM.assistantView
 
-type StoredConversation = Conversation & { app?: (typeof appBriefs)[string] }
-
 /** 单条取数与**写操作前置**共用同一个判定（07 §3.3 硬规矩 1）；看不见一律 404（硬规矩 3） */
 const findConv = (id: string, token: string, action: string = CONVERSATION_ACTION): StoredConversation =>
   requireVisible(
-    conversations.find((c) => c.id === id),
+    findConversation(id),
     currentSubjects(token),
     action,
     '会话',
     id
   )
-
-const findMessage = (id: string): ChatMessage => {
-  for (const list of Object.values(messagesByConv)) {
-    const msg = list.find((m) => m.id === id)
-    if (msg) return msg
-  }
-  throw new ApiError(ErrorCode.NOT_FOUND, `消息「${id}」不存在`)
-}
 
 /** 附件应用可见性：看得见应用才开得了它的会话，否则应用名会从会话标题里漏出去（07 §4.3） */
 const appVisible = (appId: string, subjects: SubjectSet): boolean => {
@@ -65,7 +72,126 @@ const withApp = (conv: StoredConversation) => {
   return conv
 }
 
+/* ── 免登录 token 解析：应用凭证 与 会话/消息分享 共用同一套校验词 ── */
+
+interface PublicGateOk {
+  ok: true
+  /** 应用凭证分支 */
+  cred?: { token: string; appId: string }
+  /** 分享分支 */
+  share?: { token: string; conversationId: string; scope: ShareScope; messageId?: string }
+}
+type PublicGate = PublicGateOk | { ok: false; code: number; message: string; hint?: string }
+
+function gatePublicToken(token: string): PublicGate {
+  const cred = publicCredentials.find((c) => c.token === token)
+  if (cred) {
+    if (!cred.enabled || cred.revokedAt) {
+      return {
+        ok: false,
+        code: 40402,
+        message: '访问凭证已被撤销',
+        hint: '该公开链接已停止访问，请联系应用管理员重新生成链接'
+      }
+    }
+    if (cred.expiresAt && new Date(cred.expiresAt).getTime() < Date.now()) {
+      return {
+        ok: false,
+        code: 40403,
+        message: '访问凭证已过期',
+        hint: '请向分享者索取新的公开链接'
+      }
+    }
+    return { ok: true, cred: { token: cred.token, appId: cred.appId } }
+  }
+
+  const share = findShareByToken(token)
+  if (share) {
+    if (share.revokedAt) {
+      return {
+        ok: false,
+        code: 40402,
+        message: '访问凭证已被撤销',
+        hint: '该公开链接已停止访问，请向分享者索取新的公开链接'
+      }
+    }
+    if (share.expiresAt && new Date(share.expiresAt).getTime() < Date.now()) {
+      return {
+        ok: false,
+        code: 40403,
+        message: '访问凭证已过期',
+        hint: '请向分享者索取新的公开链接'
+      }
+    }
+    return {
+      ok: true,
+      share: {
+        token: share.token,
+        conversationId: share.conversationId,
+        scope: share.scope,
+        messageId: share.messageId
+      }
+    }
+  }
+
+  return {
+    ok: false,
+    code: 40401,
+    message: '访问凭证无效',
+    hint: '链接可能不完整，请向分享者重新索取公开链接'
+  }
+}
+
+function gateOrThrow(token: string): PublicGateOk {
+  const gate = gatePublicToken(token)
+  if (!gate.ok) throw new ApiError(gate.code, gate.message, gate.hint)
+  return gate
+}
+
+/**
+ * 分享分支的公开上下文：从会话反查应用摘要。
+ * 无应用（通用问答）时按会话标题合成一个最小上下文，让公开页仍能开门，
+ * 而不是因为 `appId` 为空就报「应用已不存在」。
+ */
+function contextFromShare(share: { conversationId: string }) {
+  const conv = findConversation(share.conversationId)
+  if (!conv) return null
+  const app = conv.appId ? appBriefs[conv.appId] : undefined
+  if (app) {
+    return {
+      appId: app.id,
+      appName: app.name,
+      icon: app.icon,
+      description: app.description,
+      prologue: app.prologue,
+      quickQuestions: app.quickQuestions
+    }
+  }
+  return {
+    appId: conv.appId ?? '',
+    appName: conv.appName || '通用问答',
+    icon: conv.appName?.slice(0, 1) || '通',
+    description: conv.title || '共享的对话',
+    prologue: '这是共享的对话记录，可直接阅读下方内容。',
+    quickQuestions: []
+  }
+}
+
+function publicMessagesFor(gate: PublicGateOk): ChatMessage[] {
+  if (gate.cred) {
+    // 应用凭证分支：公开演示消息（chat-store 水合自 fixtures，允许被追加）
+    return publicMessages[gate.cred.token] ?? []
+  }
+  if (gate.share) {
+    const share = findShareByToken(gate.share.token)
+    return share ? messagesOfShare(share) : []
+  }
+  return []
+}
+
 export const conversationRoutes: MockRoute[] = [
+  /* ── 静态段路由必须排在参数路由之前（dispatch 按序首个命中） ── */
+
   [
     'GET',
     '/conversations',
@@ -89,6 +215,107 @@ export const conversationRoutes: MockRoute[] = [
     ({ path, token }) => withApp(findConv(path.id, token))
   ],
 
+  /**
+   * 一轮问答的落库入口（#4）。
+   *
+   * 页面在 mock 下走 `chatStreamMock`，但两条链路共用 `appendTurn`：
+   * 流结束/中断的收尾处调用它，所以用户点「停止」时已生成的部分也写得进库。
+   * 无 conversationId 时自动建会话并把 id 回给调用方。
+   */
+  [
+    'POST',
+    '/conversations/chat',
+    ({ body, token }) => {
+      const subjects = currentSubjects(token)
+      const req = (body ?? {}) as {
+        appId?: string
+        conversationId?: string
+        question: string
+        attachmentIds?: string[]
+      }
+      const question = (req.question ?? '').trim()
+      if (!question) throw new ApiError(4001, '问题不能为空')
+
+      if (req.conversationId) {
+        findConv(req.conversationId, token)
+      } else if (req.appId && !appVisible(req.appId, subjects)) {
+        throw new ApiError(ErrorCode.NOT_FOUND, `应用「${req.appId}」不存在或已下架`)
+      }
+
+      // 同步生成（mock 语义）：非流式入口直接给完整回答
+      const payload = req.appId ? cannedAnswer.withRefs : cannedAnswer.withoutRefs
+      const turn = appendTurn({
+        conversationId: req.conversationId,
+        appId: req.appId ?? null,
+        ownerId: selfId(subjects),
+        question,
+        answer: payload.text,
+        status: '已生成',
+        refs: payload.refs,
+        suggestions: payload.suggestions,
+        tokens: Math.round(payload.text.length / 2.2),
+        durationMs: 900,
+        attachmentIds: req.attachmentIds,
+        messageId: `msg_${Date.now().toString(36)}`
+      })
+      return {
+        conversationId: turn.conversationId,
+        userMessage: turn.user,
+        assistantMessage: turn.assistant
+      }
+    }
+  ],
+
+  [
+    'GET',
+    '/conversations/:id/shares',
+    ({ path, token }) => {
+      findConv(path.id, token)
+      return listShares(path.id).map(toShareView)
+    }
+  ],
+
+  [
+    'POST',
+    '/conversations/:id/shares',
+    ({ path, body, token }) => {
+      // 写操作前置也要过判定（§3.3 硬规矩 1）
+      const conv = findConv(path.id, token)
+      const req = (body ?? {}) as {
+        scope?: ShareScope
+        messageId?: string
+        expiresAt?: string | null
+      }
+      const scope = req.scope ?? 'conversation'
+      if (scope !== 'app' && scope !== 'conversation' && scope !== 'message') {
+        throw new ApiError(4004, '分享范围只能是 app / conversation / message')
+      }
+      if (scope === 'message') {
+        if (!req.messageId) throw new ApiError(4005, '消息级分享必须指定 messageId')
+        const msg = messagesOf(conv.id).find((m) => m.id === req.messageId)
+        if (!msg) throw new ApiError(ErrorCode.NOT_FOUND, `消息「${req.messageId}」不存在`)
+      }
+      const rec = createShare({
+        conversationId: conv.id,
+        scope,
+        messageId: req.messageId,
+        expiresAt: req.expiresAt ?? null
+      })
+      return toShareView(rec)
+    }
+  ],
+
+  [
+    'DELETE',
+    '/conversations/:id/shares/:token',
+    ({ path, token }) => {
+      findConv(path.id, token)
+      // 撤销是幂等的：对的会话 + 不存在的 token 也算「撤销完成」
+      revokeShare(path.id, path.token)
+      return undefined
+    }
+  ],
+
   [
     'POST',
     '/conversations',
@@ -108,7 +335,7 @@ export const conversationRoutes: MockRoute[] = [
         throw new ApiError(ErrorCode.NOT_FOUND, `应用「${appId}」不存在或已下架`)
       }
 
-      const created: StoredConversation = {
+      return addConversation({
         id: `c${Date.now().toString(36)}`,
         title: '新建会话',
         appId: appId ?? null,
@@ -119,10 +346,7 @@ export const conversationRoutes: MockRoute[] = [
         // 归属由"后端"写（07 §六 阶段 1）：会话是私人对话，默认 private
         ownerId: selfId(subjects),
         visibility: 'private'
-      }
-      conversations.unshift(created)
-      messagesByConv[created.id] = []
-      return created
+      })
     }
   ],
 
@@ -133,8 +357,7 @@ export const conversationRoutes: MockRoute[] = [
       const conv = findConv(path.id, token)
       const { title } = (body ?? {}) as { title?: string }
       if (!title?.trim()) throw new ApiError(4001, '会话名称不能为空')
-      conv.title = title.trim()
-      conv.updatedAt = new Date().toISOString()
+      patchConversation(conv.id, { title: title.trim(), updatedAt: new Date().toISOString() })
       return withApp(conv)
     }
   ],
@@ -144,8 +367,7 @@ export const conversationRoutes: MockRoute[] = [
     '/conversations/:id',
     ({ path, token }) => {
       const conv = findConv(path.id, token)
-      conversations.splice(conversations.indexOf(conv), 1)
-      delete messagesByConv[conv.id]
+      removeConversation(conv.id)
       return undefined
     }
   ],
@@ -155,8 +377,7 @@ export const conversationRoutes: MockRoute[] = [
     '/conversations/:conversationId/messages',
     ({ path, query, token }) => {
       findConv(path.conversationId, token)
-      const list = messagesByConv[path.conversationId] ?? []
-      return paginate(list, query)
+      return paginate(messagesOf(path.conversationId), query)
     }
   ],
 
@@ -164,7 +385,7 @@ export const conversationRoutes: MockRoute[] = [
    * 赞踩互斥且可撤销：
    * - 传 'up' / 'down' 覆盖为新值（互斥）
    * - 再点同一项传 null 表示取消
-   * 状态写回 fixtures，刷新后仍在。
+   * 状态写回存储，刷新后仍在。
    *
    * 写操作也要过判定：否则"看得见消息、改得了别人的赞踩"就是一条越权路径（§3.3 硬规矩 1）
    */
@@ -173,6 +394,7 @@ export const conversationRoutes: MockRoute[] = [
     '/messages/:messageId/feedback',
     ({ path, body, token }) => {
       const msg = findMessage(path.messageId)
+      if (!msg) throw new ApiError(ErrorCode.NOT_FOUND, `消息「${path.messageId}」不存在`)
       findConv(msg.conversationId, token)
       if (msg.role !== 'assistant') {
         throw new ApiError(4002, '只能对助手回答进行赞踩')
@@ -192,35 +414,24 @@ export const conversationRoutes: MockRoute[] = [
     'GET',
     '/public/:token',
     ({ path }) => {
-      const cred = publicCredentials.find((c) => c.token === path.token)
-      // 三要素校验：存在 / 启用且未撤销 / 未过期。失败必须给出可读原因与下一步
-      if (!cred) {
-        throw new ApiError(
-          40401,
-          '访问凭证无效',
-          '链接可能不完整，请向分享者重新索取公开链接'
-        )
+      const gate = gateOrThrow(path.token)
+      if (gate.cred) {
+        const ctx = toPublicContext(publicCredentials.find((c) => c.token === gate.cred!.token)!)
+        if (!ctx) {
+          throw new ApiError(
+            40404,
+            '该公开链接对应的应用已不存在',
+            '请联系应用管理员重新生成公开链接'
+          )
+        }
+        return ctx
       }
-      if (!cred.enabled || cred.revokedAt) {
-        throw new ApiError(
-          40402,
-          '访问凭证已被撤销',
-          '该公开链接已停止访问，请联系应用管理员重新生成链接'
-        )
-      }
-      if (cred.expiresAt && new Date(cred.expiresAt).getTime() < Date.now()) {
-        throw new ApiError(
-          40403,
-          '访问凭证已过期',
-          '请向分享者索取新的公开链接'
-        )
-      }
-      const ctx = toPublicContext(cred)
+      const ctx = contextFromShare(gate.share!)
       if (!ctx) {
         throw new ApiError(
           40404,
-          '该公开链接对应的应用已不存在',
-          '请联系应用管理员重新生成公开链接'
+          '该公开链接对应的会话已不存在',
+          '请向分享者索取新的公开链接'
         )
       }
       return ctx
@@ -231,15 +442,8 @@ export const conversationRoutes: MockRoute[] = [
     'GET',
     '/public/:token/messages',
     ({ path }) => {
-      const cred = publicCredentials.find((c) => c.token === path.token)
-      if (!cred) throw new ApiError(40401, '访问凭证无效', '请向分享者重新索取公开链接')
-      if (!cred.enabled || cred.revokedAt) {
-        throw new ApiError(40402, '访问凭证已被撤销', '该公开链接已停止访问')
-      }
-      if (cred.expiresAt && new Date(cred.expiresAt).getTime() < Date.now()) {
-        throw new ApiError(40403, '访问凭证已过期', '请向分享者索取新的公开链接')
-      }
-      return publicMessages[cred.token] ?? []
+      const gate = gateOrThrow(path.token)
+      return publicMessagesFor(gate)
     }
   ]
 ]

@@ -7,6 +7,14 @@ import type { Grant, PageQuery, PageResult, ResourceVisibility } from './types'
 /** 消息状态机：生成中 → 已生成 | 已停止 | 失败（02:336） */
 export type MessageStatus = '生成中' | '已生成' | '已停止' | '失败'
 
+/** 聊天附件回执。上传后按 id 挂到消息上（`ChatMessage.attachments`） */
+export interface ChatAttachment {
+  id: string
+  name: string
+  size: number
+  mime?: string
+}
+
 export interface ChatMessage {
   id: string
   conversationId: string
@@ -21,6 +29,8 @@ export interface ChatMessage {
   failReason: string | null
   failHint: string | null
   createdAt: string
+  /** 可选：本条消息携带的附件。无附件时整个字段可缺省 */
+  attachments?: ChatAttachment[]
 }
 
 export interface Conversation {
@@ -53,6 +63,26 @@ export interface PublicContext {
   description: string
   prologue: string
   quickQuestions: string[]
+}
+
+/**
+ * 会话级分享回执。`url` 是**前端真能打开**的形状：hash 路由 `/#/public/:token`
+ * （见 bootstrap/router.ts 与 pages/conversation/route.ts）。
+ */
+export interface ConversationShare {
+  token: string
+  url: string
+  expiresAt: string | null
+}
+
+/** 分享范围：整应用 / 整会话 / 单条消息 */
+export type ShareScope = 'app' | 'conversation' | 'message'
+
+export interface CreateShareBody {
+  scope: ShareScope
+  messageId?: string
+  /** 时效；null 或不传表示长期有效 */
+  expiresAt?: string | null
 }
 
 /* ────────────────────────── 接口 ────────────────────────── */
@@ -107,4 +137,49 @@ export const listPublicMessages = (token: string) =>
     url: '/public/:token/messages',
     path: { token },
     skipAuthRetry: true
+  })
+
+/* ────────────────────────── 附件上传 ────────────────────────── */
+
+/**
+ * 上传一个聊天附件。走 multipart（与知识库文档上传同一套出口约定）。
+ * 返回的 id 挂到 `ChatMessage.attachments` / 问答请求的 `attachmentIds` 上。
+ */
+export const uploadFile = (file: File): Promise<ChatAttachment> => {
+  const form = new FormData()
+  form.append('file', file)
+  return request<ChatAttachment>({ method: 'POST', url: '/files', body: form })
+}
+
+/* ────────────────────────── 会话级分享 ────────────────────────── */
+
+/** 给会话建一个免登录分享链接。scope 决定公开页能看到的范围 */
+export const createConversationShare = (
+  conversationId: string,
+  body: CreateShareBody
+): Promise<ConversationShare> =>
+  request<ConversationShare>({
+    method: 'POST',
+    url: '/conversations/:id/shares',
+    path: { id: conversationId },
+    body
+  })
+
+export const listConversationShares = (
+  conversationId: string
+): Promise<ConversationShare[]> =>
+  request<ConversationShare[]>({
+    method: 'GET',
+    url: '/conversations/:id/shares',
+    path: { id: conversationId }
+  })
+
+export const revokeConversationShare = (
+  conversationId: string,
+  token: string
+): Promise<void> =>
+  request<void>({
+    method: 'DELETE',
+    url: '/conversations/:id/shares/:token',
+    path: { id: conversationId, token }
   })

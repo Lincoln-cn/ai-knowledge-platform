@@ -12,6 +12,9 @@
  *   done     终态收尾：已生成 / 已停止 / 失败
  *   error    失败原因与下一步；之后仍会走 done 收尾
  *
+ * 传输层保证（lib/sse.ts）：无论正常收尾、用户 abort、半途断流还是闲置超时，
+ * onDone **恰好回调一次**；abort 场景不触发 onError，且已生成内容一律保留。
+ *
  * 后端用 SSE(text/event-stream) 实现；前端换传输只需替换 lib 层实现，本文件不变。
  */
 
