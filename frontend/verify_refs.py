@@ -61,6 +61,31 @@ def scrape_refs(text: str) -> list[tuple[str, str, str]]:
     return found
 
 
+# 有一个 fixture 是**故意违法**的：`fixtures/workflow.ts` 的 `sampleInvalidGraph`
+# 用来验证「校验能拦下发布」—— 它刻意含两个 start-node、成环、孤立节点、
+# 以及引用不存在的模型/知识库。**那些悬空 id 是它的用途，不是缺陷。**
+DELIBERATE_INVALID_EXPORT = "sampleInvalidGraph"
+
+
+def split_deliberate_invalid(text: str) -> tuple[str, str]:
+    """把「故意违法」的那个具名导出整块挖出来。
+
+    返回 (剩下的、被挖走的)。
+
+    ⚠️ **只挖这一个具名块，不要整文件跳过** —— 同一个文件里还有合法的图，
+    整文件跳过会连带放过它的真悬空引用（那就把检查作废了）。
+    配套：被挖走的引用数要**打印出来**，让排除可见而不是静默 ——
+    静默的例外迟早会变成藏真问题的地方。
+    """
+    marker = re.search(rf"export\s+const\s+{DELIBERATE_INVALID_EXPORT}\b", text)
+    if not marker:
+        return text, ""
+    # 块尾 = 下一个顶层 export（或文件末尾）
+    nxt = re.search(r"\nexport\s", text[marker.end():])
+    end = marker.end() + nxt.start() if nxt else len(text)
+    return text[: marker.start()] + text[end:], text[marker.start():end]
+
+
 def main() -> int:
     owner_ids: dict[str, set[str]] = {}
     for entity, filename in OWNERS.items():
@@ -79,9 +104,12 @@ def main() -> int:
 
     problems: list[str] = []
     checked = 0
+    skipped = 0
     for folder in (FIXTURES, HANDLERS):
         for file in sorted(folder.glob("*.ts")):
-            text = file.read_text(encoding="utf-8")
+            raw = file.read_text(encoding="utf-8")
+            text, deliberate = split_deliberate_invalid(raw)
+            skipped += len(scrape_refs(deliberate))
             for entity, ref_id, key in scrape_refs(text):
                 # 该文件的作者若就是所有者，跳过（自己定义自己引用）
                 if file.name == OWNERS.get(entity):
@@ -102,6 +130,11 @@ def main() -> int:
         print("✓ 无悬空引用")
 
     print(f"\n共核对 {checked} 处有效引用")
+    if skipped:
+        print(
+            f"按设计跳过 {skipped} 处 —— 位于「故意违法」的样例图 {DELIBERATE_INVALID_EXPORT}"
+            f"（它存在的意义就是含悬空 id，用于验证校验能拦下发布）"
+        )
     print("=" * 84)
     return 1 if problems else 0
 

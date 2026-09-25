@@ -3,13 +3,12 @@ import type { WorkflowGraph } from '@/api/workflow'
 import type { ModelInfo } from '@/api/models'
 
 /**
- * ⚠️ **搬迁适配层** —— 只服务于从旧工程整体搬过来的编排画布。
+ * 编排画布的接口适配层 —— 只服务于从旧工程整体搬过来的画布代码。
  *
- * 旧画布调用的是 BladeX 的三个老接口模块（`api/adhibition/setting`、
- * `api/detailKnowledge/document`、`api/system/dictbiz`），响应体是
- * **双层包装**（`res.data.data`）。本文件把旧函数名与旧响应形状映射到新契约。
+ * 画布的调用点用的是一套旧函数名，并且期待**双层包装**的响应体
+ * （`res.data.data`）。本文件把这些旧形状映射到新契约。
  *
- * **为什么不直接改画布的调用点**：画布是一整棵 6,796 行的旧代码，此刻把它
+ * **为什么不直接改画布的调用点**：画布是一整棵 6,796 行的既有代码，此刻把它
  * 半现代化只会得到一个比两端都差的混合体。适配层让旧脸接新芯，
  * 并且**它是唯一的删除点** —— 将来把画布调用点正规化到 `@/api/*` 之后，
  * 整个 `src/api/legacy/` 目录删掉即可，不必再去 81 个文件里找残留。
@@ -92,7 +91,7 @@ export const getVersionGraph = (applicationId: string, version: number) =>
 /**
  * 模型动态表单 / 参数表单（旧 `getModelFormItem` / `getModelParams`）。
  *
- * ⚠️ **新契约没有对应接口**：旧系统由后端下发一份 avue 表单描述，
+ * ⚠️ **新契约没有对应接口**：旧形状是「后端下发一份表单描述」来驱动字段渲染，
  * 新设计里模型创建表单是前端固定的（见 `pages/models/`）。
  * 编排画布的「新建模型」弹窗依赖它，目前**返回空表单** ——
  * 也就是说该弹窗能打开但不会有字段。这是已知缺口，不是静默失败：

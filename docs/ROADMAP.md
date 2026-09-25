@@ -39,10 +39,19 @@
 
 目标：**把仓库里一切"只有内部人才看得懂"的东西清掉**，让外部读者能独立读懂。
 
-- [ ] **活代码里的旧系统引用 24 处 / 7 文件**（`grep -rn "_archive\|qa-ui-3\|qa-server\|bladex\|avue" frontend/src`）：
-  - `api/legacy/{dictbiz,document,setting}.ts` —— 旧契约适配层。**它是唯一能把旧形状一次删干净的面**，接后端时整体摘掉，不要逐个改
-  - `constants/migration.ts` + `pages/overview/Index.vue` + `pages/pending/Index.vue` —— 迁移台账与配套页面，**连同 `overview` 页一起重做**（见阶段 3）
-  - `components/dynamic-form/{DynamicForm.vue,types.ts}` —— 注释里的出处说明，改写
+- [x] **`api/legacy/{dictbiz,document,setting}.ts` 的旧系统注释改写为中性描述**（✅ 已完成）
+      —— 只改注释、逻辑零改动；用 `git diff -U0` 证明**全部改动行都是注释行**。
+      三份适配层引用数 **1+2+0 → 0/0/0**。
+      > 注：`document.ts` 本来就没有旧系统引用；三份里实际只有 2 份、共 3 处。
+- [x] **`verify_refs.py` 假阳性修正**（✅ 已完成）—— 它会把「故意违法」的样例图
+      （`fixtures/workflow.ts` 的 `sampleInvalidGraph`，用途就是含悬空 id 来验证"校验能拦下发布"）
+      里的 5 处引用报成悬空。修法是**具名挖掉那一个块、不整文件跳过**，并把跳过数量**打印出来**
+      （静默的例外迟早会变成藏真问题的地方）。金丝雀已验：注入真悬空引用后仍能报错并退出码 1。
+- [ ] **剩余旧系统引用 21 处 / 5 文件**（起始 24 处 / 7 文件，`grep -rn "_archive\|qa-ui-3\|qa-server\|bladex\|avue" frontend/src`）：
+  - `constants/migration.ts`（**13 处**）+ `pages/overview/Index.vue`（**5 处**）—— **占剩余的 86%**，
+    是**同一对**：迁移台账常量 + 读它的那一页。**应当一起重做**，不要逐个改注释
+  - `pages/pending/Index.vue`（1 处）—— 「尚未迁移」占位页，模块全迁完后应整体删除
+  - `components/dynamic-form/{DynamicForm.vue,types.ts}`（各 1 处）—— 注释里的出处说明，改写
 - [ ] **根 `README.md` 重写**：现在那份讲的是"我们怎么搬过来的"，外部读者要的是"这是什么、能干什么、怎么跑起来"
 - [ ] **`frontend/README.md` 重写**：删掉迁移进度章节，补「本地起服务 → 看演示 → 跑校验」的路径
 - [ ] 补 `LICENSE`（**需先拍板**，见文末）、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`
