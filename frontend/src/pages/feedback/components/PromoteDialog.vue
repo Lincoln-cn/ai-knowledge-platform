@@ -46,7 +46,7 @@
           <div class="hint micro">
             <template v-if="kbSource === '演示'">
               <el-tag size="small" effect="plain" type="warning">演示目录</el-tag>
-              知识库模块尚未迁移，此处为预演用固定目标；接上契约后自动走 <code>knowledgeApi</code>。
+              接口未返回时退回内置演示目录；接口可达时自动走 <code>knowledgeApi</code>。
             </template>
             <template v-else>问题将写入该知识库的问题列表</template>
           </div>

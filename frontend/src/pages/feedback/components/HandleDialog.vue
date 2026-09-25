@@ -110,7 +110,7 @@
               把「用户问题」写入目标知识库的问题列表，下次同类提问可命中人工沉淀的答案。
               <template v-if="kbSource === '演示'">
                 <el-tag size="small" effect="plain" type="warning" class="ml6">演示目录</el-tag>
-                知识库模块尚未迁移，此处为预演用固定目标。
+                接口未返回时退回内置演示目录。
               </template>
             </div>
           </div>
@@ -170,9 +170,8 @@ const loadingKbs = ref(false)
 const kbSource = ref<'契约' | '演示'>('演示')
 
 /**
- * 知识库模块尚未迁移时 knowledgeApi 会 404。
- * 预演阶段退回固定目录，保证「优化答案」这条路径在界面上走得通；
- * 接上知识库契约后自动改走接口，页面代码不再改。
+ * 接口不可用时退回内置演示目录，保证「优化答案」这条路径在界面上走得通；
+ * 接口可达时自动改走契约（`kbSource` 变 '契约'），页面代码不再改。
  */
 const DEMO_KBS = [
   { id: 'kb1', name: '合同管理制度' },

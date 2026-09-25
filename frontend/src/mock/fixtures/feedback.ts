@@ -196,8 +196,7 @@ export const feedbacks: FeedbackItem[] = [
 /**
  * 「优化答案」可沉淀的目标知识库（FR-03-12 问答对）。
  *
- * 知识库模块尚未迁移，knowledgeApi.listKnowledgeBases 的 mock 会 404。
- * 预演阶段由本表提供可选目标，接上知识库契约后页面会优先走接口。
+ * 页面优先走 knowledgeApi.listKnowledgeBases；接口不可用时退回本表作为兜底目标。
  * id 与页面侧演示列表保持一致，保证沉淀回显的名称能对上。
  */
 export const promotableKnowledgeBases = [
