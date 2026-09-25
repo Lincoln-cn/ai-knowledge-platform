@@ -70,11 +70,16 @@
         </div>
       </div>
 
-      <div v-if="!loading && !list.length" class="empty panel">
-        <div class="empty-title">
-          {{ query.onlyOversized ? '没有超长分段' : '该筛选下没有分段' }}
+      <!-- 空态：两栏（左图右字）。图的左缘与分段卡片的左缘同一格，
+           讲的是「切分 / 入库」这条管线，不是通用插画。 -->
+      <div v-if="!loading && !list.length" class="empty panel empty-split">
+        <EmptyArt kind="pipeline" />
+        <div class="empty-copy">
+          <div class="empty-title">
+            {{ query.onlyOversized ? '没有超长分段' : '该筛选下没有分段' }}
+          </div>
+          <p class="micro muted">调整筛选条件，或从文档页导入新内容</p>
         </div>
-        <p class="micro muted">调整筛选条件，或从文档页导入新内容</p>
       </div>
     </div>
 
@@ -115,6 +120,7 @@ import type { DocumentItem, Segment } from '@/api/ingestion'
 import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 import SegmentEditDialog from './SegmentEditDialog.vue'
+import EmptyArt from '@/components/EmptyArt.vue'
 
 const props = defineProps<{ kbId: string; initialDocumentId?: string }>()
 
@@ -386,6 +392,21 @@ onMounted(() => {
 
 .empty {
   grid-column: 1 / -1;
+}
+
+/* 空态两栏：把全局 .empty 的居中排布换成左起的两栏（图左字右）。 */
+.empty-split {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-xl);
+  text-align: left;
+}
+
+.empty-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
 }
 
 .pager {

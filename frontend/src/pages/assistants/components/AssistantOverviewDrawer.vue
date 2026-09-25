@@ -32,6 +32,26 @@
         </div>
       </div>
 
+      <!--
+        发布与访问回执 —— 本抽屉唯一那一次深色石墨带（Cobalt 签名 4 + 8，见 design.md § 仪器面板）。
+        读数全部来自 `assistant` 上**已有、此前没展示**的字段（type / modelName / workflow /
+        kbIds / promptIds / multiTurn），外加一次 listCredentials。
+
+        ⚠️ CredentialsPanel 内部**也会**调 `assistantsApi.listCredentials`，所以本处多一次请求。
+        这是刻意取舍：要省掉它，就得让那个表格组件把列表吐上来（新增 emit / 上提状态），
+        等于让"独立读数"反过来依赖表格组件的挂载与刷新时机，耦合更坏。
+        代价要说清：在本抽屉里新建 / 撤销凭证后，这里有两条读数要等**下次打开抽屉**才刷新。
+
+        发布态**不单列一行** —— 上面 .metrics 已经有一条「发布态」标签，重复一遍不是读数；
+        由右上角四态胶囊承担（published → OK / 未发布 → WARN）。
+      -->
+      <InstrumentCard
+        v-if="publishRows.length"
+        title="发布与访问回执"
+        :status="publishStatus"
+        :rows="publishRows"
+      />
+
       <!-- 趋势图 -->
       <div class="trend panel">
         <div class="sec-hd">
@@ -59,17 +79,18 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import * as echarts from 'echarts'
 import dayjs from 'dayjs'
-import { analyticsApi } from '@/api'
-import type { Assistant } from '@/api/assistants'
+import { analyticsApi, assistantsApi } from '@/api'
+import type { AccessCredential, Assistant } from '@/api/assistants'
 import type { TrendPoint } from '@/api/analytics'
+import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/components/InstrumentCard.vue'
 import CredentialsPanel from './CredentialsPanel.vue'
 import ApiKeysPanel from './ApiKeysPanel.vue'
 import BundlePanel from './BundlePanel.vue'
 
-defineProps<{ assistant: Assistant | null }>()
+const props = defineProps<{ assistant: Assistant | null }>()
 const emit = defineEmits<{ saved: [] }>()
 
 const visible = ref(false)
@@ -154,14 +175,114 @@ const reset = () => {
   chart?.clear()
 }
 
+/* ────────────── 发布与访问回执读数（仪器面板 · 签名 4 + 8） ────────────── */
+
+/** 凭证列表。`null` = 还没读到（含读取失败），此时面板显示「—」而不是画成 0 */
+const creds = ref<AccessCredential[] | null>(null)
+const credsFailed = ref(false)
+
+const loadCredentials = async () => {
+  const id = props.assistant?.id
+  if (!id) {
+    creds.value = null
+    credsFailed.value = false
+    return
+  }
+  try {
+    creds.value = await assistantsApi.listCredentials(id)
+    credsFailed.value = false
+  } catch {
+    creds.value = null
+    credsFailed.value = true
+  }
+}
+
+/**
+ * 读数行。**零新增字段**：全部取自 `assistant` 上已有但此前没展示的属性 —— 不编数字。
+ *
+ * 编排应用没有 `modelName` 是**契约刻意的**（模型在各 AI 节点里，可以一条流程用多个，
+ * 在应用壳上放一个"默认模型"会让人以为整条流程就用那一个），不是缺数据，
+ * 所以显示「见流程」+ 节点数，而不是「—」。
+ *
+ * 发布态不在这里重复（见模板注释）；`.metrics` 已经有一条「发布态」。
+ */
+const publishRows = computed<InstrumentRow[]>(() => {
+  const a = props.assistant
+  if (!a) return []
+  const workflow = a.type === 'workflow'
+
+  const rows: InstrumentRow[] = [
+    {
+      label: '应用类型',
+      value: workflow ? '编排' : '简单',
+      hint: workflow ? '创建后不可更改' : `${a.retrieval.mode} · Top${a.retrieval.topN}`
+    },
+    {
+      label: '模型',
+      value: workflow ? '见流程' : (a.modelName ?? '—'),
+      hint: workflow
+        ? (a.workflow ? `流程共 ${a.workflow.nodeCount} 个节点` : undefined)
+        : `${a.multiTurn ? '多轮' : '单轮'}上下文 · 思考模式${a.thinkingEnabled ? '开' : '关'}`
+    },
+    {
+      label: '知识库',
+      value: a.kbIds.length,
+      hint: `${a.promptIds.length} 个提示词模板`
+    }
+  ]
+
+  if (credsFailed.value) {
+    rows.push({ label: '凭证', value: '—', hint: '凭证列表读取失败' })
+    return rows
+  }
+
+  const list = creds.value
+  if (!list) return rows
+
+  rows.push({
+    label: '凭证',
+    value: list.length,
+    hint: `启用 ${list.filter((c) => c.enabled && !c.revokedAt).length} · 已撤销 ${
+      list.filter((c) => c.revokedAt).length
+    }`
+  })
+
+  // 访问回执：有凭证才谈得上"访问"，一条都没有时不画 0
+  if (list.length) {
+    const lastAt = list
+      .map((c) => c.lastAccessAt)
+      .filter((t): t is string => !!t)
+      .sort()
+      .at(-1)
+    rows.push({
+      label: '累计访问',
+      value: list.reduce((n, c) => n + c.accessCount, 0).toLocaleString(),
+      hint: lastAt ? `最近 ${dayjs(lastAt).format('MM-DD HH:mm')}` : '尚无访问记录'
+    })
+  }
+
+  return rows
+})
+
+/** 状态胶囊由真实读数推导：`published` → OK；未发布 → WARN。 */
+const publishStatus = computed<InstrumentStatus>(() => (props.assistant?.published ? 'OK' : 'WARN'))
+
 const open = async () => {
   visible.value = true
   loading.value = true
   try {
+    // 父组件是 `current.value = a; overviewRef.value?.open()` **同步连着调**的：
+    // 此刻 props.assistant 还是上一次的应用，抽屉 body 也还没挂载（子组件 ref 为 undefined）。
+    // 不等这一拍，会同时踩三个坑（实测）：
+    //   ① 凭证读数取到的是**上一个应用**的列表 —— 面板显示的却是当前应用；
+    //   ② 访问凭证表首次打开是空的（`credRef.value?.fetch()` 被 `?.` 静默跳过）；
+    //   ③ API Key 表同上。
+    await nextTick()
     await Promise.all([
       loadTrend(),
       credRef.value?.fetch(),
-      keyRef.value?.fetch()
+      keyRef.value?.fetch(),
+      loadCredentials()
     ])
   } finally {
     loading.value = false

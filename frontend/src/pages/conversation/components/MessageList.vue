@@ -10,9 +10,14 @@
       <el-button size="small" class="mt8" @click="emit('retry')">重试</el-button>
     </div>
 
-    <div v-else-if="!messages.length" class="empty">
-      <div class="empty-title">开始提问</div>
-      <p class="micro muted">{{ emptyText }}</p>
+    <!-- 空态：两栏（左字右图）。图在右侧用的是消息列本来就留空的负空间
+         （正文 max-width 860px），左缘与 QUERY/ANSWER 标签对齐。 -->
+    <div v-else-if="!messages.length" class="empty empty-split">
+      <div class="empty-copy">
+        <div class="empty-title">开始提问</div>
+        <p class="micro muted">{{ emptyText }}</p>
+      </div>
+      <EmptyArt kind="retrieval" />
     </div>
 
     <template v-else>
@@ -137,6 +142,7 @@
 import { nextTick, ref, watch } from 'vue'
 import type { ChatMessage } from '@/api/conversations'
 import AnswerBody from './AnswerBody.vue'
+import EmptyArt from '@/components/EmptyArt.vue'
 
 const props = defineProps<{
   messages: ChatMessage[]
@@ -268,6 +274,30 @@ defineExpose({ scrollToBottom })
 .state {
   padding: var(--space-lg);
   text-align: center;
+}
+
+/* 空态两栏：把全局 .empty 的居中排布换成左起的两栏。
+   padding 归零 —— 左缘要与消息列（QUERY / ANSWER 标签）严格对齐，
+   否则整个空态会比正文右移一格。 */
+.empty-split {
+  flex: 1;
+  min-height: 0;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-xl);
+  padding: 0;
+  text-align: left;
+}
+
+.empty-copy {
+  /* 本组件的行宽旋钮（页面上没有测度令牌；写成一个局部变量而不是散落数值） */
+  --empty-copy-measure: 380px;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  max-width: var(--empty-copy-measure);
 }
 
 /* 引用角标条 */
