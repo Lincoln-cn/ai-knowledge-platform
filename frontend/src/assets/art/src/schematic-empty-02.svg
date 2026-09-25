@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="360" viewBox="0 0 600 360">
+  <!--
+    schematic-empty-02 —— 检索发散示意图（空态用）。
+    design.md § Art layer「空态」那一格：线稿示意图。
+    语义：一个问题 → 三种检索模式 → 融合 → 引用。
+    **不写字**（避免字体回退）；accent 只落"被命中的那一路"。
+  -->
+  <g fill="none" stroke="#b6c6e0" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <!-- ① 提问：一个带小尾的圆，像对话气泡的抽象 -->
+    <circle cx="86" cy="180" r="34" />
+    <path d="M62 206 l-14 22" stroke="#d3dcea" />
+
+    <!-- ② 三路发散 -->
+    <path d="M124 180 C168 180 168 96 212 96" />
+    <path d="M124 180 h88" />
+    <path d="M124 180 C168 180 168 264 212 264" />
+
+    <!-- ③ 三种模式：向量 / 全文 / 混合。形状不同 ⇒ 不是三个一样的方格 -->
+    <path d="M212 74 h96 a6 6 0 0 1 6 6 v32 a6 6 0 0 1 -6 6 h-96 a6 6 0 0 1 -6 -6 v-32 a6 6 0 0 1 6 -6 Z" />
+    <g stroke="#d3dcea" stroke-width="1">
+      <path d="M226 88 h14" /><path d="M246 88 h14" /><path d="M266 88 h14" />
+      <path d="M226 104 h34" /><path d="M266 104 h14" />
+    </g>
+
+    <path d="M206 162 h108 a6 6 0 0 1 6 6 v24 a6 6 0 0 1 -6 6 h-108 a6 6 0 0 1 -6 -6 v-24 a6 6 0 0 1 6 -6 Z" />
+    <g stroke="#d3dcea" stroke-width="1">
+      <path d="M214 180 h92" /><path d="M214 192 h60" />
+    </g>
+
+    <path d="M212 242 h96 a6 6 0 0 1 6 6 v32 a6 6 0 0 1 -6 6 h-96 a6 6 0 0 1 -6 -6 v-32 a6 6 0 0 1 6 -6 Z" />
+    <g stroke="#d3dcea" stroke-width="1">
+      <path d="M226 258 h14" /><path d="M248 258 h34" />
+      <path d="M226 274 h48" />
+    </g>
+
+    <!-- ④ 融合：三路收拢到一点 -->
+    <path d="M320 96 C368 96 368 180 400 180" />
+    <path d="M320 180 h80" />
+    <path d="M320 264 C368 264 368 180 400 180" />
+
+    <!-- ⑤ 引用：三张叠起来的卡片，最上一张带 accent 边 -->
+    <path d="M408 148 h132 a6 6 0 0 1 6 6 v88 a6 6 0 0 1 -6 6 H408 a6 6 0 0 1 -6 -6 v-88 a6 6 0 0 1 6 -6 Z" />
+    <path d="M420 166 h108" stroke="#d3dcea" />
+    <path d="M420 186 h108" stroke="#d3dcea" />
+    <path d="M420 206 h72" stroke="#d3dcea" />
+  </g>
+
+  <!-- accent：被采用的那一路 + 引用编号点 -->
+  <path d="M124 180 h88" stroke="#2f6fed" stroke-width="1.6" fill="none" />
+  <circle cx="402" cy="180" r="3.5" fill="#2f6fed" />
+</svg>

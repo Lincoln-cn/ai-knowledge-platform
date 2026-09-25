@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="360" viewBox="0 0 600 360">
+  <!--
+    schematic-empty-01 —— 入库管线示意图（空态用）。
+    design.md § Art layer「空态」那一格：**线稿示意图**，不是插画。
+    规则：只许线、只许冷调、只许一两个 accent 落点、**不写字**（避免字体回退毁掉画面）。
+    语义：文档 → 切分 → 向量化。
+    色彩：#b6c6e0 / #d3dcea 为线；#2f6fed 为唯一的 accent 落点。
+  -->
+  <g fill="none" stroke="#b6c6e0" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <!-- ① 文档：正文用四条发丝线示意，右上折角 -->
+    <path d="M52 92 h84 l32 32 v144 a8 8 0 0 1 -8 8 H52 a8 8 0 0 1 -8 -8 V100 a8 8 0 0 1 8 -8 Z" />
+    <path d="M136 92 v32 h32" stroke="#d3dcea" />
+    <path d="M70 152 h76" stroke="#d3dcea" />
+    <path d="M70 178 h76" stroke="#d3dcea" />
+    <path d="M70 204 h52" stroke="#d3dcea" />
+    <path d="M70 230 h64" stroke="#d3dcea" />
+
+    <!-- ② 连接线 + 箭头（中间那段是"解析"） -->
+    <path d="M188 184 h44" />
+    <path d="M224 176 l10 8 l-10 8" />
+
+    <!-- ③ 切分：三段错开叠放，示意分段不是等分切的 -->
+    <path d="M252 132 h96 a6 6 0 0 1 6 6 v26 a6 6 0 0 1 -6 6 h-96 a6 6 0 0 1 -6 -6 v-26 a6 6 0 0 1 6 -6 Z" />
+    <path d="M262 182 h96 a6 6 0 0 1 6 6 v26 a6 6 0 0 1 -6 6 h-96 a6 6 0 0 1 -6 -6 v-26 a6 6 0 0 1 6 -6 Z" />
+    <path d="M252 232 h96 a6 6 0 0 1 6 6 v26 a6 6 0 0 1 -6 6 h-96 a6 6 0 0 1 -6 -6 v-26 a6 6 0 0 1 6 -6 Z" />
+
+    <!-- ④ 连接线 -->
+    <path d="M376 196 h44" />
+    <path d="M412 188 l10 8 l-10 8" />
+
+    <!-- ⑤ 向量化：点阵 = 向量空间；右下角几个点是 accent 落点 -->
+    <g stroke="#d3dcea" stroke-width="1">
+      <path d="M444 124 h124" /><path d="M444 156 h124" /><path d="M444 188 h124" />
+      <path d="M444 220 h124" /><path d="M444 252 h124" />
+      <path d="M460 108 v160" /><path d="M492 108 v160" /><path d="M524 108 v160" />
+      <path d="M556 108 v160" />
+    </g>
+  </g>
+
+  <!-- accent 只落两点：一处表示"已入库"，一处表示"待处理" -->
+  <circle cx="492" cy="156" r="3.5" fill="#2f6fed" />
+  <circle cx="556" cy="220" r="3.5" fill="#2f6fed" opacity="0.45" />
+
+  <!-- 基线刻度：给画面一个"仪器读数"的底，不是装饰 -->
+  <g stroke="#d3dcea" stroke-width="1">
+    <path d="M44 322 h512" />
+    <path d="M44 316 v6" /><path d="M172 316 v6" /><path d="M300 316 v6" />
+    <path d="M428 316 v6" /><path d="M556 316 v6" />
+  </g>
+</svg>

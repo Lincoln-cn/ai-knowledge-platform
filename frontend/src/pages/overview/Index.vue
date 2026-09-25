@@ -73,7 +73,29 @@
       </section>
     </div>
 
-    <div v-if="(quality?.pendingFeedbackCount ?? 0) > 0" class="notice info">
+    <!--
+      机器回执 —— 本页的焦点元素，也是本页唯一那一次深色石墨带
+      （Cobalt 签名 4 + 8，见 design.md § 仪器面板）。
+      数据全部来自**本页已经在拉、但此前没展示**的字段：不新增请求，也不编数字。
+      状态胶囊不是装饰：WARN 的条件取自验收口径 B4（首字延迟 ≤ 10 s）。
+      ★ 每视口只许一个 —— 它一多，"焦点"就没有了。
+    -->
+    <InstrumentCard
+      v-if="instrumentRows.length"
+      title="近 7 天运行回执"
+      :status="instrumentStatus"
+      :rows="instrumentRows"
+    />
+
+    <!--
+      待办条是**入口**，所以要按权限过滤 —— 与上面「从这里开始」同一套判据。
+      此前只判 `pendingFeedbackCount > 0`，于是**普通用户（无 feedback:handle）
+      会看到一条通往 403 的「去处理」链接**。用户看到通向 403 的入口，比"没有入口"更坏。
+    -->
+    <div
+      v-if="(quality?.pendingFeedbackCount ?? 0) > 0 && canReach(router, '/feedback')"
+      class="notice info"
+    >
       有 <b>{{ quality?.pendingFeedbackCount }}</b> 条反馈待处理 ——
       <router-link to="/feedback" class="link">去处理</router-link>
     </div>
@@ -87,10 +109,10 @@ import { Refresh } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { analyticsApi } from '@/api'
 import type { AnalyticsRange, AssistantRankItem, OverviewMetrics, QualityMetrics } from '@/api/analytics'
-import { useSessionStore } from '@/stores/session'
+import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/components/InstrumentCard.vue'
+import { canReach } from '@/lib/reach'
 
 const router = useRouter()
-const session = useSessionStore()
 
 /** 首页固定看近 7 天 —— 需要别的区间去运营看板，那里才是「按区间深看」的地方。 */
 const rangeDays = 7
@@ -126,8 +148,8 @@ const fetchAll = async () => {
 onMounted(fetchAll)
 
 /**
- * 入门入口。**按权限过滤**：判据与侧栏同源（路由 meta.permission），
- * 否则无权限的角色会看到通向 403 的入口 —— 那是比「没有入口」更坏的体验。
+ * 入门入口。**按权限过滤** —— 判据走 `canReach()`（与顶栏、命令面板、路由守卫同源），
+ * 否则无权限的角色会看到通向 403 的入口：那是比「没有入口」更坏的体验。
  */
 const allEntries = [
   { path: '/knowledge', label: '建知识库', desc: '上传文档、切分入库，供应用检索' },
@@ -136,11 +158,43 @@ const allEntries = [
   { path: '/feedback', label: '处理反馈', desc: '用户点赞点踩与处理闭环' }
 ]
 
-const entries = computed(() =>
-  allEntries.filter((e) => {
-    const need = router.resolve(e.path).meta.permission
-    return !need || session.can(need)
-  })
+const entries = computed(() => allEntries.filter((e) => canReach(router, e.path)))
+
+/**
+ * 机器回执的读数行 —— 用**本页已经在拉、但此前没展示**的那几个字段：
+ * `quality` 有六个字段，此前只用了 `pendingFeedbackCount`；`overview` 也只用了一半。
+ * 所以这里不新增任何请求，也不编数字（仪器面板的第一条纪律）。
+ *
+ * 空数组时组件什么都不渲染（不画占位、不画 0）—— 「没测到」显示「—」是本工程的通则。
+ */
+const instrumentRows = computed<InstrumentRow[]>(() => {
+  const q = quality.value
+  const o = overview.value
+  if (!q || !o) return []
+  return [
+    {
+      label: '首字延迟 P50',
+      value: `${q.firstTokenLatencyP50} ms`,
+      hint: '验收口径 B4 ≤ 10000 ms'
+    },
+    { label: '平均引用数', value: q.avgRefCount.toFixed(1), hint: '每条回答带回的分段数' },
+    {
+      label: '结构化输出失败率',
+      value: q.artifactFailureRate == null ? '—' : `${(q.artifactFailureRate * 100).toFixed(1)}%`,
+      hint: 'MVP 只埋点，V1.1 起考核'
+    },
+    { label: 'Token 用量', value: o.tokenCount.toLocaleString() },
+    { label: '新增用户', value: o.newUserCount },
+    { label: '赞 / 踩', value: `${q.upCount} / ${q.downCount}` }
+  ]
+})
+
+/**
+ * 状态胶囊**由真实读数推导**，不是装饰：阈值取自 `docs/系统设计方案/04` 的验收口径
+ * B4（首字延迟 ≤ 10 s）。四态里只用了两态 —— 没有数据时上面的 `v-if` 已经不让它渲染。
+ */
+const instrumentStatus = computed<InstrumentStatus>(() =>
+  (quality.value?.firstTokenLatencyP50 ?? 0) > 10000 ? 'WARN' : 'OK'
 )
 
 /* 展示格式：「没测到」一律显示「—」，不画成 0 */

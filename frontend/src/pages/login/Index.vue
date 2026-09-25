@@ -1,8 +1,13 @@
 <template>
   <div class="login">
     <aside class="slate">
+      <!-- 叠层英雄构图：一片有机色块衬在文字后。装饰件，不进无障碍树。 -->
+      <span class="slate-art" aria-hidden="true"></span>
+      <span class="slate-grain" aria-hidden="true"></span>
+
       <div class="slate-brand">
-        <span class="mark">知</span>
+        <!-- 同一个字标，深色石墨面上给浅色框（design.md § Brand） -->
+        <BrandMark class="mark" :size="26" />
         <span class="mark-rule" aria-hidden="true"></span>
         <span class="mark-name">{{ APP_TITLE }}</span>
       </div>
@@ -61,6 +66,7 @@
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import BrandMark from '@/components/BrandMark.vue'
 import { ApiError } from '@/api'
 import { APP_TITLE } from '@/config/env'
 import { useSessionStore } from '@/stores/session'
@@ -114,6 +120,11 @@ const submit = async () => {
 .slate {
   flex: 0 0 42%;
   min-width: 280px;
+  /* 色块的定位上下文 + 合成边界：screen 只与本栏石墨底算，
+     并且溢出的部分被裁在本栏内，不许越进表单那侧的纸面。 */
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -122,18 +133,67 @@ const submit = async () => {
   color: var(--color-graphite-ink);
 }
 
+/* ── 叠层英雄构图（imagery-kit 的 masterclass move）────────────────────
+   一片有机色块衬在文字后：**大**、**偏右下**、z-index 0，文字在 1 档。
+
+   ★ 偏右下、**不居中** —— "居中衬在文字后"是 imagery-kit.md:145 与
+     design.md § Art layer 同时点名的 AI 默认，这一条不许打折。
+   ★ 深色石墨底上只能用 screen。本轮**实测**：同一片色块换 multiply 后
+     石墨底（oklch 22%）与色块相乘 ≈ 全黑，肉眼完全看不见 ——
+     imagery-kit.md:146「multiply over a dark canvas inverts」说的就是它。
+   ★ 不透明度取硬上限 --art-opacity-screen（0.35），不再往上一格。
+
+   width 用 clamp(60%, 80vh, 1200px)：占比下限跟随本栏、上限跟随视口高度，
+   所以宽视口下色块的**相对**构图基本稳定（实测 1440×900 为 1.19 栏宽、
+   1920×1080 与 2560×1440 为 1.07、1280×1024 为 1.52）。
+   四个窄宽度（320/375/414/768）走下面那条 media query 的落点。 */
+.slate-art {
+  position: absolute;
+  right: -34%;
+  bottom: -18%;
+  width: clamp(60%, 80vh, 1200px);
+  aspect-ratio: 1 / 1;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--art-blob);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  mix-blend-mode: screen;
+  opacity: var(--art-opacity-screen);
+}
+
+/* 本栏的颗粒，一片，硬上限 --art-opacity-grain（0.15）。
+   深底上同样走 screen：素材本身是冷炭色，multiply 在石墨上留不下任何东西。 */
+.slate-grain {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--art-grain);
+  background-repeat: repeat;
+  background-size: 128px 128px;
+  mix-blend-mode: screen;
+  opacity: var(--art-opacity-grain);
+}
+
+/* 文字一律压在色块之上 */
+.slate-brand,
+.slate-body,
+.slate-foot {
+  position: relative;
+  z-index: 1;
+}
+
 .slate-brand {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
 }
 
+/* 字标是 BrandMark 组件：这里只负责给它一个浅色 currentColor。
+   不要再写字族/字号 —— 那是上一版「知」字占位符的残留。 */
 .mark {
-  font-family: var(--font-display);
-  font-size: var(--text-xl);
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: var(--tracking-body);
   color: var(--color-graphite-ink);
 }
 
@@ -240,6 +300,16 @@ code {
     min-width: 0;
     padding: var(--space-lg);
     gap: var(--space-lg);
+  }
+
+  /* 窄屏下左栏变成顶部一条 band，原来的"右下角"就是文字区 ——
+     色块缩到 ≈ 0.78 视口宽，核心挪到 band **右上角**的空区
+     （品牌字在左、标题与标语在下，右上角没有内容）。 */
+  .slate-art {
+    right: -26%;
+    top: -50%;
+    bottom: auto;
+    width: min(78vw, 460px);
   }
 
   .slate-title {

@@ -1,0 +1,28 @@
+[
+  {
+    "date": "2026-09-25",
+    "scope": "app",
+    "round": 2,
+    "macrostructure": "Workbench",
+    "theme": "Cobalt",
+    "theme_axes": "light / grotesk-sans / cool",
+    "nav": "bordered top bar + grouped destinations + ⌘K palette (签名 5)",
+    "enrichment": "bounded art layer — blob-cool-01 / wash-cool-01 / grain-cool-01 / hatch-cool-01 / schematic-empty-01,02",
+    "brief": "知识助理平台 · 企业 RAG 知识库 + 应用编排 · 二轮：补完 Cobalt 缺失的签名动作 4/5/8（仪器面板 / 命令面板 / 各有页一条深色带）+ 有界水彩许可 + 外壳由左侧栏改带框顶栏",
+    "why": "使用者反馈「界面还是太丑了，没有设计感」。诊断 = 首轮只落地了 Cobalt 的「克制」，丢掉「戏剧性」：8 个签名动作里 4/5/8 未落地，而它们是焦点元素、签名交互与节奏来源。判据：克制不带焦点等于没有设计。",
+    "preserved": "色板 / 字族 / 间距刻度 / CTA 语气 —— 页面继续共用一套系统（多页流程的多样性规则是反转的）",
+    "art_note": "位图不走外部 CDN（kit 清单是占位且需联网，与本项目自托管 + 离线冒烟冲突）⇒ 手工 SVG 源在 src/assets/art/src/，由 tools/rasterize_art.py 本地栅格化。柔渐变与噪声用 WebP（CDP 拿的，含 alpha），线稿用 PNG。"
+  },
+  {
+    "date": "2026-09-25",
+    "scope": "app",
+    "round": 1,
+    "macrostructure": "Workbench",
+    "theme": "Cobalt",
+    "theme_axes": "light / grotesk-sans / cool",
+    "nav": "left side rail",
+    "enrichment": "none（首轮：应用页禁止 enrichment / 空态只许排版 + 发丝线）",
+    "brief": "知识助理平台 · 首轮：13 个模块一次扫完，建立 Cobalt 系统（design.md + tokens.css + fonts.css + element-plus.css + 8 个自托管 woff2）",
+    "why": "改造前四条实测问题：同屏三种蓝 · 无字号阶梯 · 间距手抄值 · 零 :focus-visible 与零 prefers-reduced-motion。"
+  }
+]

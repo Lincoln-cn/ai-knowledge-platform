@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1200 1200">
+  <!--
+    blob-cool-01 —— 透明有机色块。design.md § Art layer「沉浸页」那一格的素材。
+    用法：layered hero composition（大、偏一侧、衬在文字后，z-index:0）。
+
+    尺寸：width/height 1000、viewBox 1200 —— 内容按比例缩到 1000 栅格。
+      实测 1200×1200 的 WebP 是 274 KB（超 200 KB 上限），而它在 1600px 视口上的实际显示
+      约 960px、且是极柔的渐变 ⇒ 1200 是纯浪费。1000 足够，放大不可见。
+
+    ★ 第一版画错了，这里是第二版。第一版只有"一次位移 + 三个同心椭圆"，结果是
+      **一团淡雾** —— 边缘光滑、中心没有分量，正好是 imagery-kit.md:145 点名的
+      "居中 blob" 那个 AI 默认。问题不在参数，在**技法**：
+        位移只改轮廓，不改"颜料分布"。真实水彩的可辨识特征是**色素堆积不均**
+        （某处浓、某处透），那要靠**多个错开叠加的叶瓣**自然形成权重差，而不是一个径向渐变。
+      所以第二版：① 两层位移（粗湍流做叶瓣轮廓 + 细湍流做边缘毛刺）；
+      ② 四个**错开**的叶瓣叠在一起，重叠处自动变浓；③ 核心透明度从 0.60 提到 0.74。
+
+    色彩：Cobalt accent 色相族（约 256°）的冷调梯度。
+      #2f6fed ≈ --color-accent   oklch(58% 0.20 256)
+      #6b93e8 ≈ accent 的浅档
+      #a8c2f0 / #dce6f8 / #eef3fc ≈ --color-accent-soft 方向
+    注意：位图一旦生成，令牌就不再作用于它 —— 改色板时必须重跑 tools/rasterize_art.py。
+  -->
+  <defs>
+    <filter id="paint" x="-32%" y="-32%" width="164%" height="164%">
+      <!-- ① 粗湍流：把规整椭圆打散成叶瓣状轮廓 -->
+      <feTurbulence type="fractalNoise" baseFrequency="0.0027 0.0039" numOctaves="4" seed="23" result="coarse" />
+      <feDisplacementMap in="SourceGraphic" in2="coarse" scale="330"
+                         xChannelSelector="R" yChannelSelector="G" result="d1" />
+      <!-- ② 细湍流：让边缘带毛刺，而不是扫描线般光滑 -->
+      <feTurbulence type="fractalNoise" baseFrequency="0.0115 0.0142" numOctaves="3" seed="59" result="fine" />
+      <feDisplacementMap in="d1" in2="fine" scale="44"
+                         xChannelSelector="R" yChannelSelector="G" result="d2" />
+      <feGaussianBlur in="d2" stdDeviation="1.4" result="d3" />
+      <!-- ③ 极轻的颗粒落在色块内部，破掉"数字渐变"的平滑感 -->
+      <feTurbulence type="fractalNoise" baseFrequency="0.75" numOctaves="3" stitchTiles="stitch"
+                    seed="7" result="grain" />
+      <feColorMatrix in="grain" type="matrix"
+                     values="0 0 0 0 0.10  0 0 0 0 0.14  0 0 0 0 0.30  0 0 0 0.06 0"
+                     result="grainA" />
+      <feComposite in="grainA" in2="d3" operator="in" result="grainC" />
+      <feMerge>
+        <feMergeNode in="d3" />
+        <feMergeNode in="grainC" />
+      </feMerge>
+    </filter>
+
+    <!-- 核心：比第一版更饱和，梯度更紧 ⇒ 真有"中心" -->
+    <radialGradient id="core" cx="44%" cy="42%" r="50%">
+      <stop offset="0"    stop-color="#2f6fed" stop-opacity="0.74" />
+      <stop offset="0.34" stop-color="#4c85ea" stop-opacity="0.46" />
+      <stop offset="0.68" stop-color="#8fb2ee" stop-opacity="0.18" />
+      <stop offset="1"    stop-color="#dce6f8" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="mid" cx="50%" cy="50%" r="52%">
+      <stop offset="0"    stop-color="#5b8ce9" stop-opacity="0.40" />
+      <stop offset="0.62" stop-color="#a8c2f0" stop-opacity="0.15" />
+      <stop offset="1"    stop-color="#eef3fc" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="pale" cx="50%" cy="50%" r="54%">
+      <stop offset="0" stop-color="#a8c2f0" stop-opacity="0.30" />
+      <stop offset="1" stop-color="#eef3fc" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <g filter="url(#paint)">
+    <!-- 四个错开的叶瓣：重叠处自然堆积成浓块，这是"水彩感"的来源 -->
+    <ellipse cx="556" cy="512" rx="338" ry="286" fill="url(#core)" />
+    <ellipse cx="748" cy="668" rx="252" ry="216" fill="url(#mid)" opacity="0.88" />
+    <ellipse cx="396" cy="712" rx="214" ry="178" fill="url(#mid)" opacity="0.72" />
+    <ellipse cx="664" cy="386" rx="198" ry="158" fill="url(#pale)" opacity="0.62" />
+  </g>
+</svg>

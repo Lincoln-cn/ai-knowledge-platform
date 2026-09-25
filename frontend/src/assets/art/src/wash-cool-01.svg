@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="0 0 1600 1200">
+  <!--
+    wash-cool-01 —— 大面积柔和色场。design.md § Art layer「沉浸页」的 section 底。
+    用法：`mix-blend-mode: multiply` 于浅色纸，不透明度上限 `--art-opacity-wash`（0.6）。
+
+    ★ 第一版画错了，这里是第二版（有实测依据）。
+      第一版把色标的不透明度压在 0.20–0.30，结果**素材自身的 alpha 峰值只有 88/255**；
+      按 0.6 上限使用后，页头 band 的开/关像素均差只有 **1.62/255** —— 肉眼看不出色场存在。
+      当时的直觉是"抬高 --art-opacity-wash"，实测**无效**：0.6 → 1.0 只把均差从 1.62 抬到 2.65。
+      ⇒ 教训：**不透明度上限管的是"用多少"，管不了"素材里有多少"。素材太淡要重画素材。**
+      第二版把最强色标提到 0.62，并让 5 片错开叠加 ⇒ 重叠处 alpha 自然复合，密度上来了。
+
+    色彩：Cobalt accent 色相族（约 256°）。
+    注意：位图生成后令牌不再作用于它 —— 改色板时要重跑 tools/rasterize_art.py。
+  -->
+  <defs>
+    <filter id="bleed" x="-22%" y="-22%" width="144%" height="144%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.0028 0.0040" numOctaves="5" seed="41" result="n" />
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="300" xChannelSelector="R" yChannelSelector="G" />
+      <feGaussianBlur stdDeviation="3" />
+    </filter>
+
+    <radialGradient id="w1" cx="26%" cy="30%" r="58%">
+      <stop offset="0"    stop-color="#4c85ea" stop-opacity="0.62" />
+      <stop offset="0.52" stop-color="#8fb2ee" stop-opacity="0.34" />
+      <stop offset="1"    stop-color="#dce6f8" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="w2" cx="76%" cy="72%" r="54%">
+      <stop offset="0"    stop-color="#2f6fed" stop-opacity="0.52" />
+      <stop offset="0.50" stop-color="#6b93e8" stop-opacity="0.28" />
+      <stop offset="1"    stop-color="#dce6f8" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="w3" cx="54%" cy="14%" r="50%">
+      <stop offset="0"    stop-color="#a8c2f0" stop-opacity="0.46" />
+      <stop offset="0.58" stop-color="#dce6f8" stop-opacity="0.20" />
+      <stop offset="1"    stop-color="#eef3fc" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="w4" cx="14%" cy="82%" r="46%">
+      <stop offset="0"    stop-color="#6b93e8" stop-opacity="0.40" />
+      <stop offset="1"    stop-color="#eef3fc" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="w5" cx="88%" cy="20%" r="42%">
+      <stop offset="0" stop-color="#8fb2ee" stop-opacity="0.36" />
+      <stop offset="1" stop-color="#eef3fc" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <!-- 五片错开叠加：单片的峰值都不高，重叠处复合成真正读得出来的密度 -->
+  <g filter="url(#bleed)">
+    <rect x="-90" y="-70" width="920" height="840" rx="290" fill="url(#w1)" />
+    <rect x="810" y="430" width="920" height="880" rx="310" fill="url(#w2)" />
+    <rect x="230" y="-150" width="1140" height="530" rx="265" fill="url(#w3)" />
+    <rect x="-120" y="700" width="880" height="640" rx="270" fill="url(#w4)" />
+    <rect x="1060" y="-90" width="700" height="620" rx="280" fill="url(#w5)" />
+  </g>
+</svg>

@@ -69,11 +69,14 @@ def main() -> int:
         paper = read_var(page, "--color-paper")
         check(paper.startswith("oklch("), f"--color-paper   = {paper}")
 
-        # 兼容垫片：旧名应当解析到与新名相同
+        # 兼容垫片**已被删除**（触发条件「旧令牌引用 = 0」已满足，见 tokens.css 末尾的说明）。
+        # 所以这条断言**反过来**：`--brand` 必须解析不出来。
+        # 留着它比删掉它更有价值 —— 垫片一旦被人加回来，"页面不许用旧令牌名"这条纪律
+        # 就又没人守了，而那种回归是静默的。
         legacy = read_var(page, "--brand")
         check(
-            legacy == accent and bool(legacy),
-            f"--brand（垫片）= {legacy} —— 应等于 --color-accent",
+            not legacy,
+            f"--brand（兼容垫片）应已删除 —— 实得 {legacy or '（空，正确）'}",
         )
 
         # ── 2. 字体分工 ────────────────────────────────────────────────
@@ -122,10 +125,14 @@ def main() -> int:
         page.fill('input[autocomplete="username"]', "admin")
         page.fill('input[autocomplete="current-password"]', "admin")
         page.locator("button:has-text('登录')").first.click()
+        # 外壳已从左侧 rail 改成**带框顶栏**（Cobalt 签名 5）⇒ 判据换成 `.topbar`。
+        # ⚠️ 这一处是漏网之鱼：本轮改外壳时同步了 smoke_test / shot_sweep /
+        #    verify_permissions 三处 `.rail`，**唯独漏了这里** —— 于是它报了红。
+        #    教训：换结构时要把"谁在断言这个结构"数一遍，而不是碰见一个改一个。
         try:
-            page.wait_for_selector(".rail", timeout=15000)
+            page.wait_for_selector(".topbar", timeout=15000)
         except Exception:
-            check(False, f"登录后没等到侧栏 .rail（当前 URL: {page.url}）")
+            check(False, f"登录后没等到带框顶栏 .topbar（当前 URL: {page.url}）")
         page.wait_for_timeout(1200)
 
         print(f"\n== 4. 登录后：{page.url} ==")
@@ -146,12 +153,12 @@ def main() -> int:
         else:
             check(False, "在 /analytics 上没找到表格 —— 断言无法执行（这是失败，不是跳过）")
 
-        # 侧栏选中态：不应是整块彩底
-        rail = page.locator(".rail-item.active").first
+        # 顶栏选中态：不应是整块彩底（新顶栏里"当前"落在分组按钮或菜单项上）
+        rail = page.locator(".nav-item.active, .menu-item.active").first
         if rail.count():
             rbg = rail.evaluate("el => getComputedStyle(el).backgroundColor")
             rcolor = rail.evaluate("el => getComputedStyle(el).color")
-            print(f"    （参考）侧栏选中态 bg={rbg} color={rcolor}")
+            print(f"    （参考）顶栏选中态 bg={rbg} color={rcolor}")
 
         # ── 5. 控制台 ──────────────────────────────────────────────────
         print("\n== 5. 控制台 ==")

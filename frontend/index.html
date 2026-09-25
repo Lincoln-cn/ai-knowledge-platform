@@ -6,6 +6,12 @@
     <meta name="color-scheme" content="light" />
     <title>知识助理平台</title>
     <!--
+      favicon 必须**显式接线**：不写这一行，浏览器会去请求 `/favicon.ico`，
+      而那个文件不存在 —— 全站唯一一条 console error 就是它（实测 404）。
+      只把 `public/favicon.svg` 放进目录是**没有用**的。
+    -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!--
       首屏底色内联，避免样式表到位前的一帧白闪。
       值与 tokens.css 的 --color-paper 一致（oklch(97.4% 0.004 252)）。
       字体不在此处 preload —— 自托管 woff2 与页面同源、单份仅 13–22 KB，

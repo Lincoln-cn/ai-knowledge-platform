@@ -13,21 +13,26 @@
     </div>
 
     <template v-else-if="context">
-      <TopBar
-        :title="context.appName"
-        :subtitle="'公开问答 · 免登录'"
-        :public-mode="true"
-        :show-kb-link="false"
-        @back="onBack"
-      />
+      <header class="head-band">
+        <!-- 页头 section 底 —— 整页只此一片（design.md § Art layer）。 -->
+        <span class="head-wash" aria-hidden="true"></span>
 
-      <div class="app-info panel">
-        <div class="icon">{{ context.icon }}</div>
-        <div class="meta">
-          <div class="name">{{ context.appName }}</div>
-          <div v-if="context.description" class="desc micro muted">{{ context.description }}</div>
+        <TopBar
+          :title="context.appName"
+          :subtitle="'公开问答 · 免登录'"
+          :public-mode="true"
+          :show-kb-link="false"
+          @back="onBack"
+        />
+
+        <div class="app-info panel">
+          <div class="icon">{{ context.icon }}</div>
+          <div class="meta">
+            <div class="name">{{ context.appName }}</div>
+            <div v-if="context.description" class="desc micro muted">{{ context.description }}</div>
+          </div>
         </div>
-      </div>
+      </header>
 
       <div class="body rise">
         <section class="center panel">
@@ -270,14 +275,57 @@ onBeforeUnmount(() => {
   position: relative;
 }
 
-/* 页头：本页唯一一次深色石墨拍子 */
+/* 页头 section —— 本页唯一一片色场，也是唯一一次深色石墨拍子。
+
+   ★ 这一节**故意不写 isolation**：multiply 的合成对象必须落在页面的冷调纸面上。
+     实测：把本 section 隔离成独立合成组后，组内画布是透明的 ⇒ multiply 退化成
+     "直接贴一张 60% 的图"，颜色发白发粉，且不再随纸面色阶变化。
+
+   ★ TopBar 也放进本 section，并在下面把它的 surface 底透掉 ——
+     第一版只把 wash 铺在石墨卡片周围那一圈，实测**开/关色块全页平均像素差
+     0.11/255**（= 肉眼看不见）。色场的面积太小，等于没放。 */
+.head-band {
+  position: relative;
+  flex-shrink: 0;
+  padding: var(--space-sm) var(--space-md) var(--space-lg);
+}
+
+/* 色场：偏左上、比 section 更大、multiply、不透明度取硬上限 0.6。
+   `0% 13%` 不是估的 —— 对 7 组候选（位置 × 尺寸 × 羽化开关）做了截图像素差实测，
+   这一组在 band 内的平均差最高（1.50/255、最大差 24/255），读数见交付报告。
+   mask 那一条只做一件事：让色场的下沿**羽化**收掉，不在纸面上留一条
+   被裁直的水彩色边（那会读成"贴了两张纸"。mask 里的 black/transparent
+   是遮罩的 alpha，不是颜色 —— 不占色板。 */
+.head-wash {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--art-wash);
+  background-repeat: no-repeat;
+  background-position: 0% 13%;
+  background-size: 118% auto;
+  mix-blend-mode: multiply;
+  opacity: var(--art-opacity-wash);
+  mask-image: linear-gradient(to bottom, black 78%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, black 78%, transparent);
+}
+
+/* 顶栏的 surface 底透掉，让 bar 与石墨卡片共享同一片色场；
+   它自己带一条底部发丝线，分面照旧。 */
+.head-band :deep(.topbar) {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+}
+
 .app-info {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  margin: var(--space-sm) var(--space-sm) 0;
-  flex-shrink: 0;
   background: var(--color-graphite);
   border: 1px solid var(--color-graphite-rule);
   border-radius: var(--radius-lg);

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!--
+    知识助理平台的标记（favicon）。
+    设计意图（design.md § Brand）：**与仪器面板同源** —— 一圈发丝线框 + 一个信号点。
+    右下方留一个缺口，缺口里是唯一的钴蓝信号；方框其余部分是石墨。这样在 16px 下
+    依然能读出"一个读数指示器"，而不是一个模糊的色块。
+
+    此处硬编码色值：favicon 是独立文件，拿不到 CSS 令牌。
+      #2b2f38 ≈ --color-ink       oklch(24% 0.020 258)
+      #2f6fed ≈ --color-accent    oklch(58% 0.200 256)
+    改色板时这两个值要一起改，并重跑 tools/rasterize_art.py 无关（favicon 是 SVG，不栅格化）。
+  -->
+  <rect width="32" height="32" rx="7" fill="#f6f7f9" />
+  <g transform="translate(4 4)">
+    <!-- 发丝线框：右侧下方留缺口给信号点 -->
+    <path
+      d="M6.5 0.9 H17.5 A5.6 5.6 0 0 1 23.1 6.5 V17.5 A5.6 5.6 0 0 1 17.5 23.1 H14"
+      fill="none"
+      stroke="#2b2f38"
+      stroke-width="1.9"
+      stroke-linecap="round"
+    />
+    <!-- 唯一的信号点：落在缺口里 -->
+    <circle cx="6.6" cy="17.6" r="3.5" fill="#2f6fed" />
+  </g>
+</svg>

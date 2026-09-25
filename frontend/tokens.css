@@ -145,10 +145,41 @@
      （连线上的删除按钮之类）必须比它高。这一档**只给画布内部件用**，
      页面级的浮层一律走上面那六档。 */
   --z-canvas: 6000;
+
+  /* ── 仪器面板（design.md § 仪器面板 · Cobalt 签名 4 + 8）─────────────
+     深色石墨上的"机器回执"，是本系统的焦点元素。圆角比卡片松一档 ——
+     那是 Cobalt 对代码/回执件的口径（6px 给控件，10px 给回执）。 */
+  --radius-instrument: 10px;
+  --color-graphite-rule: oklch(33.0% 0.018 260);   /* 石墨面上的发丝线 */
+  --color-graphite-ink-2: oklch(78.0% 0.012 260);  /* 石墨面上的次要文字 */
+  --color-graphite-faint: oklch(60.0% 0.012 260);  /* 石墨面上的标签、占位 */
+
+  /* 面板内的 mono 大写标签比页面的小标签再收半档：0.06em（design.md § 仪器面板）。
+     不直接复用 --tracking-label（0.08em）—— 那两处的字号与对比度不同，
+     共用一个值会让面板标签在深色底上显得松散。 */
+  --tracking-label-instrument: 0.06em;
+
+  /* ── Art layer（design.md § Art layer）─────────────────────────────
+     素材是**本地生成**的位图（源 SVG 在 src/assets/art/src/，由
+     tools/rasterize_art.py 栅格化）—— 不走任何外部 CDN，符合自托管与离线冒烟纪律。
+     下面三个不透明度是**硬上限**，页面不许超（这是"有界的水彩许可"的界）。 */
+  --art-blob: url('./src/assets/art/blob-cool-01.webp');
+  --art-wash: url('./src/assets/art/wash-cool-01.webp');
+  --art-grain: url('./src/assets/art/grain-cool-01.webp');
+  --art-hatch: url('./src/assets/art/hatch-cool-01.png');
+  --art-empty-1: url('./src/assets/art/schematic-empty-01.png');
+  --art-empty-2: url('./src/assets/art/schematic-empty-02.png');
+  --art-opacity-wash: 0.6;    /* 浅色纸上的色场（配 multiply） */
+  --art-opacity-screen: 0.35; /* 深色底上的 wash（配 screen） */
+  --art-opacity-grain: 0.15;  /* 颗粒 —— 硬上限，再高就成了脏 */
+
+  /* ── 命令面板（design.md § 命令面板 · Cobalt 签名 5）────────────────
+     要盖住抽屉与弹窗（--z-modal 400），但要低于画布内部层（--z-canvas 6000）。 */
+  --z-cmdk: 3000;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   ⚠️ 临时兼容垫片 —— 迁移期专用，**必须删掉**。
+   ✅ 临时兼容垫片 —— **已在第二轮 design 改造中删除**（触发条件已满足）。
    ═══════════════════════════════════════════════════════════════════════
 
    本轮把整套令牌词汇改了名（旧工程的名字没有命名空间前缀，无法承载 OKLCH 色阶、
@@ -178,30 +209,16 @@
    而 `var(未定义)` 会让整条声明失效 ⇒ 全工程颜色与间距静默消失。
    所以先垫一层让树不断，页面在各自的改造批次里逐个迁到新名字。
 
-   ★ 删除触发条件：`python check_design.py --legacy` 报告 **0 处**时，删掉本块。
+   ★ 删除触发条件：`python check_design.py`（「旧令牌引用」这一维） 报告 **0 处**时，删掉本块。
      在此之前不要删 —— 也不要在页面里新增任何指向旧名字的引用。
      留着它超过迁移期，就会变成下一个人不敢删的"历史包袱"。
      （本工程已有前例：`workflow/styles/element-plus.scss` 就是这样变成孤儿的。）
    ═══════════════════════════════════════════════════════════════════════ */
-:root {
-  --brand: var(--color-accent);
-  --brand-2: var(--color-accent-hover);
-  --brand-soft: var(--color-accent-soft);
-  --brand-line: var(--color-accent-line);
-  --canvas: var(--color-paper);
-  --surface: var(--color-surface);
-  --sunken: var(--color-sunken);
-  --line: var(--color-rule);
-  --line-2: var(--color-rule-2);
-  --ink: var(--color-ink);
-  --ink-2: var(--color-ink-2);
-  --muted: var(--color-muted);
-  --ok: var(--color-ok);
-  --ok-soft: var(--color-ok-soft);
-  --warn: var(--color-warn);
-  --warn-soft: var(--color-warn-soft);
-  --danger: var(--color-danger);
-  --danger-soft: var(--color-danger-soft);
-  --font: var(--font-body);
-  --data: var(--font-mono);
-}
+/* ★ 垫片本体（20 行 `--brand:` / `--canvas:` / `--line:` … ）已删除。
+   实测依据（两道独立读数，不是只信闸门）：① `python check_design.py` 的
+   「旧令牌引用」一维 = **0**；② 全 `src/` 按词边界搜 `var(--旧名)`（含 `.scss`
+   与 `.vue` 模板）= **0 处**。
+   ⚠️ 改这一段注释的教训：原注释让人跑 `python check_design.py --legacy`，
+   而那个参数**根本不存在**（它只有 `--top` 与 `--file`）—— 照着跑会得到 exit 2。
+   一句指向不存在命令的注释，比没有注释更坏。 */
+

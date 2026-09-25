@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
+  <!--
+    hatch-cool-01 —— 蓝图式细交叉网。design.md § Art layer「石墨带内」那一格的纹理。
+    平铺：用 <pattern> + 整数周期 ⇒ 真可拼（不是靠"看不出来"）。
+    色彩：#5b7fc7 ≈ Cobalt accent 的暗一档；叠加在石墨上时靠 opacity 压住。
+  -->
+  <defs>
+    <pattern id="hatch" width="16" height="16" patternUnits="userSpaceOnUse">
+      <!-- 主斜线（左上 → 右下） -->
+      <path d="M0 16 L16 0" stroke="#5b7fc7" stroke-width="0.75" opacity="0.52" />
+      <!-- 交叉线更淡，避免织成实心面 -->
+      <path d="M0 0 L16 16" stroke="#5b7fc7" stroke-width="0.75" opacity="0.24" />
+    </pattern>
+    <pattern id="ticks" width="128" height="128" patternUnits="userSpaceOnUse">
+      <!-- 每 128px 一个稍重的刻度：让网面有"标尺"的读数感，而不是纯装饰 -->
+      <path d="M0 0 L0 128" stroke="#8fb2ee" stroke-width="1" opacity="0.34" />
+      <path d="M0 0 L128 0" stroke="#8fb2ee" stroke-width="1" opacity="0.34" />
+    </pattern>
+  </defs>
+  <rect width="400" height="400" fill="url(#hatch)" />
+  <rect width="400" height="400" fill="url(#ticks)" />
+</svg>

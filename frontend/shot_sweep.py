@@ -138,7 +138,7 @@ def main() -> int:
         page.fill('input[autocomplete="username"]', "admin")
         page.fill('input[autocomplete="current-password"]', "admin")
         page.locator("button:has-text('登录')").first.click()
-        page.wait_for_selector(".rail", timeout=15000)
+        page.wait_for_selector(".topbar", timeout=15000)
         page.wait_for_timeout(900)
 
         base_url = page.url.split("#")[0]

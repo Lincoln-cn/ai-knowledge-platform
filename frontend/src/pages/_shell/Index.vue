@@ -1,17 +1,73 @@
 <template>
   <div class="shell">
-    <header class="topbar">
+    <header class="topbar" :class="{ scrolled }">
       <router-link to="/" class="brand">
-        <span class="brand-mark">知</span>
-        <span class="brand-rule" aria-hidden="true"></span>
+        <BrandMark :size="22" />
         <span class="brand-name">{{ APP_TITLE }}</span>
       </router-link>
 
+      <span class="brand-rule" aria-hidden="true" />
+
+      <nav ref="navEl" class="nav" aria-label="功能导航">
+        <router-link to="/" class="nav-item" :class="{ active: route.path === '/' }">
+          工作台
+        </router-link>
+
+        <div v-for="(group, index) in visibleGroups" :key="group.title" class="nav-group">
+          <button
+            class="nav-item nav-trigger"
+            type="button"
+            aria-haspopup="true"
+            :aria-expanded="openGroup === group.title"
+            :aria-controls="menuId(index)"
+            :class="{ active: activeGroup === group.title, open: openGroup === group.title }"
+            @click="toggleGroup(group.title)"
+            @keydown="onTriggerKeydown($event, group.title)"
+          >
+            <span>{{ group.title }}</span>
+            <el-icon class="caret" aria-hidden="true"><ArrowDown /></el-icon>
+          </button>
+
+          <div
+            v-if="openGroup === group.title"
+            :id="menuId(index)"
+            class="menu"
+            role="menu"
+            :aria-label="group.title"
+          >
+            <router-link
+              v-for="(item, itemIndex) in group.items"
+              :key="item.path"
+              :to="item.path"
+              class="menu-item"
+              role="menuitem"
+              :class="{ active: activePath === item.path }"
+              @click="closeGroup()"
+              @keydown="onMenuKeydown($event, itemIndex)"
+            >
+              <el-icon aria-hidden="true"><component :is="item.icon" /></el-icon>
+              <span class="menu-label">{{ item.label }}</span>
+              <span v-if="activePath === item.path" class="menu-flag">当前</span>
+            </router-link>
+          </div>
+        </div>
+      </nav>
+
       <div class="grow" />
 
-      <router-link to="/conversation" class="topbar-link">
-        <el-icon><ChatDotRound /></el-icon><span>去问答</span>
-      </router-link>
+      <button
+        ref="hintEl"
+        class="hint"
+        type="button"
+        :aria-keyshortcuts="shortcutKeys"
+        :aria-label="`打开命令面板（${shortcutLabel}）`"
+        @click="openPalette"
+      >
+        <kbd class="hint-key">{{ modKey }}</kbd>
+        <span class="hint-k">K</span>
+      </button>
+
+      <el-button type="primary" @click="router.push('/conversation')">开始问答</el-button>
 
       <el-dropdown @command="onCommand">
         <button class="user">
@@ -32,44 +88,40 @@
       </el-dropdown>
     </header>
 
-    <div class="body">
-      <aside class="rail">
-        <router-link to="/" class="rail-item" :class="{ active: route.path === '/' }">
-          <el-icon><DataBoard /></el-icon><span>工作台</span>
-        </router-link>
+    <main class="main scroll-y" @scroll.passive="onScroll">
+      <router-view />
+    </main>
 
-        <div v-for="group in visibleGroups" :key="group.title" class="rail-group">
-          <div class="rail-group-title label">{{ group.title }}</div>
-          <router-link
-            v-for="item in group.items"
-            :key="item.path"
-            :to="item.path"
-            class="rail-item"
-            :class="{ active: activePath === item.path }"
-          >
-            <el-icon><component :is="item.icon" /></el-icon><span>{{ item.label }}</span>
-          </router-link>
-        </div>
-      </aside>
-
-      <main class="main scroll-y">
-        <router-view />
-      </main>
-    </div>
+    <CommandPalette v-model="paletteOpen" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import BrandMark from '@/components/BrandMark.vue'
+import CommandPalette from '@/components/CommandPalette.vue'
 import { APP_TITLE } from '@/config/env'
+import { canReach } from '@/lib/reach'
 import { navGroups } from '@/router/routes'
 import { useSessionStore } from '@/stores/session'
 
 const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
+
+const paletteOpen = ref(false)
+const openGroup = ref('')
+const scrolled = ref(false)
+const navEl = ref<HTMLElement | null>(null)
+const hintEl = ref<HTMLButtonElement | null>(null)
+
+/* ⌘K 提示按平台写字 —— Windows 上画一个 ⌘ 是骗人。 */
+const isMac = /mac/i.test(navigator.userAgent)
+const modKey = isMac ? '⌘' : 'ctrl'
+const shortcutLabel = isMac ? '⌘K' : 'Ctrl+K'
+const shortcutKeys = isMac ? 'Meta+K' : 'Control+K'
 
 /* 取最长匹配的那个导航项为高亮项。
    否则 /assistants/prompts 会让 /assistants 与它同时高亮。 */
@@ -82,24 +134,113 @@ const activePath = computed(() => {
   )
 })
 
-/* 侧栏只列「进得去」的项。
-   权限从**路由 meta** 读，不在这里另存一份 —— 否则菜单与守卫会漂移成
-   「菜单看得见、点进去 403」。分组空了就连标题一起去掉。 */
+const activeGroup = computed(
+  () => visibleGroups.value.find((g) => g.items.some((i) => i.path === activePath.value))?.title ?? ''
+)
+
+/* 菜单只列「进得去」的项。
+   判据走 `canReach()` —— 外壳、命令面板、工作台入口三处共用同一个函数，
+   不再各写一份（漂移的表现是「某入口在 A 处隐藏、在 B 处仍可见」）。
+   分组空了就连标题一起去掉。 */
 const visibleGroups = computed(() =>
   navGroups
-    .map((group) => ({ ...group, items: group.items.filter(canReach) }))
+    .map((group) => ({ ...group, items: group.items.filter((i) => canReach(router, i.path)) }))
     .filter((group) => group.items.length > 0)
 )
 
-function canReach(item: { path: string }) {
-  const need = router.resolve(item.path).meta.permission
-  return !need || session.can(need)
+function menuId(index: number) {
+  return `topbar-menu-${index}`
+}
+
+function toggleGroup(title: string) {
+  openGroup.value = openGroup.value === title ? '' : title
+}
+
+function closeGroup() {
+  openGroup.value = ''
+}
+
+/* 菜单里的锚点不需要各自的 ref：从触发按钮所在的 .nav-group 里查就够了，
+   少一层模板 ref 就少一处"v-for 里 ref 变成数组"这类惊喜。 */
+function focusMenuItem(trigger: HTMLElement, index: number) {
+  const items = Array.from(trigger.parentElement?.querySelectorAll<HTMLElement>('a.menu-item') ?? [])
+  if (!items.length) return
+  items[(index + items.length) % items.length].focus()
+}
+
+async function onTriggerKeydown(event: KeyboardEvent, title: string) {
+  // Esc 必须在这里也接住：鼠标点开菜单后焦点留在触发按钮上，
+  // 只给菜单项写 Esc 的话，用户按 Esc 会以为"关不掉"（实测确实关不掉）。
+  if (event.key === 'Escape') {
+    closeGroup()
+    return
+  }
+
+  if (event.key !== 'ArrowDown') return
+  event.preventDefault()
+  // currentTarget 在 await 之后就为 null 了，先抓住元素
+  const trigger = event.currentTarget as HTMLElement
+  if (openGroup.value !== title) {
+    openGroup.value = title
+    await nextTick()
+  }
+  focusMenuItem(trigger, 0)
+}
+
+function onMenuKeydown(event: KeyboardEvent, index: number) {
+  const link = event.currentTarget as HTMLElement
+  const trigger = link.closest('.nav-group')?.querySelector<HTMLElement>('.nav-trigger')
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    focusMenuItem(link, index + 1)
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    if (index === 0) {
+      closeGroup()
+      trigger?.focus()
+    } else {
+      focusMenuItem(link, index - 1)
+    }
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    closeGroup()
+    trigger?.focus()
+  } else if (event.key === 'Tab') {
+    // 菜单不吸住焦点：Tab 走人，菜单关掉
+    closeGroup()
+  }
+}
+
+function onDocumentPointerdown(event: PointerEvent) {
+  if (!openGroup.value) return
+  if (navEl.value?.contains(event.target as Node)) return
+  closeGroup()
+}
+
+function onScroll(event: Event) {
+  scrolled.value = (event.target as HTMLElement).scrollTop > 4
+}
+
+function openPalette() {
+  hintEl.value?.focus()
+  paletteOpen.value = true
 }
 
 onMounted(() => {
+  document.addEventListener('pointerdown', onDocumentPointerdown)
   // 刷新页面后把登录态找回来；失败则交给路由守卫处理
   session.loadProfile().catch(() => {})
 })
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerdown)
+})
+
+watch(
+  () => route.path,
+  () => closeGroup()
+)
 
 const onCommand = async (command: string) => {
   if (command !== 'logout') return
@@ -116,7 +257,8 @@ const onCommand = async (command: string) => {
   flex-direction: column;
 }
 
-/* 顶栏：齐边全宽 + 一条发丝下边线。全工程唯一允许 backdrop-filter 的位置。 */
+/* 带框顶栏（Cobalt 签名 5）：通栏 + 单条底部发丝线。
+   全工程唯一允许 backdrop-filter 的位置。 */
 .topbar {
   height: 48px;
   flex-shrink: 0;
@@ -124,13 +266,22 @@ const onCommand = async (command: string) => {
   align-items: center;
   gap: var(--space-sm);
   padding: 0 var(--space-md);
-  background: color-mix(in oklch, var(--color-surface) 88%, transparent);
+  background: color-mix(in oklch, var(--color-surface) 72%, transparent);
   backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--color-rule);
+  border-bottom: 1px solid var(--color-rule-2);
   z-index: var(--z-sticky);
+  transition:
+    background-color var(--dur-short) var(--ease-out),
+    border-color var(--dur-short) var(--ease-out);
 }
 
-/* 字标：display 重字 + 发丝竖线 + 品牌名，一组。不使用圆角色块。 */
+/* 页面滚动后顶栏与内容的分界收紧一档：从次线变成主线 */
+.topbar.scrolled {
+  background: color-mix(in oklch, var(--color-surface) 92%, transparent);
+  border-bottom-color: var(--color-rule);
+}
+
+/* 字标：几何标记 + 一条发丝竖线 + 平台名。色由调用方定（这里是浅色纸 ⇒ 深色框）。 */
 .brand {
   display: flex;
   align-items: center;
@@ -138,13 +289,12 @@ const onCommand = async (command: string) => {
   color: var(--color-ink);
 }
 
-.brand-mark {
+.brand-name {
   font-family: var(--font-display);
-  font-size: var(--text-lg);
+  font-size: var(--text-md);
   font-weight: 600;
-  line-height: 1;
+  line-height: var(--leading-tight);
   letter-spacing: var(--tracking-body);
-  color: var(--color-ink);
 }
 
 .brand-rule {
@@ -153,37 +303,188 @@ const onCommand = async (command: string) => {
   background: var(--color-rule-strong);
 }
 
-.brand-name {
-  font-family: var(--font-body);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: var(--tracking-body);
-  color: var(--color-ink);
+.nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  min-width: 0;
 }
 
-.brand:hover .brand-name {
-  color: var(--color-accent);
+.nav-group {
+  position: relative;
 }
 
-.topbar-link {
+/* 去处：13 个模块**按分组收纳**，不平铺成 13 个链接 */
+.nav-item {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2xs);
-  font-size: var(--text-2xs);
+  height: 28px;
+  padding: 0 var(--space-xs);
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--leading-tight);
   color: var(--color-ink-2);
-  padding: var(--space-2xs) var(--space-xs);
-  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
   transition:
     background-color var(--dur-micro) var(--ease-out),
     color var(--dur-micro) var(--ease-out);
 }
 
-.topbar-link:hover {
-  background: var(--color-sunken);
+.nav-item:hover {
+  background: var(--color-hover);
   color: var(--color-ink);
 }
 
+.nav-item:active {
+  background: var(--color-sunken);
+}
+
+.nav-item.active,
+.nav-item.open,
+.nav-item[aria-expanded='true'] {
+  background: var(--color-hover);
+  color: var(--color-ink);
+  font-weight: 500;
+}
+
+.caret {
+  font-size: var(--text-2xs);
+  color: var(--color-muted);
+  transition: transform var(--dur-micro) var(--ease-out);
+}
+
+.nav-item.open .caret {
+  transform: rotate(180deg);
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + var(--space-2xs));
+  left: 0;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2xs);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-float);
+  z-index: var(--z-dropdown);
+  animation: menu-in var(--dur-short) var(--ease-out) both;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--color-ink-2);
+  transition:
+    background-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
+}
+
+.menu-item:hover {
+  background: var(--color-hover);
+  color: var(--color-ink);
+}
+
+.menu-item:active {
+  background: var(--color-sunken);
+}
+
+.menu-item.active {
+  color: var(--color-ink);
+  font-weight: 500;
+}
+
+.menu-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.menu-flag {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+/* ── 带框的 ⌘K 提示：mono 大写 + 1px 框，点它等同按键 ── */
+.hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  height: 28px;
+  padding: 0 var(--space-xs);
+  background: var(--color-surface);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-muted);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-micro) var(--ease-out),
+    border-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
+}
+
+.hint:hover {
+  background: var(--color-hover);
+  border-color: var(--color-muted);
+  color: var(--color-ink);
+}
+
+.hint:active {
+  background: var(--color-sunken);
+}
+
+.hint:disabled {
+  background: transparent;
+  border-color: var(--color-rule);
+  color: var(--color-faint);
+  cursor: not-allowed;
+}
+
+.hint-key,
+.hint-k {
+  font-family: inherit;
+}
+
+.hint-k {
+  color: var(--color-ink-2);
+}
+
+.hint:disabled .hint-k {
+  color: var(--color-faint);
+}
+
+/* ── 用户 ── */
 .user {
   display: flex;
   align-items: center;
@@ -224,74 +525,31 @@ const onCommand = async (command: string) => {
   color: var(--color-muted);
 }
 
-.body {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-}
-
-.rail {
-  width: 200px;
-  flex-shrink: 0;
-  background: var(--color-surface);
-  border-right: 1px solid var(--color-rule);
-  padding: var(--space-xs);
-  overflow-y: auto;
-}
-
-.rail-group {
-  margin-top: var(--space-sm);
-}
-
-/* 分组标题走全局 .label（mono 全大写小标签，12px） */
-.rail-group-title {
-  padding: 0 var(--space-xs) var(--space-2xs);
-}
-
-/* 选中态：accent 左竖条 + 文字转 ink + 轻微底色。不用整块彩底。 */
-.rail-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-  padding: var(--space-xs) var(--space-sm);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  color: var(--color-ink-2);
-  transition:
-    background-color var(--dur-micro) var(--ease-out),
-    color var(--dur-micro) var(--ease-out);
-}
-
-.rail-item:hover {
-  background: var(--color-hover);
-  color: var(--color-ink);
-}
-
-.rail-item:active {
-  background: var(--color-sunken);
-}
-
-.rail-item.active {
-  background: var(--color-hover);
-  color: var(--color-ink);
-  font-weight: 500;
-}
-
-.rail-item.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: var(--space-2xs);
-  bottom: var(--space-2xs);
-  width: 2px;
-  border-radius: var(--radius-xs);
-  background: var(--color-accent);
-}
-
 .main {
   flex: 1;
   min-width: 0;
   background: var(--color-paper);
+}
+
+/* 降低动效：不许有位移，只留透明度交叉淡入 */
+@media (prefers-reduced-motion: reduce) {
+  .menu {
+    animation-name: menu-fade;
+  }
+
+  .caret,
+  .nav-item.open .caret {
+    transform: none;
+  }
+}
+
+@keyframes menu-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 </style>

@@ -128,8 +128,13 @@ with sync_playwright() as p:
         check(stats == 4, "工作台指标条渲染 4 项", f"实际 {stats} 项")
         apps = page.locator(".app-row").count()
         check(apps > 0, "工作台列出常用应用", f"实际 {apps} 行")
-        rails = page.locator(".rail-item").count()
-        check(rails > 0, "侧栏渲染", f"{rails} 项")
+        # 外壳由左侧栏改成带框顶栏（Cobalt 签名 5）：
+        # 顶层是「工作台」直链 + 三个分组按钮 + ⌘K 提示，不再是 9 个平的侧栏项。
+        nav = page.locator(".nav-item").count()
+        check(nav > 0, "顶栏导航渲染", f"{nav} 项")
+        triggers = page.locator(".nav-trigger").count()
+        check(triggers > 0, "顶栏分组按钮渲染", f"{triggers} 组")
+        check(page.locator(".hint").count() == 1, "⌘K 提示在顶栏", "")
 
     # ── 5. 工作台给出的每个入口都必须到得了真实页面 ──
     #     原来是验「迁移总览里每个模块的打开」；那一页已被产品首页取代。

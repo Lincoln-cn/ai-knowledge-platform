@@ -151,19 +151,33 @@ def main() -> int:
                     except Exception as exc:  # noqa: BLE001
                         check(False, f"{role_name} ▸ 硬刷新", f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
 
-                # ── 侧栏：不该出现进不去的项 ──
+                # ── 顶栏：不该出现进不去的项 ──
+                # 外壳已从左侧栏改成**分组式带框顶栏**（Cobalt 签名 5）：
+                # 顶层只显示「工作台」+ 三个分组名，各组项在展开后才进 DOM（`v-if`）。
+                # 所以要先逐个展开分组再收标签 —— 直接读顶层会把断言变成在量分组名。
                 try:
                     page.goto(base + "#/", wait_until="networkidle")
                     page.wait_for_timeout(1400)
-                    got = [t.strip() for t in page.locator(".rail-item").all_inner_texts() if t.strip()]
+                    got: list[str] = []
+                    if page.locator(".nav-item", has_text="工作台").count():
+                        got.append("工作台")
+                    for idx in range(page.locator(".nav-trigger").count()):
+                        page.locator(".nav-trigger").nth(idx).click()
+                        page.wait_for_timeout(240)
+                        for t in page.locator(".menu-label").all_inner_texts():
+                            t = t.strip()
+                            if t and t not in got:
+                                got.append(t)
+                        page.keyboard.press("Escape")
+                        page.wait_for_timeout(140)
                     want = NAV[username]
                     check(
                         sorted(got) == sorted(want),
-                        f"{role_name} ▸ 侧栏只列可访问项",
+                        f"{role_name} ▸ 顶栏只列可访问项",
                         f"实得 {got}",
                     )
                 except Exception as exc:  # noqa: BLE001
-                    check(False, f"{role_name} ▸ 侧栏", f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
+                    check(False, f"{role_name} ▸ 顶栏", f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
 
                 ctx.close()
                 print()

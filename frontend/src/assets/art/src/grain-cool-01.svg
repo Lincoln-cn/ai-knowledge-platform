@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!--
+    grain-cool-01 —— 细颗粒。design.md § Art layer 允许的四处表面之一（仪器面板内、石墨带）。
+    平铺：feTurbulence 的 stitchTiles="stitch" 保证接缝可拼（不是靠肉眼"看不出来"）。
+    尺寸取 128：它是**平铺**素材，256 只是四倍的像素与体积，视觉上分不出来。
+    不透明度：素材自带 alpha ≈ 0.5 上限，使用时**还要**再封到 0.15。
+    色彩：冷调炭（≈ --color-graphite 的色相，暗于纸面）。
+  -->
+  <defs>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="1.55" numOctaves="3" stitchTiles="stitch" seed="7" />
+      <!--
+        ★ 第一版把 alpha 直接乘 0.5 —— 结果**整块都半透明（覆盖率 100%）**，
+          它不是"颗粒"而是"一层均匀的纱"：叠上去只会整体压暗，看不出纹路。
+        第二版用 discrete 取最高一档 —— **矫枉过正**（覆盖率只剩 0.6%，几乎是空的）。
+          原因是 fractalNoise 的 alpha 集中在低段，卡在 0.8 以上几乎没有像素。
+        第三版（本版）改用 linear + 负截距做成**软阈值**：alpha = 4.5×a − 2.4，
+          即 a > 0.53 才落下来 ⇒ 得到稀疏但有量的斑点。
+          这条曲线是**量出来的**（tools/check_art.py 报覆盖率），不是猜的。
+      -->
+      <feColorMatrix type="matrix"
+        values="0 0 0 0 0.145
+                0 0 0 0 0.176
+                0 0 0 0 0.246
+                0 0 0 1 0" />
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="4.5" intercept="-2.4" />
+      </feComponentTransfer>
+    </filter>
+  </defs>
+  <rect width="128" height="128" filter="url(#grain)" />
+</svg>
