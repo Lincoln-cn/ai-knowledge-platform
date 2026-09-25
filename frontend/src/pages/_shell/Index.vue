@@ -35,7 +35,7 @@
     <div class="body">
       <aside class="rail">
         <router-link to="/" class="rail-item" :class="{ active: route.path === '/' }">
-          <el-icon><DataBoard /></el-icon><span>迁移总览</span>
+          <el-icon><DataBoard /></el-icon><span>工作台</span>
         </router-link>
 
         <div v-for="group in visibleGroups" :key="group.title" class="rail-group">

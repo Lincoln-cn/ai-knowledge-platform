@@ -24,7 +24,7 @@
         </div>
       </div>
 
-      <el-button size="small" type="primary" @click="$router.push('/')">回到迁移总览</el-button>
+      <el-button size="small" type="primary" @click="$router.push('/')">回到工作台</el-button>
     </div>
   </div>
 </template>

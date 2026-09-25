@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "知识助理平台 · 前端（无 avue / 无 vuex / 无 BladeX 依赖）",
+  "description": "知识助理平台 · 前端（Vue 3 + Element Plus + Vite + Pinia）",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",

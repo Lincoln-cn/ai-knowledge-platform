@@ -97,7 +97,7 @@ export const routes: RouteRecordRaw[] = [
         path: '',
         name: 'overview',
         component: () => import('@/pages/overview/Index.vue'),
-        meta: { title: '迁移总览' }
+        meta: { title: '工作台' }
       },
       ...pageRoutes
     ]

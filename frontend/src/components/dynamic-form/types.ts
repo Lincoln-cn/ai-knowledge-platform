@@ -80,7 +80,7 @@ export interface FormField {
   children?: Array<FormField>
 }
 
-/** 远程触发回调：由调用方注入，本组件不绑定任何后端 / BladeX 接口 */
+/** 远程触发回调：由调用方注入，本组件不绑定任何具体后端接口 */
 export type FormTrigger = (
   field: FormField,
   formValue: FormValues,

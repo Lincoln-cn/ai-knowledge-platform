@@ -34,7 +34,7 @@ import { cloneValue, getByPath, initDefaultData, shouldShow, triggerHit, watches
 /**
  * 字段驱动的动态表单引擎。
  * 给 `fields` + `v-model` 即可渲染；`validate()` 拿到校验结果。
- * 不依赖 avue / vuex / BladeX；远程选项由调用方通过 `trigger` 注入。
+ * 不依赖任何特定 UI 框架或状态库；远程选项由调用方通过 `trigger` 注入。
  */
 defineOptions({ name: 'DynamicForm' })
 

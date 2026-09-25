@@ -47,11 +47,27 @@
       （`fixtures/workflow.ts` 的 `sampleInvalidGraph`，用途就是含悬空 id 来验证"校验能拦下发布"）
       里的 5 处引用报成悬空。修法是**具名挖掉那一个块、不整文件跳过**，并把跳过数量**打印出来**
       （静默的例外迟早会变成藏真问题的地方）。金丝雀已验：注入真悬空引用后仍能报错并退出码 1。
-- [ ] **剩余旧系统引用 21 处 / 5 文件**（起始 24 处 / 7 文件，`grep -rn "_archive\|qa-ui-3\|qa-server\|bladex\|avue" frontend/src`）：
-  - `constants/migration.ts`（**13 处**）+ `pages/overview/Index.vue`（**5 处**）—— **占剩余的 86%**，
-    是**同一对**：迁移台账常量 + 读它的那一页。**应当一起重做**，不要逐个改注释
-  - `pages/pending/Index.vue`（1 处）—— 「尚未迁移」占位页，模块全迁完后应整体删除
-  - `components/dynamic-form/{DynamicForm.vue,types.ts}`（各 1 处）—— 注释里的出处说明，改写
+- [x] **`overview` 页改造成产品首页 + 删掉三个死文件**（✅ 已完成）
+      —— 一次动作清掉 **19/21**。`src/` 下旧系统引用 **24 处 / 7 文件 → 0 处 / 0 文件**。
+  - `pages/overview/Index.vue` 重写为**工作台**：指标条（问答/活跃/满意度/待处理反馈，取现有
+    `analytics` 契约，**未扩契约、未造数据**）+ 常用应用（`listTopAssistants`）+ 从这里开始
+    （**入口按权限过滤**，与侧栏同源判据，避免点进去 403）+ 待办条
+  - 删 `constants/migration.ts`（13 处）· `pages/pending/`（1 处）· `router/planned.ts`
+    （`planned()` **零调用方**，随 pending 页一起成为死代码）
+  - 配套改写：`_shell` 侧栏 · `routes.ts` 标题 · `forbidden`/`not-found` 的「回到…」
+  - `components/dynamic-form/{types.ts,DynamicForm.vue}`：两处**否定式声明**（"不依赖
+    avue/vuex/BladeX"）改写为中性表述 —— 对没听过这些产品的外部读者只是噪声
+  - `frontend/package.json` 的 `description` 去掉旧系统品牌名（它是随包分发的元数据）
+- [x] **`check_theme.py` 修一处静默丢覆盖**（✅ 已完成）—— 表头字体那条断言原本写成
+      `if 有表格: 验`，落地页从「迁移总览」换成「工作台」后那张表没了 ⇒ 断言**静默消失**
+      （10/10 → 9/9，无任何报红）。改为**在 `/analytics` 上无条件执行**，找不到表格即判失败。
+      > 通则：`if 条件: 断言` 是覆盖的漏洞 —— 条件不成立时不会报红，只会少一条。
+- [ ] **文档与配置里的旧系统引用 25 处**（`grep` 全库，排除 `innerdoc/`、`_archive/`）：
+  - `docs/ROADMAP.md`（7 处）—— **需要重新定性**：一个对外发布的路线图不该以"清理前身系统"为目录，
+    阶段一做完后本段应整段移除，内部清理过程移入 `innerdoc/`
+  - `backend/README.md`（4 处）· `docs/系统设计方案/{00,05}`（3 处）·
+    `docs/需求规格说明书/{00,01}`（4 处）—— 改写成中性描述（"前身系统"而非具体产品名）
+  - `frontend/README.md`（4 处，含 3/5 两行把它定义成"某系统的迁移产物"）—— 属下面那条重写
 - [ ] **根 `README.md` 重写**：现在那份讲的是"我们怎么搬过来的"，外部读者要的是"这是什么、能干什么、怎么跑起来"
 - [ ] **`frontend/README.md` 重写**：删掉迁移进度章节，补「本地起服务 → 看演示 → 跑校验」的路径
 - [ ] 补 `LICENSE`（**需先拍板**，见文末）、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`

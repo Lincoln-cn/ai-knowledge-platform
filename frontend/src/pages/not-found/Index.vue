@@ -5,7 +5,7 @@
       <div class="empty-title">页面不存在</div>
       <div class="rule state-rule" aria-hidden="true"></div>
       <p class="micro muted"><code>{{ route.fullPath }}</code></p>
-      <el-button size="small" type="primary" @click="$router.push('/')">回到迁移总览</el-button>
+      <el-button size="small" type="primary" @click="$router.push('/')">回到工作台</el-button>
     </div>
   </div>
 </template>

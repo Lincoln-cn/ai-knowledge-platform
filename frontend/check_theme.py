@@ -129,12 +129,22 @@ def main() -> int:
         page.wait_for_timeout(1200)
 
         print(f"\n== 4. 登录后：{page.url} ==")
-        # 找一个表格存在与否都不强求 —— 有就验表头字体
-        if page.locator(".el-table th .cell").count():
-            th_font = page.locator(".el-table th .cell").first.evaluate(
-                "el => getComputedStyle(el).fontFamily"
-            )
+
+        # 表头字体必须在**真有表格的页面**上验，且**无条件**。
+        # ⚠️ 这里原来是 `if 有表格: 验` —— 一个"有就验、没有就算过"的条件断言。
+        #    落地页从「迁移总览」换成「工作台」后那张表没了 ⇒ 这条断言**静默消失**
+        #    （总数 10/10 → 9/9，没有任何报红）。静默丢覆盖比报红更危险：
+        #    报红会有人修，"少了一条"没人会注意到。
+        base_url = page.url.split("#")[0]
+        page.goto(f"{base_url}#/analytics", wait_until="networkidle")
+        page.wait_for_timeout(1600)
+
+        th = page.locator(".el-table th .cell")
+        if th.count():
+            th_font = th.first.evaluate("el => getComputedStyle(el).fontFamily")
             check("JetBrains Mono" in th_font, f"表头字体 = {th_font[:60]}（应为 mono）")
+        else:
+            check(False, "在 /analytics 上没找到表格 —— 断言无法执行（这是失败，不是跳过）")
 
         # 侧栏选中态：不应是整块彩底
         rail = page.locator(".rail-item.active").first
