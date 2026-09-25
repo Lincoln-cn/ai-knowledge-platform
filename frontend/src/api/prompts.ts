@@ -11,7 +11,7 @@ import type { PageQuery, PageResult } from './types'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
-/** 提示词类型（旧 markedType / blade-roleType） */
+/** 提示词类型（字段命名沿用了被替换的旧契约） */
 export interface PromptType {
   id: string
   typeName: string
@@ -19,7 +19,7 @@ export interface PromptType {
   promptCount: number
 }
 
-/** 提示词配置（旧 markedConfig / blade-role） */
+/** 提示词配置（字段命名沿用了被替换的旧契约） */
 export interface PromptConfig {
   id: string
   /** 角色名称 */
