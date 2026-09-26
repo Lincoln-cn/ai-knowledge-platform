@@ -55,7 +55,8 @@ export interface Segment {
   content: string
   charCount: number
   enabled: boolean
-  embedding: '待向量化' | '已向量化' | '失败'
+  /** 「向量化中」是编辑后重新向量化时的过渡态（#10） */
+  embedding: '待向量化' | '向量化中' | '已向量化' | '失败'
 }
 
 export interface DocumentQuery extends PageQuery {
@@ -66,6 +67,18 @@ export interface SegmentQuery extends PageQuery {
   documentId?: string
   /** 只看超长分段（SEG-I1） */
   onlyOversized?: boolean
+  /**
+   * 限定知识库（P1 跨库批量删除）。不传时后端按数据范围返回**所有可见库**的分段 ——
+   * 批量操作前必须传，否则会跨库误删。
+   */
+  kbId?: string
+}
+
+/** 切分计划的一段。预览里用户可编辑，编辑结果作为 `segmentationPlan` 提交 */
+export interface SegmentationPlanItem {
+  ordinal: number
+  title?: string
+  content: string
 }
 
 /** 切分预览请求：向导第二步的核心 */
@@ -78,6 +91,10 @@ export interface PreviewSegmentationBody {
   overlap: number
   /** 切分策略 */
   strategy: 'auto' | 'custom'
+  /** #11 暂存上传的文件 id；与 `documentId` 二选一，预览走**用户自己的文件** */
+  uploadIds?: string[]
+  /** #11 用户确认过的切分计划（含预览编辑）。不传则按规则自动切 */
+  segmentationPlan?: SegmentationPlanItem[]
 }
 
 export interface PreviewSegmentationResult {
@@ -87,6 +104,41 @@ export interface PreviewSegmentationResult {
   /** 当前向量模型的分段长度上限，用于界面左侧实时提示 */
   modelLimit: number
   segments: Array<{ ordinal: number; content: string; charCount: number; oversized: boolean }>
+}
+
+/** #11 暂存上传回执 */
+export interface StageUploadsResult {
+  uploadIds: string[]
+}
+
+/** #11/#P1 导入请求：走暂存 id + 切分计划，而不是裸文件 */
+export interface ImportDocumentsBody {
+  uploadIds?: string[]
+  segmentationPlan?: SegmentationPlanItem[]
+}
+
+/** P1 上传回执：部分失败必须逐条给原因，不许只回一个总数 */
+export interface UploadReceipt {
+  accepted: DocumentItem[]
+  rejected: Array<{ name: string; reason: string }>
+}
+
+/** P1 上传策略：前端据此做大小/数量校验，而不是等后端拒了才知道 */
+export interface UploadPolicy {
+  maxFileSizeMB: number
+  maxFileCount: number
+  acceptedExtensions: string[]
+}
+
+/** #10 库级重新向量化回执 */
+export interface ReembedKbResult {
+  queued: number
+}
+
+/** P1 批量删除回执 */
+export interface BatchDeleteSegmentsResult {
+  deleted: number
+  failed: Array<{ id: string; reason: string }>
 }
 
 /* ────────────────────────── 接口 ────────────────────────── */
@@ -167,3 +219,61 @@ export const deleteSegment = (id: string) =>
 /** 批量迁移：搬移语义（源删除 + 目标写入） */
 export const batchMoveSegments = (body: { segmentIds: string[]; targetDocumentId: string }) =>
   request<{ moved: number }>({ method: 'POST', url: '/segments/batch-move', body })
+
+/* ────────────── #10 重向量化 · #11 暂存上传 · P1 批量与策略 ────────────── */
+
+/** #10 单段重新向量化。编辑后 `embedding` 置「待向量化」，这里把它推进到「已向量化」 */
+export const reembedSegment = (id: string) =>
+  request<Segment>({ method: 'POST', url: '/segments/:id/embedding', path: { id } })
+
+/** #10 文档级重新向量化：该文档下所有分段重跑 */
+export const reembedDocument = (id: string) =>
+  request<DocumentItem>({ method: 'POST', url: '/documents/:id/reembed', path: { id } })
+
+/** #10 库级重新向量化：整库排队，回执只给 queued 数 */
+export const reembedKnowledgeBase = (kbId: string) =>
+  request<ReembedKbResult>({
+    method: 'POST',
+    url: '/knowledge-bases/:kbId/reembed',
+    path: { kbId }
+  })
+
+/** #11 暂存上传：只落文件、不建文档，预览与导入共用这批 `uploadIds` */
+export const stageUploads = (kbId: string, files: File[]) => {
+  const form = new FormData()
+  files.forEach((file) => form.append('files', file))
+  return request<StageUploadsResult>({
+    method: 'POST',
+    url: '/knowledge-bases/:kbId/uploads',
+    path: { kbId },
+    body: form
+  })
+}
+
+/**
+ * #11 导入：用暂存 `uploadIds` + 用户确认过的 `segmentationPlan` 建文档。
+ * 响应带部分失败回执（P1），失败的文件逐条给原因。
+ */
+export const importDocuments = (kbId: string, body: ImportDocumentsBody) =>
+  request<UploadReceipt>({
+    method: 'POST',
+    url: '/knowledge-bases/:kbId/documents',
+    path: { kbId },
+    body
+  })
+
+/** P1 批量删除：一次请求，回执区分 deleted 与 failed */
+export const batchDeleteSegments = (ids: string[]) =>
+  request<BatchDeleteSegmentsResult>({
+    method: 'DELETE',
+    url: '/segments/batch',
+    body: { ids }
+  })
+
+/** P1 上传策略：前端上传前校验大小与数量 */
+export const getUploadPolicy = (kbId: string) =>
+  request<UploadPolicy>({
+    method: 'GET',
+    url: '/knowledge-bases/:kbId/upload-policy',
+    path: { kbId }
+  })

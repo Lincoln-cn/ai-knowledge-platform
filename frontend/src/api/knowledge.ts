@@ -53,6 +53,11 @@ export interface CreateKnowledgeBaseBody {
   icon: string
   importType: ImportType
   embeddingModelId: string
+  /**
+   * 幂等键（#12）。同一 `clientRequestId` 重复创建返回**既有库**而不是「名称已存在」——
+   * 建库成功但后续上传失败后，重试「开始导入」不应被卡死，也不该留下孤儿库。
+   */
+  clientRequestId?: string
 }
 
 /* ────────────────────────── 接口 ────────────────────────── */

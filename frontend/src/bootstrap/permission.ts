@@ -2,7 +2,7 @@ import type { NavigationGuard } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 
 /**
- * 路由守卫：登录态 + 路由级权限。
+ * 路由守卫：登录态 + 路由级权限 + 强制改密。
  *
  * **门禁做在路由层，不只在按钮层。** 没权限的页面是「进不去」，
  * 而不是「进得去但按钮藏起来了」—— 后者拦不住直接敲 URL 的人。
@@ -25,10 +25,15 @@ export const permissionGuard: NavigationGuard = async (to) => {
     return { path: '/' }
   }
 
+  const session = useSessionStore()
+
+  // 强制改密：改完前不放行进业务页（防绕过 —— 直敲 URL 也被拦回来）
+  if (session.mustChangePassword && to.path !== '/change-password') {
+    return { path: '/change-password' }
+  }
+
   const required = to.meta.permission
   if (!required) return true
-
-  const session = useSessionStore()
 
   // 硬刷新时 store 是空的，而权限点只在「当前用户」接口里 ——
   // 必须先把它取回来再判，否则「刷新一下就进不去」会被当成权限 bug。

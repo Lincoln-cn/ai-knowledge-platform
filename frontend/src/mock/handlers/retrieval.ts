@@ -1,4 +1,4 @@
-import { ApiError, ErrorCode } from '@/api/types'
+import { ApiError } from '@/api/types'
 import type { HitItem, HitTestRequest, HitTestResult, RetrievalMode, RetrievalParams } from '@/api/retrieval'
 import type { MockRoute } from '../dispatch'
 import { hitCorpus, knowledgeBases, retrievalParams } from '../fixtures/knowledge'
@@ -24,7 +24,17 @@ const MODE_PROFILE: Record<RetrievalMode, { scoreBoost: number; cutRatio: number
 
 const findParams = (kbId: string): RetrievalParams => {
   const p = retrievalParams[kbId]
-  if (!p) throw new ApiError(ErrorCode.NOT_FOUND, `知识库「${kbId}」的检索参数不存在`)
+  // P1 新库检索参数：回**默认值**而不是 404 —— 否则设置面板刚建好的库会弹「不存在」
+  if (!p) {
+    const defaults: RetrievalParams = {
+      mode: '混合检索',
+      threshold: 0.6,
+      topN: 5,
+      noRefStrategy: '拒答'
+    }
+    retrievalParams[kbId] = defaults
+    return defaults
+  }
   return p
 }
 

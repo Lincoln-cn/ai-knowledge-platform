@@ -165,6 +165,8 @@ const runSingle = async () => {
       question: question.value.trim()
     })
   } catch (error) {
+    // P1 失败必须清掉上一次结果 —— 否则旧结果会被当成这次的结论
+    singleResult.value = null
     ElMessage.error(error instanceof ApiError ? error.message : '命中测试失败')
   } finally {
     testing.value = false
@@ -187,6 +189,8 @@ const runCompare = async () => {
       question: question.value.trim()
     })
   } catch (error) {
+    // P1 同上：失败清空，不残留上一次对比结果
+    compareResults.value = []
     ElMessage.error(error instanceof ApiError ? error.message : '对比测试失败')
   } finally {
     comparing.value = false

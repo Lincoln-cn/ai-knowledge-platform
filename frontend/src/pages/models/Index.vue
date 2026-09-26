@@ -19,15 +19,15 @@
         placeholder="搜索模型名称或基础模型"
         style="width: 230px"
         clearable
-        @keyup.enter="fetchList"
-        @clear="fetchList"
+        @keyup.enter="onFilterChange"
+        @clear="onFilterChange"
       />
-      <el-select v-model="query.kind" size="small" placeholder="全部类型" style="width: 130px" @change="fetchList">
+      <el-select v-model="query.kind" size="small" placeholder="全部类型" style="width: 130px" @change="onFilterChange">
         <el-option label="全部类型" value="" />
         <el-option label="对话模型" value="chat" />
         <el-option label="向量模型" value="embedding" />
       </el-select>
-      <el-select v-model="query.status" size="small" placeholder="全部状态" style="width: 130px" @change="fetchList">
+      <el-select v-model="query.status" size="small" placeholder="全部状态" style="width: 130px" @change="onFilterChange">
         <el-option label="全部状态" value="" />
         <el-option v-for="s in STATUSES" :key="s" :label="s" :value="s" />
       </el-select>
@@ -109,7 +109,14 @@
         </div>
       </el-card>
 
-      <div v-if="!loading && !list.length" class="empty panel">
+      <!-- 错误态 ≠ 空态：请求失败不能伪装成「暂无模型」 -->
+      <div v-if="error" class="empty panel error-state">
+        <div class="empty-title">加载失败</div>
+        <hr class="rule-2" />
+        <p class="micro muted">{{ error }}</p>
+        <el-button size="small" type="primary" @click="onFilterChange">重试</el-button>
+      </div>
+      <div v-else-if="!loading && !list.length" class="empty panel">
         <div class="empty-title">暂无模型</div>
         <hr class="rule-2" />
         <p class="micro muted">
@@ -138,11 +145,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { modelsApi } from '@/api'
 import type { ModelInfo, ModelKind, ModelStatus } from '@/api/models'
+import { ApiError } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import ModelFormDialog from './components/ModelFormDialog.vue'
 
@@ -181,22 +190,44 @@ const CAP_DOT: Record<string, string> = {
   PARALLEL: 'ok'
 }
 
+const route = useRoute()
+const router = useRouter()
+
 const list = ref<ModelInfo[]>([])
 const total = ref(0)
 const loading = ref(false)
+const error = ref<string | null>(null)
 const pageSize = 12
 
+/** 筛选/分页入 URL —— 刷新与直链不丢状态（一.2） */
 const query = reactive({
-  keyword: '',
-  kind: '' as ModelKind | '',
-  status: '' as ModelStatus | '',
-  page: 1
+  keyword: (route.query.keyword as string) ?? '',
+  kind: ((route.query.kind as string) ?? '') as ModelKind | '',
+  status: ((route.query.status as string) ?? '') as ModelStatus | '',
+  page: Number(route.query.page) || 1
 })
 
-const loadingCount = computed(() => list.value.filter((m) => m.status === '加载中').length)
+/** 把当前筛选/分页写回 URL（replace 不产生历史记录） */
+const syncUrl = () => {
+  router.replace({
+    query: {
+      ...(query.keyword ? { keyword: query.keyword } : {}),
+      ...(query.kind ? { kind: query.kind } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.page > 1 ? { page: String(query.page) } : {})
+    }
+  })
+}
+
+/** 全平台「加载中」的模型数 —— 跨页统计，不是只看当前页 */
+const globalLoadingCount = ref(0)
+const loadingCount = computed(() =>
+  Math.max(globalLoadingCount.value, list.value.filter((m) => m.status === '加载中').length)
+)
 
 const fetchList = async () => {
   loading.value = true
+  error.value = null
   try {
     const result = await modelsApi.listModels({
       keyword: query.keyword || undefined,
@@ -207,12 +238,38 @@ const fetchList = async () => {
     })
     list.value = result.list
     total.value = result.total
+  } catch (e) {
+    // 错误态 ≠ 空态：请求失败不能伪装成「暂无模型」（一.1）
+    error.value = e instanceof ApiError ? e.message : '加载模型列表失败，请检查网络后重试'
+    list.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
 }
 
-/* ── 只在有模型处于「加载中」时轮询；完成即停；页面不可见时暂停 ── */
+/**
+ * 跨页刷新：轮询时另外查一次「全部加载中」的 total，保证第 2 页的
+ * "加载中"也能被感知 —— 否则 loadingCount 只看当前页，翻页后轮询就停了。
+ */
+const fetchGlobalLoadingCount = async () => {
+  try {
+    const result = await modelsApi.listModels({ status: '加载中', size: 1 })
+    globalLoadingCount.value = result.total
+  } catch {
+    // 静默：计数失败不影响主列表
+  }
+}
+
+/**
+ * 轮询：加上限与退避（P2 文档 §8.5「加上限与退避，但不要改成 SSE」）。
+ * - 最多 30 次（约 30×(1.5→8s) ≈ 3 分钟），之后自动停并提示
+ * - 间隔从 1.5s 线性退避到 8s，避免后端卡住时无限每 1.5s 打一枪
+ */
+const MAX_POLLS = 30
+const BASE_INTERVAL = 1500
+const MAX_INTERVAL = 8000
+let pollCount = 0
 let timer: ReturnType<typeof setTimeout> | null = null
 
 const clearTimer = () => {
@@ -220,13 +277,26 @@ const clearTimer = () => {
   timer = null
 }
 
+const nextInterval = () =>
+  Math.min(BASE_INTERVAL + pollCount * 250, MAX_INTERVAL)
+
 const schedule = () => {
   clearTimer()
-  if (!loadingCount.value || document.hidden) return
+  if (!loadingCount.value || document.hidden) {
+    pollCount = 0
+    return
+  }
+  if (pollCount >= MAX_POLLS) {
+    ElMessage.info('模型加载较慢，自动刷新已暂停。可手动点「刷新」继续跟踪')
+    pollCount = 0
+    return
+  }
+  const interval = nextInterval()
+  pollCount += 1
   timer = setTimeout(async () => {
-    await fetchList()
+    await Promise.all([fetchList(), fetchGlobalLoadingCount()])
     schedule()
-  }, 1500)
+  }, interval)
 }
 
 const onVisibility = () => {
@@ -235,17 +305,28 @@ const onVisibility = () => {
     return
   }
   // 回到前台立即补一次，不等下一个周期
-  fetchList().then(schedule)
+  Promise.all([fetchList(), fetchGlobalLoadingCount()]).then(schedule)
 }
 
 onMounted(() => {
   document.addEventListener('visibilitychange', onVisibility)
-  fetchList().then(schedule)
+  Promise.all([fetchList(), fetchGlobalLoadingCount()]).then(schedule)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
   clearTimer()
+})
+
+/* ── 筛选切换时重置 page（否则停在空页）+ 同步 URL ── */
+const onFilterChange = () => {
+  query.page = 1
+  syncUrl()
+  fetchList().then(schedule)
+}
+
+watch(() => query.page, () => {
+  syncUrl()
 })
 
 /* ── 操作 ── */
@@ -267,21 +348,34 @@ const onSaved = () => {
 }
 
 const reload = async (model: ModelInfo) => {
-  await modelsApi.loadModel(model.id)
-  ElMessage.success(`已提交加载「${model.name}」，加载需要一点时间`)
-  await fetchList()
-  schedule()
+  try {
+    await modelsApi.loadModel(model.id)
+    ElMessage.success(`已提交加载「${model.name}」，加载需要一点时间`)
+    await fetchList()
+    schedule()
+  } catch (e) {
+    ElMessage.error(e instanceof ApiError ? e.message : '提交加载失败')
+  }
 }
 
 const remove = async (model: ModelInfo) => {
-  await ElMessageBox.confirm(
-    `删除后使用该模型的应用将无法提问。确认删除「${model.name}」？`,
-    '确认删除模型',
-    { type: 'warning', confirmButtonText: '删除' }
-  )
-  await modelsApi.deleteModel(model.id)
-  ElMessage.success('已删除')
-  await fetchList()
+  try {
+    await ElMessageBox.confirm(
+      `删除后使用该模型的应用将无法提问。确认删除「${model.name}」？`,
+      '确认删除模型',
+      { type: 'warning', confirmButtonText: '删除' }
+    )
+  } catch {
+    // 用户点了取消 —— 不是错误，静默返回
+    return
+  }
+  try {
+    await modelsApi.deleteModel(model.id)
+    ElMessage.success('已删除')
+    await fetchList()
+  } catch (e) {
+    ElMessage.error(e instanceof ApiError ? e.message : '删除失败')
+  }
 }
 </script>
 
@@ -432,6 +526,10 @@ const remove = async (model: ModelInfo) => {
   flex-direction: column;
   align-items: center;
   gap: var(--space-xs);
+}
+
+.error-state {
+  border-color: color-mix(in oklch, var(--color-danger) 30%, var(--color-rule));
 }
 
 .empty .rule-2 {

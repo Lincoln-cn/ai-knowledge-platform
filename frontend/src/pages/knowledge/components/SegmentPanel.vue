@@ -10,11 +10,19 @@
       <span class="grow" />
       <template v-if="batchMode">
         <el-button size="small" type="primary" :disabled="!selectedIds.length" @click="openMove">批量迁移</el-button>
+        <el-button size="small" :disabled="!selectedIds.length" @click="batchReembed">批量重新向量化</el-button>
         <el-button size="small" type="danger" :disabled="!selectedIds.length" @click="batchRemove">批量删除</el-button>
         <span class="micro muted">已选 {{ selectedIds.length }} 项</span>
         <el-button size="small" @click="exitBatch">取消选择</el-button>
       </template>
       <el-button v-else size="small" @click="batchMode = true">批量选择</el-button>
+      <el-button v-if="canEdit" size="small" @click="reembedAll">全部重新向量化</el-button>
+    </div>
+
+    <div v-if="loadError" class="notice err">
+      <div><b>加载失败：</b>{{ loadError.reason }}</div>
+      <div v-if="loadError.hint" class="micro">{{ loadError.hint }}</div>
+      <el-button size="small" style="margin-top: var(--space-xs)" @click="fetchList">重试</el-button>
     </div>
 
     <div v-if="oversizedCount > 0" class="notice warn">
@@ -44,7 +52,7 @@
           <span class="sg-title ellipsis">{{ seg.title || '（无标题）' }}</span>
           <span class="grow" />
           <el-tag v-if="seg.charCount > modelLimit" size="small" type="warning" effect="plain">超长</el-tag>
-          <el-tag size="small" effect="plain" :type="seg.embedding === '已向量化' ? 'success' : 'info'">
+          <el-tag size="small" effect="plain" :type="embeddingTagType(seg.embedding)">
             {{ seg.embedding }}
           </el-tag>
         </div>
@@ -58,6 +66,11 @@
         <div class="sg-foot">
           <span class="micro muted">#{{ seg.ordinal }} · <b class="num">{{ seg.charCount }}</b> 字</span>
           <span class="grow" />
+          <el-button
+            v-if="!batchMode && canEdit && needsReembed(seg)"
+            link size="small" type="primary"
+            @click.stop="reembedOne(seg)"
+          >重新向量化</el-button>
           <el-switch
             v-if="!batchMode && canEdit"
             :model-value="seg.enabled"
@@ -70,9 +83,8 @@
         </div>
       </div>
 
-      <!-- 空态：两栏（左图右字）。图的左缘与分段卡片的左缘同一格，
-           讲的是「切分 / 入库」这条管线，不是通用插画。 -->
-      <div v-if="!loading && !list.length" class="empty panel empty-split">
+      <!-- 空态与错误态严格区分：只有"请求成功且 0 条"才走这里 -->
+      <div v-if="!loading && !loadError && !list.length" class="empty panel empty-split">
         <EmptyArt kind="pipeline" />
         <div class="empty-copy">
           <div class="empty-title">
@@ -93,7 +105,12 @@
       />
     </div>
 
-    <SegmentEditDialog ref="editRef" :model-limit="modelLimit" @saved="fetchList" />
+    <SegmentEditDialog
+      ref="editRef"
+      :model-limit="modelLimit"
+      @saved="fetchList"
+      @reembed="onEditReembed"
+    />
 
     <el-dialog v-model="moveVisible" title="批量迁移分段" width="420px">
       <el-select v-model="moveTargetId" placeholder="选择目标文档" style="width: 100%">
@@ -130,6 +147,7 @@ const canEdit = computed(() => session.can(PERM.segmentEdit))
 const list = ref<Segment[]>([])
 const total = ref(0)
 const loading = ref(false)
+const loadError = ref<{ reason: string; hint?: string } | null>(null)
 const pageSize = 20
 const docOptions = ref<DocumentItem[]>([])
 const modelLimit = ref(1200)
@@ -149,10 +167,29 @@ const moving = ref(false)
 
 const editRef = ref<InstanceType<typeof SegmentEditDialog>>()
 
+const errText = (error: unknown, fallback: string): { reason: string; hint?: string } => {
+  if (error instanceof ApiError) return { reason: error.message, hint: error.hint }
+  if (error instanceof Error) return { reason: error.message || fallback }
+  return { reason: fallback }
+}
+
+const embeddingTagType = (e: Segment['embedding']) => {
+  if (e === '已向量化') return 'success'
+  if (e === '向量化中') return 'warning'
+  if (e === '失败') return 'danger'
+  return 'info'
+}
+
+const needsReembed = (seg: Segment) =>
+  seg.embedding === '待向量化' || seg.embedding === '失败'
+
 const fetchList = async () => {
   loading.value = true
+  loadError.value = null
   try {
+    // P1 跨库批量：始终带 kbId，否则列表会扫到别的库的分段，批量删除会跨库
     const result = await ingestionApi.listSegments({
+      kbId: props.kbId,
       documentId: query.documentId || undefined,
       onlyOversized: query.onlyOversized || undefined,
       page: query.page,
@@ -163,20 +200,27 @@ const fetchList = async () => {
 
     // 超长告警：用 onlyOversized 查一次拿总数（契约里 Segment 没有 oversized 字段）
     const over = await ingestionApi.listSegments({
+      kbId: props.kbId,
       documentId: query.documentId || undefined,
       onlyOversized: true,
       page: 1,
       size: 1
     })
     oversizedCount.value = over.total
+  } catch (error) {
+    loadError.value = errText(error, '加载分段列表失败')
   } finally {
     loading.value = false
   }
 }
 
 const fetchDocs = async () => {
-  const result = await ingestionApi.listDocuments(props.kbId, { page: 1, size: 100 })
-  docOptions.value = result.list
+  try {
+    const result = await ingestionApi.listDocuments(props.kbId, { page: 1, size: 100 })
+    docOptions.value = result.list
+  } catch {
+    // 文档下拉是辅助信息，拿不到不阻断分段列表；下拉保持空即可
+  }
 }
 
 /** 从切分预览拿 modelLimit（契约里 Segment 本身不带该字段） */
@@ -220,11 +264,66 @@ const exitBatch = () => {
 
 const openEdit = (seg: Segment) => editRef.value?.open(seg)
 
+/** 编辑对话框保存后勾了「立即重新向量化」 */
+const onEditReembed = async (id: string) => {
+  try {
+    await ingestionApi.reembedSegment(id)
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(errText(error, '重新向量化失败').reason)
+    await fetchList()
+  }
+}
+
+const reembedOne = async (seg: Segment) => {
+  try {
+    await ingestionApi.reembedSegment(seg.id)
+    ElMessage.success('已开始重新向量化')
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(errText(error, '重新向量化失败').reason)
+  }
+}
+
+const batchReembed = async () => {
+  let ok = 0
+  for (const id of selectedIds.value) {
+    try {
+      await ingestionApi.reembedSegment(id)
+      ok += 1
+    } catch {
+      // 单段失败不阻断其余；回执在最后统一报
+    }
+  }
+  ElMessage.success(ok ? `已提交 ${ok} 个分段重新向量化` : '没有分段被提交')
+  exitBatch()
+  await fetchList()
+}
+
+const reembedAll = async () => {
+  await ElMessageBox.confirm(
+    '将对该知识库下全部文档重新向量化，可能需要一些时间。确认？',
+    '全部重新向量化',
+    { type: 'warning', confirmButtonText: '开始' }
+  )
+  try {
+    const result = await ingestionApi.reembedKnowledgeBase(props.kbId)
+    ElMessage.success(`已排队 ${result.queued} 个分段`)
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(errText(error, '重新向量化失败').reason)
+  }
+}
+
 const toggleEnabled = async (seg: Segment) => {
   const next = !seg.enabled
-  await ingestionApi.setSegmentEnabled(seg.id, next)
-  ElMessage.success(next ? '已启用，参与检索' : '已停用，不再参与检索')
-  await fetchList()
+  try {
+    await ingestionApi.setSegmentEnabled(seg.id, next)
+    ElMessage.success(next ? '已启用，参与检索' : '已停用，不再参与检索')
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(errText(error, '操作失败').reason)
+  }
 }
 
 const remove = async (seg: Segment) => {
@@ -233,21 +332,35 @@ const remove = async (seg: Segment) => {
     '确认删除分段',
     { type: 'warning', confirmButtonText: '删除' }
   )
-  await ingestionApi.deleteSegment(seg.id)
-  ElMessage.success('已删除')
-  await fetchList()
+  try {
+    await ingestionApi.deleteSegment(seg.id)
+    ElMessage.success('已删除')
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(errText(error, '删除失败').reason)
+    await fetchList()
+  }
 }
 
+/** P1 批量删除走单次 batch 接口，拿部分失败回执 */
 const batchRemove = async () => {
   await ElMessageBox.confirm(
     `将删除选中的 ${selectedIds.value.length} 个分段，且不可恢复。确认？`,
     '批量删除分段',
     { type: 'warning', confirmButtonText: '删除' }
   )
-  for (const id of selectedIds.value) {
-    await ingestionApi.deleteSegment(id)
+  try {
+    const result = await ingestionApi.batchDeleteSegments(selectedIds.value)
+    if (result.failed.length) {
+      ElMessage.warning(
+        `已删除 ${result.deleted} 个，${result.failed.length} 个失败：${result.failed[0].reason}`
+      )
+    } else {
+      ElMessage.success(`已删除 ${result.deleted} 个分段`)
+    }
+  } catch (error) {
+    ElMessage.error(errText(error, '批量删除失败').reason)
   }
-  ElMessage.success(`已删除 ${selectedIds.value.length} 个分段`)
   exitBatch()
   await fetchList()
 }
@@ -269,7 +382,7 @@ const confirmMove = async () => {
     exitBatch()
     await fetchList()
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '迁移失败')
+    ElMessage.error(errText(error, '迁移失败').reason)
   } finally {
     moving.value = false
   }
@@ -357,7 +470,7 @@ onMounted(() => {
 
 .sg-content {
   margin: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   color: var(--color-ink-2);
   line-height: var(--leading-body);
   display: -webkit-box;

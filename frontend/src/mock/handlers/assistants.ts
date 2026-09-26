@@ -3,18 +3,21 @@ import type {
   AccessCredential,
   ApiKeyItem,
   Assistant,
+  AssistantOrigin,
   AssistantType,
   BundleCheckResult,
   BundleDependency,
   PublishCheckResult,
   UpsertAssistantBody
 } from '@/api/assistants'
+import type { Grant, ResourceVisibility } from '@/api/types'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
 import { apiKeys, assistants, credentials, sampleBundleDeps, workflowDrafts } from '../fixtures/assistants'
 import { models } from '../fixtures/models'
 import { cannedAnswer } from '../fixtures/canned'
 import { promptConfigs } from '../fixtures/prompts'
+import { roles, users } from '../fixtures/identity'
 import { PERM } from '@/constants/permissions'
 import { currentSubjects, requireVisible, selfId, visiblePredicate } from '../policy'
 
@@ -33,6 +36,16 @@ const findAssistant = (id: string, token: string, action: string = PERM.assistan
 
 const modelNameOf = (modelId: string) =>
   models.find((m) => m.id === modelId)?.name ?? ''
+
+/**
+ * 响应装饰：补 `ownerName`（#8）。广场卡片要显示「由谁分享」，只有 ownerId 这个 id
+ * 是显示不出来的。在**响应边界**做，不动夹具本体 —— 归属的真相源仍是 `ownerId`。
+ */
+const withOwnerName = (app: Assistant): Assistant => {
+  if (!app.ownerId) return app
+  const name = users.find((u) => u.id === app.ownerId)?.displayName
+  return name ? { ...app, ownerName: name } : app
+}
 
 /**
  * 发布前校验（AS-I2~I5）。任一项不通过则不允许发布。
@@ -166,6 +179,11 @@ export const assistantRoutes: MockRoute[] = [
       const type = query.type === 'simple' || query.type === 'workflow' ? (query.type as AssistantType) : null
       // mine=true 只看自己名下的（07 §六 阶段 1 的唯一新增查询参数）
       const mine = query.mine === true || query.mine === 'true'
+      const origin =
+        query.origin === 'official' || query.origin === 'shared' || query.origin === 'mine'
+          ? (query.origin as AssistantOrigin)
+          : null
+      const me = selfId(subjects)
 
       let list = assistants
         // 先在数据层过滤再分页：total 必须是"我看得见的条数"
@@ -177,7 +195,16 @@ export const assistantRoutes: MockRoute[] = [
       if (type) {
         list = list.filter((a) => a.type === type)
       }
-      return paginate(list, query)
+      // 来源分段与卡片徽标同一套判据：builtin 优先归「官方」，其余按 ownerId 分流
+      if (origin === 'official') {
+        list = list.filter((a) => a.builtin)
+      } else if (origin === 'mine') {
+        list = list.filter((a) => !a.builtin && a.ownerId === me)
+      } else if (origin === 'shared') {
+        list = list.filter((a) => !a.builtin && a.ownerId !== me)
+      }
+      const page = paginate(list, query)
+      return { ...page, list: page.list.map(withOwnerName) }
     }
   ],
 
@@ -235,7 +262,7 @@ export const assistantRoutes: MockRoute[] = [
         workflowDrafts[created.id] = { nodes: [], edges: [] }
       }
       assistants.unshift(created)
-      return created
+      return withOwnerName(created)
     }
   ],
 
@@ -317,14 +344,14 @@ export const assistantRoutes: MockRoute[] = [
         visibility: 'private'
       }
       assistants.unshift(created)
-      return created
+      return withOwnerName(created)
     }
   ],
 
   [
     'GET',
     '/assistants/:id',
-    ({ path, token }) => findAssistant(path.id, token)
+    ({ path, token }) => withOwnerName(findAssistant(path.id, token))
   ],
 
   [
@@ -386,7 +413,7 @@ export const assistantRoutes: MockRoute[] = [
         else app.thinkingEnabled = input.thinkingEnabled
       }
 
-      return app
+      return withOwnerName(app)
     }
   ],
 
@@ -433,7 +460,59 @@ export const assistantRoutes: MockRoute[] = [
         }
       }
       app.published = published
-      return app
+      return withOwnerName(app)
+    }
+  ],
+
+  /* ── 分享写（07 §3.1 / §8.1）：可见性与授权是两个写口，分开落 ── */
+
+  [
+    'PATCH',
+    '/assistants/:id/visibility',
+    ({ path, body, token }) => {
+      const app = findAssistant(path.id, token, PERM.assistantEdit)
+      if (app.builtin) {
+        throw new ApiError(4006, `「${app.name}」是内置应用，可见性由平台统一维护`)
+      }
+      const { visibility } = body as { visibility: ResourceVisibility }
+      if (visibility !== 'private' && visibility !== 'shared' && visibility !== 'public') {
+        throw new ApiError(4004, '可见性只能是 private / shared / public')
+      }
+      app.visibility = visibility
+      return withOwnerName(app)
+    }
+  ],
+
+  [
+    'PUT',
+    '/assistants/:id/grants',
+    ({ path, body, token }) => {
+      const app = findAssistant(path.id, token, PERM.assistantEdit)
+      if (app.builtin) {
+        throw new ApiError(4006, `「${app.name}」是内置应用，可见性由平台统一维护`)
+      }
+      const { grants } = body as { grants: Grant[] }
+      if (!Array.isArray(grants)) {
+        throw new ApiError(4004, 'grants 必须是数组')
+      }
+      // 主体必须真实存在：写错 id 的授权等于静默没共享出去（对方看不到，自己以为共享了）
+      for (const g of grants) {
+        const kind = g.subject?.kind
+        const id = g.subject?.id
+        if ((kind !== 'user' && kind !== 'role') || !id) {
+          throw new ApiError(4004, '共享主体只支持账号（user）与角色（role）')
+        }
+        const exists =
+          kind === 'user' ? users.some((u) => u.id === id) : roles.some((r) => r.id === id)
+        if (!exists) {
+          throw new ApiError(4004, `共享主体不存在：${kind} ${id}`)
+        }
+        if (!Array.isArray(g.actions) || g.actions.length === 0) {
+          throw new ApiError(4004, '每条授权至少要有一个动作')
+        }
+      }
+      app.grants = grants.map((g) => ({ subject: { ...g.subject }, actions: [...g.actions] }))
+      return withOwnerName(app)
     }
   ],
 

@@ -82,6 +82,7 @@
         </button>
         <template #dropdown>
           <el-dropdown-menu>
+            <el-dropdown-item command="change-password">修改密码</el-dropdown-item>
             <el-dropdown-item command="logout">退出登录</el-dropdown-item>
           </el-dropdown-menu>
         </template>
@@ -231,8 +232,15 @@ function openPalette() {
 
 onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointerdown)
-  // 刷新页面后把登录态找回来；失败则交给路由守卫处理
-  session.loadProfile().catch(() => {})
+  // 刷新页面后把登录态找回来。失败说明令牌已过期 —— 给提示并回登录页，
+  // 不能 `.catch(() => {})` 吞掉（那会留下「未登录」的坏壳：菜单塌掉、无提示、不跳转）
+  session.loadProfile().catch((error: unknown) => {
+    const message =
+      error instanceof Error && error.message ? error.message : '登录已过期，请重新登录'
+    ElMessage.warning(message)
+    session.reset()
+    router.push('/login')
+  })
 })
 
 onBeforeUnmount(() => {
@@ -245,6 +253,10 @@ watch(
 )
 
 const onCommand = async (command: string) => {
+  if (command === 'change-password') {
+    router.push('/change-password')
+    return
+  }
   if (command !== 'logout') return
   await session.logout()
   ElMessage.success('已退出登录')

@@ -67,7 +67,12 @@ export const roles: Role[] = [
   }
 ]
 
-export const users: Array<User & { password: string }> = [
+/**
+ * 用户夹具。`mustChangePassword` 是登录契约的一等字段（`LoginResult`）：
+ * 新建用户默认密码 123456 时置 true，改过密码后置 false。
+ * 现有四个账号都已改过，所以都是 false —— 否则回归脚本一登录就被弹去改密页。
+ */
+export const users: Array<User & { password: string; mustChangePassword: boolean }> = [
   {
     id: 'u1',
     username: 'admin',
@@ -76,7 +81,8 @@ export const users: Array<User & { password: string }> = [
     roleId: 'r1',
     roleName: '管理员',
     status: '正常',
-    lastLoginAt: '2026-02-13 08:30'
+    lastLoginAt: '2026-02-13 08:30',
+    mustChangePassword: false
   },
   {
     id: 'u2',
@@ -86,7 +92,8 @@ export const users: Array<User & { password: string }> = [
     roleId: 'r2',
     roleName: '知识运营',
     status: '正常',
-    lastLoginAt: '2026-02-13 09:12'
+    lastLoginAt: '2026-02-13 09:12',
+    mustChangePassword: false
   },
   {
     id: 'u3',
@@ -96,7 +103,8 @@ export const users: Array<User & { password: string }> = [
     roleId: 'r3',
     roleName: '应用配置',
     status: '正常',
-    lastLoginAt: '2026-02-12 17:44'
+    lastLoginAt: '2026-02-12 17:44',
+    mustChangePassword: false
   },
   {
     id: 'u4',
@@ -106,7 +114,8 @@ export const users: Array<User & { password: string }> = [
     roleId: 'r4',
     roleName: '普通用户',
     status: '正常',
-    lastLoginAt: '2026-02-13 10:05'
+    lastLoginAt: '2026-02-13 10:05',
+    mustChangePassword: false
   }
 ]
 

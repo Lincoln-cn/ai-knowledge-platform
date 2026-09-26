@@ -29,6 +29,12 @@
         <el-switch v-model="form.enabled" />
         <span class="hint micro">停用后该分段不参与检索</span>
       </el-form-item>
+      <el-form-item v-if="contentChanged" label="向量化">
+        <el-checkbox v-model="reembedNow">保存后立即重新向量化</el-checkbox>
+        <div class="hint micro">
+          内容已改动，该分段会先置为「待向量化」。重新向量化后改动才会被检索到。
+        </div>
+      </el-form-item>
     </el-form>
 
     <template #footer>
@@ -46,12 +52,14 @@ import { ApiError } from '@/api/types'
 import type { Segment } from '@/api/ingestion'
 
 const props = defineProps<{ modelLimit: number }>()
-const emit = defineEmits<{ saved: [] }>()
+const emit = defineEmits<{ saved: []; reembed: [id: string] }>()
 
 const visible = ref(false)
 const saving = ref(false)
 const formRef = ref()
 const editingId = ref('')
+const originalContent = ref('')
+const reembedNow = ref(true)
 
 const form = reactive({
   title: '',
@@ -60,12 +68,15 @@ const form = reactive({
 })
 
 const isOversized = computed(() => form.content.length > props.modelLimit)
+const contentChanged = computed(() => form.content !== originalContent.value)
 
 const open = (seg: Segment) => {
   editingId.value = seg.id
   form.title = seg.title
   form.content = seg.content
+  originalContent.value = seg.content
   form.enabled = seg.enabled
+  reembedNow.value = true
   visible.value = true
 }
 
@@ -73,7 +84,9 @@ const reset = () => {
   editingId.value = ''
   form.title = ''
   form.content = ''
+  originalContent.value = ''
   form.enabled = true
+  reembedNow.value = true
 }
 
 const submit = async () => {
@@ -86,7 +99,15 @@ const submit = async () => {
     if (form.enabled !== undefined) {
       await ingestionApi.setSegmentEnabled(editingId.value, form.enabled)
     }
-    ElMessage.success('已保存。内容变更后需重新向量化')
+    const shouldReembed = contentChanged.value && reembedNow.value
+    if (shouldReembed) {
+      ElMessage.success('已保存，正在重新向量化')
+      emit('reembed', editingId.value)
+    } else if (contentChanged.value) {
+      ElMessage.warning('已保存。内容已置为「待向量化」，请在列表里点「重新向量化」后生效')
+    } else {
+      ElMessage.success('已保存')
+    }
     visible.value = false
     emit('saved')
   } catch (error) {

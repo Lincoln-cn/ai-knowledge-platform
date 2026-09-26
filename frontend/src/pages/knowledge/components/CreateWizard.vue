@@ -5,7 +5,7 @@
     width="860px"
     :close-on-click-modal="false"
     :show-close="step === 0 || step === 3"
-    @closed="reset"
+    @closed="onClosed"
   >
     <el-steps :active="step" align-center class="steps" finish-status="success">
       <el-step title="基本信息" />
@@ -70,16 +70,30 @@
             :on-change="onFileChange"
             :on-remove="onFileRemove"
             :file-list="fileList"
-            accept=".pdf,.docx,.doc,.md,.txt"
+            :accept="acceptAttr"
           >
             <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
             <div class="el-upload__text">将文件拖到此处，或<em>点击选择</em></div>
             <template #tip>
               <div class="el-upload__tip micro muted">
-                支持 PDF / Word / Markdown / 纯文本。选好文件后点「下一步」进入分段设置。
+                <template v-if="uploadPolicy">
+                  支持 {{ uploadPolicy.acceptedExtensions.join(' / ') }} · 单个 ≤ {{ uploadPolicy.maxFileSizeMB }}MB ·
+                  一次最多 {{ uploadPolicy.maxFileCount }} 个。选好文件后点「下一步」进入分段设置。
+                </template>
+                <template v-else>
+                  支持 PDF / Word / Markdown / 纯文本。选好文件后点「下一步」进入分段设置。
+                </template>
               </div>
             </template>
           </el-upload>
+          <div v-if="fileRejects.length" class="notice warn reject-list">
+            <div><b>以下文件未通过校验：</b></div>
+            <div v-for="r in fileRejects" :key="r.name" class="micro">{{ r.name }} —— {{ r.reason }}</div>
+          </div>
+          <div v-if="stageError" class="notice err" style="margin-top: var(--space-sm)">
+            <div><b>暂存上传失败：</b>{{ stageError }}</div>
+            <div class="micro">可以直接点「下一步」重试 —— 知识库是幂等创建的，不会重复建库。</div>
+          </div>
         </el-tab-pane>
         <!-- 在线抓取属 V1.2，整项隐藏而不是留一个点了没反应的入口 -->
         <el-tab-pane v-if="false" label="在线抓取" name="online">
@@ -126,10 +140,15 @@
             切分预览
             <template v-if="preview">· 共 {{ preview.segmentCount }} 段</template>
           </span>
-          <span class="micro muted">可编辑</span>
+          <span class="micro muted">可编辑 · 导入时按此计划切分</span>
         </div>
 
-        <div v-if="!preview" class="preview-empty micro muted">
+        <div v-if="previewError" class="notice err preview-error">
+          <div><b>生成预览失败：</b>{{ previewError }}</div>
+          <el-button size="small" style="margin-top: var(--space-xs)" @click="generatePreview">重试</el-button>
+        </div>
+
+        <div v-else-if="!preview" class="preview-empty micro muted">
           点左侧「生成预览」查看切分结果。超长分段会标红并给出建议。
         </div>
 
@@ -143,8 +162,9 @@
             <div class="pi-head">
               <span class="micro muted">#{{ seg.ordinal }} · {{ seg.charCount }} 字</span>
               <span v-if="seg.oversized" class="pi-warn">⚠ 超长</span>
+              <span v-if="editedOrdinals.has(seg.ordinal)" class="pi-edited">已编辑</span>
             </div>
-            <!-- 可编辑 -->
+            <!-- 可编辑：改动写入 segmentationPlan，导入时被真正采纳 -->
             <el-input
               v-if="editingOrdinal === seg.ordinal"
               v-model="editingContent"
@@ -164,7 +184,11 @@
 
     <!-- ── 第四步：导入结果 ── -->
     <div v-show="step === 3" class="step-body">
-      <div class="notice info">
+      <div v-if="importError" class="notice err">
+        <div><b>导入失败：</b>{{ importError }}</div>
+        <div class="micro">知识库已创建（幂等），可以点「重试导入」继续，不会重复建库。</div>
+      </div>
+      <div v-else class="notice info">
         知识库「{{ createdKb?.name }}」已创建，文档正在解析与切分。可以离开本向导，进度在文档列表继续可见。
       </div>
       <div class="result-list">
@@ -201,6 +225,9 @@
         >开始导入</el-button>
       </template>
       <template v-else>
+        <el-button v-if="importError" size="small" type="primary" :loading="submitting" @click="startImport">
+          重试导入
+        </el-button>
         <el-button size="small" type="primary" @click="finish">完成</el-button>
       </template>
     </template>
@@ -208,7 +235,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import {
   ElMessage,
   type FormInstance,
@@ -221,7 +248,13 @@ import { ingestionApi, knowledgeApi, modelsApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { ImportType, KnowledgeBase, KnowledgeCategory } from '@/api/knowledge'
 import type { ModelInfo } from '@/api/models'
-import type { DocumentItem, DocumentStatus, PreviewSegmentationResult } from '@/api/ingestion'
+import type {
+  DocumentItem,
+  DocumentStatus,
+  PreviewSegmentationResult,
+  SegmentationPlanItem,
+  UploadPolicy
+} from '@/api/ingestion'
 
 const emit = defineEmits<{ created: [kb: KnowledgeBase] }>()
 
@@ -275,6 +308,8 @@ const baseRules: FormRules = {
 
 const files = ref<File[]>([])
 const fileList = ref<UploadFiles>([])
+const uploadPolicy = ref<UploadPolicy | null>(null)
+const fileRejects = ref<Array<{ name: string; reason: string }>>([])
 
 const segForm = reactive({
   strategy: 'auto' as 'auto' | 'custom',
@@ -283,12 +318,28 @@ const segForm = reactive({
 })
 
 const preview = ref<PreviewSegmentationResult | null>(null)
+const previewError = ref('')
+const stageError = ref('')
+const importError = ref('')
 const modelLimit = ref(1200)
 const editingOrdinal = ref<number | null>(null)
 const editingContent = ref('')
+const editedOrdinals = ref(new Set<number>())
 
 const createdKb = ref<KnowledgeBase | null>(null)
 const resultDocs = ref<DocumentItem[]>([])
+/** #12 幂等键：一次向导会话内不变。重试「开始导入」不会二次建库 */
+const clientRequestId = ref('')
+/** #11 暂存上传 id */
+const uploadIds = ref<string[]>([])
+/** 是否已经把文档导进去过（用来决定关闭时要不要清孤儿库） */
+const imported = ref(false)
+
+const acceptAttr = computed(() =>
+  uploadPolicy.value?.acceptedExtensions.length
+    ? uploadPolicy.value.acceptedExtensions.join(',')
+    : '.pdf,.docx,.doc,.md,.txt'
+)
 
 const open = async () => {
   visible.value = true
@@ -296,6 +347,15 @@ const open = async () => {
   categories.value = await knowledgeApi.listKnowledgeCategories()
   const models = await modelsApi.listModels({ kind: 'embedding', size: 50 })
   embeddingModels.value = models.list.filter((m) => m.status === '已加载' || m.status === '未加载')
+  try {
+    // 上传策略挂在已有库上；新库还没建，先用一个可见的库拿策略，拿不到就用默认提示
+    const anyKb = await knowledgeApi.listKnowledgeBases({ page: 1, size: 1 })
+    if (anyKb.list[0]) {
+      uploadPolicy.value = await ingestionApi.getUploadPolicy(anyKb.list[0].id)
+    }
+  } catch {
+    uploadPolicy.value = null
+  }
 }
 
 const reset = () => {
@@ -308,14 +368,35 @@ const reset = () => {
   baseForm.embeddingModelId = ''
   files.value = []
   fileList.value = []
+  fileRejects.value = []
   segForm.strategy = 'auto'
   segForm.segmentLength = 500
   segForm.overlap = 60
   preview.value = null
+  previewError.value = ''
+  stageError.value = ''
+  importError.value = ''
   editingOrdinal.value = null
+  editedOrdinals.value = new Set()
   createdKb.value = null
   resultDocs.value = []
+  uploadIds.value = []
+  imported.value = false
   baseFormRef.value?.clearValidate()
+}
+
+/** 关闭时清理孤儿库：建了库但一个文档都没导入，就删掉 */
+const onClosed = async () => {
+  const kb = createdKb.value
+  const shouldCleanup = kb && !imported.value && !resultDocs.value.length
+  reset()
+  if (shouldCleanup && kb) {
+    try {
+      await knowledgeApi.deleteKnowledgeBase(kb.id)
+    } catch {
+      // 清理失败不阻断关闭；空库留在列表里，用户可手动删
+    }
+  }
 }
 
 const collectFiles = (list: UploadFiles) => {
@@ -326,14 +407,71 @@ const collectFiles = (list: UploadFiles) => {
   return result
 }
 
+const validateFiles = (list: File[]): Array<{ name: string; reason: string }> => {
+  const bad: Array<{ name: string; reason: string }> = []
+  const p = uploadPolicy.value
+  if (!p) return bad
+  if (list.length > p.maxFileCount) {
+    bad.push({ name: `共 ${list.length} 个文件`, reason: `一次最多 ${p.maxFileCount} 个，请分批上传` })
+  }
+  for (const f of list) {
+    const ext = f.name.includes('.') ? f.name.slice(f.name.lastIndexOf('.')).toLowerCase() : ''
+    if (p.acceptedExtensions.length && ext && !p.acceptedExtensions.includes(ext)) {
+      bad.push({ name: f.name, reason: `不支持的类型「${ext}」` })
+      continue
+    }
+    if (f.size > p.maxFileSizeMB * 1024 * 1024) {
+      bad.push({ name: f.name, reason: `超过 ${p.maxFileSizeMB}MB 上限` })
+    }
+  }
+  return bad
+}
+
 const onFileChange = (_f: UploadFile, list: UploadFiles) => {
   fileList.value = list
   files.value = collectFiles(list)
+  fileRejects.value = validateFiles(files.value)
 }
 
 const onFileRemove = (_f: UploadFile, list: UploadFiles) => {
   fileList.value = list
   files.value = collectFiles(list)
+  fileRejects.value = validateFiles(files.value)
+}
+
+/**
+ * 确保知识库已创建（#12 幂等）。
+ * 同一 clientRequestId 重试返回既有库 —— 上传失败后不会再撞「名称已存在」。
+ */
+const ensureKb = async (): Promise<KnowledgeBase> => {
+  if (createdKb.value) {
+    // 回上一步改过名称/分类的话，补一次更新
+    try {
+      createdKb.value = await knowledgeApi.updateKnowledgeBase(createdKb.value.id, {
+        name: baseForm.name,
+        category: baseForm.category,
+        description: baseForm.description,
+        icon: baseForm.icon,
+        embeddingModelId: baseForm.embeddingModelId
+      })
+    } catch {
+      // 更新失败不阻断导入流程，以已建库为准
+    }
+    return createdKb.value
+  }
+  if (!clientRequestId.value) {
+    clientRequestId.value = `kbreq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+  }
+  createdKb.value = await knowledgeApi.createKnowledgeBase({
+    name: baseForm.name,
+    category: baseForm.category,
+    description: baseForm.description,
+    icon: baseForm.icon,
+    importType: baseForm.importType,
+    embeddingModelId: baseForm.embeddingModelId,
+    clientRequestId: clientRequestId.value
+  })
+  return createdKb.value
 }
 
 const next = async () => {
@@ -348,27 +486,50 @@ const next = async () => {
       ElMessage.warning('请至少选择一个文档')
       return
     }
-    step.value = 2
+    const bad = validateFiles(files.value)
+    if (bad.length) {
+      fileRejects.value = bad
+      return
+    }
+    submitting.value = true
+    stageError.value = ''
+    try {
+      // #12 先幂等建库，再暂存上传 —— 任一步失败都可以直接重试「下一步」
+      const kb = await ensureKb()
+      const staged = await ingestionApi.stageUploads(kb.id, files.value)
+      uploadIds.value = staged.uploadIds
+      step.value = 2
+    } catch (error) {
+      stageError.value = error instanceof ApiError ? error.message : '暂存上传失败，请重试'
+    } finally {
+      submitting.value = false
+    }
   }
 }
 
 const generatePreview = async () => {
   previewing.value = true
+  previewError.value = ''
   try {
-    // 上传前预览：documentId 传 null。契约里没有 content 字段，mock 用内置语料演示切分
+    // #11 预览基于**用户暂存的文件**，不是内置语料；带 segmentationPlan 则按编辑后的计划展示
     preview.value = await ingestionApi.previewSegmentation({
       documentId: null,
       segmentLength: segForm.segmentLength,
       overlap: segForm.overlap,
-      strategy: segForm.strategy
+      strategy: segForm.strategy,
+      uploadIds: uploadIds.value.length ? uploadIds.value : undefined,
+      segmentationPlan: editedOrdinals.value.size && preview.value ? toPlan(preview.value) : undefined
     })
     modelLimit.value = preview.value.modelLimit
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '生成预览失败')
+    previewError.value = error instanceof ApiError ? error.message : '生成预览失败'
   } finally {
     previewing.value = false
   }
 }
+
+const toPlan = (p: PreviewSegmentationResult): SegmentationPlanItem[] =>
+  p.segments.map((s) => ({ ordinal: s.ordinal, content: s.content }))
 
 const startPreviewEdit = (seg: { ordinal: number; content: string }) => {
   editingOrdinal.value = seg.ordinal
@@ -380,6 +541,7 @@ const savePreviewEdit = (seg: { ordinal: number; content: string; charCount: num
   seg.content = editingContent.value
   seg.charCount = editingContent.value.length
   seg.oversized = seg.charCount > modelLimit.value
+  editedOrdinals.value = new Set(editedOrdinals.value).add(seg.ordinal)
   editingOrdinal.value = null
 }
 
@@ -388,25 +550,30 @@ const startImport = async () => {
     ElMessage.warning('请先生成预览，确认切分结果后再导入')
     return
   }
+  if (!uploadIds.value.length) {
+    stageError.value = '暂存文件已丢失，请回到上一步重新选择文件'
+    ElMessage.error(stageError.value)
+    return
+  }
   submitting.value = true
+  importError.value = ''
   try {
-    // 1) 建库
-    createdKb.value = await knowledgeApi.createKnowledgeBase({
-      name: baseForm.name,
-      category: baseForm.category,
-      description: baseForm.description,
-      icon: baseForm.icon,
-      importType: baseForm.importType,
-      embeddingModelId: baseForm.embeddingModelId
+    // #12 库已用 clientRequestId 幂等创建；这里只做导入，失败可直接重试
+    const kb = await ensureKb()
+    // #11 把预览里编辑过的分段作为切分计划提交 —— 不再"只改本地数组"
+    const receipt = await ingestionApi.importDocuments(kb.id, {
+      uploadIds: uploadIds.value,
+      segmentationPlan: toPlan(preview.value)
     })
-
-    // 2) 上传文档（触发解析切分）
-    resultDocs.value = await ingestionApi.uploadDocuments(createdKb.value.id, files.value)
-
+    resultDocs.value = receipt.accepted
+    imported.value = receipt.accepted.length > 0
+    if (receipt.rejected.length) {
+      importError.value = `成功 ${receipt.accepted.length} 个，失败 ${receipt.rejected.length} 个：${receipt.rejected[0].reason}`
+    }
     step.value = 3
-    emit('created', createdKb.value)
+    emit('created', kb)
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '导入失败')
+    importError.value = error instanceof ApiError ? error.message : '导入失败，请重试'
   } finally {
     submitting.value = false
   }
@@ -500,6 +667,7 @@ defineExpose({ open })
   font-weight: 500;
   line-height: var(--leading-tight);
   color: var(--color-ink);
+  letter-spacing: var(--tracking-body);
 }
 
 .strategy-group {
@@ -563,6 +731,10 @@ defineExpose({ open })
   text-align: center;
 }
 
+.preview-error {
+  margin: var(--space-md);
+}
+
 .preview-list {
   flex: 1;
   max-height: 320px;
@@ -604,9 +776,16 @@ defineExpose({ open })
   line-height: var(--leading-tight);
 }
 
+.pi-edited {
+  font-size: var(--text-2xs);
+  color: var(--color-accent);
+  font-weight: 500;
+  line-height: var(--leading-tight);
+}
+
 .pi-content {
   margin: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   color: var(--color-ink-2);
   line-height: var(--leading-body);
   cursor: pointer;
@@ -654,6 +833,10 @@ defineExpose({ open })
 .st-warn { color: var(--color-warn); }
 .st-ok { color: var(--color-ok); }
 .st-err { color: var(--color-danger); }
+
+.reject-list {
+  margin-top: var(--space-sm);
+}
 
 /* 上传区：发丝线 + 文案，不用拖拽虚线框 */
 .step-body :deep(.el-upload),

@@ -1,6 +1,7 @@
 import dayjs from 'dayjs'
 import type { MockRoute } from '../dispatch'
 import {
+  mySummaryBetween,
   overviewBetween,
   qualityBetween,
   rankBetween,
@@ -56,6 +57,15 @@ export const analyticsRoutes: MockRoute[] = [
     ({ query }) => {
       const { from, to } = readRange(query)
       return qualityBetween(from, to)
+    }
+  ],
+
+  [
+    'GET',
+    '/analytics/me/summary',
+    ({ query }) => {
+      const { from, to } = readRange(query)
+      return mySummaryBetween(from, to)
     }
   ]
 ]

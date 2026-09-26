@@ -29,6 +29,17 @@
     </div>
 
     <div class="filters panel">
+      <!--
+        来源分段（§六 1）：全部 / 官方 / 共享给我 / 我的。
+        与卡片徽标同一套判据 —— builtin 优先归「官方」，其余按 ownerId 分流。
+        服务端在分页前过滤（`origin` 查询参数），否则 total 与翻页会错位。
+      -->
+      <el-radio-group v-model="query.origin" size="small" @change="onFilterChange">
+        <el-radio-button value="">全部</el-radio-button>
+        <el-radio-button value="official">官方</el-radio-button>
+        <el-radio-button value="shared">共享给我</el-radio-button>
+        <el-radio-button value="mine">我的</el-radio-button>
+      </el-radio-group>
       <el-input
         v-model="query.keyword"
         size="small"
@@ -45,7 +56,7 @@
         size="small"
         placeholder="全部状态"
         style="width: 130px"
-        @change="fetchList"
+        @change="onFilterChange"
       >
         <el-option label="全部状态" value="" />
         <el-option label="已发布" value="true" />
@@ -57,7 +68,7 @@
         size="small"
         placeholder="全部类型"
         style="width: 130px"
-        @change="fetchList"
+        @change="onFilterChange"
       >
         <el-option label="全部类型" value="" />
         <el-option label="简单" value="simple" />
@@ -66,7 +77,16 @@
       <span class="micro muted">共 {{ total }} 个</span>
     </div>
 
-    <div v-loading="loading" class="grid">
+    <!--
+      失败与空数据必须能分清（本模块 P1：列表请求无 catch ⇒ 被渲染成「还没有应用」）。
+      错误态就地给原因与重试，不落进空态文案。
+    -->
+    <div v-if="loadError" class="notice err load-error">
+      <div><b>加载失败：</b>{{ loadError }}</div>
+      <el-button size="small" @click="fetchList">重试</el-button>
+    </div>
+
+    <div v-else v-loading="loading" class="grid">
       <el-card v-for="a in list" :key="a.id" shadow="never" class="app-card" :class="{ plaza: consumer }">
         <div class="ac-head">
           <span class="ac-icon">{{ a.icon }}</span>
@@ -77,7 +97,15 @@
                 <el-tag v-if="!consumer" size="small" effect="plain" class="ac-type-tag">
                   {{ a.type === 'workflow' ? '编排' : '简单' }}
                 </el-tag>
-                <el-tag v-if="a.builtin" size="small" effect="plain" type="info">内置</el-tag>
+                <!--
+                  来源徽标三态（§六 2 / #8）：官方 / 由 X 分享 / 我的。
+                  对消费者同样显示 —— 广场要能回答「这应用是谁给的」。
+                -->
+                <el-tag v-if="originOf(a) === 'official'" size="small" effect="plain" type="info">官方</el-tag>
+                <el-tag v-else-if="originOf(a) === 'mine'" size="small" effect="plain" type="success">我的</el-tag>
+                <el-tag v-else size="small" effect="plain" type="warning">
+                  由 {{ a.ownerName || '他人' }} 分享
+                </el-tag>
               </span>
             </div>
             <div class="micro muted ellipsis-2 ac-desc" :title="a.description">{{ a.description }}</div>
@@ -144,35 +172,39 @@
 
         <div class="ac-actions">
           <!--
-            一个入口，不是两个。
-            对编排应用来说「配置」与「编排」本来就是同一件事 —— 画布就是它的配置面，
-            放两个按钮只会让人以为点进去会看到不同的东西。
-            主操作（配置/编排）是全卡唯一的 accent 落点，用 primary link。
-            消费者形态下这三个管理动作（配置/概览/发布/删除）都不出现，
-            只剩「开始对话」—— 卡片从"资产条目"变成"能用什么"。
+            主操作按来源分化（§六 3）：
+              官方 / 他人分享 → 只能「开始对话」
+              我的            → 配置（编排）/ 分享 / 概览 / 发布 / 删除
+            内置应用即使归属我也是「官方」—— 配置项只读，分享由平台统一维护。
+            消费者形态下管理动作一律不出现，卡片只剩「开始对话」。
           -->
           <el-button
-            v-if="!consumer && can(PERM.assistantEdit)"
+            v-if="showConfig(a)"
             link size="small"
             type="primary"
             @click="openConfig(a)"
           >{{ a.type === 'workflow' ? '编排' : '配置' }}</el-button>
-          <el-button v-if="!consumer" link size="small" @click="openOverview(a)">概览</el-button>
+          <el-button
+            v-if="showShare(a)"
+            link size="small"
+            @click="openShare(a)"
+          >分享</el-button>
+          <el-button v-if="showOverview(a)" link size="small" @click="openOverview(a)">概览</el-button>
           <el-button
             link
             size="small"
-            :type="consumer ? 'primary' : undefined"
+            :type="originOf(a) === 'mine' && !consumer ? undefined : 'primary'"
             @click="demo(a)"
-          >{{ consumer ? '开始对话' : '演示' }}</el-button>
+          >{{ originOf(a) === 'mine' && !consumer ? '演示' : '开始对话' }}</el-button>
           <el-button
-            v-if="!consumer && can(PERM.assistantPublish)"
+            v-if="showPublish(a)"
             link size="small"
             :type="a.published ? 'warning' : 'success'"
             @click="togglePublish(a)"
           >{{ a.published ? '下架' : '发布' }}</el-button>
           <span class="grow" />
           <el-button
-            v-if="!consumer && can(PERM.assistantEdit) && !a.builtin"
+            v-if="showDelete(a)"
             link size="small" type="danger"
             @click="remove(a)"
           >删除</el-button>
@@ -181,15 +213,9 @@
 
       <div v-if="!loading && !list.length" class="empty panel">
         <div class="empty-title">
-          {{ consumer
-            ? '暂时没有可用的应用'
-            : hasFilter ? '当前筛选下没有应用' : '还没有创建任何应用' }}
+          {{ emptyTitle }}
         </div>
-        <p class="micro muted">
-          {{ consumer
-            ? '已经发布的应用会出现在这里，可以拿它直接对话'
-            : hasFilter ? '换个关键词或清空筛选试试' : '创建第一个应用，开始组装对话服务' }}
-        </p>
+        <p class="micro muted">{{ emptyHint }}</p>
         <el-button
           v-if="!consumer && can(PERM.assistantEdit)"
           size="small" type="primary"
@@ -211,6 +237,7 @@
     <AssistantCreateDialog ref="createRef" @created="fetchList" @saved="fetchList" />
     <AssistantConfigDrawer ref="configRef" :assistant="current" @saved="fetchList" @published="fetchList" />
     <AssistantOverviewDrawer ref="overviewRef" :assistant="current" @saved="fetchList" />
+    <ShareDialog ref="shareRef" :assistant="current" @saved="fetchList" />
   </div>
 </template>
 
@@ -221,13 +248,14 @@ import { Refresh } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { assistantsApi } from '@/api'
 import { ApiError } from '@/api/types'
-import type { Assistant } from '@/api/assistants'
+import type { Assistant, AssistantOrigin } from '@/api/assistants'
 import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 import PageHeader from '@/components/PageHeader.vue'
 import AssistantCreateDialog from './components/AssistantCreateDialog.vue'
 import AssistantConfigDrawer from './components/AssistantConfigDrawer.vue'
 import AssistantOverviewDrawer from './components/AssistantOverviewDrawer.vue'
+import ShareDialog from './components/ShareDialog.vue'
 
 const router = useRouter()
 const session = useSessionStore()
@@ -249,6 +277,7 @@ const consumer = computed(() => session.dataScope === 'shared')
 const list = ref<Assistant[]>([])
 const total = ref(0)
 const loading = ref(false)
+const loadError = ref('')
 const pageSize = 12
 const current = ref<Assistant | null>(null)
 
@@ -256,27 +285,87 @@ const query = reactive({
   keyword: '',
   published: '' as '' | 'true' | 'false',
   type: '' as '' | 'simple' | 'workflow',
+  origin: '' as '' | AssistantOrigin,
   page: 1
 })
 
-const hasFilter = computed(() => Boolean(query.keyword || query.published || query.type))
+const hasFilter = computed(() =>
+  Boolean(query.keyword || query.published || query.type || query.origin)
+)
+
+/* ── 来源三态（§六）：与卡片徽标、分段筛选同一套判据 ── */
+
+const meId = computed(() => session.user?.id ?? '')
+
+/**
+ * builtin 优先归「官方」—— 内置应用即使归属我也是平台资产，不给配置/分享入口。
+ * 其余按 ownerId 分流：我的 / 他人分享。
+ */
+const originOf = (a: Assistant): AssistantOrigin => {
+  if (a.builtin) return 'official'
+  return a.ownerId && a.ownerId === meId.value ? 'mine' : 'shared'
+}
+
+// 主操作按来源分化（§六 3）：官方与他人分享只有「开始对话」，我的才有配置/分享/概览
+const showConfig = (a: Assistant) =>
+  !consumer.value && can(PERM.assistantEdit) && originOf(a) === 'mine'
+const showShare = (a: Assistant) =>
+  !consumer.value && can(PERM.assistantEdit) && originOf(a) === 'mine'
+const showOverview = (a: Assistant) => !consumer.value && originOf(a) === 'mine'
+const showPublish = (a: Assistant) =>
+  !consumer.value && can(PERM.assistantPublish) && originOf(a) === 'mine'
+const showDelete = (a: Assistant) =>
+  !consumer.value && can(PERM.assistantEdit) && originOf(a) === 'mine'
+
+const emptyTitle = computed(() => {
+  if (consumer.value) return '暂时没有可用的应用'
+  if (hasFilter.value) return '当前筛选下没有应用'
+  return '还没有创建任何应用'
+})
+
+const emptyHint = computed(() => {
+  if (consumer.value) return '已经发布的应用会出现在这里，可以拿它直接对话'
+  if (hasFilter.value) return '换个关键词或清空筛选试试'
+  return '创建第一个应用，开始组装对话服务'
+})
 
 const createRef = ref<InstanceType<typeof AssistantCreateDialog>>()
 const configRef = ref<InstanceType<typeof AssistantConfigDrawer>>()
 const overviewRef = ref<InstanceType<typeof AssistantOverviewDrawer>>()
+const shareRef = ref<InstanceType<typeof ShareDialog>>()
+
+const onFilterChange = () => {
+  query.page = 1
+  fetchList()
+}
 
 const fetchList = async () => {
   loading.value = true
+  loadError.value = ''
   try {
     const result = await assistantsApi.listAssistants({
       keyword: query.keyword || undefined,
-      published: query.published === '' ? undefined : query.published === 'true',
+      // 消费者形态默认只列已发布（§六 5）：共享的草稿不该进广场
+      published: consumer.value
+        ? true
+        : query.published === ''
+          ? undefined
+          : query.published === 'true',
       type: query.type || undefined,
+      origin: query.origin || undefined,
       page: query.page,
       size: pageSize
     })
     list.value = result.list
     total.value = result.total
+  } catch (error) {
+    // 失败必须能与「没有数据」分清（本模块 P1）：清空列表 + 就地错误态 + 可重试
+    list.value = []
+    total.value = 0
+    loadError.value =
+      error instanceof ApiError
+        ? `${error.message}${error.hint ? '。' + error.hint : ''}`
+        : '应用列表加载失败，请检查网络后重试'
   } finally {
     loading.value = false
   }
@@ -302,6 +391,12 @@ const openConfig = (a: Assistant) => {
 const openOverview = (a: Assistant) => {
   current.value = a
   overviewRef.value?.open()
+}
+
+const openShare = (a: Assistant) => {
+  current.value = a
+  // 直接把 a 传进去：current 刚赋值，props 到子组件可能还没刷新
+  shareRef.value?.open(a)
 }
 
 const demo = (a: Assistant) => {
@@ -507,6 +602,14 @@ onMounted(fetchList)
 
 .empty {
   grid-column: 1 / -1;
+}
+
+/* 错误态与空态分开：加载失败不许伪装成「还没有应用」 */
+.load-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-xs);
 }
 
 .pager {

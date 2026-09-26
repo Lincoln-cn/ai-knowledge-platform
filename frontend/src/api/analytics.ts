@@ -43,6 +43,25 @@ export interface QualityMetrics {
   pendingFeedbackCount: number
 }
 
+/**
+ * 「我的」口径聚合（07 §五 · #18）。
+ *
+ * 消费者进工作台看到的是**我**的使用情况，不是"平台运营成什么样"。
+ * 全平台活跃用户数与待处理反馈对他既是噪声也是越界。
+ */
+export interface MeSummary {
+  /** 我的提问数 */
+  myQuestionCount: number
+  /** 我的对话数 */
+  myConversationCount: number
+  /** 我最近一次活跃时间；从未活跃为 null */
+  lastActiveAt: string | null
+  /** 我点过的赞 */
+  myUp: number
+  /** 我点过的踩 */
+  myDown: number
+}
+
 /* ────────────────────────── 接口 ────────────────────────── */
 
 export const getOverview = (range: AnalyticsRange) =>
@@ -60,3 +79,7 @@ export const listTopAssistants = (range: AnalyticsRange, limit = 10) =>
 
 export const getQualityMetrics = (range: AnalyticsRange) =>
   request<QualityMetrics>({ method: 'GET', url: '/analytics/quality', query: { ...range } })
+
+/** 我的口径聚合（消费者工作台用）。与 `getOverview` 是两套口径，不可互换 */
+export const getMySummary = (range: AnalyticsRange) =>
+  request<MeSummary>({ method: 'GET', url: '/analytics/me/summary', query: { ...range } })

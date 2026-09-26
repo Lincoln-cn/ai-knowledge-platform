@@ -13,6 +13,12 @@
       </template>
     </PageHeader>
 
+    <!-- 错误态 ≠ 空态：请求失败不能伪装成「暂无数据」 -->
+    <div v-if="error" class="notice err">
+      <b>加载失败：</b>{{ error }}
+      <el-button size="small" type="primary" plain style="margin-left: var(--space-sm)" @click="fetchAll">重试</el-button>
+    </div>
+
     <!-- 核心指标 -->
     <div v-loading="loading" class="kpi-row">
       <div class="kpi panel">
@@ -123,7 +129,11 @@
               <div class="q-label label">待处理反馈</div>
               <div class="q-value num">{{ fmtCount(quality?.pendingFeedbackCount) }}</div>
             </div>
-            <el-button size="small" type="primary" plain @click="goFeedback">
+            <!-- 入口按权限过滤（reach.ts 唯一判据），否则无 feedback:handle 的角色会看到通向 403 的按钮 -->
+            <el-button
+              v-if="canReach(router, '/feedback')"
+              size="small" type="primary" plain @click="goFeedback"
+            >
               去处理
               <el-icon class="el-icon--right"><ArrowRight /></el-icon>
             </el-button>
@@ -149,6 +159,7 @@ import type {
 } from '@/api/analytics'
 import PageHeader from '@/components/PageHeader.vue'
 import TrendChart from './components/TrendChart.vue'
+import { canReach } from '@/lib/reach'
 
 type RangeKey = '7d' | '30d'
 
@@ -158,6 +169,7 @@ const router = useRouter()
 
 const rangeKey = ref<RangeKey>('7d')
 const loading = ref(false)
+const error = ref<string | null>(null)
 
 const overview = ref<OverviewMetrics | null>(null)
 const trend = ref<TrendPoint[]>([])
@@ -172,6 +184,7 @@ const range = computed<AnalyticsRange>(() => {
 
 const fetchAll = async () => {
   loading.value = true
+  error.value = null
   try {
     const q = range.value
     const [o, t, a, m] = await Promise.all([
@@ -184,6 +197,9 @@ const fetchAll = async () => {
     trend.value = t
     rank.value = a
     quality.value = m
+  } catch (e) {
+    // 错误态 ≠ 空态：请求失败不能伪装成「暂无数据」（一.1）
+    error.value = e instanceof Error ? e.message : '加载运营数据失败，请检查网络后重试'
   } finally {
     loading.value = false
   }

@@ -115,7 +115,7 @@ import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 
 const props = defineProps<{ kb: KnowledgeBase }>()
-const emit = defineEmits<{ changed: []; deleted: [] }>()
+const emit = defineEmits<{ changed: []; deleted: []; dirtyChange: [dirty: boolean] }>()
 
 const session = useSessionStore()
 const canManage = computed(() => session.can(PERM.knowledgeManage))
@@ -143,6 +143,30 @@ const retrieval = reactive<RetrievalParams>({
   noRefStrategy: '拒答'
 })
 
+/** P1 设置面板改动静默丢失：脏标记上报给页面壳，切 Tab 前确认 */
+const snapshot = ref('')
+const dirty = ref(false)
+
+const takeSnapshot = () => {
+  snapshot.value = JSON.stringify({
+    form: { ...form },
+    retrieval: { ...retrieval }
+  })
+  if (dirty.value) {
+    dirty.value = false
+    emit('dirtyChange', false)
+  }
+}
+
+const checkDirty = () => {
+  const now = JSON.stringify({ form: { ...form }, retrieval: { ...retrieval } })
+  const next = now !== snapshot.value
+  if (next !== dirty.value) {
+    dirty.value = next
+    emit('dirtyChange', next)
+  }
+}
+
 const rules: FormRules = {
   name: [{ required: true, message: '请输入知识库名称', trigger: 'blur' }],
   category: [{ required: true, message: '请选择分类', trigger: 'change' }]
@@ -153,7 +177,8 @@ const loadForm = () => {
   form.category = props.kb.category
   form.icon = props.kb.icon
   form.description = props.kb.description
-  form.embeddingModelId = props.kb.embeddingLocked ? props.kb.embeddingModelId : props.kb.embeddingModelId
+  form.embeddingModelId = props.kb.embeddingModelId
+  takeSnapshot()
 }
 
 const save = async () => {
@@ -169,6 +194,7 @@ const save = async () => {
       embeddingModelId: form.embeddingModelId
     })
     ElMessage.success('已保存')
+    takeSnapshot()
     emit('changed')
   } catch (error) {
     ElMessage.error(error instanceof ApiError ? error.message : '保存失败')
@@ -183,6 +209,7 @@ const loadRetrieval = async () => {
   retrieval.threshold = params.threshold
   retrieval.topN = params.topN
   retrieval.noRefStrategy = params.noRefStrategy
+  takeSnapshot()
 }
 
 const saveRetrieval = async () => {
@@ -195,6 +222,7 @@ const saveRetrieval = async () => {
       noRefStrategy: retrieval.noRefStrategy
     })
     ElMessage.success('检索参数已保存')
+    takeSnapshot()
   } catch (error) {
     ElMessage.error(error instanceof ApiError ? error.message : '保存失败')
   } finally {
@@ -205,27 +233,46 @@ const saveRetrieval = async () => {
 const toggleEnabled = async () => {
   const next = !props.kb.enabled
   if (!next) {
-    await ElMessageBox.confirm(
-      '停用后该知识库不再参与检索。确认停用？',
-      '确认停用知识库',
-      { type: 'warning', confirmButtonText: '停用' }
-    )
+    try {
+      await ElMessageBox.confirm(
+        '停用后该知识库不再参与检索。确认停用？',
+        '确认停用知识库',
+        { type: 'warning', confirmButtonText: '停用' }
+      )
+    } catch {
+      return
+    }
   }
-  await knowledgeApi.setKnowledgeBaseEnabled(props.kb.id, next)
-  ElMessage.success(next ? '已启用' : '已停用')
-  emit('changed')
+  try {
+    await knowledgeApi.setKnowledgeBaseEnabled(props.kb.id, next)
+    ElMessage.success(next ? '已启用' : '已停用')
+    emit('changed')
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '操作失败')
+  }
 }
 
 const remove = async () => {
-  await ElMessageBox.confirm(
-    `删除「${props.kb.name}」将一并移除其全部文档与分段，且不可恢复。确认删除？`,
-    '确认删除知识库',
-    { type: 'warning', confirmButtonText: '删除' }
-  )
-  await knowledgeApi.deleteKnowledgeBase(props.kb.id)
-  ElMessage.success('已删除')
-  emit('deleted')
+  try {
+    await ElMessageBox.confirm(
+      `删除「${props.kb.name}」将一并移除其全部文档与分段，且不可恢复。确认删除？`,
+      '确认删除知识库',
+      { type: 'warning', confirmButtonText: '删除' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await knowledgeApi.deleteKnowledgeBase(props.kb.id)
+    ElMessage.success('已删除')
+    emit('deleted')
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '删除失败')
+  }
 }
+
+// P1 脏标记：任何表单改动都算 dirty
+watch([form, retrieval], checkDirty, { deep: true })
 
 watch(() => props.kb.id, loadForm)
 

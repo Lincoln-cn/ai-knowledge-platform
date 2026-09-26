@@ -27,6 +27,12 @@ const refreshCategoryCounts = () => {
   }
 }
 
+/**
+ * #12 幂等建库：同一 `clientRequestId` 重复创建返回**既有库**。
+ * 没有这张表，「建库成功但上传失败后重试」会被「名称已存在」卡死，并留下孤儿库。
+ */
+const createRequestIdToKbId = new Map<string, string>()
+
 export const knowledgeRoutes: MockRoute[] = [
   [
     'GET',
@@ -74,6 +80,17 @@ export const knowledgeRoutes: MockRoute[] = [
     ({ body, token }) => {
       const subjects = currentSubjects(token)
       const input = body as CreateKnowledgeBaseBody
+
+      // #12 幂等：同一 clientRequestId 重试直接回既有库，不再撞「名称已存在」
+      const requestId = input.clientRequestId?.trim()
+      if (requestId) {
+        const existingId = createRequestIdToKbId.get(requestId)
+        if (existingId) {
+          const existing = knowledgeBases.find((k) => k.id === existingId)
+          if (existing) return existing
+        }
+      }
+
       if (!input.name?.trim()) throw new ApiError(3001, '知识库名称不能为空')
       if (knowledgeBases.some((k) => k.name === input.name.trim())) {
         throw new ApiError(3002, `知识库名称「${input.name}」已存在`)
@@ -107,6 +124,7 @@ export const knowledgeRoutes: MockRoute[] = [
         visibility: 'private'
       }
       knowledgeBases.unshift(created)
+      if (requestId) createRequestIdToKbId.set(requestId, created.id)
       refreshCategoryCounts()
       return created
     }
@@ -163,6 +181,10 @@ export const knowledgeRoutes: MockRoute[] = [
     ({ path, token }) => {
       const kb = findKb(path.id, token, PERM.knowledgeManage)
       knowledgeBases.splice(knowledgeBases.indexOf(kb), 1)
+      // 幂等键一并清掉：库没了，旧 clientRequestId 不该再解析到幽灵 id
+      for (const [rid, kid] of createRequestIdToKbId) {
+        if (kid === kb.id) createRequestIdToKbId.delete(rid)
+      }
       refreshCategoryCounts()
       return undefined
     }

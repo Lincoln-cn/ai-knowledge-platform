@@ -4,8 +4,14 @@
       <div class="head-main">
         <h1 class="h1">工作台</h1>
         <p class="micro muted intro">
-          近 {{ rangeDays }} 天（{{ range.from }} ~ {{ range.to }}）的使用情况与常用入口。
-          数据来自运营统计接口，接上后端后随 <code>VITE_USE_MOCK</code> 一起切换。
+          <template v-if="consumer">
+            近 {{ rangeDays }} 天（{{ range.from }} ~ {{ range.to }}）的使用情况。
+            选一个应用开始提问，或继续上次的对话。
+          </template>
+          <template v-else>
+            近 {{ rangeDays }} 天（{{ range.from }} ~ {{ range.to }}）的使用情况与常用入口。
+            数据来自运营统计接口，接上后端后随 <code>VITE_USE_MOCK</code> 一起切换。
+          </template>
         </p>
       </div>
       <div class="page-actions">
@@ -14,8 +20,26 @@
       </div>
     </div>
 
-    <!-- 指标条：数字是主角，标签走 mono 小标签 -->
-    <div class="stats panel">
+    <!-- 指标条：消费者看「我的」口径，建设者/运营看平台口径（07 §五） -->
+    <div v-if="consumer" class="stats panel">
+      <div class="stat">
+        <span class="stat-k label">我的提问</span>
+        <span class="stat-v num">{{ fmtCount(mySummary?.myQuestionCount) }}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k label">我的对话</span>
+        <span class="stat-v num">{{ fmtCount(mySummary?.myConversationCount) }}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k label">我的赞</span>
+        <span class="stat-v num">{{ fmtCount(mySummary?.myUp) }}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k label">我的踩</span>
+        <span class="stat-v num">{{ fmtCount(mySummary?.myDown) }}</span>
+      </div>
+    </div>
+    <div v-else class="stats panel">
       <div class="stat">
         <span class="stat-k label">对话次数</span>
         <span class="stat-v num">{{ fmtCount(overview?.questionCount) }}</span>
@@ -35,27 +59,70 @@
     </div>
 
     <div class="cols">
-      <!-- 常用应用：按调用次数排序，点进去直接问答 -->
-      <section class="panel">
-        <div class="panel-head">
-          <h2 class="h2">常用应用</h2>
-          <router-link to="/assistants" class="link">全部应用</router-link>
-        </div>
+      <!-- 消费者左栏：我的对话 + 我提的反馈；建设者/运营：常用应用 -->
+      <template v-if="consumer">
+        <div class="consumer-main">
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="h2">我的对话</h2>
+              <router-link to="/conversation" class="link">全部对话</router-link>
+            </div>
+            <ul v-if="myConversations.length" class="apps">
+              <li v-for="c in myConversations" :key="c.id" class="app-row">
+                <router-link :to="`/conversation?conversationId=${c.id}`" class="app-name">
+                  {{ c.title || '未命名对话' }}
+                </router-link>
+                <span class="app-metric micro muted">{{ c.appName }}</span>
+                <span class="app-metric micro muted">{{ c.updatedAt }}</span>
+              </li>
+            </ul>
+            <div v-else class="empty">
+              <div class="empty-title">还没有对话记录</div>
+              <span>选一个应用开始提问，这里会列出最近的对话</span>
+            </div>
+          </section>
 
-        <ul v-if="apps.length" class="apps">
-          <li v-for="item in apps" :key="item.appId" class="app-row">
-            <router-link :to="`/conversation?appId=${item.appId}`" class="app-name">
-              {{ item.name }}
-            </router-link>
-            <span class="app-metric num">{{ fmtCount(item.callCount) }} 次</span>
-            <span class="app-metric num">{{ fmtPct(item.satisfaction) }}</span>
-          </li>
-        </ul>
-        <div v-else class="empty">
-          <div class="empty-title">还没有使用记录</div>
-          <span>发布一个应用并对话后，这里会列出最常用的几个</span>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="h2">我提的反馈</h2>
+            </div>
+            <ul v-if="myFeedbacks.length" class="apps">
+              <li v-for="f in myFeedbacks" :key="f.id" class="app-row">
+                <span class="vote-tag" :class="f.type === 'up' ? 'up' : 'down'">
+                  {{ f.type === 'up' ? '赞' : '踩' }}
+                </span>
+                <span class="app-name" :title="f.question">{{ f.question }}</span>
+                <span class="status-tag" :class="feedbackStatusClass(f.status)">{{ f.status }}</span>
+              </li>
+            </ul>
+            <div v-else class="empty">
+              <div class="empty-title">还没有提交过反馈</div>
+              <span>在对话页点赞或点踩后，这里能看到处理进展</span>
+            </div>
+          </section>
         </div>
-      </section>
+      </template>
+      <template v-else>
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="h2">常用应用</h2>
+            <router-link v-if="canReach(router, '/assistants')" to="/assistants" class="link">全部应用</router-link>
+          </div>
+          <ul v-if="apps.length" class="apps">
+            <li v-for="item in apps" :key="item.appId" class="app-row">
+              <router-link :to="`/conversation?appId=${item.appId}`" class="app-name">
+                {{ item.name }}
+              </router-link>
+              <span class="app-metric num">{{ fmtCount(item.callCount) }} 次</span>
+              <span class="app-metric num">{{ fmtPct(item.satisfaction) }}</span>
+            </li>
+          </ul>
+          <div v-else class="empty">
+            <div class="empty-title">还没有使用记录</div>
+            <span>发布一个应用并对话后，这里会列出最常用的几个</span>
+          </div>
+        </section>
+      </template>
 
       <!-- 从这里开始：入口按**权限**过滤，与侧栏同一套判据（避免点进去 403） -->
       <section class="panel">
@@ -76,13 +143,13 @@
     <!--
       机器回执 —— 本页的焦点元素，也是本页唯一那一次深色石墨带
       （Cobalt 签名 4 + 8，见 design.md § 仪器面板）。
-      数据全部来自**本页已经在拉、但此前没展示**的字段：不新增请求，也不编数字。
-      状态胶囊不是装饰：WARN 的条件取自验收口径 B4（首字延迟 ≤ 10 s）。
+      消费者口径换成「我的」读数而不是删掉（07 §五）。
+      状态胶囊由真实读数推导，不是装饰。
       ★ 每视口只许一个 —— 它一多，"焦点"就没有了。
     -->
     <InstrumentCard
       v-if="instrumentRows.length"
-      title="近 7 天运行回执"
+      :title="consumer ? '我的使用回执' : '近 7 天运行回执'"
       :status="instrumentStatus"
       :rows="instrumentRows"
     />
@@ -93,7 +160,7 @@
       会看到一条通往 403 的「去处理」链接**。用户看到通向 403 的入口，比"没有入口"更坏。
     -->
     <div
-      v-if="(quality?.pendingFeedbackCount ?? 0) > 0 && canReach(router, '/feedback')"
+      v-if="!consumer && (quality?.pendingFeedbackCount ?? 0) > 0 && canReach(router, '/feedback')"
       class="notice info"
     >
       有 <b>{{ quality?.pendingFeedbackCount }}</b> 条反馈待处理 ——
@@ -107,8 +174,10 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
-import { analyticsApi } from '@/api'
-import type { AnalyticsRange, AssistantRankItem, OverviewMetrics, QualityMetrics } from '@/api/analytics'
+import { analyticsApi, conversationsApi, feedbackApi } from '@/api'
+import type { AnalyticsRange, AssistantRankItem, MeSummary, OverviewMetrics, QualityMetrics } from '@/api/analytics'
+import type { Conversation } from '@/api/conversations'
+import type { FeedbackItem, FeedbackStatus } from '@/api/feedback'
 import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/components/InstrumentCard.vue'
 import { canReach } from '@/lib/reach'
 import { navGroups, navLabel } from '@/router/routes'
@@ -136,6 +205,9 @@ const loading = ref(false)
 const overview = ref<OverviewMetrics | null>(null)
 const quality = ref<QualityMetrics | null>(null)
 const apps = ref<AssistantRankItem[]>([])
+const mySummary = ref<MeSummary | null>(null)
+const myConversations = ref<Conversation[]>([])
+const myFeedbacks = ref<FeedbackItem[]>([])
 
 const range = computed<AnalyticsRange>(() => {
   const to = dayjs()
@@ -143,18 +215,33 @@ const range = computed<AnalyticsRange>(() => {
   return { from: from.format('YYYY-MM-DD'), to: to.format('YYYY-MM-DD') }
 })
 
+/**
+ * 按口径拉数：消费者走 `me/summary` + `mine=true`，建设者/运营走平台口径。
+ * 两套口径是**不同的接口**，不可互换（07 §五）。
+ */
 const fetchAll = async () => {
   loading.value = true
   try {
     const q = range.value
-    const [o, a, m] = await Promise.all([
-      analyticsApi.getOverview(q),
-      analyticsApi.listTopAssistants(q, 5),
-      analyticsApi.getQualityMetrics(q)
-    ])
-    overview.value = o
-    apps.value = a
-    quality.value = m
+    if (consumer.value) {
+      const [s, convs, fbs] = await Promise.all([
+        analyticsApi.getMySummary(q),
+        conversationsApi.listConversations({ mine: true, size: 5 }),
+        feedbackApi.listFeedbacks({ mine: true, size: 5 })
+      ])
+      mySummary.value = s
+      myConversations.value = convs.list
+      myFeedbacks.value = fbs.list
+    } else {
+      const [o, a, m] = await Promise.all([
+        analyticsApi.getOverview(q),
+        analyticsApi.listTopAssistants(q, 5),
+        analyticsApi.getQualityMetrics(q)
+      ])
+      overview.value = o
+      apps.value = a
+      quality.value = m
+    }
   } finally {
     loading.value = false
   }
@@ -193,13 +280,21 @@ const entries = computed(() =>
 )
 
 /**
- * 机器回执的读数行 —— 用**本页已经在拉、但此前没展示**的那几个字段：
- * `quality` 有六个字段，此前只用了 `pendingFeedbackCount`；`overview` 也只用了一半。
- * 所以这里不新增任何请求，也不编数字（仪器面板的第一条纪律）。
- *
+ * 机器回执的读数行 —— 消费者换「我的」读数（07 §五），建设者/运营用平台口径。
+ * 数据必须真实、不编数字（仪器面板的第一条纪律）。
  * 空数组时组件什么都不渲染（不画占位、不画 0）—— 「没测到」显示「—」是本工程的通则。
  */
 const instrumentRows = computed<InstrumentRow[]>(() => {
+  if (consumer.value) {
+    const s = mySummary.value
+    if (!s) return []
+    return [
+      { label: '我的提问', value: s.myQuestionCount.toLocaleString(), hint: '近 7 天' },
+      { label: '我的对话', value: s.myConversationCount.toLocaleString(), hint: '近 7 天' },
+      { label: '我的赞 / 踩', value: `${s.myUp} / ${s.myDown}`, hint: '赞踩互斥且可撤销' },
+      { label: '最近活跃', value: s.lastActiveAt ?? '—' }
+    ]
+  }
   const q = quality.value
   const o = overview.value
   if (!q || !o) return []
@@ -222,12 +317,26 @@ const instrumentRows = computed<InstrumentRow[]>(() => {
 })
 
 /**
- * 状态胶囊**由真实读数推导**，不是装饰：阈值取自 `docs/系统设计方案/04` 的验收口径
- * B4（首字延迟 ≤ 10 s）。四态里只用了两态 —— 没有数据时上面的 `v-if` 已经不让它渲染。
+ * 状态胶囊**由真实读数推导**，不是装饰。
+ * 建设者/运营：阈值取自验收口径 B4（首字延迟 ≤ 10 s）。
+ * 消费者：踩多于赞时给 WARN —— 他对答案不满意，需要关注。
  */
-const instrumentStatus = computed<InstrumentStatus>(() =>
-  (quality.value?.firstTokenLatencyP50 ?? 0) > 10000 ? 'WARN' : 'OK'
-)
+const instrumentStatus = computed<InstrumentStatus>(() => {
+  if (consumer.value) {
+    const s = mySummary.value
+    if (!s) return 'OK'
+    return s.myDown > s.myUp ? 'WARN' : 'OK'
+  }
+  return (quality.value?.firstTokenLatencyP50 ?? 0) > 10000 ? 'WARN' : 'OK'
+})
+
+/** 反馈状态的视觉映射：与反馈页共用同一套语义 */
+const feedbackStatusClass = (status: FeedbackStatus) => {
+  if (status === '已处理') return 'st-ok'
+  if (status === '已忽略') return 'st-err'
+  if (status === '待处理') return 'st-warn'
+  return ''
+}
 
 /* 展示格式：「没测到」一律显示「—」，不画成 0 */
 const fmtCount = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString())
@@ -274,12 +383,20 @@ const fmtPct = (n: number | null | undefined) =>
   line-height: 1.2;
 }
 
-/* 两栏不等宽：常用应用是主体，入门入口是窄栏 —— 不搞等宽双栏那种模板感 */
+/* 两栏不等宽：常用应用/我的对话是主体，入门入口是窄栏 —— 不搞等宽双栏那种模板感 */
 .cols {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
   gap: var(--space-md);
   align-items: start;
+}
+
+/* 消费者左栏：两块纵向排列 */
+.consumer-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  min-width: 0;
 }
 
 @media (max-width: 1100px) {
@@ -362,5 +479,44 @@ code {
   background: var(--color-sunken);
   padding: 0 var(--space-2xs);
   border-radius: var(--radius-xs);
+}
+
+/* 反馈状态/赞踩标签 */
+.vote-tag {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  font-weight: 500;
+}
+
+.vote-tag.up {
+  color: var(--color-ok);
+}
+
+.vote-tag.down {
+  color: var(--color-danger);
+}
+
+.status-tag {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  padding: 0 var(--space-2xs);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-xs);
+  color: var(--color-muted);
+}
+
+.status-tag.st-ok {
+  color: var(--color-ok);
+  border-color: var(--color-ok);
+}
+
+.status-tag.st-warn {
+  color: var(--color-warn);
+  border-color: var(--color-warn);
+}
+
+.status-tag.st-err {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
 }
 </style>

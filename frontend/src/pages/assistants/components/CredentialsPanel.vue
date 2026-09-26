@@ -98,8 +98,13 @@ const expiresAt = ref<Date | null>(null)
 
 const formatTime = (iso: string) => dayjs(iso).format('YYYY-MM-DD HH:mm')
 
+/**
+ * 免登录公开链接的**真实路由形状**是 hash 路径 `/#/public/:token`
+ * （`pages/conversation/route.ts`），不是查询串。
+ * 拼成 `/#/public?token=xxx` 打开即 404 —— 那个形状在路由表里不存在，也没有任何页面读 `?token`。
+ */
 const shareUrl = (token: string) =>
-  `${window.location.origin}/#/public?token=${token}`
+  `${window.location.origin}/#/public/${token}`
 
 const copy = async (text: string) => {
   await navigator.clipboard.writeText(text)

@@ -27,7 +27,8 @@ export const feedbacks: FeedbackItem[] = [
     promotedToKbId: null,
     promotedToKbName: null,
     createdAt: '2026-02-13 09:18',
-    handledAt: null
+    handledAt: null,
+    requesterId: 'u4'
   },
   {
     id: 'fb2',
@@ -45,7 +46,8 @@ export const feedbacks: FeedbackItem[] = [
     promotedToKbId: null,
     promotedToKbName: null,
     createdAt: '2026-02-13 09:22',
-    handledAt: null
+    handledAt: null,
+    requesterId: 'u4'
   },
   {
     id: 'fb3',
@@ -63,7 +65,8 @@ export const feedbacks: FeedbackItem[] = [
     promotedToKbId: null,
     promotedToKbName: null,
     createdAt: '2026-02-12 16:40',
-    handledAt: null
+    handledAt: null,
+    requesterId: 'u4'
   },
   {
     id: 'fb4',
@@ -82,6 +85,7 @@ export const feedbacks: FeedbackItem[] = [
     promotedToKbName: null,
     createdAt: '2026-02-12 11:05',
     handledAt: null
+    // 公开链接提交，无登录态 → 无 requesterId
   },
   {
     id: 'fb5',
@@ -99,7 +103,8 @@ export const feedbacks: FeedbackItem[] = [
     promotedToKbId: 'kb1',
     promotedToKbName: '合同管理制度',
     createdAt: '2026-02-11 14:30',
-    handledAt: '2026-02-12 10:15'
+    handledAt: '2026-02-12 10:15',
+    requesterId: 'u2'
   },
   {
     id: 'fb6',
@@ -117,7 +122,8 @@ export const feedbacks: FeedbackItem[] = [
     promotedToKbId: 'kb2',
     promotedToKbName: '采购与供应商',
     createdAt: '2026-02-10 09:50',
-    handledAt: '2026-02-11 15:40'
+    handledAt: '2026-02-11 15:40',
+    requesterId: 'u3'
   },
   {
     id: 'fb7',
@@ -135,7 +141,8 @@ export const feedbacks: FeedbackItem[] = [
     promotedToKbId: null,
     promotedToKbName: null,
     createdAt: '2026-02-09 17:12',
-    handledAt: '2026-02-10 09:30'
+    handledAt: '2026-02-10 09:30',
+    requesterId: 'u4'
   },
   {
     id: 'fb8',
@@ -153,7 +160,8 @@ export const feedbacks: FeedbackItem[] = [
     promotedToKbId: null,
     promotedToKbName: null,
     createdAt: '2026-02-09 10:20',
-    handledAt: '2026-02-09 18:00'
+    handledAt: '2026-02-09 18:00',
+    requesterId: 'u4'
   },
   {
     id: 'fb9',
@@ -171,7 +179,8 @@ export const feedbacks: FeedbackItem[] = [
     promotedToKbId: null,
     promotedToKbName: null,
     createdAt: '2026-02-13 11:45',
-    handledAt: null
+    handledAt: null,
+    requesterId: 'u2'
   },
   {
     id: 'fb10',
@@ -189,7 +198,8 @@ export const feedbacks: FeedbackItem[] = [
     promotedToKbId: null,
     promotedToKbName: null,
     createdAt: '2026-02-13 13:02',
-    handledAt: null
+    handledAt: null,
+    requesterId: 'u3'
   }
 ]
 

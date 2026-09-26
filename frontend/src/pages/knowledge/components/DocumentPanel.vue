@@ -20,7 +20,13 @@
       <el-button v-if="canUpload" size="small" type="primary" @click="openUpload">+ 上传文档</el-button>
     </div>
 
-    <GlobalProgress :progress="progress" />
+    <GlobalProgress :progress="progress" :load-error="progressError" @retry="manualRefresh" />
+
+    <div v-if="loadError" class="notice err">
+      <div><b>加载失败：</b>{{ loadError.reason }}</div>
+      <div v-if="loadError.hint" class="micro">{{ loadError.hint }}</div>
+      <el-button size="small" style="margin-top: var(--space-xs)" @click="refreshAll">重试</el-button>
+    </div>
 
     <div v-loading="loading" class="table-wrap">
       <el-table :data="list" row-key="id" empty-text="暂无文档，点右上角「上传文档」开始导入">
@@ -55,7 +61,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
             <!-- 行内进度：向量化中时展示 processed/total，不是百分比 -->
             <span v-if="row.status === '向量化中'" class="row-progress">
@@ -70,6 +76,13 @@
               link size="small" type="primary"
               @click="startEmbed(row)"
             >开始向量化</el-button>
+
+            <!-- #10 文档级重新向量化入口 -->
+            <el-button
+              v-if="row.status === '成功' && canUpload"
+              link size="small"
+              @click="reembed(row)"
+            >重新向量化</el-button>
 
             <template v-if="isFailed(row.status)">
               <el-button link size="small" @click="toggleFail(row.id)">
@@ -176,6 +189,8 @@ const statusDot = (s: DocumentStatus) => STATUS_DOT[s] ?? ''
 const list = ref<DocumentItem[]>([])
 const total = ref(0)
 const loading = ref(false)
+const loadError = ref<{ reason: string; hint?: string } | null>(null)
+const progressError = ref<string | null>(null)
 const pageSize = 20
 const expandedFails = ref(new Set<string>())
 
@@ -201,8 +216,15 @@ const embedPercent = (row: DocumentItem) => {
   return Math.min(100, Math.round((row.processedSegments / row.segmentCount) * 100))
 }
 
+const errText = (error: unknown, fallback: string): { reason: string; hint?: string } => {
+  if (error instanceof ApiError) return { reason: error.message, hint: error.hint }
+  if (error instanceof Error) return { reason: error.message || fallback }
+  return { reason: fallback }
+}
+
 const fetchList = async () => {
   loading.value = true
+  loadError.value = null
   try {
     const result = await ingestionApi.listDocuments(props.kbId, {
       keyword: query.keyword || undefined,
@@ -212,34 +234,66 @@ const fetchList = async () => {
     })
     list.value = result.list
     total.value = result.total
+  } catch (error) {
+    loadError.value = errText(error, '加载文档列表失败')
   } finally {
     loading.value = false
   }
 }
 
 const fetchProgress = async () => {
-  progress.value = await ingestionApi.getIngestionProgress(props.kbId)
+  progressError.value = null
+  try {
+    progress.value = await ingestionApi.getIngestionProgress(props.kbId)
+  } catch (error) {
+    // 进度失败必须与"暂无文档"区分：GlobalProgress 靠这个字段换标题
+    progressError.value = errText(error, '加载进度失败').reason
+    throw error
+  }
 }
 
 const refreshAll = async () => {
-  await Promise.all([fetchList(), fetchProgress()])
+  await Promise.all([fetchList(), fetchProgress().catch(() => undefined)])
 }
 
-/* ── 轮询：只在有进行中任务时轮询；完成即停；页面不可见暂停；回前台立即补一次 ── */
+/* ── 轮询：只在有进行中任务时轮询；完成即停；页面不可见暂停；
+      上限 + 退避 —— 后端卡在"运行中"时不会无限每 1.5s 打一枪 ── */
+const POLL_BASE_MS = 1500
+const POLL_MAX_MS = 12_000
+const POLL_MAX_ATTEMPTS = 48
+
 let timer: ReturnType<typeof setTimeout> | null = null
+let pollAttempts = 0
 
 const clearTimer = () => {
   if (timer) clearTimeout(timer)
   timer = null
 }
 
+const nextDelay = () =>
+  Math.min(POLL_MAX_MS, Math.round(POLL_BASE_MS * Math.pow(1.25, Math.max(0, pollAttempts - 1))))
+
 const schedule = () => {
   clearTimer()
-  if (!progress.value.running || document.hidden) return
+  if (!progress.value.running || document.hidden) {
+    pollAttempts = 0
+    return
+  }
+  if (pollAttempts >= POLL_MAX_ATTEMPTS) {
+    progressError.value = `轮询已达上限（${POLL_MAX_ATTEMPTS} 次），已停止自动刷新。可手动点「刷新」继续。`
+    return
+  }
+  pollAttempts += 1
   timer = setTimeout(async () => {
-    await refreshAll()
+    try {
+      await refreshAll()
+    } catch {
+      clearTimer()
+      pollAttempts = 0
+      return
+    }
     schedule()
-  }, 1500)
+  }, nextDelay())
 }
 
 const onVisibility = () => {
@@ -248,10 +302,11 @@ const onVisibility = () => {
     return
   }
   // 回到前台立即补一次，不等下一个周期
-  refreshAll().then(schedule)
+  refreshAll().then(schedule, clearTimer)
 }
 
 const manualRefresh = async () => {
+  pollAttempts = 0
   await refreshAll()
   schedule()
 }
@@ -285,10 +340,24 @@ const startEmbed = async (row: DocumentItem) => {
   try {
     await ingestionApi.startEmbedding(row.id)
     ElMessage.success(`已开始向量化「${row.name}」`)
+    pollAttempts = 0
     await refreshAll()
     schedule()
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '启动向量化失败')
+    ElMessage.error(errText(error, '启动向量化失败').reason)
+  }
+}
+
+/** #10 文档级重新向量化 */
+const reembed = async (row: DocumentItem) => {
+  try {
+    await ingestionApi.reembedDocument(row.id)
+    ElMessage.success(`已开始重新向量化「${row.name}」`)
+    pollAttempts = 0
+    await refreshAll()
+    schedule()
+  } catch (error) {
+    ElMessage.error(errText(error, '重新向量化失败').reason)
   }
 }
 
@@ -297,10 +366,11 @@ const retry = async (row: DocumentItem) => {
     await ingestionApi.retryDocument(row.id)
     ElMessage.success(`已重新提交「${row.name}」，从失败阶段继续`)
     expandedFails.value.delete(row.id)
+    pollAttempts = 0
     await refreshAll()
     schedule()
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '重试失败')
+    ElMessage.error(errText(error, '重试失败').reason)
   }
 }
 
@@ -312,40 +382,68 @@ const toggleFail = (id: string) => {
 }
 
 const openRename = async (row: DocumentItem) => {
-  const { value } = await ElMessageBox.prompt('输入新的文档名', '重命名文档', {
-    inputValue: row.name,
-    confirmButtonText: '保存',
-    cancelButtonText: '取消'
-  })
+  let value: string
+  try {
+    const res = await ElMessageBox.prompt('输入新的文档名', '重命名文档', {
+      inputValue: row.name,
+      confirmButtonText: '保存',
+      cancelButtonText: '取消'
+    })
+    value = res.value
+  } catch {
+    // 用户取消，不是错误
+    return
+  }
   if (!value?.trim()) return
-  await ingestionApi.renameDocument(row.id, value.trim())
-  ElMessage.success('已重命名')
-  await fetchList()
+  try {
+    await ingestionApi.renameDocument(row.id, value.trim())
+    ElMessage.success('已重命名')
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(errText(error, '重命名失败').reason)
+  }
 }
 
 const toggleEnabled = async (row: DocumentItem) => {
   const next = !row.enabled
   if (!next) {
-    await ElMessageBox.confirm(
-      `停用后「${row.name}」的分段将不再参与检索。确认停用？`,
-      '确认停用文档',
-      { type: 'warning', confirmButtonText: '停用' }
-    )
+    try {
+      await ElMessageBox.confirm(
+        `停用后「${row.name}」的分段将不再参与检索。确认停用？`,
+        '确认停用文档',
+        { type: 'warning', confirmButtonText: '停用' }
+      )
+    } catch {
+      return
+    }
   }
-  await ingestionApi.setDocumentEnabled(row.id, next)
-  ElMessage.success(next ? '已启用' : '已停用')
-  await fetchList()
+  try {
+    await ingestionApi.setDocumentEnabled(row.id, next)
+    ElMessage.success(next ? '已启用' : '已停用')
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(errText(error, '操作失败').reason)
+  }
 }
 
 const remove = async (row: DocumentItem) => {
-  await ElMessageBox.confirm(
-    `删除「${row.name}」将一并移除其全部分段，且不可恢复。确认删除？`,
-    '确认删除文档',
-    { type: 'warning', confirmButtonText: '删除' }
-  )
-  await ingestionApi.deleteDocument(row.id)
-  ElMessage.success('已删除')
-  await refreshAll()
+  try {
+    await ElMessageBox.confirm(
+      `删除「${row.name}」将一并移除其全部分段，且不可恢复。确认删除？`,
+      '确认删除文档',
+      { type: 'warning', confirmButtonText: '删除' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await ingestionApi.deleteDocument(row.id)
+    ElMessage.success('已删除')
+    await refreshAll()
+  } catch (error) {
+    ElMessage.error(errText(error, '删除失败').reason)
+    await refreshAll()
+  }
 }
 </script>
 

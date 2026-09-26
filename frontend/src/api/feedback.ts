@@ -27,6 +27,8 @@ export interface FeedbackItem {
   promotedToKbName: string | null
   createdAt: string
   handledAt: string | null
+  /** 提交者 id（07 §六 阶段 1 可选字段）。用于 `mine=true` 过滤「我提的反馈」 */
+  requesterId?: string
 }
 
 export interface FeedbackStats {
@@ -39,6 +41,8 @@ export interface FeedbackStats {
 export interface FeedbackQuery extends PageQuery {
   status?: FeedbackStatus
   appId?: string
+  /** 只看自己提交的（07 §六 阶段 1）。不传 = 按数据范围给全部可见的 */
+  mine?: boolean
 }
 
 export interface HandleFeedbackBody {

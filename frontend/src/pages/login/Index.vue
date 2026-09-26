@@ -95,7 +95,10 @@ const submit = async () => {
   try {
     const result = await session.login(form.username, form.password)
     if (result.mustChangePassword) {
+      // 安全闭环：初始密码必须先改掉，不放行进业务页（路由守卫也会拦）
       ElMessage.warning('首次登录需修改密码')
+      router.push('/change-password')
+      return
     }
     const redirect = (route.query.redirect as string) || '/'
     router.push(redirect)

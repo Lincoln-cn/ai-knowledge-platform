@@ -43,14 +43,14 @@
         placeholder="搜索问题 / 回答 / 反馈内容"
         style="width: 240px"
         clearable
-        @keyup.enter="fetchList"
-        @clear="fetchList"
+        @keyup.enter="onFilterChange"
+        @clear="onFilterChange"
       />
-      <el-select v-model="query.appId" size="small" placeholder="全部应用" style="width: 160px" @change="fetchList">
+      <el-select v-model="query.appId" size="small" placeholder="全部应用" style="width: 160px" @change="onFilterChange">
         <el-option label="全部应用" value="" />
         <el-option v-for="a in appOptions" :key="a.id" :label="a.name" :value="a.id" />
       </el-select>
-      <el-select v-model="query.status" size="small" placeholder="全部状态" style="width: 130px" @change="fetchList">
+      <el-select v-model="query.status" size="small" placeholder="全部状态" style="width: 130px" @change="onFilterChange">
         <el-option label="全部状态" value="" />
         <el-option v-for="s in STATUSES" :key="s" :label="s" :value="s" />
       </el-select>
@@ -155,7 +155,13 @@
         </el-table-column>
 
         <template #empty>
-          <div class="empty">
+          <div v-if="error" class="empty">
+            <div class="empty-title">加载失败</div>
+            <hr class="rule-2" />
+            <p class="micro muted">{{ error }}</p>
+            <el-button size="small" type="primary" @click="onFilterChange">重试</el-button>
+          </div>
+          <div v-else class="empty">
             <div class="empty-title">暂无反馈</div>
             <hr class="rule-2" />
             <p class="micro muted">
@@ -183,12 +189,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { feedbackApi } from '@/api'
 import type { FeedbackItem, FeedbackStats, FeedbackStatus } from '@/api/feedback'
+import { ApiError } from '@/api/types'
 import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 import PageHeader from '@/components/PageHeader.vue'
@@ -205,6 +212,7 @@ const STATUS_DOT: Record<FeedbackStatus, string> = {
 }
 const statusDot = (status: string) => STATUS_DOT[status as FeedbackStatus] ?? ''
 
+const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
 const canHandle = computed(() => session.can(PERM.feedbackHandle))
@@ -212,15 +220,28 @@ const canHandle = computed(() => session.can(PERM.feedbackHandle))
 const list = ref<FeedbackItem[]>([])
 const total = ref(0)
 const loading = ref(false)
-const page = ref(1)
+const error = ref<string | null>(null)
 const pageSize = 10
 
-/** 默认只看待处理 —— 形成工作队列，而不是又一个只读日志 */
+/** 默认只看待处理 —— 形成工作队列，而不是又一个只读日志。筛选/分页入 URL */
 const query = reactive({
-  keyword: '',
-  status: '待处理' as FeedbackStatus | '',
-  appId: ''
+  keyword: (route.query.keyword as string) ?? '',
+  status: ((route.query.status as string) ?? '待处理') as FeedbackStatus | '',
+  appId: (route.query.appId as string) ?? ''
 })
+const page = ref(Number(route.query.page) || 1)
+
+/** 把当前筛选/分页写回 URL（replace 不产生历史记录） */
+const syncUrl = () => {
+  router.replace({
+    query: {
+      ...(query.keyword ? { keyword: query.keyword } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.appId ? { appId: query.appId } : {}),
+      ...(page.value > 1 ? { page: String(page.value) } : {})
+    }
+  })
+}
 
 const emptyStats: FeedbackStats = { 待处理: 0, 处理中: 0, 已处理: 0, 已忽略: 0 }
 const stats = ref<FeedbackStats>({ ...emptyStats })
@@ -246,6 +267,7 @@ const rowClass = ({ row }: { row: FeedbackItem }) =>
 
 const fetchList = async () => {
   loading.value = true
+  error.value = null
   try {
     const result = await feedbackApi.listFeedbacks({
       keyword: query.keyword || undefined,
@@ -257,6 +279,11 @@ const fetchList = async () => {
     list.value = result.list
     total.value = result.total
     collectApps(result.list)
+  } catch (e) {
+    // 错误态 ≠ 空态：请求失败不能伪装成「暂无反馈」（一.1）
+    error.value = e instanceof ApiError ? e.message : '加载反馈列表失败，请检查网络后重试'
+    list.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
@@ -275,11 +302,19 @@ const refresh = () => {
   fetchStats()
 }
 
-const toggleStatus = (s: FeedbackStatus) => {
-  query.status = query.status === s ? '' : s
+/** 筛选切换时重置 page（否则停在空页）+ 同步 URL */
+const onFilterChange = () => {
   page.value = 1
+  syncUrl()
   fetchList()
 }
+
+const toggleStatus = (s: FeedbackStatus) => {
+  query.status = query.status === s ? '' : s
+  onFilterChange()
+}
+
+watch(page, () => syncUrl())
 
 const onSaved = () => refresh()
 
@@ -304,11 +339,16 @@ const goConversation = (row: FeedbackItem) => {
 }
 
 const reopen = async (row: FeedbackItem) => {
-  await ElMessageBox.confirm(
-    `重新打开后状态回到「处理中」并清空处理时间，可继续指派与填写说明。确认重新打开该反馈？`,
-    '重新打开反馈',
-    { type: 'warning', confirmButtonText: '重新打开' }
-  )
+  try {
+    await ElMessageBox.confirm(
+      `重新打开后状态回到「处理中」并清空处理时间，可继续指派与填写说明。确认重新打开该反馈？`,
+      '重新打开反馈',
+      { type: 'warning', confirmButtonText: '重新打开' }
+    )
+  } catch {
+    // 用户点了取消 —— 不是错误，静默返回
+    return
+  }
   try {
     await feedbackApi.reopenFeedback(row.id)
     ElMessage.success('已重新打开，状态回到「处理中」')
@@ -318,7 +358,10 @@ const reopen = async (row: FeedbackItem) => {
   }
 }
 
-onMounted(refresh)
+onMounted(() => {
+  syncUrl()
+  refresh()
+})
 </script>
 
 <style scoped>

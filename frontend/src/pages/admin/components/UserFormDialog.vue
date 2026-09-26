@@ -23,12 +23,18 @@
       </el-form-item>
 
       <el-form-item label="角色" prop="roleId">
-        <el-select v-model="form.roleId" placeholder="选择角色" style="width: 100%">
+        <el-select
+          v-model="form.roleId"
+          placeholder="选择角色"
+          style="width: 100%"
+          :disabled="isSelf"
+        >
           <el-option v-for="r in roles" :key="r.id" :label="r.name" :value="r.id">
             <span>{{ r.name }}</span>
             <span class="opt-code">{{ r.code }}</span>
           </el-option>
         </el-select>
+        <div v-if="isSelf" class="hint micro">不能修改自己的角色 —— 请让另一位管理员操作，避免自锁</div>
       </el-form-item>
 
       <el-form-item :label="isEdit ? '重置密码' : '初始密码'">
@@ -61,6 +67,7 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { identityApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { Role, User, UpsertUserBody } from '@/api/identity'
+import { useSessionStore } from '@/stores/session'
 
 const props = defineProps<{
   user: User | null
@@ -68,11 +75,15 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ saved: [] }>()
 
+const session = useSessionStore()
 const visible = ref(false)
 const saving = ref(false)
 const formRef = ref<FormInstance>()
 
 const isEdit = computed(() => props.user !== null)
+
+/** 编辑自己时锁住角色选择 —— 改自己的角色 = 把自己踢出管理位（自锁） */
+const isSelf = computed(() => props.user !== null && props.user.id === session.user?.id)
 
 const form = reactive({
   username: '',

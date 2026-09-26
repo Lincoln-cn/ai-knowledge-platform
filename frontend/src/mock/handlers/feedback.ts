@@ -3,6 +3,7 @@ import type { FeedbackStats, FeedbackStatus, HandleFeedbackBody } from '@/api/fe
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
 import { feedbacks, promotableKnowledgeBases } from '../fixtures/feedback'
+import { currentSubjects, selfId } from '../policy'
 
 const findFeedback = (id: string) => {
   const item = feedbacks.find((f) => f.id === id)
@@ -38,10 +39,13 @@ export const feedbackRoutes: MockRoute[] = [
   [
     'GET',
     '/feedbacks',
-    ({ query }) => {
+    ({ query, token }) => {
       const keyword = String(query.keyword ?? '').trim()
       const status = query.status ? (String(query.status) as FeedbackStatus) : ''
       const appId = query.appId ? String(query.appId) : ''
+      const mine = query.mine === true || query.mine === 'true'
+      // `mine=true` 时按提交者过滤（07 §六 阶段 1 可选参数 `mine`）
+      const meId = mine ? selfId(currentSubjects(token)) : ''
 
       const list = feedbacks
         .filter((f) => {
@@ -51,6 +55,7 @@ export const feedbackRoutes: MockRoute[] = [
         })
         .filter((f) => !status || f.status === status)
         .filter((f) => !appId || f.appId === appId)
+        .filter((f) => !mine || f.requesterId === meId)
         // 待处理优先、新提交在前 —— 形成工作队列
         .slice()
         .sort((a, b) => {

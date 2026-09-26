@@ -51,6 +51,11 @@ export interface Assistant {
   satisfaction: number | null
   /** 归属与可见性（07 §3.1）。由后端写入，创建时 ownerId = 当前用户 / private */
   ownerId?: string
+  /**
+   * 归属人显示名。广场卡片要回答「这应用是谁给的」—— 只有 `ownerId` 这个 id
+   * 显示不出来（#8），所以列表/详情响应补这一个可选字段。
+   */
+  ownerName?: string
   visibility?: ResourceVisibility
   grants?: Grant[]
 }
@@ -68,12 +73,20 @@ export interface WorkflowBrief {
   publishedVersion: number | null
 }
 
+/**
+ * 广场的来源分段（§六）：官方 / 他人分享 / 我的。
+ * 判据是 `builtin` + `ownerId`，可客户端分流；作为查询参数时由服务端在分页前过滤。
+ */
+export type AssistantOrigin = 'official' | 'shared' | 'mine'
+
 export interface AssistantQuery extends PageQuery {
   published?: boolean
   /** 按类型筛选；不传为全部 */
   type?: AssistantType
   /** 只看自己名下的（07 §六 阶段 1）。不传 = 按数据范围给全部可见的 */
   mine?: boolean
+  /** 按来源分段筛选；不传为全部 */
+  origin?: AssistantOrigin
 }
 
 /**
@@ -199,6 +212,29 @@ export const debugAssistant = (id: string, question: string) =>
     url: '/assistants/:id/debug',
     path: { id },
     body: { question }
+  })
+
+/* ── 分享写（07 §3.1 / §8.1；阶段 1 只落了可选响应字段，分享是写） ── */
+
+/**
+ * 改可见性：`private` 仅自己 · `shared` 指定主体 · `public` 登录用户里人人可见。
+ * ★ `public` 不等于免登录 —— 免登录只有访问凭证那条链路。
+ */
+export const setAssistantVisibility = (id: string, visibility: ResourceVisibility) =>
+  request<Assistant>({
+    method: 'PATCH',
+    url: '/assistants/:id/visibility',
+    path: { id },
+    body: { visibility }
+  })
+
+/** 覆盖式写入共享授权。主体形状见 `Grant`（MVP 只填 user / role 两种） */
+export const setAssistantGrants = (id: string, grants: Grant[]) =>
+  request<Assistant>({
+    method: 'PUT',
+    url: '/assistants/:id/grants',
+    path: { id },
+    body: { grants }
   })
 
 /* ── 访问凭证 ── */

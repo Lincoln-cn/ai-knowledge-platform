@@ -5,10 +5,9 @@ import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
 import {
   appBriefs,
-  publicCredentials,
-  toPublicContext
+  publicCredentials
 } from '../fixtures/conversations'
-import { assistants } from '../fixtures/assistants'
+import { assistants, credentials as assistantCredentials } from '../fixtures/assistants'
 import { cannedAnswer } from '../fixtures/canned'
 import {
   addConversation,
@@ -103,6 +102,34 @@ function gatePublicToken(token: string): PublicGate {
       }
     }
     return { ok: true, cred: { token: cred.token, appId: cred.appId } }
+  }
+
+  /*
+   * 应用侧的访问凭证（`fixtures/assistants` 的 `credentials`）也要认。
+   * 两套夹具是并行任务各自写的：CredentialsPanel 展示/生成的是这边的 token，
+   * 而公开页校验走的是上面的 `publicCredentials` —— 不打通的话，
+   * 「复制链接发给别人」永远打不开（token 对不上，报「访问凭证无效」）。
+   */
+  for (const [appId, list] of Object.entries(assistantCredentials)) {
+    const ac = list.find((c) => c.token === token)
+    if (!ac) continue
+    if (!ac.enabled || ac.revokedAt) {
+      return {
+        ok: false,
+        code: 40402,
+        message: '访问凭证已被撤销',
+        hint: '该公开链接已停止访问，请联系应用管理员重新生成链接'
+      }
+    }
+    if (ac.expiresAt && new Date(ac.expiresAt).getTime() < Date.now()) {
+      return {
+        ok: false,
+        code: 40403,
+        message: '访问凭证已过期',
+        hint: '请向分享者索取新的公开链接'
+      }
+    }
+    return { ok: true, cred: { token: ac.token, appId } }
   }
 
   const share = findShareByToken(token)
@@ -416,7 +443,18 @@ export const conversationRoutes: MockRoute[] = [
     ({ path }) => {
       const gate = gateOrThrow(path.token)
       if (gate.cred) {
-        const ctx = toPublicContext(publicCredentials.find((c) => c.token === gate.cred!.token)!)
+        // 两套凭证夹具（publicCredentials / assistants.credentials）都已在 gate 里归一成 appId
+        const app = appBriefs[gate.cred.appId]
+        const ctx = app
+          ? {
+              appId: app.id,
+              appName: app.name,
+              icon: app.icon,
+              description: app.description,
+              prologue: app.prologue,
+              quickQuestions: app.quickQuestions
+            }
+          : null
         if (!ctx) {
           throw new ApiError(
             40404,

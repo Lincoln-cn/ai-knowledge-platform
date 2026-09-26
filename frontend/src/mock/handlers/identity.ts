@@ -40,7 +40,7 @@ export const identityRoutes: MockRoute[] = [
       return {
         accessToken: `mock_access_${user.id}`,
         refreshToken: `mock_refresh_${user.id}`,
-        mustChangePassword: false
+        mustChangePassword: user.mustChangePassword
       }
     }
   ],
@@ -67,6 +67,7 @@ export const identityRoutes: MockRoute[] = [
       if (user.password !== oldPassword) throw new ApiError(4001, '原密码不正确')
       if (newPassword.length < 8) throw new ApiError(4001, '新密码至少 8 位')
       user.password = newPassword
+      user.mustChangePassword = false
       return undefined
     }
   ],
@@ -108,7 +109,9 @@ export const identityRoutes: MockRoute[] = [
         roleId: role.id,
         roleName: role.name,
         status: '正常' as const,
-        lastLoginAt: null
+        lastLoginAt: null,
+        // 用默认密码建的号必须改密 —— 契约里 `mustChangePassword` 的语义就是这个
+        mustChangePassword: !input.password
       }
       users.push(created)
       return stripPassword(created)
@@ -118,7 +121,7 @@ export const identityRoutes: MockRoute[] = [
   [
     'PUT',
     '/users/:id',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
       const user = users.find((u) => u.id === path.id)
       if (!user) throw new ApiError(ErrorCode.NOT_FOUND, '用户不存在')
       const input = body as { displayName: string; roleId: string; password?: string }
@@ -126,10 +129,19 @@ export const identityRoutes: MockRoute[] = [
       const role = roles.find((r) => r.id === input.roleId)
       if (!role) throw new ApiError(4002, '请选择一个有效的角色')
 
+      // 危险操作不可自毁：改自己的角色 = 把自己踢出管理位（删自己已挡，改自己也要挡）
+      const self = userFromToken(token)
+      if (self && user.id === self.id && role.id !== user.roleId) {
+        throw new ApiError(4005, '不能修改自己的角色 —— 请让另一位管理员操作，避免自锁')
+      }
+
       user.displayName = input.displayName
       user.roleId = role.id
       user.roleName = role.name
-      if (input.password) user.password = input.password
+      if (input.password) {
+        user.password = input.password
+        user.mustChangePassword = false
+      }
       return stripPassword(user)
     }
   ],
@@ -153,11 +165,41 @@ export const identityRoutes: MockRoute[] = [
   [
     'PUT',
     '/roles/:id/permissions',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
       const role = roles.find((r) => r.id === path.id)
       if (!role) throw new ApiError(ErrorCode.NOT_FOUND, '角色不存在')
       if (role.code === 'ADMIN') throw new ApiError(4004, '管理员角色权限不可裁剪')
-      role.permissions = (body as { permissions: string[] }).permissions
+
+      const next = (body as { permissions: string[] }).permissions
+
+      // 危险操作不可自毁：不许把「当前用户所属角色」的 system:manage 裁掉
+      const self = userFromToken(token)
+      const selfRole = self ? users.find((u) => u.id === self.id)?.roleId : undefined
+      const had = role.permissions.includes('system:manage')
+      const keeps = next.includes('system:manage')
+      if (selfRole === role.id && had && !keeps) {
+        throw new ApiError(4005, '不能裁掉自己所属角色的「账号与权限」权限 —— 避免自锁')
+      }
+
+      role.permissions = next
+      return role
+    }
+  ],
+
+  [
+    'PUT',
+    '/roles/:id/data-scope',
+    ({ path, body }) => {
+      const role = roles.find((r) => r.id === path.id)
+      if (!role) throw new ApiError(ErrorCode.NOT_FOUND, '角色不存在')
+      if (role.code === 'ADMIN') throw new ApiError(4004, '管理员角色的数据范围固定为全平台，不可修改')
+
+      const { dataScope, dataScopeRule } = body as { dataScope?: string; dataScopeRule?: string }
+      if (dataScope !== 'own' && dataScope !== 'shared' && dataScope !== 'all') {
+        throw new ApiError(4006, '数据范围只能是 own / shared / all')
+      }
+      role.dataScope = dataScope
+      role.dataScopeRule = dataScopeRule ?? ''
       return role
     }
   ],

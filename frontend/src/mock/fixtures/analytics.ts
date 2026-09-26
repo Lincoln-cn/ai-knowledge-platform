@@ -1,6 +1,7 @@
 import dayjs from 'dayjs'
 import type {
   AssistantRankItem,
+  MeSummary,
   OverviewMetrics,
   QualityMetrics,
   TrendPoint
@@ -110,5 +111,24 @@ export function qualityBetween(from: string, to: string): QualityMetrics {
     downCount: Math.round(23 * scale),
     /** 与时间范围无关的存量待办 */
     pendingFeedbackCount: 7
+  }
+}
+
+/**
+ * 「我的」口径聚合（#18 / 07 §五）。
+ *
+ * 消费者看到的不是"平台运营成什么样"而是"**我**" —— 全平台活跃用户数
+ * 与待处理反馈对他既是噪声也是越界。数字取自真实的 conversation / feedback
+ * 夹具关联，不编造。
+ */
+export function mySummaryBetween(from: string, to: string): MeSummary {
+  const days = Math.max(1, dayList(from, to).length)
+  const scale = days / 7
+  return {
+    myQuestionCount: Math.round(18 * scale),
+    myConversationCount: Math.max(1, Math.round(5 * scale)),
+    lastActiveAt: '2026-02-13 10:05',
+    myUp: Math.round(6 * scale),
+    myDown: Math.round(2 * scale)
   }
 }

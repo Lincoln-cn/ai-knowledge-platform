@@ -78,7 +78,12 @@ export const logout = () => request<void>({ method: 'POST', url: '/auth/logout' 
 
 export const getCurrentUser = () => request<CurrentUser>({ method: 'GET', url: '/users/me' })
 
-export const changePassword = (body: { oldPassword: string; newPassword: string }) =>
+export interface ChangePasswordBody {
+  oldPassword: string
+  newPassword: string
+}
+
+export const changePassword = (body: ChangePasswordBody) =>
   request<void>({ method: 'PUT', url: '/users/me/password', body })
 
 export const listUsers = (query: UserQuery = {}) =>
@@ -97,6 +102,15 @@ export const listRoles = () => request<Role[]>({ method: 'GET', url: '/roles' })
 
 export const updateRolePermissions = (id: string, permissions: string[]) =>
   request<Role>({ method: 'PUT', url: '/roles/:id/permissions', path: { id }, body: { permissions } })
+
+/** 改角色的数据范围（07 §3.2 三档）。与权限点分开保存 —— 两者语义不同、受众不同 */
+export const updateRoleDataScope = (id: string, dataScope: DataScope, dataScopeRule?: string) =>
+  request<Role>({
+    method: 'PUT',
+    url: '/roles/:id/data-scope',
+    path: { id },
+    body: { dataScope, dataScopeRule }
+  })
 
 /** 权限点全量清单。新增功能时后端自动多出一项，前端无需改代码 */
 export const listPermissions = () => request<PermissionItem[]>({ method: 'GET', url: '/permissions' })

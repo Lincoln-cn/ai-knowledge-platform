@@ -1,23 +1,25 @@
 <template>
-  <div class="global-progress panel" :class="{ running: progress.running }">
+  <div class="global-progress panel" :class="{ running: progress.running, failed: !!loadError }">
     <div class="gp-head">
       <span class="gp-title">
-        <el-icon v-if="progress.running" class="is-loading"><Loading /></el-icon>
+        <el-icon v-if="loadError" class="is-fail"><WarningFilled /></el-icon>
+        <el-icon v-else-if="progress.running" class="is-loading"><Loading /></el-icon>
         <el-icon v-else-if="progress.failed"><WarningFilled /></el-icon>
         <el-icon v-else><CircleCheckFilled /></el-icon>
         {{ headline }}
       </span>
-      <span class="micro muted">
+      <span v-if="!loadError" class="micro muted">
         已完成 <b class="num">{{ progress.done }}</b> / {{ progress.total }}
         <template v-if="progress.failed"> · 失败 {{ progress.failed }}</template>
       </span>
+      <el-button v-else link size="small" type="primary" @click="emit('retry')">重试</el-button>
     </div>
 
-    <div class="gp-bar">
+    <div v-if="!loadError" class="gp-bar">
       <div class="gp-fill" :style="{ width: percent + '%' }" />
     </div>
 
-    <div class="gp-stages micro">
+    <div v-if="!loadError" class="gp-stages micro">
       <span v-for="s in visibleStages" :key="s.status" class="gp-stage">
         <i class="dot" :class="STAGE_DOT[s.status]" />
         {{ s.status }}
@@ -32,7 +34,13 @@ import { computed } from 'vue'
 import { CircleCheckFilled, Loading, WarningFilled } from '@element-plus/icons-vue'
 import type { DocumentStatus, IngestionProgress } from '@/api/ingestion'
 
-const props = defineProps<{ progress: IngestionProgress }>()
+const props = defineProps<{
+  progress: IngestionProgress
+  /** P1 进度接口失败时的可读原因。有它就走错误态，不许伪装成「暂无文档」 */
+  loadError?: string | null
+}>()
+
+const emit = defineEmits<{ retry: [] }>()
 
 const STAGE_DOT: Record<DocumentStatus, string> = {
   待解析: '',
@@ -56,6 +64,8 @@ const runningCount = computed(() =>
 )
 
 const headline = computed(() => {
+  // 错误态优先于空态 —— 这是 P1 点名的"加载失败被显示成暂无文档"
+  if (props.loadError) return '进度加载失败'
   if (props.progress.running) return `正在处理 ${runningCount.value} 个文档`
   if (props.progress.failed && !props.progress.done && props.progress.total) return '处理中断，有文档失败'
   if (!props.progress.total) return '暂无文档'
@@ -78,6 +88,10 @@ const visibleStages = computed(() => props.progress.stages.filter((s) => s.count
   border-color: var(--color-accent-line);
 }
 
+.global-progress.failed {
+  border-color: color-mix(in oklch, var(--color-danger) 30%, var(--color-rule));
+}
+
 .gp-head {
   display: flex;
   align-items: center;
@@ -93,6 +107,10 @@ const visibleStages = computed(() => props.progress.stages.filter((s) => s.count
   font-weight: 500;
   line-height: var(--leading-tight);
   color: var(--color-ink);
+}
+
+.gp-title .is-fail {
+  color: var(--color-danger);
 }
 
 .gp-head .num {

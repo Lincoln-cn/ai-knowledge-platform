@@ -19,6 +19,16 @@ const declaredScope = (user: CurrentUser | null): DataScope | undefined => {
   return raw === 'own' || raw === 'shared' || raw === 'all' ? raw : undefined
 }
 
+/** `mustChangePassword` 跨刷新存活：登录响应一次性下发，刷新后只能靠本地记 */
+const MUST_CHANGE_KEY = 'must_change_password'
+
+const readMustChange = () => localStorage.getItem(MUST_CHANGE_KEY) === '1'
+
+const writeMustChange = (on: boolean) => {
+  if (on) localStorage.setItem(MUST_CHANGE_KEY, '1')
+  else localStorage.removeItem(MUST_CHANGE_KEY)
+}
+
 /**
  * 登录态。
  *
@@ -29,7 +39,9 @@ const declaredScope = (user: CurrentUser | null): DataScope | undefined => {
 export const useSessionStore = defineStore('session', {
   state: () => ({
     user: null as CurrentUser | null,
-    loading: false
+    loading: false,
+    /** 首次登录必须改密（`LoginResult.mustChangePassword`）。为真时路由守卫只放行改密页 */
+    mustChangePassword: readMustChange()
   }),
 
   getters: {
@@ -67,6 +79,8 @@ export const useSessionStore = defineStore('session', {
       try {
         const result = await identityApi.login({ username, password })
         setTokens(result.accessToken, result.refreshToken)
+        this.mustChangePassword = result.mustChangePassword
+        writeMustChange(result.mustChangePassword)
         await this.loadProfile()
         return result
       } finally {
@@ -81,12 +95,31 @@ export const useSessionStore = defineStore('session', {
       return this.user
     },
 
+    /** 改密成功后清掉强制标记，路由守卫放行进业务页 */
+    clearMustChangePassword() {
+      this.mustChangePassword = false
+      writeMustChange(false)
+    },
+
+    /**
+     * 令牌已失效时清本地登录态。不调登出接口 —— 它同样会 401，
+     * 而这里的目的只是把坏壳收干净、让用户回到登录页。
+     */
+    reset() {
+      clearTokens()
+      this.user = null
+      this.mustChangePassword = false
+      writeMustChange(false)
+    },
+
     async logout() {
       try {
         await identityApi.logout()
       } finally {
         clearTokens()
         this.user = null
+        this.mustChangePassword = false
+        writeMustChange(false)
       }
     }
   }

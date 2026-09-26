@@ -1,9 +1,13 @@
 import { ApiError, ErrorCode } from '@/api/types'
 import type {
   DocumentItem,
+  ImportDocumentsBody,
   PreviewSegmentationBody,
   PreviewSegmentationResult,
-  Segment
+  Segment,
+  SegmentationPlanItem,
+  UploadPolicy,
+  UploadReceipt
 } from '@/api/ingestion'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
@@ -61,6 +65,86 @@ const SPLIT_MS = 1600
 /** 向量模型分段长度上限（SEG-I1 的判据） */
 const MODEL_LIMIT = 1200
 
+/** P1 上传策略：前端据此做大小/数量校验 */
+const UPLOAD_POLICY: UploadPolicy = {
+  maxFileSizeMB: 20,
+  maxFileCount: 10,
+  acceptedExtensions: ['.pdf', '.docx', '.doc', '.md', '.txt']
+}
+
+/**
+ * #11 暂存上传。只落文件元数据与可识别的正文占位，**不建文档**——
+ * 预览与导入共用这批 `uploadIds`，用户在预览里改的切分计划才会被真正采纳。
+ */
+interface StagedUpload {
+  id: string
+  kbId: string
+  name: string
+  size: number
+  text: string
+}
+const stagedUploads = new Map<string, StagedUpload>()
+
+/** 从请求体里抽文件元数据。真 FormData 优先；兼容测试直传的 { files: [{name,size}] } */
+function extractFiles(body: unknown): Array<{ name: string; size: number }> {
+  if (body && typeof body === 'object' && typeof (body as FormData).entries === 'function') {
+    const out: Array<{ name: string; size: number }> = []
+    for (const [, value] of (body as FormData).entries()) {
+      if (value && typeof value === 'object' && 'name' in value && 'size' in value) {
+        const f = value as File
+        out.push({ name: String(f.name || '未命名文件'), size: Number(f.size) || 0 })
+      }
+    }
+    return out
+  }
+  const raw = body as { files?: Array<{ name: string; size?: number }> } | null
+  if (raw?.files && Array.isArray(raw.files)) {
+    return raw.files.map((f) => ({ name: String(f.name ?? '未命名文件'), size: Number(f.size) || 0 }))
+  }
+  return []
+}
+
+/** 暂存文件的正文占位：按文件名生成可切分的文本，让预览真的"基于用户文件" */
+function stagedText(upload: StagedUpload): string {
+  if (upload.text) return upload.text
+  const base = upload.name.replace(/\.[^.]+$/, '')
+  return (
+    `「${base}」的内容提要。` +
+    `本文件共约 ${upload.size} 字节，按段落与语义边界切分后进入知识库。` +
+    `第一条说明适用范围与职责分工。第二条给出操作流程与质量要求。` +
+    `第三条约定例外情形的审批路径。第四条明确归档与保存期限。` +
+    `第五条说明本文件的解释权与生效日期。`
+  ).repeat(3)
+}
+
+/**
+ * #11 把用户确认过的切分计划落成真实分段。
+ * 这是"预览里的可编辑生效"的唯一通道 —— 不再只改本地数组。
+ */
+function applySegmentationPlan(doc: DocumentItem, plan: SegmentationPlanItem[]) {
+  doc.segmentCount = plan.length
+  doc.processedSegments = 0
+  doc.status = '待向量化'
+  doc.charCount = plan.reduce((s, p) => s + p.content.length, 0)
+  for (const p of plan) {
+    const seg: Segment = {
+      id: `seg_${doc.id}_${p.ordinal}`,
+      documentId: doc.id,
+      ordinal: p.ordinal,
+      title: p.title || `${doc.name.replace(/\.[^.]+$/, '')} · 第 ${p.ordinal} 段`,
+      content: p.content,
+      charCount: p.content.length,
+      enabled: true,
+      embedding: '待向量化'
+    }
+    const idx = segments.findIndex((s) => s.id === seg.id)
+    if (idx >= 0) segments.splice(idx, 1, seg)
+    else segments.push(seg)
+  }
+  doc.updatedAt = new Date().toISOString()
+  touchKbCounters(doc.kbId)
+}
+
 const findDoc = (id: string) => {
   const doc = documents.find((d) => d.id === id)
   if (!doc) throw new ApiError(ErrorCode.NOT_FOUND, `文档「${id}」不存在`)
@@ -112,6 +196,49 @@ const runEmbedding = (doc: DocumentItem) => {
       doc.status = '成功'
       for (const seg of segments.filter((s) => s.documentId === doc.id)) {
         seg.embedding = '已向量化'
+      }
+      touchKbCounters(doc.kbId)
+    }
+  }, EMBED_TICK_MS)
+  embedTimers.set(doc.id, timer)
+}
+
+/** #10 单段重新向量化：先置「向量化中」，一拍后落「已向量化」 */
+const segEmbedTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+const runSegmentEmbedding = (seg: Segment) => {
+  const prev = segEmbedTimers.get(seg.id)
+  if (prev) clearTimeout(prev)
+  seg.embedding = '向量化中'
+  const timer = setTimeout(() => {
+    seg.embedding = '已向量化'
+    segEmbedTimers.delete(seg.id)
+  }, EMBED_TICK_MS * 2)
+  segEmbedTimers.set(seg.id, timer)
+}
+
+/**
+ * #10 文档级重新向量化：该文档下所有分段重跑。
+ * 回到「向量化中」而不是直接成功 —— 界面要能看到真实过渡态。
+ */
+const runDocumentReembed = (doc: DocumentItem) => {
+  const segs = segments.filter((s) => s.documentId === doc.id)
+  for (const s of segs) runSegmentEmbedding(s)
+  doc.segmentCount = segs.length
+  doc.processedSegments = 0
+  doc.status = '向量化中'
+  doc.failReason = null
+  doc.failHint = null
+  doc.updatedAt = new Date().toISOString()
+  stopEmbedTimer(doc.id)
+  const timer = setInterval(() => {
+    doc.processedSegments = Math.min(doc.segmentCount, doc.processedSegments + EMBED_STEP)
+    doc.updatedAt = new Date().toISOString()
+    if (doc.processedSegments >= doc.segmentCount) {
+      stopEmbedTimer(doc.id)
+      doc.status = '成功'
+      for (const s of segments.filter((x) => x.documentId === doc.id)) {
+        s.embedding = '已向量化'
       }
       touchKbCounters(doc.kbId)
     }
@@ -249,8 +376,73 @@ export const ingestionRoutes: MockRoute[] = [
       const kbId = path.kbId
       gateKb(kbId, token, PERM.documentUpload, '知识库', kbId)
 
-      // multipart：mock 侧按 body 里的文件名列表构造 DocumentItem
-      // 真实后端从 multipart 解析；mock 允许传 { files: [{ name, size }] } 或 FormData 形状
+      // #11 新路径：JSON 体带 uploadIds / segmentationPlan → 回执形态
+      const importBody = body as ImportDocumentsBody | null
+      const isImport =
+        !!importBody &&
+        typeof importBody === 'object' &&
+        !(typeof (importBody as FormData).entries === 'function') &&
+        (Array.isArray(importBody.uploadIds) || Array.isArray(importBody.segmentationPlan))
+
+      if (isImport && importBody) {
+        const accepted: DocumentItem[] = []
+        const rejected: UploadReceipt['rejected'] = []
+
+        const uploadIds = importBody.uploadIds ?? []
+        if (!uploadIds.length) {
+          throw new ApiError(3021, '没有可导入的暂存文件', '请先选择文件并暂存上传')
+        }
+
+        for (const uid of uploadIds) {
+          const up = stagedUploads.get(uid)
+          if (!up) {
+            rejected.push({ name: uid, reason: '暂存文件不存在或已过期' })
+            continue
+          }
+          const tooBig = up.size > UPLOAD_POLICY.maxFileSizeMB * 1024 * 1024
+          if (tooBig) {
+            rejected.push({
+              name: up.name,
+              reason: `文件超过 ${UPLOAD_POLICY.maxFileSizeMB}MB 上限`
+            })
+            stagedUploads.delete(uid)
+            continue
+          }
+
+          const doc: DocumentItem = {
+            id: `doc${Date.now()}_${accepted.length}`,
+            kbId,
+            name: up.name,
+            source: 'local',
+            status: '待解析',
+            segmentCount: 0,
+            processedSegments: 0,
+            charCount: up.size || 10000,
+            enabled: true,
+            failReason: null,
+            failHint: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+          documents.unshift(doc)
+          const isScan = /扫描|scan/i.test(up.name)
+          if (isScan) {
+            runParse(doc, { failSplit: true })
+          } else if (importBody.segmentationPlan?.length) {
+            // #11 用户在预览里确认/编辑过的切分计划被真正采纳
+            applySegmentationPlan(doc, importBody.segmentationPlan)
+          } else {
+            runParse(doc, { failSplit: false })
+          }
+          accepted.push(doc)
+          stagedUploads.delete(uid)
+        }
+
+        touchKbCounters(kbId)
+        return { accepted, rejected } satisfies UploadReceipt
+      }
+
+      // 旧路径：multipart 直传文件，响应仍是 DocumentItem[]（契约不改）
       const raw = body as { files?: Array<{ name: string; size?: number }> } | FormData | null
       let files: Array<{ name: string; size?: number }> = []
       if (raw && typeof raw === 'object' && 'files' in raw && Array.isArray((raw as { files: unknown }).files)) {
@@ -419,9 +611,17 @@ export const ingestionRoutes: MockRoute[] = [
     ({ body, token }) => {
       const input = body as PreviewSegmentationBody & { content?: string }
 
-      // 已有文档：取文档下已有分段拼接；上传前：用请求体 content 或内置语料
+      // #11 优先走暂存 uploadIds —— 预览必须基于**用户自己的文件**，不是内置语料
       let sourceText = input.content ?? ''
-      if (input.documentId) {
+      if (input.uploadIds?.length) {
+        const parts: string[] = []
+        for (const uid of input.uploadIds) {
+          const up = stagedUploads.get(uid)
+          if (!up) throw new ApiError(3020, `暂存文件「${uid}」不存在或已过期`, '请重新选择文件后再试')
+          parts.push(stagedText(up))
+        }
+        sourceText = parts.join('\n')
+      } else if (input.documentId) {
         const doc = documents.find((d) => d.id === input.documentId)
         // 文档存在才判可见性：传了不存在的 documentId 时保持"纯计算预览"的旧行为
         if (doc) gateKb(doc.kbId, token, PERM.segmentEdit, '文档', doc.id)
@@ -429,6 +629,25 @@ export const ingestionRoutes: MockRoute[] = [
         sourceText = segs.map((s) => s.content).join('\n')
         if (!sourceText) {
           sourceText = doc ? `${doc.name} 的正文内容占位……`.repeat(20) : ''
+        }
+      }
+
+      // #11 用户已确认的切分计划（含预览编辑）优先于自动切分
+      if (input.segmentationPlan?.length) {
+        const result = input.segmentationPlan.map((p) => {
+          const charCount = p.content.length
+          return {
+            ordinal: p.ordinal,
+            content: p.content,
+            charCount,
+            oversized: charCount > MODEL_LIMIT
+          }
+        })
+        return {
+          segmentCount: result.length,
+          charCount: result.reduce((s, x) => s + x.charCount, 0),
+          modelLimit: MODEL_LIMIT,
+          segments: result
         }
       }
 
@@ -441,11 +660,18 @@ export const ingestionRoutes: MockRoute[] = [
     '/segments',
     ({ query, token }) => {
       const documentId = query.documentId ? String(query.documentId) : ''
+      const kbId = query.kbId ? String(query.kbId) : ''
       const onlyOversized = query.onlyOversized === true || query.onlyOversized === 'true'
       const keyword = String(query.keyword ?? '')
 
       const list = visibleSegments(currentSubjects(token))
         .filter((s) => !documentId || s.documentId === documentId)
+        // P1 跨库批量：限定知识库后不会扫到别的库的分段
+        .filter((s) => {
+          if (!kbId) return true
+          const doc = documents.find((d) => d.id === s.documentId)
+          return doc?.kbId === kbId
+        })
         .filter((s) => !keyword || s.title.includes(keyword) || s.content.includes(keyword))
         // SEG-I1：超长 = 字数超过向量模型上限
         .filter((s) => !onlyOversized || s.charCount > MODEL_LIMIT)
@@ -528,6 +754,147 @@ export const ingestionRoutes: MockRoute[] = [
       target.segmentCount = segments.filter((s) => s.documentId === targetDocumentId).length
       touchKbCounters(target.kbId)
       return { moved }
+    }
+  ],
+
+  /* ── #11 暂存上传 · P1 上传策略 ── */
+
+  [
+    'POST',
+    '/knowledge-bases/:kbId/uploads',
+    ({ path, body, token }) => {
+      const kbId = path.kbId
+      gateKb(kbId, token, PERM.documentUpload, '知识库', kbId)
+
+      const files = extractFiles(body)
+      if (!files.length) {
+        throw new ApiError(3022, '未读到待上传的文件', '请重新选择文件后再试')
+      }
+      if (files.length > UPLOAD_POLICY.maxFileCount) {
+        throw new ApiError(
+          3023,
+          `一次最多上传 ${UPLOAD_POLICY.maxFileCount} 个文件`,
+          '请分批上传'
+        )
+      }
+
+      const uploadIds: string[] = []
+      for (const f of files) {
+        const ext = f.name.includes('.') ? f.name.slice(f.name.lastIndexOf('.')).toLowerCase() : ''
+        if (UPLOAD_POLICY.acceptedExtensions.length && ext && !UPLOAD_POLICY.acceptedExtensions.includes(ext)) {
+          throw new ApiError(
+            3024,
+            `不支持的文件类型「${ext}」`,
+            `支持：${UPLOAD_POLICY.acceptedExtensions.join(' / ')}`
+          )
+        }
+        if (f.size > UPLOAD_POLICY.maxFileSizeMB * 1024 * 1024) {
+          throw new ApiError(
+            3025,
+            `文件「${f.name}」超过 ${UPLOAD_POLICY.maxFileSizeMB}MB 上限`,
+            '请压缩或拆分后再传'
+          )
+        }
+        const id = `up_${Date.now().toString(36)}_${uploadIds.length}`
+        stagedUploads.set(id, { id, kbId, name: f.name, size: f.size, text: '' })
+        uploadIds.push(id)
+      }
+      return { uploadIds }
+    }
+  ],
+
+  [
+    'GET',
+    '/knowledge-bases/:kbId/upload-policy',
+    ({ path, token }) => {
+      gateKb(path.kbId, token, PERM.knowledgeView, '知识库', path.kbId)
+      return UPLOAD_POLICY
+    }
+  ],
+
+  /* ── #10 重向量化 ×3 ── */
+
+  [
+    'POST',
+    '/segments/:id/embedding',
+    ({ path, token }) => {
+      const seg = findSeg(path.id)
+      gateKb(kbIdOfSeg(seg.id), token, PERM.segmentEdit, '分段', seg.id)
+      // 编辑后是「待向量化」；失败态也允许重跑。已向量化的强制重跑也放行（用户显式动作）
+      if (seg.embedding === '向量化中') {
+        throw new ApiError(3026, '该分段正在向量化中，无需重复提交')
+      }
+      runSegmentEmbedding(seg)
+      return seg
+    }
+  ],
+
+  [
+    'POST',
+    '/documents/:id/reembed',
+    ({ path, token }) => {
+      const doc = findDoc(path.id)
+      gateKb(doc.kbId, token, PERM.documentUpload, '文档', doc.id)
+      const segs = segments.filter((s) => s.documentId === doc.id)
+      if (!segs.length) {
+        throw new ApiError(3027, '该文档没有可向量化的分段')
+      }
+      runDocumentReembed(doc)
+      return doc
+    }
+  ],
+
+  [
+    'POST',
+    '/knowledge-bases/:kbId/reembed',
+    ({ path, token }) => {
+      const kbId = path.kbId
+      gateKb(kbId, token, PERM.documentUpload, '知识库', kbId)
+      const docs = documents.filter((d) => d.kbId === kbId)
+      let queued = 0
+      for (const doc of docs) {
+        const segs = segments.filter((s) => s.documentId === doc.id)
+        if (!segs.length) continue
+        runDocumentReembed(doc)
+        queued += segs.length
+      }
+      return { queued }
+    }
+  ],
+
+  /* ── P1 批量删除（回执区分 deleted / failed） ── */
+
+  [
+    'DELETE',
+    '/segments/batch',
+    ({ body, token }) => {
+      const { ids } = body as { ids?: string[] }
+      if (!ids?.length) throw new ApiError(3028, '请先选择要删除的分段')
+
+      let deleted = 0
+      const failed: Array<{ id: string; reason: string }> = []
+      for (const id of ids) {
+        const seg = segments.find((s) => s.id === id)
+        if (!seg) {
+          failed.push({ id, reason: '分段不存在' })
+          continue
+        }
+        try {
+          gateKb(kbIdOfSeg(id), token, PERM.segmentEdit, '分段', id)
+        } catch (error) {
+          failed.push({ id, reason: error instanceof ApiError ? error.message : '无权删除' })
+          continue
+        }
+        segments.splice(segments.indexOf(seg), 1)
+        deleted += 1
+      }
+      touchKbCounters('')
+      // 逐个文档回刷计数（touchKbCounters('') 不够）
+      for (const doc of documents) {
+        doc.segmentCount = segments.filter((s) => s.documentId === doc.id).length
+        touchKbCounters(doc.kbId)
+      }
+      return { deleted, failed }
     }
   ]
 ]
