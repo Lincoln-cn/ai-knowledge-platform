@@ -14,7 +14,7 @@
 | 后端服务 | 17 个独立微服务 | **1 个模块化单体** |
 | 框架 | 商业框架（无可源码，私有制品仓） | 自建，无商业构件依赖 |
 | 模块边界 | 靠约定与人的自觉 | **框架强制**（CI 跑架构测试） |
-| 中间件 | PG / Redis / Nacos / RabbitMQ / Neo4j / MinIO / Sentinel / Seata | **PostgreSQL(+pgvector) + 模型服务** |
+| 中间件 | PG / Redis / Nacos / RabbitMQ / Neo4j / MinIO / Sentinel / Seata | **PostgreSQL(+pgvector) + OpenAI 兼容网关（JAiRouter）** |
 | 多租户 | 开启（行级隔离） | 不预埋（软关闭，V2.0 再说） |
 | 管理后台 | 两套（一套还没有导航入口） | **单后台，角色控制可见性** |
 | 事件 | MQ | 事务事件 + 出站事件表（不引 MQ） |
@@ -96,7 +96,7 @@
 |---|---|---|
 | Java | **21**（虚拟线程） | 流式问答与入库都是 IO 密集，虚拟线程比响应式更好维护 |
 | 框架 | Spring Boot 3.x + **Spring Modulith** | 模块边界可被框架校验，不靠自觉 |
-| 模型接入 | **Spring AI** | 老系统已用（49 文件），`ChatModelPort`/`EmbeddingModelPort` 只是薄封装，可移植而非重写 |
+| 模型接入 | **Spring AI** + **OpenAI 兼容网关（JAiRouter）** | 老系统已用（49 文件），`ChatModelPort`/`EmbeddingModelPort` 只是薄封装，可移植而非重写。**上游不直连推理服务**：用官方 `spring-ai-starter-model-openai` 把 `base-url` 指向网关即可（负载均衡/熔断/限流由网关承担）。职责边界见 `docs/系统设计方案/09` §3.13 |
 | 向量库 | **pgvector 同库** | 少一个独立组件；与业务数据同事务 |
 | 持久化 | JPA（领域层）+ **Spring AI 的 `PgVectorStore`**（向量检索**不手写 SQL**） | 向量相似度查询用 ORM 表达确实不划算，但官方 `PgVectorStore` 已把这层写好并测过（索引/距离/维度/元数据过滤/批量）。逐项分析见 `docs/系统设计方案/09` §5.1 |
 | 鉴权 | **Spring Security 责任链**（`SecurityFilterChain` + `oauth2ResourceServer().jwt()`）+ JWT 双令牌 + 401 静默刷新一次 | **不自研安全组件**：JWT 验签与解析、密码编码、401/403、方法级授权全用官方；前端 `lib/http.ts` 已按这个行为实现。责任链组成与"只有两处必须自己写"见 `docs/系统设计方案/08` §4.2 |
