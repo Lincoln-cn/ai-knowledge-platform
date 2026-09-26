@@ -20,8 +20,8 @@
     <b>出错了有没有提示</b>、<b>刷新后状态丢不丢</b>。本报告按这四条复核。
   </p>
   <div class="meta">
-    <span>审计基线 <b>8b5bdba</b></span>
-    <span>提交数 <b>16</b></span>
+    <span>审计基线 <b>8b5bdba</b> → 收口 <b>2fd7f71</b></span>
+    <span>提交数 <b>22</b></span>
     <span>HEAD == origin/main <b>是</b></span>
     <span>仓库 <b>PRIVATE</b></span>
     <span>契约面 <b>12 域 / 115 端点</b></span>
@@ -54,7 +54,7 @@
   <h2><span class="no">02</span>审计基线与取证方法</h2>
   <p class="lead">凡是本报告写下的结论，都能回到下面某一条客观读数；子代理的自述一律不作为证据。</p>
 
-  <h3>2.1 机械闸门（基线 8b5bdba 实测）</h3>
+  <h3>2.1 机械闸门（收口后复跑：20 个闸门全绿）</h3>
   <div class="tw">
     <table>
       <thead><tr><th>闸门</th><th>内容</th><th class="num">exit</th></tr></thead>
@@ -67,8 +67,8 @@
         <tr><td class="mono">check_theme.py</td><td>主题令牌一致性</td><td class="num"><span class="tag t-ok">0</span></td></tr>
         <tr><td class="mono">tools/check_art.py</td><td>美术素材可用性（按用途分四类）</td><td class="num"><span class="tag t-ok">6/6</span></td></tr>
         <tr><td class="mono">smoke_test.py</td><td>核心冒烟（serve dist/）</td><td class="num"><span class="tag t-ok">0</span></td></tr>
-        <tr><td class="mono">verify_features.py</td><td>功能面断言</td><td class="num"><span class="tag t-ok">0</span></td></tr>
-        <tr><td class="mono">verify_permissions.py</td><td>权限门禁矩阵（43 条）</td><td class="num"><span class="tag t-ok">0</span></td></tr>
+        <tr><td class="mono">verify_features.py</td><td>功能面断言（39 条）</td><td class="num"><span class="tag t-ok">0</span></td></tr>
+        <tr><td class="mono">verify_permissions.py</td><td>权限门禁矩阵（49 条 dist / 53 条含接口层）</td><td class="num"><span class="tag t-ok">0</span></td></tr>
         <tr><td class="mono">check_assistants.py · check_canvas.py</td><td>应用列表 · 画布基础</td><td class="num"><span class="tag t-ok">0 · 0</span></td></tr>
         <tr><td class="mono">check_collapse · check_history · check_nodeconfig<br>check_palette · check_pickers · check_publish · check_singleton</td><td>编排画布 7 件</td><td class="num"><span class="tag t-ok">全 0</span></td></tr>
         <tr><td class="mono">shot_sweep.py · shot_workflow.py</td><td>12 页截图扫描 · 画布截图</td><td class="num"><span class="tag t-ok">0 · 0</span></td></tr>
@@ -367,7 +367,7 @@
         <tr><td>API Key 单条启停 / 凭证启停</td><td class="mono">PATCH …/api-keys/:id/enabled · PATCH …/credentials/:id/enabled</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
         <tr><td>消息定位（深链跳到某条消息）</td><td class="mono">MessageQuery.around</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
         <tr><td>SSE 心跳帧 / 终态必达 / <b>任务不依赖前端连接</b></td><td>落进 <code>stream-types.ts</code>：<code>HeartbeatComment</code> · <code>20s</code> · <code>60s</code>（契约写死 20×3≤60）· <code>StreamTerminationPath</code> · <code>TaskProgressOwnership</code></td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
-        <tr><td>批量办理反馈</td><td class="mono">PATCH /feedbacks/batch</td><td class="num"><span class="tag t-mute">P2 · 未做</span></td></tr>
+        <tr><td>批量办理反馈</td><td class="mono">PATCH /feedbacks/batch → { accepted[], rejected[{id,reason}] }</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
       </tbody>
     </table>
   </div>
