@@ -10,7 +10,7 @@
 
 | 维度 | 前身系统 | 本后端 |
 |---|---|---|
-| 部署进程 | 约 32 个容器 | **4 个** |
+| 部署进程 | 约 32 个容器 | **3 个平台进程**（PG + 应用 + 模型网关）+ 反向代理 |
 | 后端服务 | 17 个独立微服务 | **1 个模块化单体** |
 | 框架 | 商业框架（无可源码，私有制品仓） | 自建，无商业构件依赖 |
 | 模块边界 | 靠约定与人的自觉 | **框架强制**（CI 跑架构测试） |
@@ -90,16 +90,30 @@
 以及 M0 必须交付的两份技术结论（思考三态取值 / Spring AI 能否下发思考开关）。
 
 
-## 技术选型（待确认）
+## 技术选型（★ 已定 · 2026-09 收口）
 
-| 项 | 倾向 | 理由 |
+> **唯一真源是 [`../docs/系统设计方案/09-中间件与-Spring-模块选型.md`](../docs/系统设计方案/09-中间件与-Spring-模块选型.md)**：
+> 它的 **§十** 是全量收口表（每个能力都有名字，含"明确不需要"的证据），**§四** 是 Boot 4 的 starter 坐标与破坏性变更，
+> **§九** 是向量存储的硬约束。**本节只列结论，避免两处漂移。**
+
+| 项 | 选型 | 说明 |
 |---|---|---|
-| Java | **21**（虚拟线程） | 流式问答与入库都是 IO 密集，虚拟线程比响应式更好维护 |
-| 框架 | Spring Boot 3.x + **Spring Modulith** | 模块边界可被框架校验，不靠自觉 |
-| 模型接入 | **Spring AI** + **OpenAI 兼容网关（JAiRouter）** | 老系统已用（49 文件），`ChatModelPort`/`EmbeddingModelPort` 只是薄封装，可移植而非重写。**上游不直连推理服务**：用官方 `spring-ai-starter-model-openai` 把 `base-url` 指向网关即可（负载均衡/熔断/限流由网关承担）。职责边界见 `docs/系统设计方案/09` §3.13 |
-| 向量库 | **pgvector 同库** | 少一个独立组件；与业务数据同事务 |
-| 持久化 | JPA（领域层）+ **Spring AI 的 `PgVectorStore`**（向量检索**不手写 SQL**） | 向量相似度查询用 ORM 表达确实不划算，但官方 `PgVectorStore` 已把这层写好并测过（索引/距离/维度/元数据过滤/批量）。逐项分析见 `docs/系统设计方案/09` §5.1 |
-| 鉴权 | **Spring Security 责任链**（`SecurityFilterChain` + `oauth2ResourceServer().jwt()`）+ JWT 双令牌 + 401 静默刷新一次 | **不自研安全组件**：JWT 验签与解析、密码编码、401/403、方法级授权全用官方；前端 `lib/http.ts` 已按这个行为实现。责任链组成与"只有两处必须自己写"见 `docs/系统设计方案/08` §4.2 |
+| 语言 | **Java 25**（LTS，Eclipse Temurin 25） | 虚拟线程是本次选型的支点；Framework 7 的生产推荐版本 |
+| 框架 | **Spring Boot 4.1.x**（Framework 7.x / Security 7.x） | ★ Boot 4 做过一次 **starter 大改名**，坐标以 `09 §4.0` 为准（照 Boot 3 写法会编译不过） |
+| Web | **Spring MVC + 虚拟线程**（`spring-boot-starter-webmvc`） | **不用 WebFlux** —— 决定性理由不是流式而是**持久化**（选它等于放弃 JPA），见 `09 §4.5` |
+| 模块化 | **Spring Modulith 2.1.x** | 模块边界可被框架校验，不靠自觉；还给出站事件表与架构文档生成 |
+| 持久化 | **Spring Data JPA**（Hibernate 7.4.x）+ **Flyway**（每模块一个 migration 目录） | **向量表也由 Flyway 建**（关掉框架的自动建表，见 `09 §9.4`） |
+| 数据库 | **PostgreSQL 16 + pgvector**，扩展**只要 `vector`** | 关系数据与向量同库，少一个组件（ADR-02） |
+| 向量检索 | **Spring AI 的 `PgVectorStore`**（**不手写 SQL**） | ★ 但它的**列名硬编码、维度是表级** ⇒ **按维度分表 + `vectorindex` 路由**，见 `09 §九` |
+| 模型接入 | **Spring AI 2.0.1** + **OpenAI 兼容网关（JAiRouter）** | **不直连推理服务**：`spring-ai-starter-model-openai` 的 `base-url` 指向网关即可；负载均衡/熔断/限流由网关承担。职责边界见 `09 §3.13` |
+| 鉴权 | **Spring Security 责任链**（`SecurityFilterChain` + `oauth2ResourceServer().jwt()`）+ JWT 双令牌 | **不自研安全组件**：验签、解析、密码编码、401/403、方法级授权全用官方；前端 `lib/http.ts` 已按这个行为实现（`08 §4.2`）。Security 7 的 API 变化见 `09 §4.4` |
+| 数据范围 | `OwnedResource`（`platform`）+ `AccessScopePort`（**唯一实现放 `identity`**） | 列表按 `dataScope` 拼进查询；看不见的资源返 **404**（`08 §4.4`） |
+| **文档解析** | **`tika-core`（MIME 嗅探）+ Apache PDFBox 3 + Apache POI 5.5.1** | MVP 支持 `.pdf / .docx / .doc / .md / .txt`；**不做 OCR、不做表格抽取**；理由见 `09 §10.2 #1` |
+| **中文全文检索** | 应用侧 **2-gram** 切分 + PG `simple` 配置的 tsvector | **不装 PG 扩展**（`zhparser`/`pg_jieba` 都要手工编译，留作升级路径），见 `09 §10.2 #3` |
+| 构建 / 质量 | **Maven 3.9.16** · Spotless + google-java-format · Checkstyle 14.1.0 · SpotBugs 4.10.4 | ★ Maven 4.x 仍是 RC，不用于生产（`09 §10.1 E`） |
+| 测试 | JUnit 5 + **Testcontainers 2.x**（起**真 PG**）+ REST Docs + **自研契约漂移检测** | 不用 H2/mock 测数据库 —— 我们的复杂度几乎全在数据库上（`09 §10.2 #8`） |
+| CI | **GitHub Actions**（`setup-java` + temurin 25） | 前端 11 个脚本 + 后端四类闸门 |
+| 可观测 | Actuator + Micrometer（Prometheus / OTLP）+ **Boot 原生结构化 JSON 日志** | `logging.structured.format.console=ecs` —— ★ 3.4 起内置，**不引第三方 encoder** |
 
 ---
 

@@ -51,6 +51,26 @@
 中文字形**不引网络字体**，一律由访客本机的 CJK 字体栈提供（`PingFang SC` →
 `HarmonyOS Sans SC` → `Microsoft YaHei` → `Source Han Sans`），因此不涉及字体许可。
 
+## 后端依赖（★ 待生成，M0）
+
+后端的依赖清单**尚未生成** —— 后端工程还没开工（`backend/` 目前只有 `README.md`）。
+M0 会加 **`license-maven-plugin`**，从 `pom.xml` 实际解析出依赖树并生成本节，规则与上表一致：
+**只列直接依赖 + 实际列入署名的传递依赖，且每条从发布包自己的许可字段实读，不按印象推断。**
+
+开工前已知的许可要点（选型阶段核实过，见 [`docs/系统设计方案/09`](docs/系统设计方案/09-中间件与-Spring-模块选型.md) §10.1）：
+
+| 类 | 许可 |
+|---|---|
+| Spring Boot / Framework / Security / Modulith / **Spring AI** | Apache-2.0 |
+| PostgreSQL JDBC 驱动 · Flyway · HikariCP | Apache-2.0 |
+| **Apache Tika**（`tika-core`）· **Apache PDFBox** · **Apache POI** | Apache-2.0 |
+| **commonmark-java**（由 `tika-core` 传递引入） | **BSD-2-Clause** |
+| **JGraphT**（V1.0 编排引擎才用） | ★ **LGPL-2.1-or-later OR EPL-2.0 双选 ⇒ 取 EPL-2.0**（避开 LGPL） |
+| Caffeine · Resilience4j · Testcontainers | Apache-2.0 / MIT |
+
+> 一条纪律：**引入任何新依赖时先看许可，再看体积**。上表里 `commonmark` 是 `tika-core` 带进来的（BSD-2-Clause），
+> 而 `JGraphT` 是**双许可**——这类都要在引入当期就记进本节，不要留到发布前补。
+
 ## 说明
 
 - 上表只列**直接依赖**与实际列入署名的传递依赖。其余传递依赖各自随包携带许可，

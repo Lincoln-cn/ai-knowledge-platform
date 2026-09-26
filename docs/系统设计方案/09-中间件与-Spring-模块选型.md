@@ -67,11 +67,12 @@ postgres(pgvector)  +  应用  +  模型网关(JAiRouter)
 
 **为什么是它**：关系数据 + JSON 元数据 + 全文检索 + 向量检索 + 行锁 + 幂等表 + 出站事件表 —— 一张库全包。
 **版本**：16+（`pgvector` 与更好的 JSON 路径能力）。
-**扩展**：`vector`、`hstore`、`uuid-ossp`（★ 官方文档明确列的三个，见 §四.5）。
+**扩展**：★ **只需要 `vector` 一个** —— `vector` / `hstore` / `uuid-ossp` 是 `PgVectorStore` 的 `initializeSchema` 会建的三个，
+而我们**关掉它、表由 Flyway 建**（§9.2 / §9.4）：`hstore` 与 `uuid-ossp` 都用不上（主键由应用侧生成）。
 
 ### 3.2 向量检索：pgvector 同库（改向：**不手写 SQL**）
 
-**原设计**（`backend/README.md:101`）："JdbcTemplate（向量检索**手写 SQL**）—— 向量相似度查询用 ORM 表达不划算"。
+**原设计**（`backend/README.md` 的技术选型表，**本轮收口时该表已改写**）："JdbcTemplate（向量检索**手写 SQL**）—— 向量相似度查询用 ORM 表达不划算"。
 **本轮改向**（★ 官方文档查证）：**用 Spring AI 的 `PgVectorStore`**，它内部就是 JdbcTemplate，
 而且已经把我们要手写的东西都做好了：
 
@@ -113,7 +114,9 @@ postgres(pgvector)  +  应用  +  模型网关(JAiRouter)
 ### 3.6 全文检索：PG `tsvector` 起步
 
 混合检索的第二路（全文）用 PG 的 `tsvector` + GIN 索引即可。
-**中文分词**：PG 需要 `zhparser` 或 `pg_jieba` 扩展——**这是唯一需要单独确认的扩展**（标为待办，见 §八）。
+**中文分词**（★ 本轮已定，见 §10.2 #3）：**不装 PG 扩展** —— 用**应用侧 2-gram 切分**后写入 `simple` 配置的 tsvector。
+为什么不能就这么用 `simple`：`to_tsvector('simple', …)` 对中文会把**整段当成一个 token**，这一路等于检索不到东西。
+`zhparser` / `pg_jieba` 都要**手工编译 C 扩展**（PG 镜像就不再是官方镜像）⇒ **留作可逆的升级路径**，不作起步选择。
 **什么时候换 ES/OpenSearch**：语料上百万段、且需要相关性调参与聚合分析时。`retrieval` 的三模式接口不变。
 
 ### 3.7 对象存储：本地磁盘 + 端口（不引 MinIO）
@@ -160,7 +163,7 @@ postgres(pgvector)  +  应用  +  模型网关(JAiRouter)
 | 指标 | **Micrometer** → Prometheus |
 | 追踪 | **Micrometer Tracing** → OTLP（`traceId` **跨异步传递**，`03` 机制七） |
 | 健康 | **Actuator**（`/health` 给容器探针用） |
-| 日志 | 结构化 JSON 到 stdout（由容器收集），**起步不引 ELK** |
+| 日志 | **结构化 JSON 到 stdout**（容器收集）：★ 用 **Boot 原生** `logging.structured.format.console=ecs`（3.4 起内置，**不引第三方 encoder**，见 §10.2 #4）。起步不引 ELK |
 | 业务指标 | 首字延迟、检索耗时、入库吞吐、结构化输出失败率（`analytics/quality` 读的就是它们） |
 
 ### 3.13 模型服务：**经 OpenAI 兼容网关**（不直连推理服务）
@@ -287,7 +290,7 @@ postgres(pgvector)  +  应用  +  模型网关(JAiRouter)
 | `spring-boot-starter-security` + **`spring-boot-starter-security-oauth2-resource-server`** + `oauth2-jose` | ✅ | JWT 验签/解析、过滤链、密码编码（见 `08 §4.2`） | ★ 原 `spring-boot-starter-oauth2-resource-server`（无 `security-` 前缀）已改名 |
 | `spring-boot-starter-data-jpa` | ✅ | 聚合读写、`AuditorAware` 审计、`Specification` 数据范围过滤 | ⚠️ 管理的 Hibernate 是 **7.4.5**（**不是 8**），JPA 3.2 |
 | `spring-ai-starter-model-openai`（经网关，§3.13） | ✅ | 模型调用、流式、**结构化输出** | ★ 坐标已转正（**2.0.1**，不再需要 milestone 仓） |
-| **`spring-ai-starter-vector-store-pgvector`** | ✅ **★改向** | **向量表/索引/相似度查询/元数据过滤**（原本打算手写 SQL） | ⚠️ **`initialize-schema` 默认已改为 `false`** ⇒ 必须显式打开（§5.1） |
+| **`spring-ai-starter-vector-store-pgvector`** | ✅ **★改向** | **向量索引 / 相似度查询 / 元数据过滤 / 批量 upsert**（原本打算手写 SQL） | ⚠️ **`initialize-schema` 默认 `false`** ⇒ **保持关闭**，表由 Flyway 建（§9.4）；★ **列名硬编码、维度是表级** ⇒ 见 **§九** |
 | `spring-boot-starter-validation` | ✅ | 请求校验（Jakarta Validation） | 无变化 |
 | `spring-boot-starter-actuator` + `micrometer-registry-prometheus` + **`spring-boot-starter-opentelemetry`** | ✅ | 指标、追踪、健康探针 | ★ OTLP 改走新 starter；`management.tracing.enabled` → **`management.tracing.export.enabled`** |
 | `spring-boot-starter-cache` + `caffeine` | ✅ | 进程内缓存，换 Redis 时业务零改动 | 无变化 |
@@ -300,13 +303,13 @@ postgres(pgvector)  +  应用  +  模型网关(JAiRouter)
 | **`spring-boot-starter-security-test`**（测试期） | ✅ | `@WithMockUser` 等测试支持 | ★ 测试侧也已按 `security-` 前缀改名 |
 | `shedlock-spring`（**7.x**） | ⏳ 多实例时 | 定时任务"同一时刻只跑一个实例" | ★ 7.x 的兼容矩阵含 Boot 4 |
 | `spring-boot-starter-webflux` | ❌ | 已由 ADR-01 否掉 | ⚠️ 但 Spring AI 的**流式客户端**会把 `spring-webflux`（**库**，非 starter）带进依赖树 —— **这不等于选了 WebFlux 栈**：只要 `spring-boot-starter-webmvc` 在，Boot 仍以 Servlet 栈启动 |
-| Spring Cloud（Gateway / Config / Registry / OpenFeign） | ❌ | 单体不需要 |
-| `spring-boot-starter-batch` | ❌ | 见 §4.2 |
-| `spring-statemachine` | ❌ | 见 §4.2 |
-| `spring-integration` | ❌ | 不引 MQ 就不需要它 |
-| `spring-session` / Redis | ❌ | 无状态 JWT |
-| `spring-data-envers` | ❌ | 版本历史已有显式版本聚合 |
-| Spring Authorization Server | ✅ **能力已并入 Security 7 本体** | 见 §4.3 —— 只需装配，**不用引独立项目** |
+| Spring Cloud（Gateway / Config / Registry / OpenFeign） | ❌ | — | 单体不需要 |
+| `spring-boot-starter-batch` | ❌ | — | 见 §4.2 |
+| `spring-statemachine` | ❌ | — | 见 §4.2（★ 且已归档） |
+| `spring-integration` | ❌ | — | 不引 MQ 就不需要它 |
+| `spring-session` / Redis | ❌ | — | 无状态 JWT |
+| `spring-data-envers` | ❌ | — | 版本历史已有显式版本聚合 |
+| Spring Authorization Server | ✅（**能力已并入 Security 7 本体**） | — | 见 §4.3 —— 只需装配，**不用引独立项目** |
 
 ### 4.1 用（以及它替掉了什么）
 
@@ -369,7 +372,7 @@ postgres(pgvector)  +  应用  +  模型网关(JAiRouter)
 | **重试** | **`spring-retry` 不再被 Boot 管版本**；Framework 7 内置 `@Retryable` / `@EnableResilientMethods` | 优先用 Framework 7 原生的（少一个第三方库） |
 | **SpEL** | 默认**最多求值 10000 步**（自带一道熔断） | 与 §5.3.1 的安全边界叠加使用 |
 | **`RestTemplate`** | 已弃用 | 我们本来就用 `RestClient` ✅ |
-| **Spring AI / PgVector** | **`initialize-schema` 默认改为 `false`**（原先默认建表） | **必须显式**开：`spring.ai.vectorstore.pgvector.initialize-schema=true`，否则"检索为什么一条都搜不到"会查很久 |
+| **Spring AI / PgVector** | **`initialize-schema` 默认改为 `false`**（原先默认建表）· **列名不可定制**（硬编码 `id/content/metadata/embedding`）· **维度是表级** | **保持关闭**（表由 Flyway 建，§9.4）；误开也无害（DDL 全是 `IF NOT EXISTS`）。⚠️ "检索一条都搜不到"时**先查表是否存在、维度是否匹配** —— 完整约束与迁就方式见 **§九** |
 | **Undertow** | Boot 4 **已删除 Undertow**（与 Servlet 6.1 不兼容） | 我们用 Tomcat 11 ✅（**别照旧文档配 Undertow**） |
 | **Jackson** | Jackson 3 优先（2 已弃用） | 自定义序列化器要迁到 `tools.jackson` 包 |
 
@@ -408,7 +411,7 @@ Boot 的 `WebApplicationType` 判定仍是 **SERVLET**（`DispatcherServlet` 与
 
 ### 5.1 向量检索：**不手写 SQL**，用 `PgVectorStore`
 
-**原设计**（`backend/README.md:101`）：`JdbcTemplate`（向量检索**手写 SQL**），理由是"向量相似度查询用 ORM 表达不划算"。
+**原设计**（`backend/README.md` 的技术选型表，**本轮收口时该表已改写**）：`JdbcTemplate`（向量检索**手写 SQL**），理由是"向量相似度查询用 ORM 表达不划算"。
 
 **这条判断是对的，但结论错了** —— 不划算的是 **ORM**，而我们本来要手写的正是**官方已经写好并测试过的那一层**：
 
@@ -428,6 +431,9 @@ Boot 的 `WebApplicationType` 判定仍是 **SERVLET**（`DispatcherServlet` 与
 
 **注意**：`filterExpression` 是**字符串**——拼它时必须走 `FilterExpressionBuilder`（结构化构造），
 **不要字符串拼接用户输入**（那是注入面）。
+
+> ⚠️ **本节只讲了"它能替我们做什么"**。它还有**三条硬约束**（列名不可定制 / 维度是表级 / `initialize-schema` 默认关闭），
+> 其中第一条**直接改掉了 `02` 的向量表设计** —— 完整内容在 **§九**，动向量这块之前务必先读那一节。
 
 ### 5.2 结构化输出：**不自研"四层防御"**，用官方转换器
 
@@ -667,10 +673,17 @@ nginx / caddy                   ← TLS + 前端静态 + 反向代理（★ 必�
 | **新建资源默认可见性** | 曾被列为待拍板 | ✅ **不是待拍板** —— **契约里已写死 `private`**（§8.2）⇒ 后端照实现，**不要做成可配置项** |
 | **`api/legacy/*` 垫片** | 待定（删 / 留） | ✅ **保留 + 上锁** —— 本轮核实：它**不产生任何额外后端端点**，对后端零负担（§8.3） |
 | **web 栈** | ADR-01：MVC + 虚拟线程 | ✅ **复核确认**，并把"不用 WebFlux"的**决定性理由（JPA/事务）**写全（§4.5） |
+| **文档解析 / MIME 校验** | 未定（`04:357` 只说"解析器分级"） | ★ **本轮定**：`tika-core` + PDFBox + POI；**不做 OCR、不做表格抽取**（§10.2 #1 / #2） |
+| **中文全文检索** | `zhparser` 或 `pg_jieba`（待办） | ★ **本轮定**：应用侧 **2-gram** + `simple`（**不装扩展**，§10.2 #3） |
+| **主键 ID 策略** | UUID（版本未定） | ★ **本轮定**：**时间有序 UUID**，用 Hibernate 生成器（**零新依赖**，§10.2 #5） |
+| **日志实现** | "结构化 JSON"（库未定） | ★ **本轮定**：**Boot 原生** `logging.structured.format.console=ecs`（§10.2 #4） |
+| **工程工具链** | 未定（ROADMAP 只写"CI 跑通"） | ★ **本轮定**：Maven 3.9.16 · Spotless · Checkstyle · SpotBugs · GitHub Actions · Temurin 25（§10.1 E） |
+| **契约漂移检测** | 未定（`ROADMAP §7.2` 列为闸门） | ★ **本轮定**：**自研**（解析 TS 契约 ↔ `RequestMappingHandlerMapping`，§10.2 #8） |
+| **向量表形状** | `02`：`vec_embedding(segment_id, model_id, dimension, …)` | ⚠️ **改**：列名迁就框架四列 + **按维度分表 + 路由**（§九） |
 
 ---
 
-## 八、待拍板与待办（★ 2026-09 刷新：三项已定）
+## 八、待拍板与待办（★ 2026-09 刷新：选型已在 §九 / §十 全量收口）
 
 ### 8.1 已定（本轮拍板 / 本轮查证后关闭）
 
@@ -682,6 +695,15 @@ nginx / caddy                   ← TLS + 前端静态 + 反向代理（★ 必�
 | 4 | **`POST /models/:id/load` 的语义** | 定为 **「平台启用位 + 上游可用性校验」**，**不尝试操纵上游实例**（"载入显存"是网关/上游的事，且不同适配器语义不统一 —— vLLM/外部 API 根本没有"加载"）。四态映射见 §3.13.4 | §3.13.4 |
 | 5 | **新建资源的默认可见性** | **`private` + `ownerId = 当前用户`**。**这不是待拍板项** —— 前端契约里已经写死了（三处注释都写明"由后端写入，契约里没有对应的请求字段"），见 §8.2 | §8.2 |
 | 6 | **`api/legacy/*` 垫片** | **保留**（本轮核实：它**不产生任何额外后端端点**，对后端零负担） | §8.3 |
+| 7 | **中文全文检索** | ★ **装 PG 扩展 `zhparser`（真分词）+ 自制 PG 镜像**（用户拍板）。扩展进镜像 initdb、text search 配置进 Flyway、**启动自检**；词典变更后需重建 tsvector | §10.2 #3 |
+| 8 | **日志格式** | **Boot 原生结构化 JSON**（`logging.structured.format.console=ecs`）—— ★ 3.4 起内置，**不引第三方 encoder** | §10.2 #4 |
+| 9 | **文档解析与 MIME 校验** | **`tika-core`（嗅探）+ PDFBox 3.0.8 + POI 5.5.1**；Markdown 由 `tika-core` 内嵌的 commonmark 承担 | §10.2 #1 · #2 |
+| 10 | **主键 UUID 采用时间有序** | Hibernate `@UuidGenerator(style = TIME)`（或自定义 v7）—— **零新依赖** | §10.2 #5 |
+| 11 | **工程工具链** | Maven 3.9.16 · Spotless 3.10.3 + google-java-format · Checkstyle 14.1.0 · SpotBugs 4.10.4 · GitHub Actions · Temurin 25 | §10.1 E |
+| 12 | **向量的落地形状** | **按维度分表 + `vectorindex` 路由**；表由 Flyway 建、列名迁就框架四列 | §九 |
+
+> ★ **本轮之后的收口状态**：§10.1 的全量表**每一行都已填满**，剩下**只有两件**需要拍板（§10.3）。
+> 也就是说：**M0 已经具备开工条件**。
 
 ### 8.2 后端必须照契约实现的默认值（不是可配置项）
 
@@ -726,14 +748,374 @@ nginx / caddy                   ← TLS + 前端静态 + 反向代理（★ 必�
 
 ### 8.4 仍然待办（不阻塞 M0）
 
+> ★ 本轮收口后，原六项里有**两项关闭**：中文分词扩展（→ §10.2 #3 定 2-gram）·
+> 日志格式（→ §10.2 #4 定用 Boot 原生）。**剩下四项**：
+
 | # | 事项 | 建议 | 期限 |
 |---|---|---|---|
-| 1 | **中文全文检索的分词扩展** | 选 `zhparser` 或 `pg_jieba`（§3.6）—— **唯一需要额外确认的 PG 扩展** | **M2 前** |
-| 2 | **JAiRouter 网关的部署与获取**（同机 / 独立机 / 已有实例） | **M0 就要定** —— 决定 `modelcatalog` 的 base-url、探活方式、超时与重试参数，也决定 dev 环境怎么起 | **M0** |
-| 3 | Resilience4j 的熔断阈值 | M1 定（模型调用是第一个外部依赖），先保守默认 | M1 |
-| 4 | 日志：起步是否只到 stdout | 建议**是**（容器收集）；ELK 等到真需要检索日志时再说 | M0 |
-| 5 | 缓存：是否给"模型列表"加缓存 | 建议**先不加**（单实例 + 进程内 Caffeine）；真慢了再加，`Cache` 抽象零改动 | M1 |
-| 6 | 网关的 `/v1/embeddings` 是否覆盖我们全部向量模型（§3.13.4） | **建议不留直连例外**，统一走网关 | M2 前 |
+| 1 | **JAiRouter 网关的部署与获取**（同机 / 独立机 / 已有实例） | **M0 就要定** —— 决定 `modelcatalog` 的 base-url、探活方式、超时与重试参数，也决定 dev 环境怎么起 | **M0** |
+| 2 | Resilience4j 的熔断阈值 | M1 定（模型调用是第一个外部依赖），先保守默认 | M1 |
+| 3 | 缓存：是否给"模型列表"加缓存 | 建议**先不加**（单实例 + 进程内 Caffeine）；真慢了再加，`Cache` 抽象零改动 | M1 |
+| 4 | 网关的 `/v1/embeddings` 是否覆盖我们全部向量模型（§3.13.5） | **建议不留直连例外**，统一走网关 | M2 前 |
+
+## 九、向量存储的落地约束（★ `PgVectorStore` 的硬编码，以及我们怎么迁就它）
+
+> **为什么单独一节**：§5.1 的改向（"不手写 SQL，用 `PgVectorStore`"）只回答了**它能替我们做什么**。
+> 本轮为了把选型收口，去读了 **Spring AI 2.0.1 的源码与官方文档**，发现它有三条**硬约束** ——
+> 其中第一条**直接改掉 `02` 册的向量表设计**。这一节是 §5.1 的必读补充。
+
+### 9.1 三条硬约束（★ 逐条来自源码/官方文档，不是印象）
+
+| # | 硬约束 | 证据 | 对我们的影响 |
+|---|---|---|---|
+| **1** | **列名不可定制** —— 建表 DDL、`INSERT`、`DELETE`、`RowMapper`、`SchemaValidator` 五处**全部硬编码** `id / content / metadata / embedding`。Builder 上只有 `schemaName` · `vectorTableName` · `idType` · `dimensions` · `distanceType` · `indexType` · `initializeSchema` · `maxDocumentBatchSize`（**没有** `tableName` / `idColumnName` / `contentColumnName` …） | `PgVectorStore.java` L277-278 / L324 / L616-619；`PgVectorSchemaValidator` L106-110 | ⚠️ **`02 §5.3` 的 `vec_embedding(segment_id, model_id, dimension, embedding, created_at)` 对不上** ⇒ 表设计必须改（§9.2） |
+| **2** | **维度是表级** —— `vector(N)` 是**列**类型。★ 官方原文：*"Dimensions are set to the embedding column on table creation. If you change the dimensions you would have to re-create the `vector_store` table as well."* | `pgvector.html` 配置表；`PgVectorStore` L498-515 | 一张表**只能装一个维度** ⇒ 不同维度的向量模型不能共表（§9.3） |
+| **3** | **`initializeSchema` 默认 `false`**（1.x 是 `true`，这是 2.0 的破坏性变更）；它建的 DDL **全部带 `IF NOT EXISTS`**（幂等，不会与 Flyway 打架） | `PgVectorStore.afterPropertiesSet()` L429-456；`upgrade-notes` | **表由我们的 Flyway 建** ⇒ §4.0 写的"**必须显式打开**"要**修正为"保持关闭"**（§9.4） |
+
+**另有两条恰好与我们既有设计吻合**（不用改，但要记下来 —— 它们证明原设计是对的）：
+
+| 既有设计 | 框架实际行为 | 结论 |
+|---|---|---|
+| `03 §3.3`："`segment_id` 是向量表主键 ⇒ 天然 upsert 幂等" | 写入 SQL 是 `INSERT … ON CONFLICT (id) DO UPDATE`（同 id **覆盖写、不报错**） | ✅ **完全吻合** —— 主键值直接用 `segmentId` |
+| `03 §3.4`："进度由后端事实回写、按批处理" | **没有进度回调 API**，但按 `maxDocumentBatchSize` 切批判量写入 | ✅ 我们本来就要自己分片计数 —— **回调不是必需的** |
+
+### 9.2 表设计改为"迁就框架的四列"
+
+```sql
+-- Flyway · vectorindex 模块自己的 migration 目录
+CREATE TABLE vec_embedding_768 (
+    id        uuid PRIMARY KEY,        -- ★ 值 = segmentId（应用侧生成，与 kb_segment 一对一）
+    content   text NOT NULL,           -- 分段文本（框架读写它；顺带省掉"检索后回表取文本"这一步）
+    metadata  json,                    -- 可过滤的业务字段：kb_id / document_id / model_id …
+    embedding vector(768) NOT NULL
+);
+CREATE INDEX idx_vec_768_hnsw ON vec_embedding_768
+    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);  -- 参数我们显式写
+CREATE INDEX idx_vec_768_kb ON vec_embedding_768 ((metadata::jsonb -> 'kb_id'));   -- ★ 过滤走 jsonpath
+```
+
+三条要记的：
+
+| 项 | 怎么做 | 为什么 |
+|---|---|---|
+| `model_id` / `dimension` / `created_at` 放哪 | **放 `metadata`**，不另加列 | ★ 框架只写那四列；加列虽可行，但会让 `schema-validation=true` **失败**（它校验的是"表**恰好**有那四列"）。放 metadata 还换来一个好处：**可以直接用过滤表达式查**"哪些向量是旧模型生成的、需要重灌" |
+| `metadata` 的值类型 | **一律存字符串**（UUID 也 `toString()`） | 框架把 metadata 序列化成 JSON ⇒ 读回来是 `String` 而不是 `UUID`，比较也在 JSON 层。**混类型会静默失配** |
+| null 值 | 用**哨兵值**，不要用 `null` | ★ PgVector 的过滤转换器**没实现 `IS NULL` / `IS NOT NULL` / `NOT`**（遇到会抛 `Not supported expression type`） |
+
+> ★ **顺带纠正 §二 中间件总表的一句**：那里写的扩展是 `vector` / `hstore` / `uuid-ossp` ——
+> 那是**框架 `initializeSchema` 会建的三个**。**我们关掉它之后，PG 只需要 `vector` 一个**：
+> `hstore` 与 `uuid-ossp` 都用不上（主键由应用侧生成，不需要 `uuid_generate_v4()`）。
+
+### 9.3 多向量模型：**按维度分表 + 路由收在一处**
+
+**问题**：`KnowledgeBase.embeddingModelId` 是**每个库各自绑定**的（契约允许同时存在多个向量模型），
+而**维度是表级的** ⇒ 两个库分别用 768 与 1024 维模型时，向量**无法共表**。
+
+**定法：按维度分表，路由收在 `vectorindex`。**
+
+| 层 | 做什么 |
+|---|---|
+| 表 | `vec_embedding_768` / `vec_embedding_1024` … —— **一个维度一张表**，由 Flyway 建 |
+| Bean | 一张表一个 `PgVectorStore` Bean（各自的 `vectorTableName` + `dimensions`） |
+| **路由** | **`vectorindex` 暴露唯一入口："给定 `modelId` / 维度 → 返回对应的 `VectorStore`"**；`ingestion` 与 `retrieval` **永远不直接注入 `VectorStore`** |
+| 同维度多模型 | **共表**，用 `metadata.model_id` 过滤区分（省表、省 Bean） |
+
+**为什么路由必须收在一处**：★ 框架的自动配置是 `@ConditionalOnMissingBean` 的**单个** `vectorStore` Bean；
+多个 store 只能靠 `@Qualifier` 手工区分 —— **"该用哪个 store"这个判断一旦散落，就是两处真相**
+（同 `07 §3.3`"可见性判定只在后端一处实现"的纪律）。
+这也正好让 `vectorindex` 的存在落地：§5.1 已把它降级为**薄封装**，而**路由就是这层薄封装的核心职责**。
+
+⚠️ **另一个上限要进能力校验**：★ 官方写明 **HNSW 索引维度上限 2000**。
+向量模型的维度是 `modelcatalog` 的能力元数据（§3.13.2）⇒ **注册时就该拦下超 2000 维的模型**。
+
+### 9.4 配置项（以及 §4.0 的一处修正）
+
+```yaml
+spring:
+  ai:
+    vectorstore:
+      pgvector:
+        initialize-schema: false        # ★ 保持关闭：表由 Flyway 建（§4.0 的"必须显式打开"在此修正）
+        schema-validation: true         # 启动即校验"恰好四列"，防列漂移
+        table-name: vec_embedding_768   # 单表场景的默认值；多维度时由 vectorindex 用 Builder 建 Bean
+        dimensions: 768
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        max-document-batch-size: 64     # ★ 默认 10000 太大（理由见下）
+```
+
+**`max-document-batch-size` 为什么必须调小**：★ 框架的流程是"**整批一次调 `embed`**，再分批写库"（源码 L261-274）。
+默认 10000 意味着**一次向网关发一万个分段的嵌入请求** —— 对上游不友好，也让 `03 §3.4` 的"每批回写进度"失去粒度。
+**取 32–64**，与"每批回写 `processedSegments`"对齐。
+
+> **一句留给将来的话**：列名硬编码意味着将来若真需要 `segment_id` 这样的列名，**只能绕过 `PgVectorStore`**（走 `getNativeClient()`）。
+> 现在不是问题 —— 眼下它带来的收益（索引 / 距离 / 过滤 / 批量 / upsert 全由官方承担）远大于列名的审美。
+
+---
+
+## 十、技术选型收口总表（★ 2026-09 · M0 开工判据）
+
+### 10.0 "选型做完"的判据
+
+> **每一个会用到的能力都有名字；每一个"不需要"的都有理由与证据。**
+> 下面 §10.1 **每一行都必须填满**（填"选型"或"不需要 + 证据"），**不留空格** ——
+> **这一节就是 M0 的开工判据**：哪一行空着，哪个模块就不具备开工条件。
+
+### 10.1 全量对账（六组 · ★ 本节为收口，未标的行出处见同组备注）
+
+**A · 运行时与框架**
+
+| 能力 | 选型 | 状态 |
+|---|---|---|
+| 语言 / 运行时 | **Java 25**（LTS；虚拟线程自 21 已转正） | 已定（§8.1） |
+| **JDK 发行版** | **Eclipse Temurin 25** | ★ 本轮定 |
+| 框架 | Spring Boot **4.1.x**（Framework 7.x / Security 7.x） | 已定（§4.0） |
+| 模块化 | Spring Modulith **2.1.x** | 已定（§4.0） |
+| Web | **Spring MVC** + 虚拟线程（`spring-boot-starter-webmvc`） | 已定（§4.5） |
+| 持久化 | Spring Data JPA（Hibernate **7.4.5** / JPA 3.2） | 已定（§4.0） |
+| 校验 | `spring-boot-starter-validation`（Jakarta Validation） | 已定（§4.0） |
+| 序列化 | **Jackson 3**（`tools.jackson`，Boot 4 默认） | 已定（§4.4） |
+| **连接池** | **HikariCP**（Boot 默认，不换） | ★ 本轮登记 |
+| 调度 | Spring `TaskScheduler`（多实例加 ShedLock 7.x） | 已定（§3.11） |
+| 缓存 | **Caffeine**（进程内；不引 Redis） | 已定（§3.3） |
+| 事件 / 异步 | Modulith 事务事件 + **出站事件表**（不引 MQ） | 已定（§3.4） |
+
+**B · 数据与文本**（本轮补齐的**三项真缺口**都在这一组）
+
+| 能力 | 选型 | 状态 |
+|---|---|---|
+| 关系库 | **PostgreSQL 16 + pgvector** | 已定（§3.1） |
+| **PG 扩展** | **只有 `vector`**（§9.2：不用 `hstore` / `uuid-ossp`） | ★ 本轮定 |
+| 迁移 | **Flyway**（`spring-boot-starter-flyway` + `flyway-database-postgresql`），每模块一个目录，**向量表也由它建** | 已定 + ★ 本轮定（§9.2） |
+| **主键 ID** | **UUID，时间有序** —— Hibernate `@UuidGenerator(style = TIME)`；要 v7 时用自定义 `UuidValueGenerator`。**零新依赖** | ★ 本轮定（§10.2 #5） |
+| 向量存储 | **`PgVectorStore`** + **按维度分表 + `vectorindex` 路由** | 已定 + ★ 本轮定（§9.3） |
+| **中文全文检索** | ★ **PG 扩展 `zhparser`（真分词）+ 自制 PG 镜像**：扩展在镜像 initdb、配置在 Flyway、启动自检 | ★ 已拍板（§10.2 #3） |
+| 切分 | 自研（字符长度 50–4096 / 重叠 0–1000，`ChunkStrategy` 已定） | 已定（`02:460`） |
+| **token 计数** | **不需要** —— 我们按**字符**切分与守卫上下文，不做 token 预算 | ★ 本轮确认 |
+| **文档解析** | **`tika-core`（MIME 嗅探）+ PDFBox 3.0.8 + POI 5.5.1（`poi` / `poi-scratchpad` / `poi-ooxml`）** | ★ 本轮定（§10.2 #1） |
+| **Markdown 解析** | **`tika-core` 4.0 的 POM 里已依赖 `commonmark`** ⇒ 零额外依赖 | ★ 本轮定（§10.2 #1） |
+| **MIME 内容校验** | `tika-core` 的 `Detector`（magic bytes）**+ 解析器兜底** | ★ 本轮定（§10.2 #2） |
+| **OCR** | **不需要** —— MVP 明确不支持扫描件；扫描件给**可读失败原因** + "转 Markdown 再传"的替代路径 | 不需要（`04:357`） |
+| **PDF 表格抽取** | **不做** —— 表格按文本流出来；`04` 的"解析器分级"退化为"文本型直读 + 失败可读" | 不需要（MVP） |
+| **Excel / Word / PDF 导出** | **不需要** —— 契约里**零个导出端点**（唯一的"导出"是应用 JSON 包 `GET /assistants/:id/export`） | 不需要（`api/assistants.ts:326`） |
+| V1.1 的 PPT 生成 | **复用 POI 的 XSLF**（同一依赖，零新增） | 只需登记（§10.4） |
+| V1.2 的爬虫 | jsoup（静态页）+ 浏览器自动化（JS 渲染页） | 只需登记（§10.4） |
+
+**C · 安全与身份**
+
+| 能力 | 选型 | 状态 |
+|---|---|---|
+| 认证 | Spring Security 7 责任链 + `oauth2ResourceServer().jwt()`（Nimbus） | 已定（§4.0 / `08 §4.2`） |
+| 令牌 | 双令牌（access 30m / refresh 7d），**刷新令牌轮换落 PG** | 已定（§3.15） |
+| 授权 | `@PreAuthorize` + 官方 `AuthorizationManager`；权限点为**代码常量、启动幂等同步** | 已定（`08 §4.3`） |
+| 数据范围 | `AccessScopePort`（接口在 `platform`，**唯一实现在 `identity`**） | 已定（`08 §4.4`） |
+| 公开令牌 | `PublicTokenResolver`（**一个入口**，两套凭证合并） | 已定（`08 §4.2.3`） |
+| **密码存储** | `BCryptPasswordEncoder`（官方，强度用默认值） | ★ 本轮登记 |
+| CORS / CSRF | Security 的 `cors()` + CSRF 关闭（令牌式无状态 API） | 已定（`08 §4.2`） |
+| **接口限流（我们自己的 API）** | **Resilience4j 的 `RateLimiter`**，**先只用于"登录"与"公开令牌"两个面** | ★ 本轮定 |
+| 验证码 / 短信 / 邮件 / 找回密码 | **不需要** —— 契约里 **0 个**相关端点（登录只有 `username` + `password`） | 不需要 |
+
+**D · AI 与检索**
+
+| 能力 | 选型 | 状态 |
+|---|---|---|
+| 模型调用 | Spring AI **2.0.1** + `spring-ai-starter-model-openai`（**`base-url` 指向 JAiRouter**） | 已定（§3.13） |
+| 网关 | **JAiRouter**（负载均衡 / 限流 / 熔断 / 降级都在它这一层） | 已定（§3.13.2） |
+| 结构化输出 | 官方 `BeanOutputConverter` + `validateSchema()` + **只自写一层宽松解析** | 已定（§5.2） |
+| **混合检索融合** | **RRF，自研**（两路排名加权求和，约 30 行） | ★ 本轮登记 |
+| rerank | **不做** —— 契约里 `reranker-node` 属"规划中"节点（`implemented: false`） | 不需要（MVP） |
+| 网关认证 | 服务账号 / API Key，**不透传平台用户身份** | 已定（§3.13.3） |
+
+**E · 工程与交付**（★ 本轮补齐的一大块 —— 这一组以前几乎是空的）
+
+| 能力 | 选型 | 状态 |
+|---|---|---|
+| 构建 | **Maven 3.9.16**（★ 4.x 仍是 RC，官方明确"不用于生产"） | ★ 本轮定 |
+| 格式化 | **Spotless 3.10.3 + google-java-format**（★ JDK 16+ 需 `--add-exports jdk.compiler/...`） | ★ 本轮定 |
+| 静态检查 | **Checkstyle 14.1.0 + SpotBugs 4.10.4** | ★ 本轮定 |
+| 单元测试 | JUnit 5 + AssertJ + Mockito（Boot `starter-test` 自带） | ★ 本轮定 |
+| 集成测试 | **Testcontainers 2.x** + `@ServiceConnection`；镜像用 `pgvector/pgvector:pg16` | 已定 + ★ 本轮补镜像 |
+| 接口文档 | **REST Docs**（Boot 4 用 `spring-boot-starter-restdocs`） | 已定（§4.0） |
+| **契约漂移检测** | **自研**（约 100 行）：`frontend/src/api/**` 的 method+url ↔ 启动后的 `RequestMappingHandlerMapping`，不一致即失败 | ★ 本轮定（§10.2 #8） |
+| CI | **GitHub Actions**（`actions/setup-java@v6` + `distribution: temurin` + `java-version: 25`） | ★ 本轮定 |
+| 应用镜像 | 多阶段构建 → **`eclipse-temurin:25-jre`** | ★ 本轮定 |
+| 本地编排 | `docker-compose.yml`：app + postgres(pgvector) + jairouter | 已定（§6.2） |
+| 依赖漏洞扫描 | **OWASP Dependency-Check**（或 Trivy 的 `fs` 模式） | ★ 本轮定 |
+| 许可证合规 | `license-maven-plugin` 生成**后端**依赖清单，并入根 `THIRD-PARTY-NOTICES.md` | ★ 本轮定 |
+| **日志** | **Boot 原生结构化 JSON**：`logging.structured.format.console=ecs`（★ 3.4 起内置，**不需要 `logstash-logback-encoder`**） | ★ 本轮定（§10.2 #4） |
+| 可观测 | Actuator + Micrometer → Prometheus / OTLP（`spring-boot-starter-opentelemetry`） | 已定（§3.12） |
+| **E2E（对真后端跑三场景）** | **复用前端已有的 Python + Playwright 脚本**（`smoke_test.py` 等，`VITE_USE_MOCK=false`） | ★ 本轮定 |
+| **前端测试栈** | **维持现状**（`vue-tsc` + 11 个自写脚本 + Playwright CLI），**不引 vitest / jest** | ★ 本轮定 |
+| **前端 lint** | **暂不加**（现状只有 `vue-tsc`）；要加就是 ESLint + Prettier | ★ 本轮定（记录取舍） |
+| 压测 | JMeter 或 k6（B7 = 连续 200 次问答） | 只需登记（M6） |
+| 备份 / 恢复 | `pg_dump` + 文件存储目录同步（脚本即可，不引工具） | 只需登记（运维） |
+
+**F · 明确不需要（以及"为什么不需要"的证据）**
+
+| 被排除的东西 | 证据 |
+|---|---|
+| 消息队列 / 注册中心 / 配置中心 | `09 §3.4` · §3.8 · §3.9（ADR-03） |
+| Redis / Spring Session | `09 §3.3` · §3.15（无状态 JWT） |
+| 独立向量库（Milvus / Qdrant） | ADR-02（pgvector 同库） |
+| Elasticsearch | `09 §3.6`（PG 全文起步） |
+| MinIO / OSS | `09 §3.7`（端口 + 本地磁盘） |
+| WebFlux | ADR-01 / `09 §4.5`（**决定性理由是 JPA 与事务**） |
+| Spring Batch / Statemachine / Integration / Cloud | `09 §4.2`（Statemachine ★ 已归档） |
+| Sentinel / Seata / Vault / Apollo | `09 §3.5` · §3.8 · §3.10 |
+| **WebSocket** | 契约里**零个** WS 端点（实时只有 SSE + 定时轮询） |
+| **OCR（PaddleOCR 等）** | `ROADMAP:297`；契约的失败提示是"转为可检索 PDF 或 Markdown" |
+| **验证码 / 短信 / 邮件 / 找回密码** | 契约里 **0 个**相关端点 |
+| **i18n / 多语言** | 契约与页面**单语言**（`main.ts` 只有 `zhCn`，无 i18n 资源） |
+| **Excel / CSV / Word / PDF 报表导出** | 契约里 **0 个**导出端点 |
+| 多租户 | `08 §4.12`（软关闭，V2.0） |
+
+### 10.2 本轮新定的八项（逐项给理由与证据）
+
+**#1 文档解析：精准组合，不用 Tika 全量包**
+
+- **选**：`tika-core`（MIME 嗅探）+ **PDFBox 3.0.8** + **POI 5.5.1**（`poi` + `poi-scratchpad` + `poi-ooxml`）
+- **不选** `tika-parsers-standard-package`：★ 它是个 **POM 聚合包**，会拖进 **OCR / CAD / 音视频 / 邮件 / 字体 / 加密**等约 20 个 parser 模块 ——
+  而我们**明确不做 OCR**、只要 5 种格式。**多出来的依赖面就是多出来的 CVE 面与升级面**
+- ★ **意外收获（我这轮读 POM 才发现的）**：**`tika-core` 4.0.0 自己就依赖 `commonmark` + `commonmark-ext-gfm-tables`**
+  ⇒ **Markdown 解析免费得到**，比原方案还少一个依赖
+- **版本（★ 2026-09 查证，均 Apache-2.0）**：Tika **4.0.0**（Java 17+；3.3.2 是维护线）·
+  PDFBox **3.0.8**（★ 3.x 的 API 变化：`PDDocument.load` → **`Loader.loadPDF()`**，2.x 的 deprecated API 已全部移除）·
+  POI **5.5.1**（★ `.doc` 在 **`poi-scratchpad`**、`.docx` 在 **`poi-ooxml`**，**不是同一个 artifact**）
+- **必须写进 M0 解析测试的边界**：★ **PDFBox 不提供表格结构化抽取**（官方 FAQ 明确它是"低层 PDF 库"），
+  PDF 表格只能作为文本流出来 ⇒ 这正是 `04:357` 那条"解析失败给可读原因 + 人工转 Markdown"的适用面
+
+**#2 MIME 内容校验：嗅探 + 解析器兜底（两层）**
+
+- 白名单里 `.doc` 是 **OLE2 容器**（magic `D0 CF 11 E0`）、`.docx` 是 **ZIP**（`PK\x03\x04`）⇒ magic bytes 能区分
+- 但 OLE2 里也可能是 `.xls` / `.ppt`，ZIP 里也可能是 `.xlsx` / `.pptx` ⇒ **嗅探只给"像什么"**
+- 所以**第二层才是可靠的**：**真的去打开它**（POI / PDFBox 打不开就是坏文件）。
+  机制八要防的是"**改扩展名绕过**"，而只有真正解析一次才能证明它是不是那种文件
+
+**#3 中文全文检索：PG 扩展（`zhparser`）+ 自制 PG 镜像**（★ 用户拍板：**要真分词**）
+
+- **先说问题**：`02` 原先写的 `to_tsvector('simple', …)` 对中文**实际不工作** ——
+  中文没有空格，整段中文会被当成**一个 token**，于是"全文检索"这一路永远检索不到东西。
+  所以这里必须选一条：**装分词扩展**（真分词）还是**应用侧切分**（2-gram，零扩展）。
+- **拍板：装扩展，走真分词。** 运维方式是**自制 PG 镜像**：冻结 PG 大版本 + 一个打包脚本，
+  扩展与 init SQL 进镜像，将来升级只更新打包 —— **这是这类扩展的标准做法**（Dockerfile 骨架见下）。
+- ★ **扩展选 `zhparser`，不选 `pg_jieba`**（2026-09 查证）：
+
+  | | **`zhparser`** | `pg_jieba` |
+  |---|---|---|
+  | 维护 | ★ **2.4（2026-06）**，官方 CI **覆盖 PG 16 / 17 / 18** | ✗ 末次代码 **2022-11**；PG16/17 只有 **open issue** |
+  | 许可 | PostgreSQL License | BSD-3-Clause |
+  | 分词引擎 | SCWS 1.2.3 | cppjieba |
+  | 现成镜像 | ★ 有官方 Dockerfile 可照抄（多阶段） | 无 |
+
+  ⚠️ 顺带记一个坑：`pg_jieba` 的 parser 名是 **`jieba`**（不是 `pg_jieba`），社区在 PG17/18 上靠自救 ——
+  **"用维护中的东西"这条原则在这里正好适用**：两者做同一件事，选维护好的那个。
+
+- **三条必须写进设计的约束**（这一节最值钱的部分）：
+
+  | # | 约束 | 怎么做 |
+  |---|---|---|
+  | 1 | ★ **`CREATE EXTENSION` 需要超级用户**（两个扩展的 control 都**没有 `trusted=true`**，官方文档写"ordinarily requires superuser"） | ⇒ **扩展必须在镜像 initdb 阶段建好**（`/docker-entrypoint-initdb.d/`），**绝不能放 Flyway** —— 应用连接的库用户不是超管 |
+  | 2 | **`CREATE TEXT SEARCH CONFIGURATION` 可以放 Flyway**（配置本身不需要超管） | ⇒ 清晰的切分是「**扩展在镜像、配置在迁移**」：`CREATE TEXT SEARCH CONFIGURATION chinese_zh (PARSER = zhparser)` + `ALTER … ADD MAPPING FOR n,v,a,i,e,l,x WITH simple`（★ 自定义词的 token 类型是 **`x`**，不加这条进不了 tsvector） |
+  | 3 | ★ **启动必须自检**（本轮新增要求） | 断言 `pg_extension` 里有 `zhparser` 与 `vector`，并跑一次 `to_tsvector('chinese_zh','合同违约金')` 断言分词正确。**缺扩展时的症状是"全文检索一条都搜不到"** —— 正是本项目最怕的静默失效，所以它要与 `01 §五` 的架构测试同等待遇 |
+
+- **词典可以加业务词，但 tsvector 不会自动重算**（★ `zhparser#59`）：
+  合同 / 制度 / 报销规定这类语料**专有名词多**，**能加词典正是本方案相对 2-gram 的主要收益**。
+  但 tsvector 是**写入时物化**的 ⇒ 改词典后必须重建（`UPDATE … SET content_tsv = to_tsvector('chinese_zh', content)` 或 `REINDEX`）。
+  ⇒ **`kb_segment` 需要一个"重建全文索引"的运维动作**（与 `reembedKnowledgeBase` 同族：由 `TaskScheduler` 跑、按知识库触发）。
+- **镜像与打包**：base 取 `pgvector/pgvector` 的**带版本 tag**（如 `0.8.6-pg16-bookworm`，**别用浮动的 `pg16`**），
+  多阶段编 SCWS + zhparser（照抄 zhparser 官方 Dockerfile）。
+  ⚠️ **PGDG / Debian 没有现成包**（本轮查过 `postgresql-16-zhparser` / `postgresql-16-jieba`，均无）
+  ⇒ "自制镜像 + 打包脚本"不是偏好，而是**唯一可行路径**。
+- **退路（保留）**：万一打包在某台机器上卡住，**2-gram 是保底方案** —— 它可以先用起来把链路跑通
+  （不改表结构，只改写入侧与查询侧），之后换扩展时重建一次 tsvector 即可。**写进设计是因为它便宜**。
+
+**#4 结构化日志：用 Boot 原生的，不引第三方 encoder**
+
+- ★ **Boot 3.4 起内置**：`logging.structured.format.console`，可选 **`ecs` / `logstash` / `gelf`**
+- ⇒ §3.12 与 §8.4#4 那句"格式实现库未定"**关闭**：**默认 `ecs`**，**不引 `logstash-logback-encoder`**
+- 仍然只是**运维边界**要确认：起步是否只到 stdout（**建议是**，由容器收集；要检索日志时再说）
+
+**#5 UUID 用时间有序：零新依赖**
+
+- **背景**：主键一律 UUID（`02 §5.1`），而 v4 **完全随机** ⇒ B-tree 随机插入、页分裂、索引膨胀；
+  `08 §4.11` 一直要找的"ID 生成策略"没有名字
+- ★ 事实一：**JDK 25 的 `java.util.UUID` 没有 v7**（只有 `randomUUID()`=v4、`nameUUIDFromBytes()`=v3）
+- ★ 事实二：**PG 16/17 也没有 `uuidv7()`**（那是 PG 18 才有的函数）
+- ★ 事实三（关键）：**Hibernate 7 自带** —— `@UuidGenerator(style = TIME)`，官方原文是
+  *"time-based (IETF RFC 4122 version 1, variant2)"*；还可用 `algorithm = …UuidValueGenerator` **自实现 v7**
+- ⇒ **定法**：`platform` 的 ID 策略 = **时间有序 UUID**，实现走 Hibernate 的生成器（或 20 行自定义 v7），
+  **不引 `uuid-creator`**
+- **收益**：插入近似"追加"，`kb_segment` / `vec_embedding` 这类**写入量大的表**索引更健康
+
+**#6 向量表：见 §九**（表结构、按维度分表、配置项都在那一节，本节不重复）
+
+**#7 工程工具链：见 §10.1 的 E 组**（Maven 3.9.16 / Spotless / Checkstyle / SpotBugs / GitHub Actions / Temurin 25）
+
+**#8 契约漂移检测：自研一个小测试，不引 Spring Cloud Contract**
+
+- `ROADMAP §7.2` 把它列为后端闸门之一，但**实现方式一直没定**
+- **选自研**，三段：① 从 `frontend/src/api/*.ts` 抓 `method:` + `url:`（契约里这两项是**字面量**，好抓）
+  ② 在 `@SpringBootTest` 里读 `RequestMappingHandlerMapping` 拿**真实映射** ③ 双向比对，缺一即失败
+- **为什么不引工具**：契约的真源是**前端那份 TS**，而"它怎么表达端点"只有我们清楚；
+  引 Spring Cloud Contract 反倒要它去理解我们的目录约定，还要动前端工程
+- **顺带的好处**：它与"**每个写端点都必须声明权限**"那条架构测试（`08 §4.3.2`）**同源** ——
+  一次拿到"端点清单"，两条检查都能跑
+
+### 10.3 本轮拍板的两件（★ 已定）
+
+| # | 事项 | 拍板结果 | 附带要求（必须一起落） |
+|---|---|---|---|
+| 1 | **中文全文检索** | **装 PG 扩展、走真分词** —— 用 **`zhparser`**，不用 `pg_jieba`（后者已近 4 年未维护）；运维走**自制 PG 镜像**（冻结大版本 + 打包脚本） | ★ 三条约束：**扩展在镜像 initdb**（要超管）· **配置在 Flyway**（不要超管）· **启动自检**（缺扩展＝静默失效）；外加"**词典变更后重建 tsvector**"的运维动作（§10.2 #3） |
+| 2 | **向量表怎么放** | **按维度分表 + `vectorindex` 路由** | 路由必须**收在一处** —— 否则"该用哪个 store"会散落成两处真相（§9.3） |
+
+> ⇒ 至此 **§10.1 的每一行都有结论**，**技术选型收口完成**。
+
+### 10.4 只需登记、不在 M0 范围
+
+| 项 | 版本点 | 触发条件 |
+|---|---|---|
+| PPT / Word 生成 | V1.1 —— 复用 **POI XSLF**（已在依赖里） | `documentgen` 模块立项 |
+| 在线爬虫 | V1.2 —— jsoup（静态）+ 浏览器自动化（JS 渲染） | `crawler` 模块立项 |
+| MCP 接入 | V1.2 —— 协议仍在演进（`06 §5.0`） | 同上 |
+| 独立向量库 | 单表向量到千万级 | `retrieval` 的 P95 超预算 |
+| 压测 | M6 —— JMeter 或 k6 | B7 验收（连续 200 次问答） |
+| 备份 / 恢复 | 运维 —— `pg_dump` + 文件目录同步 | 部署上线前 |
+
+### 10.5 与其它文档的对账（★ 本轮**已同步**）
+
+> 下表列的是**本轮已经改完**的对照关系 —— 记下来是为了让"改了什么、为什么改"可追溯，**不是待办**。
+> **唯一没同步的是 `innerdoc/` 下的内部笔记**（见 §10.6 的提醒）。
+
+| 文档 | 本轮改了什么 | 依据 |
+|---|---|---|
+| `backend/README.md` | 技术选型表：**Java 21 → 25**、**Boot 3.x → 4.1.x**，去掉"待确认"，补 web 栈 / 文档解析 / 迁移 / 测试 / CI | ★ 改之前它写着 **Java 21 + Boot 3.x**，与 `09` 直接矛盾 —— 现已同步 |
+| `backend/README.md:13` | 部署进程口径统一为 **3 个平台进程 + Nginx** | 与 `09 §二`一致（"4 个容器"是含反向代理的旧算法） |
+| `00 §3.1` | 补齐本轮新定的行（文档解析 / **中文全文检索** / UUID / 日志 / 工具链），并指向 `09 §十` | 总览表要能落到收口表 |
+| `00 §七` 文档索引 · `README.md:49,95` | 系统设计**10 册**（不是 8 册）；`09` 的描述补"选型收口" | 索引与实际不符 |
+| `02:583-594` | `content_tsv` 改为基于 **`chinese_zh` 分词配置**（`PARSER = zhparser`）的生成列 + GIN，并补一段"扩展在镜像 / 配置在 Flyway / 启动自检 / 词典变更要重建" | 否则中文全文检索不工作（§10.2 #3） |
+| `02:590-604` | `vec_embedding` → **按维度分表**，列名迁就框架四列 | `PgVectorStore` 硬约束（§9.2） |
+| `04:357,365` | R3 的"解析器选型"**关掉**：写清选了谁、不支持什么（表格 / 扫描件） | 风险表里不能留着"未定" |
+| `ROADMAP §7.2` | 契约漂移检测的**实现方式**写清（自研）；后端测试栈点名 | 闸门要有可执行形式 |
+| `09 §4.0` | `initialize-schema`：从"**必须显式打开**"→"**保持关闭 + Flyway 建表**" | §9.4 纠正 |
+| `09 §二` | PG 扩展：`vector` / `hstore` / `uuid-ossp` → **只有 `vector`** | §9.2 纠正 |
+| `09 §8.4` | 待办关掉两项（中文分词、日志），其余保留 | 收口 |
+| `THIRD-PARTY-NOTICES.md` | 补**后端**依赖清单（M0 用 `license-maven-plugin` 生成） | 现在只有前端 |
+| **新增 `10-RAG-检索策略设计.md`** | 策略层成册（查询理解 / 分解与配额合并 / 多跳 / 预算与降级 / **契约影响清单**）；并连带回写 `02`（`RetrievalConfig` 加字段）、`03 机制二`（加指针）、`04`（B1 口径与问答对）、`ROADMAP`（M3 范围） | 选型收口后发现的最大设计缺口（见 `10 §1.1`） |
+
+### 10.6 三条"不是选型问题、但会卡住后端实现"的契约缺口
+
+> 这三条是**盘点契约时顺手发现的**（不在选型范围，但会在 M2/M4b 撞上）。
+> ⚠️ 另有一份 **`innerdoc/docs/契约缺口清单.md`（C1–C20）已经过期** ——
+> 其中 C1（提示词域）、C4（停止生成）、C5（重新生成）、C13（会话附件上传）**在前端契约里都已经补齐**，
+> 后端**不要照那份旧清单去实现**。它需要一次整体复核。
+
+| # | 缺口 | 证据 | 影响 |
+|---|---|---|---|
+| 1 | **重生成 / 续写的请求体缺字段** | `stream-types.ts:155-157` 与 mock 里有 `mode` / `targetMessageId`，但 `lib/sse.ts:170-176` 实际发送时**没带** | 若"重生成"要走同一个 SSE 端点，**现在这条链是断的** —— 实现 M4b 前要定 |
+| 2 | **三处文件类型清单不一致** | 知识库上传 `.pdf/.docx/.doc/.md/.txt`；聊天附件**多一个 `.pptx`**；工作流 `fileAccept` 还含 `xlsx/csv/html` | `GET /upload-policy` 只覆盖第一处，**另两处是前端写死的** ⇒ 后端要决定是否统一 |
+| 3 | **没有乐观锁** | 契约无版本号 / `If-Match` 字段，而画布**每 60s 自动保存草稿**（`workflow/Index.vue:252-254`） | **两人同时编辑会静默后写覆盖前写**。MVP 可接受，但要**显式记账** |
+
+---
 
 ### 一条贯穿的原则
 
