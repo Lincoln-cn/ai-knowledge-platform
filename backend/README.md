@@ -99,7 +99,7 @@
 | 模型接入 | **Spring AI** | 老系统已用（49 文件），`ChatModelPort`/`EmbeddingModelPort` 只是薄封装，可移植而非重写 |
 | 向量库 | **pgvector 同库** | 少一个独立组件；与业务数据同事务 |
 | 持久化 | JPA（领域层）+ JdbcTemplate（向量检索手写 SQL） | 向量相似度查询用 ORM 表达不划算 |
-| 鉴权 | JWT 双令牌 + 401 静默刷新一次 | 前端 `lib/http.ts` 已按这个行为实现 |
+| 鉴权 | **Spring Security 责任链**（`SecurityFilterChain` + `oauth2ResourceServer().jwt()`）+ JWT 双令牌 + 401 静默刷新一次 | **不自研安全组件**：JWT 验签与解析、密码编码、401/403、方法级授权全用官方；前端 `lib/http.ts` 已按这个行为实现。责任链组成与"只有两处必须自己写"见 `docs/系统设计方案/08` §4.2 |
 
 ---
 
