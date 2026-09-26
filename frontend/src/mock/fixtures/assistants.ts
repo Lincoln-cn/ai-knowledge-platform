@@ -43,6 +43,8 @@ export const assistants: Assistant[] = [
     callCount: 1284,
     tokenCount: 1_862_400,
     satisfaction: 92,
+    tags: ['法务', '合同'],
+    createdAt: '2026-01-05T09:00:00Z',
     // public：登录用户里人人可见（持有 assistant:view 即可），所以普通用户也看得见它
     ownerId: 'u3',
     visibility: 'public'
@@ -73,6 +75,8 @@ export const assistants: Assistant[] = [
     callCount: 652,
     tokenCount: 421_300,
     satisfaction: 88,
+    tags: ['财务', '制度'],
+    createdAt: '2026-01-12T10:00:00Z',
     // 共享给「普通用户」角色：可用，但共享里只给了 assistant:view（不能改配置）
     ownerId: 'u2',
     visibility: 'shared',
@@ -105,6 +109,8 @@ export const assistants: Assistant[] = [
     callCount: 0,
     tokenCount: 0,
     satisfaction: null,
+    tags: ['采购'],
+    createdAt: '2026-02-01T14:00:00Z',
     ownerId: 'u2',
     visibility: 'private'
   },
@@ -134,6 +140,8 @@ export const assistants: Assistant[] = [
     callCount: 3560,
     tokenCount: 4_210_000,
     satisfaction: 90,
+    tags: ['通用', '问答'],
+    createdAt: '2025-12-01T08:00:00Z',
     // 内置应用：平台资产，归管理员名下、public（普通用户只能问答，不能改配置）
     ownerId: 'u1',
     visibility: 'public'
@@ -166,6 +174,8 @@ export const assistants: Assistant[] = [
     callCount: 0,
     tokenCount: 0,
     satisfaction: null,
+    tags: ['法务', '编排'],
+    createdAt: '2026-02-10T16:00:00Z',
     // 编排草稿：别人的 private —— 普通用户既看不见、也开不了它的会话
     ownerId: 'u3',
     visibility: 'private'

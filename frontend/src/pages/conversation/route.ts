@@ -1,4 +1,5 @@
 import type { RouteRecordRaw } from 'vue-router'
+import { PERM } from '@/constants/permissions'
 
 /**
  * 问答会话 —— 全平台唯一的会话页。
@@ -9,10 +10,10 @@ export default [
     path: 'conversation',
     name: 'conversation',
     component: () => import('./Index.vue'),
-    // 刻意**不声明** permission：问答是本平台的终端用户入口，
-    // 四个角色里权限最少的「普通用户」也只有 knowledge:view + assistant:view，
-    // 若给它挂任何一个权限点，就等于把他们挡在门外 —— 那是产品事故，不是门禁。
-    meta: { title: '对话' }
+    // 声明 `conversation:view`：问答是本平台的终端用户入口，
+    // 四个角色都被授予了该点（见 mock/fixtures/identity.ts）——
+    // 门禁存在但不会把任何角色挡在门外。
+    meta: { title: '对话', permission: PERM.conversationView }
   }
 ] satisfies RouteRecordRaw[]
 

@@ -59,6 +59,12 @@ export interface Assistant {
   ownerName?: string
   visibility?: ResourceVisibility
   grants?: Grant[]
+  /** 分类/标签（市场筛选用）。可选 —— 老数据可以没有 */
+  tags?: string[]
+  /** 创建时间（市场「最新」排序用）。可选 */
+  createdAt?: string
+  /** 当前用户是否已收藏。收藏按用户存，故在响应装饰里下发 */
+  favorited?: boolean
 }
 
 /**
@@ -88,6 +94,12 @@ export interface AssistantQuery extends PageQuery {
   mine?: boolean
   /** 按来源分段筛选；不传为全部 */
   origin?: AssistantOrigin
+  /** 排序：人气（调用次数）/ 最新（创建时间）/ 名称。不传 = 服务端默认序 */
+  sort?: 'popular' | 'latest' | 'name'
+  /** 只看已收藏 */
+  favorite?: boolean
+  /** 按标签筛选 */
+  tag?: string
 }
 
 /**
@@ -248,6 +260,20 @@ export const setAssistantGrants = (id: string, grants: Grant[]) =>
     path: { id },
     body: { grants }
   })
+
+/* ── 收藏（市场） ── */
+
+/** 收藏。幂等：重复收藏不报错 */
+export const favoriteAssistant = (id: string) =>
+  request<Assistant>({ method: 'POST', url: '/assistants/:id/favorite', path: { id } })
+
+/** 取消收藏。幂等 */
+export const unfavoriteAssistant = (id: string) =>
+  request<Assistant>({ method: 'DELETE', url: '/assistants/:id/favorite', path: { id } })
+
+/** 取全部标签（市场筛选用）。静态段路由，排在 :id 之前 */
+export const listAssistantTags = () =>
+  request<string[]>({ method: 'GET', url: '/assistants/tags' })
 
 /* ── 访问凭证 ── */
 

@@ -12,6 +12,10 @@ export const permissions: PermissionItem[] = [
   { code: PERM.assistantView, label: '查看应用', module: '应用' },
   { code: PERM.assistantEdit, label: '配置应用', module: '应用' },
   { code: PERM.assistantPublish, label: '发布应用', module: '应用' },
+  { code: PERM.conversationView, label: '使用对话', module: '对话' },
+  { code: PERM.conversationShare, label: '分享自己的对话', module: '对话' },
+  // 现阶段无前端消费方：没有任何页面/接口用它做门禁，先定下点位便于后端对齐
+  { code: PERM.conversationManage, label: '管理他人会话', module: '对话' },
   { code: PERM.modelManage, label: '模型管理', module: '模型' },
   { code: PERM.dashboardView, label: '查看运营看板', module: '运营' },
   { code: PERM.feedbackHandle, label: '处理反馈', module: '运营' },
@@ -37,6 +41,8 @@ export const roles: Role[] = [
       PERM.segmentEdit,
       PERM.hitTest,
       PERM.assistantView,
+      PERM.conversationView,
+      PERM.conversationShare,
       PERM.dashboardView,
       PERM.feedbackHandle
     ]
@@ -53,6 +59,8 @@ export const roles: Role[] = [
       PERM.assistantView,
       PERM.assistantEdit,
       PERM.assistantPublish,
+      PERM.conversationView,
+      PERM.conversationShare,
       PERM.dashboardView
     ]
   },
@@ -63,7 +71,12 @@ export const roles: Role[] = [
     memberCount: 68,
     // 只看得见「被共享给自己的」+ 公开的（07 §4.2 知识库/应用两行）
     dataScope: 'shared',
-    permissions: [PERM.knowledgeView, PERM.assistantView]
+    permissions: [
+      PERM.knowledgeView,
+      PERM.assistantView,
+      PERM.conversationView,
+      PERM.conversationShare
+    ]
   }
 ]
 

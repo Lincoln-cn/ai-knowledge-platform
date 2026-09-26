@@ -183,7 +183,7 @@ const props = defineProps<{
   botIcon?: string
   publicMode?: boolean
   activeRefIndex?: number | null
-  /** 分享入口显隐（权限点：assistant:edit） */
+  /** 分享入口显隐（权限点：conversation:share） */
   canShare?: boolean
   /**
    * 还有更早的消息可加载 / 正在加载。

@@ -24,6 +24,22 @@ import { PERM } from '@/constants/permissions'
 import { currentSubjects, requireVisible, selfId, visiblePredicate } from '../policy'
 
 /**
+ * 收藏是**按用户**的会话态。mock 存内存 —— 刷新即重置，与真实后端的持久化不同。
+ * 键是 userId，值是收藏的 appId 集合。
+ */
+const favoritesByUser = new Map<string, Set<string>>()
+
+const favSet = (token: string): Set<string> => {
+  const uid = selfId(currentSubjects(token)) ?? token
+  let s = favoritesByUser.get(uid)
+  if (!s) {
+    s = new Set()
+    favoritesByUser.set(uid, s)
+  }
+  return s
+}
+
+/**
  * 单条取数与**写操作前置**共用同一个判定（07 §3.3 硬规矩 1）。
  * 看不见一律 404（硬规矩 3），不返回 403 —— 403 等于告诉对方"这个 id 存在"。
  */
@@ -48,6 +64,12 @@ const withOwnerName = (app: Assistant): Assistant => {
   const name = users.find((u) => u.id === app.ownerId)?.displayName
   return name ? { ...app, ownerName: name } : app
 }
+
+/** 响应装饰：再补 `favorited`（当前用户是否已收藏） */
+const withUserMeta = (app: Assistant, token: string): Assistant => ({
+  ...withOwnerName(app),
+  favorited: favSet(token).has(app.id)
+})
 
 /**
  * 发布前校验（AS-I2~I5）。任一项不通过则不允许发布。
@@ -186,6 +208,13 @@ export const assistantRoutes: MockRoute[] = [
           ? (query.origin as AssistantOrigin)
           : null
       const me = selfId(subjects)
+      // 市场三件套：排序 / 标签 / 只看收藏
+      const sort =
+        query.sort === 'popular' || query.sort === 'latest' || query.sort === 'name'
+          ? (query.sort as 'popular' | 'latest' | 'name')
+          : null
+      const tag = typeof query.tag === 'string' && query.tag ? query.tag : null
+      const favoriteOnly = query.favorite === true || query.favorite === 'true'
 
       let list = assistants
         // 先在数据层过滤再分页：total 必须是"我看得见的条数"
@@ -205,8 +234,23 @@ export const assistantRoutes: MockRoute[] = [
       } else if (origin === 'shared') {
         list = list.filter((a) => !a.builtin && a.ownerId !== me)
       }
+      if (tag) {
+        list = list.filter((a) => (a.tags ?? []).includes(tag))
+      }
+      if (favoriteOnly) {
+        const favs = favSet(token)
+        list = list.filter((a) => favs.has(a.id))
+      }
+      // 排序在过滤后、分页前
+      if (sort === 'popular') {
+        list = [...list].sort((a, b) => b.callCount - a.callCount)
+      } else if (sort === 'latest') {
+        list = [...list].sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')))
+      } else if (sort === 'name') {
+        list = [...list].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+      }
       const page = paginate(list, query)
-      return { ...page, list: page.list.map(withOwnerName) }
+      return { ...page, list: page.list.map((a) => withUserMeta(a, token)) }
     }
   ],
 
@@ -359,10 +403,23 @@ export const assistantRoutes: MockRoute[] = [
     }
   ],
 
+  // 字面量路径必须排在 :id 参数路由之前（与 /assistants/import 同理）
+  [
+    'GET',
+    '/assistants/tags',
+    ({ token }) => {
+      const subjects = currentSubjects(token)
+      const visible = assistants.filter(visiblePredicate(subjects, PERM.assistantView, {}))
+      const set = new Set<string>()
+      for (const a of visible) for (const t of a.tags ?? []) set.add(t)
+      return [...set].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    }
+  ],
+
   [
     'GET',
     '/assistants/:id',
-    ({ path, token }) => withOwnerName(findAssistant(path.id, token))
+    ({ path, token }) => withUserMeta(findAssistant(path.id, token), token)
   ],
 
   [
@@ -524,6 +581,28 @@ export const assistantRoutes: MockRoute[] = [
       }
       app.grants = grants.map((g) => ({ subject: { ...g.subject }, actions: [...g.actions] }))
       return withOwnerName(app)
+    }
+  ],
+
+  /* ── 收藏（市场）。幂等：重复收藏/取消不报错 ── */
+
+  [
+    'POST',
+    '/assistants/:id/favorite',
+    ({ path, token }) => {
+      const app = findAssistant(path.id, token)
+      favSet(token).add(app.id)
+      return withUserMeta(app, token)
+    }
+  ],
+
+  [
+    'DELETE',
+    '/assistants/:id/favorite',
+    ({ path, token }) => {
+      const app = findAssistant(path.id, token)
+      favSet(token).delete(app.id)
+      return withUserMeta(app, token)
     }
   ],
 

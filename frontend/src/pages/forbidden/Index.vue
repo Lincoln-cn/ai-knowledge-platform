@@ -19,7 +19,7 @@
             size="small"
             @click="$router.push(item.path)"
           >
-            {{ navLabel(item, session.dataScope) }}
+            {{ item.label }}
           </el-button>
         </div>
       </div>
@@ -33,7 +33,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { canReach } from '@/lib/reach'
-import { navGroups, navLabel } from '@/router/routes'
+import { navGroups } from '@/router/routes'
 import { useSessionStore } from '@/stores/session'
 
 const route = useRoute()

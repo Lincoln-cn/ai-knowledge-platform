@@ -46,7 +46,7 @@
               @keydown="onMenuKeydown($event, itemIndex)"
             >
               <el-icon aria-hidden="true"><component :is="item.icon" /></el-icon>
-              <span class="menu-label">{{ navLabel(item, session.dataScope) }}</span>
+              <span class="menu-label">{{ item.label }}</span>
               <span v-if="activePath === item.path" class="menu-flag">当前</span>
             </router-link>
           </div>
@@ -108,7 +108,7 @@ import CommandPalette from '@/components/CommandPalette.vue'
 import AccountDialog from './AccountDialog.vue'
 import { APP_TITLE } from '@/config/env'
 import { canReach } from '@/lib/reach'
-import { navGroups, navLabel } from '@/router/routes'
+import { navGroups } from '@/router/routes'
 import { useSessionStore } from '@/stores/session'
 
 const route = useRoute()

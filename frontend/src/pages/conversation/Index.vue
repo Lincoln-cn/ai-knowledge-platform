@@ -156,8 +156,8 @@ const shareMessageId = ref<string | null>(null)
 const msgListRef = ref<InstanceType<typeof MessageList>>()
 const composerRef = ref<InstanceType<typeof Composer>>()
 
-/** 分享入口按权限点显隐（03 权限点词汇：assistant:edit） */
-const canShare = computed(() => session.can(PERM.assistantEdit))
+/** 分享入口按权限点显隐（03 权限点词汇：conversation:share） */
+const canShare = computed(() => session.can(PERM.conversationShare))
 const shareConversationId = computed(() => activeConversation.value?.id ?? null)
 
 /* ── 顶栏 ── */

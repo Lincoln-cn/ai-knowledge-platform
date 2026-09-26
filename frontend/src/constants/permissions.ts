@@ -17,6 +17,10 @@ export const PERM = {
   assistantEdit: 'assistant:edit',
   assistantPublish: 'assistant:publish',
 
+  conversationView: 'conversation:view',
+  conversationShare: 'conversation:share',
+  conversationManage: 'conversation:manage',
+
   modelManage: 'model:manage',
 
   dashboardView: 'dashboard:view',

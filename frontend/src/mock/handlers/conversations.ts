@@ -44,17 +44,16 @@ import {
  * 而 fixtures 只是种子 —— 所以刷新页面后本轮问答仍在（#4）。
  *
  * 数据权限（07 §4.2「会话：只有自己的」）：
- *  - 会话自己没有权限点（13 个权限点全是操作，没有 `conversation:*`），所以读会话按
- *    `assistant:view` 问 —— 会话挂在应用上（§4.3），共享/公开分支用的就是应用那一套词
+ *  - 读会话按 `conversation:view` 问（会话族权限点；此前借用 `assistant:view`）
  *  - 会话夹具全部 `private` ⇒ 实际由「归属 + 数据范围」两项决定：全平台档看得见全部，
  *    其余角色只看得见自己那几条
  */
 
 /**
- * 会话在权限点里没有自己的点，借用应用的那一个：会话挂在应用上（07 §4.3）。
+ * 读会话动作用会话族自己的权限点。
  * 只用于让 grants / public 两个分支有同一套词汇可用；夹具里会话全部 private。
  */
-const CONVERSATION_ACTION = PERM.assistantView
+const CONVERSATION_ACTION = PERM.conversationView
 
 /** 单条取数与**写操作前置**共用同一个判定（07 §3.3 硬规矩 1）；看不见一律 404（硬规矩 3） */
 const findConv = (id: string, token: string, action: string = CONVERSATION_ACTION): StoredConversation =>

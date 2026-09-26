@@ -1,15 +1,13 @@
 <template>
   <div class="page">
     <PageHeader
-      :title="consumer ? '应用广场' : '应用管理'"
-      :desc="consumer
-        ? '这些应用可以直接用来对话。挑一个开始，引用与反馈都在对话页里'
-        : '应用把模型、知识库与提示词组装成可发布的对话服务。简单应用看模型 / 知识库数，编排应用看节点数 / 版本；另有发布态 / 用量 / 满意度'"
+      title="应用管理"
+      desc="应用把模型、知识库与提示词组装成可发布的对话服务。简单应用看模型 / 知识库数，编排应用看节点数 / 版本；另有发布态 / 用量 / 满意度'"
     >
       <template #actions>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchList">刷新</el-button>
         <el-button
-          v-if="!consumer && can(PERM.assistantEdit)"
+          v-if="can(PERM.assistantEdit)"
           size="small"
           type="primary"
           @click="openCreate"
@@ -17,11 +15,7 @@
       </template>
     </PageHeader>
 
-    <!--
-      操作说明是**建设语汇**的密集地（简单/编排、配置/画布/发布/校验/内置不可改）——
-      对消费者它整块不出现（07 §五 判据 1），而不是留一段读不懂的说明。
-    -->
-    <div v-if="!consumer" class="notice info">
+    <div class="notice info">
       操作说明：应用分<b>简单</b>（提示词约束）与<b>编排</b>（画布式流程）两档，<b>创建后类型不可改</b>。
       简单应用点<b>配置</b>打开左表单 + 右调试；编排应用点<b>编排</b>进入流程画布（对编排应用而言配置就是画布，所以只有一个入口）；
       <b>概览</b>看用量、公开凭证、API Key 与导入导出；<b>演示</b>进入对话试效果；<b>发布</b>先跑发布前校验。
@@ -49,9 +43,7 @@
         @keyup.enter="onFilterChange"
         @clear="onFilterChange"
       />
-      <!-- 状态（草稿/已发布）与类型（简单/编排）是建设面的分类，消费者不筛这两个 -->
       <el-select
-        v-if="!consumer"
         v-model="query.published"
         size="small"
         placeholder="全部状态"
@@ -63,7 +55,6 @@
         <el-option label="草稿" value="false" />
       </el-select>
       <el-select
-        v-if="!consumer"
         v-model="query.type"
         size="small"
         placeholder="全部类型"
@@ -93,7 +84,7 @@
         :key="a.id"
         shadow="never"
         class="app-card"
-        :class="{ plaza: consumer, focused: highlightId === a.id }"
+        :class="{ focused: highlightId === a.id }"
       >
         <div class="ac-head">
           <span class="ac-icon">{{ a.icon }}</span>
@@ -101,12 +92,11 @@
             <div class="ac-name-row">
               <span class="h3 ac-name">{{ a.name }}</span>
               <span class="ac-tags">
-                <el-tag v-if="!consumer" size="small" effect="plain" class="ac-type-tag">
+                <el-tag size="small" effect="plain" class="ac-type-tag">
                   {{ a.type === 'workflow' ? '编排' : '简单' }}
                 </el-tag>
                 <!--
                   来源徽标三态（§六 2 / #8）：官方 / 由 X 分享 / 我的。
-                  对消费者同样显示 —— 广场要能回答「这应用是谁给的」。
                 -->
                 <el-tag v-if="originOf(a) === 'official'" size="small" effect="plain" type="info">官方</el-tag>
                 <el-tag v-else-if="originOf(a) === 'mine'" size="small" effect="plain" type="success">我的</el-tag>
@@ -117,17 +107,12 @@
             </div>
             <div class="micro muted ellipsis-2 ac-desc" :title="a.description">{{ a.description }}</div>
           </div>
-          <el-tag v-if="!consumer" size="small" effect="plain" :type="a.published ? 'success' : 'info'">
+          <el-tag size="small" effect="plain" :type="a.published ? 'success' : 'info'">
             {{ a.published ? '已发布' : '草稿' }}
           </el-tag>
         </div>
 
-        <!--
-          「模型 / 知识库数」是配置面，「用量 / 满意度」是运营口径 ——
-          对消费者两者都不是他要看的东西（他要的是「哪个能用」）。
-          所以消费者形态下整块读数不渲染，卡片只剩身份与一个动作。
-        -->
-        <dl v-if="!consumer" class="ac-facts">
+        <dl class="ac-facts">
           <!--
             编排应用**没有「模型」这一项**（模型在各 AI 节点里，一条流程可以多个），
             所以它的卡片数据与简单应用是两套：
@@ -183,7 +168,6 @@
               官方 / 他人分享 → 只能「开始对话」
               我的            → 配置（编排）/ 分享 / 概览 / 发布 / 删除
             内置应用即使归属我也是「官方」—— 配置项只读，分享由平台统一维护。
-            消费者形态下管理动作一律不出现，卡片只剩「开始对话」。
           -->
           <el-button
             v-if="showConfig(a)"
@@ -200,9 +184,9 @@
           <el-button
             link
             size="small"
-            :type="originOf(a) === 'mine' && !consumer ? undefined : 'primary'"
+            :type="originOf(a) === 'mine' ? undefined : 'primary'"
             @click="demo(a)"
-          >{{ originOf(a) === 'mine' && !consumer ? '演示' : '开始对话' }}</el-button>
+          >{{ originOf(a) === 'mine' ? '演示' : '开始对话' }}</el-button>
           <el-button
             v-if="showPublish(a)"
             link size="small"
@@ -224,7 +208,7 @@
         </div>
         <p class="micro muted">{{ emptyHint }}</p>
         <el-button
-          v-if="!consumer && can(PERM.assistantEdit)"
+          v-if="can(PERM.assistantEdit)"
           size="small" type="primary"
           @click="openCreate"
         >新建应用</el-button>
@@ -268,19 +252,6 @@ const router = useRouter()
 const route = useRoute()
 const session = useSessionStore()
 const can = (code: string) => session.can(code)
-
-/**
- * 消费者形态（07 §五）：数据范围 `shared` = 只用别人做好的，不建东西。
- *
- * 判据来自 `session.dataScope` **一处**，页面只据此换形态（标题/说明/动作集），
- * 不在这里另判权限点 —— 权限点回答「能不能做这个动作」，范围回答「这个页面对他是什么」。
- * 两者会同时为真：消费者本来也没有 `assistant:edit`，但只靠权限点的话，
- * 页面仍然是「应用管理」那张建设面，只是按钮少几个 —— 那正是本册要治的病。
- *
- * ★ 这只是 UX。真正的数据边界在后端按 `dataScope` 过滤（07 §3.3），
- * 前端少渲染一个按钮不等于后端会拒绝直连接口。
- */
-const consumer = computed(() => session.dataScope === 'shared')
 
 const list = ref<Assistant[]>([])
 const total = ref(0)
@@ -338,23 +309,21 @@ const originOf = (a: Assistant): AssistantOrigin => {
 
 // 主操作按来源分化（§六 3）：官方与他人分享只有「开始对话」，我的才有配置/分享/概览
 const showConfig = (a: Assistant) =>
-  !consumer.value && can(PERM.assistantEdit) && originOf(a) === 'mine'
+  can(PERM.assistantEdit) && originOf(a) === 'mine'
 const showShare = (a: Assistant) =>
-  !consumer.value && can(PERM.assistantEdit) && originOf(a) === 'mine'
-const showOverview = (a: Assistant) => !consumer.value && originOf(a) === 'mine'
+  can(PERM.assistantEdit) && originOf(a) === 'mine'
+const showOverview = (a: Assistant) => originOf(a) === 'mine'
 const showPublish = (a: Assistant) =>
-  !consumer.value && can(PERM.assistantPublish) && originOf(a) === 'mine'
+  can(PERM.assistantPublish) && originOf(a) === 'mine'
 const showDelete = (a: Assistant) =>
-  !consumer.value && can(PERM.assistantEdit) && originOf(a) === 'mine'
+  can(PERM.assistantEdit) && originOf(a) === 'mine'
 
 const emptyTitle = computed(() => {
-  if (consumer.value) return '暂时没有可用的应用'
   if (hasFilter.value) return '当前筛选下没有应用'
   return '还没有创建任何应用'
 })
 
 const emptyHint = computed(() => {
-  if (consumer.value) return '已经发布的应用会出现在这里，可以拿它直接对话'
   if (hasFilter.value) return '换个关键词或清空筛选试试'
   return '创建第一个应用，开始组装对话服务'
 })
@@ -381,12 +350,9 @@ const fetchList = async () => {
   try {
     const result = await assistantsApi.listAssistants({
       keyword: query.keyword || undefined,
-      // 消费者形态默认只列已发布（§六 5）：共享的草稿不该进广场
-      published: consumer.value
-        ? true
-        : query.published === ''
-          ? undefined
-          : query.published === 'true',
+      published: query.published === ''
+        ? undefined
+        : query.published === 'true',
       type: query.type || undefined,
       origin: query.origin || undefined,
       page: query.page,
@@ -687,12 +653,6 @@ onMounted(async () => {
   margin-top: var(--space-sm);
   padding-top: var(--space-xs);
   border-top: 1px solid var(--color-rule-2);
-}
-
-/* 应用广场的卡片没有读数块（那才是建设者要的），得让**卡片头**把剩余高度吃掉 ——
-   否则同一行里描述长短不一会让「开始对话」跳来跳去。 */
-.app-card.plaza .ac-head {
-  flex: 1;
 }
 
 .empty {

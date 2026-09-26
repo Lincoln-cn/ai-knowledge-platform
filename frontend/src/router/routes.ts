@@ -43,14 +43,6 @@ export interface NavItem {
   path: string
   label: string
   icon: string
-  /**
-   * 同一路由对不同数据范围的**两种叫法**（07 §五）。
-   *
-   * `/assistants` 对全平台角色是「应用管理」（建设面），对消费者是「应用广场」
-   * （能用什么）—— 同一条路由、同一份数据，两种身份。所以叫法挂在导航项上，
-   * 由 `navLabel()` 统一解析，不在模板里各写一遍判断。
-   */
-  labelByScope?: Partial<Record<DataScope, string>>
 }
 
 export interface NavGroup {
@@ -64,12 +56,8 @@ export const navGroups: NavGroup[] = [
     items: [
       { path: '/conversation', label: '对话', icon: 'ChatDotRound' },
       { path: '/knowledge', label: '知识库', icon: 'Collection' },
-      {
-        path: '/assistants',
-        label: '应用管理',
-        icon: 'Grid',
-        labelByScope: { own: '应用广场', shared: '应用广场' }
-      },
+      { path: '/market', label: '应用市场', icon: 'Shop' },
+      { path: '/assistants', label: '应用管理', icon: 'Grid' },
       { path: '/assistants/prompts', label: '提示词', icon: 'EditPen' }
     ]
   },
@@ -86,16 +74,6 @@ export const navGroups: NavGroup[] = [
     items: [{ path: '/admin', label: '系统管理', icon: 'Setting' }]
   }
 ]
-
-/**
- * 取导航项在当前数据范围下的叫法 —— 顶栏与命令面板、403 页共用这一个函数。
- *
- * 放在这里而不是各调用点：同一项在三处渲染，各自写一遍 scope 判断
- * 早晚会漂移成「顶栏叫应用广场、命令面板叫应用管理」。
- */
-export function navLabel(item: NavItem, scope: DataScope): string {
-  return item.labelByScope?.[scope] ?? item.label
-}
 
 /**
  * 页面路由自动发现。

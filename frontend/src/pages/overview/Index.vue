@@ -180,7 +180,6 @@ import type { Conversation } from '@/api/conversations'
 import type { FeedbackItem, FeedbackStatus } from '@/api/feedback'
 import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/components/InstrumentCard.vue'
 import { canReach } from '@/lib/reach'
-import { navGroups, navLabel } from '@/router/routes'
 import { useSessionStore } from '@/stores/session'
 
 const router = useRouter()
@@ -191,12 +190,6 @@ const session = useSessionStore()
  * 本页对他是「能用什么 + 我该去哪」，不是「平台运营成什么样」。
  */
 const consumer = computed(() => session.dataScope === 'shared')
-
-/** 「应用广场 / 应用管理」两套叫法只有一处定义，见 `router/routes.ts` 的 `labelByScope` */
-const plazaLabel = computed(() => {
-  const item = navGroups.flatMap((g) => g.items).find((i) => i.path === '/assistants')
-  return item ? navLabel(item, session.dataScope) : '应用广场'
-})
 
 /** 首页固定看近 7 天 —— 需要别的区间去运营看板，那里才是「按区间深看」的地方。 */
 const rangeDays = 7
@@ -268,15 +261,11 @@ const buildEntries = [
  */
 const consumerEntries = [
   { path: '/conversation', label: '开始对话', desc: '选一个应用直接提问，答案带引用' },
-  { path: '/assistants', label: '应用广场', desc: '看看现在有哪些应用可以用' }
+  { path: '/market', label: '应用市场', desc: '看看现在有哪些应用可以用' }
 ]
 
 const entries = computed(() =>
-  (consumer.value ? consumerEntries : buildEntries).map((e) => ({
-    ...e,
-    // 应用广场这一项的叫法与顶栏**同一个来源**（`navLabel`），不在这里再硬编一遍
-    label: e.path === '/assistants' ? plazaLabel.value : e.label
-  })).filter((e) => canReach(router, e.path))
+  (consumer.value ? consumerEntries : buildEntries).filter((e) => canReach(router, e.path))
 )
 
 /**

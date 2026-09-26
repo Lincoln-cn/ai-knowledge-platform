@@ -36,7 +36,7 @@ const props = defineProps<{
   appId?: string | null
   publicMode?: boolean
   showKbLink?: boolean
-  /** 分享入口显隐由调用方按权限点决定（assistant:edit） */
+  /** 分享入口显隐由调用方按权限点决定（conversation:share） */
   showShare?: boolean
 }>()
 
