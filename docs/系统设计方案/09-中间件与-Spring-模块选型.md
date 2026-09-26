@@ -39,20 +39,25 @@
 | 7 | 对象存储 | **本地磁盘 + `FileStorePort`** | MinIO 起步就上 | 端口留好，换 S3/MinIO 零改动 |
 | 8 | 配置中心 | **Spring Boot 配置 + 环境变量** | Nacos / Apollo | 单体 + 容器，配置随镜像/环境变量走 |
 | 9 | 注册中心 | **不引** | Nacos / Eureka | 单体没有"服务发现"这件事 |
-| 10 | 限流 / 熔断 | **Resilience4j** | Sentinel | 模型服务是关键外部依赖，需要一个熔断器 |
+| 10 | 限流 / 熔断 | **分层**：上游的负载均衡/限流/熔断**交给网关**（JAiRouter），我们只留"**超时 + 一次重试**"（Resilience4j） | Sentinel | 两层熔断会互相干扰、故障时分不清是谁断的（§3.10） |
 | 11 | 调度 | **Spring `TaskScheduler`**（多实例加 ShedLock） | Quartz / XXL-Job | 调度需求很轻（重试、补偿、日聚合） |
 | 12 | 可观测 | **Actuator + Micrometer**（Prometheus / OTLP） | ELK 全家桶 | 指标与追踪先行；日志先结构化输出到 stdout |
-| 13 | 模型服务 | **Ollama（内网）+ 可换外部 API** | — | 由 Spring AI 抽象隔离 |
+| 13 | 模型服务 | **OpenAI 兼容网关（JAiRouter）** —— **不直连推理服务** | — | 官方的 `spring-ai-starter-model-openai` 把 `base-url` 指向网关即可，零自研（§3.13） |
 | 14 | 网关 / 静态托管 | **Nginx / Caddy** | Spring Cloud Gateway | 单体不需要网关；前端是静态产物 |
 | 15 | 会话状态 | **无状态 JWT** | Redis / Spring Session | 但**刷新令牌轮换要落 PG**（见 §三.15） |
 
 ### 最终部署形态（容器数）
 
 ```
-postgres(pgvector)  +  应用  +  模型服务
+postgres(pgvector)  +  应用  +  模型网关(JAiRouter)
 ```
 
 **3 个进程**（前身系统约 32 个容器 / 17 个微服务）。这不是"省"，是**每多一个组件都要有人会修它**。
+
+> **口径说明**（★ 因为 §3.13 改成了经网关接入）：这 3 个是**平台自己的进程**。
+> **上游推理服务（Ollama / vLLM / 外部 API）由网关对接，不算平台的进程** ——
+> 它们可能是内网已有实例、或网关自带的 adapter 指向的对象。
+> 平台**只认一个 OpenAI 兼容入口**，这正是"不直连推理服务"的收益：**上游换实现，平台零改动**。
 
 ---
 
@@ -212,12 +217,46 @@ postgres(pgvector)  +  应用  +  模型服务
 **理由**：否则网关的 RBAC 会成为**第二套权限源**，而我们的数据范围（`ownerId`/`dataScope`）是**平台概念**，
 网关不可能知道。两层权限各管各的，边界清楚。
 
-#### 3.13.4 两个待确认（不阻塞选型，但影响契约）
+#### 3.13.4 `POST /models/:id/load` 的语义：**已定**（★ 本轮拍板）
 
-| # | 事项 | 影响 |
-|---|---|---|
-| 1 | `POST /models/:id/load` 的语义 | 它原本是 **Ollama 的"加载/卸载模型"**；经网关后，"加载"应改成**读网关的状态**，还是保留为我们自己的启用位？**需要定**（涉及 `/models` 域 3 个端点） |
-| 2 | 网关的 `/v1/embeddings` 是否覆盖我们的全部向量模型 | 若某个向量模型只能直连，`ingestion` 需要一个"直连例外"口子——**建议不留**，统一走网关 |
+**它是"平台启用位 + 上游可用性校验"，不是"把权重载入显存"。**
+
+| 为什么不能按字面理解 | 说明 |
+|---|---|
+| "加载"是**实例级**动作 | Ollama 的"加载"= 把权重读进显存；而经网关后上游可能是 **vLLM / Xinference / GPUStack**（进程启动即常驻，**没有"加载"这个概念**）或**外部 API**（更没）⇒ 语义**跨上游不统一** |
+| 但前端契约把四态冻结了 | `ModelStatus = 未加载 \| 加载中 \| 已加载 \| 加载失败`（`api/models.ts:11`），页面有完整的"点加载 → 加载中 → 自动轮询 → 已加载 / 加载失败 + 重新加载"体验（`pages/models/Index.vue`，`smoke_test.py:265-270` 正在断言它） |
+
+**⇒ 四态保留，语义重映射到平台侧**（前端**一行不改**）：
+
+| 契约态 | 平台含义 |
+|---|---|
+| `未加载` | **平台未启用**该模型资产 |
+| `加载中` | 正在做**启用前的可用性校验**（问网关：该基础模型有没有可用实例） |
+| `已加载` | **已启用，且上游清单里有它** |
+| `加载失败` | **网关不可达**，或上游清单里没有这个基础模型 |
+
+**职责边界**：平台**不负责**"把它载入显存"（那是网关与上游运维的事，§3.13.2 已划）；
+平台只声明**意愿**（启用位）+ **校验可用性**。这样对任何上游适配器都成立。
+
+##### ⚠️ 连带审出的一个真缺陷：**"已加载"的模型删不掉，而且没有卸载入口**
+
+- `DELETE /models/:id` 在 `已加载` 时被拒，提示"**请先卸载**或切换到其它模型后再删除"（`mock/handlers/models.ts:161`）
+- 但契约里**只有 `load`、没有 `unload`**（`api/models.ts` 的 8 个端点），页面上**也只有"加载 / 重新加载"**
+  ⇒ **建模型 → 加载 → 再也删不掉**，而提示语指向一个**不存在的入口**
+
+**修法**（语义定清后自然成立）：删除的拒绝条件应是 **"被应用 / 知识库引用"**（这才是真的引用完整性约束），
+**而不是"已加载"**。"停用"只是一次 `UPDATE`，删除时顺带清掉启用位即可。
+**前端侧同步改两处**：`mock/handlers/models.ts` 的拒绝条件 + `models/Index.vue` 的失败文案
+（现文案"检查模型服务是否可用、**显存**是否足够"在经网关后应是"检查**模型网关**是否可用、该基础模型**是否在上游清单中**"）。
+
+> **顺带记一个可接受的限制（不算缺陷）**：页面只在存在"加载中"时才轮询，
+> 所以"已加载"**不会自己变成"加载失败"**（上游实例被驱逐时）。
+> 状态实际是**打开页面那一刻的快照**，刷新才更新 —— 记入已知。
+
+#### 3.13.5 网关的 `/v1/embeddings` 覆盖度
+
+**已定**：**不留"直连例外"** —— 向量化与对话一样，统一走网关（§3.13 已确认它有 `POST /v1/embeddings`）。
+若某个向量模型只能直连，那应该先在网关里加一个 adapter，而不是在平台里开第二条链路。
 
 ### 3.14 网关 / 静态托管
 
@@ -235,34 +274,39 @@ postgres(pgvector)  +  应用  +  模型服务
 
 ## 四、Spring 模块选型
 
-### 4.0 总表
+### 4.0 总表（★ 坐标已按 **Spring Boot 4** 版本线核实，2026-09）
 
-| 模块 / 库 | 用? | 替掉了什么自研 |
-|---|---|---|
-| `spring-boot-starter-web`（**MVC**） | ✅ | —（ADR-01：MVC + 虚拟线程，**不用 WebFlux**） |
-| `spring-modulith-starter-jpa` | ✅ | 模块边界校验、**出站事件表**、架构文档生成 |
-| `spring-boot-starter-security` + `oauth2-resource-server` + `oauth2-jose` | ✅ | JWT 验签/解析、过滤链、密码编码（见 `08 §4.2`） |
-| `spring-boot-starter-data-jpa` | ✅ | 聚合读写、`AuditorAware` 审计、`Specification` 数据范围过滤 |
-| `spring-ai-starter-model-ollama`（+ 可选 openai 等） | ✅ | 模型调用、流式、**结构化输出** |
-| **`spring-ai-starter-vector-store-pgvector`** | ✅ **★改向** | **向量表/索引/相似度查询/元数据过滤**（原本打算手写 SQL） |
-| `spring-boot-starter-validation` | ✅ | 请求校验（Jakarta Validation） |
-| `spring-boot-starter-actuator` + `micrometer-registry-prometheus` + `micrometer-tracing-bridge-otel` | ✅ | 指标、追踪、健康探针 |
-| `spring-boot-starter-cache` + `caffeine` | ✅ | 进程内缓存，换 Redis 时业务零改动 |
-| **`spring-retry`** | ✅ | `@Retryable` 重试（模型调用、解析失败） |
-| **`resilience4j-spring-boot3`**（或 Spring Cloud Circuit Breaker 抽象） | ✅ | 熔断/限流/舱壁 |
-| `flyway-core` | ✅ | 数据库迁移（`01`/`02` 已定） |
-| `spring-boot-testcontainers` + `testcontainers-postgresql`（`@ServiceConnection`） | ✅ | **集成测试用真 PG**，不 mock 数据库 |
-| `spring-boot-docker-compose` | ✅ | 本地开发自动起 PG（dev services） |
-| `spring-restdocs` | ✅ | **从测试生成接口文档** —— 与前端契约对账、防漂移 |
-| `shedlock-spring` | ⏳ 多实例时 | 定时任务"同一时刻只跑一个实例" |
-| `spring-boot-starter-webflux` | ❌ | 已由 ADR-01 否掉 |
+> **版本线已定**（用户拍板"就用最新的"）：**Spring Boot 4.1.x + Spring Framework 7.x + Spring Security 7.x**。
+> ★ 本表坐标是**对着 Boot 4 核实过的** —— Boot 4 做了一次 **starter 大改名**，
+> **照 Boot 3 的坐标写会编译不过或缺自动配置**（改名列见最后一列）。
+
+| 模块 / 库（Boot 4 坐标） | 用? | 替掉了什么自研 | ★ Boot 4 改名 / 注意 |
+|---|---|---|---|
+| `spring-boot-starter-webmvc`（**MVC**） | ✅ | —（ADR-01：MVC + 虚拟线程，**不用 WebFlux**） | ★ 原 `spring-boot-starter-web` 已改名（旧名弃用） |
+| `spring-modulith-starter-jpa`（**2.1.x**） | ✅ | 模块边界校验、**出站事件表**、架构文档生成 | ★ 2.1.1 官方支持 Boot 4（`events-jpa` 依赖 `boot-hibernate:4.1.1`） |
+| `spring-boot-starter-security` + **`spring-boot-starter-security-oauth2-resource-server`** + `oauth2-jose` | ✅ | JWT 验签/解析、过滤链、密码编码（见 `08 §4.2`） | ★ 原 `spring-boot-starter-oauth2-resource-server`（无 `security-` 前缀）已改名 |
+| `spring-boot-starter-data-jpa` | ✅ | 聚合读写、`AuditorAware` 审计、`Specification` 数据范围过滤 | ⚠️ 管理的 Hibernate 是 **7.4.5**（**不是 8**），JPA 3.2 |
+| `spring-ai-starter-model-openai`（经网关，§3.13） | ✅ | 模型调用、流式、**结构化输出** | ★ 坐标已转正（**2.0.1**，不再需要 milestone 仓） |
+| **`spring-ai-starter-vector-store-pgvector`** | ✅ **★改向** | **向量表/索引/相似度查询/元数据过滤**（原本打算手写 SQL） | ⚠️ **`initialize-schema` 默认已改为 `false`** ⇒ 必须显式打开（§5.1） |
+| `spring-boot-starter-validation` | ✅ | 请求校验（Jakarta Validation） | 无变化 |
+| `spring-boot-starter-actuator` + `micrometer-registry-prometheus` + **`spring-boot-starter-opentelemetry`** | ✅ | 指标、追踪、健康探针 | ★ OTLP 改走新 starter；`management.tracing.enabled` → **`management.tracing.export.enabled`** |
+| `spring-boot-starter-cache` + `caffeine` | ✅ | 进程内缓存，换 Redis 时业务零改动 | 无变化 |
+| **Framework 7 原生 `@Retryable` / `@EnableResilientMethods`** | ✅ | `@Retryable` 重试（模型调用、解析失败） | ★ **`spring-retry` 不再被 Boot 管版本** ⇒ 优先用 Framework 7 内置的；若仍用 `spring-retry` 则自钉版本 |
+| **`resilience4j-spring-boot4`**（**2.4.x**） | ✅ | 熔断/限流/舱壁 | ★ artifactId 由 `resilience4j-spring-boot3` 改为 **`-boot4`** |
+| **`spring-boot-starter-flyway`** + `flyway-database-postgresql` | ✅ | 数据库迁移（`01`/`02` 已定） | ★ **只写 `flyway-core` 会丢自动配置**，必须用 starter |
+| `spring-boot-testcontainers` + `testcontainers-postgresql`（`@ServiceConnection`） | ✅ | **集成测试用真 PG**，不 mock 数据库 | ★ Testcontainers **2.x** |
+| `spring-boot-docker-compose` | ✅ | 本地开发自动起 PG（dev services） | 无变化 |
+| **`spring-boot-starter-restdocs`**（4.0.x） | ✅ | **从测试生成接口文档** —— 与前端契约对账、防漂移 | ★ 改用 starter（Boot ≥ 4.0.4） |
+| **`spring-boot-starter-security-test`**（测试期） | ✅ | `@WithMockUser` 等测试支持 | ★ 测试侧也已按 `security-` 前缀改名 |
+| `shedlock-spring`（**7.x**） | ⏳ 多实例时 | 定时任务"同一时刻只跑一个实例" | ★ 7.x 的兼容矩阵含 Boot 4 |
+| `spring-boot-starter-webflux` | ❌ | 已由 ADR-01 否掉 | ⚠️ 但 Spring AI 的**流式客户端**会把 `spring-webflux`（**库**，非 starter）带进依赖树 —— **这不等于选了 WebFlux 栈**：只要 `spring-boot-starter-webmvc` 在，Boot 仍以 Servlet 栈启动 |
 | Spring Cloud（Gateway / Config / Registry / OpenFeign） | ❌ | 单体不需要 |
 | `spring-boot-starter-batch` | ❌ | 见 §4.2 |
 | `spring-statemachine` | ❌ | 见 §4.2 |
 | `spring-integration` | ❌ | 不引 MQ 就不需要它 |
 | `spring-session` / Redis | ❌ | 无状态 JWT |
 | `spring-data-envers` | ❌ | 版本历史已有显式版本聚合 |
-| Spring Authorization Server | ❌（暂） | 见 §4.3 |
+| Spring Authorization Server | ✅ **能力已并入 Security 7 本体** | 见 §4.3 —— 只需装配，**不用引独立项目** |
 
 ### 4.1 用（以及它替掉了什么）
 
@@ -302,11 +346,59 @@ postgres(pgvector)  +  应用  +  模型服务
 
 | 模块 | 引入时机 | 触发信号 |
 |---|---|---|
-| **Spring Authorization Server（独立项目）** | 若要**把 API 开放给第三方**（不只是自家前端） | ★ **已归档，但不是废弃**：官方公告是它**迁入 Spring Security 7.0**，后续新特性在 Security 里加。⇒ **不要引这个独立项目**；真到了要开放的那天，用 **Spring Security 7 的内置能力**（意味着要上 Boot 4 版本线，见 §八之 7）。在那之前，`08 §4.2.3` 的"自写薄层做刷新令牌轮换"仍然成立 |
+| **授权服务器能力**（原独立项目 `spring-authorization-server`） | 若要**把 API 开放给第三方**（不只是自家前端） | ★ **已并入 Spring Security 7 本体** —— 我们既然已定 Boot 4 / Security 7 版本线，**这项能力就在依赖里**，不必引独立项目、也不必单独管版本。⚠️ 区分清楚：**JWT 资源服务器**（我们已用，`08 §4.2`）与**授权服务器**是两件事，后者只在"要给第三方发令牌"时才装配。在那之前，`08 §4.2.3` 的"自写薄层做刷新令牌轮换"仍然成立 |
 | `shedlock-spring` | 应用多实例部署时 | 副本数 > 1 且用了定时任务 |
 | Spring Cloud Config / K8s ConfigMap | 要"不重启改配置"时 | 配置变更频率上来了 |
 | Micrometer → 完整可观测栈 | 单机排障不够用时 | 需要跨服务追踪 / 日志检索 |
 | 独立向量库（Milvus/Qdrant） | 单表向量到千万级，或索引要跨库共享 | `retrieval` 的 P95 超出预算 |
+
+### 4.4 ★ Boot 4 的破坏性变更里，**影响我们这几处用法**的（本轮查证）
+
+> 版本线已定 Boot 4（§8.1）。下面这些**不是可选项** —— 照 Boot 3 的写法会**编译不过或丢自动配置**。
+
+| 我们的用法 | Boot 4 / Framework 7 / Security 7 的变化 | 要怎么做 |
+|---|---|---|
+| **web 层** | `spring-boot-starter-web` → **`spring-boot-starter-webmvc`** | 换坐标（旧名弃用）。★ 由此可推断：Boot 4 已把 web 栈**按 MVC / WebFlux 分开命名** —— 与 ADR-01 的立场一致（见 §4.5） |
+| **安全过滤链** | `and()` **已删除**（只剩 lambda DSL）· `authorizeRequests` 删除 → `authorizeHttpRequests` · `requestMatchers` 底层换成 **`PathPatternRequestMatcher`**（`MvcRequestMatcher` / `AntPathRequestMatcher` 已移除）· `AuthorizationManager#check` → **`#authorize`** · starter 改名 **`spring-boot-starter-security-oauth2-resource-server`** · 序列化走 **Jackson 3**（`tools.jackson`） | `08 §4.2` 的责任链示例按这几条重写（**是 API 变化，不是设计变化**） |
+| **方法级授权** | `@EnableMethodSecurity` **默认仍启用** `@PreAuthorize` / `@PostAuthorize` / `@PreFilter` / `@PostFilter`（JSR-250 仍需显式开） | `08 §4.3` 的用法**不变** ✅ |
+| **虚拟线程** | **`spring.threads.virtual.enabled` 属性名未变** | `03` 的用法**不变** ✅ |
+| **JPA / Hibernate** | 管理的 Hibernate 是 **7.4.5**（**不是 8**），JPA 3.2；`EntityManagerFactory` / `EntityManager` 可直接注入 | 聚合映射不受影响；注意 JPA 3.2 的少量行为差异 |
+| **观测** | OTLP 改走 **`spring-boot-starter-opentelemetry`**；`management.tracing.enabled` → **`management.tracing.export.enabled`** | 配置项改名 |
+| **Flyway** | 必须用 **`spring-boot-starter-flyway`**（只写 `flyway-core` 会**丢自动配置**） | 换坐标 |
+| **REST Docs** | 改用 **`spring-boot-starter-restdocs`** | 换坐标 |
+| **重试** | **`spring-retry` 不再被 Boot 管版本**；Framework 7 内置 `@Retryable` / `@EnableResilientMethods` | 优先用 Framework 7 原生的（少一个第三方库） |
+| **SpEL** | 默认**最多求值 10000 步**（自带一道熔断） | 与 §5.3.1 的安全边界叠加使用 |
+| **`RestTemplate`** | 已弃用 | 我们本来就用 `RestClient` ✅ |
+| **Spring AI / PgVector** | **`initialize-schema` 默认改为 `false`**（原先默认建表） | **必须显式**开：`spring.ai.vectorstore.pgvector.initialize-schema=true`，否则"检索为什么一条都搜不到"会查很久 |
+| **Undertow** | Boot 4 **已删除 Undertow**（与 Servlet 6.1 不兼容） | 我们用 Tomcat 11 ✅（**别照旧文档配 Undertow**） |
+| **Jackson** | Jackson 3 优先（2 已弃用） | 自定义序列化器要迁到 `tools.jackson` 包 |
+
+### 4.5 ★ web 栈复核：**MVC，不是 WebFlux**（ADR-01 结论不变，但理由要写全）
+
+**答案：MVC。** 决定性理由**不是流式**，而是**持久化**：
+
+| 判据 | MVC（选它） | WebFlux（否） |
+|---|---|---|
+| **持久化** ★决定性 | Spring Data JPA（阻塞 JDBC）+ `Specification` 数据范围过滤 + Modulith `starter-jpa` 事务事件 | 要换 **R2DBC** ⇒ **等于放弃 JPA**：聚合映射、`@Transactional`、`Specification`、Modulith 事务事件**全要重写** |
+| 流式（SSE） | `SseEmitter` / `StreamingResponseBody`（Servlet 异步）**本来就够** —— 前端契约是纯 SSE 文本帧，后端逐帧 flush 即可 | 并不因此更强 |
+| 等模型返回 | 虚拟线程让"阻塞等"变便宜（**IO 密集**，非 CPU 密集） | 收益重复（虚拟线程已解决同一问题） |
+| 领域层纯净 | 领域层无框架类型 | `Mono` / `Flux` 会渗透进 domain 与 application |
+
+**⚠️ 一个容易误判的点**：★ Boot 4 把 starter 拆成了 `spring-boot-starter-webmvc`，
+而 **Spring AI 的流式客户端会把 `spring-webflux`（库）带进依赖树**。
+**看到依赖树里有 webflux ≠ 选了 WebFlux 栈** —— 只要 `spring-boot-starter-webmvc` 在，
+Boot 的 `WebApplicationType` 判定仍是 **SERVLET**（`DispatcherServlet` 与 `DispatcherHandler` 同时存在时，Servlet 优先）。
+
+**MVC 下做 SSE 的四个实操要点**（`03` 机制七 / §6.3 已有，这里汇总）：
+
+1. `spring.threads.virtual.enabled=true`（**属性名 Boot 4 未变**）
+2. 契约要求**任何终止路径恰好一次 `done`** ⇒ 后端必须在 **60s 空闲**（`IDLE_TIMEOUT_MS`，心跳 20s×3）时
+   **主动结束并吐 `done`**，不能靠连接超时兜底
+3. 反向代理**必须关响应缓冲**（`proxy_buffering off` / `X-Accel-Buffering: no`）
+4. 到网关的流式调用用 **`RestClient`**（官方同步客户端）；**不自写 SSE 解析**
+
+**什么时候才该换 WebFlux**：不打算改。除非出现"第三方高频短请求 + 必须非阻塞"的极端场景，
+且愿意付"放弃 JPA"的代价 —— 那不划算。
 
 ---
 
@@ -396,19 +488,102 @@ postgres(pgvector)  +  应用  +  模型服务
 并把执行上下文塞进 `ExtendedState`（`Map<String,Object>`）——**强类型丢了**，
 而换来的只是替掉"转移判定"这很小的一块。
 
-#### 那该用什么（建设性部分）
+#### 那该用什么：先把"能替掉它的候选"列全，再说为什么都不合适（★ 本轮查证补事实）
 
-**自己写一个小图解释器是合理的 —— 这不是"自研框架"，而是业务逻辑**（任何规则引擎都要有人写这一层）。
-但**不要顺手把周边能力也自研了**：
+**先说结论**：**不为这件事选"一个引擎"，而是选一组零件** ——
+"遍历 + 执行上下文"这一层是必须自己写的**业务逻辑**（任何流程引擎内部也有这一层）。
+零件清单见 §5.3.1。
+
+| 候选 | ★ 查证到的事实（2026-09） | 结论 |
+|---|---|---|
+| **Flowable 8.0.0**（BPMN 引擎） | 核心 **Apache-2.0**（商业线是独立产品，不污染开源核心）· **8.0 起只支持 Spring Boot 4 / Framework 7** ⇒ 与我们的版本线恰好一致 · starter 仍是 `org.flowable:flowable-spring-boot-starter` · BPMN 嵌入式常用 schema = **39 张 `ACT_*`**（全量 56 ACT + 6 FLW）· `BpmnModel` 是**纯 POJO**，可**不写 XML 程序化建流程**再 `createDeployment()` · `delegateExpression` 可绑 Spring bean | **引擎路线首选**（也是唯一可嵌入且活跃的），但代价见下 |
+| **Camunda 7** | CE **已 EOL**（7.24 为最后特性版 2025-10-14）· 仓库 **`archived`** · EE 支持到 2030-04-09 | **排除** |
+| **Camunda 8 / Zeebe** | 发布物是独立分发包，**必须独立部署集群** | **排除**（违反"3 个进程"） |
+| **Temporal**（持久化执行） | SDK Apache-2.0；进程内的 `temporal-test-server` / dev server 官方定位是**测试与开发** | **排除**——生产要 Server 集群。**真到"长时挂起 + saga 补偿"时它是最优选**（V2.0 级） |
+| **Activiti 8.8.1** / **Kogito·jBPM** | 仍在维护但节奏弱 / 生态迁移中 | 不作为首选 |
+| **Netflix Conductor / Apache Airflow** | 同为**独立服务**；Airflow 还是"离线调度" | 排除 |
+| **Spring Batch** | 批处理模型（Job / Step / Chunk），不是图执行 | 排除 |
+| **Spring Integration** | 企业集成模式（channel / router / transformer），前提是"有多个系统要接" | 排除 |
+
+##### 若一定要"现成引擎"：**Flowable 是最不坏的那个**，但代价要算清
+
+| 项 | 数字 / 说明 |
+|---|---|
+| 引入的表 | **39 张 `ACT_*`**（BPMN 嵌入式常用集）—— `09` 定的部署形态是 **3 个进程 + 1 个库**，它一次给这个库加 39 张表 |
+| 翻译层 | 我们的图 JSON → `BpmnModel` → `BpmnXMLConverter.convertToXML` → `createDeployment()`，约 **800–1500 行**（节点类型映射、边→`sequenceFlow`、条件→网关 + UEL、节点间数据→`variables`、节点执行器→`delegateExpression`） |
+| 版本治理 | **每次改图 = 一次新部署**，`ACT_RE_PROCDEF` 版本递增、旧实例续跑旧版 ⇒ 必须自建清理与治理 |
+| **会失去** | **没有原生"逐节点单步"调试器**（要靠 `ExecutionListener` 截 `DelegateExecution` + 历史表反查）；执行上下文进 `variables`（`Map`）⇒ **强类型丢了** |
+| **会换回** | 事务、重试、定时器、历史审计、崩溃续跑（这些自研要补） |
+
+**⇒ 现在不划算**：我们没有一个"人等流程"的节点，全是机器执行。
+翻牌判据见下面"升级信号"——出现**人工审批 / 长时挂起**时 Flowable 第一顺位；
+出现 **saga 补偿 / 小时级崩溃续跑**时转向 **Temporal**（那时才值得多一个进程）。
+
+#### 5.3.1 零件清单：把自研压到最薄（★ 本轮查证）
+
+| 关注点 | 零件 | 版本 / 许可 / 注意（★ 2026-09 查证） |
+|---|---|---|
+| 图算法：拓扑序、环检测、可达性、子图 | **JGraphT** | **1.5.3** · 许可 **LGPL-2.1-or-later OR EPL-2.0 双选 ⇒ 选 EPL-2.0**（避开 LGPL 在服务端的链接争议）· 可用 `TopologicalOrderIterator` / `CycleDetector` / `ConnectivityInspector` / `AsSubgraph` |
+| 条件表达式求值 | **SpEL**（Spring 官方 `SpelExpressionParser`） | ⚠️ 必须配 **`SimpleEvaluationContext`**，安全边界见下 |
+| 节点执行器装配 | **Spring DI** | 每种节点类型一个 `@Component`，装配成 `Map<String, NodeExecutor>` |
+| 并行 / 扇出（V1.0） | 虚拟线程 + **`CompletableFuture`** | ⚠️ **不要用 `StructuredTaskScope`**：★ 查证 JEP 505 = JDK 25 **第五次 Preview**、JEP 525 = JDK 26 **第六次 Preview** ⇒ **到 JDK 26 仍未转正**，生产用要 `--enable-preview` |
+| 重试 / 超时 | `spring-retry` + Resilience4j | §4.0 已选 |
+| 执行记录 / 单步 / 上下文 | 自家聚合 + JPA（**与业务同事务**） | `GET /workflow/records` 契约已冻结 |
+| 模型 / 检索节点 | `modelcatalog`（经网关）/ `retrieval` | 已有 |
+
+##### ⚠️ SpEL 的安全边界（这一条不写清就是 RCE 面）
+
+★ 官方文档（`framework-docs/.../core/expressions/evaluation.adoc` 的 Security Considerations）明确：
+
+> 表达式求值可调用构造器、方法与属性（反射）⇒ **对"不可信来源"的表达式求值本质危险，通常应当避免**，可导致 **RCE**。
+> `SimpleEvaluationContext` 排除了 `T()` 类型引用、构造器与 bean 引用，
+> 但官方同时说明它只是 **best-effort** —— 例如 read-only 数据绑定**不检查形似 getter 的方法的副作用**。
+
+**我们的条件节点里填的内容，是用户在画布上输入的 = 不可信来源。** 所以：
+
+1. **默认形态是结构化比较，不是自由表达式**：条件 = 左值（**上游节点输出的白名单字段**）+ 操作符 + 右值。
+   MVP/V1.0 只允许这一种形态 ⇒ **连表达式解析都不需要**，也就没有 SpEL 这一层风险。
+2. 若确实要放开自由表达式：`SimpleEvaluationContext.forReadOnlyDataBinding()` +
+   上下文**只放显式准备的变量**（不放 bean、不放对象引用）+ 表达式长度与求值超时。
+3. **禁止**：任何面向用户输入的路径出现 `StandardEvaluationContext`（它能 `T()` 与 bean 调用）。
+
+**三条约束同时成立，把上面全部排除**：
+
+① 图是**运行时的数据**（用户画的 JSON、存库、按版本发布）—— 不是部署期的定义
+② 必须**嵌入式**（`09` 已定 3 个进程）
+③ 图格式**已冻结**（`frontend/src/api/workflow.ts`）—— 不能改成 BPMN
+
+#### 建议：自己写一个「薄的图解释器」，周边能力全用现成的
+
+**这不是"自研框架"，而是业务逻辑** —— 任何流程引擎都要有人写这一层。核心只有三件事：
+**遍历 + 条件求值 + 节点执行**（几十到一两百行，一次性成本，完全可控）。
+**但周边能力一个都别自研**（这才对得起"少自研"）：
 
 | 关注点 | 用什么 | 说明 |
 |---|---|---|
 | 图遍历 / 调度 / 上下文 | 自己写（**薄**）：节点执行器注册表 + 遍历 + 上下文 | 业务逻辑，框架替不了 |
-| **条件表达式求值** | ★ **SpEL**（Spring 官方 `SpelExpressionParser`） | **不要自研表达式解析器** |
-| 并行 / 异步（V1.0） | 虚拟线程 + `CompletableFuture` / `StructuredTaskScope`（JDK 官方） | |
-| 重试 / 超时 | `spring-retry` / Resilience4j（§4.0 已选） | |
-| 节点执行器装配 | **Spring DI**：`Map<String, NodeExecutor>` 按 bean 名注入 | 官方能力，别写工厂 |
-| 执行记录 | 自家聚合（契约已冻结，别改） | |
+| **图算法 / 条件求值 / 节点执行器装配 / 并行 / 重试** | **见 §5.3.1 零件清单** | 一处真相，不在两处重复维护 |
+| 模型调用（ai-chat 节点） | `modelcatalog` → **OpenAI 兼容网关**（§3.13 已定） | 已有 |
+| 检索（search-dataset 节点） | **`retrieval` 模块**（已定） | 已有 |
+| 发布 / 版本 / 回滚 | **已有聚合**（`WorkflowVersion`） | 不用新造 |
+| 执行记录 / 逐节点耗时 | 自家聚合（`GET /workflow/records` **契约已冻结**） | 与业务同事务 |
+| 画布内调试 | 解释器天然支持"逐节点暂停 / 单步 / 看上下文" | 这正是自写解释器**比状态机更好做**的地方 |
+| **节点执行状态** | 枚举 + **显式状态守卫**（同 `03` 机制三对文档状态的手法） | 不引状态机；守卫表比状态机更容易读懂与调试 |
+
+#### 升级信号（什么时候该回到上表重新选）
+
+出现下面任一条 ⇒ 说明"薄解释器"不够用了：
+
+| 信号 | 指向 |
+|---|---|
+| **人工审批 / 长时挂起**（流程要等人点"同意"才继续） | Camunda / Flowable（BPMN 是为此而生的） |
+| **跨系统 saga / 补偿事务**（要回滚已执行成功的步骤） | Temporal（持久化执行 + 补偿） |
+| **执行时长到小时/天级**，且要求**崩溃后从断点续跑** | Temporal |
+| 需要**业务人员自己用图形化工具改流程**（不是开发者改） | BPMN 引擎 + 它的建模器 |
+
+> **回滚方案要提前想清**：真到那天，"图格式已冻结"会变成改造的阻力。
+> 所以**现在就把解释器写成"图 → 执行计划 → 执行"两段**：
+> 前面那段（读图、校验、算依赖）与后面那段（执行、记录）分开 ⇒ 将来换引擎只换后者。
 
 #### 什么时候才真的该上状态机（留个判据，避免这条被读成"永远不用"）
 
@@ -434,7 +609,7 @@ postgres(pgvector)  +  应用  +  模型服务
 | `POST /v1/models`（上游有哪些模型） | **JAiRouter** | 我们**不在平台里维护第二份上游清单** |
 | `GET /models/base-models`（基础模型目录） | **我们** | 底座候选 + **能力元数据**（上下文窗口/维度/供应商）——网关只给 `id/type/adapter` |
 | `POST /models/probe`（能力探测：思考三态 / 工具调用） | **我们** | 这是**业务准入**判据（`03` 机制四的 M-I5），网关不管 |
-| `POST /models/:id/load`（加载/卸载） | **待定**（§3.13.4） | 原本是 Ollama 实例语义；经网关后应改为"读网关状态"还是保留为平台启用位？ |
+| `POST /models/:id/load`（加载） | **我们**（已定，见 §3.13.4） | 语义 = **平台启用位 + 上游可用性校验**；**不操作上游实例** —— 那是网关的事，且各适配器语义不同 |
 | 上限/超时/重试策略 | **JAiRouter** | 我们只留"到网关这一跳"的超时 + 一次重试 |
 
 **判据**：
@@ -451,10 +626,13 @@ postgres(pgvector)  +  应用  +  模型服务
 
 ```
 postgres:16 + pgvector          ← 唯一中间件（业务数据 + 向量 + 全文 + 锁 + 幂等 + 出站事件）
-app (spring boot, 虚拟线程)      ← 单体
-ollama (模型服务)                ← 模型；可换外部 API
-nginx / caddy                   ← TLS + 前端静态 + 反向代理
+app (spring boot 4, 虚拟线程)    ← 单体
+jairouter (模型网关)             ← ★ OpenAI 兼容入口；上游的负载均衡/限流/熔断/降级都在它这里
+nginx / caddy                   ← TLS + 前端静态 + 反向代理（★ 必须关 SSE 缓冲，见 §6.3）
 ```
+
+> **上游推理服务（Ollama / vLLM / 外部 API）在网关之后，不是平台的容器**（见 §二 口径说明）。
+> ★ 另注意：**Boot 4 已删除 Undertow**（与 Servlet 6.1 不兼容）⇒ 用 **Tomcat 11**，别照旧文档配 Undertow。
 
 ### 6.2 本地开发（官方 dev services）
 
@@ -472,33 +650,90 @@ nginx / caddy                   ← TLS + 前端静态 + 反向代理
 
 | 项 | 原状态 | 本篇结论 |
 |---|---|---|
-| 中间件数量 | `backend/README.md`：PG(+pgvector) + 模型服务 | ✅ **确认**，并补上"缓存用 Caffeine、限流用 Resilience4j"两处 |
+| 中间件数量 | `backend/README.md`：PG(+pgvector) + 模型服务 | ✅ **确认**，并补上"缓存用 Caffeine"；限流/熔断改为**分层**（上游交网关，§3.10） |
 | 事件不引 MQ | ADR-03 | ✅ **确认**（用 Modulith 出站事件表） |
 | **向量检索实现** | **手写 SQL（JdbcTemplate）** | ⚠️ **改向**：用 `PgVectorStore`（§5.1） |
 | **结构化输出** | **自研四层防御** | ⚠️ **改向**：官方转换器 + `validateSchema()`，只自写宽松解析（§5.2） |
-| 鉴权 | `01 §3.1`：Spring Security + JWT | ✅ 确认，细节见 `08 §4.2`（责任链、不自研） |
+| 鉴权 | `01 §3.1`：Spring Security + JWT | ✅ 确认，细节见 `08 §4.2`（责任链、不自研）；Security 7 的 API 变化见 §4.4 |
 | 对象存储 | 端口 + 本地磁盘 | ✅ 确认 |
 | 持久化 | JPA + JdbcTemplate 手写向量 SQL | ⚠️ 前半确认；后半由 §5.1 取代 |
 | 构建 | Maven（`01 §3.1`） | ✅ 确认 |
 | **模型服务** | **内网 Ollama 直连** | ⚠️ **改向**：经 **OpenAI 兼容网关**（JAiRouter，本项目自己的开源项目）——**不直连推理服务**（§3.13） |
 | **限流 / 熔断** | Resilience4j 承担熔断 | ⚠️ **修订**：**熔断/限流/负载均衡交给网关**，我们只留"到网关这一跳"的超时 + 一次重试（§3.10） |
-| **编排执行引擎** | 未定 | ❌ **不用 Spring Statemachine**（已归档 + 技术错配，§5.3） |
-| 授权服务器 | 曾建议"要开放第三方 API 时用 Spring Authorization Server" | ⚠️ **修正**：独立项目**已归档**（公告是并入 Spring Security 7.0）⇒ 不要引它；真到那天用 Security 7 内置能力（§4.3） |
+| **编排执行引擎** | 未定 | ❌ **不用 Spring Statemachine**（已归档 + 技术错配，§5.3）；**改用"薄解释器 + 零件"**（§5.3.1） |
+| 授权服务器 | 曾建议"要开放第三方 API 时用 Spring Authorization Server" | ⚠️ **修正**：该独立项目**已并入 Spring Security 7 本体**。我们既已定 Security 7 版本线 ⇒ **能力在依赖里，不用引独立项目**（§4.3） |
+| **Spring Boot 版本线** | 未定（3.x / 4.x） | ★ **已定：Boot 4.1.x / Framework 7.x / Security 7.x / JDK 25** —— 生态已核实**无硬阻塞**（§4.0 / §8.1） |
+| **`POST /models/:id/load` 语义** | 待定 | ✅ **已定**：**平台启用位 + 上游可用性校验**，不操纵上游实例（§3.13.4 / §8.1） |
+| **新建资源默认可见性** | 曾被列为待拍板 | ✅ **不是待拍板** —— **契约里已写死 `private`**（§8.2）⇒ 后端照实现，**不要做成可配置项** |
+| **`api/legacy/*` 垫片** | 待定（删 / 留） | ✅ **保留 + 上锁** —— 本轮核实：它**不产生任何额外后端端点**，对后端零负担（§8.3） |
+| **web 栈** | ADR-01：MVC + 虚拟线程 | ✅ **复核确认**，并把"不用 WebFlux"的**决定性理由（JPA/事务）**写全（§4.5） |
 
 ---
 
-## 八、待拍板与待办
+## 八、待拍板与待办（★ 2026-09 刷新：三项已定）
 
-| # | 事项 | 建议 |
+### 8.1 已定（本轮拍板 / 本轮查证后关闭）
+
+| # | 事项 | 结论 | 出处 |
+|---|---|---|---|
+| 1 | **版本线** | **Spring Boot 4.1.x + Spring Framework 7.x + Spring Security 7.x**（用户拍板"就用最新的"）。★ 已核实周边生态 **无硬阻塞**：Modulith **2.1.1** / Spring AI **2.0.1** / Resilience4j **2.4.0** 均已支持 Boot 4。⚠️ 反向的一条：**Boot 3.5 的 OSS 支持已于 2026-06-30 结束** ⇒ 留 3.5 反而没有社区补丁 | §4.0 |
+| 2 | **JDK 基线** | Boot 4 最低 JDK 17；虚拟线程在 **21 已转正**；Framework 7 生产推荐 **25** ⇒ 建议 **JDK 25（LTS）** | §4.0 |
+| 3 | **授权服务器** | 原独立项目 **已并入 Security 7 本体** ⇒ **不引独立项目**（能力已在依赖里）。要开放第三方 API 时装配 Security 7 内置能力；在那之前按 `08 §4.2.3` 自写薄层做刷新令牌轮换 | §4.3 |
+| 4 | **`POST /models/:id/load` 的语义** | 定为 **「平台启用位 + 上游可用性校验」**，**不尝试操纵上游实例**（"载入显存"是网关/上游的事，且不同适配器语义不统一 —— vLLM/外部 API 根本没有"加载"）。四态映射见 §3.13.4 | §3.13.4 |
+| 5 | **新建资源的默认可见性** | **`private` + `ownerId = 当前用户`**。**这不是待拍板项** —— 前端契约里已经写死了（三处注释都写明"由后端写入，契约里没有对应的请求字段"），见 §8.2 | §8.2 |
+| 6 | **`api/legacy/*` 垫片** | **保留**（本轮核实：它**不产生任何额外后端端点**，对后端零负担） | §8.3 |
+
+### 8.2 后端必须照契约实现的默认值（不是可配置项）
+
+| 项 | 值 | 契约出处 |
 |---|---|---|
-| 1 | **中文全文检索的分词扩展** | 需确认选 `zhparser` 或 `pg_jieba`（§3.6）——**这是唯一一个需要额外确认的 PG 扩展**，M2 前定 |
-| 2 | 是否 M1 就引入**授权服务器** | ★ 独立的 `spring-authorization-server` **已归档**（并入 Spring Security 7.0）⇒ **不引**。若真要开放第三方 API，走 Security 7 内置能力，但那意味着 Boot 4 版本线（见 7）。在那之前按 `08 §4.2.3` 自写薄层做刷新令牌轮换 |
-| 3 | Resilience4j 的熔断阈值 | M1 定（模型调用是第一个外部依赖），先用保守默认值 |
-| 4 | 日志：起步是否只到 stdout | 建议**是**（容器收集）；ELK 等到真需要检索日志时再说 |
-| 5 | **JAiRouter 网关的部署与获取**（同机 / 独立机 / 已有实例） | **M0 就要定** —— 它决定 `modelcatalog` 的 base-url 配置、探活方式、超时与重试参数；也决定 dev 环境怎么起（它有 dev profile） |
-| 7 | **Spring Boot 版本线：3.x 还是 4.x** | ★ 本轮查证的连带问题：Spring Authorization Server 的能力**并入 Spring Security 7.0**，而 Security 7 对应 Boot 4 版本线；Spring AI 也在快速演进（本轮查的文档是 2.0.1）。**建议 M0 就把三者的版本线一起定死**，别到 M4b 才发现要跳大版本 |
-| 8 | `POST /models/:id/load` 的语义（§3.13.4） | 经网关后它是"读网关状态"还是"平台启用位"？影响 `/models` 域 3 个端点 |
-| 6 | 缓存：是否给"模型列表"加缓存 | 建议**先不加**（本地 Ollama + 单实例，省一次缓存一致性问题；真慢了再加，Spring `Cache` 抽象零改动） |
+| 新建知识库 / 应用 / 会话的 `visibility` | **`private`** | `frontend/src/api/knowledge.ts:27-29` · `assistants.ts:53` · `conversations.ts:41-44` |
+| `ownerId` | **当前登录用户，且不可变**（转让是显式动作） | `07 §3.1` · `api/types.ts` 的 `OwnedResource` |
+| 请求体里**不出现** `visibility` / `ownerId` | 前端不传，后端也不该要求 | 同上 |
+
+> ⇒ 这条的价值在于：**别把它做成可配置项**。数据权限放开容易，收回难（`07 §8.1`）。
+
+### 8.3 `api/legacy/*` 垫片：保留 + 上锁（★ 本轮核实）
+
+**先纠正一个误解**：它看起来像"后端要兼容的旧接口"，**实际不是** ——
+本轮逐个读了这个目录的三个文件，**它们打的全部是新契约端点，一个旧 URL 都没有**：
+
+| legacy 函数 | 实际打到哪 | 在 115 端点契约里？ |
+|---|---|---|
+| `getAiList`（3 处调用） | `GET /models?size=200` | ✅ |
+| `detail` / `addSubmit` / `workFlowPublish` | `GET`/`PUT /assistants/:appId/workflow/draft` · `POST …/publish` | ✅ |
+| `getWorkFlowVersion` / `getVersionGraph` | `GET /assistants/:appId/workflow/versions[/:version]` | ✅ |
+| `allList` | `listKnowledgeBases()` → `GET /knowledge` | ✅ |
+| `getDictionary` | **不发请求**（前端常量表） | — 零后端依赖 |
+
+**⇒ 结论：对后端是零负担。** 它只做两件事：
+① 把响应**再包一层**（`res.data.data`，给旧组件读）② 字段**改名**（`modelName` / `model_type` / `baseName` / `knowledgeIcon` / `dictValue`）。
+**后端只实现单层 `{code,message,data}`，双层由这一层在前端构造** —— 这条必须写进后端文档，
+免得后端"顺手兼容双层"。
+
+**为什么现在不删**：删它 = 改 **6 个调用点**（`workflow/Index.vue`、`PublishHistory.vue`、
+`SelectProviderDialog.vue` + 3 个节点组件），而这 6 处都在 **6,796 行的旧画布代码**里。
+收益是删约 150 行，**风险是动画布的数据访问** —— 而画布正要进入"真实执行"的开发期。
+它是**刻意的边界标记**（三个文件头都写明"唯一删除点"）。
+
+**要做的只有两件**：
+1. **上锁（机械检查）**：`api/legacy/*` 只允许被 `pages/workflow/**` 引用，新增引用即失败；导出函数清单不得增加。
+2. **给清理触发条件**：V1.0 落地"节点执行器"那一轮，顺手把 6 个调用点正规化到 `@/api/*`，再整个目录一次删除。
+
+⚠️ **一个要记下的已知点**：`getDictionary` **不发请求**（供应商字典是前端常量）。
+若 V1.0 真需要"后端下发字典"，**这个垫片会退化成"假装成字典的常量表"** ——
+到那时要做的不是给它接后端，而是废掉它。
+
+### 8.4 仍然待办（不阻塞 M0）
+
+| # | 事项 | 建议 | 期限 |
+|---|---|---|---|
+| 1 | **中文全文检索的分词扩展** | 选 `zhparser` 或 `pg_jieba`（§3.6）—— **唯一需要额外确认的 PG 扩展** | **M2 前** |
+| 2 | **JAiRouter 网关的部署与获取**（同机 / 独立机 / 已有实例） | **M0 就要定** —— 决定 `modelcatalog` 的 base-url、探活方式、超时与重试参数，也决定 dev 环境怎么起 | **M0** |
+| 3 | Resilience4j 的熔断阈值 | M1 定（模型调用是第一个外部依赖），先保守默认 | M1 |
+| 4 | 日志：起步是否只到 stdout | 建议**是**（容器收集）；ELK 等到真需要检索日志时再说 | M0 |
+| 5 | 缓存：是否给"模型列表"加缓存 | 建议**先不加**（单实例 + 进程内 Caffeine）；真慢了再加，`Cache` 抽象零改动 | M1 |
+| 6 | 网关的 `/v1/embeddings` 是否覆盖我们全部向量模型（§3.13.4） | **建议不留直连例外**，统一走网关 | M2 前 |
 
 ### 一条贯穿的原则
 
