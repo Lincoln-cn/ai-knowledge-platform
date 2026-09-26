@@ -43,8 +43,9 @@
       <li><b>契约面已定型且可枚举</b>：12 个域、115 个端点、全部从 <code>@/api</code> 单一出口导出；
         清单里当初倒推出的 22 条接口需求，绝大多数已经作为<b>可选字段 / 新端点</b>写进契约。</li>
     </ul>
-    <p style="margin:14px 0 0"><b>唯一不阻塞后端开工的在飞项</b>：编排画布（workflow）的节点操作菜单
-      在真实鼠标下打不开 —— 这是<b>纯前端交互缺陷</b>，<b>不改动任何后端契约</b>，修复正在进行中。</p>
+    <p style="margin:14px 0 0"><b>收口后已无在飞项</b>：本报告初版列出的 7 条缺口<b>全部已修并逐条验证</b>；
+      收口过程中闸门又抓出 4 个真缺陷（编排画布节点菜单、模型弹窗首开空目录、<code>/admin</code> 的
+      Tab 与 URL 单向同步、<code>/prompt-configs</code> 写接口无门禁），也都已修 —— 详见 §8。</p>
   </div>
 </section>
 
@@ -105,7 +106,7 @@
         <tr><td><b>应用市场</b></td><td class="mono">/market</td><td>来源四分段（全部/官方/共享给我/我的）· 关键词/分类/排序/只看收藏 · 收藏 · 详情抽屉 · 最近使用</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
         <tr><td><b>应用管理</b></td><td class="mono">/assistants</td><td>建简单/编排两类应用 · 配置（模型/知识库/提示词）· 校验发布 · 凭证与 API Key · 导入导出 · 演示</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
         <tr><td><b>提示词</b></td><td class="mono">/assistants/prompts</td><td>可复用角色指令（<b>配置</b>）的增删改。<b>类型是分类法（契约），已收归「系统管理 → 提示词类型」由管理员维护</b>，此处只读引用</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
-        <tr><td><b>编排画布</b></td><td class="mono">/assistants/:id/workflow</td><td>17 类节点目录 · 拖拽编排 · 7 个配置面板 · 存取/校验/发布/版本/回滚 · 调试 · 运行记录</td><td class="num"><span class="tag t-warn">一处待修</span></td></tr>
+        <tr><td><b>编排画布</b></td><td class="mono">/assistants/:id/workflow</td><td>17 类节点目录 · 拖拽编排 · 7 个配置面板 · 存取/校验/发布/版本/回滚 · 调试 · 运行记录 · <b>节点操作菜单（展开/重命名/复制/删除）</b></td><td class="num"><span class="tag t-ok">可用</span></td></tr>
         <tr><td><b>知识库</b></td><td class="mono">/knowledge</td><td>建库向导（暂存上传 + 按自己文件预览切分）· 文档/分段治理 · 重新向量化 · 检索参数 · 命中测试</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
         <tr><td><b>模型管理</b></td><td class="mono">/models</td><td>增删改 · 加载/重载 · 探活 · 解析与校验 · 加载中自动刷新（有上限与退避）</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
         <tr><td><b>运营看板</b></td><td class="mono">/analytics</td><td>趋势/应用排行/质量指标 · 反馈待处理入口（按权限过滤）</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
@@ -364,8 +365,8 @@
         <tr><td>分段归属 / 批量分段</td><td class="mono">SegmentQuery.kbId · DELETE /segments/batch → { deleted, failed[] }</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
         <tr><td>上传策略 / 检索默认参数</td><td class="mono">GET …/upload-policy · GET …/retrieval</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
         <tr><td>API Key 单条启停 / 凭证启停</td><td class="mono">PATCH …/api-keys/:id/enabled · PATCH …/credentials/:id/enabled</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
-        <tr><td>消息定位（深链跳到某条消息）</td><td class="mono">GET /conversations/:id/messages 缺 <code>around</code> 参数</td><td class="num"><span class="tag t-warn">仍缺</span></td></tr>
-        <tr><td>SSE 心跳帧 / 终态必达</td><td>已写进 <code>docs/前端页面与功能清单.md</code> §八，<b>尚未写进 <code>stream-types.ts</code></b></td><td class="num"><span class="tag t-warn">仍缺</span></td></tr>
+        <tr><td>消息定位（深链跳到某条消息）</td><td class="mono">MessageQuery.around</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>SSE 心跳帧 / 终态必达 / <b>任务不依赖前端连接</b></td><td>落进 <code>stream-types.ts</code>：<code>HeartbeatComment</code> · <code>20s</code> · <code>60s</code>（契约写死 20×3≤60）· <code>StreamTerminationPath</code> · <code>TaskProgressOwnership</code></td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
         <tr><td>批量办理反馈</td><td class="mono">PATCH /feedbacks/batch</td><td class="num"><span class="tag t-mute">P2 · 未做</span></td></tr>
       </tbody>
     </table>
