@@ -94,8 +94,13 @@ def main() -> int:
             def prompts():
                 body = goto("/assistants/prompts")
                 check("提示词" in body, "提示词：页面渲染", "")
-                check("类型" in body and ("配置" in body or "内容" in body),
-                      "提示词：类型与配置合一（7 合 1）", "")
+                # 提示词页只剩「配置」：类型是分类法（契约），维护入口已搬到系统管理。
+                # 用元素计数而不是文本 —— desc 里仍会出现「提示词类型」四个字（说明它不在本页）。
+                new_type = page.locator("button", has_text="新建类型").count()
+                type_panel = page.locator(".h4", has_text="提示词类型").count()
+                check("提示词配置" in body and new_type == 0 and type_panel == 0,
+                      "提示词：页面只管配置（类型已归系统管理）",
+                      f"新建类型按钮 {new_type} 个 / 类型面板 {type_panel} 个")
 
             # ── 问答会话 ──
             def conversation_render():
@@ -142,6 +147,34 @@ def main() -> int:
                 check("用户管理" in body, "账号权限：有用户管理", "")
                 check("角色管理" in body, "账号权限：有角色管理", "")
                 check("权限点" in body, "账号权限：有权限点清单", "")
+                check("提示词类型" in body, "账号权限：有提示词类型 Tab", "")
+
+            def prompt_types_tab():
+                # ?tab=promptTypes 是深链，直接落到第 4 个 Tab。
+                # 断言必须**限定在该 Tab 面板内**：其它 Tab 的用户表也在 DOM 里（el-tab-pane 用
+                # v-show 惰性渲染），不限定就会把用户行数当类型行数（4 用户 + 4 类型 = 8）。
+                body = goto("/admin?tab=promptTypes", wait=2000)
+                # 断言「真的切过去了」，不是标签文本在 body 里 —— 四个 Tab 的标签永远都在
+                # DOM 中，`"提示词类型" in body` 是恒真断言。要看激活态：is-active 的 Tab 文本，
+                # 或 #pane-promptTypes 面板存在（lazy 下未激活则不渲染）。
+                active_tab = page.locator(".el-tabs__item.is-active").inner_text().strip()
+                check(active_tab == "提示词类型", "账号权限：深链进提示词类型 Tab",
+                      f"实际激活 Tab =「{active_tab}」")
+                check(page.locator("#pane-promptTypes").count() > 0,
+                      "账号权限：提示词类型面板已渲染", "")
+                scope = "#pane-promptTypes"
+                names = [t.strip() for t in page.locator(f"{scope} tbody tr td:nth-child(2)").all_inner_texts()]
+                want = ["通用", "合同法务", "制度咨询", "写作辅助"]
+                check(sorted(names) == sorted(want),
+                      "账号权限：提示词类型列出 4 个类型", f"实际 {names}")
+                acts = [
+                    page.locator(f"{scope} button", has_text="新建类型").count(),
+                    page.locator(f"{scope} tbody tr button", has_text="编辑").count(),
+                    page.locator(f"{scope} tbody tr button", has_text="删除").count(),
+                ]
+                check(acts[0] > 0 and acts[1] == 4 and acts[2] == 4,
+                      "账号权限：提示词类型有增/改/删入口",
+                      f"新建 {acts[0]} / 编辑 {acts[1]} / 删除 {acts[2]}")
 
             # ── 免登录公开页（沉浸布局，需顶层路由）──
             def public_ok():
@@ -171,13 +204,14 @@ def main() -> int:
             step("知识库四步向导", kb_wizard)
             step("命中测试", kb_hittest)
             step("应用管理", assistants)
-            step("提示词 7 合 1", prompts)
+            step("提示词只管配置", prompts)
             step("会话渲染", conversation_render)
             step("会话流式", conversation_stream)
             step("会话空应用无引用区块", conversation_no_ref_block)
             step("反馈处理", feedback)
             step("运营看板", analytics)
             step("账号与权限", admin)
+            step("账号与权限·提示词类型", prompt_types_tab)
             step("公开页·有效", public_ok)
             step("公开页·过期", public_expired)
             step("公开页·撤销", public_revoked)

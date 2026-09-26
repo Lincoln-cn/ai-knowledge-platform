@@ -329,6 +329,24 @@ watch(() => query.page, () => {
   syncUrl()
 })
 
+// URL → 筛选/分页：浏览器前进/后退、页内改 hash 时界面跟随。
+// 值比较后再赋值，避免与 syncUrl 互写成环；只在真变了时才拉列表。
+watch(
+  () => [route.query.keyword, route.query.kind, route.query.status, route.query.page],
+  () => {
+    const kw = route.query.keyword ? String(route.query.keyword) : ''
+    const kind = route.query.kind ? String(route.query.kind) : ''
+    const status = route.query.status ? String(route.query.status) : ''
+    const pg = route.query.page ? Number(route.query.page) || 1 : 1
+    if (kw === query.keyword && kind === query.kind && status === query.status && pg === query.page) return
+    query.keyword = kw
+    query.kind = kind as ModelKind | ''
+    query.status = status as ModelStatus | ''
+    query.page = pg
+    fetchList().then(schedule)
+  }
+)
+
 /* ── 操作 ── */
 const formRef = ref<InstanceType<typeof ModelFormDialog>>()
 const editing = ref<ModelInfo | null>(null)

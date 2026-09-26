@@ -18,6 +18,85 @@
  * 后端用 SSE(text/event-stream) 实现；前端换传输只需替换 lib 层实现，本文件不变。
  */
 
+/* ────────────────────────── 传输层硬保证（契约，不是注释装饰） ────────────────────────── *
+ *
+ * 下面四条是**后端必须实现**的形状与行为。没写进这里的保证，后端可以合理地不做；
+ * 写进来了就必须做，前端按此验收。
+ */
+
+/**
+ * ① 心跳帧 —— wire 形状。
+ *
+ * SSE **注释帧**：一整行以 `:` 开头，推荐载荷 `keep-alive`：
+ *
+ *     : keep-alive\n\n
+ *
+ * - 不是业务事件，没有 `event:`/`data:`；解析端必须**跳过**（不得当成 message）
+ * - 用途：证明连接仍活着（反向代理 60s 空闲超时会掐断无字节的连接）
+ * - 发送方在**无业务帧可发**的间隙（模型思考、检索）按 `HEARTBEAT_INTERVAL_MS` 发
+ */
+export type HeartbeatComment = `:${string}`
+
+/** 心跳注释帧的行首（SSE 规范 comment line） */
+export const HEARTBEAT_PREFIX = ':'
+
+/** 心跳推荐载荷。解析端只认前缀 `:`，不按载荷匹配 */
+export const HEARTBEAT_PAYLOAD = 'keep-alive'
+
+/**
+ * 心跳间隔（毫秒），后端在无业务帧时按此间隔发。
+ * **契约约束**：`HEARTBEAT_INTERVAL_MS × 3 ≤ IDLE_TIMEOUT_MS`
+ * —— 连续丢 2 个心跳仍不会被前端闲置超时误判，第 3 个间隔到来前必有新帧。
+ */
+export const HEARTBEAT_INTERVAL_MS = 20_000
+
+/**
+ * 前端闲置超时（毫秒）：连续此时长内**一帧都未收到**（业务帧或心跳都算）即判连接吊死。
+ * 数值关系（契约，两边都要遵守）：
+ *   心跳 20s × 3 = 60s = 闲置超时
+ *   ⇒ 心跳必须**重置**闲置计时器（心跳是存活信号）；
+ *   ⇒ 后端最长静默 20s，前端最长容忍 60s，留两个心跳的余量。
+ */
+export const IDLE_TIMEOUT_MS = 60_000
+
+/**
+ * ② 终态必达 —— `done` / `error` 的收口纪律。
+ *
+ * 任何终止路径（正常完成 / 用户停止 / 连接断开 / 超时）**恰好产出一次**终态：
+ * `onDone` 有且仅有一次回调，`StreamDone.status ∈ StreamStatus`。
+ *
+ * 中断路径（连接断开、超时、半途断流）必须至少给出 `onError` 或 `onDone` 之一；
+ * **不允许「无错且无终态」** —— 那会让界面永远停在「生成中」。
+ *
+ * 服务端 `error` 帧之后仍必须跟 `done` 帧收尾（error 不是终态，done 才是）。
+ */
+export type StreamTerminationPath =
+  /** 正常写完 → done(已生成|失败) */
+  | 'complete'
+  /** 用户主动停止 → done(已停止) */
+  | 'abort'
+  /** 连接断开 / 半途断流 → error? + done(失败) */
+  | 'disconnect'
+  /** 闲置超时 → error + done(失败) */
+  | 'idle-timeout'
+
+/**
+ * ③ 任务推进与前端连接无关。
+ *
+ * 任务（问答生成、向量化进度、导入等）的**唯一真相源在后端**；
+ * 前端断连**不得**导致后端停止、回滚或取消任务进程 —— 断连只影响「看到」，不影响「做」。
+ *
+ * 前端轮询 / SSE 都只是**读取通道**：有进行中任务时前端才轮询或订阅；
+ * 重连后靠 REST 补拉状态，不得假设服务端会因连接关闭而取消任务。
+ * （本条是硬保证，不是「目前恰好这么做」。）
+ */
+export interface TaskProgressOwnership {
+  /** 唯一真相源在后端 */
+  readonly sourceOfTruth: 'server'
+  /** 前端断连不影响任务推进 */
+  readonly survivesClientDisconnect: true
+}
+
 export interface StreamMeta {
   messageId: string
   traceId: string
@@ -83,6 +162,11 @@ export interface ChatStreamOptions {
   onArtifact?: (artifact: Artifact) => void
   onDone?: (result: StreamDone) => void
   onError?: (reason: string, hint?: string) => void
+  /**
+   * 传输层心跳（`: keep-alive` 注释帧）。收到即回调；业务层通常忽略。
+   * 有它才谈得上「心跳帧被真的发出」可被观测/断言（见 mock/stream.ts）。
+   */
+  onHeartbeat?: () => void
 }
 
 export interface StreamHandle {

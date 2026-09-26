@@ -109,7 +109,25 @@ export const renameConversation = (id: string, title: string) =>
 export const deleteConversation = (id: string) =>
   request<void>({ method: 'DELETE', url: '/conversations/:id', path: { id } })
 
-export const listMessages = (conversationId: string, query: PageQuery = {}) =>
+/**
+ * 消息列表查询。
+ *
+ * 两种取数方式**互斥**：
+ *  - `page`/`size`：常规分页（`page=-1` 表示最后一页，聊天窗口先看最近几条）
+ *  - `around`：以某条消息为中心取一个窗口（深链 / 分享链接跳到某条消息）
+ *
+ * 传了 `around` 就**忽略 `page`**；`size` 在 around 模式下表示窗口宽度（中心前后各约 size/2）。
+ */
+export interface MessageQuery extends PageQuery {
+  /**
+   * 目标消息 id。以该消息为中心，前后各取若干条，使目标落在窗口内。
+   * 与 `page` 互斥：传了 `around` 就忽略 `page`。
+   * 找不到该消息时应报 404，而不是静默回退到第一页。
+   */
+  around?: string
+}
+
+export const listMessages = (conversationId: string, query: MessageQuery = {}) =>
   request<PageResult<ChatMessage>>({
     method: 'GET',
     url: '/conversations/:conversationId/messages',

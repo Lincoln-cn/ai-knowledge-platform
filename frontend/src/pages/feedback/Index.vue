@@ -316,6 +316,26 @@ const toggleStatus = (s: FeedbackStatus) => {
 
 watch(page, () => syncUrl())
 
+// URL → 筛选/分页：浏览器前进/后退、页内改 hash 时界面跟随。
+// 值比较后再赋值，避免与 syncUrl 互写成环；只在真变了时才拉列表。
+// 注意 status 缺省在这里读作 ''（= 不筛），不是初始默认「待处理」——
+// syncUrl 非空才写 status，用户清掉筛选后 URL 就是无 status，不能再弹回默认。
+watch(
+  () => [route.query.keyword, route.query.status, route.query.appId, route.query.page],
+  () => {
+    const kw = route.query.keyword ? String(route.query.keyword) : ''
+    const st = (route.query.status ? String(route.query.status) : '') as FeedbackStatus | ''
+    const app = route.query.appId ? String(route.query.appId) : ''
+    const pg = route.query.page ? Number(route.query.page) || 1 : 1
+    if (kw === query.keyword && st === query.status && app === query.appId && pg === page.value) return
+    query.keyword = kw
+    query.status = st
+    query.appId = app
+    page.value = pg
+    fetchList()
+  }
+)
+
 const onSaved = () => refresh()
 
 const openHandle = (row: FeedbackItem) => {

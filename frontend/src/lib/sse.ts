@@ -8,6 +8,7 @@ import type {
   StreamHandle,
   StreamMeta
 } from '@/api/stream-types'
+import { HEARTBEAT_PREFIX, IDLE_TIMEOUT_MS } from '@/api/stream-types'
 
 /** 一帧 SSE：event + data */
 interface Frame {
@@ -18,24 +19,38 @@ interface Frame {
 /**
  * 把 SSE 文本缓冲切成完整帧，返回剩余未完整部分。
  * 单帧可能被网络切在两半，必须保留尾部等下一次 —— 这是手写流解析最常见的错。
+ *
+ * 心跳（`:` 开头的注释行）**不产生业务帧**，但会计入 `heartbeats` ——
+ * 调用方据此重置闲置计时并回调 `onHeartbeat`（见 stream-types.ts 契约①）。
  */
-export function splitFrames(buffer: string): { frames: Frame[]; rest: string } {
+export function splitFrames(buffer: string): {
+  frames: Frame[]
+  rest: string
+  heartbeats: number
+} {
   const frames: Frame[] = []
+  let heartbeats = 0
   const blocks = buffer.split('\n\n')
   const rest = blocks.pop() ?? ''
 
   for (const block of blocks) {
     let event = 'message'
     const dataLines: string[] = []
+    let sawComment = false
     for (const line of block.split('\n')) {
-      if (line.startsWith(':')) continue // 心跳
+      if (line.startsWith(HEARTBEAT_PREFIX)) {
+        // 心跳注释帧：跳过，不进业务事件
+        sawComment = true
+        continue
+      }
       if (line.startsWith('event:')) event = line.slice(6).trim()
       else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
     }
+    if (sawComment && !dataLines.length) heartbeats += 1
     if (dataLines.length) frames.push({ event, data: dataLines.join('\n') })
   }
 
-  return { frames, rest }
+  return { frames, rest, heartbeats }
 }
 
 function emit(
@@ -80,8 +95,11 @@ function emit(
   }
 }
 
-/** 连接闲置多久视为吊死（毫秒）。超过即按「中途断掉」收尾并掐断底层连接 */
-const IDLE_TIMEOUT_MS = 60_000
+/**
+ * 连接闲置多久视为吊死（毫秒）。超过即按「中途断掉」收尾并掐断底层连接。
+ * 与心跳的数值关系见 stream-types.ts 契约①：心跳 20s × 3 = 60s。
+ */
+const IDLE_TIMEOUT = IDLE_TIMEOUT_MS
 
 /** 真实后端的流式实现：fetch + ReadableStream，自带中断 */
 export function chatStreamViaSse(options: ChatStreamOptions): StreamHandle {
@@ -101,7 +119,7 @@ export function chatStreamViaSse(options: ChatStreamOptions): StreamHandle {
     }
   }
 
-  /** 每收到一帧就重置。60 秒无帧 = 连接吊死 */
+  /** 每收到一帧（业务帧或心跳）就重置。60 秒无任何帧 = 连接吊死 */
   const armIdle = () => {
     clearIdle()
     idleTimer = setTimeout(() => {
@@ -109,7 +127,7 @@ export function chatStreamViaSse(options: ChatStreamOptions): StreamHandle {
       // 闲置超时与「中途断掉」同口径收尾，并 abort 掉底层连接
       failTerminal('连接中断', '网络或服务异常，可重试')
       controller.abort()
-    }, IDLE_TIMEOUT_MS)
+    }, IDLE_TIMEOUT)
   }
 
   /** 唯一的 onDone 出口。透传服务端 done 帧也走这里，保证恰好一次 */
@@ -171,9 +189,14 @@ export function chatStreamViaSse(options: ChatStreamOptions): StreamHandle {
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
-      const { frames, rest } = splitFrames(buffer)
+      const { frames, rest, heartbeats } = splitFrames(buffer)
       buffer = rest
-      // 闲置超时按「帧」算：60 秒无一帧 = 吊死。心跳注释行不产生帧，不重置计时
+      // 心跳是存活信号：重置闲置计时并向上回调（契约①：心跳必须能续命）
+      if (heartbeats > 0) {
+        armIdle()
+        for (let i = 0; i < heartbeats; i += 1) options.onHeartbeat?.()
+      }
+      // 业务帧同样重置闲置计时
       if (frames.length) armIdle()
       for (const frame of frames) {
         emit(frame, options, {

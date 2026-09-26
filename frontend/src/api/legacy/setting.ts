@@ -88,17 +88,3 @@ export const getVersionGraph = (applicationId: string, version: number) =>
     path: { appId: applicationId, version }
   })
 
-/**
- * 模型动态表单 / 参数表单（旧 `getModelFormItem` / `getModelParams`）。
- *
- * ⚠️ **新契约没有对应接口**：旧形状是「后端下发一份表单描述」来驱动字段渲染，
- * 新设计里模型创建表单是前端固定的（见 `pages/models/`）。
- * 编排画布的「新建模型」弹窗依赖它，目前**返回空表单** ——
- * 也就是说该弹窗能打开但不会有字段。这是已知缺口，不是静默失败：
- * 待定夺是「编排画布内不再新建模型、引导去模型管理页」还是「补契约」。
- */
-export const getModelFormItem = (_params?: unknown) =>
-  Promise.resolve(wrap({ form_item: [], rules: {} }))
-
-export const getModelParams = (_params?: unknown) =>
-  Promise.resolve(wrap({ form_item: [], rules: {} }))

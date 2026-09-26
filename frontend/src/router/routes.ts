@@ -57,13 +57,14 @@ export const navGroups: NavGroup[] = [
       { path: '/conversation', label: '对话', icon: 'ChatDotRound' },
       { path: '/knowledge', label: '知识库', icon: 'Collection' },
       { path: '/market', label: '应用市场', icon: 'Shop' },
-      { path: '/assistants', label: '应用管理', icon: 'Grid' },
-      { path: '/assistants/prompts', label: '提示词', icon: 'EditPen' }
+      { path: '/assistants', label: '应用管理', icon: 'Grid' }
     ]
   },
   {
     title: '配置与运营',
     items: [
+      // 提示词跟着「应用管理」办，但它是配置资产（写应用时才用），不是终端用户内容
+      { path: '/assistants/prompts', label: '提示词', icon: 'EditPen' },
       { path: '/models', label: '模型管理', icon: 'Cpu' },
       { path: '/analytics', label: '运营看板', icon: 'TrendCharts' },
       { path: '/feedback', label: '反馈处理', icon: 'ChatLineSquare' }

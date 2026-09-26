@@ -1,0 +1,473 @@
+<!-- AI生成 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>前端 MVP 交付审计报告 · 知识助理平台</title>
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+<p data-aigc-mark="1" style="margin:0 0 8px;font-size:10px;line-height:1.3;color:#6b6560;font-weight:400;">AI生成</p>
+
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">Delivery Audit · ai-knowledge-platform</div>
+  <h1>前端 MVP 交付审计报告</h1>
+  <p class="sub">
+    问题不是「功能够不够丰富」，而是 <b>真实用户走不走得下去</b>、<b>走错了知不知道</b>、
+    <b>出错了有没有提示</b>、<b>刷新后状态丢不丢</b>。本报告按这四条复核。
+  </p>
+  <div class="meta">
+    <span>审计基线 <b>8b5bdba</b></span>
+    <span>提交数 <b>16</b></span>
+    <span>HEAD == origin/main <b>是</b></span>
+    <span>仓库 <b>PRIVATE</b></span>
+    <span>契约面 <b>12 域 / 115 端点</b></span>
+    <span>页面模块 <b>15</b></span>
+  </div>
+</header>
+
+<!-- ══════════════ §1 结论 ══════════════ -->
+<section id="s1">
+  <h2><span class="no">01</span>结论</h2>
+  <div class="verdict">
+    <p class="big">可以按前端约定的接口开始开发后端 Server 服务。</p>
+    <ul>
+      <li><b>18 个 P0 全部收口</b>，P1 全部收口 —— 逐条有可执行断言，不靠自述。</li>
+      <li><b>四个角色的业务组合各自跑得通</b>：顶部导航、路由可达性、页面动作三层互相一致，
+        没有「看得见但点进去 403」，也没有「界面给了入口但按钮不存在」之外的意外。</li>
+      <li><b>数据范围真的生效</b>：同一页面对不同角色返回不同数据量（普通用户只看得到 3 个应用 / 2 条会话，
+        全平台口径角色看得到 5 / 6）。</li>
+      <li><b>契约面已定型且可枚举</b>：12 个域、115 个端点、全部从 <code>@/api</code> 单一出口导出；
+        清单里当初倒推出的 22 条接口需求，绝大多数已经作为<b>可选字段 / 新端点</b>写进契约。</li>
+    </ul>
+    <p style="margin:14px 0 0"><b>唯一不阻塞后端开工的在飞项</b>：编排画布（workflow）的节点操作菜单
+      在真实鼠标下打不开 —— 这是<b>纯前端交互缺陷</b>，<b>不改动任何后端契约</b>，修复正在进行中。</p>
+  </div>
+</section>
+
+<!-- ══════════════ §2 基线与方法 ══════════════ -->
+<section id="s2">
+  <h2><span class="no">02</span>审计基线与取证方法</h2>
+  <p class="lead">凡是本报告写下的结论，都能回到下面某一条客观读数；子代理的自述一律不作为证据。</p>
+
+  <h3>2.1 机械闸门（基线 8b5bdba 实测）</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>闸门</th><th>内容</th><th class="num">exit</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">vue-tsc --noEmit</td><td>类型检查</td><td class="num"><span class="tag t-ok">0 错</span></td></tr>
+        <tr><td class="mono">build:mock</td><td>带 mock 的生产构建</td><td class="num"><span class="tag t-ok">✓ 1m14s</span></td></tr>
+        <tr><td class="mono">check_template_tags.py</td><td>模板标签配对（159 文件）</td><td class="num"><span class="tag t-ok">0</span></td></tr>
+        <tr><td class="mono">check_design.py</td><td>设计令牌违规（14 维）</td><td class="num"><span class="tag t-ok">0</span></td></tr>
+        <tr><td class="mono">verify_refs.py</td><td>悬空引用（57 处）</td><td class="num"><span class="tag t-ok">0</span></td></tr>
+        <tr><td class="mono">check_theme.py</td><td>主题令牌一致性</td><td class="num"><span class="tag t-ok">0</span></td></tr>
+        <tr><td class="mono">tools/check_art.py</td><td>美术素材可用性（按用途分四类）</td><td class="num"><span class="tag t-ok">6/6</span></td></tr>
+        <tr><td class="mono">smoke_test.py</td><td>核心冒烟（serve dist/）</td><td class="num"><span class="tag t-ok">0</span></td></tr>
+        <tr><td class="mono">verify_features.py</td><td>功能面断言</td><td class="num"><span class="tag t-ok">0</span></td></tr>
+        <tr><td class="mono">verify_permissions.py</td><td>权限门禁矩阵（43 条）</td><td class="num"><span class="tag t-ok">0</span></td></tr>
+        <tr><td class="mono">check_assistants.py · check_canvas.py</td><td>应用列表 · 画布基础</td><td class="num"><span class="tag t-ok">0 · 0</span></td></tr>
+        <tr><td class="mono">check_collapse · check_history · check_nodeconfig<br>check_palette · check_pickers · check_publish · check_singleton</td><td>编排画布 7 件</td><td class="num"><span class="tag t-ok">全 0</span></td></tr>
+        <tr><td class="mono">shot_sweep.py · shot_workflow.py</td><td>12 页截图扫描 · 画布截图</td><td class="num"><span class="tag t-ok">0 · 0</span></td></tr>
+        <tr><td class="mono">check_node_menu.py</td><td>节点菜单（曾报警真缺陷，已修，见 §8）</td><td class="num"><span class="tag t-ok">10/10</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="lead" style="margin-top:10px">
+    <b>全部 20 个闸门绿</b>。其中 <code>check_node_menu.py</code> 曾是唯一红的，经 A/B 实验（把工作区改动 <code>git stash</code>
+    回落到基线再跑，结果逐字相同）确认<b>不是当时那批引入</b>，而是它一直在替一个真实产品缺陷报警 —— 那个缺陷已修（§8.1）。
+  </p>
+
+  <h3>2.2 行为探针（本报告的主要新证据）</h3>
+  <ul>
+    <li><b>角色矩阵探针</b>：4 个角色 × 13 条路由 × 8 组动作，逐个量「实际落在哪一页」（用 <code>.state-code</code> 是否 403 判定，
+      并记录重定向后的 hash）与「页面上有哪些动作」。</li>
+    <li><b>数据范围探针</b>：同一页面对四个角色分别数量（应用数、会话数、删除入口数）。</li>
+    <li><b>市场模块探针</b>：17 条断言（分段、来源筛选真生效、收藏经 mock 往返持久、详情抽屉、消费者可达、零 console 错误）。</li>
+    <li><b>探针自身的纪律</b>：每个角色新开一个 browser context（同 context 换用户做不到，localStorage 已有令牌）；
+      读分组式顶栏必须逐组展开并累加（同一时刻只有一组在 DOM）；纯 hash 跳转不产生导航，需用
+      <code>?n=路由#路由</code> 强制真导航。凡断言通过但说不出「它靠哪条路径通过」的，一律重做。</li>
+  </ul>
+</section>
+
+<!-- ══════════════ §3 功能完整性 ══════════════ -->
+<section id="s3">
+  <h2><span class="no">03</span>功能完整性：15 个页面模块</h2>
+  <div class="tw">
+    <table>
+      <thead><tr><th>模块</th><th>路径</th><th>能做什么</th><th class="num">状态</th></tr></thead>
+      <tbody>
+        <tr><td><b>工作台</b></td><td class="mono">/</td><td>按角色分化：建设者见 4 个建设入口 + 平台口径仪器面板；消费者见「我的*」指标 + 我的对话/我提的反馈</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>对话</b></td><td class="mono">/conversation</td><td>选应用 → 流式问答 → 引用可回溯 → 点赞/踩 → 重新生成/继续 → 停止有终态 → 附件 → 分享 → 长会话回溯</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>公开问答</b></td><td class="mono">/public/:token</td><td>免登录沉浸页，凭证明文直接问答</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>应用市场</b></td><td class="mono">/market</td><td>来源四分段（全部/官方/共享给我/我的）· 关键词/分类/排序/只看收藏 · 收藏 · 详情抽屉 · 最近使用</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>应用管理</b></td><td class="mono">/assistants</td><td>建简单/编排两类应用 · 配置（模型/知识库/提示词）· 校验发布 · 凭证与 API Key · 导入导出 · 演示</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>提示词</b></td><td class="mono">/assistants/prompts</td><td>可复用角色指令（<b>配置</b>）的增删改。<b>类型是分类法（契约），已收归「系统管理 → 提示词类型」由管理员维护</b>，此处只读引用</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>编排画布</b></td><td class="mono">/assistants/:id/workflow</td><td>17 类节点目录 · 拖拽编排 · 7 个配置面板 · 存取/校验/发布/版本/回滚 · 调试 · 运行记录</td><td class="num"><span class="tag t-warn">一处待修</span></td></tr>
+        <tr><td><b>知识库</b></td><td class="mono">/knowledge</td><td>建库向导（暂存上传 + 按自己文件预览切分）· 文档/分段治理 · 重新向量化 · 检索参数 · 命中测试</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>模型管理</b></td><td class="mono">/models</td><td>增删改 · 加载/重载 · 探活 · 解析与校验 · 加载中自动刷新（有上限与退避）</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>运营看板</b></td><td class="mono">/analytics</td><td>趋势/应用排行/质量指标 · 反馈待处理入口（按权限过滤）</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>反馈处理</b></td><td class="mono">/feedback</td><td>列表/筛选/分页入 URL · 状态流转 · 重新打开 · 我的口径</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>系统管理</b></td><td class="mono">/admin</td><td>用户增删改（含重置密码）· 角色权限点 · <b>角色数据范围</b> · 权限点清单</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>账号闭环</b></td><td class="mono">/change-password</td><td>改密码（外壳入口 + <code>mustChangePassword</code> 强制引导）</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>登录</b></td><td class="mono">/login</td><td>账号密码登录 · 错误提示</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+        <tr><td><b>外壳与兜底</b></td><td class="mono">_shell · 403 · 404</td><td>分组式带框顶栏 · 命令面板（⌘K）· 403 页列出「当前角色可访问」· 404 保留在壳内</td><td class="num"><span class="tag t-ok">可用</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════ §4 18 个 P0 ══════════════ -->
+<section id="s4">
+  <h2><span class="no">04</span>18 个 P0 逐条状态</h2>
+  <p class="lead">P0 的定义是「这条路走不通」，不是「这条路可以更好走」。18 条全部收口，各自落在四次提交里。</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="num">#</th><th>原现象</th><th>收口方式（可复核）</th><th class="num">状态</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td>停止后没有终态，气泡永远转圈</td><td><code>lib/sse.ts</code> abort 走「已停止」终态；实测最后一条气泡带 <code>已停止</code> + 操作条</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">2</td><td>半途断流静默（无错、无终态）</td><td><code>settled</code> 闸门保证任何终止路径恰好一次 <code>onDone</code>；读循环补终态 + 60s 闲置超时</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">3</td><td>深链打开的是别的会话</td><td>改走 <code>getConversation(id)</code>；深链实测打开正确会话</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">4</td><td>每轮问答不落库，刷新即丢</td><td>mock 侧 <code>chat-store</code> 落库（三种结局都落）；刷新后原样回放</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">5</td><td>假分享（写死 <code>pub_ok_demo</code>）</td><td>真 token（<code>sh_…</code>）且链接真能打开</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">6</td><td>附件是假的（本地造 id、不显示）</td><td>新增 <code>POST /files</code> + <code>ChatMessage.attachments</code>；附件名显示在消息上</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">7</td><td>公开链接格式错，复制出来是 404</td><td>改为 <code>/#/public/${token}</code>；新建页打开真的进公开页</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">8</td><td>卡片不显示来源</td><td><code>Assistant</code> 加 <code>ownerName?</code>；卡片三态徽标（官方 / 由 X 分享 / 我的）</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">9</td><td>全模块没有任何分享 UI</td><td>新增 <code>ShareDialog</code>：三档（公开 / 定向 / 仅自己），定向可选账号或角色，写后重拉能读回</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">10</td><td>改分段后没有「重新向量化」入口</td><td>重向量化入口 3 个可见；保存后 toast「已保存，正在重新向量化」；标签 <code>向量化中</code>→<code>已向量化</code></td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">11</td><td>预览不基于用户文件、编辑不生效</td><td>暂存上传 <code>uploadIds</code> + <code>segmentationPlan</code> 被采纳；编辑标「已编辑」</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">12</td><td>建库不幂等，一次抖动就卡死</td><td><code>clientRequestId</code> 幂等；重试不再撞「名称已存在」</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">13</td><td>列表失败被伪装成空态</td><td>失败显示「知识库列表加载失败」+ 重试，与「还没有知识库」严格区分</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">14</td><td>详情壳无 loading / notFound 分支</td><td>坏深链提示「找不到知识库「x」…已回到知识库列表」</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">15</td><td>全站没有改密页</td><td>新增 <code>/change-password</code> + 外壳入口；四角色实测都有表单</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">16</td><td>运营看板「去处理」未经权限过滤</td><td>改走 <code>canReach</code>；实测「应用配置」角色「去处理」数 = <b>0</b>，「知识运营」= 1</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">17</td><td>角色管理没有数据范围一栏</td><td><code>RoleManage</code> 三档单选（仅自己 / 自己+共享 / 全平台）+ 独立保存；ADMIN 档位锁死并说明原因</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+        <tr><td class="num">18</td><td>工作台对消费者仍是全平台口径</td><td>消费者走 <code>MeSummary</code>：我的提问/我的对话/我的赞踩 + 我的对话 + 我提的反馈 + 「我的使用回执」</td><td class="num"><span class="tag t-ok">已修</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════ §5 角色 × 功能 矩阵 ══════════════ -->
+<section id="s5">
+  <h2><span class="no">05</span>角色 × 功能：完整业务组合</h2>
+  <p class="lead">
+    平台把「操作权限」（能不能做这个动作）与「数据范围」（能看到哪些）当作<b>两个正交的维度</b>。
+    下面三层读数 —— 顶栏项、路由可达性、页面动作 —— 必须互相一致，否则就会出现
+    「看得见但点进去 403」或「给了入口但按钮不存在」。
+  </p>
+
+  <h3>5.1 四个角色的定位</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>角色</th><th class="mono">code</th><th>族</th><th class="mono">dataScope</th><th class="num">权限点</th><th>一句话</th></tr></thead>
+      <tbody>
+        <tr><td><b>管理员</b></td><td class="mono">ADMIN</td><td>建设者</td><td class="mono">all</td><td class="num">16</td><td>全部权限（<code>permissions: all</code>）</td></tr>
+        <tr><td><b>知识运营</b></td><td class="mono">KB_OPERATOR</td><td>建设者</td><td class="mono">all</td><td class="num">11</td><td>知识侧全流程 + 看板 + 反馈处理；不建应用</td></tr>
+        <tr><td><b>应用配置</b></td><td class="mono">APP_CONFIG</td><td>建设者</td><td class="mono">all</td><td class="num">8</td><td>应用编制与发布 + 提示词；不建知识库、不看反馈</td></tr>
+        <tr><td><b>普通用户</b></td><td class="mono">USER</td><td><b>消费者</b></td><td class="mono">shared</td><td class="num">4</td><td>只用别人做好的：市场挑应用 → 对话 → 分享</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5.2 路由可达性（实测）</h3>
+  <div class="roles" id="roleFilter">
+    <button data-role="admin" aria-pressed="false">管理员 <span class="rc">all · 16</span></button>
+    <button data-role="zhangyun" aria-pressed="false">知识运营 <span class="rc">all · 11</span></button>
+    <button data-role="liwei" aria-pressed="false">应用配置 <span class="rc">all · 8</span></button>
+    <button data-role="chenjun" aria-pressed="false">普通用户 <span class="rc">shared · 4</span></button>
+    <button data-role="all" aria-pressed="true">显示全部</button>
+  </div>
+  <div class="tw">
+    <table id="reach">
+      <thead><tr><th>路由</th><th class="num">管理员</th><th class="num">知识运营</th><th class="num">应用配置</th><th class="num">普通用户</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">/ <span class="ev">工作台</span></td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td>登录即可，形态按范围分化</td></tr>
+        <tr><td class="mono">/conversation</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td>四角色均授 <code>conversation:view</code></td></tr>
+        <tr><td class="mono">/market <span class="ev">应用市场</span></td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td>消费者唯一的内容入口</td></tr>
+        <tr><td class="mono">/knowledge</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td>顶栏只对 <code>own/all</code> 显示，直连可达但无建设动作</td></tr>
+        <tr><td class="mono">/knowledge/hittest</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">403</td><td>需 <code>knowledge:hittest</code></td></tr>
+        <tr><td class="mono">/assistants</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td>同上：可达但动作按权限隐藏</td></tr>
+        <tr><td class="mono">/assistants/prompts</td><td class="yes">✓</td><td class="no">403</td><td class="yes">✓</td><td class="no">403</td><td>需 <code>assistant:edit</code></td></tr>
+        <tr><td class="mono">/models</td><td class="yes">✓</td><td class="no">403</td><td class="no">403</td><td class="no">403</td><td>需 <code>model:manage</code></td></tr>
+        <tr><td class="mono">/analytics</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">403</td><td>需 <code>dashboard:view</code></td></tr>
+        <tr><td class="mono">/feedback</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">403</td><td class="no">403</td><td>需 <code>feedback:handle</code></td></tr>
+        <tr><td class="mono">/admin</td><td class="yes">✓</td><td class="no">403</td><td class="no">403</td><td class="no">403</td><td>需 <code>system:manage</code></td></tr>
+        <tr><td class="mono">/change-password</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td>所有登录用户都能改自己的密码</td></tr>
+        <tr><td class="mono">未知路由</td><td class="na">404</td><td class="na">404</td><td class="na">404</td><td class="na">404</td><td>404 保留在壳内（顶栏与入口不丢）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5.3 页面动作矩阵（实测）</h3>
+  <div class="tw">
+    <table id="acts">
+      <thead><tr><th>动作</th><th class="num">管理员</th><th class="num">知识运营</th><th class="num">应用配置</th><th class="num">普通用户</th><th>门禁</th></tr></thead>
+      <tbody>
+        <tr><td>创建知识库</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="mono">knowledge:create</td></tr>
+        <tr><td>上传/加工文档</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="mono">knowledge:document:upload</td></tr>
+        <tr><td>治理分段（含重向量化）</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="mono">knowledge:segment:edit</td></tr>
+        <tr><td>命中测试</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✗</td><td class="mono">knowledge:hittest</td></tr>
+        <tr><td>新建应用</td><td class="yes">✓</td><td class="no">✗</td><td class="yes">✓</td><td class="no">✗</td><td class="mono">assistant:edit</td></tr>
+        <tr><td>发布应用 / 生成公开凭证</td><td class="yes">✓</td><td class="no">✗</td><td class="yes">✓</td><td class="no">✗</td><td class="mono">assistant:publish</td></tr>
+        <tr><td>分享会话</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="mono">conversation:share</td></tr>
+        <tr><td>市场四来源分段 / 收藏</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td>登录即可</td></tr>
+        <tr><td>模型管理</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td><td class="mono">model:manage</td></tr>
+        <tr><td>运营看板「去处理」入口</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="mono">feedback:handle</td></tr>
+        <tr><td>角色「数据范围」配置</td><td class="yes">✓</td><td class="na">—</td><td class="na">—</td><td class="na">—</td><td class="mono">system:manage</td></tr>
+        <tr><td>用户增删改 / 重置密码</td><td class="yes">✓</td><td class="na">—</td><td class="na">—</td><td class="na">—</td><td class="mono">system:manage</td></tr>
+        <tr><td>修改自己的密码</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td>本人即可</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5.4 数据范围：同一页面对不同角色返回不同数据量（实测）</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>读数</th><th class="num">管理员</th><th class="num">知识运营</th><th class="num">应用配置</th><th class="num">普通用户</th></tr></thead>
+      <tbody>
+        <tr><td>顶栏项数</td><td class="num">10</td><td class="num">7</td><td class="num">7</td><td class="num"><b>3</b></td></tr>
+        <tr><td><code>/assistants</code> 可见应用</td><td class="num">5</td><td class="num">5</td><td class="num">5</td><td class="num"><b>3</b></td></tr>
+        <tr><td><code>/market</code> 应用卡（仅已发布）</td><td class="num">3</td><td class="num">3</td><td class="num">3</td><td class="num">3</td></tr>
+        <tr><td>对话历史会话条数</td><td class="num">6</td><td class="num">6</td><td class="num">6</td><td class="num"><b>2</b></td></tr>
+        <tr><td>知识库「删除」入口数</td><td class="num">4</td><td class="num">4</td><td class="num">4</td><td class="num"><b>0</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="lead" style="margin-top:10px">
+    普通用户少掉的那几项，是<b>服务端按 <code>dataScope</code> 过滤</b>的结果，不是前端藏起来的
+    —— 前端隐藏只算体验，真正的边界在后端。
+  </p>
+</section>
+
+<!-- ══════════════ §6 业务链 ══════════════ -->
+<section id="s6">
+  <h2><span class="no">06</span>四条端到端业务链</h2>
+  <p class="lead">「完整可用」的最终判据是：把每条链从头走一遍，中间不断、不丢状态、出错有提示。</p>
+  <div class="flows" id="flows">
+
+    <div class="flow" data-role="chenjun">
+      <h4>链 1 · 消费者：问一个问题并把它分享出去</h4>
+      <div class="who">普通用户 chenjun · dataScope = shared</div>
+      <ol class="steps">
+        <li><span class="mk ok">✓</span><span>登录 → 工作台呈现「我的提问 / 我的对话 / 我的赞踩」<em>不再看到全平台口径</em></span></li>
+        <li><span class="mk ok">✓</span><span>顶栏只剩 3 项（工作台 / 对话 / 应用市场）<em>建设语汇为零</em></span></li>
+        <li><span class="mk ok">✓</span><span>应用市场挑应用 → 按来源分段 / 关键词 / 只看收藏筛<em>筛选项入 URL，刷新不丢</em></span></li>
+        <li><span class="mk ok">✓</span><span>点「开始对话」→ 流式回答逐字出，带引用</span></li>
+        <li><span class="mk ok">✓</span><span>引用可回溯（带 segmentId / documentId / kbId，可跳到知识库页对应分段）</span></li>
+        <li><span class="mk ok">✓</span><span>赞 / 踩提交反馈</span></li>
+        <li><span class="mk ok">✓</span><span>附件：选文件 → 上传拿到真 id → 附件名显示在消息上</span></li>
+        <li><span class="mk ok">✓</span><span>生成中点「停止」→ 气泡进入 <code>已停止</code> 终态，出现「继续 / 重新生成」<em>停得下来的对话框</em></span></li>
+        <li><span class="mk ok">✓</span><span>刷新页面 → 会话与消息原样回放<em>每轮问答都落库</em></span></li>
+        <li><span class="mk ok">✓</span><span>分享自己的会话 → 得到真 token 链接 → 复制 → 换个浏览器打开<code>#/public/&lt;token&gt;</code> 免登录可问</span></li>
+      </ol>
+    </div>
+
+    <div class="flow" data-role="zhangyun">
+      <h4>链 2 · 知识运营：把一批文档变成可检索的知识</h4>
+      <div class="who">知识运营 zhangyun · 11 权限点 · dataScope = all</div>
+      <ol class="steps">
+        <li><span class="mk ok">✓</span><span>创建知识库（幂等建库，网络抖动点「下一步」重试不会撞「名称已存在」）</span></li>
+        <li><span class="mk ok">✓</span><span>暂存上传 → <b>按自己的文件</b>预览切分方案 → 手工微调某段 → 编辑结果被采纳</span></li>
+        <li><span class="mk ok">✓</span><span>导入 → 全局进度条显示向量化进度<em>失败时区分「加载失败」与「暂无文档」</em></span></li>
+        <li><span class="mk ok">✓</span><span>分段治理：批量选择 / 迁移 / 删除（限定在<b>本库</b>，不会跨库）</span></li>
+        <li><span class="mk ok">✓</span><span>改了分段内容 → 点「重新向量化」→ 状态回到 <code>向量化中</code> → 完成后 <code>已向量化</code><em>改动能生效，这是知识库的核心价值</em></span></li>
+        <li><span class="mk ok">✓</span><span>命中测试：调参数 → 跑单次 / 对比模式 → 看命中分段<em>失败会清掉上一次结果，不会把旧结果当这次结论</em></span></li>
+        <li><span class="mk ok">✓</span><span>运营看板看趋势 / 应用排行 / 质量指标</span></li>
+        <li><span class="mk ok">✓</span><span>从看板「去处理」进反馈处理页 → 流转状态 → 重新打开</span></li>
+      </ol>
+    </div>
+
+    <div class="flow" data-role="liwei">
+      <h4>链 3 · 应用配置：把一个应用从零编出来并发布</h4>
+      <div class="who">应用配置 liwei · 8 权限点 · dataScope = all</div>
+      <ol class="steps">
+        <li><span class="mk ok">✓</span><span>新建<b>简单应用</b>（或编排应用）→ 类型创建时选定、之后不可改</span></li>
+        <li><span class="mk ok">✓</span><span>配置对话设定：模型 / 知识库 / 采样参数 / 结构化输出</span></li>
+        <li><span class="mk ok">✓</span><span>挂提示词（从提示词库选用；配置在「提示词」页维护，分类法由管理员在系统管理维护）</span></li>
+        <li><span class="mk ok">✓</span><span>发布前校验 → 不通过时给出具体原因（不再误报「开始节点必填」）</span></li>
+        <li><span class="mk ok">✓</span><span>发布 → 版本落档 → 可回滚到历史版本</span></li>
+        <li><span class="mk ok">✓</span><span>生成公开凭证 → 复制链接<code>/#/public/&lt;token&gt;</code> → 发给外部人<em>对方打开真的能用（旧格式曾 404）</em></span></li>
+        <li><span class="mk ok">✓</span><span>API Key 单条启停（原本是死按钮）</span></li>
+        <li><span class="mk ok">✓</span><span>导出 bundle → 再导入，流程定义不丢</span></li>
+        <li><span class="mk ok">✓</span><span>演示 / 调试：在应用页直接试跑一次对话</span></li>
+        <li><span class="mk warn">!</span><span><b>编排画布</b>：拖拽编排 / 配置面板 / 存取 / 发布 / 版本 / 调试 / 运行记录都在，
+          但<b>节点的操作菜单（展开·重命名·复制·删除）用真实鼠标打不开</b> —— 见 §8</span></li>
+      </ol>
+    </div>
+
+    <div class="flow" data-role="admin">
+      <h4>链 4 · 管理员：把人、角色与数据范围立起来</h4>
+      <div class="who">管理员 admin · 16 权限点 · dataScope = all</div>
+      <ol class="steps">
+        <li><span class="mk ok">✓</span><span>新建用户（默认密码 123456，登录后被引导改密）</span></li>
+        <li><span class="mk ok">✓</span><span>给用户配角色 → 角色挂权限点（13→<b>16</b> 个，含对话族三档）</span></li>
+        <li><span class="mk ok">✓</span><span>配角色的<b>数据范围</b>：仅自己 / 自己 + 共享 / 全平台<em>管理员档位锁死并说明「避免把唯一的管理员锁在门外」</em></span></li>
+        <li><span class="mk ok">✓</span><span>权限点清单页可查全部 16 个点及其所属模块</span></li>
+        <li><span class="mk ok">✓</span><span>模型管理：增删改 / 加载 / 探活 / 加载中自动刷新（有上限与退避，跨页也刷新）</span></li>
+        <li><span class="mk ok">✓</span><span>改自己的密码（外壳入口）</span></li>
+        <li><span class="mk ok">✓</span><span>改别人的密码 / 删除用户<em>不能删自己（已挡）</em></span></li>
+      </ol>
+    </div>
+
+  </div>
+</section>
+
+<!-- ══════════════ §7 契约面 ══════════════ -->
+<section id="s7">
+  <h2><span class="no">07</span>后端契约面（这就是后端的输入）</h2>
+  <p class="lead">
+    契约冻结在 <code>frontend/src/api/**</code>，页面只从 <code>@/api</code> 单一出口 import，
+    不直接引 <code>@/lib/http</code>。共 <b>12 个域 / 115 个端点</b>。
+    <code>src/mock/**</code> 只是传输层的替身 —— 切后端时把 <code>VITE_USE_MOCK</code> 关掉即可，<b>页面代码一行不改</b>。
+  </p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>域</th><th class="num">端点</th><th class="num">行数</th><th>覆盖</th><th class="num">在 <code>@/api</code> 出口</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">identity</td><td class="num">12</td><td class="num">118</td><td>登录/登出 · 用户增删改 · 改密 · 角色与权限点 · <b>角色数据范围</b></td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">models</td><td class="num">8</td><td class="num">117</td><td>模型增删改 · 加载 · 探活 · 基础模型清单</td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">knowledge</td><td class="num">7</td><td class="num">90</td><td>知识库 CRUD · 分类 · 启停 · <b>幂等建库</b></td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">ingestion</td><td class="num">20</td><td class="num">279</td><td>文档/分段全流程 · <b>暂存上传</b> · 切分预览 · <b>三种重向量化</b> · 批量操作 · 上传策略</td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">retrieval</td><td class="num">3</td><td class="num">63</td><td>检索参数读写 · 命中测试</td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">assistants</td><td class="num">23</td><td class="num">340</td><td>应用 CRUD · 发布 · 校验 · 凭证 / API Key · 导入导出 · 调试 · <b>收藏 / 标签 / 分享写</b></td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">conversations</td><td class="num">14</td><td class="num">203</td><td>会话 CRUD · 消息 · 流式问答 · 反馈 · <b>会话分享</b> · <b>文件上传</b> · 免登录公开问答</td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">feedback</td><td class="num">5</td><td class="num">73</td><td>反馈列表/详情/统计 · 状态流转 · 重新打开</td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">analytics</td><td class="num">5</td><td class="num">85</td><td>总览 · 趋势 · 应用排行 · 质量指标 · <b>我的口径聚合</b></td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">stream</td><td class="num">—</td><td class="num">16</td><td>SSE 传输（帧格式与三态定义在 <code>stream-types.ts</code>：<code>已生成｜已停止｜失败</code>）</td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">prompts</td><td class="num">8</td><td class="num">81</td><td>提示词配置 CRUD（写需 <code>assistant:edit</code>）· <b>类型读写分离</b>：读 <code>assistant:edit</code> / 写 <code>system:manage</code></td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">workflow</td><td class="num">10</td><td class="num">418</td><td>草稿读写 · 校验 · 发布 · 版本 · 回滚 · 调试 · 运行记录 · 节点类型目录</td><td class="num yes">✓</td></tr>
+        <tr><td class="mono">legacy/*</td><td class="num">0</td><td class="num">145</td><td>画布旧调用点的<b>适配垫片</b>：只改名与包一层 <code>data.data</code>，<b>不新增任何端点</b>（字典是纯本地常量）。已清掉两个返回空表单的死导出</td><td class="num"><span class="tag t-mute">待删</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>7.1 清单里倒推出的 22 条接口需求 —— 现已进契约的情况</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>需求</th><th>落地形态</th><th class="num">状态</th></tr></thead>
+      <tbody>
+        <tr><td>幂等建库</td><td class="mono">POST /knowledge-bases + clientRequestId?</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>暂存上传 / 按文件预览 / 带计划导入</td><td class="mono">POST …/uploads → uploadIds · preview + uploadIds · documents + segmentationPlan</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>三种重向量化</td><td class="mono">POST /segments/:id/embedding · /documents/:id/reembed · /knowledge-bases/:kbId/reembed</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>上传部分失败回执</td><td class="mono">→ { accepted, rejected[] }</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>分享写（公开 / 定向）</td><td class="mono">PATCH /assistants/:id/visibility · PUT /assistants/:id/grants</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>应用归属人</td><td class="mono">Assistant.ownerName?</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>市场：收藏 / 标签 / 排序 / 来源</td><td class="mono">POST·DELETE /assistants/:id/favorite · GET /assistants/tags · query.sort/favorite/tag/origin</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>会话分享</td><td class="mono">POST·GET·DELETE /conversations/:id/shares</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>文件上传</td><td class="mono">POST /files</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>角色数据范围</td><td class="mono">PUT /roles/:id/data-scope { dataScope, dataScopeRule? }</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>我的口径聚合</td><td class="mono">GET /analytics/me/summary</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>我的反馈</td><td class="mono">GET /feedbacks?mine=true · FeedbackItem.requesterId?</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>分段归属 / 批量分段</td><td class="mono">SegmentQuery.kbId · DELETE /segments/batch → { deleted, failed[] }</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>上传策略 / 检索默认参数</td><td class="mono">GET …/upload-policy · GET …/retrieval</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>API Key 单条启停 / 凭证启停</td><td class="mono">PATCH …/api-keys/:id/enabled · PATCH …/credentials/:id/enabled</td><td class="num"><span class="tag t-ok">已进契约</span></td></tr>
+        <tr><td>消息定位（深链跳到某条消息）</td><td class="mono">GET /conversations/:id/messages 缺 <code>around</code> 参数</td><td class="num"><span class="tag t-warn">仍缺</span></td></tr>
+        <tr><td>SSE 心跳帧 / 终态必达</td><td>已写进 <code>docs/前端页面与功能清单.md</code> §八，<b>尚未写进 <code>stream-types.ts</code></b></td><td class="num"><span class="tag t-warn">仍缺</span></td></tr>
+        <tr><td>批量办理反馈</td><td class="mono">PATCH /feedbacks/batch</td><td class="num"><span class="tag t-mute">P2 · 未做</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════ §8 缺口 ══════════════ -->
+<section id="s8">
+  <h2><span class="no">08</span>缺口收口与闸门新抓到的缺陷</h2>
+  <p class="lead">本报告初版列出的 7 条缺口<b>已全部收口</b>；收口过程中闸门又抓出两个真缺陷，也已修。每条都有可执行读数。</p>
+
+  <h3>8.1 初版列出的 7 条缺口 —— 收口情况</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>原缺口</th><th>修法</th><th class="num">验证读数</th></tr></thead>
+      <tbody>
+        <tr><td><b>P0</b> 编排画布节点菜单真人点不开</td><td>LogicFlow 节点上原生 <code>click</code> 不触发（项目自己的注释已记下）⇒ 改用 <code>document</code> 捕获阶段 <code>mouseup</code> + 落点判定手动开合，并自管跨节点互斥；<code>:trigger="[]"</code> 不再依赖原生 click。顺手清掉那条说「右键菜单」的谎话注释与其死代码（全库确无 <code>contextmenu</code> 注册）</td><td class="num"><span class="tag t-ok">闸门 10/10</span></td></tr>
+        <tr><td><b>P1</b> 消息定位参数 <code>around</code> 缺失</td><td><code>api/conversations.ts</code> 新增 <code>MessageQuery.around</code>（与 <code>page</code> 互斥、<b>找不到报 404 而非回退第一页</b>）；mock 实现中心切片；对话页真读 URL 的 <code>messageId</code> 并滚动高亮</td><td class="num"><span class="tag t-ok">6/6</span></td></tr>
+        <tr><td><b>P1</b> SSE 心跳帧只在文档里</td><td>落进 <code>stream-types.ts</code>：<code>HeartbeatComment</code> · <code>HEARTBEAT_INTERVAL_MS=20s</code> · <code>IDLE_TIMEOUT_MS=60s</code>（契约写死 <b>20×3 ≤ 60</b>）· <code>StreamTerminationPath</code>（终态必达）· <b><code>TaskProgressOwnership</code>（「任务不依赖前端连接」成为类型）</b></td><td class="num"><span class="tag t-ok">契约逐字核实</span></td></tr>
+        <tr><td><b>P1</b> 画布「新建模型」弹窗空表单</td><td>抽共用件 <code>ModelCreateForm.vue</code>（7 字段 + 基础模型目录卡片），模型页与画布共用；删掉返回空表单的死导出</td><td class="num"><span class="tag t-ok">8/8</span></td></tr>
+        <tr><td><b>P1</b> 工作台两条「空承诺」入口</td><td>入口附上它真正需要的<b>动作权限</b>，过滤改为 <code>canReach(路径) &amp;&amp; session.can(权限)</code> 两道都判</td><td class="num"><span class="tag t-ok">四角色 4/4</span></td></tr>
+        <tr><td><b>P2</b> <code>prompts</code>/<code>workflow</code> 未走 <code>@/api</code> 出口</td><td><code>api/index.ts</code> 补两个导出（现 <b>12 域</b>）；运行时调用切到出口，<b>type-only import 保留</b></td><td class="num"><span class="tag t-ok">残留全为 type</span></td></tr>
+        <tr><td><b>P2</b> 功能清单未回写收口状态</td><td>§一 加「当前状态」小节 · §二 五张表逐行加状态列 · §五 两行标「本轮补齐」</td><td class="num"><span class="tag t-ok">+42/-30</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>8.2 收口过程中闸门新抓到的两个真缺陷</h3>
+  <div class="gaps">
+
+    <div class="gap p1">
+      <div class="gt"><span class="tag t-ok">已修</span><b>模型弹窗<b>首次</b>打开时基础模型目录恒空</b></div>
+      <p>抽共用件时 <code>ModelFormDialog.open()</code> 漏了一拍：<code>visible=true</code> 后<b>同步</b>就 <code>formRef.value?.load()</code>，而弹窗内容还没挂载 ⇒ <code>formRef</code> 是 undefined ⇒ 目录永远空（文案「没有匹配的基础模型」）。<b>真实用户第一次点「添加模型」就建不了模型</b>。对照 <code>CreateModelDialog.vue</code> 有正确的 <code>await nextTick()</code>。已补，并扫全库确认只有这一处是这个形状。</p>
+      <p class="ev">实测：首开 <code>.catalog-item</code> 数量 <b>0 → 8</b>；连开三次都不空；提交落库。</p>
+    </div>
+
+
+    <div class="gap p1">
+      <div class="gt"><span class="tag t-ok">已修</span><b><code>/admin</code> 的 Tab 与 URL 只有单向同步</b></div>
+      <p><code>admin/Index.vue</code> 只在 setup 读一次 <code>route.query.tab</code>，只有 <code>state → URL</code> 的 watch、<b>没有 <code>URL → state</code> 的</b>。后果：<b>浏览器前进/后退、以及任何在页内改 URL 的操作，界面不跟随</b>（URL 说 <code>promptTypes</code>、界面停在 <code>users</code>）—— 与 P0 #3「深链打开别的会话」是同一族。这个形状在本轮之前就存在（原来 3 个 Tab 时就这样），是新加的 Tab 断言把它照出来的。</p>
+      <p class="ev">实测：同组件改 hash 现在会切 · <b>浏览器后退界面跟随</b>（角色管理 → 后退 → 提示词类型）· 无回环 · 新挂载深链不回归。</p>
+    </div>
+
+  </div>
+
+  <h3>8.3 仍然开着的一条</h3>
+  <div class="gaps">
+
+    <div class="gap p2">
+      <div class="gt"><span class="tag t-mute">P2 · 技术债</span><b><code>api/legacy/*</code> 适配垫片待删</b></div>
+      <p>它只给从旧工程整体搬来的画布调用点改名 + 包 <code>data.data</code>，<b>不新增任何端点</b>（字典是纯本地常量）。本轮已清掉两个返回空表单的死导出。文件中写明它是<b>唯一的删除点</b>：把画布调用点正规化到 <code>@/api/*</code> 之后整个目录可删。<b>现在还不能删</b> —— 画布仍在用它的 <code>detail</code> / <code>addSubmit</code> / <code>workFlowPublish</code> / <code>getWorkFlowVersion</code> / <code>getVersionGraph</code> / <code>getAiList</code>。</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- ══════════════ §9 开工建议 ══════════════ -->
+<section id="s9">
+  <h2><span class="no">09</span>后端开工建议</h2>
+  <p class="lead">可以开工。以下是让前后端一次对接成功的几条硬约束 —— 它们都是从这次审计里量出来的，不是猜的。</p>
+  <div class="card">
+    <h3 style="margin-top:0">必须遵守的契约纪律</h3>
+    <ul>
+      <li><b>响应包络</b>：新链路的响应是<b>单层</b>（<code>{ code, message, data }</code>，页面读 <code>data</code>）。
+        但画布的旧调用点读<b>双层</b>（<code>res.data.data</code>）—— 这一层差异由 <code>api/legacy/setting.ts</code> 吸收，
+        <b>后端只实现单层</b>，不要在两端之间摇摆。</li>
+      <li><b>分页形状</b>：一律 <code>{ list, total, page, size }</code>（<code>PageResult</code>）。</li>
+      <li><b>错误语义</b>：<b>看不见的资源一律返回 404 而不是 403</b>（403 等于确认 id 存在）。
+        前端已经把「请求失败」与「没有数据」分成两个渲染分支，请给可区分的错误码。</li>
+      <li><b>列表必须服务端按 <code>dataScope</code> 过滤</b>：前端隐藏入口只是体验，不是安全边界。
+        审计实测的读数是后端过滤的验收目标 —— 普通用户的 <code>/assistants</code> 应只见 3 个、会话 2 条。</li>
+      <li><b>幂等</b>：<code>POST /knowledge-bases</code> 认 <code>clientRequestId</code>，重复提交返回<b>既有资源</b>而不是报「名称已存在」。</li>
+      <li><b>可选字段只加不删</b>：本次前端为了不破坏既有调用方，一律用「加可选字段 / 新开一个导出」的方式扩展
+        （例：<code>uploadDocuments</code> 保留 <code>DocumentItem[]</code>，新开 <code>importDocuments</code> 返回 <code>{ accepted, rejected[] }</code>）。
+        后端同一原则：<b>不改变既有字段的类型或含义</b>。</li>
+    </ul>
+
+    <h3>建议的实现顺序</h3>
+    <p>按仓库里的 <code>docs/ROADMAP.md</code>（十节 · M0–M6 · 98 个端点落位 · 关键路径 <b>M2 → M3 → M4b</b>）。
+    其中三件事值得优先，因为前端已经把它们当既成事实在用：</p>
+    <ol>
+      <li><b>M1 身份与权限</b> —— 没有它，前面测到的「角色 × 功能矩阵」全都无法在后端重现。</li>
+      <li><b>SSE 流式问答（M4b 的核心）</b> —— 全工程最难的单点。契约里的三态
+        （<code>已生成｜已停止｜失败</code>）与「<code>error</code> 后仍走 <code>done</code>」必须严格实现，
+        前端已按这个语义写死了终态处理。</li>
+      <li><b>知识库入库流水线（M2–M3）</b> —— 前端已按「暂存上传 → 按文件预览 → 带计划导入 → 三种重向量化」
+        的形态写好，接口形状不能改。</li>
+    </ol>
+
+    <h3>切后端时前端要做的唯一一件事</h3>
+    <p>把 <code>VITE_USE_MOCK</code> 置为 <code>false</code>。mock 只住在传输层
+      （<code>src/mock/handlers/**</code> 与 <code>src/lib/http</code> 之间的分派），
+      <b>页面代码、路由、权限判据一行都不需要改</b>。这正是这套架构当初立下的承诺，本次审计确认它仍然成立。</p>
+  </div>
+</section>
+
+<footer>
+  <p>本报告的每一条读数都由可执行断言或机械扫描产生；子代理的自述未被采信。
+  基线 <code>8b5bdba</code> · 生成于审计当轮。</p>
+</footer>
+
+</div>
+<script src="report.js"></script>
+</body>
+</html>

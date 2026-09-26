@@ -14,6 +14,8 @@ import { enrichRef } from './fixtures/conversations'
  *
  * 严格按 api/stream-types.ts 的事件顺序发射：
  *   meta → refs → delta(多次) → artifact → done
+ * 心跳（`: keep-alive` 注释帧的 mock 对应物）在生成间隙按固定节拍发，
+ * 保证契约①「心跳帧」这一条在 mock 下也被真的走到。
  * 目的是让界面上的流式、引用、停止、重生成都是**真的事件驱动**，
  * 而不是假动画。换成真实 SSE 只取决于 config/env.ts 的 USE_MOCK。
  *
@@ -31,6 +33,13 @@ import { enrichRef } from './fixtures/conversations'
 const CHAR_STEP_MIN = 2
 const CHAR_STEP_MAX = 4
 
+/**
+ * mock 心跳节拍。生产是 `HEARTBEAT_INTERVAL_MS`（20s）—— mock 流几秒就结束，
+ * 用同一个 20s 永远观测不到心跳 ⇒ 这里按时间压缩到 400ms，
+ * 保证契约①「心跳帧会被发出」在 mock 下**真的被执行**（可被 onHeartbeat 断言）。
+ */
+const MOCK_HEARTBEAT_MS = 400
+
 /** 问题里带这个词就模拟生成失败 —— 让「失败」这条终态可被真的走到 */
 const FAIL_TRIGGER = '模拟失败'
 
@@ -43,6 +52,8 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
   const timers = new Set<ReturnType<typeof setTimeout>>()
   let aborted = false
   let closed = false
+  /** 心跳计时器：与业务 timer 分开清，finish/abort 都要停 */
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
   /** 本轮已推给调用方的文本 —— 中断时要落的就是这个半截，不是整篇 canned */
   let emittedText = ''
@@ -59,9 +70,17 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
     timers.add(timer)
   }
 
+  const stopHeartbeat = () => {
+    if (heartbeatTimer !== null) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+    }
+  }
+
   const cleanup = () => {
     timers.forEach(clearTimeout)
     timers.clear()
+    stopHeartbeat()
   }
 
   /** 当前登录人；拿不到人时传空串，公开流由 appendTurn 按 credentialToken 分支 */
@@ -138,6 +157,14 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
       traceId: `trace_${messageId}`,
       model: options.thinking ? 'qwen3:8b' : 'qwen3:4b-instruct'
     })
+    // 契约①：连接建立后开始发心跳（`: keep-alive` 的 mock 对应物）。
+    // 生产间隔 20s，mock 时间压缩到 400ms，保证短流也能被观测到。
+    if (!closed && !aborted && heartbeatTimer === null) {
+      heartbeatTimer = setInterval(() => {
+        if (closed || aborted) return
+        options.onHeartbeat?.()
+      }, MOCK_HEARTBEAT_MS)
+    }
   }, 60)
 
   // 2) refs：检索先于生成，引用先到，用户可边看答案边点引用

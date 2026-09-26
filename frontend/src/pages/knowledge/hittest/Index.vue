@@ -48,6 +48,17 @@ watch(kbId, (id) => {
   router.replace({ query: { ...route.query, kbId: id || undefined } })
 })
 
+// URL → 选择：浏览器前进/后退、页内改 hash 时下拉跟随。
+// 值比较后再赋值，避免与上面的 watch(kbId) 互写成环。
+watch(
+  () => route.query.kbId,
+  (raw) => {
+    const next = typeof raw === 'string' ? raw : ''
+    if (next === kbId.value) return
+    kbId.value = next
+  }
+)
+
 onMounted(loadOptions)
 </script>
 

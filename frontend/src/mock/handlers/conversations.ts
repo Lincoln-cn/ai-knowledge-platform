@@ -430,6 +430,32 @@ export const conversationRoutes: MockRoute[] = [
     ({ path, query, token }) => {
       findConv(path.conversationId, token)
       const list = messagesOf(path.conversationId)
+
+      /*
+       * around=messageId：以该消息为中心取一个窗口（深链 / 分享跳到某条消息）。
+       * 与 page 互斥 —— 传了 around 就忽略 page；size 表示窗口宽度（前后各约 size/2）。
+       * 找不到目标消息报 404，不静默回退第一页（回退会让深链「跳到别的消息」）。
+       */
+      const around = query.around != null && query.around !== '' ? String(query.around) : ''
+      if (around) {
+        const idx = list.findIndex((m) => m.id === around)
+        if (idx < 0) {
+          throw new ApiError(ErrorCode.NOT_FOUND, `消息「${around}」不存在`)
+        }
+        const size = Number(query.size ?? 20)
+        const half = Math.floor(size / 2)
+        const start = Math.max(0, idx - half)
+        const end = Math.min(list.length, start + size)
+        // 贴到末尾时向前扩，保证窗口尽量满
+        const start2 = Math.max(0, end - size)
+        return {
+          list: list.slice(start2, end),
+          total: list.length,
+          page: 1,
+          size
+        }
+      }
+
       // page=-1 表示取最后一页 —— 聊天窗口总是先看到最近的几条，再「加载更早」
       if (String(query.page ?? '') === '-1') {
         const size = Number(query.size ?? 50)

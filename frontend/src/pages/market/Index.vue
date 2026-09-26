@@ -156,7 +156,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -266,6 +266,35 @@ const onPageChange = () => {
   syncQueryToUrl()
   fetchList()
 }
+
+// URL → 筛选/分页：浏览器前进/后退、页内改 hash 时界面跟随。
+// 值比较后再赋值，避免与 syncQueryToUrl 互写成环；只在真变了时才拉列表。
+// （`?focus=` 是一次性滚动定位，不是可同步的筛选态，不在此列。）
+watch(
+  () => [
+    route.query.keyword,
+    route.query.origin,
+    route.query.tag,
+    route.query.sort,
+    route.query.favorite,
+    route.query.page
+  ],
+  () => {
+    const next = readQueryFromUrl()
+    if (
+      next.keyword === query.keyword &&
+      next.origin === query.origin &&
+      next.tag === query.tag &&
+      next.sort === query.sort &&
+      next.favorite === query.favorite &&
+      next.page === query.page
+    ) {
+      return
+    }
+    Object.assign(query, next)
+    fetchList()
+  }
+)
 
 const fetchList = async () => {
   loading.value = true

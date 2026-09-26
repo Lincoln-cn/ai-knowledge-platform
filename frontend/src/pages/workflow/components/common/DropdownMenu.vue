@@ -48,7 +48,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import { cloneDeep } from 'lodash-es'
-import { listNodeTypes } from '@/api/workflow'
+import { workflowApi } from '@/api'
 import type { NodeTypeMeta } from '@/api/workflow'
 import { nodeDict } from '@/pages/workflow/components/common/data'
 import { iconComponent } from '@/pages/workflow/components/icons/utils'
@@ -155,7 +155,7 @@ function clickCatalog(meta: NodeTypeMeta) {
 }
 
 onMounted(() => {
-    listNodeTypes()
+    workflowApi.listNodeTypes()
         .then((list) => {
             catalog.value = list ?? []
         })

@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="提示词"
-      desc="提示词类型与提示词配置。7 份旧副本已合为一处：类型管分类，配置管可复用的角色指令"
+      desc="提示词配置：可复用的角色指令，被应用按引用选用。类别里的类型是分类法（契约），由管理员在「系统管理 → 提示词类型」维护"
     >
       <template #actions>
         <el-button size="small" :icon="Refresh" :loading="loadingTypes || loadingConfigs" @click="reloadAll">
@@ -15,14 +15,6 @@
       提示词配置里的「角色名称 + 提示词」可在应用配置中被引用（<b>从提示词选用</b>）。
       被应用引用的配置删除前会阻止，并提示先解除引用。
     </div>
-
-    <PromptTypePanel
-      :list="types"
-      :loading="loadingTypes"
-      @create="openType()"
-      @edit="openType"
-      @remove="removeType"
-    />
 
     <PromptConfigPanel
       :list="configs"
@@ -41,12 +33,7 @@
       @page="onPage"
     />
 
-    <PromptFormDialog
-      ref="formRef"
-      :kind="dialogKind"
-      :types="types"
-      @saved="onSaved"
-    />
+    <PromptFormDialog ref="formRef" :types="types" @saved="onSaved" />
   </div>
 </template>
 
@@ -54,11 +41,10 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import * as promptsApi from '@/api/prompts'
+import { promptsApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { PromptConfig, PromptType } from '@/api/prompts'
 import PageHeader from '@/components/PageHeader.vue'
-import PromptTypePanel from '../components/prompts/PromptTypePanel.vue'
 import PromptConfigPanel from '../components/prompts/PromptConfigPanel.vue'
 import PromptFormDialog from '../components/prompts/PromptFormDialog.vue'
 
@@ -71,10 +57,10 @@ const typeId = ref('')
 const keyword = ref('')
 const loadingTypes = ref(false)
 const loadingConfigs = ref(false)
-const dialogKind = ref<'type' | 'config'>('config')
 
 const formRef = ref<InstanceType<typeof PromptFormDialog>>()
 
+/** 类型是只读引用：本页只把它填进筛选/表单的下拉，读写都由系统管理负责 */
 const loadTypes = async () => {
   loadingTypes.value = true
   try {
@@ -105,37 +91,12 @@ const reloadAll = async () => {
   await Promise.all([loadTypes(), loadConfigs()])
 }
 
-const openType = (row?: PromptType) => {
-  dialogKind.value = 'type'
-  formRef.value?.openType(row)
-}
-
 const openConfig = (row?: PromptConfig) => {
-  dialogKind.value = 'config'
   formRef.value?.openConfig(row)
 }
 
 const onSaved = () => {
   reloadAll()
-}
-
-const removeType = async (row: PromptType) => {
-  const confirmed = await ElMessageBox.confirm(
-    `删除类型「${row.typeName}」后，其下的提示词将失去分类。确认删除？`,
-    '确认删除类型',
-    { type: 'warning', confirmButtonText: '删除' }
-  ).then(
-    () => true,
-    () => false
-  )
-  if (!confirmed) return
-  try {
-    await promptsApi.deletePromptType(row.id)
-    ElMessage.success('已删除')
-    await reloadAll()
-  } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '删除失败')
-  }
 }
 
 const removeConfig = async (row: PromptConfig) => {

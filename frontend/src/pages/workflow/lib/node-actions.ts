@@ -1,7 +1,7 @@
 /**
  * 节点操作动作（删除 / 复制 / 收起展开 / 重命名）与单例规则。
  *
- * 左侧 ⋮ 菜单、右键菜单、「添加组件」面板**共用这一套**，避免多处各写一份规则。
+ * ⋮ 操作菜单与「添加组件」面板**共用这一套**，避免多处各写一份规则。
  *
  * 单例删除规则（不是「start-node 一律不能删」）：
  *   删除后图是否仍合法？
@@ -223,13 +223,6 @@ export function buildNodeMenuItems(opts: BuildNodeMenuOptions): NodeMenuItem[] {
       run: () => requestDeleteNode(graphModel, nodeId)
     }
   ]
-}
-
-/** 右键菜单用的展示文案：禁用项把原因直接写进标题（右键菜单没有 tooltip） */
-export function menuDisplayLabel(item: NodeMenuItem): string {
-  return item.disabled && item.disabledReason
-    ? `${item.label}（${item.disabledReason}）`
-    : item.label
 }
 
 /* ────────────────────────── 「添加组件」入口的单例闸门 ────────────────────────── */

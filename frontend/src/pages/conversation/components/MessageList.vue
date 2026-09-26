@@ -29,7 +29,11 @@
       </div>
       <template v-for="(msg, mi) in messages" :key="msg.id">
         <hr v-if="mi > 0" class="rule-2 msg-rule" />
-        <article class="msg" :class="msg.role">
+        <article
+          class="msg"
+          :class="[msg.role, { focused: highlightId === msg.id }]"
+          :data-message-id="msg.id"
+        >
           <!-- 角色：mono 小标签，不靠气泡左右/颜色区分 -->
           <header class="msg-head">
             <span class="label">{{ msg.role === 'user' ? 'QUERY' : 'ANSWER' }}</span>
@@ -223,6 +227,23 @@ const scrollToBottom = (smooth = true) => {
   el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
 }
 
+/**
+ * 深链定位：滚到目标消息并短暂高亮（与 assistants `?focus=` 同一手法）。
+ * 找不到目标时静默留在原地 —— 消息可能已被删，页面仍有可读内容。
+ */
+const highlightId = ref('')
+const scrollToMessage = (id: string) => {
+  const el = scroller.value
+  if (!el) return
+  const target = el.querySelector(`[data-message-id="${id}"]`)
+  if (!target) return
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  highlightId.value = id
+  window.setTimeout(() => {
+    if (highlightId.value === id) highlightId.value = ''
+  }, 2600)
+}
+
 watch(
   () => props.messages.map((m) => m.content.length + m.status).join('|'),
   async () => {
@@ -239,7 +260,7 @@ watch(
   }
 )
 
-defineExpose({ scrollToBottom })
+defineExpose({ scrollToBottom, scrollToMessage })
 </script>
 
 <style scoped>
@@ -260,6 +281,12 @@ defineExpose({ scrollToBottom })
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
+}
+
+/* 深链定位到的那条消息：滚动到视野内后短暂描边，让人看见「落在了哪一个」 */
+.msg.focused {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 /* 角色行：mono 小标签，替代左右气泡 */

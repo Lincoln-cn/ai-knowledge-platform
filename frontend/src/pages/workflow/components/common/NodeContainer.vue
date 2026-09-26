@@ -64,7 +64,15 @@
                           `rect` 恒为 0×0、永远不显示（用户看到的就是「有 ⋮ 但点了没反应」）。
                           弹出到 body 才正常。
                         -->
-                        <el-dropdown trigger="click">
+                        <!--
+                          触发方式：**不依赖原生 click**。
+                          LogicFlow 节点上 mousedown/mouseup 落到不同元素（拖拽前会重渲染节点 DOM）
+                          ⇒ 浏览器不派发 click ⇒ `trigger="click"` 对真人鼠标永远打不开。
+                          正解与「点卡片开配置」同一套：document 捕获阶段 mouseup + 落点判定，
+                          命中 ⋮ 按钮时手动 `handleOpen()`。`trigger` 留空，避免 click 与手动开合打架；
+                          键盘（Enter/Space）仍走 dropdown 自己的 triggerKeys。
+                        -->
+                        <el-dropdown ref="nodeMenuRef" :trigger="[]" @visible-change="onNodeMenuVisible">
                             <el-button text>
                                 <el-icon class="color-secondary">
                                     <MoreFilled />
@@ -157,6 +165,45 @@
         </el-collapse-transition>
     </div>
 </template>
+<script lang="ts">
+/**
+ * 跨 NodeContainer 实例共享的 ⋮ 菜单互斥状态。
+ *
+ * 为什么在普通 `<script>`（模块作用域）而不是 `<script setup>`：
+ * LogicFlow 给每个节点 `createApp()` 建**独立 Vue 子应用**（见 app-node.ts），
+ * `<script setup>` 里的变量是每实例一份，只有模块级变量能跨节点共享
+ * （同 context.ts 里的 collapseAll）。
+ */
+type MenuController = { close: () => void }
+
+const menuControllers = new Set<MenuController>()
+let pendingOnUp: ((e: MouseEvent) => void) | null = null
+
+function clearPendingOnUp() {
+    if (!pendingOnUp) return
+    document.removeEventListener('mouseup', pendingOnUp, true)
+    pendingOnUp = null
+}
+
+/** 收起所有节点的 ⋮ 菜单。开新菜单前先调它，保证同一时刻 ≤1 个可见。 */
+function closeAllNodeMenus() {
+    for (const c of menuControllers) c.close()
+}
+
+/**
+ * Escape 兜底收起。
+ * ElDropdown 自己的 Escape 依赖焦点落在菜单内；焦点被 LogicFlow 抢走时关不掉
+ * （实测同一菜单要按两次 Escape）。这里在捕获阶段无条件收，不 stopPropagation，
+ * 不影响抽屉/对话框各自的 Escape。
+ */
+document.addEventListener(
+    'keydown',
+    (e) => {
+        if (e.key === 'Escape') closeAllNodeMenus()
+    },
+    true
+)
+</script>
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import DropdownMenu from '@/pages/workflow/components/common/DropdownMenu.vue'
@@ -208,33 +255,104 @@ const mousedown = () => {
  *    （诊断证据：`[DIAG down]` 触发、`[DIAG click]` 一次都没有。）
  * 正解 = 在 `document` 上以捕获阶段自己收 `mouseup`，用位移判据区分「点击」与「拖拽」。
  *   捕获阶段的好处是不受 LogicFlow 的 stopPropagation 影响。
+ *
+ * 同一套判据也用来驱动 ⋮ 操作菜单：落点在 `.el-dropdown` 触发器上时手动开/关，
+ * 不依赖 `el-dropdown` 的 `trigger="click"`（那个 click 在 LF 节点上同样永不触发）。
+ *
+ * ⚠️ 开新菜单前必须 `closeAllNodeMenus()`：原生 click 在 LF 节点上不派发 ⇒
+ * el-dropdown 的 onClickOutside（挂在 window 的 click 上）也永不触发，
+ * 指望它在切换菜单时收起上一个是靠不住的（实测会两个菜单叠加）。
  */
 const downPos = { x: 0, y: 0 }
 let pressedOnCard = false
 
+const nodeMenuRef = ref<any>(null)
+const nodeMenuOpen = ref(false)
+function onNodeMenuVisible(v: boolean) {
+    nodeMenuOpen.value = v
+}
+
+/** 本实例菜单的收起入口，挂进模块级 registry 供互斥逻辑调用。 */
+const menuController: MenuController = {
+    close: () => {
+        // 无条件关：nodeMenuOpen 可能与真实可见态不同步（visible-change 不一定 100% 触发），
+        // 用它当闸门会漏关，导致两个菜单同时可见。
+        nodeMenuOpen.value = false
+        nodeMenuRef.value?.handleClose?.()
+        // 见下方 openNodeActionMenu 的「二次确认」：click 若真的派发了，onClickOutside
+        // 的 onClose 会和 handleClose 抢同一个 useDelayedToggle 槽，再关一次兜底。
+        setTimeout(() => {
+            nodeMenuOpen.value = false
+            nodeMenuRef.value?.handleClose?.()
+        }, 0)
+    }
+}
+
+/**
+ * 打开本节点 ⋮ 操作菜单（不是锚点上的「添加组件」菜单 openNodeMenu）。
+ *
+ * 为什么要「二次确认开」：el-dropdown 的 onClickOutside 挂在 window 的 click 上。
+ * LogicFlow 节点上多数时候 click 不派发（toFront 换掉 down/up 的公共祖先），
+ * 但**不是 100%** —— click 一旦派发，会在我们 mouseup 里的 handleOpen 之后跑
+ * onClose，把同一个 useDelayedToggle 槽里的 show 取消掉 ⇒ 菜单看起来「没打开」。
+ * 把 handleOpen 再往宏任务队列末尾推一次，就能盖掉 click 引发的那次 hide。
+ */
+function openNodeActionMenu() {
+    closeAllNodeMenus()
+    const assertOpen = () => {
+        nodeMenuOpen.value = true
+        nodeMenuRef.value?.handleOpen?.()
+    }
+    assertOpen()
+    setTimeout(assertOpen, 0)
+    setTimeout(assertOpen, 50)
+}
+
 const onCardDown = (event: MouseEvent) => {
+    // 先清掉任何残留的 mouseup 监听：down/up 不配对时（如在窗口外松开）旧闭包会
+    // 留在 document 上，下一次 mouseup 会先跑旧节点的 handleOpen，把旧菜单弹回来。
+    clearPendingOnUp()
     downPos.x = event.clientX
     downPos.y = event.clientY
     pressedOnCard = true
+    // 快照「按下那一刻」菜单是否开着：blur / onClickOutside 可能在 down/up 之间
+    // 先把菜单收了（visible-change 已翻成 false），若用当下的 nodeMenuOpen 判开关，点 ⋮ 收不掉。
+    const menuWasOpen = nodeMenuOpen.value
     mousedown()
 
     const onUp = (e: MouseEvent) => {
-        document.removeEventListener('mouseup', onUp, true)
+        clearPendingOnUp()
         if (!pressedOnCard) return
         pressedOnCard = false
         // 位移 > 4px 视为拖拽节点，不弹配置
         if (Math.abs(e.clientX - downPos.x) > 4 || Math.abs(e.clientY - downPos.y) > 4) return
-        // 落点是交互控件 ⇒ 走它自己的事，不要抢着开配置
+        const target = e.target as HTMLElement | null
+        // 落点是 ⋮ 触发器 ⇒ 手动开/关操作菜单（原生 click 在 LF 节点上永不触发）。
+        // 必须在「交互控件」那条 return 之前判 —— 否则 ⋮ 会掉进那条 return，
+        // 菜单打不开；同时这里 return 也保住了「点 ⋮ 不弹配置抽屉」的语义。
+        if (target?.closest('.el-dropdown')) {
+            if (menuWasOpen) menuController.close()
+            else openNodeActionMenu()
+            return
+        }
+        // 落点在卡片其它地方：先收起可能开着的 ⋮ 菜单，再决定要不要弹配置。
+        closeAllNodeMenus()
+        // 落点是其它交互控件 ⇒ 走它自己的事，不要抢着开配置
         // （按钮组的 @mousedown.stop 已去掉，所以这里必须自己判 ——
         //   否则点 ⋮ 会同时弹出操作菜单与配置抽屉。）
-        const target = e.target as HTMLElement | null
-        if (target?.closest('button, a, input, textarea, select, .el-dropdown, .el-select, [role="button"]')) return
+        if (target?.closest('button, a, input, textarea, select, .el-select, [role="button"]')) return
         showConfig.value = true
     }
+    pendingOnUp = onUp
     document.addEventListener('mouseup', onUp, true)
 }
 
+onMounted(() => {
+    menuControllers.add(menuController)
+})
 onBeforeUnmount(() => {
+    menuControllers.delete(menuController)
+    clearPendingOnUp()
     pressedOnCard = false
 })
 
@@ -301,7 +419,7 @@ const showNode = computed({
 
 /**
  * 节点操作菜单项。规则（单例、删除可用性、复制可用性）全在 `lib/node-actions`，
- * 左侧 ⋮ 与右键菜单共用同一份 —— 不在这里另写一套判断。
+ * 与「添加组件」面板共用同一份 —— 不在这里另写一套判断。
  */
 const nodeMenuItems = computed(() =>
     buildNodeMenuItems({
@@ -311,7 +429,7 @@ const nodeMenuItems = computed(() =>
     })
 )
 
-/* 右键菜单等外部入口要收起/展开单个节点时，通过事件过来（模型不是响应式的，必须走这里） */
+/* 外部入口要收起/展开单个节点时，通过事件过来（模型不是响应式的，必须走这里） */
 function onToggleCollapse(nodeId: string) {
     if (nodeId !== props.nodeModel.id) return
     showNode.value = !localShow.value

@@ -49,7 +49,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import * as promptsApi from '@/api/prompts'
+import { promptsApi } from '@/api'
 import type { PromptConfig, PromptType } from '@/api/prompts'
 
 const props = defineProps<{ modelValue: string[] }>()

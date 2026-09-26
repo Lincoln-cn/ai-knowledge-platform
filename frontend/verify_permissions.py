@@ -9,6 +9,10 @@
 用法：
     python verify_permissions.py                    # 起本地服务跑 dist/
     python verify_permissions.py --base http://127.0.0.1:5280/   # 跑已开的 dev server
+
+⚠️ 有一类断言**只能**在 `--base`（dev server）下跑：mock 的接口层门禁要走
+`import('/src/api/prompts.ts')` —— 那是 Vite 现场编译 TS 的路径，dist 里没有 `/src/*`。
+这类断言在 dist 模式下显式打印 SKIP（不伪装成通过），见 `INTERFACE_LAYER_OK`。
 """
 from __future__ import annotations
 
@@ -23,6 +27,10 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent
 PORT = 4210
+
+# ── 接口层断言是否可跑 ──
+# dev server 才有 /src/*.ts（Vite 现场编译）；dist 是打包产物，按路径 import 必 404。
+INTERFACE_LAYER_OK = "--base" in sys.argv
 
 # ── 账号（取自 mock/fixtures/identity.ts，四个角色各一个）──
 #   username, password, 角色名
@@ -182,6 +190,89 @@ def main() -> int:
                     )
                 except Exception as exc:  # noqa: BLE001
                     check(False, f"{role_name} ▸ 顶栏", f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
+
+                # ── T86 提示词类型收紧：应用配置进得了提示词页，但一个「类型」写入口都没有 ──
+                # 本页的门禁没变（仍是 assistant:edit）—— 变的是**类型的归属**：
+                # 类型是分类法（契约，归系统管理），提示词是内容（归应用配置）。
+                # 判据用元素计数而不是文本：desc 里仍会出现「提示词类型」四个字（指着它不在本页）。
+                if username == "liwei":
+                    try:
+                        page.goto(base + "#/assistants/prompts", wait_until="networkidle")
+                        page.wait_for_timeout(1700)
+                        new_type = page.locator("button", has_text="新建类型").count()
+                        type_panel = page.locator(".h4", has_text="提示词类型").count()
+                        type_rows = page.locator("th", has_text="提示词数").count()
+                        check(
+                            new_type == 0 and type_panel == 0 and type_rows == 0,
+                            "应用配置 ▸ 提示词页零个类型写入口",
+                            f"新建类型 {new_type} / 类型面板 {type_panel} / 类型表头 {type_rows}",
+                        )
+                        # 只读引用仍要能用：类别下拉必须列得出 4 个类型，收紧不能把这条断了
+                        page.locator(".el-select").first.click()
+                        page.wait_for_timeout(700)
+                        opts = [t.strip() for t in page.locator(".el-select-dropdown__item").all_inner_texts()]
+                        known = ("通用", "合同法务", "制度咨询", "写作辅助")
+                        hit = len({t for t in opts if t in known})
+                        check(
+                            hit == 4,
+                            "应用配置 ▸ 类别下拉仍列出 4 个类型（只读引用没断）",
+                            f"下拉项 {opts}",
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        check(False, "应用配置 ▸ 提示词类型收紧", f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
+
+                # ── 接口层：/prompt-configs 的写门禁（与页面门禁同一个权限点 assistant:edit）──
+                # 这条**页面级验不了**：没有 assistant:edit 的账号在 /assistants/prompts 上直接落
+                # 403，连一个能点的写入口都看不到 —— 只能绕开界面直调接口去验。
+                # 手法只在本机 dev（--base）成立：它 import 的是 Vite 现场编译的 TS 模块；
+                # dist 里没有 /src/*，所以那里打印 SKIP 而不是 check(True) —— 假的通过比没有更糟。
+                if username in ("liwei", "zhangyun"):
+                    if not INTERFACE_LAYER_OK:
+                        print("  SKIP  接口层 /prompt-configs 写门禁（需 --base dev，dist 里没有 /src/*）")
+                    else:
+                        try:
+                            page.goto(base + "#/assistants", wait_until="networkidle")
+                            page.wait_for_timeout(1400)
+                            res = page.evaluate(
+                                """async () => {
+                                  const api = await import('/src/api/prompts.ts');
+                                  try {
+                                    const c = await api.createPromptConfig({
+                                      roleName: '门禁探针_' + Date.now(),
+                                      callWord: '探针：仅用于写门禁校验',
+                                      typeId: 'pt1',
+                                      description: '探针',
+                                      icon: '📝'
+                                    });
+                                    await api.deletePromptConfig(c.id);
+                                    return { ok: true };
+                                  } catch (e) {
+                                    return { ok: false, code: e.code, message: e.message };
+                                  }
+                                }"""
+                            )
+                            if username == "liwei":
+                                # 正向对照：有 assistant:edit 就必须写得动。
+                                # 没有它，下面那条 403 断言可能只是「什么都 403」的恒真句。
+                                check(
+                                    res.get("ok") is True,
+                                    "应用配置 ▸ 接口层可写提示词配置（正向对照）",
+                                    str(res),
+                                )
+                            else:
+                                ok = (
+                                    res.get("ok") is False
+                                    and res.get("code") == 403
+                                    and "维护提示词配置" in str(res.get("message", ""))
+                                )
+                                check(
+                                    ok,
+                                    "知识运营 ▸ 接口层拒绝写提示词配置（403 + 明确原因）",
+                                    str(res),
+                                )
+                        except Exception as exc:  # noqa: BLE001
+                            check(False, f"{role_name} ▸ 接口层 /prompt-configs",
+                                  f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
 
                 ctx.close()
                 print()

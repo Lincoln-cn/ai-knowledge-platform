@@ -179,6 +179,7 @@ import type { AnalyticsRange, AssistantRankItem, MeSummary, OverviewMetrics, Qua
 import type { Conversation } from '@/api/conversations'
 import type { FeedbackItem, FeedbackStatus } from '@/api/feedback'
 import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/components/InstrumentCard.vue'
+import { PERM } from '@/constants/permissions'
 import { canReach } from '@/lib/reach'
 import { useSessionStore } from '@/stores/session'
 
@@ -243,14 +244,40 @@ const fetchAll = async () => {
 onMounted(fetchAll)
 
 /**
- * 入门入口。**按权限 + 数据范围过滤** —— 判据走 `canReach()`（与顶栏、命令面板、路由守卫同源），
- * 否则无权限的角色会看到通向 403 的入口：那是比「没有入口」更坏的体验。
+ * 入门入口。**按路由可达性 + 动作权限双重过滤** ——
+ * `canReach()` 判「页面进得去」（路由 meta.permission 与 dataScope），
+ * `session.can(perm)` 判「进去后**那个动作**做得了」。
+ *
+ * 为什么两道都要：路由门禁是**页面级**（如 `/knowledge` 要 `knowledge:view`），
+ * 而入口承诺的是**动作**（建知识库要 `knowledge:create`）。只判前者就是
+ * 「空承诺」：知识运营看得到「建应用」、点进去却没有「新建应用」按钮。
+ * 与 `lib/reach.ts` 同族的理由 —— 用户看到通向「做不到」的入口，比没有入口更坏。
  */
 const buildEntries = [
-  { path: '/knowledge', label: '建知识库', desc: '上传文档、切分入库，供应用检索' },
-  { path: '/assistants', label: '建应用', desc: '把模型、知识库与提示词组装成对话服务' },
-  { path: '/analytics', label: '看运营数据', desc: '对话趋势、应用排行与质量观测' },
-  { path: '/feedback', label: '处理反馈', desc: '用户点赞点踩与处理闭环' }
+  {
+    path: '/knowledge',
+    label: '建知识库',
+    desc: '上传文档、切分入库，供应用检索',
+    perm: PERM.knowledgeCreate
+  },
+  {
+    path: '/assistants',
+    label: '建应用',
+    desc: '把模型、知识库与提示词组装成对话服务',
+    perm: PERM.assistantEdit
+  },
+  {
+    path: '/analytics',
+    label: '看运营数据',
+    desc: '对话趋势、应用排行与质量观测',
+    perm: PERM.dashboardView
+  },
+  {
+    path: '/feedback',
+    label: '处理反馈',
+    desc: '用户点赞点踩与处理闭环',
+    perm: PERM.feedbackHandle
+  }
 ]
 
 /**
@@ -260,12 +287,24 @@ const buildEntries = [
  * 那仍然是一个建设入口，读起来还是"工地"。所以整块换成他要的两个动作：去问、看看有什么能用。
  */
 const consumerEntries = [
-  { path: '/conversation', label: '开始对话', desc: '选一个应用直接提问，答案带引用' },
-  { path: '/market', label: '应用市场', desc: '看看现在有哪些应用可以用' }
+  {
+    path: '/conversation',
+    label: '开始对话',
+    desc: '选一个应用直接提问，答案带引用',
+    perm: PERM.conversationView
+  },
+  {
+    path: '/market',
+    label: '应用市场',
+    desc: '看看现在有哪些应用可以用',
+    perm: PERM.assistantView
+  }
 ]
 
 const entries = computed(() =>
-  (consumer.value ? consumerEntries : buildEntries).filter((e) => canReach(router, e.path))
+  (consumer.value ? consumerEntries : buildEntries).filter(
+    (e) => canReach(router, e.path) && session.can(e.perm)
+  )
 )
 
 /**

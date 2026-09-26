@@ -106,7 +106,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { conversationsApi } from '@/api'
@@ -254,19 +254,25 @@ const applyAppBrief = (conv: ConversationEx | null, fallbackAppId?: string) => {
   appBrief.value = null
 }
 
-const openConversation = async (conv: ConversationEx) => {
+const openConversation = async (conv: ConversationEx, opts: { aroundMessageId?: string } = {}) => {
   if (chat.generating.value) chat.stop()
   activeConversation.value = conv
   applyAppBrief(conv)
   activeMessage.value = null
   activeRefIndex.value = null
-  await chat.loadHistory(conv.id)
-  // 同步 URL，便于刷新后回到同一会话
+  await chat.loadHistory(conv.id, opts.aroundMessageId ? { around: opts.aroundMessageId } : {})
+  // 深链定位：消息加载完再滚/高亮，否则目标节点还不存在
+  if (opts.aroundMessageId) {
+    await nextTick()
+    msgListRef.value?.scrollToMessage(opts.aroundMessageId)
+  }
+  // 同步 URL，便于刷新后回到同一会话；深链保留 messageId，普通打开清掉它
   router.replace({
     path: '/conversation',
     query: {
       ...(conv.appId ? { appId: conv.appId } : {}),
-      conversationId: conv.id
+      conversationId: conv.id,
+      ...(opts.aroundMessageId ? { messageId: opts.aroundMessageId } : {})
     }
   })
 }
@@ -429,17 +435,19 @@ onMounted(async () => {
   await loadHistory()
 
   const convId = route.query.conversationId as string
+  // 深链定位：URL 带 messageId 时用 around 取窗口，再滚/高亮到那条消息
+  const deepMessageId = (route.query.messageId as string) || ''
   if (convId) {
     // 深链：不在前 50 条也要打开那一条 —— 直接按 id 取，不再在列表里找
     const found = history.list.value.find((c) => c.id === convId)
     if (found) {
-      await openConversation(found)
+      await openConversation(found, deepMessageId ? { aroundMessageId: deepMessageId } : {})
       return
     }
     try {
       const conv = (await conversationsApi.getConversation(convId)) as ConversationEx
       history.prepend(conv)
-      await openConversation(conv)
+      await openConversation(conv, deepMessageId ? { aroundMessageId: deepMessageId } : {})
       return
     } catch (error) {
       // 真的不存在 / 无权访问：给可读提示并回落到空态，

@@ -39,7 +39,7 @@
                                 <Check />
                             </el-icon>
                         </el-option>
-                        <!-- <template #footer>
+                        <template #footer>
                             <div class="w-full text-left cursor" @click="openCreateModel()">
                                 <el-button type="primary" link>
                                     <el-icon class="mr-4">
@@ -48,7 +48,7 @@
                                     添加模型
                                 </el-button>
                             </div>
-                        </template> -->
+                        </template>
                     </el-select>
                 </el-form-item>
 

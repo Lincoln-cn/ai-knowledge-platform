@@ -1,8 +1,36 @@
 import { ApiError, ErrorCode } from '@/api/types'
 import type { PromptConfig, PromptType, UpsertPromptConfigBody, UpsertPromptTypeBody } from '@/api/prompts'
+import { PERM } from '@/constants/permissions'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
 import { promptConfigs, promptTypes } from '../fixtures/prompts'
+import { currentSubjects } from '../policy'
+
+/**
+ * 提示词的两个实体的动作（07 §3.3 硬规矩 2：界面上藏入口不是边界，这里才是）。
+ *
+ * 类型（分类法）：读沿用「配置应用」，写要「账号与权限」—— 改一次类型，所有配置的
+ * 归类与应用里「从提示词选用」的分组都跟着变，与权限点清单同族，归管理员维护。
+ * 配置（内容）：读写都归「配置应用」—— 页面 /assistants/prompts 的门禁就是它，
+ * 接口用同一个点才叫界面与接口一致；否则「进不去页面却写得动接口」就是一条越权路径。
+ */
+const TYPE_READ_ACTION = PERM.assistantEdit
+const TYPE_WRITE_ACTION = PERM.systemManage
+const CONFIG_WRITE_ACTION = PERM.assistantEdit
+
+/**
+ * 动作级门禁。拿不到权限点一律 **403 且说清缺哪一个** ——
+ * 不能静默返回空列表：那会让「写被拒」伪装成「保存成功但没变」。
+ */
+function requireAction(token: string, action: string, label: string): void {
+  const subjects = currentSubjects(token)
+  if (subjects.permissions.has(action)) return
+  throw new ApiError(
+    ErrorCode.FORBIDDEN,
+    `没有${label}的权限（需要 ${action}）`,
+    '请联系管理员为你的角色勾选该权限点'
+  )
+}
 
 const findType = (id: string) => {
   const item = promptTypes.find((t) => t.id === id)
@@ -25,7 +53,8 @@ export const promptRoutes: MockRoute[] = [
   [
     'GET',
     '/prompt-types',
-    ({ query }) => {
+    ({ query, token }) => {
+      requireAction(token, TYPE_READ_ACTION, '查看提示词类型')
       const keyword = String(query.keyword ?? '')
       const list = promptTypes.filter((t) => !keyword || t.typeName.includes(keyword))
       return paginate(list, query)
@@ -35,7 +64,8 @@ export const promptRoutes: MockRoute[] = [
   [
     'POST',
     '/prompt-types',
-    ({ body }) => {
+    ({ body, token }) => {
+      requireAction(token, TYPE_WRITE_ACTION, '维护提示词类型')
       const input = body as UpsertPromptTypeBody
       if (promptTypes.some((t) => t.typeName === input.typeName)) {
         throw new ApiError(4002, `提示词类型「${input.typeName}」已存在`)
@@ -54,7 +84,8 @@ export const promptRoutes: MockRoute[] = [
   [
     'PUT',
     '/prompt-types/:id',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
+      requireAction(token, TYPE_WRITE_ACTION, '维护提示词类型')
       const item = findType(path.id)
       const input = body as Partial<UpsertPromptTypeBody>
       if (input.typeName && input.typeName !== item.typeName && promptTypes.some((t) => t.typeName === input.typeName)) {
@@ -74,7 +105,8 @@ export const promptRoutes: MockRoute[] = [
   [
     'DELETE',
     '/prompt-types/:id',
-    ({ path }) => {
+    ({ path, token }) => {
+      requireAction(token, TYPE_WRITE_ACTION, '维护提示词类型')
       const item = findType(path.id)
       const used = promptConfigs.filter((c) => c.typeId === item.id).length
       if (used > 0) {
@@ -105,7 +137,8 @@ export const promptRoutes: MockRoute[] = [
   [
     'POST',
     '/prompt-configs',
-    ({ body }) => {
+    ({ body, token }) => {
+      requireAction(token, CONFIG_WRITE_ACTION, '维护提示词配置')
       const input = body as UpsertPromptConfigBody
       const type = findType(input.typeId)
       if (promptConfigs.some((c) => c.roleName === input.roleName)) {
@@ -131,7 +164,8 @@ export const promptRoutes: MockRoute[] = [
   [
     'PUT',
     '/prompt-configs/:id',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
+      requireAction(token, CONFIG_WRITE_ACTION, '维护提示词配置')
       const item = findConfig(path.id)
       const input = body as Partial<UpsertPromptConfigBody>
       if (input.roleName && input.roleName !== item.roleName && promptConfigs.some((c) => c.roleName === input.roleName)) {
@@ -156,7 +190,8 @@ export const promptRoutes: MockRoute[] = [
   [
     'DELETE',
     '/prompt-configs/:id',
-    ({ path }) => {
+    ({ path, token }) => {
+      requireAction(token, CONFIG_WRITE_ACTION, '维护提示词配置')
       const item = findConfig(path.id)
       if (item.usageCount > 0) {
         throw new ApiError(

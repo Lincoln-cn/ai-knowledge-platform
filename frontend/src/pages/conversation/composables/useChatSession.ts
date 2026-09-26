@@ -282,10 +282,12 @@ export function useChatSession(options: ChatSessionOptions = {}) {
   }
 
   /**
-   * 打开会话：先拿**最近**一页（page=-1），再由「加载更早」往前翻。
+   * 打开会话：默认先拿**最近**一页（page=-1），再由「加载更早」往前翻。
    * 固定 size:100 且只取 page:1 会把 >100 条后的消息永久截断 —— 这里按页可回溯。
+   *
+   * `around`：深链到某条消息时，以它为中心取窗口（与 page 互斥，见 MessageQuery）。
    */
-  const loadHistory = async (conversationId: string) => {
+  const loadHistory = async (conversationId: string, opts: { around?: string } = {}) => {
     loadingHistory.value = true
     loadError.value = null
     messages.value = []
@@ -296,6 +298,18 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       if (options.credentialToken) {
         const list = await conversationsApi.listPublicMessages(options.credentialToken)
         messages.value = list.map((m) => toReactiveMessage(m) as ChatMessageEx)
+        return
+      }
+      if (opts.around) {
+        // 深链：围绕目标消息取窗口，目标必须落在结果里（mock 找不到会 404）
+        const result = await conversationsApi.listMessages(conversationId, {
+          around: opts.around,
+          size: MSG_PAGE_SIZE
+        })
+        messages.value = result.list.map((m) => toReactiveMessage(m) as ChatMessageEx)
+        // 窗口前还有更早的一页才算可回溯；around 不改 earliestPage 语义，按 total 估
+        earliestPage = Math.max(1, Math.ceil(result.total / MSG_PAGE_SIZE))
+        hasEarlier.value = earliestPage > 1
         return
       }
       // page=-1 = 最后一页（mock 按此语义实现；真实后端可按 around/offset 等价实现）
