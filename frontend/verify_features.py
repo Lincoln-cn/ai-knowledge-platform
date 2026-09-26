@@ -134,6 +134,55 @@ def main() -> int:
                 check("V0.2" in body, "反馈：标注 V0.2 设计预演", "")
                 check("待处理" in body, "反馈：有待处理状态", "")
 
+            def feedback_batch():
+                """批量办理入口的真实可用性。
+
+                ⚠️ 不能写成 `"批量" in body` —— 列表页文案里本来就有「批量」字样，
+                那是恒真断言。这里锁的是**状态变化**：未勾选时按钮禁用，勾选 2 行后
+                变为可点，点进去能提交并给出回执。
+                """
+                goto("/feedback")
+                btn_status = page.locator(".filters button", has_text="批量改状态")
+                btn_assign = page.locator(".filters button", has_text="批量指派")
+                check(btn_status.count() == 1 and btn_assign.count() == 1,
+                      "反馈批量：有批量改状态/批量指派入口",
+                      f"改状态 {btn_status.count()} 个 / 指派 {btn_assign.count()} 个")
+                if btn_status.count() == 0:
+                    return
+                # 未勾选 → 必须禁用（证明按钮不是摆设）
+                check(btn_status.first.is_disabled(),
+                      "反馈批量：未勾选时批量按钮禁用",
+                      f"disabled={btn_status.first.is_disabled()}")
+
+                # 勾选 2 行（只点表体行，避开表头全选框）
+                boxes = page.locator(".el-table__body tr .el-checkbox")
+                n = boxes.count()
+                check(n >= 2, "反馈批量：待处理列表至少 2 行可勾选", f"实际 {n} 行")
+                if n < 2:
+                    return
+                boxes.nth(0).click()
+                page.wait_for_timeout(180)
+                boxes.nth(1).click()
+                page.wait_for_timeout(180)
+                check(btn_status.first.is_enabled(),
+                      "反馈批量：勾选 2 行后批量按钮变为可用",
+                      f"disabled={btn_status.first.is_disabled()}")
+
+                # 真提交一条路径：打开对话框 → 办理 → 拿到回执
+                btn_status.first.click()
+                page.wait_for_timeout(500)
+                dlg = page.locator(".el-dialog", has_text="批量改状态")
+                check(dlg.count() > 0, "反馈批量：勾选后能打开批量办理对话框", "")
+                if not dlg.count():
+                    return
+                dlg.locator("button", has_text="办理").first.click()
+                page.wait_for_timeout(1000)
+                receipt_dlg = page.locator(".el-dialog", has_text="批量办理回执")
+                body = page.inner_text("body")
+                check(receipt_dlg.count() > 0 and "已办成" in body,
+                      "反馈批量：提交后给出批量办理回执（逐条结果）",
+                      f"回执弹窗 {receipt_dlg.count()} 个")
+
             # ── 运营看板：质量观测 ──
             def analytics():
                 body = goto("/analytics")
@@ -209,6 +258,7 @@ def main() -> int:
             step("会话流式", conversation_stream)
             step("会话空应用无引用区块", conversation_no_ref_block)
             step("反馈处理", feedback)
+            step("反馈批量办理", feedback_batch)
             step("运营看板", analytics)
             step("账号与权限", admin)
             step("账号与权限·提示词类型", prompt_types_tab)

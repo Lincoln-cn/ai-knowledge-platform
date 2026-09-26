@@ -1,14 +1,37 @@
-import { ApiError } from '@/api/types'
-import type { FeedbackStats, FeedbackStatus, HandleFeedbackBody } from '@/api/feedback'
+import { ApiError, ErrorCode } from '@/api/types'
+import type {
+  BatchHandleFeedbackBody,
+  BatchHandleFeedbackResult,
+  FeedbackStats,
+  FeedbackStatus,
+  HandleFeedbackBody
+} from '@/api/feedback'
+import { PERM } from '@/constants/permissions'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
 import { feedbacks, promotableKnowledgeBases } from '../fixtures/feedback'
+import { users } from '../fixtures/identity'
 import { currentSubjects, selfId } from '../policy'
 
 const findFeedback = (id: string) => {
   const item = feedbacks.find((f) => f.id === id)
   if (!item) throw new ApiError(404, '反馈不存在或已被清理')
   return item
+}
+
+/**
+ * 动作级门禁（与 prompts.ts 同一写法）。页面 `/feedback` 的门禁是 `feedback:handle`，
+ * 写接口必须用同一个点 —— 否则「进不去页面却写得动接口」就是一条越权路径。
+ * 读路径（列表/详情/统计）不走这里，避免误伤只读场景。
+ */
+function requireHandle(token: string): void {
+  const subjects = currentSubjects(token)
+  if (subjects.permissions.has(PERM.feedbackHandle)) return
+  throw new ApiError(
+    ErrorCode.FORBIDDEN,
+    `没有办理反馈的权限（需要 ${PERM.feedbackHandle}）`,
+    '请联系管理员为你的角色勾选该权限点'
+  )
 }
 
 /**
@@ -91,10 +114,90 @@ export const feedbackRoutes: MockRoute[] = [
     ({ path }) => findFeedback(path.id)
   ],
 
+  // 静态段必须排在 PATCH /feedbacks/:id 之前 —— 否则 :id 会把 batch 当成 id 吞掉
+  // （与 /assistants/tags 同一教训）
+  [
+    'PATCH',
+    '/feedbacks/batch',
+    ({ body, token }): BatchHandleFeedbackResult => {
+      requireHandle(token)
+      const input = body as BatchHandleFeedbackBody
+      const ids = Array.isArray(input.ids) ? input.ids : []
+      if (!ids.length) {
+        throw new ApiError(400, '请至少选择一条反馈再批量办理')
+      }
+
+      // 处理人是整批共用参数：id 不合法就整单拒绝，不要做一半才说指派失败
+      let assigneeName: string | null | undefined
+      if (input.assigneeId !== undefined) {
+        if (input.assigneeId === null) {
+          assigneeName = null
+        } else {
+          const user = users.find((u) => u.id === input.assigneeId)
+          if (!user) {
+            throw new ApiError(400, '指定的处理人不存在', '请从用户目录里选择处理人')
+          }
+          assigneeName = user.displayName
+        }
+      }
+
+      const accepted: BatchHandleFeedbackResult['accepted'] = []
+      const rejected: BatchHandleFeedbackResult['rejected'] = []
+
+      for (const id of ids) {
+        const item = feedbacks.find((f) => f.id === id)
+        if (!item) {
+          rejected.push({ id, reason: '反馈不存在或已被清理' })
+          continue
+        }
+
+        if (!TRANSITIONS[item.status].includes(input.status)) {
+          rejected.push({
+            id,
+            reason:
+              item.status === '已处理' || item.status === '已忽略'
+                ? `「${item.status}」不能改状态；换状态请先「重新打开」`
+                : `不能从「${item.status}」流转到「${input.status}」`
+          })
+          continue
+        }
+
+        // 与单条办理同一条规则：已处理必须有结论，否则闭环是空壳
+        if (input.status === '已处理' && !input.resolution?.trim()) {
+          rejected.push({ id, reason: '流转到「已处理」必须填写处理说明' })
+          continue
+        }
+
+        const prevStatus = item.status
+        item.status = input.status
+        if (assigneeName !== undefined) {
+          item.assignee = assigneeName
+        }
+        if (input.resolution !== undefined) {
+          item.resolution = input.resolution
+        }
+
+        const enteredTerminal =
+          prevStatus !== input.status && (input.status === '已处理' || input.status === '已忽略')
+        if (enteredTerminal) {
+          item.handledAt = now()
+        } else if (input.status === '待处理' || input.status === '处理中') {
+          item.handledAt = null
+        }
+
+        accepted.push(item)
+      }
+
+      // 部分失败必须逐条回执：只回总数的话，用户不知道哪几条没办成、为什么
+      return { accepted, rejected }
+    }
+  ],
+
   [
     'PATCH',
     '/feedbacks/:id',
-    ({ path, body }) => {
+    ({ path, body, token }) => {
+      requireHandle(token)
       const item = findFeedback(path.id)
       const input = body as HandleFeedbackBody
 
@@ -147,7 +250,8 @@ export const feedbackRoutes: MockRoute[] = [
   [
     'POST',
     '/feedbacks/:id/reopen',
-    ({ path }) => {
+    ({ path, token }) => {
+      requireHandle(token)
       const item = findFeedback(path.id)
       if (item.status !== '已处理' && item.status !== '已忽略') {
         throw new ApiError(4004, `「${item.status}」状态的反馈无需重新打开`, '只有已处理 / 已忽略可以重新打开')

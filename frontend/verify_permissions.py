@@ -274,6 +274,56 @@ def main() -> int:
                             check(False, f"{role_name} ▸ 接口层 /prompt-configs",
                                   f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
 
+                # ── 接口层：/feedbacks/batch 的写门禁（与页面门禁同一个权限点 feedback:handle）──
+                # 页面级验不了：无 feedback:handle 的账号连 /feedback 都进不去，
+                # 看不到批量入口 —— 只能绕开界面直调接口去验。
+                # 手法只在本机 dev（--base）成立（同上：import 的是 Vite 现场编译 TS）。
+                if username in ("liwei", "zhangyun"):
+                    if not INTERFACE_LAYER_OK:
+                        print("  SKIP  接口层 /feedbacks/batch 写门禁（需 --base dev，dist 里没有 /src/*）")
+                    else:
+                        try:
+                            # 任意已登录页均可直调；用 liwei 进得去的页面作为宿主
+                            page.goto(base + "#/assistants", wait_until="networkidle")
+                            page.wait_for_timeout(1200)
+                            res = page.evaluate(
+                                """async () => {
+                                  const api = await import('/src/api/feedback.ts');
+                                  try {
+                                    const r = await api.batchHandleFeedbacks({
+                                      ids: ['fb1'],
+                                      status: '处理中',
+                                      assigneeId: null
+                                    });
+                                    return { ok: true, accepted: (r.accepted||[]).length, rejected: (r.rejected||[]).length };
+                                  } catch (e) {
+                                    return { ok: false, code: e.code, message: e.message };
+                                  }
+                                }"""
+                            )
+                            if username == "zhangyun":
+                                # 正向对照：有 feedback:handle 就必须办得动。
+                                # 没有它，下面那条 403 断言可能只是「什么都 403」的恒真句。
+                                check(
+                                    res.get("ok") is True,
+                                    "知识运营 ▸ 接口层可批量办理反馈（正向对照）",
+                                    str(res),
+                                )
+                            else:
+                                ok = (
+                                    res.get("ok") is False
+                                    and res.get("code") == 403
+                                    and "feedback:handle" in str(res.get("message", ""))
+                                )
+                                check(
+                                    ok,
+                                    "应用配置 ▸ 接口层拒绝批量办理反馈（403 + 明确原因）",
+                                    str(res),
+                                )
+                        except Exception as exc:  # noqa: BLE001
+                            check(False, f"{role_name} ▸ 接口层 /feedbacks/batch",
+                                  f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
+
                 ctx.close()
                 print()
 
