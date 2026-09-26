@@ -90,7 +90,7 @@
 
         <div v-if="m.status === '加载失败'" class="notice err mc-fail">
           <el-icon><WarningFilled /></el-icon>
-          <span>点「重新加载」可重试。若持续失败，检查模型服务是否可用、显存是否足够。</span>
+          <span>点「重新加载」可重试。若持续失败，检查模型网关是否可达、该基础模型是否在上游清单中。</span>
         </div>
 
         <div class="mc-actions">

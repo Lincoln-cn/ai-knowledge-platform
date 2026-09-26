@@ -3,6 +3,8 @@ import type { ModelCapability, ModelInfo, UpsertModelBody } from '@/api/models'
 import type { ProbeBaseModelBody } from '@/api/models'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
+import { assistants } from '../fixtures/assistants'
+import { knowledgeBases } from '../fixtures/knowledge'
 import { baseModels, models, probedCapabilities } from '../fixtures/models'
 
 /** 加载是异步的：先置「加载中」，若干秒后转「已加载」。与真实后端行为一致 */
@@ -158,9 +160,23 @@ export const modelRoutes: MockRoute[] = [
       if (model.builtin) {
         throw new ApiError(4006, `「${model.name}」是内置模型，不可删除`)
       }
-      if (model.status === '已加载') {
-        throw new ApiError(4007, '该模型正在使用中，请先卸载或切换到其它模型后再删除')
+
+      // 门禁是「被谁引用」，不是「当前加载态」：契约里只有 load 没有 unload，
+      // 拿加载态当门禁会让加载过的模型永远删不掉。删除即停用，不必先卸载。
+      const appNames = assistants.filter((a) => a.modelId === model.id).map((a) => a.name)
+      const kbNames = knowledgeBases.filter((k) => k.embeddingModelId === model.id).map((k) => k.name)
+      if (appNames.length || kbNames.length) {
+        const brief = (names: string[], unit: string) =>
+          `${names.length} 个${unit}（${names.slice(0, 2).join('、')}${names.length > 2 ? ' 等' : ''}）`
+        const refs = [
+          appNames.length ? brief(appNames, '应用') : '',
+          kbNames.length ? brief(kbNames, '知识库') : ''
+        ]
+          .filter(Boolean)
+          .join('、')
+        throw new ApiError(4007, `该模型被 ${refs} 引用，无法删除；请先在这些引用处更换模型`)
       }
+
       models.splice(models.indexOf(model), 1)
       return undefined
     }
