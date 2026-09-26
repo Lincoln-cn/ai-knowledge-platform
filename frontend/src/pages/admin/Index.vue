@@ -33,7 +33,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@/components/PageHeader.vue'
 import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
@@ -42,8 +43,20 @@ import RoleManage from './components/RoleManage.vue'
 import PermissionList from './components/PermissionList.vue'
 
 const session = useSessionStore()
+const route = useRoute()
+const router = useRouter()
 const canManage = computed(() => session.can(PERM.systemManage))
-const active = ref('users')
+
+const TABS = ['users', 'roles', 'permissions'] as const
+const active = ref<(typeof TABS)[number]>(
+  TABS.includes(route.query.tab as (typeof TABS)[number])
+    ? (route.query.tab as (typeof TABS)[number])
+    : 'users'
+)
+
+watch(active, (val) => {
+  router.replace({ query: { ...route.query, tab: val === 'users' ? undefined : val } })
+})
 </script>
 
 <style scoped>

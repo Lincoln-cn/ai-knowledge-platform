@@ -46,8 +46,8 @@
         placeholder="搜索应用名称或描述"
         style="width: 230px"
         clearable
-        @keyup.enter="fetchList"
-        @clear="fetchList"
+        @keyup.enter="onFilterChange"
+        @clear="onFilterChange"
       />
       <!-- 状态（草稿/已发布）与类型（简单/编排）是建设面的分类，消费者不筛这两个 -->
       <el-select
@@ -87,7 +87,14 @@
     </div>
 
     <div v-else v-loading="loading" class="grid">
-      <el-card v-for="a in list" :key="a.id" shadow="never" class="app-card" :class="{ plaza: consumer }">
+      <el-card
+        v-for="a in list"
+        :id="`app-card-${a.id}`"
+        :key="a.id"
+        shadow="never"
+        class="app-card"
+        :class="{ plaza: consumer, focused: highlightId === a.id }"
+      >
         <div class="ac-head">
           <span class="ac-icon">{{ a.icon }}</span>
           <div class="ac-title">
@@ -230,7 +237,7 @@
         :page-size="pageSize"
         layout="total, prev, pager, next"
         :total="total"
-        @current-change="fetchList"
+        @current-change="onPageChange"
       />
     </div>
 
@@ -242,10 +249,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { assistantsApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { Assistant, AssistantOrigin } from '@/api/assistants'
@@ -258,6 +265,7 @@ import AssistantOverviewDrawer from './components/AssistantOverviewDrawer.vue'
 import ShareDialog from './components/ShareDialog.vue'
 
 const router = useRouter()
+const route = useRoute()
 const session = useSessionStore()
 const can = (code: string) => session.can(code)
 
@@ -281,13 +289,35 @@ const loadError = ref('')
 const pageSize = 12
 const current = ref<Assistant | null>(null)
 
-const query = reactive({
-  keyword: '',
-  published: '' as '' | 'true' | 'false',
-  type: '' as '' | 'simple' | 'workflow',
-  origin: '' as '' | AssistantOrigin,
-  page: 1
-})
+/**
+ * 列表筛选/分页入 URL（本模块 P1：刷新即丢）。
+ * 初值从 route.query 恢复，改动后 replace 回写 —— 用 replace 不用 push，
+ * 翻页不该把浏览器历史塞满。
+ */
+const readQueryFromUrl = () => {
+  const q = route.query
+  return {
+    keyword: typeof q.keyword === 'string' ? q.keyword : '',
+    published: (typeof q.published === 'string' ? q.published : '') as '' | 'true' | 'false',
+    type: (typeof q.type === 'string' ? q.type : '') as '' | 'simple' | 'workflow',
+    origin: (typeof q.origin === 'string' ? q.origin : '') as '' | AssistantOrigin,
+    page: Number(q.page) > 0 ? Number(q.page) : 1
+  }
+}
+
+const query = reactive(readQueryFromUrl())
+
+const syncQueryToUrl = () => {
+  router.replace({
+    query: {
+      ...(query.keyword ? { keyword: query.keyword } : {}),
+      ...(query.published ? { published: query.published } : {}),
+      ...(query.type ? { type: query.type } : {}),
+      ...(query.origin ? { origin: query.origin } : {}),
+      ...(query.page > 1 ? { page: String(query.page) } : {})
+    }
+  })
+}
 
 const hasFilter = computed(() =>
   Boolean(query.keyword || query.published || query.type || query.origin)
@@ -336,6 +366,12 @@ const shareRef = ref<InstanceType<typeof ShareDialog>>()
 
 const onFilterChange = () => {
   query.page = 1
+  syncQueryToUrl()
+  fetchList()
+}
+
+const onPageChange = () => {
+  syncQueryToUrl()
   fetchList()
 }
 
@@ -405,11 +441,17 @@ const demo = (a: Assistant) => {
 
 const togglePublish = async (a: Assistant) => {
   if (a.published) {
-    await ElMessageBox.confirm(
+    // 取消是正常路径，不是错误：用 then/两个回调区分「确认」与「取消」，
+    // 不让取消落成 unhandled rejection（本模块 P1）
+    const confirmed = await ElMessageBox.confirm(
       `下架后公开链接将失效。确认下架「${a.name}」？`,
       '确认下架',
       { type: 'warning', confirmButtonText: '下架' }
+    ).then(
+      () => true,
+      () => false
     )
+    if (!confirmed) return
     await assistantsApi.setAssistantPublished(a.id, false)
     ElMessage.success('已下架')
     await fetchList()
@@ -443,17 +485,64 @@ const togglePublish = async (a: Assistant) => {
 }
 
 const remove = async (a: Assistant) => {
-  await ElMessageBox.confirm(
+  const confirmed = await ElMessageBox.confirm(
     `删除后公开链接与 API Key 一并作废，且不可恢复。确认删除「${a.name}」？`,
     '确认删除应用',
     { type: 'warning', confirmButtonText: '删除' }
+  ).then(
+    () => true,
+    () => false
   )
-  await assistantsApi.deleteAssistant(a.id)
-  ElMessage.success('已删除')
-  await fetchList()
+  if (!confirmed) return
+  try {
+    await assistantsApi.deleteAssistant(a.id)
+    ElMessage.success('已删除')
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '删除失败')
+  }
 }
 
-onMounted(fetchList)
+/**
+ * 对话页顶栏跳过来时带 `?focus=<appId>`（`conversation/TopBar.vue`），
+ * 要求落到**那一个应用**而不是全量列表。做法：加载后滚到它的卡片并短暂高亮；
+ * 若它被当前筛选滤掉了，清空筛选再找一次。
+ */
+const focusId = ref('')
+const highlightId = ref('')
+
+const applyFocus = async () => {
+  if (!focusId.value) return
+  const id = focusId.value
+  let found = list.value.some((a) => a.id === id)
+  if (!found && hasFilter.value) {
+    query.keyword = ''
+    query.published = ''
+    query.type = ''
+    query.origin = ''
+    query.page = 1
+    syncQueryToUrl()
+    await fetchList()
+    found = list.value.some((a) => a.id === id)
+  }
+  if (!found) {
+    ElMessage.info('目标应用不在当前列表中，可能已删除或你没有查看权限')
+    return
+  }
+  await nextTick()
+  highlightId.value = id
+  document.getElementById(`app-card-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  window.setTimeout(() => {
+    highlightId.value = ''
+  }, 2600)
+}
+
+onMounted(async () => {
+  const focus = route.query.focus
+  focusId.value = typeof focus === 'string' ? focus : ''
+  await fetchList()
+  await applyFocus()
+})
 </script>
 
 <style scoped>
@@ -476,6 +565,12 @@ onMounted(fetchList)
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
+}
+
+/* `?focus=` 定位到的那张卡：滚动到视野内后短暂描边，让人看见「落在了哪一个」 */
+.app-card.focused {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .app-card :deep(.el-card__body) {

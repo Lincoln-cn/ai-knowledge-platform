@@ -86,9 +86,13 @@ const regenerate = async () => {
 }
 
 const toggle = async (row: ApiKeyItem) => {
-  // 契约里没有 setApiKeyEnabled，仅提供 regenerate；此处用本地提示说明缺口
-  ElMessage.info('契约暂未提供单条启停接口；如需停用请轮换生成新 Key 后弃用旧 Key')
-  void row
+  try {
+    await assistantsApi.setApiKeyEnabled(props.appId, row.id, !row.enabled)
+    ElMessage.success(row.enabled ? '已停用，该 Key 将不再通过鉴权' : '已启用')
+    await fetch()
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '操作失败')
+  }
 }
 
 defineExpose({ fetch })

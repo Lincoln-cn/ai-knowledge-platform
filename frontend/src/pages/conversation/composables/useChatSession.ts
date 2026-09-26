@@ -6,7 +6,7 @@ import type {
   Conversation,
   MessageStatus
 } from '@/api/conversations'
-import type { SourceRef, StreamHandle } from '@/api/stream-types'
+import type { ChatMode, SourceRef, StreamHandle } from '@/api/stream-types'
 import { ApiError } from '@/api/types'
 
 /* ── 本模块展示用扩展类型（契约字段之外的可选补充） ── */
@@ -32,11 +32,8 @@ export type ConversationEx = Conversation & { app?: AppBrief }
 /** 契约 ChatMessage.attachments 落盘前后的兼容读写（字段可选） */
 export type ChatMessageEx = ChatMessage & { attachments?: ChatAttachment[] }
 
-export type SourceRefEx = SourceRef & {
-  segmentId?: string
-  documentId?: string
-  kbId?: string
-}
+/** 契约 SourceRef 已带 segmentId/documentId/kbId —— 这里保留别名，兼容既有引用 */
+export type SourceRefEx = SourceRef
 
 /** 附件上传态。发送时只带上「已就绪」的真实 id，失败的必须能看见原因并移除 */
 export type AttachmentStatus = 'uploading' | 'ready' | 'failed'
@@ -85,13 +82,7 @@ export function readAppBrief(raw: unknown): AppBrief | null {
 }
 
 export function toRefEx(ref: SourceRef): SourceRefEx {
-  const extra = ref as SourceRefEx
-  return {
-    ...ref,
-    segmentId: extra.segmentId,
-    documentId: extra.documentId,
-    kbId: extra.kbId
-  }
+  return { ...ref }
 }
 
 export function errText(error: unknown, fallback: string): { reason: string; hint?: string } {
@@ -120,10 +111,18 @@ function toReactiveMessage(raw: ChatMessage): ChatMessage {
 
 /* ── 会话列表 ── */
 
+const HISTORY_PAGE_SIZE = 50
+
 export function useHistoryPanel() {
   const list: Ref<ConversationEx[]> = ref([])
   const loading = ref(false)
+  const loadingMore = ref(false)
   const loadError = ref<{ reason: string; hint?: string } | null>(null)
+  /** 还有更早的会话没拉完 */
+  const hasMore = ref(false)
+  /** 当前搜索词；空串 = 不筛 */
+  const keyword = ref('')
+  let page = 1
 
   const groups = computed(() => {
     const map = new Map<string, ConversationEx[]>()
@@ -136,25 +135,61 @@ export function useHistoryPanel() {
     return [...map.entries()]
   })
 
+  const fetchPage = async (appId: string | undefined, p: number) => {
+    const result = await conversationsApi.listConversations({
+      appId,
+      keyword: keyword.value.trim() || undefined,
+      page: p,
+      size: HISTORY_PAGE_SIZE
+    })
+    return result
+  }
+
+  const mapConvs = (raw: Conversation[]): ConversationEx[] =>
+    raw.map((c) => {
+      const ex = c as ConversationEx
+      if (!ex.app && ex.appId) ex.app = readAppBrief((c as ConversationEx).app) ?? undefined
+      return ex
+    })
+
   const load = async (appId?: string) => {
     loading.value = true
     loadError.value = null
+    page = 1
     try {
-      const result = await conversationsApi.listConversations({
-        appId,
-        page: 1,
-        size: 50
-      })
-      list.value = result.list.map((c) => {
-        const ex = c as ConversationEx
-        if (!ex.app && ex.appId) ex.app = readAppBrief((c as ConversationEx).app) ?? undefined
-        return ex
-      })
+      const result = await fetchPage(appId, 1)
+      list.value = mapConvs(result.list)
+      hasMore.value = result.total > list.value.length
     } catch (error) {
       loadError.value = errText(error, '加载历史会话失败')
     } finally {
       loading.value = false
     }
+  }
+
+  /** 加载更早的一页并接在后面（历史列表按更新时间倒序，后面的更早） */
+  const loadMore = async (appId?: string) => {
+    if (loadingMore.value || !hasMore.value) return
+    loadingMore.value = true
+    try {
+      page += 1
+      const result = await fetchPage(appId, page)
+      const seen = new Set(list.value.map((c) => c.id))
+      list.value = [...list.value, ...mapConvs(result.list).filter((c) => !seen.has(c.id))]
+      hasMore.value = result.total > list.value.length
+    } catch (error) {
+      // 加载更多失败不该把已有列表清掉 —— 只报错并把页码退回去
+      page -= 1
+      loadError.value = errText(error, '加载更多历史会话失败')
+    } finally {
+      loadingMore.value = false
+    }
+  }
+
+  /** 按关键词搜索（空串 = 恢复全量）。搜索结果从第一页重来 */
+  const search = async (appId: string | undefined, kw: string) => {
+    keyword.value = kw
+    await load(appId)
   }
 
   const remove = async (id: string) => {
@@ -183,7 +218,22 @@ export function useHistoryPanel() {
     }
   }
 
-  return { list, groups, loading, loadError, load, remove, rename, prepend, touch }
+  return {
+    list,
+    groups,
+    loading,
+    loadingMore,
+    loadError,
+    hasMore,
+    keyword,
+    load,
+    loadMore,
+    search,
+    remove,
+    rename,
+    prepend,
+    touch
+  }
 }
 
 /* ── 问答会话（流式） ── */
@@ -200,12 +250,20 @@ export interface ChatSessionOptions {
 export function useChatSession(options: ChatSessionOptions = {}) {
   const messages: Ref<ChatMessageEx[]> = ref([])
   const loadingHistory = ref(false)
+  const loadingEarlier = ref(false)
   const loadError = ref<{ reason: string; hint?: string } | null>(null)
   const generating = ref(false)
   /** 生成失败时的可读原因与下一步 —— 绝不静默失败 */
   const streamError = ref<{ reason: string; hint?: string } | null>(null)
+  /** 还有更早的消息没拉完（长会话截断的出口） */
+  const hasEarlier = ref(false)
 
   let handle: StreamHandle | null = null
+  /** 当前会话 id；加载更早时要用 */
+  let activeConvId = ''
+  /** 已拉到的最早一页（page 从后往前走，-1 是最后一页） */
+  let earliestPage = 1
+  const MSG_PAGE_SIZE = 50
 
   const lastAssistant = computed(() => {
     for (let i = messages.value.length - 1; i >= 0; i -= 1) {
@@ -223,22 +281,59 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     return (found as ChatMessageEx | undefined) ?? (msg as ChatMessageEx)
   }
 
+  /**
+   * 打开会话：先拿**最近**一页（page=-1），再由「加载更早」往前翻。
+   * 固定 size:100 且只取 page:1 会把 >100 条后的消息永久截断 —— 这里按页可回溯。
+   */
   const loadHistory = async (conversationId: string) => {
     loadingHistory.value = true
     loadError.value = null
     messages.value = []
+    activeConvId = conversationId
+    hasEarlier.value = false
+    earliestPage = 1
     try {
       if (options.credentialToken) {
         const list = await conversationsApi.listPublicMessages(options.credentialToken)
         messages.value = list.map((m) => toReactiveMessage(m) as ChatMessageEx)
-      } else {
-        const result = await conversationsApi.listMessages(conversationId, { page: 1, size: 100 })
-        messages.value = result.list.map((m) => toReactiveMessage(m) as ChatMessageEx)
+        return
       }
+      // page=-1 = 最后一页（mock 按此语义实现；真实后端可按 around/offset 等价实现）
+      const result = await conversationsApi.listMessages(conversationId, {
+        page: -1,
+        size: MSG_PAGE_SIZE
+      })
+      messages.value = result.list.map((m) => toReactiveMessage(m) as ChatMessageEx)
+      earliestPage = Math.max(1, Math.ceil(result.total / MSG_PAGE_SIZE))
+      hasEarlier.value = earliestPage > 1
     } catch (error) {
       loadError.value = errText(error, '加载消息失败')
     } finally {
       loadingHistory.value = false
+    }
+  }
+
+  /** 加载更早一页，接在消息列表前面（长会话「加载更多」） */
+  const loadEarlier = async () => {
+    if (loadingEarlier.value || !hasEarlier.value || !activeConvId) return
+    loadingEarlier.value = true
+    try {
+      earliestPage -= 1
+      const result = await conversationsApi.listMessages(activeConvId, {
+        page: earliestPage,
+        size: MSG_PAGE_SIZE
+      })
+      const seen = new Set(messages.value.map((m) => m.id))
+      const older = result.list
+        .filter((m) => !seen.has(m.id))
+        .map((m) => toReactiveMessage(m) as ChatMessageEx)
+      messages.value = [...older, ...messages.value]
+      hasEarlier.value = earliestPage > 1
+    } catch (error) {
+      earliestPage += 1
+      loadError.value = errText(error, '加载更早消息失败')
+    } finally {
+      loadingEarlier.value = false
     }
   }
 
@@ -265,10 +360,12 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     attachmentIds?: string[]
     /** 重新生成：覆盖原答案；「继续生成」不传，保留已生成内容并追加 */
     overwrite?: boolean
+    /** 生成模式：显式告诉后端这是新一轮 / 覆盖重生成 / 续写 */
+    mode?: ChatMode
   }
 
   const startStream = (input: StartStreamInput) => {
-    const { conversationId, question, attachmentIds, overwrite } = input
+    const { conversationId, question, attachmentIds, overwrite, mode } = input
     // 始终写响应式代理：外部传入的可能是原始对象
     const assistant = resolveMsg(input.assistant)
     generating.value = true
@@ -291,6 +388,9 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       attachmentIds,
       thinking: options.thinking?.value ?? false,
       credentialToken: options.credentialToken,
+      // 重生成/继续生成把目标消息 id 一并带上：服务端据此覆盖/续写，而不是新增一轮
+      mode,
+      targetMessageId: mode && mode !== 'new' ? assistant.id : undefined,
 
       onMeta: (meta) => {
         assistant.id = meta.messageId || assistant.id
@@ -399,7 +499,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     })
   }
 
-  /** 重新生成：用同一个问题覆盖原答案 */
+  /** 重新生成：用同一个问题覆盖原答案（带 messageId，服务端就地替换，不新增消息对） */
   const regenerate = (input: ChatMessage) => {
     if (generating.value) return
     const assistant = resolveMsg(input)
@@ -419,13 +519,14 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       question: userMsg.content,
       assistant,
       attachmentIds: (userMsg.attachments ?? []).map((a) => a.id),
-      overwrite: true
+      overwrite: true,
+      mode: 'regenerate'
     })
   }
 
   /**
    * 停止后的「继续」：保留已生成内容，在其后追加。
-   * 契约暂无断点续传接口，这里以「请接着上文继续」发起新一轮流式并追加写入。
+   * 带 `mode:'continue'` + 目标 messageId —— **不伪造问句**，否则历史里会多出一条重复问题。
    */
   const continueGenerate = (input: ChatMessage) => {
     if (generating.value) return
@@ -440,12 +541,13 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     }
     if (!userMsg) return
 
-    const question = `${userMsg.content}\n\n（请接着上文已输出的内容继续，不要重复已写部分）`
     startStream({
       conversationId: assistant.conversationId,
-      question,
+      // 原问题原样发 —— 伪造后缀会让服务端把「继续」当成新一轮，历史里多一条重复问句
+      question: userMsg.content,
       assistant,
-      attachmentIds: (userMsg.attachments ?? []).map((a) => a.id)
+      attachmentIds: (userMsg.attachments ?? []).map((a) => a.id),
+      mode: 'continue'
     })
   }
 
@@ -460,11 +562,14 @@ export function useChatSession(options: ChatSessionOptions = {}) {
   return {
     messages,
     loadingHistory,
+    loadingEarlier,
     loadError,
     generating,
     streamError,
+    hasEarlier,
     lastAssistant,
     loadHistory,
+    loadEarlier,
     send,
     stop,
     regenerate,

@@ -3,6 +3,7 @@ import type {
   AccessCredential,
   ApiKeyItem,
   Assistant,
+  AssistantBundleConfig,
   AssistantOrigin,
   AssistantType,
   BundleCheckResult,
@@ -10,6 +11,7 @@ import type {
   PublishCheckResult,
   UpsertAssistantBody
 } from '@/api/assistants'
+import type { WorkflowGraph } from '@/api/workflow'
 import type { Grant, ResourceVisibility } from '@/api/types'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
@@ -296,7 +298,7 @@ export const assistantRoutes: MockRoute[] = [
       const input = body as {
         bundle: {
           format: string
-          config: UpsertAssistantBody
+          config: AssistantBundleConfig
           dependencies: BundleDependency[]
           includesDocuments?: boolean
         }
@@ -342,6 +344,15 @@ export const assistantRoutes: MockRoute[] = [
         // 导入也是新建：归属给导入人，默认 private
         ownerId: selfId(subjects),
         visibility: 'private'
+      }
+      // 编排应用：包里带了流程定义就恢复进草稿，否则建一个空画布（与新建同形）
+      if (importedType === 'workflow') {
+        const restored: WorkflowGraph = config.workflow ?? { nodes: [], edges: [] }
+        workflowDrafts[created.id] = restored
+        created.workflow = {
+          nodeCount: restored.nodes.length,
+          publishedVersion: null
+        }
       }
       assistants.unshift(created)
       return withOwnerName(created)
@@ -632,6 +643,21 @@ export const assistantRoutes: MockRoute[] = [
     }
   ],
 
+  // 单条启停（与凭证面板的 …/credentials/:id/enabled 同形）。停用是可逆的，不是终态
+  [
+    'PATCH',
+    '/assistants/:appId/api-keys/:id/enabled',
+    ({ path, body, token }) => {
+      findAssistant(path.appId, token, PERM.assistantEdit)
+      const list = ensureApiKeys(path.appId)
+      const item = list.find((k) => k.id === path.id)
+      if (!item) throw new ApiError(ErrorCode.NOT_FOUND, 'API Key 不存在')
+      const { enabled } = body as { enabled: boolean }
+      item.enabled = enabled
+      return item
+    }
+  ],
+
   /* ── 导入导出 ── */
 
   [
@@ -644,14 +670,14 @@ export const assistantRoutes: MockRoute[] = [
       /*
        * 依赖项里的「模型」：简单应用取应用级模型；**编排应用没有它** ⇒ 列流程里
        * AI 节点用到的模型（去重）。
-       * 注：`BundleDependency` 一个 kind 只带一个 `name`，且**流程定义本身也没进 bundle** ——
-       * 导入导出对编排应用仍不完整，这是已知契约缺口，这里只保证不报错、不编假数据。
+       * 编排应用另加一档「流程」：画布定义随包走，否则导入后流程是空的（P1）。
        */
+      const graph = app.type === 'workflow' ? (workflowDrafts[app.id] ?? { nodes: [], edges: [] }) : null
       const modelNames =
         app.type === 'workflow'
           ? [
               ...new Set(
-                (workflowDrafts[app.id]?.nodes ?? [])
+                (graph?.nodes ?? [])
                   .filter((n) => n.type === 'ai-chat-node' || n.type === 'question-node')
                   .map((n) => (n.config as { modelId?: string | null } | undefined)?.modelId)
                   .filter((id): id is string => !!id)
@@ -687,28 +713,44 @@ export const assistantRoutes: MockRoute[] = [
                 satisfied: !!p,
                 degrade: p ? null : '跳过后使用空角色设定'
               }
-            })
+            }),
+            // 流程档只在编排应用出现；简单应用的清单里不该有它
+            ...(graph
+              ? [
+                  {
+                    kind: '流程' as const,
+                    name: `${graph.nodes.length} 个节点 · ${graph.edges.length} 条连线`,
+                    detail: '画布流程定义，随包导出',
+                    satisfied: true,
+                    degrade: null
+                  }
+                ]
+              : [])
           ]
+
+      const config: AssistantBundleConfig = {
+        name: app.name,
+        icon: app.icon,
+        description: app.description,
+        type: app.type,
+        modelId: app.modelId ?? '',
+        kbIds: app.kbIds,
+        rolePrompt: app.rolePrompt,
+        promptIds: app.promptIds,
+        retrieval: app.retrieval,
+        multiTurn: app.multiTurn,
+        thinkingEnabled: app.thinkingEnabled,
+        prologue: app.prologue,
+        quickQuestions: app.quickQuestions,
+        // 编排应用带流程定义；简单应用不写这个字段
+        ...(graph ? { workflow: graph } : {})
+      }
 
       return {
         format: 'assistant-bundle@1',
         exportedAt: new Date().toISOString(),
         includesDocuments: includeDocuments,
-        config: {
-          name: app.name,
-          icon: app.icon,
-          description: app.description,
-          type: app.type,
-          modelId: app.modelId,
-          kbIds: app.kbIds,
-          rolePrompt: app.rolePrompt,
-          promptIds: app.promptIds,
-          retrieval: app.retrieval,
-          multiTurn: app.multiTurn,
-          thinkingEnabled: app.thinkingEnabled,
-          prologue: app.prologue,
-          quickQuestions: app.quickQuestions
-        },
+        config,
         dependencies
       }
     }

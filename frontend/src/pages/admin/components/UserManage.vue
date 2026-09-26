@@ -71,7 +71,7 @@
         :page-size="pageSize"
         layout="total, prev, pager, next"
         :total="total"
-        @current-change="fetchList"
+        @current-change="onPageChange"
       />
     </div>
 
@@ -81,6 +81,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { identityApi } from '@/api'
@@ -103,6 +104,8 @@ const STATUS_DOT: Record<User['status'], string> = {
 }
 
 const session = useSessionStore()
+const route = useRoute()
+const router = useRouter()
 
 const list = ref<User[]>([])
 const roles = ref<Role[]>([])
@@ -110,12 +113,25 @@ const total = ref(0)
 const loading = ref(false)
 const pageSize = 10
 
+/** 筛选/分页入 URL —— 刷新与直链能恢复同一筛选态（一.2） */
 const query = reactive({
-  keyword: '',
-  roleId: '',
-  status: '' as User['status'] | '',
-  page: 1
+  keyword: (route.query.keyword as string) ?? '',
+  roleId: (route.query.roleId as string) ?? '',
+  status: ((route.query.status as string) ?? '') as User['status'] | '',
+  page: Number(route.query.page) || 1
 })
+
+const syncUrl = () => {
+  router.replace({
+    query: {
+      ...route.query,
+      ...(query.keyword ? { keyword: query.keyword } : { keyword: undefined }),
+      ...(query.roleId ? { roleId: query.roleId } : { roleId: undefined }),
+      ...(query.status ? { status: query.status } : { status: undefined }),
+      ...(query.page > 1 ? { page: String(query.page) } : { page: undefined })
+    }
+  })
+}
 
 const fetchList = async () => {
   loading.value = true
@@ -140,6 +156,12 @@ const fetchRoles = async () => {
 
 const search = () => {
   query.page = 1
+  syncUrl()
+  fetchList()
+}
+
+const onPageChange = () => {
+  syncUrl()
   fetchList()
 }
 
@@ -178,11 +200,14 @@ const onSaved = () => {
 }
 
 const remove = async (user: User) => {
-  await ElMessageBox.confirm(
+  const ok = await ElMessageBox.confirm(
     `删除后该账号将无法登录，此操作不可恢复。确认删除「${user.displayName}（${user.username}）」？`,
     '确认删除用户',
     { type: 'warning', confirmButtonText: '删除' }
   )
+    .then(() => true)
+    .catch(() => false)
+  if (!ok) return
   try {
     await identityApi.deleteUser(user.id)
     ElMessage.success('已删除')

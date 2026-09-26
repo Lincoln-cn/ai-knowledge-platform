@@ -79,21 +79,25 @@ const iso = (msAgo: number) => new Date(now - msAgo).toISOString()
 
 /** 引用全文。流式 mock 的 canned refs 不带 full，历史消息这里补上，抽屉可读原文 */
 export const segmentFullTexts: Record<string, string> = {
-  'seg-3': '第三条 付款条款要求。合同付款应明确付款比例、付款节点与逾期违约责任。前期付款比例原则上不超过合同总额的 30%，尾款须在验收合格后支付。付款节点应与履约进度挂钩，不得以单纯时间节点作为唯一付款依据。',
-  'seg-4': '第四条 验收标准与争议解决。验收标准应量化、可检验，避免使用「合格」「满意」等模糊表述。争议解决应优先约定甲方所在地法院或约定仲裁，并明确适用法律。'
+  seg3:
+    '付款方式应明确约定付款比例、付款节点与发票要求。前期付款比例原则上不超过合同总额的百分之三十，尾款须在验收合格后支付。付款节点应与履约进度挂钩，不得以单纯时间节点作为唯一付款依据。逾期付款应约定违约责任与计算方式。',
+  seg4:
+    '验收标准应量化、可检测，避免「符合要求」等模糊表述。争议解决方式优先协商，协商不成的，约定向公司所在地人民法院提起诉讼。'
 }
 
-/** 给 SourceRef 补上 full / 跳转所需 id（契约里是可选字段） */
+/**
+ * 给 SourceRef 补上 full / 跳转所需 id。
+ * id 必须与 `fixtures/knowledge.ts` 里真实存在的分段/文档/知识库对齐，
+ * 否则「跳转到分段管理」会落到不存在的分段上（跨模块 id 对不上时界面只会静默显示空）。
+ */
 export function enrichRef(ref: SourceRef): SourceRef {
-  const key = ref.index === 1 ? 'seg-3' : 'seg-4'
+  const key = ref.index === 1 ? 'seg3' : 'seg4'
   return {
     ...ref,
-    full: segmentFullTexts[key],
-    ...({
-      segmentId: key,
-      documentId: 'doc-1',
-      kbId: 'kb1'
-    } as Record<string, string>)
+    full: ref.full ?? segmentFullTexts[key],
+    segmentId: ref.segmentId ?? key,
+    documentId: ref.documentId ?? 'doc1',
+    kbId: ref.kbId ?? 'kb1'
   }
 }
 

@@ -9,6 +9,7 @@ import {
 } from '../fixtures/conversations'
 import { assistants, credentials as assistantCredentials } from '../fixtures/assistants'
 import { cannedAnswer } from '../fixtures/canned'
+import { documents, knowledgeBases, segments } from '../fixtures/knowledge'
 import {
   addConversation,
   appendTurn,
@@ -27,7 +28,13 @@ import {
   toShareView,
   type StoredConversation
 } from '../chat-store'
-import { currentSubjects, requireVisible, selfId, visiblePredicate, type SubjectSet } from '../policy'
+import {
+  currentSubjects,
+  requireVisible,
+  selfId,
+  visiblePredicate,
+  type SubjectSet
+} from '../policy'
 
 /**
  * 会话域 mock。
@@ -227,9 +234,15 @@ export const conversationRoutes: MockRoute[] = [
       const appId = query.appId ? String(query.appId) : ''
       // mine=true 只看自己名下的（07 §六 阶段 1 的唯一新增查询参数）
       const mine = query.mine === true || query.mine === 'true'
+      const keyword = String(query.keyword ?? '').trim()
       const list = conversations
         .filter(visiblePredicate(subjects, CONVERSATION_ACTION, { mine }))
         .filter((c) => !appId || c.appId === appId)
+        // 历史搜索：按标题 / 应用名模糊匹配
+        .filter((c) => {
+          if (!keyword) return true
+          return c.title.includes(keyword) || (c.appName ?? '').includes(keyword)
+        })
         .map(withApp)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       return paginate(list, query)
@@ -259,6 +272,8 @@ export const conversationRoutes: MockRoute[] = [
         conversationId?: string
         question: string
         attachmentIds?: string[]
+        mode?: 'new' | 'regenerate' | 'continue'
+        targetMessageId?: string
       }
       const question = (req.question ?? '').trim()
       if (!question) throw new ApiError(4001, '问题不能为空')
@@ -271,19 +286,30 @@ export const conversationRoutes: MockRoute[] = [
 
       // 同步生成（mock 语义）：非流式入口直接给完整回答
       const payload = req.appId ? cannedAnswer.withRefs : cannedAnswer.withoutRefs
+      // 继续生成：只补还没写的尾巴（与流式 mock 同一口径）
+      const prev =
+        req.mode === 'continue' && req.targetMessageId
+          ? findMessage(req.targetMessageId)
+          : undefined
+      const answer =
+        req.mode === 'continue' && prev
+          ? payload.text.slice(prev.content.length)
+          : payload.text
       const turn = appendTurn({
         conversationId: req.conversationId,
         appId: req.appId ?? null,
         ownerId: selfId(subjects),
         question,
-        answer: payload.text,
+        answer,
         status: '已生成',
         refs: payload.refs,
         suggestions: payload.suggestions,
-        tokens: Math.round(payload.text.length / 2.2),
+        tokens: Math.round(answer.length / 2.2),
         durationMs: 900,
         attachmentIds: req.attachmentIds,
-        messageId: `msg_${Date.now().toString(36)}`
+        messageId: `msg_${Date.now().toString(36)}`,
+        mode: req.mode,
+        targetMessageId: req.targetMessageId
       })
       return {
         conversationId: turn.conversationId,
@@ -404,7 +430,38 @@ export const conversationRoutes: MockRoute[] = [
     '/conversations/:conversationId/messages',
     ({ path, query, token }) => {
       findConv(path.conversationId, token)
-      return paginate(messagesOf(path.conversationId), query)
+      const list = messagesOf(path.conversationId)
+      // page=-1 表示取最后一页 —— 聊天窗口总是先看到最近的几条，再「加载更早」
+      if (String(query.page ?? '') === '-1') {
+        const size = Number(query.size ?? 50)
+        const lastPage = Math.max(1, Math.ceil(list.length / size))
+        return paginate(list, { ...query, page: lastPage, size })
+      }
+      return paginate(list, query)
+    }
+  ],
+
+  /**
+   * 引用回溯：按 id 取一条知识分段。
+   * 可见性继承所属知识库（与 ingestion 的分段端点同口径）；看不见一律 404。
+   */
+  [
+    'GET',
+    '/segments/:id',
+    ({ path, token }) => {
+      const seg = segments.find((s) => s.id === path.id)
+      if (!seg) throw new ApiError(ErrorCode.NOT_FOUND, `分段「${path.id}」不存在`)
+      const doc = documents.find((d) => d.id === seg.documentId)
+      const kb = doc ? knowledgeBases.find((k) => k.id === doc.kbId) : undefined
+      requireVisible(kb, currentSubjects(token), PERM.knowledgeView, '分段', seg.id)
+      return {
+        id: seg.id,
+        documentId: seg.documentId,
+        title: seg.title,
+        content: seg.content,
+        charCount: seg.charCount,
+        enabled: seg.enabled
+      }
     }
   ],
 

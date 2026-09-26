@@ -33,6 +33,12 @@ export interface SourceRef {
   score: number
   rank?: number
   full?: string
+  /** 分段 id —— 「跳转到分段管理」深链用（`/knowledge?segment=`） */
+  segmentId?: string
+  /** 所属文档 id —— 深链用（`/knowledge?doc=`） */
+  documentId?: string
+  /** 所属知识库 id —— 深链用（`/knowledge?kb=`） */
+  kbId?: string
 }
 
 export type Artifact =
@@ -49,6 +55,13 @@ export interface StreamDone {
   durationMs: number
 }
 
+/**
+ * 生成模式。缺省 `new` = 正常新一轮。
+ *  - `regenerate` 覆盖 `targetMessageId` 对应的原答案（不新增消息对）
+ *  - `continue`   接着 `targetMessageId` 已生成的内容续写（不伪造新问句）
+ */
+export type ChatMode = 'new' | 'regenerate' | 'continue'
+
 export interface ChatStreamOptions {
   /** 应用 id；不传为通用问答 */
   appId?: string
@@ -59,6 +72,10 @@ export interface ChatStreamOptions {
   thinking?: boolean
   /** 免登录场景的访问凭证，替代 Authorization 头 */
   credentialToken?: string
+  /** 生成模式；不传按 `new` 处理 */
+  mode?: ChatMode
+  /** 重生成 / 继续生成的目标助手消息 id */
+  targetMessageId?: string
 
   onMeta?: (meta: StreamMeta) => void
   onRefs?: (refs: SourceRef[]) => void

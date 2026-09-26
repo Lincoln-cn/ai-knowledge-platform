@@ -36,6 +36,8 @@
           :bot-icon="appBrief?.icon || 'AI'"
           :active-ref-index="activeRefIndex"
           :can-share="canShare"
+          :has-earlier="chat.hasEarlier.value"
+          :loading-earlier="chat.loadingEarlier.value"
           @cite="onCite"
           @copy="onCopy"
           @feedback="onFeedback"
@@ -44,6 +46,7 @@
           @share="openShare"
           @suggest="onSuggest"
           @retry="reloadMessages"
+          @load-earlier="chat.loadEarlier"
         />
 
         <Composer

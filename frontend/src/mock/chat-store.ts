@@ -269,6 +269,13 @@ export interface AppendTurnInput {
   attachmentIds?: string[]
   /** 助手消息 id。传流式的 messageId，保证反馈接口刷新后仍按同一 id 回写 */
   messageId?: string
+  /**
+   * 生成模式（契约 `ChatStreamOptions.mode`）。
+   * 传了就按显式意图落库；不传时才回落到「末尾问答对且问题相同 = 重生成」的近似识别。
+   */
+  mode?: 'new' | 'regenerate' | 'continue'
+  /** 重生成 / 继续生成的目标助手消息 id */
+  targetMessageId?: string
 }
 
 export interface AppendTurnResult {
@@ -289,10 +296,10 @@ function buildMessage(
  *  - `已停止`：用户点停止 → `abort()` → `finish('已停止')`
  *  - `失败`：`onError` 后 `finish('失败')`
  *
- * **重生成识别**：契约没有「这是重生成」的字段，页面又在他人领地改不了，
- * 所以按「最后一条是助手消息、且其前一条用户消息与本次问题相同」识别为重生成，
- * 覆盖那条助手消息而不是追加一对新消息。继续生成的问题文本带后缀、与原问题
- * 不同，会被当成新一轮 —— 那是可接受的近似，见交付报告。
+ * **重生成 / 继续生成**：契约里 `mode` + `targetMessageId` 显式表达意图 ——
+ *  - `regenerate` 覆盖目标助手消息（不新增消息对）
+ *  - `continue`   把本轮增量接到目标助手消息正文之后（不伪造新问句、不重复问题）
+ * 未传 mode 时回落到旧的「末尾问答对且问题相同」近似识别，保证旧调用不破。
  */
 export function appendTurn(input: AppendTurnInput): AppendTurnResult {
   const {
@@ -307,7 +314,9 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
     failReason,
     failHint,
     attachmentIds,
-    messageId
+    messageId,
+    mode,
+    targetMessageId
   } = input
 
   const attachments = resolveAttachments(attachmentIds)
@@ -317,6 +326,33 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
     const key = credentialToken
     const list = (state.publicMessages[key] ??= [])
     const conversationId = `public:${credentialToken}`
+
+    // 重生成 / 继续：先在公开消息里找目标助手消息，就地改写
+    const target = targetMessageId ? list.find((m) => m.id === targetMessageId) : undefined
+    if (target && target.role === 'assistant') {
+      if (mode === 'continue') {
+        target.content = `${target.content}${answer}`
+        if (enrichedRefs.length) target.refs = enrichedRefs
+      } else {
+        target.content = answer
+        target.refs = enrichedRefs
+      }
+      target.status = status
+      target.suggestions = suggestions ?? []
+      target.tokens = tokens ?? 0
+      target.durationMs = durationMs ?? 0
+      target.failReason = failReason ?? null
+      target.failHint = failHint ?? null
+      if (messageId) target.id = messageId
+      persist()
+      const user = list.filter((m) => m.role === 'user').pop()
+      return {
+        conversationId,
+        user: user ?? target,
+        assistant: target
+      }
+    }
+
     const user = buildMessage({
       id: `um_${Date.now().toString(36)}`,
       conversationId,
@@ -359,15 +395,6 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
   })
   const list = (state.messagesByConv[conv.id] ??= [])
 
-  const last = list[list.length - 1]
-  const prev = list[list.length - 2]
-  const isRegenerate =
-    !!last &&
-    last.role === 'assistant' &&
-    !!prev &&
-    prev.role === 'user' &&
-    prev.content === question
-
   const assistantBase = {
     conversationId: conv.id,
     role: 'assistant' as const,
@@ -381,6 +408,43 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
     failReason: failReason ?? null,
     failHint: failHint ?? null
   }
+
+  // 显式意图优先
+  if (targetMessageId && (mode === 'regenerate' || mode === 'continue')) {
+    const target = list.find((m) => m.id === targetMessageId && m.role === 'assistant')
+    if (target) {
+      if (mode === 'continue') {
+        Object.assign(target, assistantBase, {
+          content: `${target.content}${answer}`,
+          attachments: target.attachments,
+          createdAt: target.createdAt
+        })
+      } else {
+        Object.assign(target, assistantBase, {
+          attachments: target.attachments,
+          createdAt: target.createdAt
+        })
+      }
+      if (messageId) target.id = messageId
+      conv.updatedAt = new Date().toISOString()
+      persist()
+      // 找它前面最近的问句作为配对的 user 消息
+      const idx = list.indexOf(target)
+      const user = list.slice(0, idx).reverse().find((m) => m.role === 'user') ?? target
+      return { conversationId: conv.id, user, assistant: target }
+    }
+  }
+
+  // 回落：旧近似识别（末尾问答对且问题文本相同 = 重生成）
+  const last = list[list.length - 1]
+  const prev = list[list.length - 2]
+  const isRegenerate =
+    mode !== 'new' &&
+    !!last &&
+    last.role === 'assistant' &&
+    !!prev &&
+    prev.role === 'user' &&
+    prev.content === question
 
   if (isRegenerate && last) {
     Object.assign(last, assistantBase, {

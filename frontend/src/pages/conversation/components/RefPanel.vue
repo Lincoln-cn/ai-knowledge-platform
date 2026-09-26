@@ -28,9 +28,14 @@
         <div v-else class="full micro muted">
           （契约未返回分段全文，可跳转到分段管理查看原文）
         </div>
-        <button type="button" class="jump" @click.stop="emit('jump', ref)">
-          跳转到分段管理
-        </button>
+        <div class="row-actions">
+          <button type="button" class="jump" @click.stop="emit('back', ref.index)">
+            回到原句
+          </button>
+          <button type="button" class="jump" @click.stop="emit('jump', ref)">
+            跳转到分段管理
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -50,6 +55,8 @@ const emit = defineEmits<{
   close: []
   select: [index: number]
   jump: [ref: SourceRefEx]
+  /** 回到原句：滚回正文里的 [N] 角标 */
+  back: [index: number]
 }>()
 </script>
 
@@ -170,8 +177,14 @@ const emit = defineEmits<{
   overflow: hidden;
 }
 
-.jump {
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
   margin-top: var(--space-xs);
+}
+
+.jump {
   border: none;
   background: transparent;
   color: var(--color-accent);

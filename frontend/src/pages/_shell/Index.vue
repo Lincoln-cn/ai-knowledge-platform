@@ -82,6 +82,7 @@
         </button>
         <template #dropdown>
           <el-dropdown-menu>
+            <el-dropdown-item command="my-account">我的账号</el-dropdown-item>
             <el-dropdown-item command="change-password">修改密码</el-dropdown-item>
             <el-dropdown-item command="logout">退出登录</el-dropdown-item>
           </el-dropdown-menu>
@@ -94,6 +95,7 @@
     </main>
 
     <CommandPalette v-model="paletteOpen" />
+    <AccountDialog ref="accountRef" />
   </div>
 </template>
 
@@ -103,6 +105,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import BrandMark from '@/components/BrandMark.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
+import AccountDialog from './AccountDialog.vue'
 import { APP_TITLE } from '@/config/env'
 import { canReach } from '@/lib/reach'
 import { navGroups, navLabel } from '@/router/routes'
@@ -117,6 +120,7 @@ const openGroup = ref('')
 const scrolled = ref(false)
 const navEl = ref<HTMLElement | null>(null)
 const hintEl = ref<HTMLButtonElement | null>(null)
+const accountRef = ref<InstanceType<typeof AccountDialog>>()
 
 /* ⌘K 提示按平台写字 —— Windows 上画一个 ⌘ 是骗人。 */
 const isMac = /mac/i.test(navigator.userAgent)
@@ -253,6 +257,10 @@ watch(
 )
 
 const onCommand = async (command: string) => {
+  if (command === 'my-account') {
+    accountRef.value?.open()
+    return
+  }
   if (command === 'change-password') {
     router.push('/change-password')
     return

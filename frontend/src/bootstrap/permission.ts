@@ -18,6 +18,10 @@ export const permissionGuard: NavigationGuard = async (to) => {
   const token = localStorage.getItem('access_token')
 
   if (!token && !isPublic) {
+    // 未登录命中壳内 404 ⇒ 不能进壳（会变成"未登录"坏壳），转去裸 404
+    if (to.name === 'not-found') {
+      return { name: 'not-found-public', query: { from: to.fullPath } }
+    }
     return { path: '/login', query: { redirect: to.fullPath } }
   }
 

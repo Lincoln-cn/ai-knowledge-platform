@@ -25,6 +25,8 @@ import { computed } from 'vue'
 const props = defineProps<{
   text: string
   streaming?: boolean
+  /** 当前激活的引用编号 —— 对应正文里的 [N] 高亮，方便「回滚定位」 */
+  activeIndex?: number | null
 }>()
 
 const emit = defineEmits<{
@@ -45,7 +47,8 @@ function renderInline(raw: string): string {
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
   html = html.replace(
     /\[(\d+)\]/g,
-    '<span class="cite" data-ref="$1" role="button" tabindex="0">[$1]</span>'
+    (_m, n: string) =>
+      `<span class="cite${Number(n) === props.activeIndex ? ' active' : ''}" data-ref="${n}" role="button" tabindex="0">[${n}]</span>`
   )
   return html
 }
@@ -121,6 +124,17 @@ function onClick(e: MouseEvent) {
   const n = Number(cite.dataset.ref)
   if (Number.isFinite(n)) emit('cite', n)
 }
+
+/**
+ * 「回滚定位」：从引用面板回到正文里的原句角标。
+ * 找到 [N] 后滚入视野 —— 看完引用能回到刚才那句话，而不是在面板里迷路。
+ */
+function scrollToCite(index: number) {
+  const el = document.querySelector(`.cite[data-ref="${index}"]`) as HTMLElement | null
+  el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+defineExpose({ scrollToCite })
 </script>
 
 <style scoped>

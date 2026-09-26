@@ -6,7 +6,8 @@ import type {
 import { cannedAnswer } from './fixtures/canned'
 import { userFromToken } from './fixtures/identity'
 import { getToken } from '@/lib/token'
-import { appendTurn } from './chat-store'
+import { appendTurn, findMessage } from './chat-store'
+import { enrichRef } from './fixtures/conversations'
 
 /**
  * 流式契约的 mock 实现。
@@ -23,6 +24,7 @@ import { appendTurn } from './chat-store'
  *
  * 失败路径按问题文本触发（与 ingestion 的「扫描件命名约定」同一手法）：
  * 问题含「模拟失败」时走 onError + done(失败)，同样落库。
+ * 问题含「模拟空回答」时走 done(已生成) 但正文为空，用来验证空回答提示。
  */
 
 /** 逐字推送的字符数与间隔，模拟真实模型的吐字节奏 */
@@ -31,6 +33,9 @@ const CHAR_STEP_MAX = 4
 
 /** 问题里带这个词就模拟生成失败 —— 让「失败」这条终态可被真的走到 */
 const FAIL_TRIGGER = '模拟失败'
+
+/** 问题里带这个词就模拟「已生成但正文为空」 */
+const EMPTY_TRIGGER = '模拟空回答'
 
 export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
   const startedAt = Date.now()
@@ -91,7 +96,9 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
         failReason,
         failHint,
         attachmentIds: options.attachmentIds,
-        messageId
+        messageId,
+        mode: options.mode,
+        targetMessageId: options.targetMessageId
       })
     } catch {
       /* 落库失败不该把流式收尾也拖垮 —— UI 仍要走完 done */
@@ -112,6 +119,17 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
   const payload = options.appId ? cannedAnswer.withRefs : cannedAnswer.withoutRefs
   const thinkingMs = options.thinking ? 1200 : 0
   const shouldFail = options.question.includes(FAIL_TRIGGER)
+  const shouldEmpty = options.question.includes(EMPTY_TRIGGER)
+
+  /**
+   * 「继续生成」只推还没写出去的尾巴，不整篇重放。
+   * 先按 targetMessageId 找到已生成的部分，再从其长度处切开 canned 文本。
+   */
+  const resumeFrom = (() => {
+    if (options.mode !== 'continue' || !options.targetMessageId) return 0
+    const prev = findMessage(options.targetMessageId)
+    return prev ? prev.content.length : 0
+  })()
 
   // 1) meta：连接建立即返回。这是「生成中可停止」的前提
   later(() => {
@@ -124,9 +142,9 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
 
   // 2) refs：检索先于生成，引用先到，用户可边看答案边点引用
   later(() => {
-    if (shouldFail) return
+    if (shouldFail || shouldEmpty) return
     if (payload.refs.length) {
-      emittedRefs = payload.refs as SourceRef[]
+      emittedRefs = payload.refs.map((r) => enrichRef(r as SourceRef))
       options.onRefs?.(emittedRefs)
     }
   }, 260 + thinkingMs)
@@ -140,11 +158,21 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
       )
       return
     }
+    if (shouldEmpty) {
+      // 空回答：不推任何 delta，直接以「已生成」收尾 —— 让空回答提示可被实测
+      finish('已生成', { prompt: 512, completion: 0, total: 512 })
+      return
+    }
+    // 继续生成：从已写到的位置接着吐；重生成/新一轮从头吐
+    const text =
+      options.mode === 'continue' && resumeFrom > 0
+        ? payload.text.slice(resumeFrom)
+        : payload.text
     let cursor = 0
     const tick = () => {
       if (aborted || closed) return
       const step = CHAR_STEP_MIN + Math.floor(Math.random() * (CHAR_STEP_MAX - CHAR_STEP_MIN + 1))
-      const chunk = payload.text.slice(cursor, cursor + step)
+      const chunk = text.slice(cursor, cursor + step)
       cursor += step
 
       if (chunk) {
@@ -152,15 +180,15 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
         options.onDelta?.(chunk)
       }
 
-      if (cursor >= payload.text.length) {
+      if (cursor >= text.length) {
         if (payload.suggestions.length) {
           emittedSuggestions = payload.suggestions
           options.onArtifact?.({ type: 'suggestions', items: payload.suggestions })
         }
         finish('已生成', {
           prompt: 812,
-          completion: Math.round(payload.text.length / 2.2),
-          total: 812 + Math.round(payload.text.length / 2.2)
+          completion: Math.round(text.length / 2.2),
+          total: 812 + Math.round(text.length / 2.2)
         })
         return
       }

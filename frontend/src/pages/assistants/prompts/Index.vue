@@ -120,11 +120,15 @@ const onSaved = () => {
 }
 
 const removeType = async (row: PromptType) => {
-  await ElMessageBox.confirm(
+  const confirmed = await ElMessageBox.confirm(
     `删除类型「${row.typeName}」后，其下的提示词将失去分类。确认删除？`,
     '确认删除类型',
     { type: 'warning', confirmButtonText: '删除' }
+  ).then(
+    () => true,
+    () => false
   )
+  if (!confirmed) return
   try {
     await promptsApi.deletePromptType(row.id)
     ElMessage.success('已删除')
@@ -135,11 +139,15 @@ const removeType = async (row: PromptType) => {
 }
 
 const removeConfig = async (row: PromptConfig) => {
-  await ElMessageBox.confirm(
+  const confirmed = await ElMessageBox.confirm(
     `删除提示词「${row.roleName}」？若正被应用引用会阻止删除。`,
     '确认删除提示词',
     { type: 'warning', confirmButtonText: '删除' }
+  ).then(
+    () => true,
+    () => false
   )
+  if (!confirmed) return
   try {
     await promptsApi.deletePromptConfig(row.id)
     ElMessage.success('已删除')

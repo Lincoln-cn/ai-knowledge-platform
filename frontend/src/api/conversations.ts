@@ -53,6 +53,8 @@ export interface ConversationQuery extends PageQuery {
   appId?: string
   /** 只看自己名下的（07 §六 阶段 1）。不传 = 按数据范围给全部可见的 */
   mine?: boolean
+  /** 按标题 / 应用名模糊搜索（PageQuery 已有该字段，这里显式声明语义） */
+  keyword?: string
 }
 
 /** 免登录链接的解析结果：应用上下文由凭证决定，客户端无法指定 */
@@ -114,6 +116,22 @@ export const listMessages = (conversationId: string, query: PageQuery = {}) =>
     path: { conversationId },
     query
   })
+
+/**
+ * 按 id 取一条知识分段（引用回溯用）。
+ * 跳转「分段管理」与抽屉里补全文都靠它；看不见一律 404（与单条取数同口径）。
+ */
+export interface SegmentBrief {
+  id: string
+  documentId: string
+  title: string
+  content: string
+  charCount: number
+  enabled: boolean
+}
+
+export const getSegment = (id: string) =>
+  request<SegmentBrief>({ method: 'GET', url: '/segments/:id', path: { id } })
 
 /** 赞踩互斥且可撤销：type 传 null 表示取消 */
 export const submitMessageFeedback = (messageId: string, type: 'up' | 'down' | null) =>

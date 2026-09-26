@@ -21,6 +21,12 @@
     </div>
 
     <template v-else>
+      <!-- 长会话：还有更早的一页时给出口，不再把早期消息永久截断 -->
+      <div v-if="hasEarlier" class="earlier-bar">
+        <el-button size="small" :loading="loadingEarlier" @click="emit('load-earlier')">
+          加载更早消息
+        </el-button>
+      </div>
       <template v-for="(msg, mi) in messages" :key="msg.id">
         <hr v-if="mi > 0" class="rule-2 msg-rule" />
         <article class="msg" :class="msg.role">
@@ -179,6 +185,16 @@ const props = defineProps<{
   activeRefIndex?: number | null
   /** 分享入口显隐（权限点：assistant:edit） */
   canShare?: boolean
+  /**
+   * 还有更早的消息可加载 / 正在加载。
+   *
+   * ⚠️ 这两个 prop 与下面的 `load-earlier` emit 是**补上的**：
+   * 上一轮 agent 在重构中途被取消，只改了模板与 composable，
+   * 漏了本文件的 props/emits 与父组件接线 ⇒ `vue-tsc` 报三处 TS2339/TS2345。
+   * 实现都在 `useChatSession`（`hasEarlier` / `loadingEarlier` / `loadEarlier`），这里只做接线。
+   */
+  hasEarlier?: boolean
+  loadingEarlier?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -190,6 +206,7 @@ const emit = defineEmits<{
   share: [msg: ChatMessage]
   suggest: [text: string]
   retry: []
+  'load-earlier': []
 }>()
 
 const scroller = ref<HTMLElement>()

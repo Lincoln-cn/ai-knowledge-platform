@@ -155,11 +155,16 @@ const toggleEnabled = async (row: AccessCredential) => {
 }
 
 const revoke = async (row: AccessCredential) => {
-  await ElMessageBox.confirm(
+  // 取消是正常路径：then 的拒绝回调把它收成 false，不落成 unhandled rejection
+  const confirmed = await ElMessageBox.confirm(
     '撤销后该链接立即失效，且无法重新启用。只能重新生成一个新凭证。确认撤销？',
     '确认撤销凭证',
     { type: 'warning', confirmButtonText: '撤销' }
+  ).then(
+    () => true,
+    () => false
   )
+  if (!confirmed) return
   try {
     await assistantsApi.revokeCredential(props.appId, row.id)
     ElMessage.success('已撤销，链接立即失效')

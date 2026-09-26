@@ -4,16 +4,20 @@
       <div class="state-code">404</div>
       <div class="empty-title">页面不存在</div>
       <div class="rule state-rule" aria-hidden="true"></div>
-      <p class="micro muted"><code>{{ route.fullPath }}</code></p>
+      <p class="micro muted"><code>{{ originalPath }}</code></p>
       <el-button size="small" type="primary" @click="$router.push('/')">回到工作台</el-button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
+
+/** 未登录被守卫转来时原始路径在 query.from；直接命中时就是当前路径 */
+const originalPath = computed(() => (route.query.from as string) || route.fullPath)
 </script>
 
 <style scoped>

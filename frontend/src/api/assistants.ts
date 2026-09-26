@@ -1,6 +1,7 @@
 import { request } from '@/lib/http'
 import type { RetrievalParams } from './retrieval'
 import type { Grant, PageQuery, PageResult, ResourceVisibility } from './types'
+import type { WorkflowGraph } from './workflow'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
@@ -148,17 +149,28 @@ export interface ApiKeyItem {
   lastUsedAt: string | null
 }
 
+/**
+ * 导出包里的配置体。
+ *
+ * 比 `UpsertAssistantBody` 多一个可选 `workflow`：编排应用的流程定义随包走，
+ * 否则导出再导入后画布是空的，得从零重画。简单应用没有这个字段。
+ */
+export interface AssistantBundleConfig extends UpsertAssistantBody {
+  workflow?: WorkflowGraph
+}
+
 /** 导出包：配置 + 依赖清单，可选带文档内容 */
 export interface AssistantBundle {
   format: string
   exportedAt: string
   includesDocuments: boolean
-  config: UpsertAssistantBody
+  config: AssistantBundleConfig
   dependencies: BundleDependency[]
 }
 
 export interface BundleDependency {
-  kind: '模型' | '知识库' | '提示词'
+  /** 「流程」是编排应用的画布定义；简单应用的清单里没有这一档 */
+  kind: '模型' | '知识库' | '提示词' | '流程'
   name: string
   /** 描述，如「本地推理 · 已加载」「128 个文档 · 412 个分段」 */
   detail: string
@@ -273,6 +285,15 @@ export const listApiKeys = (appId: string) =>
 
 export const regenerateApiKey = (appId: string) =>
   request<ApiKeyItem>({ method: 'POST', url: '/assistants/:appId/api-keys', path: { appId } })
+
+/** 单条启停。形状与 `setCredentialEnabled` 同构：停用后 Key 保留，可再启用 */
+export const setApiKeyEnabled = (appId: string, id: string, enabled: boolean) =>
+  request<ApiKeyItem>({
+    method: 'PATCH',
+    url: '/assistants/:appId/api-keys/:id/enabled',
+    path: { appId, id },
+    body: { enabled }
+  })
 
 /* ── 导入导出 ── */
 

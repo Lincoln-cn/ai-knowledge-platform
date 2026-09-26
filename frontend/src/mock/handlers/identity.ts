@@ -8,13 +8,17 @@ import { permissions, roles, userFromToken, users } from '../fixtures/identity'
  * 「令牌 → 用户」的约定只有一处实现（夹具层），数据权限判定（`mock/policy.ts`）也用它 ——
  * 两处各写一遍迟早会漂移。
  */
-const toCurrentUser = (user: (typeof users)[number]): CurrentUser => ({
-  id: user.id,
-  username: user.username,
-  displayName: user.displayName,
-  roleName: user.roleName,
-  permissions: roles.find((r) => r.id === user.roleId)?.permissions ?? []
-})
+const toCurrentUser = (user: (typeof users)[number]): CurrentUser => {
+  const role = roles.find((r) => r.id === user.roleId)
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.displayName,
+    roleName: user.roleName,
+    permissions: role?.permissions ?? [],
+    dataScope: role?.dataScope
+  }
+}
 
 const stripPassword = (user: (typeof users)[number]): User => {
   const { password: _password, ...rest } = user

@@ -137,12 +137,20 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/pages/overview/Index.vue'),
         meta: { title: '工作台' }
       },
-      ...pageRoutes
+      ...pageRoutes,
+      {
+        // 404 挂在 shell 内 —— 登录用户敲错 URL 时保留顶栏与一切入口（与 403 同理）
+        path: ':pathMatch(.*)*',
+        name: 'not-found',
+        component: () => import('@/pages/not-found/Index.vue'),
+        meta: { title: '页面不存在' }
+      }
     ]
   },
   {
-    path: '/:pathMatch(.*)*',
-    name: 'not-found',
+    // 未登录时的裸 404（无壳）。守卫在未登录命中 not-found 时重定向到这里
+    path: '/404',
+    name: 'not-found-public',
     component: () => import('@/pages/not-found/Index.vue'),
     meta: { public: true, title: '页面不存在' }
   }

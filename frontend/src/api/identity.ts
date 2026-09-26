@@ -32,6 +32,8 @@ export interface CurrentUser {
   roleName: string
   /** 权限点。后端在登录后一次性下发，前端不再据此渲染，只用于按钮显隐 */
   permissions: string[]
+  /** 角色声明的数据范围（07 §3.2）。可选 —— 后端未下发时前端按权限点降级 */
+  dataScope?: DataScope
 }
 
 export interface Role {
