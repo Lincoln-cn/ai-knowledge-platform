@@ -428,7 +428,7 @@ public class RrfQuotaDocumentJoiner implements DocumentJoiner {
 | 5 | ★ **纯函数、无状态、无 IO** ⇒ 可以用"给定的排名集合 → 断言的输出顺序"写成表驱动单测（**这一条让 RRF/配额的数学可被测试**，而不是靠线上观察） |
 | 6 | 配额被"优化"掉的防回归：★ **类注释里写死理由并指回 `10 §3.3.3`**（`10 §11.1 R6` 点过这个风险） |
 
-**R4 `DocumentSuppressor`**：同 `documentId` 在最终 TopN 内最多 `ceil(topN/2)` 条（`10 §4.5 (i)`）；RRF 分相同则词面重合多的优先。
+**R4 `DocumentSuppressor`**：同 `documentId` 在最终 TopN 内最多 `ceil(topN/2)` 条（`10 §4.5 (i)`）；RRF 分相同则词面重合多的优先；★ **同文档相邻 `ordinal` 只保留 RRF 分更高的那个** —— 分块的重叠窗口会让相邻块**同时命中**（`12 §3.3`），不去重的话上下文里会出现两段几乎一样的内容。
 **R5 `ContextBudgetAllocator`**：总预算 → 按意图单元均分 → 单元内填充 → 剩余回流 → 仍超窗才退 `03 §2.4` 的裁剪；★ **输出"哪些文档进了上下文"与"哪些只保留在引用里"两个集合**（R3/R4 之后的编号依赖它）。
 **R6 `MultiHopEvaluator`**：输入 = 问题 + **已命中分段的标题与前 100 字**（不是全文，省 token）；输出 `{sufficient, nextQuery}`；★ 停止条件四条（`10 §3.4.4`），其中 **Jaccard 重合度 > 0.6** 用 `segmentId` 集合算（纯计算，可单测）。
 **R7 `RetrievalBudgetGuard`**：★ **统一计时器**，每层开始前检查余量；降级时**必须记录 `degradeLevel` + 原因**（`10 §6.3`：否则"这周质量莫名下降"无从解释）。

@@ -892,11 +892,14 @@ spring:
 | **中文全文检索** | ★ **PG 扩展 `zhparser`（真分词）+ 自制 PG 镜像**：扩展在镜像 initdb、配置在 Flyway、启动自检 | ★ 已拍板（§10.2 #3） |
 | 切分 | 自研（字符长度 50–4096 / 重叠 0–1000，`ChunkStrategy` 已定） | 已定（`02:460`） |
 | **token 计数** | **不需要** —— 我们按**字符**切分与守卫上下文，不做 token 预算 | ★ 本轮确认 |
-| **文档解析** | **`tika-core`（MIME 嗅探）+ PDFBox 3.0.8 + POI 5.5.1（`poi` / `poi-scratchpad` / `poi-ooxml`）** | ★ 本轮定（§10.2 #1） |
-| **Markdown 解析** | **`tika-core` 4.0 的 POM 里已依赖 `commonmark`** ⇒ 零额外依赖 | ★ 本轮定（§10.2 #1） |
+| **文档解析** | ★ **`tika-core` + 三个细粒度 parser 模块**（`tika-parser-pdf-module` / `-microsoft-module` / `-text-module`）—— **不用** `tika-parsers-standard-package`（4.0 起是 POM 聚合包） | ★ **已改向**（§10.2 #1） |
+| **解析产物** | ★ **Markdown**（`ToMarkdownContentHandler`）—— 让**标题层级与表格**成为分块器可用的信号 | ★ 见 `12 §二` |
+| **Markdown 解析** | 由 `tika-parser-text-module` 承担（`tika-core` 内嵌 commonmark 做序列化） | ★ 已改向（§10.2 #1） |
 | **MIME 内容校验** | `tika-core` 的 `Detector`（magic bytes）**+ 解析器兜底** | ★ 本轮定（§10.2 #2） |
 | **OCR** | **不需要** —— MVP 明确不支持扫描件；扫描件给**可读失败原因** + "转 Markdown 再传"的替代路径 | 不需要（`04:357`） |
-| **PDF 表格抽取** | **不做** —— 表格按文本流出来；`04` 的"解析器分级"退化为"文本型直读 + 失败可读" | 不需要（MVP） |
+| **PDF 结构化** | ★ **分级**：默认段落流 → tagged PDF 开 `extractMarkedContent` → **叠一层中文编号启发式**（第X条 / （一）/ 1.1） | ★ 见 `12 §2.3` |
+| **PDF 表格抽取** | **不做结构化** —— 表格按文本流出来（官方明示"不计算单元格/行边界"）；`04` 的"解析器分级"落成 §2.3 的三级 | 不需要（MVP） |
+| **DOCX 列表层级** | ⚠️ **已知上限**：Tika 不产出 `ul/ol/li`（只把编号当字符写进段首）⇒ M0 量化占比后再决定是否加 POI 补丁 | 见 `12 §2.5` |
 | **Excel / Word / PDF 导出** | **不需要** —— 契约里**零个导出端点**（唯一的"导出"是应用 JSON 包 `GET /assistants/:id/export`） | 不需要（`api/assistants.ts:326`） |
 | V1.1 的 PPT 生成 | **复用 POI 的 XSLF**（同一依赖，零新增） | 只需登记（§10.4） |
 | V1.2 的爬虫 | jsoup（静态页）+ 浏览器自动化（JS 渲染页） | 只需登记（§10.4） |
@@ -971,18 +974,42 @@ spring:
 
 ### 10.2 本轮新定的八项（逐项给理由与证据）
 
-**#1 文档解析：精准组合，不用 Tika 全量包**
+**#1 文档解析：`tika-core` + **三个细粒度 parser 模块**（★ 2026-09 二次改向）**
 
-- **选**：`tika-core`（MIME 嗅探）+ **PDFBox 3.0.8** + **POI 5.5.1**（`poi` + `poi-scratchpad` + `poi-ooxml`）
-- **不选** `tika-parsers-standard-package`：★ 它是个 **POM 聚合包**，会拖进 **OCR / CAD / 音视频 / 邮件 / 字体 / 加密**等约 20 个 parser 模块 ——
-  而我们**明确不做 OCR**、只要 5 种格式。**多出来的依赖面就是多出来的 CVE 面与升级面**
-- ★ **意外收获（我这轮读 POM 才发现的）**：**`tika-core` 4.0.0 自己就依赖 `commonmark` + `commonmark-ext-gfm-tables`**
-  ⇒ **Markdown 解析免费得到**，比原方案还少一个依赖
-- **版本（★ 2026-09 查证，均 Apache-2.0）**：Tika **4.0.0**（Java 17+；3.3.2 是维护线）·
-  PDFBox **3.0.8**（★ 3.x 的 API 变化：`PDDocument.load` → **`Loader.loadPDF()`**，2.x 的 deprecated API 已全部移除）·
-  POI **5.5.1**（★ `.doc` 在 **`poi-scratchpad`**、`.docx` 在 **`poi-ooxml`**，**不是同一个 artifact**）
-- **必须写进 M0 解析测试的边界**：★ **PDFBox 不提供表格结构化抽取**（官方 FAQ 明确它是"低层 PDF 库"），
-  PDF 表格只能作为文本流出来 ⇒ 这正是 `04:357` 那条"解析失败给可读原因 + 人工转 Markdown"的适用面
+> ⚠️ **本节改过一次向，记录在此**：最初写的是"精准组合：`tika-core` + PDFBox + POI（自己抽文本）"。
+> **那个结论有缺陷** —— ★ 只引 `tika-core` 的话，**`AutoDetectParser` 没有任何 `Parser` 实现可用**
+> （`ToMarkdownContentHandler` 只是"XHTML → Markdown"的**序列化器**，不含解析器），
+> 等于**把 Tika 的解析能力全部绕开**。项目负责人的要求是对的：**多用 Tika 的能力，少引自写胶水**。
+
+- **选**（解析 MVP 的 5 种格式所需的最小集）：
+
+  | 依赖 | 负责 |
+  |---|---|
+  | **`tika-core`** | MIME 嗅探 · `AutoDetectParser` · **`ToMarkdownContentHandler`** · 编码检测（`CharsetDetector`）· 语言检测 |
+  | **`tika-parser-pdf-module`** | PDF（★ 内部即 **PDFBox 3.0.8**，与 `§4.0` 的选型一致） |
+  | **`tika-parser-microsoft-module`** | `.docx` / `.doc`（★ 内部即 **POI 5.5.1**） |
+  | **`tika-parser-text-module`** | `.md` / `.txt` / `.csv` |
+
+- **不选 `tika-parsers-standard-package`**：★ 4.0 起它是 **POM 聚合包**（须 `<type>pom</type>`），拖进
+  **OCR / CAD / 音视频 / 邮件 / 字体 / 加密**等模块 —— 而我们**明确不做 OCR**。
+  ⇒ **规避它的正确方式是引细粒度模块，而不是放弃 Tika**（Tika 3.0 起就已模块化）
+- ★ **关键事实**：`tika-parser-pdf-module` 与 `-microsoft-module` **内部锁定的正是 PDFBox 3.0.8 与 POI 5.5.1**
+  ⇒ 换到 Tika **不是换一套技术**，而是**同一批底层库之上多了一层 Tika 的统一管线**（装配、识别、结构序列化）
+- **装配**：`AutoDetectParser` 靠 **SPI（`ServiceLoader`）** 从 classpath 装配 Parser ⇒
+  **不需要配置**；★ 注意 **4.0 已删除 `TikaConfig` 的 XML 配置 API**（改 JSON），照旧文档写会踩
+- **版本（★ 2026-09 查证，均 Apache-2.0）**：Tika **4.0.0**（Java 17+，与 JDK 25 兼容；3.3.2 是维护线）·
+  ★ `ToMarkdownContentHandler` 引入于 **3.3.0**（`CHANGES.txt` 原文"Add a markdown option for content handlers"，TIKA-4563；
+  其 javadoc 写 `@since 3.2` 与发布记录**不一致** ⇒ 以 3.3.0 为准）·
+  ★ 4.0 的 `CHANGES.txt`：**默认 content handler 改为 Markdown**（TIKA-4663）且 **Markdown 输出快约 30×**（TIKA-4868）
+- ★ **产物是 Markdown，不是纯文本** —— 这是本次改向的真正收益：**结构（标题层级/表格）成为分块器可用的信号**。
+  完整设计（分块算法、结构化前缀、标签、摘要）见 **`12-文档加工链设计.md`**
+- **必须写进 M0 解析测试的三条已知上限**（★ 逐条来自源码核实）：
+  1. ★ **DOCX 的列表会丢层级**：Tika 的 Microsoft 模块**不产出 `ul/ol/li`**，只把 `1.`/`·` 等编号当**字符**写进段首
+     ⇒ 用 Word 自动编号的文档受影响；**中文合同多是手工编号（"第X条"）⇒ 不受影响**。M0 要**量化占比**再决定补不补
+  2. ★ **普通 PDF 只有段落流**（`<p>` + page div），**Tika 没有字号推断标题的启发式**；
+     只有 **tagged PDF**（PDF/UA）开 `PDFParserConfig.setExtractMarkedContent(true)` 才能出标题/表格
+     ⇒ 内网多数 PDF 无 tag，所以要**叠一层中文编号启发式**（"第X章/第X条/（一）/1.1"）
+  3. **必丢**：图片正文（只剩 `![]()` 占位）、**页眉页脚**（降级 `div`，需自行剥离）、多栏阅读顺序、脚注、文本框
 
 **#2 MIME 内容校验：嗅探 + 解析器兜底（两层）**
 
@@ -1102,6 +1129,7 @@ spring:
 | `THIRD-PARTY-NOTICES.md` | 补**后端**依赖清单（M0 用 `license-maven-plugin` 生成） | 现在只有前端 |
 | **新增 `10-RAG-检索策略设计.md`** | 策略层成册（查询理解 / 分解与配额合并 / 多跳 / 预算与降级 / **契约影响清单**）；并连带回写 `02`（`RetrievalConfig` 加字段）、`03 机制二`（加指针）、`04`（B1 口径与问答对）、`ROADMAP`（M3 范围） | 选型收口后发现的最大设计缺口（见 `10 §1.1`） |
 | **新增 `11-RAG的SpringAI落地设计.md`** | 落地层成册：Spring AI 2.0.1 的 Advisor 体系与六个 RAG 零件接口（★ 全部对着 javadoc/源码核实）、四个矛盾的解法、组件清单、线程模型、`refs` 端到端链路、测试策略；并回写 `10`（多跳粒度、依赖矩阵核查结论） | 把 `10` 的策略挂到具体扩展点上（见 `11 §一`） |
+| **新增 `12-文档加工链设计.md`** | 加工侧成册：**解析改向 Tika 统一管线（产物 Markdown）**、分块算法（四层优先级 + 表格/代码保护）、**结构化前缀**（零 LLM 拿召回大头）、标签的三种用法、摘要三层方案、**28 项遗漏检查清单**；并回写 `02`（字段与 DDL 增量）、`04 R3`、`11 §5.2 R4` | 见 `12 §八` —— 原设计在这条链上空白 16 项 |
 | `11` 连带确认的选型事实 | ★ 官方 advisor 默认值（memory `+200` / tool `+300` / RAG `0`）· 流式**只有 Reactive**、**无 MVC `SseEmitter` 官方示例** · **2.0 删除项**（`internalToolExecutionEnabled` / `SpringBeanToolCallbackResolver` / **`PromptChatMemoryAdvisor` 不存在**）· ★ 官方已有 `SemanticCacheAdvisor` 与 `StructuredOutputValidationAdvisor`（别自研） | 见 `11 §2` —— 这些是**会写错代码**的地方 |
 
 ### 10.6 三条"不是选型问题、但会卡住后端实现"的契约缺口
