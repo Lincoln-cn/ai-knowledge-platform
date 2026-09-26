@@ -1101,6 +1101,8 @@ spring:
 | `09 §8.4` | 待办关掉两项（中文分词、日志），其余保留 | 收口 |
 | `THIRD-PARTY-NOTICES.md` | 补**后端**依赖清单（M0 用 `license-maven-plugin` 生成） | 现在只有前端 |
 | **新增 `10-RAG-检索策略设计.md`** | 策略层成册（查询理解 / 分解与配额合并 / 多跳 / 预算与降级 / **契约影响清单**）；并连带回写 `02`（`RetrievalConfig` 加字段）、`03 机制二`（加指针）、`04`（B1 口径与问答对）、`ROADMAP`（M3 范围） | 选型收口后发现的最大设计缺口（见 `10 §1.1`） |
+| **新增 `11-RAG的SpringAI落地设计.md`** | 落地层成册：Spring AI 2.0.1 的 Advisor 体系与六个 RAG 零件接口（★ 全部对着 javadoc/源码核实）、四个矛盾的解法、组件清单、线程模型、`refs` 端到端链路、测试策略；并回写 `10`（多跳粒度、依赖矩阵核查结论） | 把 `10` 的策略挂到具体扩展点上（见 `11 §一`） |
+| `11` 连带确认的选型事实 | ★ 官方 advisor 默认值（memory `+200` / tool `+300` / RAG `0`）· 流式**只有 Reactive**、**无 MVC `SseEmitter` 官方示例** · **2.0 删除项**（`internalToolExecutionEnabled` / `SpringBeanToolCallbackResolver` / **`PromptChatMemoryAdvisor` 不存在**）· ★ 官方已有 `SemanticCacheAdvisor` 与 `StructuredOutputValidationAdvisor`（别自研） | 见 `11 §2` —— 这些是**会写错代码**的地方 |
 
 ### 10.6 三条"不是选型问题、但会卡住后端实现"的契约缺口
 
