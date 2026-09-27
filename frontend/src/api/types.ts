@@ -67,6 +67,15 @@ export type DataScope = 'own' | 'shared' | 'all'
 /** 资源侧的可见性（07 §3.1）。**`public` 不等于免登录** —— 它是"登录用户里人人可见" */
 export type ResourceVisibility = 'private' | 'shared' | 'public'
 
+/**
+ * 密级（企业四级）。
+ *
+ * ★ 这四级是**工程惯例，不是法定密级** —— 法定的只有《保守国家秘密法》的
+ * 绝密 / 机密 / 秘密。用"公开/内部/秘密/机密"是因为企业内控需要这四档，
+ * 但**不要**在文档或界面上声称它是法定定密（13 册 §1.1）。
+ */
+export type ClassificationLevel = '公开' | '内部' | '秘密' | '机密'
+
 /** 共享主体种类。MVP 只填 `user` / `role`；加"共享给部门"只是多一个枚举值（07 §8.1） */
 export type SubjectKind = 'user' | 'role' | 'org' | 'group' | 'link'
 

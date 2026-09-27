@@ -1,5 +1,5 @@
 import { request } from '@/lib/http'
-import type { DataScope, PageQuery, PageResult } from './types'
+import type { ClassificationLevel, DataScope, PageQuery, PageResult } from './types'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
@@ -57,6 +57,17 @@ export interface Role {
   dataScope?: DataScope
   /** 范围规则的逃生口（07 §8.3）：结构化规则字符串，MVP 留空且不解析 */
   dataScopeRule?: string
+  /**
+   * ★ 这个角色**能看到**的最高密级（clearance，13 §8.3）。
+   *
+   * ⚠️ 注意与 `KnowledgeBase.maxClassification` **正交**：那个是"这个库允许装多密的"（ceiling，
+   * 入库校验用），这个是"这个人能看多密的"。两者混成一个字段会让"库允许装但我不该看"无处表达。
+   *
+   * 可选 —— 冻结契约下只加可选字段；后端未下发时前端不该据此做安全判断。
+   */
+  maxClassification?: ClassificationLevel
+  /** ★ 这个角色可涉的密级标签（无序，如 财务 / 人事） */
+  labels?: string[]
 }
 
 /** 权限点自描述，供「角色管理」页直接渲染分组勾选 */

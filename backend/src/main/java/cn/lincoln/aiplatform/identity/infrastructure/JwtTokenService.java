@@ -47,6 +47,12 @@ public class JwtTokenService {
             // ★ 权限点数组 —— SecurityConfig 的 JwtAuthenticationConverter 会把它翻成 GrantedAuthority，
             //   于是 @PreAuthorize("hasAuthority('knowledge:create')") 直接用得上
             .claim("authorities", Permissions.of(role.code()))
+            // ★ 数据范围与密级也进令牌（与权限点同样的取舍）：省掉"每个请求查一次角色表"，
+            //   代价同样是"改了角色的范围/密级，最长 accessTtl 才生效"。
+            //   AccessScopeAdapter 因此可以零查询地构造 ScopeFilter。
+            .claim("scope", role.dataScope().name())
+            .claim("clearance", role.maxClassification().name())
+            .claim("clLabels", role.labels())
             .build();
 
     return encoder.encode(JwtEncoderParameters.from(claims)).getTokenValue();
