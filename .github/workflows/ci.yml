@@ -43,7 +43,7 @@ jobs:
           if-no-files-found: ignore
 
   frontend:
-    name: 前端 · 静态闸门 + 构建
+    name: 前端 · 闸门 + 构建
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,30 +54,84 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # ★ 必须在跑 python 脚本之前：runner 上只有 python3，
+      #   而这些脚本全部以 `python xxx.py` 的方式被调用
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: 安装依赖
         working-directory: frontend
         run: npm ci
 
-      # ★ 这 8 个闸门只用 Python 标准库（`pathlib` / `re` / `argparse`…），
-      #   不需要 dev server、不需要浏览器 —— 所以它们能进 CI。
-      #   两条继承来的铁律：① 旧的绿一律不能继承，结构一改就要重跑
-      #   ② "某脚本报错了"就把退出码列一遍，不要猜（ROADMAP §7.1）
-      - name: 契约与结构闸门
+      # ── 第一组：不需要 dev server。这三个是真正的纯静态闸门 ──
+      - name: 静态闸门
         working-directory: frontend
         run: |
           python verify_refs.py
-          python verify_features.py
-          python verify_permissions.py
           python check_template_tags.py
-          python check_theme.py
           python check_design.py
-          python check_nodeconfig.py
-          python check_canvas.py
 
-      # ⚠️ smoke_test.py / shot_sweep.py / shot_workflow.py 暂不进 CI：
-      #   它们 import playwright + 需要跑着 dev server 与浏览器，
-      #   在 CI 里要先装浏览器内核、起 vite、再截图比对，成本高且易假红。
-      #   它们仍属于"每周算发布"的手工验证（判据 2 的"能演示"）。
+      # ── 第二组：需要 dev server + 浏览器 ──
+      # ★ 实测结论（2026-09，本机两遍）：这 19 个 .py 里有 16 个 import playwright，
+      #   其中 14 个（3 个纯静态 + 11 个浏览器）两遍结果**完全一致**，可以当确定性闸门用；
+      #   另外 3 个当前 flaky，**故意不放在这里**（理由见下面的注释）。
+      - name: 装 playwright 浏览器（Python 侧）
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: 起 dev server 并等就绪
+        working-directory: frontend
+        run: |
+          npm run dev > /tmp/vite.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5280 > /dev/null; then
+              echo "dev server ready after ${i} tries"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "★ dev server 起不来 —— 后面所有浏览器闸门都会以 ERR_CONNECTION_REFUSED 失败，"
+          echo "  那不是页面有问题，是基础设施没就绪。日志："
+          cat /tmp/vite.log
+          exit 1
+
+      # ★ 等就绪之后还要再等一拍：vite 是**首次访问才编译**，
+      #   curl 通只代表端口在听。实测在这一拍上踩过：verify_permissions 冷启动时报
+      #   "49/50"，热了之后是 "49/49" —— 数字不同不是代码变了，是页面还没编译完。
+      - name: 预热首页（触发 vite 首次编译）
+        run: |
+          curl -s http://localhost:5280 > /dev/null
+          curl -s http://localhost:5280/login > /dev/null
+          sleep 5
+
+      - name: 浏览器闸门（11 个确定性闸门）
+        working-directory: frontend
+        run: |
+          python check_theme.py
+          python check_nodeconfig.py
+          python check_node_menu.py
+          python check_canvas.py
+          python check_collapse.py
+          python check_history.py
+          python check_palette.py
+          python check_pickers.py
+          python check_assistants.py
+          python check_singleton.py
+          python check_publish.py
+
+      # ⚠️ 故意不接入 CI 的三个闸门（等它们稳定后接进来）：
+      #
+      #   verify_features.py     —— 断言总数在变：35/39 → 38/39 → 39/39
+      #   verify_permissions.py  —— 断言总数在变：49/49 → 49/50 → 49/51
+      #   smoke_test.py          —— 通过数在变：24/33 → 26/33 → 28/33，控制台错误 0~3 条
+      #
+      #   ★ "总数在变"说明它们在页面渲染未完成时就开始断言 —— 是脚本的时序问题，
+      #     不是被测代码在变。这类脚本接入 CI 的后果是**随机变红**，
+      #     而"红不是真信号"正是这个项目最贵的一类损失（报红会有人修，'少了一条'没人会注意到）。
+      #   处理路径：让它们等页面就绪（或改成确定性选择器）之后再接进来 —— 记为待办。
+
       - name: 类型检查 + 构建（mock 模式）
         working-directory: frontend
         run: npm run build:mock

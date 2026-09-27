@@ -42,10 +42,10 @@ Modulith 的出站事件表已就位。**没有任何业务功能** —— 这�
 ```
 mvn -B verify         → BUILD SUCCESS，Tests run: 16, Failures: 0, Errors: 0
                         Spotless: 25 files clean
-前端 8 个静态闸门      → 全部 exit=0
-                        （verify_refs / verify_features / verify_permissions /
-                          check_template_tags / check_theme / check_design /
-                          check_nodeconfig / check_canvas）
+前端闸门（起 dev server）→ 14 个确定性闸门全绿，两遍结果完全一致
+                        ★ 但实测另发现 3 个闸门当前 flaky（见下节「检测发现」），
+                          故未接入 CI —— 接入一个会随机变红的闸门，
+                          等于让 CI 的红失去信号价值
 curl /actuator/health → HTTP 200 {"groups":["liveness","readiness"],"status":"UP"}
 ```
 
@@ -85,6 +85,19 @@ curl /actuator/health → HTTP 200 {"groups":["liveness","readiness"],"status":"
 | 6 | `ROADMAP §6.1 P3` 说"**两份**技术结论"，`§4.4` 说"**三份**"（多了"能否稳定产出结构化输出"） | 文档内部不一致；本版按 `§4.4` 的三份执行 |
 | 7 | `smoke_test.py` / `shot_sweep.py` / `shot_workflow.py` **未进 CI**（需 dev server + 浏览器） | 详见 `ci.yml` 的注释 |
 | 8 | `01 §5.2` 的依赖声明示例与包结构示例用的是 `com.example.platform.*`，实际是 `cn.lincoln.aiplatform.*` | 示例性代码，不影响实现；回写 `01` 时一并更正 |
+
+### ★ 第 1 周检测发现（不是本版引入的问题，但会挡住"CI 全绿"）
+
+> 这些是**重跑**才暴露出来的 —— 按本项目的铁律"**旧的绿一律不能继承**"。
+> 它们都在前端侧、不属第 1 周的产出，但会影响 0.0.1 验收第 ③ 条（CI 含前端脚本），
+> 所以必须记账，而不是把它当成"已经跑过了"。
+
+| # | 发现 | 证据（本机实测） | 处理 |
+|---|---|---|---|
+| 1 | ★ **3 个闸门当前 flaky**：`verify_features` / `verify_permissions` / `smoke_test` | 连"断言总数"都在变：`verify_permissions` 49/49 → 49/50 → 49/51；`verify_features` 35/39 → 38/39 → 39/39；`smoke_test` 24/33 → 26/33 → 28/33，控制台错误 0~3 条 | **不接入 CI**（接入 = 随机变红）。待办：让它们等页面就绪，或改用确定性选择器 |
+| 2 | ★ **无 dev server 时是"假绿"** | `verify_permissions` 在没有 server 时报"49/49 通过" —— 它**根本没跑浏览器那一批断言**（有 server 时是 51 条） | 已从 CI 的"静态闸门"组移出；CI 现在**先起 server 再跑**该组 |
+| 3 | `check_publish` 把页面错误当告警 | 两遍都输出 `PAGEERROR: Cannot read properties of undefined (reading 'validate')`，但 exit=0 | ★ 它**报了一个真错却不拦**。`check_publish` 的判定要复核 —— 这可能是发布流程的真实缺陷 |
+| 4 | `19 个 .py` 里 **16 个依赖 playwright** | 逐文件扫描：只有 `verify_refs` / `check_template_tags` / `check_design` 是纯静态 | 已据此重写 CI 的前端 job（分两组），并在注释里写明每组的依赖 |
 
 ### 三份技术结论（`ROADMAP §6.1` P3）
 
