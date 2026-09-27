@@ -61,11 +61,23 @@ public class GlobalExceptionHandler {
   }
 
   private static HttpStatus httpStatusOf(ErrorCode code) {
+    // ★ 码值本身就是 HTTP 语义时（400 / 401 / 403 / 404）直接对齐。
+    //   写成"按码值解析"而不是逐个 case，是为了让以后新增这类码**不必再回来改这张表** ——
+    //   最初漏掉 ACCOUNT_LOCKED 就是"加了码、忘了改映射"的典型后果：
+    //   它悄悄落进 default 变成了 400，而 400 的语义是"你的请求有问题"，
+    //   实际却是"账号被锁"。这类错误不会报任何异常。
+    HttpStatus direct = HttpStatus.resolve(code.code());
+    if (direct != null && direct.is4xxClientError()) {
+      return direct;
+    }
+
     return switch (code) {
-      case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
-      case FORBIDDEN -> HttpStatus.FORBIDDEN;
-      case NOT_FOUND -> HttpStatus.NOT_FOUND;
-      case BAD_REQUEST -> HttpStatus.BAD_REQUEST;
+      // 业务码（1001 / 2001 / 3001 / 3002 / 6001 …）里语义与 HTTP 不一致的，在这里显式列出
+      case ACCOUNT_LOCKED ->
+          // 语义是"请求被理解但被拒绝"（账号被锁），不是"参数错误"
+          HttpStatus.FORBIDDEN;
+      // 其余业务码的共同语义是"请求在当前状态下不合法"（密码太弱、模型未就绪、
+      // 分段超长、发布校验不过）—— 具体原因由包络里的 code 承载，前端按 code 分支
       default -> HttpStatus.BAD_REQUEST;
     };
   }

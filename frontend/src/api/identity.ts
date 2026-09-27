@@ -6,6 +6,14 @@ import type { DataScope, PageQuery, PageResult } from './types'
 export interface LoginRequest {
   username: string
   password: string
+  /**
+   * 验证码 id 与用户填写的字符。等保要求登录必须带验证码，所以后端默认强制校验。
+   *
+   * ★ 字段保持**可选**：冻结契约只加可选字段，而且"是否强制"是后端开关
+   * （`app.security.captcha.enabled`）—— 关掉时这两个字段可以不传。
+   */
+  captchaId?: string
+  captchaCode?: string
 }
 
 export interface LoginResult {
@@ -72,6 +80,15 @@ export interface UpsertUserBody {
 }
 
 /* ────────────────────────── 接口 ────────────────────────── */
+
+/** 图形验证码。`image` 是 data URL，前端直接塞进 `<img :src="captcha.image">` */
+export interface Captcha {
+  id: string
+  image: string
+}
+
+/** 取一张新验证码。★ 每次调用都会作废此前发出的验证码（避免囤积一批再暴力试） */
+export const getCaptcha = () => request<Captcha>({ method: 'GET', url: '/auth/captcha' })
 
 export const login = (body: LoginRequest) =>
   request<LoginResult>({ method: 'POST', url: '/auth/login', body, skipAuthRetry: true })

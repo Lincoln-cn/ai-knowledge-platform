@@ -25,7 +25,29 @@ const stripPassword = (user: (typeof users)[number]): User => {
   return rest
 }
 
+/**
+ * mock 用的验证码图片。
+ *
+ * ★ mock 里**不校验**验证码（它只是一张能显示出来的图），目的是让页面在
+ * {@code VITE_USE_MOCK=true} 下与真实后端长得一样 —— 有输入框、有可点的图。
+ * "点了换一张"这件事在 mock 下也是真的会换（每次返回的图略有不同）。
+ * 真正的校验逻辑由后端的 {@code ComplianceTest} 对着真后端验。
+ */
+function mockCaptchaImage(): string {
+  const code = 'A7K3'
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="40">` +
+    `<rect width="120" height="40" fill="#f7f7f5"/>` +
+    `<path d="M4 30 L116 12 M8 10 L112 32" stroke="#d8d8d4" stroke-width="1" fill="none"/>` +
+    `<text x="14" y="29" font-family="monospace" font-size="24" font-weight="bold" ` +
+    `fill="#3a3a3a" letter-spacing="5">${code}</text>` +
+    `</svg>`
+  return `data:image/svg+xml;base64,${btoa(svg)}`
+}
+
 export const identityRoutes: MockRoute[] = [
+  // 登录验证码（等保要求）。真后端出的是 Java2D 渲染的 PNG，形状一致
+  ['GET', '/auth/captcha', () => ({ id: `mock_captcha_${Date.now()}`, image: mockCaptchaImage() })],
   [
     'POST',
     '/auth/login',

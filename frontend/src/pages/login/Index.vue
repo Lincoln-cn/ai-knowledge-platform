@@ -41,8 +41,28 @@
               placeholder="请输入密码"
               show-password
               autocomplete="current-password"
-              @keydown.enter="submit"
             />
+          </el-form-item>
+          <el-form-item label="验证码" prop="captchaCode">
+            <div class="captcha-row">
+              <el-input
+                v-model="form.captchaCode"
+                placeholder="请输入图中字符"
+                autocomplete="off"
+                maxlength="6"
+                @keydown.enter="submit"
+              />
+              <button
+                type="button"
+                class="captcha-pic"
+                :disabled="captcha.loading"
+                :title="captcha.loading ? '正在获取' : '看不清？点击换一张'"
+                @click="refreshCaptcha"
+              >
+                <img v-if="captcha.image" :src="captcha.image" alt="验证码，点击可换一张" />
+                <span v-else class="captcha-pic-fallback">加载中</span>
+              </button>
+            </div>
           </el-form-item>
         </el-form>
 
@@ -63,11 +83,11 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import BrandMark from '@/components/BrandMark.vue'
-import { ApiError } from '@/api'
+import { ApiError, identityApi } from '@/api'
 import { APP_TITLE } from '@/config/env'
 import { useSessionStore } from '@/stores/session'
 
@@ -79,11 +99,41 @@ const formRef = ref<FormInstance>()
 const loading = ref(false)
 const errorText = ref('')
 
-const form = reactive({ username: 'admin', password: 'admin' })
+const form = reactive({ username: 'admin', password: 'admin', captchaCode: '' })
+
+/**
+ * 验证码（等保要求）。
+ *
+ * ★ 它是**一次性**的：服务端无论校验成功还是失败都会把它作废，
+ * 所以任何一次登录失败之后都必须换一张 —— 否则用户重试时提交的是一张已作废的验证码，
+ * 界面会一直说"验证码不正确"，而用户明明照着图输对了。这是最容易漏掉的一处。
+ */
+const captcha = reactive({ id: '', image: '', loading: false })
+
+const refreshCaptcha = async () => {
+  captcha.loading = true
+  form.captchaCode = ''
+  try {
+    const fresh = await identityApi.getCaptcha()
+    captcha.id = fresh.id
+    captcha.image = fresh.image
+  } catch {
+    // 取不到图不该拦住登录动作本身（后端可能把验证码关掉了），
+    // 让它降级成"没有验证码"的形态，而不是在页面上报一个取图错误
+    captcha.id = ''
+    captcha.image = ''
+  } finally {
+    captcha.loading = false
+  }
+}
+
+onMounted(refreshCaptcha)
 
 const rules: FormRules = {
   username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+  // ★ 验证码**不做前端必填校验**：是否强制由后端的开关决定（等保环境开启）。
+  //   把它写死成必填，就等于把这个开关废掉了
 }
 
 const submit = async () => {
@@ -93,7 +143,12 @@ const submit = async () => {
 
   loading.value = true
   try {
-    const result = await session.login(form.username, form.password)
+    const result = await session.login(
+      form.username,
+      form.password,
+      captcha.id,
+      form.captchaCode
+    )
     if (result.mustChangePassword) {
       // 安全闭环：初始密码必须先改掉，不放行进业务页（路由守卫也会拦）
       ElMessage.warning('首次登录需修改密码')
@@ -106,6 +161,7 @@ const submit = async () => {
     // 失败原因直接来自接口，界面不自己编话术
     errorText.value =
       error instanceof ApiError ? error.message : '登录失败，请稍后重试'
+    await refreshCaptcha()
   } finally {
     loading.value = false
   }
@@ -285,6 +341,45 @@ const submit = async () => {
 
 .submit {
   width: 100%;
+}
+
+/* 验证码：输入框 + 可点的图。图是 120×40，与后端渲染出的比例一致。
+   不设 border，只用纸面底色 —— 外观交给主题变量，避免引入一个本页没出现过的颜色变量 */
+.captcha-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-xs);
+  width: 100%;
+}
+
+.captcha-pic {
+  flex: 0 0 auto;
+  width: 120px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: var(--color-surface);
+  cursor: pointer;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.captcha-pic:disabled {
+  cursor: progress;
+}
+
+.captcha-pic img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+.captcha-pic-fallback {
+  font-size: var(--text-sm);
 }
 
 code {

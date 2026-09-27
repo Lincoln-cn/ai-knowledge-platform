@@ -74,10 +74,17 @@ export const useSessionStore = defineStore('session', {
   },
 
   actions: {
-    async login(username: string, password: string) {
+    /**
+     * 登录。
+     *
+     * ★ 验证码是**等保要求**的：后端的 `app.security.captcha.enabled` 打开时会强制校验，
+     * 所以这两个参数从调用点一路传下来，而不是在这里"按需拼"。传 undefined 时由后端决定
+     * 接不接受（关掉校验的环境可以不传）。
+     */
+    async login(username: string, password: string, captchaId?: string, captchaCode?: string) {
       this.loading = true
       try {
-        const result = await identityApi.login({ username, password })
+        const result = await identityApi.login({ username, password, captchaId, captchaCode })
         setTokens(result.accessToken, result.refreshToken)
         this.mustChangePassword = result.mustChangePassword
         writeMustChange(result.mustChangePassword)

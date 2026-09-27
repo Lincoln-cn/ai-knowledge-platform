@@ -44,6 +44,10 @@ class ApiResponseTest {
     //   而请求体校验失败总得有个码。它是 401/403/404 那三个"与 HTTP 对齐"的码的同族补全。
     //   CHANGELOG 0.1.0 记了"契约该补上这一项"。
     assertThat(ErrorCode.BAD_REQUEST.code()).isEqualTo(400);
+    // ★ 等保相关的三个码：登录失败处理 / 口令强度 / 验证码
+    assertThat(ErrorCode.ACCOUNT_LOCKED.code()).isEqualTo(1001);
+    assertThat(ErrorCode.PASSWORD_TOO_WEAK.code()).isEqualTo(1002);
+    assertThat(ErrorCode.CAPTCHA_INVALID.code()).isEqualTo(1003);
     assertThat(ErrorCode.UNAUTHORIZED.code()).isEqualTo(401);
     assertThat(ErrorCode.FORBIDDEN.code()).isEqualTo(403);
     assertThat(ErrorCode.NOT_FOUND.code()).isEqualTo(404);

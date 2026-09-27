@@ -38,12 +38,16 @@ class AuthorizationDeclarationTest {
   /**
    * 白名单（{@code 08 §4.3.2} 允许的三类：{@code /auth/**}、{@code /public/**}、{@code /users/me/**}）。
    *
-   * <p>目前写端点只落在 {@code AuthController}（登录 / 刷新 / 登出 —— 本人即可，不需要权限点）； {@code /users/me} 是
-   * GET，不在本规则范围内。
-   *
-   * <p>⚠️ 若这个类被改名，白名单会失效 —— 那时它的写端点会被要求声明权限并<strong>构建失败</strong>。 失败方向是安全的（有人会被明确通知到），比"悄悄放开"好得多。
+   * <p>★ 精确到<strong>方法</strong>而不是整个类。按类放过是偷懒：第 3 周给 {@code UserController} 加用户 CRUD（{@code POST
+   * /users} 需要 {@code system:manage}）时，按类白名单会把它一起放过 —— 而那正是这条闸门存在的理由。写成 {@code 类名.方法名}
+   * 之后，新加的写端点必须显式声明权限。
    */
-  private static final Set<String> WHITELISTED_CONTROLLERS = Set.of("AuthController");
+  private static final Set<String> WHITELISTED_ENDPOINTS =
+      Set.of(
+          "AuthController.login",
+          "AuthController.refresh",
+          "AuthController.logout",
+          "UserController.changePassword");
 
   @Test
   void 每个写端点都必须声明权限() {
@@ -80,7 +84,7 @@ class AuthorizationDeclarationTest {
             JavaClass owner = method.getOwner();
             return owner.isAnnotatedWith(RestController.class)
                 && owner.getPackageName().startsWith(basePackage)
-                && !WHITELISTED_CONTROLLERS.contains(owner.getSimpleName());
+                && !WHITELISTED_ENDPOINTS.contains(owner.getSimpleName() + "." + method.getName());
           }
         };
 

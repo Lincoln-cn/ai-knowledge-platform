@@ -55,6 +55,18 @@ app:
       #    拿到它就能伪造任意用户的令牌。
       secret: ${JWT_SECRET:ZGV2LW9ubHktc2VjcmV0LWtleS1kby1ub3QtdXNlLWluLXByb2Q=}
 
+    captcha:
+      # ★ 等保要求登录带验证码，所以默认开启。留开关是为了压测/自动化能关掉 ——
+      #   不是为了生产能关（关掉就等于放弃了那一条测评项）
+      enabled: ${CAPTCHA_ENABLED:true}
+      # 验证码有效期。它只需要"够人输入一次"，越短越好
+      ttl: 2m
+
+    login-failure:
+      # ★ 等保：对登录失败做次数限制并在超限后冻结账号。本项目取 3 次 / 30 分钟
+      max-attempts: ${LOGIN_MAX_ATTEMPTS:3}
+      lock-duration: ${LOGIN_LOCK_DURATION:30m}
+
 server:
   port: ${SERVER_PORT:8080}
 

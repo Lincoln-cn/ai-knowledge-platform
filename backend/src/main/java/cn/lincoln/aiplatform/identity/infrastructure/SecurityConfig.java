@@ -41,7 +41,11 @@ import org.springframework.security.web.SecurityFilterChain;
 // ★ Security 7 里 @PreAuthorize 默认仍启用（09 §4.4）；显式声明是为了让"这个应用有方法级授权"
 //   在代码里可见 —— 不然新人只能靠翻文档才知道
 @EnableMethodSecurity
-@EnableConfigurationProperties(JwtProperties.class)
+@EnableConfigurationProperties({
+  JwtProperties.class,
+  CaptchaProperties.class,
+  LoginFailureProperties.class
+})
 public class SecurityConfig {
 
   @Bean
@@ -61,8 +65,10 @@ public class SecurityConfig {
                     // 健康探针
                     .requestMatchers("/actuator/health", "/actuator/health/**")
                     .permitAll()
-                    // ★ 登录与刷新必须免认证 —— 否则"刷新令牌"这件事在逻辑上就是循环的
-                    .requestMatchers("/api/v1/auth/login", "/api/v1/auth/refresh")
+                    // ★ 登录、刷新、验证码必须免认证。刷新免认证是因为"令牌过期了才能刷新、
+                    //   可刷新又要求令牌有效"本身就是循环的；验证码则是给"还没登录的人"用的
+                    .requestMatchers(
+                        "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/captcha")
                     .permitAll()
                     // 免登录问答面（M4 才有实体，先留面）
                     .requestMatchers("/api/v1/public/**")

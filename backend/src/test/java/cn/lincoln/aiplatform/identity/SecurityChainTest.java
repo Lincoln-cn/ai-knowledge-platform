@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -28,6 +29,10 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
+// ★ 显式关掉验证码：这个类验的是**认证链本身**（哪些路径免认证、401 长什么样、刷新与重放）。
+//   验证码开启时的行为由 ComplianceTest 覆盖 —— 那边**不关**，跑的是生产路径。
+//   拆成两个类而不是在一个类里混着开关，是为了让"哪个测试在测哪条路径"一眼可见。
+@TestPropertySource(properties = "app.security.captcha.enabled=false")
 class SecurityChainTest {
 
   @Container @ServiceConnection

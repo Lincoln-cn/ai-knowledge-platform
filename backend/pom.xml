@@ -111,6 +111,14 @@
       <artifactId>spring-boot-starter-validation</artifactId>
     </dependency>
 
+    <!-- ─── 进程内缓存（09 §4.0 已选）：当前用于验证码的 TTL 存储 ───
+         ★ 直接用 Caffeine 的 Cache 构造，不引 spring-boot-starter-cache 的注解抽象 ——
+           我们只有"一张带过期的键值表"这一个需求，注解式缓存在这儿是多一层间接。 -->
+    <dependency>
+      <groupId>com.github.ben-manes.caffeine</groupId>
+      <artifactId>caffeine</artifactId>
+    </dependency>
+
     <!-- ─── 迁移：★ 必须用 starter（只写 flyway-core 会丢自动配置，09 §4.4） ─── -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
