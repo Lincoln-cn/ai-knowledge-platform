@@ -76,6 +76,29 @@
 一句话版：**M0 骨架 1 周 → M1 身份与模型 → M2 知识库与入库 ★ → M3 检索 ★ → M4a 应用配置 / M4b 问答链路 ★
 → M5 反馈与看板 → M5.5 编排配置面 → M6 端到端验证**，关键路径 **M2 → M3 → M4b**。
 
+## 开发期的模型服务（★ 不必等真模型）
+
+真模型服务（Ollama）在本机有两个现实障碍：**镜像拉不到**（`registry-1.docker.io` 被 DNS 污染），
+且 **CPU 跑推理不现实**。所以开发期用 `tools/openai_stub.py` —— 一个 OpenAI 兼容的桩服务：
+
+```powershell
+cd backend
+tools\dev-model.cmd                          # 起在 11434；application.yml 一行都不用改
+tools\dev-model.cmd --fail-rate 0.3          # 注入故障，用来测重试与降级路径
+tools\dev-model.cmd --delay-ms 300           # 模拟慢上游（测超时/心跳）
+curl http://localhost:11434/__stub/requests  # ★ 看应用到底发了什么
+```
+
+★ 它的价值**不在"能返回假数据"，而在能看见请求体** ——
+"Spring AI 把请求打到了哪个路径""它有没有把 `reasoning_effort` 发出去"这两类问题，
+真 Ollama 答不了，它答得了。`OpenAiStubContractTest` 就是拿它当断言对象的。
+
+⚠️ **它的输出是设定值，不是测量值**：不要拿它的"思考三态"或"结构化输出成功率"
+去填 `docs/技术结论/M0-技术结论.md`。探针会**主动识别桩服务并拒绝执行**，就是为了防这件事。
+
+`docker-compose.yml` 里也留了一个 `ollama` 服务（`--profile ollama`），等网络或机器条件允许时可用；
+★ 它**未经实拉验证**（镜像没拉下来过），别当成"已经能跑"。
+
 ## 开始之前必须先拿到的东西
 
 已重新评估 —— `需求规格说明书/10` 列的四项里，**三项对本项目不构成阻断**，因为这套后端是**自建、schema 与

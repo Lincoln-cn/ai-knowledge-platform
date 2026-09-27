@@ -43,5 +43,35 @@ services:
       timeout: 3s
       retries: 20
 
+  # ──────────────────────────────────────────────────────────────────────────
+  #  模型服务（Ollama）—— ★ 默认不启动，要加 --profile ollama
+  #
+  #  为什么用 profile 而不是默认起：ROADMAP §4.6 定的开发期形态是"2 个进程
+  #  （PG + 应用）"，而 Ollama 是**外部依赖**，不是平台自己的进程
+  #  （09 §3.13.5 的表里它就单列成"Ollama 的 /v1"那一列）。
+  #  设成默认服务会让"开发期 2 进程"这句话失效，也会让只想跑单测的人白等一次容器启动。
+  #
+  #  用法：
+  #    docker-compose --profile ollama up -d       起 PG + Ollama
+  #    docker-compose exec ollama ollama pull <模型>   拉模型
+  #    docker-compose exec ollama ollama list          看已拉到的模型
+  #
+  #  ★ 模型数据落在项目内的 ./.ollama-data（已 ignore），而不是 Docker 命名 volume：
+  #    本机 C 盘只剩 ~24GB，而命名 volume 默认在 C 盘；项目在 D 盘，放这里更安全。
+  #  ★ 本机 nvidia-smi 初始化失败（NVML Unknown Error）⇒ 走 CPU 推理，故不配 GPU 段。
+  #    有可用 GPU 时再按 ollama 官方文档加 deploy.resources.reservations.devices。
+  # ──────────────────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aip-ollama
+    profiles: ["ollama"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./.ollama-data:/root/.ollama
+    environment:
+      # 模型在内存里驻留多久。探针会连发几十次请求，默认 5m 会让它反复重新加载
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-15m}
+
 volumes:
   pgdata:

@@ -63,6 +63,10 @@ class ModelCapabilityProbeTest {
   static void requireLocalModel() {
     assumeTrue(
         upstreamReachable(), "Ollama 不可达（" + BASE_URL + "）⇒ 跳过模型探针。装好模型后再跑，见 docs/技术结论/M0-技术结论.md");
+    // ★ 反向保护：桩服务（backend/tools/openai_stub.py）默认也监听 11434，而它的"三态""稳定性"
+    //   全是设定值。拿它当结论等于用自己写的答案考自己 —— 这里主动识别并拒绝，
+    //   免得将来有人（包括未来的我）看到一堆漂亮数字就填进结论文档。
+    assumeTrue(!looksLikeStub(), "★ 端口上跑着 OpenAI 桩服务（模型 id 以 stub- 开头）⇒ 跳过：那是设定值，不是模型能力的证据");
     assumeTrue(
         !models().isEmpty(), "未声明 AI_PROBE_MODELS ⇒ 跳过。例：$env:AI_PROBE_MODELS = \"qwen3:8b\"");
     System.out.println("=== 探针开始：模型 = " + models() + " ===");
@@ -219,6 +223,22 @@ class ModelCapabilityProbeTest {
       return content == null ? "" : content;
     } catch (Exception e) {
       return "__ERROR__:" + e.getClass().getSimpleName();
+    }
+  }
+
+  /** 端口上是不是桩服务（它的模型 id 以 stub- 开头，见 backend/tools/openai_stub.py）。 */
+  private static boolean looksLikeStub() {
+    try {
+      HttpRequest request =
+          HttpRequest.newBuilder(URI.create(BASE_URL + "/models"))
+              .timeout(Duration.ofSeconds(5))
+              .GET()
+              .build();
+      String body =
+          HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString()).body();
+      return body != null && body.contains("stub-");
+    } catch (Exception e) {
+      return false;
     }
   }
 

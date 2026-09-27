@@ -35,13 +35,16 @@ Modulith 的出站事件表已就位。**没有任何业务功能** —— 这�
 | 9 | **单例 `ChatClient`**，`base-url` 指向 Ollama 的 `/v1` | 上下文启动即证明装配合法 |
 | 10 | **CI**：后端 `mvn verify`（含 Testcontainers 真库）+ 前端 8 个静态闸门 + 类型检查构建 | `.github/workflows/ci.yml` |
 | 11 | **Testcontainers 2.x + 真 PG**（`pgvector/pgvector:pg16`） | 16 个测试全绿 |
-| 12 | **三份技术结论的探针**与判定口径 | `ModelCapabilityProbeTest`（模型缺席时**整体跳过**，不让构建变红）+ `docs/技术结论/M0-技术结论.md` |
+| 12 | **三份技术结论的探针**与判定口径 | `ModelCapabilityProbeTest`（模型缺席、**或端口上是桩服务**时整体跳过，不让构建变红）+ `docs/技术结论/M0-技术结论.md` |
+| 13 | ★ **OpenAI 兼容的测试桩服务** | `backend/tools/openai_stub.py` + `tools/dev-model.cmd`。监听端口与 Ollama 相同 ⇒ `application.yml` 一行不用改。开发期用它替代真模型，让 M1/M2/M4b 的链路不必等模型 |
+| 14 | ★ **Spring AI ↔ 桩的契约测试**（6 条） | `OpenAiStubContractTest`。其中"实际请求路径"与"是否下发 `reasoning_effort`"两条给出了**真证据**，而不是推断 |
 
 ### 验证记录（本地实跑，不采信旧绿）
 
 ```
-mvn -B verify         → BUILD SUCCESS，Tests run: 16, Failures: 0, Errors: 0
-                        Spotless: 25 files clean
+mvn -B verify         → BUILD SUCCESS，Tests run: 22, Failures: 0, Errors: 0
+                        Spotless: 全部 Java 文件 clean
+                        （桩服务在跑 ⇒ 契约测试 6 条真跑；探针被反向保护拦住，正确跳过）
 前端闸门（起 dev server）→ 14 个确定性闸门全绿，两遍结果完全一致
                         ★ 但实测另发现 3 个闸门当前 flaky（见下节「检测发现」），
                           故未接入 CI —— 接入一个会随机变红的闸门，
@@ -101,20 +104,25 @@ curl /actuator/health → HTTP 200 {"groups":["liveness","readiness"],"status":"
 
 ### 三份技术结论（`ROADMAP §6.1` P3）
 
-> ★ **凭证已就绪，结果待出** —— 判定口径与探针都写好了，缺的只是本地模型服务
-> （P2：Ollama + 模型 ~9GB）。**不把没跑过的东西写成结论**。
+> ★ **分条记状态，不笼统说"待实测"**。真模型（Ollama）在本机有两个现实障碍：
+> **镜像拉不到**（`registry-1.docker.io` 被 DNS 污染，解析到 `31.13.83.34`；
+> 几个镜像源虽可达但拉取未成功）且 **CPU 跑推理不现实**。所以结论表**不填猜测值**。
 >
-> - 判定口径来自冻结契约：`frontend/src/api/models.ts` 的
->   `ThinkingMode = 'NONE' | 'TOGGLEABLE' | 'ALWAYS_ON'`
-> - 怎么测 / 看什么 / 判据 / 后果：`docs/技术结论/M0-技术结论.md`
-> - 探针：`ModelCapabilityProbeTest`。★ 它在 Ollama 缺席时**整体跳过**，所以不会让 `mvn verify`
->   在任何没装模型的机器上变红；代价是报告里记 `Tests run: 0`（JUnit 类级 assumption 的既有表现）
+> 判定口径、判据、以及"桩服务能回答什么/不能回答什么"的边界，都在
+> `docs/技术结论/M0-技术结论.md`。
 
 | # | 结论 | 状态 |
 |---|---|---|
-| ① | 各模型思考模式三态取值（`NONE` / `TOGGLEABLE` / `ALWAYS_ON`） | ⏳ 探针就绪，待模型 |
-| ② | Spring AI 能否下发思考开关（★ **两侧分开测**：框架有没有透出 / 上游认不认这个字段） | ⏳ 探针就绪，待模型 |
-| ③ | 能否稳定产出结构化输出（N=20 的失败率与失败形态） | ⏳ 探针就绪，待模型 |
+| ① | 各模型思考模式三态取值（`NONE` / `TOGGLEABLE` / `ALWAYS_ON`） | ⏳ 待真模型 |
+| ② | Spring AI 能否下发思考开关（★ 两侧分开测） | **框架侧 ✅ 已答：会下发**（桩侧记录到请求体里出现了 `reasoning_effort`；不给时则不出现）· **上游侧 ⏳ 待真模型**（Ollama 认不认这个字段） |
+| ③ | 能否稳定产出结构化输出（N=20 的失败率） | ⏳ 待真模型（**解析链路已验**：桩按 schema 生成的 JSON 能被 `.entity()` 正确解析，含嵌套数组字段） |
+
+★ 这次实测顺带**确认**了两件以前只是推断的事：
+
+| 事 | 以前 | 现在 |
+|---|---|---|
+| `base-url` 写 `http://host/v1` 对不对 | 照 Ollama 文档推的 | ★ **实测正确** —— 桩记录到的真实路径是 `/v1/chat/completions`，不是 `/v1/v1/chat/completions` |
+| 结论一的三态判定会不会被"参数没传出去"污染 | 未知 | ★ **不会** —— 框架侧已证会下发，所以 `ALWAYS_ON` 的判定是可信的 |
 
 ### 未做（刻意的，不是遗漏）
 

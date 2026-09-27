@@ -14,8 +14,12 @@ innerdoc/
 # 依赖与构建产物
 # ════════════════════════════════════════════════════════════════════════
 node_modules/
-# 后端构建产物（Maven）。后端在 backend/，用它的 mvn.cmd 构建。
+# 后端构建产物（Maven）。后端在 backend/，用它的 mvn-jdk25.cmd 构建。
 target/
+
+# Ollama 的模型数据（几 GB，由 docker-compose 的 ollama 服务写入）。
+# ★ 绝不是仓库资产：体积大、可重新拉取，且许可证随模型而异。
+.ollama-data/
 dist/
 dist-ssr/
 .vite/
