@@ -896,7 +896,7 @@ spring:
 | **解析产物** | ★ **Markdown**（`ToMarkdownContentHandler`）—— 让**标题层级与表格**成为分块器可用的信号 | ★ 见 `12 §二` |
 | **Markdown 解析** | 由 `tika-parser-text-module` 承担（`tika-core` 内嵌 commonmark 做序列化） | ★ 已改向（§10.2 #1） |
 | **MIME 内容校验** | `tika-core` 的 `Detector`（magic bytes）**+ 解析器兜底** | ★ 本轮定（§10.2 #2） |
-| **OCR** | **不需要** —— MVP 明确不支持扫描件；扫描件给**可读失败原因** + "转 Markdown 再传"的替代路径 | 不需要（`04:357`） |
+| **OCR（扫描件 / 图像型 PDF）** | ★ **需要**：**Tika 自带的 `tika-parser-ocr-module`**（CLI Tesseract，**短命子进程、不算常驻服务**）+ `chi_sim+eng`（`tessdata_fast` 仅 +6 MB）。**逐页判定也是 Tika 原生内建**（`strategy=AUTO` + `totalCharsPerPage=10`） | ★ 已拍板（§10.2 #9）；设计与分块影响见 `12 §十一` |
 | **PDF 结构化** | ★ **分级**：默认段落流 → tagged PDF 开 `extractMarkedContent` → **叠一层中文编号启发式**（第X条 / （一）/ 1.1） | ★ 见 `12 §2.3` |
 | **PDF 表格抽取** | **不做结构化** —— 表格按文本流出来（官方明示"不计算单元格/行边界"）；`04` 的"解析器分级"落成 §2.3 的三级 | 不需要（MVP） |
 | **DOCX 列表层级** | ⚠️ **已知上限**：Tika 不产出 `ul/ol/li`（只把编号当字符写进段首）⇒ M0 量化占比后再决定是否加 POI 补丁 | 见 `12 §2.5` |
@@ -939,7 +939,7 @@ spring:
 | 单元测试 | JUnit 5 + AssertJ + Mockito（Boot `starter-test` 自带） | ★ 本轮定 |
 | 集成测试 | **Testcontainers 2.x** + `@ServiceConnection`；镜像用 `pgvector/pgvector:pg16` | 已定 + ★ 本轮补镜像 |
 | 接口文档 | **REST Docs**（Boot 4 用 `spring-boot-starter-restdocs`） | 已定（§4.0） |
-| **契约漂移检测** | **自研**（约 100 行）：`frontend/src/api/**` 的 method+url ↔ 启动后的 `RequestMappingHandlerMapping`，不一致即失败 | ★ 本轮定（§10.2 #8） |
+| **契约漂移检测** | **自研**（约 100 行）：`frontend/src/api/**` 的 method+url ↔ 启动后的 `RequestMappingHandlerMapping`，不一致即失败 | ★ 本轮定（§10.2 #9） |
 | CI | **GitHub Actions**（`actions/setup-java@v6` + `distribution: temurin` + `java-version: 25`） | ★ 本轮定 |
 | 应用镜像 | 多阶段构建 → **`eclipse-temurin:25-jre`** | ★ 本轮定 |
 | 本地编排 | `docker-compose.yml`：app + postgres(pgvector) + jairouter | 已定（§6.2） |
@@ -1078,7 +1078,31 @@ spring:
 
 **#7 工程工具链：见 §10.1 的 E 组**（Maven 3.9.16 / Spotless / Checkstyle / SpotBugs / GitHub Actions / Temurin 25）
 
-**#8 契约漂移检测：自研一个小测试，不引 Spring Cloud Contract**
+**#8 OCR（扫描件 / 图像型 PDF）：用 Tika 自带的三条路线，不引任何新库**（★ 新增，推翻"MVP 不支持扫描件"）
+
+- **背景**：`04 R3` / `ROADMAP §九` 原写"MVP 明确不支持扫描件，OCR 属 V1.2 之后" —— ★ **现已纳入 MVP**（设计与分块影响见 `12 §十一`）
+- ★ **Tika 4.0 自带三条 OCR 路线 ⇒ 零新库、零新服务**：
+
+  | 路线 | 形态 | 结论 |
+  |---|---|---|
+  | **`tika-parser-ocr-module`** | **CLI Tesseract**（`commons-exec` spawn 子进程，**非 JNI**） | ★ **主路径**（`language=chi_sim+eng` · `tessdataPath` · `pageSegMode` · `outputType: TXT\|HOCR`） |
+  | `tika-parser-tess4j-module` | JNI 进程内 | 备选（⚠️ native 崩溃拖垮 JVM） |
+  | **`tika-vlm`** 的 `openai-vlm-parser` | 经 **JAiRouter** 调 vision 模型，**直接返回 Markdown** | 增强/兜底（⚠️ 幻觉 + 非确定性，不能作主路径） |
+
+- **明确排除**：RapidOCR（★ Java 绑定 **2023-12 已停更**）· PaddleOCR（**无成熟纯 Java 进程内调用**）·
+  PP-StructureV2 / MinerU / docling / layoutparser（★ **全是 Python 栈**）
+- ★ **三进程约束不受影响**：`tesseract` 是**短命子进程**（fork → exec → exit），**不是常驻服务** ——
+  这与"引一个 OCR 容器"是完全不同的量级
+- ★ **"图像型判定"也是 Tika 原生内建**：`PDFParser.ocr.strategy=AUTO` + `strategyAuto.totalCharsPerPage=10`
+  ⇒ **逐页判定**，且**混合型 PDF（部分页有文本层）自动逐页处理** ⇒ 不用引 `ocrmypdf`、不用自己写
+- ⚠️ **代价必须同时说清**：CPU OCR 约 **1–5 秒/页** ⇒ **与 B6（入库 ≥3 段/秒）不可调和** ⇒
+  **OCR 走异步，扫描件不进 B6 的吞吐 SLA**（业界同样排法：先入库、后补 OCR）
+- ⚠️ **两条已写明的上限**（`12 §11.9`）：① **扫描件里的表格基本救不回来**（纯 Java 无版面分析方案）；
+  ② **VLM 直出 Markdown 只能作增强**（结构幻觉 / 语言先验幻觉 / 重复行 / 表格塌陷，均有论文证据）
+
+---
+
+**#9 契约漂移检测：自研一个小测试，不引 Spring Cloud Contract**
 
 - `ROADMAP §7.2` 把它列为后端闸门之一，但**实现方式一直没定**
 - **选自研**，三段：① 从 `frontend/src/api/*.ts` 抓 `method:` + `url:`（契约里这两项是**字面量**，好抓）
@@ -1129,7 +1153,8 @@ spring:
 | `THIRD-PARTY-NOTICES.md` | 补**后端**依赖清单（M0 用 `license-maven-plugin` 生成） | 现在只有前端 |
 | **新增 `10-RAG-检索策略设计.md`** | 策略层成册（查询理解 / 分解与配额合并 / 多跳 / 预算与降级 / **契约影响清单**）；并连带回写 `02`（`RetrievalConfig` 加字段）、`03 机制二`（加指针）、`04`（B1 口径与问答对）、`ROADMAP`（M3 范围） | 选型收口后发现的最大设计缺口（见 `10 §1.1`） |
 | **新增 `11-RAG的SpringAI落地设计.md`** | 落地层成册：Spring AI 2.0.1 的 Advisor 体系与六个 RAG 零件接口（★ 全部对着 javadoc/源码核实）、四个矛盾的解法、组件清单、线程模型、`refs` 端到端链路、测试策略；并回写 `10`（多跳粒度、依赖矩阵核查结论） | 把 `10` 的策略挂到具体扩展点上（见 `11 §一`） |
-| **新增 `12-文档加工链设计.md`** | 加工侧成册：**解析改向 Tika 统一管线（产物 Markdown）**、分块算法（四层优先级 + 表格/代码保护）、**结构化前缀**（零 LLM 拿召回大头）、标签的三种用法、摘要三层方案、**28 项遗漏检查清单**；并回写 `02`（字段与 DDL 增量）、`04 R3`、`11 §5.2 R4` | 见 `12 §八` —— 原设计在这条链上空白 16 项 |
+| **新增 `12-文档加工链设计.md`** | 加工侧成册：**解析改向 Tika 统一管线（产物 Markdown）**、分块算法（四层优先级 + 表格/代码保护）、**结构化前缀**（零 LLM 拿召回大头）、标签的三种用法、摘要三层方案、**28 项遗漏检查清单**；此外还含 **OCR 链**（图像型文档）与 **表格召回改写**；并回写 `02`（字段与 DDL 增量）、`04 R3`、`ROADMAP`、`11 §5.2 R4` | 见 `12 §八` —— 原设计在这条链上空白 16 项 |
+| **新增 `13-密级与数据隔离设计.md`** | 权限**第三轴**成册：等级 + 标签模型 · 传播与漂移（**chunk 强制继承文档** · 聚合推断 · 升降密链）· **五道闸门** · **RLS × HNSW 的坑**（`WHERE` 是后过滤、表 owner 默认绕过、`SET LOCAL` 串号）· 引用与分享的**两级过滤** · 审计 · **P0→P3 落地分期**；并回写 `07`（§8.6.1 第三轴）、`02`（字段） | 见 `13 §八`（分期）与 `13 §10.2`（待拍板） |
 | `11` 连带确认的选型事实 | ★ 官方 advisor 默认值（memory `+200` / tool `+300` / RAG `0`）· 流式**只有 Reactive**、**无 MVC `SseEmitter` 官方示例** · **2.0 删除项**（`internalToolExecutionEnabled` / `SpringBeanToolCallbackResolver` / **`PromptChatMemoryAdvisor` 不存在**）· ★ 官方已有 `SemanticCacheAdvisor` 与 `StructuredOutputValidationAdvisor`（别自研） | 见 `11 §2` —— 这些是**会写错代码**的地方 |
 
 ### 10.6 三条"不是选型问题、但会卡住后端实现"的契约缺口
