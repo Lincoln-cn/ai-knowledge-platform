@@ -28,6 +28,28 @@ jobs:
           java-version: '25'
           cache: maven
 
+      # ★ 先起 OpenAI 桩服务，否则 OpenAiStubContractTest 会整体跳过 ——
+      #   那 6 条里有两条是"框架有没有把 reasoning_effort 发出去""base-url 打得对不对"
+      #   这类真证据，跳过它等于让这条回归在 CI 里静默失效。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 起 OpenAI 桩服务（供契约测试用）
+        working-directory: backend
+        run: |
+          python tools/openai_stub.py --port 11434 > /tmp/stub.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:11434/v1/models > /dev/null; then
+              echo "桩服务就绪"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "★ 桩服务起不来 —— 契约测试会因此被跳过。日志："
+          cat /tmp/stub.log
+          exit 1
+
       # 四类闸门一次跑完：单测 / 集成（Testcontainers 真 PG）/ 架构（Modulith verify + 金丝雀）/ 格式化。
       # ★ GitHub 的 ubuntu runner 自带 Docker，Testcontainers 可直接用。
       - name: mvn verify
