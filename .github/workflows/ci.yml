@@ -1,0 +1,83 @@
+name: CI
+
+# ★ 每一道闸门都必须能在"没有任何人工"的情况下跑完 —— 这是"每周算发布"判据 3
+#   （四道回归全绿）的前提，见 ROADMAP §4.7.1。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端 · 编译 + 四类闸门
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ★ 版本线：Temurin 25（09 §4.1）。本机是靠 backend\mvn-jdk25.cmd 钉的，
+      #   CI 里由 setup-java 提供 —— 两条路都指向同一个 JDK，避免"本地过了 CI 挂"。
+      - name: 安装 JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # 四类闸门一次跑完：单测 / 集成（Testcontainers 真 PG）/ 架构（Modulith verify + 金丝雀）/ 格式化。
+      # ★ GitHub 的 ubuntu runner 自带 Docker，Testcontainers 可直接用。
+      - name: mvn verify
+        working-directory: backend
+        run: mvn -B verify
+
+      - name: 失败时留测试报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-surefire-reports
+          path: backend/target/surefire-reports/
+          if-no-files-found: ignore
+
+  frontend:
+    name: 前端 · 静态闸门 + 构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装依赖
+        working-directory: frontend
+        run: npm ci
+
+      # ★ 这 8 个闸门只用 Python 标准库（`pathlib` / `re` / `argparse`…），
+      #   不需要 dev server、不需要浏览器 —— 所以它们能进 CI。
+      #   两条继承来的铁律：① 旧的绿一律不能继承，结构一改就要重跑
+      #   ② "某脚本报错了"就把退出码列一遍，不要猜（ROADMAP §7.1）
+      - name: 契约与结构闸门
+        working-directory: frontend
+        run: |
+          python verify_refs.py
+          python verify_features.py
+          python verify_permissions.py
+          python check_template_tags.py
+          python check_theme.py
+          python check_design.py
+          python check_nodeconfig.py
+          python check_canvas.py
+
+      # ⚠️ smoke_test.py / shot_sweep.py / shot_workflow.py 暂不进 CI：
+      #   它们 import playwright + 需要跑着 dev server 与浏览器，
+      #   在 CI 里要先装浏览器内核、起 vite、再截图比对，成本高且易假红。
+      #   它们仍属于"每周算发布"的手工验证（判据 2 的"能演示"）。
+      - name: 类型检查 + 构建（mock 模式）
+        working-directory: frontend
+        run: npm run build:mock

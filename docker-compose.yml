@@ -1,0 +1,47 @@
+# ════════════════════════════════════════════════════════════════════════════
+# 开发期部署形态：★ 2 个进程（PostgreSQL + 应用）—— 见 ROADMAP §4.6
+# ════════════════════════════════════════════════════════════════════════════
+#
+# ★ 这里只起 PG，应用在本地跑（IDE 或 backend\mvn-jdk25.cmd spring-boot:run）。
+#   为什么不上第二个容器：ROADMAP §4.6 的约束是"不要第三个中间件"（不引 Redis /
+#   Nacos / MQ / MinIO），不是"应用必须容器化"。开发期把应用塞进容器，
+#   代价是每次改代码都要重建镜像 —— 那是部署期才值得付的成本（09 §6.1）。
+#
+# ★ 也不需要 JAiRouter：Ollama 自带 OpenAI 兼容端点，应用直连 /v1 即可
+#   （09 §3.13.5）。试用期换网关时只改 application.yml 的 base-url，零代码改动。
+#
+# 用法：
+#   docker compose up -d      起 PG
+#   docker compose ps         看状态
+#   docker compose down       停（保留数据）
+#   docker compose down -v    停并删数据卷 ★ 会清空所有数据
+# ════════════════════════════════════════════════════════════════════════════
+
+services:
+  postgres:
+    # ★ 必须用 pgvector 镜像而不是官方 postgres：
+    #   V1 迁移里的 CREATE EXTENSION vector 靠它。若换成官方镜像，
+    #   迁移会失败并直接指出这一点 —— 这正是把扩展安装放在第 1 周的价值。
+    image: pgvector/pgvector:pg16
+    container_name: aip-postgres
+    environment:
+      POSTGRES_DB: aiplatform
+      POSTGRES_USER: aiplatform
+      POSTGRES_PASSWORD: aiplatform
+    ports:
+      # ★ 宿主端口默认 15432 而不是 PG 标准的 5432 —— 不是随手选的：
+      #   本机 Windows 的保留端口段（netsh int ipv4 show excludedportrange protocol=tcp）
+      #   包含 5281-5380，5432 正在其中，于是 Docker 绑定会失败：
+      #   "bind: An attempt was made to access a socket in a way forbidden by its access permissions"。
+      #   用标准 5432 的机器：设 AIP_DB_PORT=5432 再 up，或把这里改回去。
+      - "${AIP_DB_PORT:-15432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiplatform -d aiplatform"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

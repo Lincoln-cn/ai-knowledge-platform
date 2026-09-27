@@ -14,6 +14,8 @@ innerdoc/
 # 依赖与构建产物
 # ════════════════════════════════════════════════════════════════════════
 node_modules/
+# 后端构建产物（Maven）。后端在 backend/，用它的 mvn.cmd 构建。
+target/
 dist/
 dist-ssr/
 .vite/

@@ -1,6 +1,9 @@
-# backend · 后端服务（规划中）
+# backend · 后端服务
 
-本目录先占位，尚未开始开发。后缀 `frontend/` 一起构成平台的前后端两侧。
+与 `frontend/` 一起构成平台的前后端两侧。**当前进度：0.0.1（第 1 周 · M0 骨架）** ——
+"这一版能做什么"与验证记录（含本版踩到的坑）见根目录 [`CHANGELOG.md`](../CHANGELOG.md)。
+
+构建方式：**`mvn-jdk25.cmd`**（本项目钉 Temurin 25，不改系统 `JAVA_HOME`，见该脚本内的说明）。
 
 ---
 
@@ -105,13 +108,13 @@
 | 持久化 | **Spring Data JPA**（Hibernate 7.4.x）+ **Flyway**（每模块一个 migration 目录） | **向量表也由 Flyway 建**（关掉框架的自动建表，见 `09 §9.4`） |
 | 数据库 | **PostgreSQL 16 + pgvector**，扩展**只要 `vector`** | 关系数据与向量同库，少一个组件（ADR-02） |
 | 向量检索 | **Spring AI 的 `PgVectorStore`**（**不手写 SQL**） | ★ 但它的**列名硬编码、维度是表级** ⇒ **按维度分表 + `vectorindex` 路由**，见 `09 §九` |
-| 模型接入 | **Spring AI 2.0.1** + **OpenAI 兼容网关（JAiRouter）** | **不直连推理服务**：`spring-ai-starter-model-openai` 的 `base-url` 指向网关即可；负载均衡/熔断/限流由网关承担。职责边界见 `09 §3.13` |
+| 模型接入 | **Spring AI 2.0.1**（`spring-ai-starter-model-openai`） | ★ **开发期直连 Ollama 自带的 OpenAI 兼容端点 `/v1`，不必需 JAiRouter** —— 换网关只改 `base-url`，零代码改动（`09 §3.13.5`）。三条纪律：不依赖网关专有字段（`service_type`/`adapter`）· 模型清单只走 `/v1/models` · 能力探测自己实现。职责边界见 `09 §3.13` |
 | 鉴权 | **Spring Security 责任链**（`SecurityFilterChain` + `oauth2ResourceServer().jwt()`）+ JWT 双令牌 | **不自研安全组件**：验签、解析、密码编码、401/403、方法级授权全用官方；前端 `lib/http.ts` 已按这个行为实现（`08 §4.2`）。Security 7 的 API 变化见 `09 §4.4` |
 | 数据范围 | `OwnedResource`（`platform`）+ `AccessScopePort`（**唯一实现放 `identity`**） | 列表按 `dataScope` 拼进查询；看不见的资源返 **404**（`08 §4.4`） |
-| **文档解析** | **`tika-core`（MIME 嗅探）+ Apache PDFBox 3 + Apache POI 5.5.1** | MVP 支持 `.pdf / .docx / .doc / .md / .txt`；**不做 OCR、不做表格抽取**；理由见 `09 §10.2 #1` |
+| **文档解析** | **`tika-core` + 三个细粒度模块**（`tika-parser-pdf-module` / `-microsoft-module` / `-text-module`）· **Tika 4.0.0** | ★ 改向：**只引 `tika-core` 时 `AutoDetectParser` 没有任何 Parser 实现** —— 等于把 Tika 能力全绕开。前两个模块内部锁定的正是 PDFBox 3 / POI 5.5.1，依赖面几乎没变却拿到统一管线。**含 OCR**（`tika-parser-ocr-module`：CLI Tesseract 短命子进程，**不破坏"不要第三个常驻中间件"**）与**表格召回改写**（行级陈述化 + 列路径前缀），见 `12` |
 | **中文全文检索** | 应用侧 **2-gram** 切分 + PG `simple` 配置的 tsvector | **不装 PG 扩展**（`zhparser`/`pg_jieba` 都要手工编译，留作升级路径），见 `09 §10.2 #3` |
-| 构建 / 质量 | **Maven 3.9.16** · Spotless + google-java-format · Checkstyle 14.1.0 · SpotBugs 4.10.4 | ★ Maven 4.x 仍是 RC，不用于生产（`09 §10.1 E`） |
-| 测试 | JUnit 5 + **Testcontainers 2.x**（起**真 PG**）+ REST Docs + **自研契约漂移检测** | 不用 H2/mock 测数据库 —— 我们的复杂度几乎全在数据库上（`09 §10.2 #8`） |
+| 构建 / 质量 | **Maven 3.9.x** · **Spotless 3.10.3 + google-java-format 1.30.0** | ★ **google-java-format ≥ 1.30.0 是 JDK 25 的下限**（1.28.0 在 JVM 25 上直接报错，不是"越新越好"）。Checkstyle / SpotBugs 按需引入（`09 §4.3`），时点记在 `pom.xml` 的注释里。Maven 4.x 仍是 RC，不用于生产（`09 §10.1 E`） |
+| 测试 | JUnit 5 + **Testcontainers 2.x**（起**真 PG**，镜像 `pgvector/pgvector:pg16`）+ REST Docs + **自研契约漂移检测** | 不用 H2/mock 测数据库 —— 我们的复杂度几乎全在数据库上。★ 2.x 把模块 artifact 统一改名为 `testcontainers-<module>`（`junit-jupiter` → `testcontainers-junit-jupiter`），且 `PostgreSQLContainer` **不再是泛型类**（`09 §10.2 #8`） |
 | CI | **GitHub Actions**（`setup-java` + temurin 25） | 前端 11 个脚本 + 后端四类闸门 |
 | 可观测 | Actuator + Micrometer（Prometheus / OTLP）+ **Boot 原生结构化 JSON 日志** | `logging.structured.format.console=ecs` —— ★ 3.4 起内置，**不引第三方 encoder** |
 

@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!-- ★ 版本线见 docs/系统设计方案/09 §4.0（★ 坐标已对 Maven Central 实测存在） -->
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.1</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>cn.lincoln</groupId>
+  <artifactId>ai-knowledge-platform</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+  <name>ai-knowledge-platform</name>
+  <description>企业级 RAG 知识助理平台 · 模块化单体（Spring Modulith）</description>
+
+  <properties>
+    <java.version>25</java.version>
+    <spring-modulith.version>2.1.1</spring-modulith.version>
+    <spring-ai.version>2.0.1</spring-ai.version>
+    <archunit.version>1.5.1</archunit.version>
+    <spotless.version>3.10.3</spotless.version>
+    <!-- 源码里有中文（错误文案与测试方法名），编码必须显式钉住。
+         Boot parent 已经设过，这里再写一次是为了让"UTF-8"这件事在文件里可见 —— 它一旦失守，
+         表现是测试名变乱码而不是编译失败，最难发现。 -->
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+    <!-- ─── 按需引入，不预留（09 §4.3）—— 记下引入的周，不写在依赖里 ───
+         第 2 周   Checkstyle（自定义最小 ruleset）/ SpotBugs
+         第 2 周   spring-boot-starter-restdocs + spring-restdocs-mockmvc（契约漂移闸门，0.1.2）
+         第 8 周   resilience4j-spring-boot4（模型调用熔断）
+         第 8 周   micrometer-registry-prometheus + spring-boot-starter-opentelemetry
+         M2        spring-ai-starter-vector-store-pgvector（有向量表之后，
+                   否则 initialize-schema=false 在无表时启动即失败，09 §9.4）
+         M2        tika-core + tika-parser-{pdf,microsoft,text}-module（12 §一 定案）
+         多实例    shedlock-spring 7.x
+         ★ 不引 spring-boot-docker-compose：开发期起容器统一走显式
+           docker-compose.yml（ROADMAP §4.6），避免两套起容器的机制打架
+    -->
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.modulith</groupId>
+        <artifactId>spring-modulith-bom</artifactId>
+        <version>${spring-modulith.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <!-- ★ Spring AI 2.0.1：坐标已转正，不再需要 milestone 仓（09 §4.0） -->
+      <dependency>
+        <groupId>org.springframework.ai</groupId>
+        <artifactId>spring-ai-bom</artifactId>
+        <version>${spring-ai.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- ─── Web：★ MVC（Boot 4 把 web 拆成 webmvc / webflux；我们只用 MVC） ─── -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webmvc</artifactId>
+    </dependency>
+
+    <!-- ─── 安全：官方责任链 + JWT 资源服务器（08 §4.2）。★ 三个坐标都是 Boot 4 的改名后形态 ─── -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-oauth2-jose</artifactId>
+    </dependency>
+
+    <!-- ─── 模块化：边界校验 + 出站事件表 + 架构文档生成（01 §五） ─── -->
+    <dependency>
+      <groupId>org.springframework.modulith</groupId>
+      <artifactId>spring-modulith-starter-jpa</artifactId>
+    </dependency>
+
+    <!-- ─── 持久化：JPA（聚合读写 / Specification / AuditorAware） ─── -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+
+    <!-- ─── 模型接入：只挂 OpenAI 兼容客户端，base-url 指向 Ollama 的 /v1（开发期）───
+         ★ 它会带进 spring-webflux（库）——这不等于选了 WebFlux 栈：
+           spring-boot-starter-webmvc 在，Boot 的 WebApplicationType 仍是 SERVLET（09 §4.5） -->
+    <dependency>
+      <groupId>org.springframework.ai</groupId>
+      <artifactId>spring-ai-starter-model-openai</artifactId>
+    </dependency>
+
+    <!-- ─── 请求校验 ─── -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+
+    <!-- ─── 迁移：★ 必须用 starter（只写 flyway-core 会丢自动配置，09 §4.4） ─── -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-flyway</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+
+    <!-- ─── 健康探针 ─── -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- ─── PostgreSQL 驱动 ─── -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- ══════════════ 测试 ══════════════ -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- Boot 4 的测试侧也按 security- 前缀改名（09 §4.0） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- 集成测试用真 PG，不 mock 数据库（09 §4.1 ⑤） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-testcontainers</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- Testcontainers 的 JUnit 5 集成（@Testcontainers / @Container）。
+         ★ Testcontainers 2.x 把模块 artifact 统一改名为 testcontainers-<module>：
+           1.x 的 org.testcontainers:junit-jupiter 在 2.x 是 testcontainers-junit-jupiter，
+           且它不在 testcontainers-postgresql 的传递依赖里，必须显式加。
+           版本由 Boot 4.1.1 导入的 testcontainers-bom:2.0.5 管理。 -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- Modulith 的测试支持（ApplicationModules.verify） -->
+    <dependency>
+      <groupId>org.springframework.modulith</groupId>
+      <artifactId>spring-modulith-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- ★ 架构测试：包边界（platform 不得依赖 Spring AI / Reactor）—— 09 §10.1 E 的测试栈补充 -->
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <version>${archunit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+
+      <!-- ─── 格式化：google-java-format。★ JDK 16+ 需要为 jdk.compiler 打开 exports，
+               已写进 .mvn/jvm.config（09 §10.1 E） ─── -->
+      <plugin>
+        <groupId>com.diffplug.spotless</groupId>
+        <artifactId>spotless-maven-plugin</artifactId>
+        <version>${spotless.version}</version>
+        <configuration>
+          <java>
+            <googleJavaFormat>
+              <!-- ★ 1.28.0 在 JVM 25 上会直接报错（"requires at least 1.30.0"），
+                   所以这个版本不是"越新越好"的随意选择，而是被 JDK 25 下限钉住的 -->
+              <version>1.30.0</version>
+              <style>GOOGLE</style>
+              <reflowLongStrings>true</reflowLongStrings>
+            </googleJavaFormat>
+            <removeUnusedImports/>
+            <trimTrailingWhitespace/>
+            <endWithNewline/>
+          </java>
+        </configuration>
+        <executions>
+          <execution>
+            <id>spotless-check</id>
+            <phase>compile</phase>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

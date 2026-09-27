@@ -1,0 +1,63 @@
+spring:
+  application:
+    name: ai-knowledge-platform
+
+  threads:
+    virtual:
+      enabled: true # ADR-01：IO 密集用虚拟线程，不用响应式（09 §4.5）
+
+  datasource:
+    # ★ 15432 是 docker-compose.yml 里的宿主端口（不是 PG 标准的 5432）——
+    #   原因见那份文件：本机 Windows 的保留端口段含 5432，Docker 绑不上。
+    #   部署到 Linux 时把它设回 5432 即可（这本来就是 DB_URL 环境变量的用处）。
+    # ⚠️ 下面三个默认值是**本地开发的占位值**（与 docker-compose.yml 对齐），
+    #    不是可以带进生产的配置 —— 任何非本地环境都必须用环境变量覆盖它们。
+    url: ${DB_URL:jdbc:postgresql://localhost:15432/aiplatform}
+    username: ${DB_USER:aiplatform}
+    password: ${DB_PASSWORD:aiplatform}
+
+  jpa:
+    hibernate:
+      # ★ schema 由 Flyway 管，Hibernate 只校验、绝不改结构（09 §9.4 的同一条立场）
+      ddl-auto: validate
+    # ★ 必须关：默认 true 会在"视图渲染期"仍持有连接。我们的响应是流式的（SSE），
+    #   开着它等于把连接池耗在已经没人读的响应上（03 机制七）
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    # 各模块的迁移放在 db/migration/<模块>/ 下（02 §5.1：模块自治，便于未来拆库）
+    locations: classpath:db/migration
+
+  ai:
+    openai:
+      # ★ 开发期直连 Ollama 自带的 OpenAI 兼容端点（09 §3.13.5）。
+      #   试用期换 JAiRouter 时只改这一行 —— 这也是"不用网关专有字段"这条纪律的用处。
+      base-url: ${AI_BASE_URL:http://localhost:11434/v1}
+      # Ollama 不校验 key，但 Spring AI 的 OpenAI 自动配置要求它非空
+      api-key: ${AI_API_KEY:ollama-local}
+
+server:
+  port: ${SERVER_PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized
+
+logging:
+  level:
+    cn.lincoln.aiplatform: DEBUG
+  # 结构化 JSON 日志（Boot 3.4+ 内置，不引第三方 encoder：09 §10.1）。
+  # 开发期保持关闭 —— 采集环境才需要它，本地读文本更省事。
+  # structured:
+  #   format:
+  #     console: ecs
