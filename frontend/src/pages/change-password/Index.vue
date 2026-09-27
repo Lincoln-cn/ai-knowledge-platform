@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="修改密码"
-      desc="定期更换密码有助于账号安全。管理员新建账号的初始密码为 123456，首次登录后请立即修改"
+      desc="定期更换密码有助于账号安全。初始口令由管理员在创建后得到（后端一次性下发），拿到后请在这里改成自己的口令"
     />
 
     <div v-if="forced" class="notice warn">

@@ -5,6 +5,13 @@ import { paginate } from '../dispatch'
 import { permissions, roles, userFromToken, users } from '../fixtures/identity'
 
 /**
+ * 未传口令时的默认初始口令。真源在后端 `UserService.DEFAULT_INITIAL_PASSWORD` ——
+ * mock 必须与之对齐：否则 mock 模式下管理者按界面提示告知新人的口令会登录失败，
+ * 这类前后端口径差异会被 mock 掩盖，直到联调才炸。
+ */
+const DEFAULT_INITIAL_PASSWORD = 'ChangeMe@2026'
+
+/**
  * 「令牌 → 用户」的约定只有一处实现（夹具层），数据权限判定（`mock/policy.ts`）也用它 ——
  * 两处各写一遍迟早会漂移。
  */
@@ -130,7 +137,7 @@ export const identityRoutes: MockRoute[] = [
       const created = {
         id: `u${Date.now()}`,
         username: input.username,
-        password: input.password || '123456',
+        password: input.password || DEFAULT_INITIAL_PASSWORD,
         displayName: input.displayName,
         roleId: role.id,
         roleName: role.name,
@@ -140,7 +147,9 @@ export const identityRoutes: MockRoute[] = [
         mustChangePassword: !input.password
       }
       users.push(created)
-      return stripPassword(created)
+      const result = stripPassword(created)
+      // 契约（`User.initialPassword`）：仅「创建且未指定 password」时回一次，其余路径不下发
+      return input.password ? result : { ...result, initialPassword: DEFAULT_INITIAL_PASSWORD }
     }
   ],
 

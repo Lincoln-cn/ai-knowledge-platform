@@ -7,6 +7,102 @@
 
 ---
 
+## 0.1.2 · 第 3 周 · M1 角色 / 权限点 / **数据范围 + 密级**
+
+> ★ **版本号顺延（先说清，免得又出现两套编号）**：`ROADMAP §4.7.3` 原把第 3 周定为 `0.1.1`，
+> 而 `0.1.1` 已被「等保补齐」占用（它是**第 2 周范围内的追加**，却单独发了一次版）。
+> 按 `§4.3` 的规则「补丁位 = 周」，第 3 周顺延为 **0.1.2**、第 4 周为 **0.1.3**（第 5 周起仍是 `0.2.0`）。
+> ROADMAP 里所有引用已同步 —— 同一个版号指向两个不同的周，正是 `§一` 认账过的"两套编号"病。
+
+### 这一版能做什么
+
+**「账号与权限」页真的能管账号了 —— 而且界面上的改动真的会生效**：
+
+```
+GET    /api/v1/users?page&size&keyword&roleId&status → { list, total, page, size }
+POST   /api/v1/users                                 → 不传口令时**一次性回初始口令**
+PUT    /api/v1/users/:id · DELETE /api/v1/users/:id  → 软删（同名可重建）
+GET    /api/v1/roles                                 → 含 memberCount / permissions / dataScope / maxClassification
+PUT    /api/v1/roles/:id/permissions                 → ★ 改完**重新登录立即生效**
+PUT    /api/v1/roles/:id/data-scope                  → own / shared / all
+GET    /api/v1/permissions                           → 16 个权限点（供角色管理页渲染勾选框）
+```
+
+**三种"应答语义"从此各归各位**（这是本周刻意划清的一条线）：
+
+```
+缺动作权限        → 403「无权限」（可以找管理员开）
+不存在 / 已软删   → 404（★ 不确认"这个 id 存在" —— 403 等于告诉对方它存在，可被枚举）
+id 格式不合法     → 400「参数类型不正确」（"你传错了"能自己修，不该让人来找后端）
+```
+
+### 交付物
+
+| # | 交付 | 关键点 |
+|---|---|---|
+| 1 | **迁移 V6**：`iam_role` 加 `data_scope` / `data_scope_rule` / `max_classification` / `labels`；新增 `iam_permission` / `iam_role_permission` | ★ 密级与范围**同批落**：它们进的是**同一个谓词构建器**（`13 §8.3`），分两次做 = 同一个函数被改两遍 |
+| 2 | **迁移 V7**：只含 `comment on table`，修正 V6 里已过时的表注释 | ★ 不改 V6 —— Flyway 校验和一旦变化，已有环境的迁移历史就失效 |
+| 3 | **判定层**：`AccessScopePort` / `ScopeFilter` / `OwnedResource` / `Grant` / `Subject` / `DataScope` / `Visibility` / `ClassificationLevel` | ★ 端口放 `platform`、**唯一实现放 `identity`** ⇒ `01` 的依赖矩阵**零改动**；全工程只有一处判定逻辑，且有金丝雀（第二个实现 ⇒ 构建失败） |
+| 4 | **三条兜底一律收窄**：未认证 ⇒ `nobody()`（连 public 都看不见）· 读不出 `scope` ⇒ `own` · 读不出 `clearance` ⇒ `公开` | 取"放开"的话，任何一次令牌结构变更都会**静默地**把所有人变成全平台可见 |
+| 5 | **用户 CRUD**：`GET/POST/PUT/DELETE /users` + 分页/筛选 + 软删 | ★ 过滤**拼进查询**（`Specification`），不是查完再筛 —— 否则 `total` 与每页条数全错 |
+| 6 | **角色 CRUD**：`GET /roles` · `PUT /roles/:id/permissions` · `PUT /roles/:id/data-scope` | 两个维度**分两个端点**改（`07 §3.2`）：勾权限点是"能做什么"，调范围是"能看到谁的" |
+| 7 | ★★ **权限点的真源分两层**（本版最重要的一处设计修正） | **目录**（有哪些权限点）⇒ 代码；**角色挂哪些** ⇒ **库**；**ADMIN 的授权** ⇒ 代码（详见下面"坑 1/2"） |
+| 8 | **端点守卫**：ADMIN 的权限点/数据范围不可改 · 空权限列表被拒 · 不能删自己 · 不能删内置 `admin` · 不能改自己的角色 · 账号名不可修改 | 文案与前端 `RoleManage.vue` / `UserManage.vue` **一字不差**（前端原文展示后端 message，两处各写一套会变成"界面说 A、接口说 B"） |
+| 9 | **初始口令由后端决定并一次性回传**（契约只加可选字段 `User.initialPassword`） | 契约里 `password?` 是可选的 ⇒ **服务端必须有默认口令** ⇒ 而管理员必须知道它 |
+| 10 | **38 个新后端测试**（合计 **104**） | 含：软删 ⇒ 404 · 软删后刷新失效 · 重启不冲掉界面改动 · 改权限点后重新登录立即生效 · 不带筛选的列表必须可用 |
+| 11 | ★ **前后端联调**（真前端 + 真 jar + 真 PG，**28 条断言全过**） | 见下面"验证记录" |
+
+### 验证记录（本地实跑）
+
+```
+mvn -B -f backend/pom.xml verify        → BUILD SUCCESS · Tests run: 104, Failures: 0
+前端 typecheck / build:mock / verify_refs / check_template_tags / check_design → 全部通过
+★ 前后端联调（VITE_USE_MOCK=false → 真前端 + 真 jar + 真 PG）—— 28 条断言全过
+    令牌 payload 实测：scope=all · clearance=机密 · authorities=16 项（不是 mock_access_*，是真 JWT）
+    ★ 在角色管理页勾掉 chenjun 角色的 conversation:share → 保存 → chenjun 重新登录后
+       /users/me 里那一项**真的没了**（再勾回来也真的回来）
+    ★ 在用户管理页新建账号（不填口令）→ 界面提示「初始口令：ChangeMe@2026（首次登录需修改）」
+       → 用这个口令**真的能登录**，且被要求首次改密
+    ★ 直连 API 削减 ADMIN 的权限点被拒（前端置灰只是体验，不是安全边界）
+    403（chenjun 调 /users）· 404（不存在的用户）· 400（/users/not-a-uuid）· 404（未实现的
+      /analytics/*）—— 四种应答各自正确且不互相冒充
+    新建的账号被软删后：列表看不见、详情 404、同名可重建、不能再登录
+```
+
+### ★ 这一版踩到的坑（**全部属于"不报错却失效"那一类**）
+
+| # | 现象 | 根因 | 处理 |
+|---|---|---|---|
+| 1 | ★★ **管理员在界面上勾的权限点完全不生效** | `JwtTokenService` 把 `authorities` 写成 `Permissions.of(role.code())`（代码常量），而"角色挂哪些"本该是**数据**。界面上能存、能回显、看起来一切正常，**鉴权根本不理会它** | 登录 / 刷新 / `GET /users/me` 三处统一改读 `iam_role_permission`。★ 顺带定下"真源分两层"：目录 ⇒ 代码，角色授权 ⇒ 库 |
+| 2 | ★★ **重启会把界面上改的权限点悄悄改回去** | 启动同步无条件按代码映射对账角色授权 ⇒ 管理员的配置被**静默回滚**，同样不报错 | 非 ADMIN 角色**只在"一行都没有"时 seed 一次**，此后以库为准；ADMIN 例外（见交付物 7）。为了让"0 行 ⟺ 从未初始化"成立，`PUT /roles/:id/permissions` **拒绝空列表** |
+| 3 | ★★ **真环境首屏的用户列表恒 500，而 104 条测试全绿** | HQL 里 `concat('%', :keyword, '%')` 的 `:keyword` **没有类型上下文**：首次执行若传 null，Hibernate 推不出类型 ⇒ 回退 `JAVA_OBJECT`（PG 驱动态按 **bytea** 发）⇒ `'%'\|\|?\|\|'%'` 退化成 bytea 拼接 ⇒ `ERROR: function lower(bytea) does not exist`。★ 更毒的是**类型会被缓存进查询计划**：冷启动后第一次带 keyword ⇒ VARCHAR ⇒ 之后不带 keyword 也 200；反之第一次不带 keyword ⇒ 此后**永远 500**。而测试里恰好有一个先带 keyword 的用例，**先把类型锁成了 VARCHAR，后面的用例就"净光"了** | 不 cast 打补丁：整体换成 Spring Data 的 **`Specification`**（按需拼谓词、**没有 null 参数**），筛选/计数共用同一份谓词。这也正是 `08 §4.3.3` 指定的做法。★ 新增"不带筛选的列表必须可用"断言钉住真环境首屏那条路径 |
+| 4 | `@PreAuthorize` 拒绝返 **500** 而不是 403 | `@RestControllerAdvice` 的兜底 `@ExceptionHandler(Exception.class)` **抢在 `ExceptionTranslationFilter` 之前**把安全异常改写掉了 —— 而它从 0.1.0 起就没被测到（当时只测了"不带令牌 ⇒ 401"，那是过滤器链在更前面就拦下的） | 显式 `@ExceptionHandler(AccessDeniedException.class)` → 403 包络；并把这条陷阱写进注释 |
+| 5 | 非法 UUID 返 **500** | `MethodArgumentTypeMismatchException` 落进兜底 handler | 显式映射 400。★ "你传错了"与"我崩了"必须分开 —— 混起来会把排查引到错误方向 |
+| 6 | 建角色的 `PUT /roles/:id/data-scope` 返 **500** | `@NotBlank` 标在**枚举**字段上 ⇒ 校验期抛 `UnexpectedTypeException`（它只认 `CharSequence`） | 改 `@NotNull`，空值交给服务层判 |
+| 7 | ★ **界面告诉管理员的初始口令是错的** | 前端与 mock 写死 `123456`，后端默认口令是 `ChangeMe@2026` ⇒ 管理员把"123456"告诉新人，新人**必然登不进去**。（而且 `123456` 连本项目自己的口令策略都过不了） | 真源放后端：创建且未传口令时，响应里**一次性**带 `initialPassword`；前端展示它，所有写死口令的文案（弹出窗 placeholder/提示、改密页说明、mock 默认值）全部清掉 |
+| 8 | 页面允许改账号名，但后端不改（且不报错） | 编辑态前端把 `username` 一起发回，后端没有这个字段 ⇒ Jackson **静默忽略** | 后端：与现账号不一致 ⇒ 400「账号名不可修改」；前端：编辑态输入框置灰。★ 前端置灰只是体验，守卫必须在后端 |
+| 9 | ★ 我把一条**错的根因**写进了代码注释 | 我写"`AuthorizationDeniedException` 不继承 `AccessDeniedException`"，审计时用 `javap` 实测（`spring-security-core-7.1.1`）**它确实继承** ⇒ 注释会误导每一个后来人 | 改成真实机制（坑 4）。★ 教训：**把结论写进注释之前先验证它** —— 注释在本项目里是文档，不是草稿 |
+
+### ⚠️ 待确认 / 欠账
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 1 | ★ **「看不见 ⇒ 404」本周只在"不存在 / 已软删"上验到了** | 完整的"**存在但越权**"需要**归属资源**，而平台上最早的归属资源是**第 5 周的知识库**。`ROADMAP` 第 3 周原演示项「chenjun 访问别人的资源返 404」在本周**没有验证对象** ⇒ 已把该条阶段退出标准从 `0.1.0` 改挂到 `0.2.0`（见 `ROADMAP §3.2/§4.4/§4.7.3`）。本周改验能验的那一半：403 / 404 / 400 三者不互相冒充 |
+| 2 | `maxClassification` 的初始值是**按角色定位推断的** | 在 `V6` 里，**待业务确认**（界面上可随时改） |
+| 3 | **内置 `admin` 是按用户名识别的** | 与前端 `isBuiltinAdmin` 同口径。更稳的做法是给用户加一个 `built_in` 标记（或不可删的角色标记）—— 记下来，等有第二个内置账号时再做 |
+| 4 | **mock 的口令校验弱于后端** | mock 只查"≥ 8 位"，后端 `PasswordPolicy` 还要求四类字符至少 3 类、不含账号名、有上限。⇒ mock 会放过真后端会拒的弱口令，可能掩盖口径差异 |
+| 5 | **登录页文案「接口已固定、当前走 mock」在真联调时是错的** | 它没跟着 `VITE_USE_MOCK` 变。不影响功能，但界面在说谎 —— 属同一类问题，记下来 |
+| 6 | **前端 3 个 flaky 闸门仍未接入 CI**（`verify_features` / `verify_permissions` / `smoke_test`） | 沿用 0.1.1 的欠账，待修稳定性 |
+| 7 | **演示口令 `123456` 仍不满足等保强度** | 沿用 0.1.1 的欠账（`V4` 已注明生产必须删除演示账号）。★ 本版新引入的"默认初始口令"是**平台级固定值**，也是同一类待议项（现状缓解：`mustChangePassword=true` 强制首次改密） |
+
+### 未做（刻意的）
+
+- **不做 `POST /roles` / `DELETE /roles`**：五个角色由迁移建立，契约里也没有这两个端点；"新建角色"是 V0.2 的话题
+- **不把"用户"纳入 `dataScope`**：`07 §4.2` 的数据面矩阵里**没有"用户"这一行** —— 范围管的是"知识库 / 应用 / 会话"这类**用户产出**的资源，而"能看多少个账号"由 `system:manage` 这一个动作权限决定。把用户也塞进范围，会让"管理员只看得到自己"这种荒谬配置变得**可表达**（`07 §8.8`：属性策略引擎这类机制"先做等于空转"）
+- **不做`dataScopeRule` 的解析器**：`07 §8.3` —— MVP 只存不解析，先加枚举值通常就够
+
+---
+
 ## 0.1.1 · 等保补齐（第 2 周范围内的追加，不是新的一周开始）
 
 ### 这一版能做什么

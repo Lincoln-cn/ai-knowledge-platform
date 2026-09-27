@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.UUID;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -57,7 +58,7 @@ class JwtTokenServiceTest {
     User user = user();
     Role role = new Role(UUID.randomUUID(), "管理员", "ADMIN");
 
-    Jwt jwt = decoder.decode(service.issueAccessToken(user, role));
+    Jwt jwt = decoder.decode(service.issueAccessToken(user, role, List.of("system:manage")));
 
     assertThat(jwt.getSubject()).isEqualTo(user.id().toString());
     assertThat(jwt.getIssuer().toString()).isEqualTo("http://test-issuer.local");
@@ -67,34 +68,34 @@ class JwtTokenServiceTest {
   }
 
   /**
-   * ★ 权限点必须原样出现在令牌里 —— {@code SecurityConfig} 的转换器读的就是这个 claim。 它一旦丢了，{@code @PreAuthorize}
-   * 会变成"永远拒绝"，而报错信息不会告诉你是这里的问题。
+   * ★ 权限点必须<strong>原样</strong>出现在令牌里 —— {@code SecurityConfig} 的转换器读的就是这个 claim。
+   * 它一旦丢了，{@code @PreAuthorize} 会变成"永远拒绝"，而报错信息不会告诉你是这里的问题。
+   *
+   * <p>★ 这里传什么就出什么：签发<strong>不</strong>再按角色代码反查 {@code Permissions.of}。 那是旧写法，会让界面勾选静默失效（见 {@link
+   * JwtTokenService} 类注释）。
    */
   @Test
-  void 权限点随令牌下发且与角色一致() {
+  void 权限点随令牌下发且与传入值一致() {
     User user = user();
     Role admin = new Role(UUID.randomUUID(), "管理员", "ADMIN");
-    Role normal = new Role(UUID.randomUUID(), "普通用户", "USER");
 
     assertThat(
             decoder
-                .decode(service.issueAccessToken(user, admin))
+                .decode(
+                    service.issueAccessToken(
+                        user,
+                        admin,
+                        List.of("system:manage", "knowledge:view", "conversation:view")))
                 .getClaimAsStringList("authorities"))
-        .hasSize(16);
-    assertThat(
-            decoder
-                .decode(service.issueAccessToken(user, normal))
-                .getClaimAsStringList("authorities"))
-        .containsExactlyInAnyOrder(
-            "knowledge:view", "assistant:view", "conversation:view", "conversation:share");
+        .containsExactly("system:manage", "knowledge:view", "conversation:view");
   }
 
-  /** 未知角色代码 ⇒ 空权限点，而不是抛异常（登录不该因为一个配置问题 500）。 */
+  /** 空授权集合照常签发（登录不该因为"这个角色还没有任何权限点"而 500）。 */
   @Test
-  void 未知角色代码给出空权限点而不是异常() {
+  void 空授权集合仍能签发令牌() {
     Role weird = new Role(UUID.randomUUID(), "从哪来的", "NOT_A_REAL_ROLE");
 
-    Jwt jwt = decoder.decode(service.issueAccessToken(user(), weird));
+    Jwt jwt = decoder.decode(service.issueAccessToken(user(), weird, List.of()));
 
     assertThat(jwt.getClaimAsStringList("authorities")).isEmpty();
   }
@@ -102,7 +103,9 @@ class JwtTokenServiceTest {
   /** ★ 篡改必须被拒 —— 这是整套令牌方案的地基。 */
   @Test
   void 被篡改的令牌验签失败() {
-    String token = service.issueAccessToken(user(), new Role(UUID.randomUUID(), "管理员", "ADMIN"));
+    String token =
+        service.issueAccessToken(
+            user(), new Role(UUID.randomUUID(), "管理员", "ADMIN"), List.of("system:manage"));
     String[] parts = token.split("\\.");
     // 改一位 payload，签名就不再匹配
     String tamperedPayload =
@@ -129,7 +132,8 @@ class JwtTokenServiceTest {
                 "http://test-issuer.local", Duration.ofMinutes(30), Duration.ofDays(7), SECRET));
 
     String foreign =
-        otherService.issueAccessToken(user(), new Role(UUID.randomUUID(), "管理员", "ADMIN"));
+        otherService.issueAccessToken(
+            user(), new Role(UUID.randomUUID(), "管理员", "ADMIN"), List.of("system:manage"));
 
     assertThatThrownBy(() -> decoder.decode(foreign)).isInstanceOf(JwtException.class);
   }

@@ -31,6 +31,12 @@ export interface User {
   roleName: string
   status: '正常' | '停用' | '待审核'
   lastLoginAt: string | null
+  /**
+   * 初始口令。★ **仅创建且未指定 password 时返回一次**，不是可重查的口令。
+   * 其它路径（列表/详情/更新、以及调用方自己传了口令的创建）后端一律不下发该字段。
+   * 真源在后端 `UserService.DEFAULT_INITIAL_PASSWORD` —— 前端不要写死任何默认口令。
+   */
+  initialPassword?: string
 }
 
 export interface CurrentUser {

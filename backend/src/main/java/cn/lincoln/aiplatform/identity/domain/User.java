@@ -77,6 +77,15 @@ public class User {
   @Column(name = "updated_at", nullable = false)
   private Instant updatedAt;
 
+  /**
+   * 软删除时刻（{@code DELETE /users/:id}）。
+   *
+   * <p>★ 用户必须**软删**：它是审计字段（{@code created_by} / {@code updated_by}）指向的东西，
+   * 硬删会让历史记录里的"谁改的"变成一个空指针。而且用户名唯一用的是部分索引 （{@code where deleted_at is null}），软删之后同名账号可以重建。
+   */
+  @Column(name = "deleted_at")
+  private Instant deletedAt;
+
   protected User() {}
 
   public User(
@@ -144,6 +153,21 @@ public class User {
   public void markPasswordChanged(String newPasswordHash) {
     this.passwordHash = newPasswordHash;
     this.mustChangePassword = false;
+  }
+
+  /** 软删除。★ 不在这里做持久化，由应用服务在事务内调用。 */
+  public void softDelete(Instant at) {
+    this.deletedAt = at;
+  }
+
+  public boolean isDeleted() {
+    return deletedAt != null;
+  }
+
+  /** 改显示名 / 所属角色（{@code PUT /users/:id}）。 */
+  public void updateProfile(String displayName, UUID roleId) {
+    this.displayName = displayName;
+    this.roleId = roleId;
   }
 
   public UUID id() {

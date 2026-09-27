@@ -7,9 +7,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
@@ -70,6 +72,44 @@ public class GlobalExceptionHandler {
                 ErrorCode.NOT_FOUND,
                 "接口不存在：" + cause.getResourcePath(),
                 "确认后端是否已实现该端点 —— 也可能是前端先行开发留下的差异"));
+  }
+
+  /**
+   * 路径参数类型不匹配（如 {@code /users/not-a-uuid}）。
+   *
+   * <p>★ 必须显式映射成 <strong>400</strong>：它是"调用方传错了 id"（他自己能修）， 落进兜底 handler 会变成 500「服务内部错误」（得来找后端）。
+   * 这条差别在联调时立刻显形。
+   */
+  @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+  public ResponseEntity<ApiResponse<Void>> onTypeMismatch(
+      MethodArgumentTypeMismatchException cause) {
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .body(
+            ApiResponse.fail(
+                ErrorCode.BAD_REQUEST, "参数类型不正确：" + cause.getName(), "请检查 id 是否为合法的 UUID"));
+  }
+
+  /**
+   * 已认证但无权限（{@code @PreAuthorize} 拒绝）。
+   *
+   * <p>★ 真实机制值得写下来，因为第一反应几乎一定会搞反：{@code @PreAuthorize} 的拒绝发生在
+   * <strong>控制器方法调用中</strong>（DispatcherServlet 内部）， 而 DispatcherServlet
+   * 的异常解析（{@code @RestControllerAdvice}）<strong>先于</strong> {@code ExceptionTranslationFilter}
+   * 决定怎么处理。于是下面那条匹配一切的 {@code @ExceptionHandler(Exception.class)} 先把安全异常改写成 500， {@code
+   * ExceptionTranslationFilter} / {@code AccessDeniedHandler} 根本没机会看到它。
+   *
+   * <p>★ 也就是说：问题<strong>不是</strong>"异常类型对不上"（{@code AuthorizationDeniedException} 确实继承 {@code
+   * AccessDeniedException}），而是"兜底 handler 抢在安全过滤器链前面"。 403 是"你没这个权限点"（可找管理员开），500 是"我崩了"（得来查后端）——
+   * 混起来会把运维引到错误的方向。
+   *
+   * <p>★ 教训（很隐蔽）：<strong>一个匹配一切的 {@code @ExceptionHandler(Exception.class)}
+   * 会抢在安全过滤器链前面改写安全异常</strong>。 只列 {@code AccessDeniedException} 即可覆盖子类 {@code
+   * AuthorizationDeniedException} —— 两个都列反而暗示它们无关。
+   */
+  @ExceptionHandler(AccessDeniedException.class)
+  public ResponseEntity<ApiResponse<Void>> onDenied(AccessDeniedException cause) {
+    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+        .body(ApiResponse.fail(ErrorCode.FORBIDDEN, "无权限", "请联系管理员为你的角色勾选该权限点"));
   }
 
   /** 兜底：未预期的异常也要是可读的包络，不能漏出堆栈（{@code ROADMAP §7.3} 第 ③ 条：不存在静默失效）。 */

@@ -11,4 +11,6 @@ public interface RoleRepository {
 
   /** 全量。★ 权限点目录的同步要遍历所有角色（角色总数是个位数，不需要分页）。 */
   List<Role> findAll();
+
+  Role save(Role role);
 }

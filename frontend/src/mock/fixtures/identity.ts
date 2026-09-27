@@ -82,7 +82,7 @@ export const roles: Role[] = [
 
 /**
  * 用户夹具。`mustChangePassword` 是登录契约的一等字段（`LoginResult`）：
- * 新建用户默认密码 123456 时置 true，改过密码后置 false。
+ * 用系统默认初始口令创建的用户置 true，改过密码后置 false。
  * 现有四个账号都已改过，所以都是 false —— 否则回归脚本一登录就被弹去改密页。
  */
 export const users: Array<User & { password: string; mustChangePassword: boolean }> = [

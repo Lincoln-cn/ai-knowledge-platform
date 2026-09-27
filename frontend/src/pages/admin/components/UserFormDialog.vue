@@ -15,7 +15,10 @@
           placeholder="登录账号，字母或数字"
           autocomplete="off"
         />
-        <div v-if="isEdit" class="hint micro">账号创建后不可修改</div>
+        <!-- 后端在 username 与现账号不一致时已返 400；置灰只是体验，守卫仍在后端 -->
+        <div v-if="isEdit" class="hint micro">
+          账号创建后不可修改 —— 账号是登录标识与审计主体，改名会让历史记录对不上号
+        </div>
       </el-form-item>
 
       <el-form-item label="姓名" prop="displayName">
@@ -43,7 +46,7 @@
           type="password"
           show-password
           maxlength="32"
-          :placeholder="isEdit ? '留空则不修改' : '留空则默认 123456'"
+          :placeholder="isEdit ? '留空则不修改' : '留空则由系统使用默认初始口令，创建后会显示'"
           autocomplete="new-password"
         />
         <div class="hint micro">
@@ -136,8 +139,16 @@ const submit = async () => {
       await identityApi.updateUser(props.user.id, body)
       ElMessage.success('已保存')
     } else {
-      await identityApi.createUser(body)
-      ElMessage.success(form.password ? '已创建' : '已创建，初始密码 123456')
+      const created = await identityApi.createUser(body)
+      // 初始口令只下发一次（契约见 `User.initialPassword`），界面上必须立刻展示；
+      // 没有该字段（调用方自定义了口令）就只提示创建成功，不瞎编默认值
+      if (created.initialPassword) {
+        ElMessage.success(
+          `已创建，初始口令：${created.initialPassword}（首次登录需修改，请尽快转告本人）`
+        )
+      } else {
+        ElMessage.success('已创建')
+      }
     }
     visible.value = false
     emit('saved')

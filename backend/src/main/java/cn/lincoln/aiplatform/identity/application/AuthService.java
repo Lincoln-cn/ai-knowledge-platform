@@ -1,10 +1,10 @@
 package cn.lincoln.aiplatform.identity.application;
 
 import cn.lincoln.aiplatform.identity.domain.PasswordPolicy;
-import cn.lincoln.aiplatform.identity.domain.Permissions;
 import cn.lincoln.aiplatform.identity.domain.RefreshToken;
 import cn.lincoln.aiplatform.identity.domain.RefreshTokenRepository;
 import cn.lincoln.aiplatform.identity.domain.Role;
+import cn.lincoln.aiplatform.identity.domain.RolePermissionRepository;
 import cn.lincoln.aiplatform.identity.domain.RoleRepository;
 import cn.lincoln.aiplatform.identity.domain.User;
 import cn.lincoln.aiplatform.identity.domain.UserRepository;
@@ -22,6 +22,7 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +60,7 @@ public class AuthService {
 
   private final UserRepository users;
   private final RoleRepository roles;
+  private final RolePermissionRepository rolePermissions;
   private final RefreshTokenRepository refreshTokens;
   private final PasswordEncoder passwordEncoder;
   private final JwtTokenService jwtTokenService;
@@ -70,6 +72,7 @@ public class AuthService {
   public AuthService(
       UserRepository users,
       RoleRepository roles,
+      RolePermissionRepository rolePermissions,
       RefreshTokenRepository refreshTokens,
       PasswordEncoder passwordEncoder,
       JwtTokenService jwtTokenService,
@@ -79,6 +82,7 @@ public class AuthService {
       AuthSecurityRecorder securityRecorder) {
     this.users = users;
     this.roles = roles;
+    this.rolePermissions = rolePermissions;
     this.refreshTokens = refreshTokens;
     this.passwordEncoder = passwordEncoder;
     this.jwtTokenService = jwtTokenService;
@@ -168,7 +172,7 @@ public class AuthService {
 
     log.info("用户 {} 登录成功（角色 {}）", user.username(), role.code());
     return new LoginResult(
-        jwtTokenService.issueAccessToken(user, role),
+        jwtTokenService.issueAccessToken(user, role, authoritiesOf(role)),
         refresh.plainValue(),
         user.mustChangePassword());
   }
@@ -224,7 +228,9 @@ public class AuthService {
     refreshTokens.save(token);
 
     return new LoginResult(
-        jwtTokenService.issueAccessToken(user, role), next.plainValue(), user.mustChangePassword());
+        jwtTokenService.issueAccessToken(user, role, authoritiesOf(role)),
+        next.plainValue(),
+        user.mustChangePassword());
   }
 
   /**
@@ -278,11 +284,21 @@ public class AuthService {
             .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "用户不存在", "它可能已被删除"));
 
     Role role = requireRole(user);
+    // ★ 与令牌同一真源：GET /users/me 回显的权限点必须与 @PreAuthorize 看到的一致。
+    //   若这里回 Permissions.of 而令牌写库值，界面会显示一套、鉴权认另一套。
     return new CurrentUserView(
-        user.id(), user.username(), user.displayName(), role.name(), Permissions.of(role.code()));
+        user.id(), user.username(), user.displayName(), role.name(), authoritiesOf(role));
   }
 
   // ────────────────────────── 内部 ──────────────────────────
+
+  /**
+   * 角色当前持有的授权集合。★ 真源是 {@code iam_role_permission}（界面上勾的）， 不是 {@code Permissions.of}（那是启动 seed 与
+   * ADMIN 维护用的初始映射）。
+   */
+  private List<String> authoritiesOf(Role role) {
+    return rolePermissions.findByRoleId(role.id());
+  }
 
   private String lockoutRule() {
     return "连续登录失败 "
