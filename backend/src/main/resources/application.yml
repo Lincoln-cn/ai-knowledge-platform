@@ -41,6 +41,20 @@ spring:
       # Ollama 不校验 key，但 Spring AI 的 OpenAI 自动配置要求它非空
       api-key: ${AI_API_KEY:ollama-local}
 
+app:
+  security:
+    jwt:
+      # ★ 必须是 URL 形式，不能是 "ai-knowledge-platform" 这样的裸串 ——
+      #   Spring 的 Jwt.getIssuer() 返回 URL，裸串会在读取 iss 时抛转换异常
+      issuer: http://ai-knowledge-platform.local
+      # 契约侧的形状见 08 §4.0：access 30 分钟 / refresh 7 天
+      access-ttl: 30m
+      refresh-ttl: 7d
+      # ⚠️ 本地开发默认密钥（Base64 的 37 字节随机串，只用于本机）。
+      #    任何非本地环境都必须用环境变量覆盖 —— 这个值在仓库里，等于公开：
+      #    拿到它就能伪造任意用户的令牌。
+      secret: ${JWT_SECRET:ZGV2LW9ubHktc2VjcmV0LWtleS1kby1ub3QtdXNlLWluLXByb2Q=}
+
 server:
   port: ${SERVER_PORT:8080}
 

@@ -1,32 +1,56 @@
 package cn.lincoln.aiplatform.identity.infrastructure;
 
+import java.util.Base64;
+import java.util.List;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
+import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
 
 /**
- * 安全责任链（{@code 08 §4.2}）—— ★ 用 Spring Security 官方过滤链，不自研 filter。
+ * 安全责任链（{@code 08 §4.2}）—— ★ 全部走 Spring Security 官方能力，不自研 filter。
  *
- * <p>为什么这一段由 {@code identity} 装配：链上的放行规则、令牌解析、权限判定都是身份域的事 （{@code 08 §4.0} 第 2~4 行的"实现在 identity"）。
+ * <p>第 1 周这里只有"链起来了但还没有认证方式"；本周补上三件事： JWT 资源服务器（验签交给官方）、方法级授权（{@code @PreAuthorize}）、 401/403
+ * 的统一出口（官方扩展点）。
  *
- * <p>★ <strong>第 1 周（0.0.1）的状态是"链起来了，但还没有认证方式"</strong>： 除下面放行的三个面之外，一切请求都会被拒。这是刻意的 —— 第 2
- * 周（0.1.0）接上 {@code oauth2ResourceServer().jwt()} 与双令牌后，受保护面才有真正的准入判断。 现在就把链摆好，是为了让"哪些路径免登录"这件事从第 1
- * 周起就只有一个地方可改。
+ * <p>★ <strong>JWT 用 HS256（对称密钥）</strong>，不是 RSA。理由：签发与验签都在同一个进程里，
+ * 不存在"把公钥分发给别方"的需求；对称密钥少一个密钥对的管理面。真需要外部验签时 （例如引入独立网关），换成 RSA 是改这几个 bean 的事，业务代码不受影响。
  *
- * <p>⚠️ 第 2 周必须补的两件事（此处不预埋代码，避免"看起来已经做了"）： ① {@code .oauth2ResourceServer(o -> o.jwt(...))} +
- * {@code JwtDecoder}（Security 7 的 API 形态见 {@code 09 §4.4}）； ② {@code @EnableMethodSecurity} +
- * {@code @PreAuthorize} 的权限点校验，以及它的金丝雀 （去掉某个 {@code @PreAuthorize} 必须让构建变红，{@code ROADMAP §4.7.1}）。
+ * <p>★ 第 3 周起本类还要长两样东西（此处不预埋，避免"看起来已经做了"）： ① 数据范围判定接入 {@code AuthorizationManager}（{@code 08
+ * §4.3.3}）； ② 公开令牌的 {@code OncePerRequestFilter}（{@code 08 §4.2.3} 第 2 项，M4 才需要）。
  */
 @Configuration
 @EnableWebSecurity
+// ★ Security 7 里 @PreAuthorize 默认仍启用（09 §4.4）；显式声明是为了让"这个应用有方法级授权"
+//   在代码里可见 —— 不然新人只能靠翻文档才知道
+@EnableMethodSecurity
+@EnableConfigurationProperties(JwtProperties.class)
 public class SecurityConfig {
 
   @Bean
-  SecurityFilterChain apiFilterChain(HttpSecurity http) throws Exception {
+  SecurityFilterChain apiFilterChain(
+      HttpSecurity http,
+      JwtAuthenticationConverter authorityConverter,
+      RestAuthenticationEntryPoint entryPoint,
+      RestAccessDeniedHandler deniedHandler)
+      throws Exception {
     http
         // 令牌式无状态 API：CSRF 不适用（官方做法）
         .csrf(AbstractHttpConfigurer::disable)
@@ -34,18 +58,70 @@ public class SecurityConfig {
         .authorizeHttpRequests(
             auth ->
                 auth
-                    // 健康探针：第 1 周的"能起来"判据要 curl 它，必须免认证
+                    // 健康探针
                     .requestMatchers("/actuator/health", "/actuator/health/**")
                     .permitAll()
-                    // 认证入口（第 2 周实装）
+                    // ★ 登录与刷新必须免认证 —— 否则"刷新令牌"这件事在逻辑上就是循环的
                     .requestMatchers("/api/v1/auth/login", "/api/v1/auth/refresh")
                     .permitAll()
-                    // 免登录问答面：凭证由专用 filter 建立上下文（08 §4.2.1）
+                    // 免登录问答面（M4 才有实体，先留面）
                     .requestMatchers("/api/v1/public/**")
                     .permitAll()
                     .anyRequest()
-                    .authenticated());
+                    .authenticated())
+        // ★ JWT 的验签与解析交给官方（08 §4.2.2：不手写 JWT 解析 Filter）
+        .oauth2ResourceServer(
+            o ->
+                o.jwt(jwt -> jwt.jwtAuthenticationConverter(authorityConverter))
+                    .authenticationEntryPoint(entryPoint))
+        .exceptionHandling(
+            e -> e.authenticationEntryPoint(entryPoint).accessDeniedHandler(deniedHandler));
 
     return http.build();
+  }
+
+  /**
+   * 把令牌里的 {@code authorities} 声明翻成 {@code GrantedAuthority}。
+   *
+   * <p>★ 少了这个 bean，{@code @PreAuthorize("hasAuthority('knowledge:create')")} 会
+   * <strong>永远拒绝</strong>（而不是报错）—— 因为默认转换器只会给一个 {@code SCOPE_*} 前缀的权限。
+   * 这种"配错就变成全拒"还算好；反过来配成"全放"才是灾难，所以它是金丝雀要盯的地方之一。
+   */
+  @Bean
+  JwtAuthenticationConverter jwtAuthenticationConverter() {
+    JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+    converter.setJwtGrantedAuthoritiesConverter(
+        jwt -> {
+          List<String> authorities = jwt.getClaimAsStringList("authorities");
+          if (authorities == null) {
+            return List.of();
+          }
+          return authorities.stream()
+              .map(SimpleGrantedAuthority::new)
+              .map(GrantedAuthority.class::cast)
+              .toList();
+        });
+    return converter;
+  }
+
+  /** ★ 密码编码用官方实现，不手写哈希与加盐（{@code 08 §4.2.2}）。 */
+  @Bean
+  PasswordEncoder passwordEncoder() {
+    return new BCryptPasswordEncoder();
+  }
+
+  @Bean
+  SecretKey jwtSecretKey(JwtProperties properties) {
+    return new SecretKeySpec(Base64.getDecoder().decode(properties.secret()), "HmacSHA256");
+  }
+
+  @Bean
+  JwtEncoder jwtEncoder(SecretKey jwtSecretKey) {
+    return NimbusJwtEncoder.withSecretKey(jwtSecretKey).build();
+  }
+
+  @Bean
+  JwtDecoder jwtDecoder(SecretKey jwtSecretKey) {
+    return NimbusJwtDecoder.withSecretKey(jwtSecretKey).macAlgorithm(MacAlgorithm.HS256).build();
   }
 }

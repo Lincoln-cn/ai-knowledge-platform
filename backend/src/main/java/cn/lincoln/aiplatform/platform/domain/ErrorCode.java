@@ -15,6 +15,15 @@ public enum ErrorCode {
   /** 成功。包络里 {@code code} 为 0 才代表成功（契约 {@code ApiResult} 的约定）。 */
   OK(0, "ok"),
 
+  /**
+   * 请求参数不合法。
+   *
+   * <p>⚠️ 这个码<strong>契约里还没有</strong>（{@code frontend/src/api/types.ts} 的 {@code ErrorCode} 只定义了 8
+   * 个）。它是第 2 周做端点时补的：请求体校验失败总得有个码，而 400 是 401/403/404 那三个"与 HTTP
+   * 对齐"的码的<strong>同族补全</strong>。前端不针对它分支（会走通用错误渲染）， 所以现在加它不破坏任何东西。CHANGELOG 0.1.0 里记了"契约该补上这一项"。
+   */
+  BAD_REQUEST(400, "请求参数不合法"),
+
   /** 未认证：令牌缺失、过期、验签失败。前端据此触发<em>静默刷新并重放一次</em>（{@code 08 §4.0} 第 2 行）。 */
   UNAUTHORIZED(401, "未认证"),
 

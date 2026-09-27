@@ -40,6 +40,10 @@ class ApiResponseTest {
   @Test
   void 错误码必须与前端契约逐项一致() {
     assertThat(ErrorCode.OK.code()).isZero();
+    // ★ BAD_REQUEST(400) 是第 2 周做端点时补的：契约的 ErrorCode 里还没有它，
+    //   而请求体校验失败总得有个码。它是 401/403/404 那三个"与 HTTP 对齐"的码的同族补全。
+    //   CHANGELOG 0.1.0 记了"契约该补上这一项"。
+    assertThat(ErrorCode.BAD_REQUEST.code()).isEqualTo(400);
     assertThat(ErrorCode.UNAUTHORIZED.code()).isEqualTo(401);
     assertThat(ErrorCode.FORBIDDEN.code()).isEqualTo(403);
     assertThat(ErrorCode.NOT_FOUND.code()).isEqualTo(404);

@@ -7,6 +7,70 @@
 
 ---
 
+## 0.1.0 · 第 2 周 · M1 认证链与双令牌
+
+### 这一版能做什么
+
+**用账号登录，并带着令牌访问受保护接口**（三个动作都是实测过的）：
+
+```
+GET  /api/v1/users/me        不带令牌 → HTTP 401 {"code":401,"hint":"登录已过期或令牌无效，请重新登录"}
+POST /api/v1/auth/login      {"username":"admin","password":"admin"} → accessToken(30m) + refreshToken(7d)
+GET  /api/v1/users/me        带令牌 → HTTP 200 + 用户名 / 角色名 / 16 个权限点
+POST /api/v1/auth/refresh    换发新的一对；★ 旧令牌再用 → 判定重放，撤销该用户全部会话
+```
+
+### 交付物
+
+| # | 交付 | 关键点 |
+|---|---|---|
+| 1 | **迁移 V3/V4**：`iam_user` / `iam_role` / `iam_refresh_token` + 5 角色 4 演示账号 | 用户名唯一用**部分索引**（删掉的账号不该永久占用名字）；刷新令牌只存 **sha256 哈希** |
+| 2 | **domain**：`User` / `Role` / `RefreshToken` / `Permissions` + 仓储接口 | 权限点 16 个与前端 `permissions.ts` 逐项对齐；角色→权限点照 mock fixtures 对齐 |
+| 3 | **JWT 签发**（`JwtTokenService` + `NimbusJwtEncoder`，HS256） | ★ 权限点放进令牌 ⇒ 省掉"每请求一次权限查询"，代价是改动最长 30 分钟生效（写在类注释里） |
+| 4 | **责任链补全**：`oauth2ResourceServer().jwt()` + `@EnableMethodSecurity` | 验签解析全走官方；401/403 用官方扩展点，输出包络 |
+| 5 | **`AuthService`**：登录 / 刷新轮换 / 重放检测 / 登出 | ★ 这是 `08 §4.2.3` 说的"两处必须自己写"的第一处 |
+| 6 | **Web 层**：`/auth/login` · `/auth/refresh` · `/auth/logout` · `/users/me` | 当前用户从 `@AuthenticationPrincipal Jwt` 取，不用 ThreadLocal |
+| 7 | **统一异常映射**（`GlobalExceptionHandler`） | ★ 401 返 **HTTP 401**（前端靠它静默刷新，见下） |
+| 8 | ★ **第三条闸门**：写端点必须声明权限 + 金丝雀 | 与模块边界、内核纯净性同构 |
+| 9 | **16 个新测试** | 令牌签发/验签 6 · 端到端认证链 8 · 权限声明 2 |
+
+### 验证记录（本地实跑）
+
+```
+mvn -B verify  → BUILD SUCCESS · Tests run: 38, Failures: 0, Errors: 0
+                  （0.0.1 的 22 个 + 本周 16 个）
+curl 演示      → 401 带 hint ✅ · 登录拿双令牌 ✅ · 带令牌取到 16 个权限点 ✅
+```
+
+### ★ 这一版踩到的坑
+
+| # | 现象 | 根因 | 处理 |
+|---|---|---|---|
+| 1 | `Unable to convert claim 'iss' of type String to URL` | ★ **JWT 的 `iss` 必须是 URL 形式** —— Spring 的 `Jwt.getIssuer()` 返回 `URL`，给裸串（`ai-knowledge-platform`）会在读取时抛转换异常 | issuer 改成 `http://ai-knowledge-platform.local`，并在配置里注明"必须是 URL" |
+| 2 | `expiresAt must be after issuedAt` | 想用"负 TTL"造过期令牌，但 `JwtClaimsSet` 在**构建期**就拒绝 | 测试改为手工构造"签发于过去"的声明 —— 那才是真正想验的（验签方是否检查过期） |
+| 3 | ArchUnit 报 `failed to check any classes` | 第 2 周的三个写端点**全在白名单里**（`AuthController`）⇒ 规则空跑，而 ArchUnit 默认把空跑当失败 | 主规则 `allowEmptyShould(true)` + 由**金丝雀**负责证明规则有效（第 3 周有 CRUD 后才有真实检查对象） |
+| 4 | `haveSimpleNameNotEqualTo` 不存在 | ArchUnit 的 `ClassesThat` 没有"不等于" | 白名单并入一个 `DescribedPredicate`，只保留一个条件表达式 |
+| 5 | ★ 重放检测的断言失败，但响应体里**明明有**那个词 | 我把服务端文案记成了"已使用"，**实际是"已被使用"**（中间隔着"被"字） | 打印**码点**定论（`U+5DF2 U+4F7F U+7528` 两边一致）⇒ 是断言写错，不是编码问题。**若跳过诊断直接去查编码，方向就全错了** |
+
+### ⚠️ 本版新增的待确认 / 欠账
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 1 | ★ **契约该补 `BAD_REQUEST(400)`** | 请求体校验失败总得有个码，而契约的 `ErrorCode` 只有 8 个。400 是 401/403/404 那三个"与 HTTP 对齐"的码的同族补全。前端不针对它分支（走通用错误渲染），所以现在加不破坏任何东西 |
+| 2 | **登录失败不区分"账号不存在"与"密码错误"** | 我按安全默认做的（区分它们等于提供用户名探测器），文案统一为"账号或密码不正确"。★ 前端 mock 是**区分**的（`账号「x」不存在` / `密码不正确`）—— 若产品上要那种提示，需要显式决定并改这一处 |
+| 3 | **`CREATOR` 角色的权限点是我按 `07 §4.1` 矩阵推的** | 前端 mock 里**没有**这个角色（只有 r1~r4），所以它没有可对齐的真源。seed 里照实建出了这个角色，没有为了"四个角色刚好整齐"而假装它不存在 |
+| 4 | **登出撤销的是全部会话** | 契约的 `POST /auth/logout` 不带令牌参数，服务端没法知道"是哪一台"。单设备登出需要契约加参数 |
+| 5 | `AuthorizationDeclarationTest` 的白名单按**类名** `AuthController` | 改名会让白名单失效 ⇒ 构建失败（方向安全，会有人被通知到）。第 3 周有了真正的受保护端点后，这条规则才第一次有实际检查对象 |
+
+### 未做（刻意的）
+
+- **`GET` 端点不在权限声明闸门内**：查询类端点归**数据范围**（第 3 周）管
+- **不给 `iam_role` 预埋 `data_scope`**：第 3 周才用，而该表只有几行 ⇒ 届时 ALTER 无成本（判断标准是"行数 × 是否进查询谓词"，见 V3 迁移的注释）
+- **不做公开令牌 filter**：`08 §4.2.3` 的第二处自研，M4 才需要
+- **不做契约漂移检测**：按计划是 0.1.2（第 4 周），本周的端点路径是手工核对的
+
+---
+
 ## 0.0.1 · 第 1 周 · M0 骨架
 
 ### 这一版能做什么
