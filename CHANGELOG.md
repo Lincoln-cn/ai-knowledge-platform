@@ -36,15 +36,19 @@ POST/PUT /api/v1/users/me/password      → 弱口令 ⇒ 400 + code 1002（带�
 | 7 | **`PUT /users/me/password`** + 强度校验 | 改密成功后撤销该用户全部刷新令牌 |
 | 8 | **27 个新测试** | 口令强度 9 · 验证码 7 · 等保端到端 11 |
 | 9 | ★ **前端登录页接入验证码** | `pages/login/Index.vue` 加验证码图与输入框（图形比例与后端一致）；**任何失败之后都换一张** —— 验证码是一次性的，不换会让用户陷入"怎么输都说验证码不对"的死循环。mock 侧补 `/auth/captcha`，让 mock 模式下的页面形态与真后端一致 |
+| 10 | ★ **前后端联调**（`VITE_USE_MOCK=false` → 真后端 + 真 PG） | 用 Playwright 对着"真前端 + 真后端 + 真 PG"跑完整登录：验证码图来自后端（PNG）、登录拿到**真 JWT**、`/users/me` 返回正确。**这一步抓出了一个真 bug**（见下面第 6 条坑） |
 
 ### 验证记录（本地实跑）
 
 ```
-mvn -B -f backend/pom.xml verify          → BUILD SUCCESS · Tests run: 65, Failures: 0
-                                            （0.1.0 的 38 个 + 本周 27 个）
+mvn -B -f backend/pom.xml verify          → BUILD SUCCESS · Tests run: 66, Failures: 0
 前端 typecheck / 3 个静态闸门 / 11 个浏览器闸门 / build:mock → 全部通过
-登录页实测（Playwright）                   → 验证码图渲染 ✅ 输入框在 ✅
-                                            填完能登录并跳首页 ✅ 无控制台错误
+★ 前后端联调（VITE_USE_MOCK=false → 真后端 + 真 PG）
+    GET  /api/v1/auth/captcha  → 200（图是后端渲染的 PNG，不是 mock 的 SVG）
+    POST /api/v1/auth/login    → 200（拿到 accessToken）
+    GET  /api/v1/users/me      → 200（admin / 管理员）
+    GET  /api/v1/analytics/*   → 404（后端未实现，前端先行的看板页在调）
+    登录后 localStorage 里是真 JWT（eyJ…），不是 mock_access_*
 ```
 
 ### ★ 这一版踩到的坑（都是"功能看起来是对的"那类）
@@ -56,6 +60,8 @@ mvn -B -f backend/pom.xml verify          → BUILD SUCCESS · Tests run: 65, Fa
 | 3 | ★ **测试恢复步骤失败，导致后续测试连锁失败** | 一个测试在 `finally` 里用 `123456` 把口令改回去，而**新加的强度校验拒绝了它**（6 位纯数字）⇒ 口令卡在被改成的那个值上 | 复位改为 `@BeforeEach` 里**直接写库**（绕过业务接口）。★ 顺带暴露一件真事：**seed 里的演示口令本身不满足等保强度** —— 这符合预期（它们是开发数据，V4 已注明生产必须删除），但它意味着"改回去"这件事只能由测试自己安排 |
 | 4 | `OptionalAssert.contains` 全部断言失败 | AssertJ 的 `assertThat(Optional).contains(x)` 是"**值等于** x"，不是"含子串" | 改用 `.orElseThrow()` 取出消息再查子串 —— 后者在"应该违规却通过了"时也会明确失败 |
 | 5 | 一条测试数据算错了字符类别 | `"abcdefg!"` 是"小写 + 特殊"= **2 类**，我按 3 类写的 | 改为 `"abcdefg1!"`。类别计数现在有单独的测试守着 |
+| 6 | ★★ **联调时"未实现的端点"返回 500 而不是 404** | 兜底的 `@ExceptionHandler(Exception.class)` 把 Spring 的 `NoResourceFoundException` 也抓了（它继承自 Exception）。于是前端调 `/api/v1/analytics/*`（后端还没实现）时收到"服务内部错误"⇒ 排查方向变成"后端崩了"，而真实原因是"这个接口还没做" | 显式处理 `NoResourceFoundException` → **404** + hint 直接点出"也可能是前端先行开发留下的差异"；并补一条断言钉住 |
+| 7 | 重新打包失败：`Unable to rename … .jar.original` | 旧 jar 被**我自己刚启动的后端进程**占着 | 顺序问题：先停服务再打包。值得记的是这条报错信息里**没有一个字提到"文件被占用"** —— 只有一句 rename 失败 |
 
 ### ⚠️ 待确认 / 欠账
 

@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * 把异常写成统一包络（{@code 08 §4.1}）。
@@ -50,6 +51,25 @@ public class GlobalExceptionHandler {
 
     return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .body(ApiResponse.fail(ErrorCode.BAD_REQUEST, detail));
+  }
+
+  /**
+   * 请求打到了一个**不存在的端点**。
+   *
+   * <p>★ 必须显式处理，否则会被下面的兜底 handler 抓成 <strong>500</strong>： Spring Boot 3.2+ 对未匹配的请求抛 {@code
+   * NoResourceFoundException}， 而它继承自 {@code Exception}。这个差别在联调时立刻显形 —— 前端的分析看板调 {@code
+   * /api/v1/analytics/overview}（后端还没实现）时， 界面收到的是 500「服务内部错误」，于是去翻后端堆栈，而真实原因是**接口还没做**。
+   *
+   * <p>★ 它同时是"契约漂移"的一类早期信号：前端先行开发的接口，后端可能还没有。 hint 直接把这一点说出来，比让人对着 500 猜要省事得多。
+   */
+  @ExceptionHandler(NoResourceFoundException.class)
+  public ResponseEntity<ApiResponse<Void>> onNoHandler(NoResourceFoundException cause) {
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .body(
+            ApiResponse.fail(
+                ErrorCode.NOT_FOUND,
+                "接口不存在：" + cause.getResourcePath(),
+                "确认后端是否已实现该端点 —— 也可能是前端先行开发留下的差异"));
   }
 
   /** 兜底：未预期的异常也要是可读的包络，不能漏出堆栈（{@code ROADMAP §7.3} 第 ③ 条：不存在静默失效）。 */

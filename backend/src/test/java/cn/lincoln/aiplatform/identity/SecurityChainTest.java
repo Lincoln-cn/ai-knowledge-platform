@@ -128,6 +128,26 @@ class SecurityChainTest {
     assertThat(post("/api/v1/auth/logout", "{}", accessToken).statusCode()).isEqualTo(200);
   }
 
+  /**
+   * ★ 未实现的端点必须返 404，不能返 500。
+   *
+   * <p>这条是**前后端联调时抓出来的**：前端的分析看板调 {@code /api/v1/analytics/overview} （后端第 2 周还没实现），界面收到
+   * 500「服务内部错误」， 于是排查方向变成"后端崩了"，而真实原因是"这个接口还没做"。
+   *
+   * <p>根因是兜底的 {@code @ExceptionHandler(Exception.class)} 把 Spring 的 {@code
+   * NoResourceFoundException} 也抓了 —— 它继承自 Exception。
+   */
+  @Test
+  void 未实现的端点返回404而不是500() throws Exception {
+    String accessToken = jsonField(login("admin", "admin").body(), "accessToken");
+
+    HttpResponse<String> res = get("/api/v1/analytics/overview", accessToken);
+
+    assertThat(res.statusCode()).as("★ 未实现 ≠ 服务出错：返 500 会让'接口还没做'看起来像'后端崩了'").isEqualTo(404);
+    assertThat(res.body()).contains("\"code\":404");
+    assertThat(res.body()).as("hint 要直接点出可能的原因").contains("端点");
+  }
+
   // ────────────────────────── HTTP 与 JSON 小工具 ──────────────────────────
 
   /**
