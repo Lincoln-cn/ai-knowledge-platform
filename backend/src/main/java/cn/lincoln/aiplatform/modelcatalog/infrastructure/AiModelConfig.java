@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -19,10 +20,21 @@ import org.springframework.context.annotation.Configuration;
  * / tool +300）显式装配。 现在挂一个空的，只会让人误以为"advisor 已经配好了"。
  */
 @Configuration
+@EnableConfigurationProperties(ModelApiProperties.class)
 public class AiModelConfig {
 
   @Bean
   ChatClient chatClient(ChatModel chatModel) {
     return ChatClient.builder(chatModel).build();
+  }
+
+  /**
+   * API key 加解密器。
+   *
+   * <p>★ 显式建 bean 而不是 {@code @Component}：它的构造参数是密钥配置， 在这里一眼能看到"这东西手里有密钥"——扫包扫出来的安全感是假的。
+   */
+  @Bean
+  ApiKeyCipher apiKeyCipher(ModelApiProperties properties) {
+    return new ApiKeyCipher(properties.apiKeySecret());
   }
 }
