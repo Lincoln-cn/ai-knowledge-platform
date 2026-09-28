@@ -2,6 +2,7 @@ import axios, { AxiosError, type AxiosRequestConfig } from 'axios'
 import { API_PREFIX, USE_MOCK } from '@/config/env'
 import { ApiError, ErrorCode, type ApiResult } from '@/api/types'
 import { clearTokens, getToken, getRefreshToken, setTokens } from '@/lib/token'
+import { httpFallbackMessage, isApiEnvelope } from '@/lib/http-error'
 import { dispatchMock } from '@/mock/dispatch'
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -100,18 +101,18 @@ client.interceptors.response.use(
     }
 
     const body = error.response?.data
-    // 无业务包体时（后端未通、网关 502、路由不存在），错误必须可行动，
-    // 不能只把 axios 的 "status code 501" 抛给用户
-    const fallback = status
-      ? `接口返回 HTTP ${status}${
-          status === 404 || status === 501
-            ? '（接口不存在，请检查 VITE_API_BASE 与后端路由）'
-            : '（后端异常，请稍后重试）'
-        }`
-      : '无法连接后端（请检查网络与后端是否启动）'
+    // ★ 只有业务包络才用后端的 message + hint。
+    //   无包络（代理 500 / 非 JSON / 缺 code|message）时必须可行动，且不能把
+    //   「后端连不上 / 被代理拦下」说成「后端异常」—— 401 刷新失败那条路径不受影响。
+    const envelope = isApiEnvelope(body) ? body : null
+    const fallback = httpFallbackMessage(status)
 
     return Promise.reject(
-      new ApiError(body?.code ?? status ?? -1, body?.message || fallback, body?.hint)
+      new ApiError(
+        envelope?.code ?? status ?? -1,
+        envelope?.message || fallback,
+        envelope?.hint
+      )
     )
   }
 )

@@ -132,12 +132,19 @@ export const modelRoutes: MockRoute[] = [
         )
       }
 
+      // ★ 与后端一致：baseModel 不校验，真伪留到 load。
+      //   后端 create 把它当字符串直接存，load 时才对上游清单验真伪；
+      //   mock 若拒「不在可选目录中」，会掩盖真后端的宽容行为。
+      //   contextWindow / dimension 能从目录带出就带出，带不出就 null ——
+      //   与后端 lookupContextWindow 的 best-effort 同口径（拉不到不阻断注册）。
       const base = findBaseModel(input.baseModel)
-      if (!base) throw new ApiError(4003, `基础模型「${input.baseModel}」不在可选目录中`)
 
-      // 模型类型必须与基础模型一致，否则向量维度/上下文窗口会张冠李戴
-      if (base.kind !== input.kind) {
-        throw new ApiError(4003, `基础模型「${base.baseModel}」是${base.kind === 'CHAT' ? '对话' : '向量'}模型，与所选类型不一致`)
+      // 不适用的字段一律拒绝，不静默丢 —— 与后端 create/update 同口径
+      if (input.kind === 'CHAT' && input.dimension != null) {
+        throw new ApiError(4001, '对话模型不产出向量，dimension 必须为空')
+      }
+      if (input.kind === 'EMBEDDING' && (input.thinking || input.tools)) {
+        throw new ApiError(4001, '能力声明只对对话模型有意义：向量模型不接受 thinking / tools')
       }
       if (input.kind === 'EMBEDDING' && !input.dimension) {
         throw new ApiError(4004, '向量模型必须显式声明向量维度 —— 维度与向量表绑定，不能靠猜')
@@ -150,8 +157,8 @@ export const modelRoutes: MockRoute[] = [
         supplier: input.supplier,
         baseModel: input.baseModel,
         status: 'NOT_LOADED',
-        contextWindow: base.contextWindow,
-        dimension: input.kind === 'EMBEDDING' ? (input.dimension ?? base.dimension) : null,
+        contextWindow: input.kind === 'CHAT' ? (base?.contextWindow ?? null) : null,
+        dimension: input.kind === 'EMBEDDING' ? (input.dimension ?? base?.dimension ?? null) : null,
         thinking: input.kind === 'CHAT' ? (input.thinking ?? 'NONE') : 'NONE',
         tools: input.kind === 'CHAT' ? (input.tools ?? 'UNSUPPORTED') : 'UNSUPPORTED',
         builtin: false,

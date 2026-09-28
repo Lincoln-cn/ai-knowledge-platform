@@ -529,7 +529,17 @@ def main() -> int:
                     return false;
                 }"""
             )
-            page.wait_for_timeout(900)
+            # ★ 等添加弹窗完全收起再点「编辑」：共用同一个 ModelFormDialog，
+            #   关闭动画未结束时 open() 会和 v-model 抢可见性，编辑弹窗打不开（偶发）。
+            try:
+                page.wait_for_function(
+                    """() => ![...document.querySelectorAll('.el-dialog')].some(
+                        d => d.offsetParent !== null && d.getBoundingClientRect().width > 0)""",
+                    timeout=4000,
+                )
+            except Exception:
+                pass
+            page.wait_for_timeout(400)
 
             def edit_btn_count() -> int:
                 return page.locator(".model-card button:has-text('编辑')").count()
@@ -555,8 +565,22 @@ def main() -> int:
                     page.wait_for_timeout(1200)
                     edit_items = dialog_form_items()
                     if not edit_items:
+                        # 编辑弹窗内容异步挂载 —— 再等一拍
                         page.wait_for_timeout(800)
                         edit_items = dialog_form_items()
+                    if not edit_items:
+                        try:
+                            page.wait_for_function(
+                                """() => {
+                                    const dlg = [...document.querySelectorAll('.el-dialog')]
+                                        .find(d => d.offsetParent !== null && d.getBoundingClientRect().width > 0);
+                                    return !!dlg && dlg.querySelectorAll('.el-form-item').length > 0;
+                                }""",
+                                timeout=3000,
+                            )
+                            edit_items = dialog_form_items()
+                        except Exception:
+                            pass
                     print("   编辑表单:", [(it['label'], it['value'], it['disabledInput']) for it in edit_items])
                     key_edit = item_by_label(edit_items, "密钥") or item_by_label(edit_items, "apiKey")
                     base_edit = item_by_label(edit_items, "服务地址") or item_by_label(edit_items, "apiBase")
@@ -620,9 +644,8 @@ def main() -> int:
             check(bool(clicked_manual), "目录区有「手动填写」逃生口（可点击）")
             page.wait_for_timeout(400)
 
-            # 手填基础模型名。真栈后端宽容（baseModel 就是字符串）；
-            # mock 的 create 会按 fixtures 校验 —— 先试一个不在目录里的名字，
-            # 被 mock 拒了再退回种子名，UI 逃生口这条断言仍然成立。
+            # 手填基础模型名。后端 create 不校验 baseModel（字符串，load 时才验）；
+            # mock 已与后端对齐 —— 任意名都可注册，陌生名应直接提交成功。
             def fill_base_input(val: str) -> bool:
                 """填「基础模型」文本框：优先表单项 label，再按 placeholder/类名兜底。"""
                 if fill_form_item("基础模型", val):
@@ -705,18 +728,7 @@ def main() -> int:
             submit_dialog()
             page.wait_for_timeout(1200)
 
-            # mock 可能因「不在可选目录中」拒掉完全陌生的名字 —— 退回种子名再走同一条 UI 路径
-            if dialog_open():
-                msg = page.evaluate(
-                    """() => [...document.querySelectorAll('.el-message')].map(e => e.innerText.trim())"""
-                )
-                print(f"   提交后弹窗仍在，message={msg}, errors={form_errors()}；退回种子名重试")
-                fill_base_input("Qwen3-8B")
-                fill_form_item("模型名称", probe_name or f"手填基础探针-{int(time.time())}")
-                page.wait_for_timeout(300)
-                submit_dialog()
-                page.wait_for_timeout(1200)
-
+            # mock 已与后端对齐（baseModel 不校验）—— 陌生名直接提交成功，不必退回种子名
             check(not dialog_open(), "手填基础模型后提交成功（弹窗关闭）")
             if probe_name:
                 ui_created_names.append(probe_name)
