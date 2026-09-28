@@ -29,7 +29,7 @@
       </el-select>
       <el-select v-model="query.status" size="small" placeholder="全部状态" style="width: 130px" @change="onFilterChange">
         <el-option label="全部状态" value="" />
-        <el-option v-for="s in STATUSES" :key="s" :label="s" :value="s" />
+        <el-option v-for="s in STATUSES" :key="s" :label="labelOf(MODEL_STATUS_LABELS, s)" :value="s" />
       </el-select>
       <span class="micro muted">
         共 {{ total }} 个

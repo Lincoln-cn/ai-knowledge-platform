@@ -6,7 +6,7 @@
                 <el-card v-resize="(wh: any) => resizeCondition(wh, item, index)" shadow="never" class="card-never mb-8"
                     style="--el-card-padding: 12px">
                     <div class="flex-between lighter">
-                        {{ item.type }}
+                        {{ branchTypeLabel(item.type) }}
                         <div class="info" v-if="item.conditions.length > 1">
                             <span>符合以下</span>
                             <el-select v-model="item.condition" size="small"
@@ -94,6 +94,7 @@ import type { FormInstance } from 'element-plus'
 import { ref, computed, onMounted } from 'vue'
 import { randomId } from '@/utils/utils'
 import { compareList } from '@/pages/workflow/components/common/data'
+import { branchTypeLabel } from '@/constants/labels'
 
 /**
  * 数值判断节点编辑器（变量 / 操作符 / 值）。

@@ -7,7 +7,7 @@
                     style="--el-card-padding: 12px">
                     <div class="flex-between lighter">
                         <span>
-                            {{ item.type }}
+                            {{ branchTypeLabel(item.type) }}
                             <el-tag v-if="isFallback(item)" size="small" type="warning" class="ml-4">兜底</el-tag>
                         </span>
                         <el-switch v-model="item._isFallback" size="small" active-text="兜底"
@@ -51,6 +51,7 @@ import NodeContainer from '@/pages/workflow/components/common/NodeContainer.vue'
 import type { FormInstance } from 'element-plus'
 import { ref, computed, onMounted } from 'vue'
 import { randomId } from '@/utils/utils'
+import { branchTypeLabel } from '@/constants/labels'
 
 /**
  * 语义判断节点编辑器。

@@ -371,6 +371,19 @@ export const CONDITION_LOGIC_LABELS: Record<ConditionLogic, string> = {
 }
 export const CONDITION_LOGIC_VALUES: ConditionLogic[] = ['AND', 'OR']
 
+/**
+ * 条件分支类型：`IF` / `ELSE IF n` / `ELSE`。
+ * `ELSE IF n` 带序号、动态拼接，进不了静态表，故给函数与 `*_LABELS` 同级做唯一文案出口。
+ */
+export function branchTypeLabel(type: string | undefined | null): string {
+  if (type == null || type === '') return ''
+  if (type === 'IF') return '如果'
+  if (type === 'ELSE') return '否则'
+  const m = /^ELSE IF\s+(\d+)$/.exec(type)
+  if (m) return `否则如果 ${m[1]}`
+  return type
+}
+
 /** 能力来源 */
 export const MODEL_CAPABILITY_SOURCE_LABELS: Record<ModelCapabilitySource, string> = {
   PROBED: '探测',

@@ -63,7 +63,7 @@
       >
         <el-form-item label="目标状态" prop="status">
           <el-radio-group v-model="form.status">
-            <el-radio-button v-for="s in statusOptions" :key="s" :value="s">{{ s }}</el-radio-button>
+            <el-radio-button v-for="s in statusOptions" :key="s" :value="s">{{ labelOf(FEEDBACK_STATUS_LABELS, s) }}</el-radio-button>
           </el-radio-group>
           <div class="hint micro">{{ statusHint }}</div>
         </el-form-item>

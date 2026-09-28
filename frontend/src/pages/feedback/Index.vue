@@ -29,7 +29,7 @@
         @click="toggleStatus(s)"
       >
         <span class="stat-n num">{{ stats[s] ?? 0 }}</span>
-        <span class="stat-k micro">{{ s }}</span>
+        <span class="stat-k micro">{{ labelOf(FEEDBACK_STATUS_LABELS, s) }}</span>
       </button>
       <div class="stat-note micro muted">
         平均处理时长：契约未提供该字段（见迁移报告缺口）。点击卡片可切换状态筛选。
@@ -52,7 +52,7 @@
       </el-select>
       <el-select v-model="query.status" size="small" placeholder="全部状态" style="width: 130px" @change="onFilterChange">
         <el-option label="全部状态" value="" />
-        <el-option v-for="s in STATUSES" :key="s" :label="s" :value="s" />
+        <el-option v-for="s in STATUSES" :key="s" :label="labelOf(FEEDBACK_STATUS_LABELS, s)" :value="s" />
       </el-select>
       <span class="micro muted">共 {{ total }} 条</span>
       <span class="grow" />
@@ -209,7 +209,7 @@
       <el-form label-width="88px" class="batch-form">
         <el-form-item v-if="batchMode === 'status'" label="目标状态">
           <el-radio-group v-model="batchStatus">
-            <el-radio-button v-for="s in batchStatusOptions" :key="s" :value="s">{{ s }}</el-radio-button>
+            <el-radio-button v-for="s in batchStatusOptions" :key="s" :value="s">{{ labelOf(FEEDBACK_STATUS_LABELS, s) }}</el-radio-button>
           </el-radio-group>
           <div class="hint micro">已办结的反馈不能改状态，需先「重新打开」</div>
         </el-form-item>

@@ -27,10 +27,10 @@
                     <el-select @change="model_change" @wheel="wheel" v-model="form_data.model_id"
                         placeholder="请选择 AI 模型" class="w-full" popper-class="select-model" :clearable="true">
                         <el-option v-for="item in modelOptions" :key="item.id" :label="item.modelName" :value="item.id"
-                            :disabled="item.status !== '已加载'" class="flex-between">
+                            :disabled="item.status !== 'LOADED'" class="flex-between">
                             <span>{{ item.modelName }}</span>
                             <!-- 不是「已加载」的选了也调不动，所以禁用 + 写明原因，而不是藏起来 -->
-                            <span v-if="item.status !== '已加载'" class="model-status">{{ item.status }}</span>
+                            <span v-if="item.status !== 'LOADED'" class="model-status">{{ labelOf(MODEL_STATUS_LABELS, item.status) }}</span>
                             <el-icon class="check-icon" v-else-if="item.id === form_data.model_id">
                                 <Check />
                             </el-icon>
@@ -117,6 +117,7 @@ import { isLastNode } from '@/pages/workflow/components/common/data'
 const AIModeParamSettingDialogRef = ref<InstanceType<typeof AIModeParamSettingDialog>>()
 import { getAiList } from '@/api/legacy/setting'
 import { getAppId } from '@/pages/workflow/lib/context'
+import { MODEL_STATUS_LABELS, labelOf } from '@/constants/labels'
 
 const wheel = (e: any) => {
     if (e.ctrlKey === true) {
