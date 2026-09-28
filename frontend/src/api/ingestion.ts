@@ -123,9 +123,28 @@ export interface StageUploadsResult {
   uploadIds: string[]
 }
 
-/** #11/#P1 导入请求：走暂存 id + 切分计划，而不是裸文件 */
+/**
+ * #11/#P1 导入请求。★ 两套形状并存，口径如下（后端 `RegisterDocumentsBody` 同步）：
+ *
+ * - `names` = **轻量建档**（只登记文档名，不带文件）—— 当前后端唯一消费的形态
+ * - `uploadIds` = **暂存上传后的导入**（`stageUploads` 的产物）—— **后端尚未消费**，属欠账
+ *
+ * ★ 至少给一种；**同时给时以 `names` 为准**。
+ * 只传 `uploadIds` / `segmentationPlan` 而不传 `names` ⇒ 400（禁止「收下但不用」的静默忽略）。
+ */
 export interface ImportDocumentsBody {
+  /**
+   * 轻量建档：文件名清单。当前后端唯一消费的建档入参。
+   */
+  names?: string[]
+  /**
+   * 暂存上传后的导入（`stageUploads` 产物）。★ 后端尚未消费 —— 只传它不传 `names` 会 400；
+   * 与 `names` 同传时以 `names` 为准。保留字段等上传链落地，**不代表它已生效**。
+   */
   uploadIds?: string[]
+  /**
+   * 用户确认过的切分计划。同属暂存导入形态：后端尚未消费，只传它不传 `names` 会 400。
+   */
   segmentationPlan?: SegmentationPlanItem[]
   /**
    * 建档必填三项（12 §5.1）—— **批级**：一次导入给这批文档同一套标签。
@@ -270,7 +289,8 @@ export const stageUploads = (kbId: string, files: File[]) => {
 }
 
 /**
- * #11 导入：用暂存 `uploadIds` + 用户确认过的 `segmentationPlan` 建文档。
+ * #11 导入建档。★ 当前后端只消费 `names`（轻量建档）；`uploadIds` / `segmentationPlan`
+ * 是暂存导入形态的欠账 —— 只传它们不传 `names` 会被 400 拒绝，同时给时以 `names` 为准。
  * 响应带部分失败回执（P1），失败的文件逐条给原因。
  */
 export const importDocuments = (kbId: string, body: ImportDocumentsBody) =>

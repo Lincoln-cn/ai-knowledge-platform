@@ -3,9 +3,12 @@ package cn.lincoln.aiplatform.knowledge.web;
 import cn.lincoln.aiplatform.knowledge.application.DocumentService;
 import cn.lincoln.aiplatform.knowledge.application.DocumentView;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -65,6 +68,9 @@ public class DocumentController {
    *
    * <p>★ 三项必填（文种/责任部门/密级）缺失 ⇒ 400 并指出是哪一项； 密级高于库 ceiling ⇒ 400 + 可读原因（{@code 13 §6}）。
    *
+   * <p>★ 契约两套形状并存时<strong>禁止静默忽略</strong>：只传 {@code uploadIds} / {@code segmentationPlan}（暂存导入形态）
+   * 而不传 {@code names}（轻量建档形态）⇒ 400 且指路 —— 「收下但不用」会让调用方以为暂存导入已生效。 同时给时以 {@code names} 为准。
+   *
    * <p>★ 真文件暂存（{@code stageUploads}）与 multipart 上传随上传链补； 本批用文件名清单把文档建出来即可。
    */
   @PostMapping("/{kbId}/documents")
@@ -73,6 +79,14 @@ public class DocumentController {
       @PathVariable UUID kbId,
       @RequestBody RegisterDocumentsBody body,
       @AuthenticationPrincipal Jwt jwt) {
+    // ★ 形状校验在入口做：暂存导入形态「出现但 names 缺失」不许静默忽略
+    if (body.stagedShapeRequested() && body.namesMissing()) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "暂存上传尚未支持，请用 names 提供文档名",
+          "uploadIds / segmentationPlan 是暂存导入形态（stageUploads 的产物），后端尚未消费——收下但不用会让人以为导入生效了。当前请用"
+              + " names 提供文件名清单建档");
+    }
     return ApiResponse.ok(
         documentService.register(
             kbId,
@@ -88,11 +102,37 @@ public class DocumentController {
    *
    * <p>★ 批次级三项标签：一次导入给这批文档同一套（契约 {@code ImportDocumentsBody} 的同名三项）。 <em>逐篇覆盖是后续</em>（等单篇编辑端点落地）。
    *
-   * @param names 文件名清单（最小建档形态；真文件暂存随上传链补）
+   * <p>★ 两套建档形状（与契约 {@code ImportDocumentsBody} 同口径）：
+   *
+   * <ul>
+   *   <li>{@code names} = <strong>轻量建档</strong>（只登记文档名，不带文件）—— 当前唯一落地形态
+   *   <li>{@code uploadIds} / {@code segmentationPlan} = <strong>暂存上传后的导入</strong> —— 后端尚未消费，属欠账；
+   *       只传它们不传 {@code names} ⇒ 400，同时给时以 {@code names} 为准
+   * </ul>
+   *
+   * @param names 文件名清单（轻量建档形态；当前后端唯一消费的建档入参）
+   * @param uploadIds 暂存上传产物 id —— <b>后端尚未消费</b>，只为「出现时能显式拒」而收下，不许静默丢弃
+   * @param segmentationPlan 切分计划 —— 同上，<b>后端尚未消费</b>
    * @param docType 文种 ★ <b>必填</b>
    * @param department 责任部门 ★ <b>必填</b>
    * @param classification 密级 ★ <b>必填</b> —— 且必须 ≤ 库的 ceiling
    */
   record RegisterDocumentsBody(
-      List<String> names, String docType, String department, ClassificationLevel classification) {}
+      List<String> names,
+      List<String> uploadIds,
+      List<Map<String, Object>> segmentationPlan,
+      String docType,
+      String department,
+      ClassificationLevel classification) {
+
+    /** 暂存导入形态是否「出现」（字段传了就算，空数组也算 —— 出现即不许静默吞）。 */
+    boolean stagedShapeRequested() {
+      return uploadIds != null || segmentationPlan != null;
+    }
+
+    /** names 缺失或为空清单。 */
+    boolean namesMissing() {
+      return names == null || names.isEmpty();
+    }
+  }
 }

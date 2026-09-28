@@ -202,7 +202,8 @@ const submit = async () => {
     } catch {
       uploadIds = []
     }
-    // names：真栈建档最小形态（RegisterDocumentsBody.names）。mock 也收，两侧同一条提交路径。
+    // names：轻量建档（当前后端唯一消费的建档入参）。uploadIds 保留但后端尚未消费
+    // —— 同时给时以 names 为准，只传 uploadIds 会被 400 拒绝（禁止静默忽略）。
     const body = {
       uploadIds: uploadIds.length ? uploadIds : undefined,
       names: files.value.map((f) => f.name),

@@ -444,7 +444,7 @@ export const ingestionRoutes: MockRoute[] = [
 
       // #11 新路径：JSON 体带 uploadIds / segmentationPlan / names → 回执形态
       // ★ 真栈建档最小形态是 `names`（文件名清单）；mock 与它对齐，否则两侧契约会漂
-      const importBody = body as ImportDocumentsBody & { names?: string[] } | null
+      const importBody = body as ImportDocumentsBody | null
       const isImport =
         !!importBody &&
         typeof importBody === 'object' &&
@@ -461,66 +461,28 @@ export const ingestionRoutes: MockRoute[] = [
         const accepted: DocumentItem[] = []
         const rejected: UploadReceipt['rejected'] = []
 
-        const uploadIds = importBody.uploadIds ?? []
-        // names 兜底：真栈建档走文件名清单；mock 也收，保证两侧同一条提交路径
+        // names = 轻量建档（当前唯一落地形态）；uploadIds / segmentationPlan = 暂存导入形态（后端尚未消费）
         const nameList = importBody.names ?? []
+        const stagedShapeRequested = importBody.uploadIds != null || importBody.segmentationPlan != null
+
+        // ★ 禁止静默忽略：暂存形态出现但 names 缺失 ⇒ 明确 400（与后端 RegisterDocumentsBody 同文案）
+        if (stagedShapeRequested && !nameList.length) {
+          throw new ApiError(
+            400,
+            '暂存上传尚未支持，请用 names 提供文档名',
+            'uploadIds / segmentationPlan 是暂存导入形态（stageUploads 的产物），后端尚未消费——收下但不用会让人以为导入生效了。当前请用 names 提供文件名清单建档'
+          )
+        }
+
+        if (!nameList.length) {
+          throw new ApiError(3021, '没有可导入的暂存文件', '请先选择文件并暂存上传')
+        }
+
+        // ★ names 为准：同时给时只按 names 建档（uploadIds 后端/mock 都不消费，保留字段等上传链落地）
         const meta = {
           docType: String(importBody.docType ?? ''),
           department: String(importBody.department ?? ''),
           classification: importBody.classification
-        }
-
-        if (!uploadIds.length && !nameList.length) {
-          throw new ApiError(3021, '没有可导入的暂存文件', '请先选择文件并暂存上传')
-        }
-
-        // 先按 uploadIds（暂存文件）建；再按 names（纯文件名清单）补
-        for (const uid of uploadIds) {
-          const up = stagedUploads.get(uid)
-          if (!up) {
-            rejected.push({ name: uid, reason: '暂存文件不存在或已过期' })
-            continue
-          }
-          const tooBig = up.size > UPLOAD_POLICY.maxFileSizeMB * 1024 * 1024
-          if (tooBig) {
-            rejected.push({
-              name: up.name,
-              reason: `文件超过 ${UPLOAD_POLICY.maxFileSizeMB}MB 上限`
-            })
-            stagedUploads.delete(uid)
-            continue
-          }
-
-          const doc: DocumentItem = {
-            id: `doc${Date.now()}_${accepted.length}`,
-            kbId,
-            name: up.name,
-            source: 'local',
-            status: 'PENDING_PARSE',
-            segmentCount: 0,
-            processedSegments: 0,
-            charCount: up.size || 10000,
-            enabled: true,
-            failReason: null,
-            failHint: null,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            docType: meta.docType,
-            department: meta.department,
-            classification: meta.classification
-          }
-          documents.unshift(doc)
-          const isScan = /扫描|scan/i.test(up.name)
-          if (isScan) {
-            runParse(doc, { failSplit: true })
-          } else if (importBody.segmentationPlan?.length) {
-            // #11 用户在预览里确认/编辑过的切分计划被真正采纳
-            applySegmentationPlan(doc, importBody.segmentationPlan)
-          } else {
-            runParse(doc, { failSplit: false })
-          }
-          accepted.push(doc)
-          stagedUploads.delete(uid)
         }
 
         for (const name of nameList) {
@@ -547,6 +509,7 @@ export const ingestionRoutes: MockRoute[] = [
           if (isScan) {
             runParse(doc, { failSplit: true })
           } else if (importBody.segmentationPlan?.length) {
+            // #11 用户在预览里确认/编辑过的切分计划被真正采纳
             applySegmentationPlan(doc, importBody.segmentationPlan)
           } else {
             runParse(doc, { failSplit: false })

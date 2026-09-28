@@ -628,7 +628,8 @@ const startImport = async () => {
     // #12 库已用 clientRequestId 幂等创建；这里只做导入，失败可直接重试
     const kb = await ensureKb()
     // #11 把预览里编辑过的分段作为切分计划提交 —— 不再"只改本地数组"
-    // names：真栈建档最小形态（RegisterDocumentsBody.names）；mock 也收
+    // names：轻量建档（当前后端唯一消费的建档入参）；uploadIds 保留但后端尚未消费
+    // —— 同时给时以 names 为准，只传 uploadIds 会被 400 拒绝（禁止静默忽略）
     const receipt = await ingestionApi.importDocuments(kb.id, {
       uploadIds: uploadIds.value.length ? uploadIds.value : undefined,
       names: files.value.map((f) => f.name),

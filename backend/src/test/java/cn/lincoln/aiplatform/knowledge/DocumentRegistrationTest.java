@@ -257,6 +257,64 @@ class DocumentRegistrationTest {
     assertThat(idsOf(page2.body())).hasSize(1);
   }
 
+  // ────────────────────────── 6 · 契约形状差禁止静默忽略 ──────────────────────────
+
+  /**
+   * ★ 契约两套形状共存时，后端<strong>不许静默忽略</strong>： 只传 {@code uploadIds}（暂存导入形态）而不传 {@code names}（轻量建档形态）⇒
+   * 400 且原因可读 —— 「收下但不用」会让调用方以为暂存导入已生效。
+   *
+   * <p>只传 {@code names} ⇒ 200（当前唯一落地形态）。 同时给时以 {@code names} 为准（不因 {@code uploadIds} 被拒）。
+   */
+  @Test
+  void 只传uploadIds不传names返回400且原因可读_只传names建档放行() throws Exception {
+    String admin = accessToken("admin", "admin");
+    String kbId = createKb(admin, "形状差库", "INTERNAL");
+
+    // 只传 uploadIds（暂存导入形态）不传 names ⇒ 400 + 可读原因（不能「收下但不用」）
+    HttpResponse<String> stagedOnly =
+        post(
+            "/api/v1/knowledge-bases/" + kbId + "/documents",
+            """
+            {"uploadIds":["up_1"],"docType":"制度","department":"采购部","classification":"INTERNAL"}\
+            """,
+            admin);
+    assertThat(stagedOnly.statusCode()).as("只传 uploadIds 不传 names 不能静默忽略").isEqualTo(400);
+    assertThat(stagedOnly.body())
+        .as("原因要指路：暂存上传尚未支持，请用 names 提供文档名")
+        .contains("暂存")
+        .contains("names");
+
+    // 只传 segmentationPlan 同理 —— 同属暂存导入形态，后端尚未消费
+    HttpResponse<String> planOnly =
+        post(
+            "/api/v1/knowledge-bases/" + kbId + "/documents",
+            """
+            {"segmentationPlan":[{"ordinal":1,"content":"x"}],"docType":"制度","department":"采购部","classification":"INTERNAL"}\
+            """,
+            admin);
+    assertThat(planOnly.statusCode()).isEqualTo(400);
+    assertThat(planOnly.body()).contains("暂存").contains("names");
+
+    // 只传 names ⇒ 200（轻量建档，当前唯一落地形态）
+    HttpResponse<String> namesOnly =
+        post(
+            "/api/v1/knowledge-bases/" + kbId + "/documents",
+            registerBody(List.of("轻量建档.md"), "制度", "采购部", "INTERNAL"),
+            admin);
+    assertThat(namesOnly.statusCode()).as("names 形态必须放行").isEqualTo(200);
+
+    // 同时给时以 names 为准：不 400，且建出来的是 names 里的文档
+    HttpResponse<String> both =
+        post(
+            "/api/v1/knowledge-bases/" + kbId + "/documents",
+            """
+            {"names":["以names为准.md"],"uploadIds":["up_x"],"docType":"制度","department":"采购部","classification":"INTERNAL"}\
+            """,
+            admin);
+    assertThat(both.statusCode()).as("同时给时以 names 为准，不因 uploadIds 被拒").isEqualTo(200);
+    assertThat(both.body()).contains("以names为准.md");
+  }
+
   // ────────────────────────── 工具 ──────────────────────────
 
   /** 建档请求体：批次级三项标签 + 文件名清单（最小建档形态，见 {@code DocumentService} 类注释）。 */
