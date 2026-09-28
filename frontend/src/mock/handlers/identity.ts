@@ -137,8 +137,8 @@ export const identityRoutes: MockRoute[] = [
       // 失败原因要可读，不返回「用户名或密码错误」这种无法行动的话
       if (!user) throw new ApiError(ErrorCode.UNAUTHORIZED, `账号「${username}」不存在`)
       if (user.password !== password) throw new ApiError(ErrorCode.UNAUTHORIZED, '密码不正确')
-      if (user.status === '停用') throw new ApiError(ErrorCode.FORBIDDEN, '该账号已停用，请联系管理员')
-      if (user.status === '待审核') throw new ApiError(ErrorCode.FORBIDDEN, '该账号待审核，尚未开通')
+      if (user.status === 'DISABLED') throw new ApiError(ErrorCode.FORBIDDEN, '该账号已停用，请联系管理员')
+      if (user.status === 'PENDING_REVIEW') throw new ApiError(ErrorCode.FORBIDDEN, '该账号待审核，尚未开通')
 
       user.lastLoginAt = new Date().toISOString().slice(0, 16).replace('T', ' ')
 
@@ -217,7 +217,7 @@ export const identityRoutes: MockRoute[] = [
         displayName: input.displayName,
         roleId: role.id,
         roleName: role.name,
-        status: '正常' as const,
+        status: 'ACTIVE' as const,
         lastLoginAt: null,
         // 用默认密码建的号必须改密 —— 契约里 `mustChangePassword` 的语义就是这个
         mustChangePassword: !input.password
@@ -308,7 +308,7 @@ export const identityRoutes: MockRoute[] = [
       if (role.code === 'ADMIN') throw new ApiError(4004, '管理员角色的数据范围固定为全平台，不可修改')
 
       const { dataScope, dataScopeRule } = body as { dataScope?: string; dataScopeRule?: string }
-      if (dataScope !== 'own' && dataScope !== 'shared' && dataScope !== 'all') {
+      if (dataScope !== 'OWN' && dataScope !== 'SHARED' && dataScope !== 'ALL') {
         throw new ApiError(4006, '数据范围只能是 own / shared / all')
       }
       role.dataScope = dataScope

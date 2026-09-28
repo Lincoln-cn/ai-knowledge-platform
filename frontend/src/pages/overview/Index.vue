@@ -88,11 +88,11 @@
             </div>
             <ul v-if="myFeedbacks.length" class="apps">
               <li v-for="f in myFeedbacks" :key="f.id" class="app-row">
-                <span class="vote-tag" :class="f.type === 'up' ? 'up' : 'down'">
-                  {{ f.type === 'up' ? '赞' : '踩' }}
+                <span class="vote-tag" :class="f.type === 'UP' ? 'up' : 'down'">
+                  {{ f.type === 'UP' ? '赞' : '踩' }}
                 </span>
                 <span class="app-name" :title="f.question">{{ f.question }}</span>
-                <span class="status-tag" :class="feedbackStatusClass(f.status)">{{ f.status }}</span>
+                <span class="status-tag" :class="feedbackStatusClass(f.status)">{{ labelOf(FEEDBACK_STATUS_LABELS, f.status) }}</span>
               </li>
             </ul>
             <div v-else class="empty">
@@ -182,6 +182,7 @@ import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/com
 import { PERM } from '@/constants/permissions'
 import { canReach } from '@/lib/reach'
 import { useSessionStore } from '@/stores/session'
+import { FEEDBACK_STATUS_LABELS, labelOf } from '@/constants/labels'
 
 const router = useRouter()
 const session = useSessionStore()
@@ -190,7 +191,7 @@ const session = useSessionStore()
  * 消费者形态（07 §五）：`shared` 范围 = 只用别人做好的。
  * 本页对他是「能用什么 + 我该去哪」，不是「平台运营成什么样」。
  */
-const consumer = computed(() => session.dataScope === 'shared')
+const consumer = computed(() => session.dataScope === 'SHARED')
 
 /** 首页固定看近 7 天 —— 需要别的区间去运营看板，那里才是「按区间深看」的地方。 */
 const rangeDays = 7
@@ -360,9 +361,9 @@ const instrumentStatus = computed<InstrumentStatus>(() => {
 
 /** 反馈状态的视觉映射：与反馈页共用同一套语义 */
 const feedbackStatusClass = (status: FeedbackStatus) => {
-  if (status === '已处理') return 'st-ok'
-  if (status === '已忽略') return 'st-err'
-  if (status === '待处理') return 'st-warn'
+  if (status === 'RESOLVED') return 'st-ok'
+  if (status === 'IGNORED') return 'st-err'
+  if (status === 'PENDING') return 'st-warn'
   return ''
 }
 

@@ -7,9 +7,9 @@ import type { PageQuery, PageResult } from './types'
 export type ThinkingMode = 'NONE' | 'TOGGLEABLE' | 'ALWAYS_ON'
 /** 工具调用能力三态。MVP 只声明不接口（V1.0 才可用） */
 export type ToolsMode = 'UNSUPPORTED' | 'SUPPORTED' | 'PARALLEL'
-export type ModelKind = 'chat' | 'embedding'
-export type ModelStatus = '未加载' | '加载中' | '已加载' | '加载失败'
-export type Supplier = '本地推理' | '外部API'
+export type ModelKind = 'CHAT' | 'EMBEDDING'
+export type ModelStatus = 'NOT_LOADED' | 'LOADING' | 'LOADED' | 'LOAD_FAILED'
+export type Supplier = 'LOCAL_INFERENCE' | 'EXTERNAL_API'
 
 export interface ModelInfo {
   id: string
@@ -39,13 +39,16 @@ export interface BaseModelOption {
   dimension: number | null
 }
 
+/** 能力来源（2.4 补录）：探测 / 手工声明 */
+export type ModelCapabilitySource = 'PROBED' | 'MANUAL'
+
 /** 能力探测结果。来源标注是「探测」还是「手工声明」，界面必须区分展示 */
 export interface ModelCapability {
   thinking: ThinkingMode
   tools: ToolsMode
   contextWindow: number | null
   dimension: number | null
-  source: '探测' | '手工声明'
+  source: ModelCapabilitySource
 }
 
 export interface ProbeBaseModelBody {
@@ -90,7 +93,7 @@ export const updateModel = (id: string, body: Partial<UpsertModelBody>) =>
 export const deleteModel = (id: string) =>
   request<void>({ method: 'DELETE', url: '/models/:id', path: { id } })
 
-/** 触发加载。加载是异步的，返回时的 status 仍是「加载中」 */
+/** 触发加载。加载是异步的，返回时的 status 仍是「加载中」(`LOADING`) */
 export const loadModel = (id: string) =>
   request<ModelInfo>({ method: 'POST', url: '/models/:id/load', path: { id } })
 

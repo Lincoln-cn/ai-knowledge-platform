@@ -271,7 +271,7 @@ export const conversationRoutes: MockRoute[] = [
         conversationId?: string
         question: string
         attachmentIds?: string[]
-        mode?: 'new' | 'regenerate' | 'continue'
+        mode?: 'NEW' | 'REGENERATE' | 'CONTINUE'
         targetMessageId?: string
       }
       const question = (req.question ?? '').trim()
@@ -287,11 +287,11 @@ export const conversationRoutes: MockRoute[] = [
       const payload = req.appId ? cannedAnswer.withRefs : cannedAnswer.withoutRefs
       // 继续生成：只补还没写的尾巴（与流式 mock 同一口径）
       const prev =
-        req.mode === 'continue' && req.targetMessageId
+        req.mode === 'CONTINUE' && req.targetMessageId
           ? findMessage(req.targetMessageId)
           : undefined
       const answer =
-        req.mode === 'continue' && prev
+        req.mode === 'CONTINUE' && prev
           ? payload.text.slice(prev.content.length)
           : payload.text
       const turn = appendTurn({
@@ -300,7 +300,7 @@ export const conversationRoutes: MockRoute[] = [
         ownerId: selfId(subjects),
         question,
         answer,
-        status: '已生成',
+        status: 'GENERATED',
         refs: payload.refs,
         suggestions: payload.suggestions,
         tokens: Math.round(answer.length / 2.2),
@@ -338,11 +338,11 @@ export const conversationRoutes: MockRoute[] = [
         messageId?: string
         expiresAt?: string | null
       }
-      const scope = req.scope ?? 'conversation'
-      if (scope !== 'app' && scope !== 'conversation' && scope !== 'message') {
+      const scope = req.scope ?? 'CONVERSATION'
+      if (scope !== 'APP' && scope !== 'CONVERSATION' && scope !== 'MESSAGE') {
         throw new ApiError(4004, '分享范围只能是 app / conversation / message')
       }
-      if (scope === 'message') {
+      if (scope === 'MESSAGE') {
         if (!req.messageId) throw new ApiError(4005, '消息级分享必须指定 messageId')
         const msg = messagesOf(conv.id).find((m) => m.id === req.messageId)
         if (!msg) throw new ApiError(ErrorCode.NOT_FOUND, `消息「${req.messageId}」不存在`)
@@ -397,7 +397,7 @@ export const conversationRoutes: MockRoute[] = [
         app,
         // 归属由"后端"写（07 §六 阶段 1）：会话是私人对话，默认 private
         ownerId: selfId(subjects),
-        visibility: 'private'
+        visibility: 'PRIVATE'
       })
     }
   ],
@@ -505,12 +505,12 @@ export const conversationRoutes: MockRoute[] = [
       const msg = findMessage(path.messageId)
       if (!msg) throw new ApiError(ErrorCode.NOT_FOUND, `消息「${path.messageId}」不存在`)
       findConv(msg.conversationId, token)
-      if (msg.role !== 'assistant') {
+      if (msg.role !== 'ASSISTANT') {
         throw new ApiError(4002, '只能对助手回答进行赞踩')
       }
-      const { type } = (body ?? {}) as { type: 'up' | 'down' | null }
-      if (type !== null && type !== 'up' && type !== 'down') {
-        throw new ApiError(4003, '反馈类型只能是 up / down / null')
+      const { type } = (body ?? {}) as { type: 'UP' | 'DOWN' | null }
+      if (type !== null && type !== 'UP' && type !== 'DOWN') {
+        throw new ApiError(4003, '反馈类型只能是 UP / DOWN / null')
       }
       msg.feedback = type
       return msg

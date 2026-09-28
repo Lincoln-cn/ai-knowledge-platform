@@ -11,6 +11,7 @@ import cn.lincoln.aiplatform.modelcatalog.domain.Supplier;
 import cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode;
 import cn.lincoln.aiplatform.modelcatalog.domain.ToolsMode;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.ApiKeyCipher;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,10 +28,11 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * {@code ai_model} 落库与迁移（第 4 周 · 0.1.3 测试项 ③ ④）。
  *
  * <p>★ 起<strong>真的 PostgreSQL</strong>（与 {@code PermissionCatalogTest} 同一口径）： Flyway 真跑一遍
- * V8、Hibernate {@code ddl-auto: validate} 真校验一遍实体 —— 这两条是"表和聚合对不对得上"的最后一道闸， mock 数据库测不出来。
+ * V8/V11、Hibernate {@code ddl-auto: validate} 真校验一遍实体 —— 这两条是"表和聚合对不对得上"的最后一道闸， mock 数据库测不出来。
  *
- * <p>★ 枚举中文值往返一致：{@code supplier}/{@code status} 在库、代码、契约三处是同一个字面量， 本测试把「写进去是中文、读出来还是中文」钉死 ——
- * 中间一旦有人加了 Converter，这里会红。
+ * <p>★ 枚举机器码往返一致：{@code supplier}/{@code status}/{@code kind} 在库、代码、契约三处是同一个 SCREAMING_SNAKE_CASE
+ * 机器码（如 {@code LOAD_FAILED}）—— 本测试把「写进去是新码、读出来还是新码」钉死， 并直接 JDBC 断言<strong>库存的就是新码</strong>（避免有人加
+ * {@code @JsonValue} 又把中文写回去）。
  */
 @SpringBootTest
 @Testcontainers
@@ -43,6 +45,9 @@ class ModelPersistenceTest {
   @Autowired ApiKeyCipher apiKeyCipher;
   @Autowired JdbcTemplate jdbc;
 
+  /** Jackson 2 的 ObjectMapper 本地构造即可 —— Boot 4 的自动配置暴露的是 Jackson 3 的 JsonMapper，不注入。 */
+  private final ObjectMapper objectMapper = new ObjectMapper();
+
   /** 每条用例前清空表 —— Testcontainers 的容器是类级共享的， 不清的话用例之间会互相看到对方的行，"count = 2" 这类断言会随执行顺序时红时绿。 */
   @BeforeEach
   void cleanTable() {
@@ -53,8 +58,8 @@ class ModelPersistenceTest {
     return new Model(
         UUID.randomUUID(),
         "本地对话模型",
-        ModelKind.chat,
-        Supplier.本地推理,
+        ModelKind.CHAT,
+        Supplier.LOCAL_INFERENCE,
         "qwen3:8b",
         null,
         null,
@@ -72,8 +77,8 @@ class ModelPersistenceTest {
     return new Model(
         UUID.randomUUID(),
         "外部向量模型",
-        ModelKind.embedding,
-        Supplier.外部API,
+        ModelKind.EMBEDDING,
+        Supplier.EXTERNAL_API,
         "bge-m3",
         apiBase,
         cipher,
@@ -94,8 +99,14 @@ class ModelPersistenceTest {
     assertThat(count).isNotNull();
   }
 
+  /**
+   * ★ 枚举机器码往返一致 + **库里存的就是新码**。
+   *
+   * <p>钉两件事：① JPA 读写不夹 Converter；② 直接 JDBC 查出来的原始值就是 SCREAMING_SNAKE_CASE 机器码 （如 {@code
+   * LOAD_FAILED} / {@code LOCAL_INFERENCE}）—— 避免有人加了 {@code @JsonValue} 又把中文写回去。
+   */
   @Test
-  void 枚举中文值往返一致() {
+  void 枚举机器码往返一致且库里存新码() {
     Model model = chatModel();
     model.startLoad();
     model.markFailed("网关不可达：连接 http://localhost:11434/v1 超时");
@@ -103,21 +114,49 @@ class ModelPersistenceTest {
 
     Model reloaded = models.findById(model.id()).orElseThrow();
 
-    assertThat(reloaded.supplier()).isEqualTo(Supplier.本地推理);
-    assertThat(reloaded.status()).isEqualTo(ModelStatus.加载失败);
-    assertThat(reloaded.kind()).isEqualTo(ModelKind.chat);
+    assertThat(reloaded.supplier()).isEqualTo(Supplier.LOCAL_INFERENCE);
+    assertThat(reloaded.status()).isEqualTo(ModelStatus.LOAD_FAILED);
+    assertThat(reloaded.kind()).isEqualTo(ModelKind.CHAT);
     assertThat(reloaded.thinking()).isEqualTo(ThinkingMode.TOGGLEABLE);
     assertThat(reloaded.tools()).isEqualTo(ToolsMode.SUPPORTED);
     assertThat(reloaded.loadError()).contains("超时");
 
-    // ★ 库里存的就是中文字面量本身（不是序号、不是英文码）。
+    // ★ 库里存的就是新码本身（不是中文、不是序号）。
     //   id 传 UUID 对象，传 toString() 会撞上 PG 的 uuid = varchar 类型错误
     String rawStatus =
         jdbc.queryForObject("select status from ai_model where id = ?", String.class, model.id());
     String rawSupplier =
         jdbc.queryForObject("select supplier from ai_model where id = ?", String.class, model.id());
-    assertThat(rawStatus).isEqualTo("加载失败");
-    assertThat(rawSupplier).isEqualTo("本地推理");
+    String rawKind =
+        jdbc.queryForObject("select kind from ai_model where id = ?", String.class, model.id());
+    assertThat(rawStatus).isEqualTo("LOAD_FAILED");
+    assertThat(rawSupplier).isEqualTo("LOCAL_INFERENCE");
+    assertThat(rawKind).isEqualTo("CHAT");
+  }
+
+  /**
+   * ★ JSON 序列化值也是新码 —— 避免有人加了 {@code @JsonValue} 又把中文写回去。
+   *
+   * <p>枚举的 {@code name()} 就是序列化值（Jackson 默认行为）。若有人给枚举加 {@code @JsonValue} 返回中文，这条会红。
+   */
+  @Test
+  void JSON序列化值是新码不是中文() throws Exception {
+    assertThat(objectMapper.writeValueAsString(ModelStatus.LOAD_FAILED))
+        .contains("\"LOAD_FAILED\"");
+    assertThat(objectMapper.writeValueAsString(ModelStatus.NOT_LOADED)).contains("\"NOT_LOADED\"");
+    assertThat(objectMapper.writeValueAsString(ModelStatus.LOADING)).contains("\"LOADING\"");
+    assertThat(objectMapper.writeValueAsString(ModelStatus.LOADED)).contains("\"LOADED\"");
+
+    assertThat(objectMapper.writeValueAsString(Supplier.LOCAL_INFERENCE))
+        .contains("\"LOCAL_INFERENCE\"");
+    assertThat(objectMapper.writeValueAsString(Supplier.EXTERNAL_API)).contains("\"EXTERNAL_API\"");
+
+    assertThat(objectMapper.writeValueAsString(ModelKind.CHAT)).contains("\"CHAT\"");
+    assertThat(objectMapper.writeValueAsString(ModelKind.EMBEDDING)).contains("\"EMBEDDING\"");
+
+    // ★ 反序列化也是新码（契约收发两端一致）
+    assertThat(objectMapper.readValue("\"LOAD_FAILED\"", ModelStatus.class))
+        .isEqualTo(ModelStatus.LOAD_FAILED);
   }
 
   @Test
@@ -147,7 +186,7 @@ class ModelPersistenceTest {
     models.save(model);
 
     Model reloaded = models.findById(model.id()).orElseThrow();
-    assertThat(reloaded.status()).isEqualTo(ModelStatus.已加载);
+    assertThat(reloaded.status()).isEqualTo(ModelStatus.LOADED);
     assertThat(reloaded.enabled()).isTrue();
     assertThat(reloaded.loadError()).isNull();
   }
@@ -164,13 +203,13 @@ class ModelPersistenceTest {
     Model emb = embeddingModel(null, null, null);
     models.save(emb);
 
-    assertThat(models.countSearch(ModelKind.chat, null)).isEqualTo(2);
-    assertThat(models.countSearch(ModelKind.embedding, null)).isEqualTo(1);
-    assertThat(models.countSearch(null, ModelStatus.未加载)).isEqualTo(1);
-    assertThat(models.countSearch(null, ModelStatus.已加载)).isEqualTo(2);
+    assertThat(models.countSearch(ModelKind.CHAT, null)).isEqualTo(2);
+    assertThat(models.countSearch(ModelKind.EMBEDDING, null)).isEqualTo(1);
+    assertThat(models.countSearch(null, ModelStatus.NOT_LOADED)).isEqualTo(1);
+    assertThat(models.countSearch(null, ModelStatus.LOADED)).isEqualTo(2);
 
-    assertThat(models.search(ModelKind.embedding, null, 0, 10)).hasSize(1);
-    assertThat(models.search(ModelKind.chat, ModelStatus.已加载, 0, 10)).hasSize(2);
+    assertThat(models.search(ModelKind.EMBEDDING, null, 0, 10)).hasSize(1);
+    assertThat(models.search(ModelKind.CHAT, ModelStatus.LOADED, 0, 10)).hasSize(2);
   }
 
   // ────────────────────────── dimension / contextWindow 的 null 语义（库层也钉） ──────────────────────────
@@ -184,8 +223,9 @@ class ModelPersistenceTest {
                 jdbc.update(
                     "insert into ai_model (id, name, kind, supplier, base_model, status, enabled,"
                         + " thinking, tools, builtin, context_window, dimension, created_at,"
-                        + " updated_at) values (?, ?, 'chat', '本地推理', 'qwen3:8b', '未加载', false,"
-                        + " 'NONE', 'UNSUPPORTED', false, 32768, 768, now(), now())",
+                        + " updated_at) values (?, ?, 'CHAT', 'LOCAL_INFERENCE', 'qwen3:8b',"
+                        + " 'NOT_LOADED', false, 'NONE', 'UNSUPPORTED', false, 32768, 768, now(),"
+                        + " now())",
                     id,
                     "非法对话模型"))
         .isInstanceOf(DataIntegrityViolationException.class);
@@ -199,8 +239,9 @@ class ModelPersistenceTest {
                 jdbc.update(
                     "insert into ai_model (id, name, kind, supplier, base_model, status, enabled,"
                         + " thinking, tools, builtin, context_window, dimension, created_at,"
-                        + " updated_at) values (?, ?, 'embedding', '外部API', 'bge-m3', '未加载', false,"
-                        + " 'NONE', 'UNSUPPORTED', false, 8192, 1024, now(), now())",
+                        + " updated_at) values (?, ?, 'EMBEDDING', 'EXTERNAL_API', 'bge-m3',"
+                        + " 'NOT_LOADED', false, 'NONE', 'UNSUPPORTED', false, 8192, 1024, now(),"
+                        + " now())",
                     id,
                     "非法向量模型"))
         .isInstanceOf(DataIntegrityViolationException.class);
@@ -214,7 +255,7 @@ class ModelPersistenceTest {
                 jdbc.update(
                     "insert into ai_model (id, name, kind, supplier, base_model, status, enabled,"
                         + " thinking, tools, builtin, created_at, updated_at)"
-                        + " values (?, ?, 'chat', '随便写的', 'qwen3:8b', '未加载', false,"
+                        + " values (?, ?, 'CHAT', '随便写的', 'qwen3:8b', 'NOT_LOADED', false,"
                         + " 'NONE', 'UNSUPPORTED', false, now(), now())",
                     id,
                     "非法 supplier"))

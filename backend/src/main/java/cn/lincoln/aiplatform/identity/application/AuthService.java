@@ -320,9 +320,9 @@ public class AuthService {
 
   private static String statusMessage(UserStatus status) {
     return switch (status) {
-      case 停用 -> "该账号已停用";
-      case 待审核 -> "该账号待审核，尚未开通";
-      case 正常 -> "账号状态异常";
+      case DISABLED -> "该账号已停用";
+      case PENDING_REVIEW -> "该账号待审核，尚未开通";
+      case ACTIVE -> "账号状态异常";
     };
   }
 

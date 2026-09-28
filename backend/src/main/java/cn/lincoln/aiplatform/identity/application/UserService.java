@@ -113,7 +113,7 @@ public class UserService {
             displayName,
             passwordEncoder.encode(password),
             roleId,
-            UserStatus.正常,
+            UserStatus.ACTIVE,
             // ★ 用了初始口令就必须改密；调用方自己给的密码也要改吗？不必 —— 那是他选的
             useDefault);
     users.save(user);

@@ -33,7 +33,7 @@ export interface ValidateContext {
 /** 两个判断类型共用的分支/兜底配置形状 */
 type BranchLike = { id: string; label: string }
 
-const BRANCH_NODE_TYPES: ReadonlySet<string> = new Set(['condition-node', 'number-condition-node'])
+const BRANCH_NODE_TYPES: ReadonlySet<string> = new Set(['CONDITION_NODE', 'NUMBER_CONDITION_NODE'])
 
 /** 只取分支 id/label —— 两个判断类型的分支列表内部形状不同，出边/兜底检查只认这两项 */
 function branchIdLabels(cfg: unknown): BranchLike[] {
@@ -112,7 +112,7 @@ export const ISSUE_TEXT: Record<string, { message: string; hint: string }> = {
 
 function issue(
   code: string,
-  level: '错误' | '警告',
+  level: 'ERROR' | 'WARNING',
   nodeId: string | null,
   extra?: Partial<WorkflowValidationIssue>
 ): WorkflowValidationIssue {
@@ -192,7 +192,7 @@ function checkReferences(nodes: WorkflowNode[], ctx: ValidateContext): WorkflowV
     const modelId = cfg.modelId
     if (typeof modelId === 'string' && modelId && !ctx.modelIds.has(modelId)) {
       issues.push(
-        issue('model-not-found', '错误', node.id, {
+        issue('model-not-found', 'ERROR', node.id, {
           message: `节点「${nodeLabel(node)}」引用的模型 ${modelId} 不存在`,
           hint: '在模型管理中创建/加载该模型，或改选一个已存在的模型'
         })
@@ -201,14 +201,14 @@ function checkReferences(nodes: WorkflowNode[], ctx: ValidateContext): WorkflowV
     for (const kbId of cfg.kbIds ?? []) {
       if (!ctx.kbIds.has(kbId)) {
         issues.push(
-          issue('kb-not-found', '错误', node.id, {
+          issue('kb-not-found', 'ERROR', node.id, {
             message: `节点「${nodeLabel(node)}」引用的知识库 ${kbId} 不存在`,
             hint: '在知识库管理中创建该知识库，或改选一个已存在的知识库'
           })
         )
       } else if (ctx.disabledKbIds?.has(kbId)) {
         issues.push(
-          issue('kb-disabled', '警告', node.id, {
+          issue('kb-disabled', 'WARNING', node.id, {
             message: `节点「${nodeLabel(node)}」引用的知识库 ${kbId} 已停用`,
             hint: '启用该知识库，或改绑启用中的知识库'
           })
@@ -232,15 +232,15 @@ export function validateGraph(
   const edges = graph.edges
 
   if (nodes.length === 0) {
-    issues.push(issue('empty-graph', '错误', null))
+    issues.push(issue('empty-graph', 'ERROR', null))
     return issues
   }
 
   // 1. 有且仅有一个 start-node
-  const starts = nodes.filter((n) => n.type === 'start-node')
+  const starts = nodes.filter((n) => n.type === 'START_NODE')
   if (starts.length !== 1) {
     issues.push(
-      issue('start-node-count', '错误', starts[0]?.id ?? null, {
+      issue('start-node-count', 'ERROR', starts[0]?.id ?? null, {
         message:
           starts.length === 0
             ? '流程缺少开始节点（有且仅有一个）'
@@ -257,7 +257,7 @@ export function validateGraph(
 
   // 2. 禁止成环
   if (hasCycle(nodeIds, edges)) {
-    issues.push(issue('cycle', '错误', null))
+    issues.push(issue('cycle', 'ERROR', null))
   }
 
   // 3. 孤立节点：没有任何入边且没有任何出边
@@ -268,7 +268,7 @@ export function validateGraph(
     // 单节点空图已在 empty-graph 处理；这里多节点下 degree-0 即孤立
     if (degree0 && nodes.length > 1) {
       issues.push(
-        issue('isolated-node', '错误', node.id, {
+        issue('isolated-node', 'ERROR', node.id, {
           message: `节点「${nodeLabel(node)}」是孤立节点，没有任何连线`,
           hint: '把该节点连入主流程，或删除它'
         })
@@ -285,7 +285,7 @@ export function validateGraph(
       const degree0 = !hasIn.has(node.id) && !hasOut.has(node.id)
       if (!reach.has(node.id) && !degree0) {
         issues.push(
-          issue('unreachable-node', '错误', node.id, {
+          issue('unreachable-node', 'ERROR', node.id, {
             message: `节点「${nodeLabel(node)}」从开始节点不可达（断链）`,
             hint: '从上游节点连一条边到该节点，或删除它'
           })
@@ -306,18 +306,18 @@ export function validateGraph(
     const cfg = node.config as { fallbackBranchId: string | null }
     const branches = branchIdLabels(node.config)
     const handles = edgeSourceHandles.get(node.id) ?? new Set<string | undefined>()
-    const kindLabel = node.type === 'number-condition-node' ? '数值判断' : '语义判断'
+    const kindLabel = node.type === 'NUMBER_CONDITION_NODE' ? '数值判断' : '语义判断'
 
     if (!cfg.fallbackBranchId) {
       issues.push(
-        issue('condition-no-fallback', '错误', node.id, {
+        issue('condition-no-fallback', 'ERROR', node.id, {
           message: `${kindLabel}节点「${nodeLabel(node)}」未配置兜底分支`,
           hint: '在判断节点配置里指定兜底分支，保证任意输入都有出口'
         })
       )
     } else if (!branches.some((b) => b.id === cfg.fallbackBranchId)) {
       issues.push(
-        issue('condition-fallback-missing', '错误', node.id, {
+        issue('condition-fallback-missing', 'ERROR', node.id, {
           message: `${kindLabel}节点「${nodeLabel(node)}」的兜底分支 ${cfg.fallbackBranchId} 不在分支列表中`,
           hint: '把兜底分支指到已有分支，或先添加该分支'
         })
@@ -327,7 +327,7 @@ export function validateGraph(
     for (const branch of branches) {
       if (!handles.has(branch.id)) {
         issues.push(
-          issue('condition-branch-no-edge', '错误', node.id, {
+          issue('condition-branch-no-edge', 'ERROR', node.id, {
             message: `${kindLabel}节点「${nodeLabel(node)}」的分支「${branch.label}」没有出边`,
             hint: `从分支「${branch.label}」的出点拖一条线到后续节点`
           })
@@ -336,19 +336,19 @@ export function validateGraph(
     }
 
     // 4b. 类型各自的配置完整性
-    if (node.type === 'condition-node') {
+    if (node.type === 'CONDITION_NODE') {
       const cfg = node.config as ConditionNodeConfig
       for (const branch of cfg.branches ?? []) {
         if (!String(branch.expression ?? '').trim()) {
           issues.push(
-            issue('condition-empty-expression', '错误', node.id, {
+            issue('condition-empty-expression', 'ERROR', node.id, {
               message: `语义判断节点「${nodeLabel(node)}」的分支「${branch.label}」判定条件为空`,
               hint: '用一句自然语言写清命中该分支的条件，由模型判定'
             })
           )
         }
       }
-    } else if (node.type === 'number-condition-node') {
+    } else if (node.type === 'NUMBER_CONDITION_NODE') {
       const cfg = node.config as NumberConditionNodeConfig
       for (const branch of cfg.branches ?? []) {
         const ok = (branch.conditions ?? []).some((c) => {
@@ -359,7 +359,7 @@ export function validateGraph(
         })
         if (!ok) {
           issues.push(
-            issue('condition-incomplete-item', '错误', node.id, {
+            issue('condition-incomplete-item', 'ERROR', node.id, {
               message: `数值判断节点「${nodeLabel(node)}」的分支「${branch.label}」没有完整条件（变量/操作符/值）`,
               hint: '每个分支至少配置一条「变量 + 操作符 + 值」条件（为空/不为空可不填值）'
             })
@@ -373,13 +373,13 @@ export function validateGraph(
   issues.push(...checkReferences(nodes, ctx))
 
   // 6. 出口提示：没有指定回复时告警
-  if (!nodes.some((n) => n.type === 'reply-node')) {
-    issues.push(issue('no-reply-node', '警告', null))
+  if (!nodes.some((n) => n.type === 'REPLY_NODE')) {
+    issues.push(issue('no-reply-node', 'WARNING', null))
   }
 
   return issues
 }
 
 export function hasBlockingError(issues: WorkflowValidationIssue[]): boolean {
-  return issues.some((i) => i.level === '错误')
+  return issues.some((i) => i.level === 'ERROR')
 }

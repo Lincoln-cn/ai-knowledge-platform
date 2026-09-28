@@ -29,14 +29,14 @@ class ScopeFilterTest {
 
   @Test
   void all范围看得见任何人的资源() {
-    ScopeFilter scope = scope(DataScope.all, ClassificationLevel.机密);
+    ScopeFilter scope = scope(DataScope.ALL, ClassificationLevel.CONFIDENTIAL);
 
     assertThat(scope.canSee(privateOf(OTHER), NOW)).isTrue();
   }
 
   @Test
   void own范围只看得见自己的() {
-    ScopeFilter scope = scope(DataScope.own, ClassificationLevel.机密);
+    ScopeFilter scope = scope(DataScope.OWN, ClassificationLevel.CONFIDENTIAL);
 
     assertThat(scope.canSee(privateOf(ME), NOW)).isTrue();
     assertThat(scope.canSee(privateOf(OTHER), NOW)).isFalse();
@@ -45,7 +45,7 @@ class ScopeFilterTest {
   /** ★ `own` 与 `shared` 的区别就在这一条：别人分享给我的，`own` 也不看。 */
   @Test
   void own范围连共享给自己的也不看() {
-    ScopeFilter scope = scope(DataScope.own, ClassificationLevel.机密);
+    ScopeFilter scope = scope(DataScope.OWN, ClassificationLevel.CONFIDENTIAL);
     OwnedResource shared = sharedWithUser(OTHER, ME, TOMORROW);
 
     assertThat(scope.canSee(shared, NOW)).as("own 是个人沙箱 —— 合并它和 shared 就再也分不出来了").isFalse();
@@ -53,7 +53,7 @@ class ScopeFilterTest {
 
   @Test
   void shared范围看得见被共享给自己的() {
-    ScopeFilter scope = scope(DataScope.shared, ClassificationLevel.机密);
+    ScopeFilter scope = scope(DataScope.SHARED, ClassificationLevel.CONFIDENTIAL);
 
     assertThat(scope.canSee(sharedWithUser(OTHER, ME, TOMORROW), NOW)).isTrue();
     assertThat(scope.canSee(sharedWithUser(OTHER, OTHER, TOMORROW), NOW)).isFalse();
@@ -61,7 +61,8 @@ class ScopeFilterTest {
 
   @Test
   void shared范围看得见共享给自己角色的() {
-    ScopeFilter scope = scope(DataScope.shared, Set.of("KB_OPERATOR"), ClassificationLevel.机密);
+    ScopeFilter scope =
+        scope(DataScope.SHARED, Set.of("KB_OPERATOR"), ClassificationLevel.CONFIDENTIAL);
 
     assertThat(scope.canSee(sharedWithRole(OTHER, "KB_OPERATOR", TOMORROW), NOW)).isTrue();
     assertThat(scope.canSee(sharedWithRole(OTHER, "ADMIN", TOMORROW), NOW)).isFalse();
@@ -74,7 +75,7 @@ class ScopeFilterTest {
    */
   @Test
   void kind与id必须一起比对() {
-    ScopeFilter scope = scope(DataScope.shared, Set.of("role-1"), ClassificationLevel.机密);
+    ScopeFilter scope = scope(DataScope.SHARED, Set.of("role-1"), ClassificationLevel.CONFIDENTIAL);
     OwnedResource trap = sharedWithRole(OTHER, ME.toString(), TOMORROW);
 
     assertThat(scope.canSee(trap, NOW))
@@ -84,7 +85,7 @@ class ScopeFilterTest {
 
   @Test
   void 过期的授权不再有效() {
-    ScopeFilter scope = scope(DataScope.shared, ClassificationLevel.机密);
+    ScopeFilter scope = scope(DataScope.SHARED, ClassificationLevel.CONFIDENTIAL);
     OwnedResource expiring = sharedWithUser(OTHER, ME, TOMORROW);
 
     assertThat(scope.canSee(expiring, NOW)).as("明天才到期，现在有效").isTrue();
@@ -93,7 +94,7 @@ class ScopeFilterTest {
 
   @Test
   void public对登录用户可见但private不行() {
-    ScopeFilter scope = scope(DataScope.own, ClassificationLevel.机密);
+    ScopeFilter scope = scope(DataScope.OWN, ClassificationLevel.CONFIDENTIAL);
 
     assertThat(scope.canSee(new SimpleResource(OTHER, Visibility.PUBLIC), NOW)).isTrue();
     assertThat(scope.canSee(privateOf(OTHER), NOW)).isFalse();
@@ -106,27 +107,29 @@ class ScopeFilterTest {
 
     assertThat(nobody.canSee(new SimpleResource(OTHER, Visibility.PUBLIC), NOW)).isFalse();
     assertThat(nobody.canSee(privateOf(ME), NOW)).isFalse();
-    assertThat(nobody.canSeeClassification(ClassificationLevel.公开, null)).isFalse();
+    assertThat(nobody.canSeeClassification(ClassificationLevel.PUBLIC, null)).isFalse();
   }
 
   // ────────────────────────── 密级维度 ──────────────────────────
 
   @Test
   void 资源密级不超过上限时可见() {
-    ScopeFilter scope = scope(DataScope.own, ClassificationLevel.秘密);
+    ScopeFilter scope = scope(DataScope.OWN, ClassificationLevel.SECRET);
 
-    assertThat(scope.canSeeClassification(ClassificationLevel.公开, null)).isTrue();
-    assertThat(scope.canSeeClassification(ClassificationLevel.内部, null)).isTrue();
-    assertThat(scope.canSeeClassification(ClassificationLevel.秘密, null)).isTrue();
-    assertThat(scope.canSeeClassification(ClassificationLevel.机密, null)).isFalse();
+    assertThat(scope.canSeeClassification(ClassificationLevel.PUBLIC, null)).isTrue();
+    assertThat(scope.canSeeClassification(ClassificationLevel.INTERNAL, null)).isTrue();
+    assertThat(scope.canSeeClassification(ClassificationLevel.SECRET, null)).isTrue();
+    assertThat(scope.canSeeClassification(ClassificationLevel.CONFIDENTIAL, null)).isFalse();
   }
 
   @Test
   void 标签与角色可涉标签相交时可见() {
-    ScopeFilter scope = scopeWithLabels(DataScope.own, ClassificationLevel.机密, Set.of("财务"));
+    ScopeFilter scope =
+        scopeWithLabels(DataScope.OWN, ClassificationLevel.CONFIDENTIAL, Set.of("财务"));
 
-    assertThat(scope.canSeeClassification(ClassificationLevel.内部, Set.of("财务", "人事"))).isTrue();
-    assertThat(scope.canSeeClassification(ClassificationLevel.内部, Set.of("人事"))).isFalse();
+    assertThat(scope.canSeeClassification(ClassificationLevel.INTERNAL, Set.of("财务", "人事")))
+        .isTrue();
+    assertThat(scope.canSeeClassification(ClassificationLevel.INTERNAL, Set.of("人事"))).isFalse();
   }
 
   /**
@@ -136,29 +139,32 @@ class ScopeFilterTest {
    */
   @Test
   void 空标签集表示不按标签限制() {
-    ScopeFilter noLabels = scope(DataScope.own, ClassificationLevel.机密);
+    ScopeFilter noLabels = scope(DataScope.OWN, ClassificationLevel.CONFIDENTIAL);
 
-    assertThat(noLabels.canSeeClassification(ClassificationLevel.秘密, Set.of("财务"))).isTrue();
+    assertThat(noLabels.canSeeClassification(ClassificationLevel.SECRET, Set.of("财务"))).isTrue();
     // 资源侧没有标签时也同理
-    ScopeFilter withLabels = scopeWithLabels(DataScope.own, ClassificationLevel.机密, Set.of("财务"));
-    assertThat(withLabels.canSeeClassification(ClassificationLevel.秘密, Set.of())).isTrue();
+    ScopeFilter withLabels =
+        scopeWithLabels(DataScope.OWN, ClassificationLevel.CONFIDENTIAL, Set.of("财务"));
+    assertThat(withLabels.canSeeClassification(ClassificationLevel.SECRET, Set.of())).isTrue();
   }
 
   // ────────────────────────── ★★ 两个维度同时生效 ──────────────────────────
 
   @Test
   void 归属看得见但密级超限时仍然看不见() {
-    ScopeFilter scope = scope(DataScope.all, ClassificationLevel.内部);
+    ScopeFilter scope = scope(DataScope.ALL, ClassificationLevel.INTERNAL);
 
     assertThat(scope.canSee(privateOf(OTHER), NOW)).as("归属上看得见").isTrue();
-    assertThat(scope.canSeeClassification(ClassificationLevel.机密, null)).as("但密级超限").isFalse();
+    assertThat(scope.canSeeClassification(ClassificationLevel.CONFIDENTIAL, null))
+        .as("但密级超限")
+        .isFalse();
   }
 
   @Test
   void 密级够但归属看不见时仍然看不见() {
-    ScopeFilter scope = scope(DataScope.own, ClassificationLevel.机密);
+    ScopeFilter scope = scope(DataScope.OWN, ClassificationLevel.CONFIDENTIAL);
 
-    assertThat(scope.canSeeClassification(ClassificationLevel.公开, null)).as("密级上够").isTrue();
+    assertThat(scope.canSeeClassification(ClassificationLevel.PUBLIC, null)).as("密级上够").isTrue();
     assertThat(scope.canSee(privateOf(OTHER), NOW)).as("但压根不是我的").isFalse();
   }
 
@@ -166,14 +172,14 @@ class ScopeFilterTest {
 
   @Test
   void 密级比较按声明顺序且传播就高不就低() {
-    assertThat(ClassificationLevel.公开.within(ClassificationLevel.公开)).isTrue();
-    assertThat(ClassificationLevel.机密.within(ClassificationLevel.秘密)).isFalse();
+    assertThat(ClassificationLevel.PUBLIC.within(ClassificationLevel.PUBLIC)).isTrue();
+    assertThat(ClassificationLevel.CONFIDENTIAL.within(ClassificationLevel.SECRET)).isFalse();
 
-    assertThat(ClassificationLevel.内部.max(ClassificationLevel.机密))
-        .isEqualTo(ClassificationLevel.机密);
-    assertThat(ClassificationLevel.机密.max(ClassificationLevel.公开))
-        .isEqualTo(ClassificationLevel.机密);
-    assertThat(ClassificationLevel.内部.max(null)).isEqualTo(ClassificationLevel.内部);
+    assertThat(ClassificationLevel.INTERNAL.max(ClassificationLevel.CONFIDENTIAL))
+        .isEqualTo(ClassificationLevel.CONFIDENTIAL);
+    assertThat(ClassificationLevel.CONFIDENTIAL.max(ClassificationLevel.PUBLIC))
+        .isEqualTo(ClassificationLevel.CONFIDENTIAL);
+    assertThat(ClassificationLevel.INTERNAL.max(null)).isEqualTo(ClassificationLevel.INTERNAL);
   }
 
   // ────────────────────────── 工具 ──────────────────────────
@@ -198,12 +204,12 @@ class ScopeFilterTest {
 
   private static OwnedResource sharedWithUser(UUID owner, UUID who, Instant expiresAt) {
     return new SimpleResource(
-        owner, Visibility.SHARED, List.of(grant(SubjectKind.user, who.toString(), expiresAt)));
+        owner, Visibility.SHARED, List.of(grant(SubjectKind.USER, who.toString(), expiresAt)));
   }
 
   private static OwnedResource sharedWithRole(UUID owner, String roleId, Instant expiresAt) {
     return new SimpleResource(
-        owner, Visibility.SHARED, List.of(grant(SubjectKind.role, roleId, expiresAt)));
+        owner, Visibility.SHARED, List.of(grant(SubjectKind.ROLE, roleId, expiresAt)));
   }
 
   private static Grant grant(SubjectKind kind, String id, Instant expiresAt) {

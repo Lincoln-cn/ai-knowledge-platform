@@ -14,15 +14,15 @@ import type { Grant } from '@/api/types'
 
 /** 共享给「普通用户」角色（r4）：知识库只读 —— 该角色下所有人（含 chenjun）可见 */
 export const kbSharedWithUserRole: Grant[] = [
-  { subject: { kind: 'role', id: 'r4' }, actions: [PERM.knowledgeView] }
+  { subject: { kind: 'ROLE', id: 'r4' }, actions: [PERM.knowledgeView] }
 ]
 
 /** 共享给 chenjun 本人：知识库只读 —— 演示 `user` 主体与 `role` 主体并存 */
 export const kbSharedWithChenjun: Grant[] = [
-  { subject: { kind: 'user', id: 'u4' }, actions: [PERM.knowledgeView] }
+  { subject: { kind: 'USER', id: 'u4' }, actions: [PERM.knowledgeView] }
 ]
 
 /** 共享给「普通用户」角色（r4）：应用可用（只读配置，故只授予 `assistant:view`） */
 export const assistantSharedWithUserRole: Grant[] = [
-  { subject: { kind: 'role', id: 'r4' }, actions: [PERM.assistantView] }
+  { subject: { kind: 'ROLE', id: 'r4' }, actions: [PERM.assistantView] }
 ]

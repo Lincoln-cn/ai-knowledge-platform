@@ -8,7 +8,7 @@
  *     症状。所以本存储把状态镜像到 `localStorage`，加载时水合、写入时落盘。
  *
  * 时序约定（#4 的关键）：`appendTurn` 在**流结束/中断的收尾处**同步调用、
- * 同步写 localStorage —— 用户点「停止」→ `abort()` → `finish('已停止')` → 落库，
+ * 同步写 localStorage —— 用户点「停止」→ `abort()` → `finish('STOPPED')` → 落库，
  * 没有「先通知 UI 再异步落库」的中断窗口。三种终态（已生成 / 已停止 / 失败）
  * 走同一个入口，只是 status 不同。
  */
@@ -35,7 +35,7 @@ const STORAGE_KEY = 'ai_plantform_mock_chat_store_v1'
 
 export type StoredConversation = Conversation & { app?: AppBrief }
 
-export type ShareScope = 'app' | 'conversation' | 'message'
+export type ShareScope = 'APP' | 'CONVERSATION' | 'MESSAGE'
 
 export interface ShareRecord {
   token: string
@@ -224,7 +224,7 @@ export function ensureConversation(params: {
     app,
     // 归属只能来自已认证主体；拿不到人时留空，不把「匿名」伪装成某个用户
     ownerId: ownerId || '',
-    visibility: 'private'
+    visibility: 'PRIVATE'
   }
   return addConversation(created)
 }
@@ -273,7 +273,7 @@ export interface AppendTurnInput {
    * 生成模式（契约 `ChatStreamOptions.mode`）。
    * 传了就按显式意图落库；不传时才回落到「末尾问答对且问题相同 = 重生成」的近似识别。
    */
-  mode?: 'new' | 'regenerate' | 'continue'
+  mode?: 'NEW' | 'REGENERATE' | 'CONTINUE'
   /** 重生成 / 继续生成的目标助手消息 id */
   targetMessageId?: string
 }
@@ -293,8 +293,8 @@ function buildMessage(
 /**
  * 把一轮问答写进存储。三种终态都从这里走：
  *  - `已生成`：流自然跑完
- *  - `已停止`：用户点停止 → `abort()` → `finish('已停止')`
- *  - `失败`：`onError` 后 `finish('失败')`
+ *  - `已停止`：用户点停止 → `abort()` → `finish('STOPPED')`
+ *  - `失败`：`onError` 后 `finish('FAILED')`
  *
  * **重生成 / 继续生成**：契约里 `mode` + `targetMessageId` 显式表达意图 ——
  *  - `regenerate` 覆盖目标助手消息（不新增消息对）
@@ -329,8 +329,8 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
 
     // 重生成 / 继续：先在公开消息里找目标助手消息，就地改写
     const target = targetMessageId ? list.find((m) => m.id === targetMessageId) : undefined
-    if (target && target.role === 'assistant') {
-      if (mode === 'continue') {
+    if (target && target.role === 'ASSISTANT') {
+      if (mode === 'CONTINUE') {
         target.content = `${target.content}${answer}`
         if (enrichedRefs.length) target.refs = enrichedRefs
       } else {
@@ -345,7 +345,7 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
       target.failHint = failHint ?? null
       if (messageId) target.id = messageId
       persist()
-      const user = list.filter((m) => m.role === 'user').pop()
+      const user = list.filter((m) => m.role === 'USER').pop()
       return {
         conversationId,
         user: user ?? target,
@@ -356,9 +356,9 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
     const user = buildMessage({
       id: `um_${Date.now().toString(36)}`,
       conversationId,
-      role: 'user',
+      role: 'USER',
       content: question,
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -371,7 +371,7 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
     const assistant = buildMessage({
       id: messageId ?? `am_${Date.now().toString(36)}`,
       conversationId,
-      role: 'assistant',
+      role: 'ASSISTANT',
       content: answer,
       status,
       refs: enrichedRefs,
@@ -397,7 +397,7 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
 
   const assistantBase = {
     conversationId: conv.id,
-    role: 'assistant' as const,
+    role: 'ASSISTANT' as const,
     content: answer,
     status,
     refs: enrichedRefs,
@@ -410,10 +410,10 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
   }
 
   // 显式意图优先
-  if (targetMessageId && (mode === 'regenerate' || mode === 'continue')) {
-    const target = list.find((m) => m.id === targetMessageId && m.role === 'assistant')
+  if (targetMessageId && (mode === 'REGENERATE' || mode === 'CONTINUE')) {
+    const target = list.find((m) => m.id === targetMessageId && m.role === 'ASSISTANT')
     if (target) {
-      if (mode === 'continue') {
+      if (mode === 'CONTINUE') {
         Object.assign(target, assistantBase, {
           content: `${target.content}${answer}`,
           attachments: target.attachments,
@@ -430,7 +430,7 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
       persist()
       // 找它前面最近的问句作为配对的 user 消息
       const idx = list.indexOf(target)
-      const user = list.slice(0, idx).reverse().find((m) => m.role === 'user') ?? target
+      const user = list.slice(0, idx).reverse().find((m) => m.role === 'USER') ?? target
       return { conversationId: conv.id, user, assistant: target }
     }
   }
@@ -439,11 +439,11 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
   const last = list[list.length - 1]
   const prev = list[list.length - 2]
   const isRegenerate =
-    mode !== 'new' &&
+    mode !== 'NEW' &&
     !!last &&
-    last.role === 'assistant' &&
+    last.role === 'ASSISTANT' &&
     !!prev &&
-    prev.role === 'user' &&
+    prev.role === 'USER' &&
     prev.content === question
 
   if (isRegenerate && last) {
@@ -460,9 +460,9 @@ export function appendTurn(input: AppendTurnInput): AppendTurnResult {
   const user = buildMessage({
     id: `um_${Date.now().toString(36)}`,
     conversationId: conv.id,
-    role: 'user',
+    role: 'USER',
     content: question,
-    status: '已生成',
+    status: 'GENERATED',
     refs: [],
     suggestions: [],
     feedback: null,
@@ -545,7 +545,7 @@ export function findShareByToken(token: string): ShareRecord | undefined {
 /** 分享可见的消息：消息级只给那一条，其余给整段会话 */
 export function messagesOfShare(share: ShareRecord): ChatMessage[] {
   const list = messagesOf(share.conversationId)
-  if (share.scope === 'message' && share.messageId) {
+  if (share.scope === 'MESSAGE' && share.messageId) {
     return list.filter((m) => m.id === share.messageId)
   }
   return list

@@ -53,7 +53,7 @@
           <span class="grow" />
           <el-tag v-if="seg.charCount > modelLimit" size="small" type="warning" effect="plain">超长</el-tag>
           <el-tag size="small" effect="plain" :type="embeddingTagType(seg.embedding)">
-            {{ seg.embedding }}
+            {{ labelOf(SEGMENT_EMBEDDING_LABELS, seg.embedding) }}
           </el-tag>
         </div>
 
@@ -138,6 +138,7 @@ import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 import SegmentEditDialog from './SegmentEditDialog.vue'
 import EmptyArt from '@/components/EmptyArt.vue'
+import { SEGMENT_EMBEDDING_LABELS, labelOf } from '@/constants/labels'
 
 const props = defineProps<{ kbId: string; initialDocumentId?: string }>()
 
@@ -174,14 +175,14 @@ const errText = (error: unknown, fallback: string): { reason: string; hint?: str
 }
 
 const embeddingTagType = (e: Segment['embedding']) => {
-  if (e === '已向量化') return 'success'
-  if (e === '向量化中') return 'warning'
-  if (e === '失败') return 'danger'
+  if (e === 'EMBEDDED') return 'success'
+  if (e === 'EMBEDDING') return 'warning'
+  if (e === 'FAILED') return 'danger'
   return 'info'
 }
 
 const needsReembed = (seg: Segment) =>
-  seg.embedding === '待向量化' || seg.embedding === '失败'
+  seg.embedding === 'PENDING_EMBEDDING' || seg.embedding === 'FAILED'
 
 const fetchList = async () => {
   loading.value = true
@@ -230,7 +231,7 @@ const fetchModelLimit = async () => {
       documentId: query.documentId || null,
       segmentLength: 500,
       overlap: 60,
-      strategy: 'auto'
+      strategy: 'AUTO'
     })
     modelLimit.value = preview.modelLimit
   } catch {

@@ -16,17 +16,17 @@
       <el-form label-width="88px" @submit.prevent>
         <el-form-item label="可见范围">
           <el-radio-group v-model="mode" :disabled="saving">
-            <el-radio-button value="public">公开</el-radio-button>
-            <el-radio-button value="shared">定向</el-radio-button>
-            <el-radio-button value="private">仅自己</el-radio-button>
+            <el-radio-button value="PUBLIC">公开</el-radio-button>
+            <el-radio-button value="SHARED">定向</el-radio-button>
+            <el-radio-button value="PRIVATE">仅自己</el-radio-button>
           </el-radio-group>
         </el-form-item>
 
         <div class="mode-hint micro muted">
-          <template v-if="mode === 'public'">
+          <template v-if="mode === 'PUBLIC'">
             登录用户里人人可见（<b>不等于免登录</b> —— 免登录走访问凭证）。
           </template>
-          <template v-else-if="mode === 'shared'">
+          <template v-else-if="mode === 'SHARED'">
             只有下面选中的账号与角色可见。至少选一个主体。
           </template>
           <template v-else>
@@ -34,7 +34,7 @@
           </template>
         </div>
 
-        <template v-if="mode === 'shared'">
+        <template v-if="mode === 'SHARED'">
           <el-form-item label="共享账号">
             <el-select
               v-model="userIds"
@@ -104,7 +104,7 @@ const emit = defineEmits<{ saved: [] }>()
 const visible = ref(false)
 const saving = ref(false)
 const saveError = ref('')
-const mode = ref<'public' | 'shared' | 'private'>('public')
+const mode = ref<ResourceVisibility>('PRIVATE')
 const userIds = ref<string[]>([])
 const roleIds = ref<string[]>([])
 const userOptions = ref<User[]>([])
@@ -118,8 +118,8 @@ const restoreFromGrants = (grants: Grant[] | undefined) => {
   userIds.value = []
   roleIds.value = []
   for (const g of grants ?? []) {
-    if (g.subject.kind === 'user') userIds.value.push(g.subject.id)
-    if (g.subject.kind === 'role') roleIds.value.push(g.subject.id)
+    if (g.subject.kind === 'USER') userIds.value.push(g.subject.id)
+    if (g.subject.kind === 'ROLE') roleIds.value.push(g.subject.id)
   }
 }
 
@@ -129,7 +129,7 @@ const open = async (payload?: Assistant | null) => {
   const a = payload ?? props.assistant
   if (!a) return
   target.value = a
-  mode.value = a.visibility === 'public' ? 'public' : a.visibility === 'shared' ? 'shared' : 'private'
+  mode.value = a.visibility === 'PUBLIC' ? 'PUBLIC' : a.visibility === 'SHARED' ? 'SHARED' : 'PRIVATE'
   restoreFromGrants(a.grants)
   visible.value = true
   await loadSubjects()
@@ -158,10 +158,10 @@ const buildGrants = (): Grant[] => {
   const actions = [PERM.assistantView]
   const grants: Grant[] = []
   for (const id of userIds.value) {
-    grants.push({ subject: { kind: 'user' as SubjectKind, id }, actions: [...actions] })
+    grants.push({ subject: { kind: 'USER' as SubjectKind, id }, actions: [...actions] })
   }
   for (const id of roleIds.value) {
-    grants.push({ subject: { kind: 'role' as SubjectKind, id }, actions: [...actions] })
+    grants.push({ subject: { kind: 'ROLE' as SubjectKind, id }, actions: [...actions] })
   }
   return grants
 }
@@ -171,22 +171,22 @@ const save = async () => {
   if (!a) return
   saveError.value = ''
 
-  if (mode.value === 'shared' && !userIds.value.length && !roleIds.value.length) {
+  if (mode.value === 'SHARED' && !userIds.value.length && !roleIds.value.length) {
     saveError.value = '定向共享至少要选一个账号或角色'
     return
   }
 
   saving.value = true
   try {
-    const grants = mode.value === 'shared' ? buildGrants() : []
+    const grants = mode.value === 'SHARED' ? buildGrants() : []
     // 先写授权再改可见性：反过来会有一瞬「shared 但 grants 还是旧的」
     await assistantsApi.setAssistantGrants(a.id, grants)
     const visibility: ResourceVisibility = mode.value
     await assistantsApi.setAssistantVisibility(a.id, visibility)
     ElMessage.success(
-      visibility === 'public'
+      visibility === 'PUBLIC'
         ? '已公开：登录用户里人人可见'
-        : visibility === 'shared'
+        : visibility === 'SHARED'
           ? `已定向共享给 ${grants.length} 个主体`
           : '已撤销分享：仅自己可见'
     )

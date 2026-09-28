@@ -30,7 +30,7 @@ void implementedExtras
 
 export const nodeTypeCatalog: NodeTypeMeta[] = [
   {
-    type: 'start-node',
+    type: 'START_NODE',
     label: '开始节点',
     category: '基础',
     implemented: true,
@@ -39,7 +39,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '流程唯一入口。配置开场白与推荐问题，可作为变量引用来源。'
   },
   {
-    type: 'base-node',
+    type: 'BASE_NODE',
     label: '基本信息收集',
     category: '基础',
     implemented: true,
@@ -48,7 +48,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '运行时向用户收集结构化字段（文本/单选/多选/日期/数字/文件），产出可被下游引用的变量。'
   },
   {
-    type: 'question-node',
+    type: 'QUESTION_NODE',
     label: '问题改写',
     category: '预处理',
     implemented: true,
@@ -57,7 +57,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '把多轮口语化问题改写成独立可检索的查询。可选改写模型，不选则原样透传。'
   },
   {
-    type: 'search-dataset-node',
+    type: 'SEARCH_DATASET_NODE',
     label: '知识库检索',
     category: '数据',
     implemented: true,
@@ -66,7 +66,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '按检索参数从绑定知识库召回片段，产出 snippets 供下游引用。'
   },
   {
-    type: 'ai-chat-node',
+    type: 'AI_CHAT_NODE',
     label: 'AI 对话',
     category: '模型',
     implemented: true,
@@ -75,7 +75,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '调用对话模型生成回答。可绑知识库、提示词，支持思考开关与多轮。'
   },
   {
-    type: 'condition-node',
+    type: 'CONDITION_NODE',
     label: '语义判断',
     category: '逻辑',
     implemented: true,
@@ -84,7 +84,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '按自然语言条件把流程导向不同分支，条件由模型判定（不支持手写脚本），并要求配置兜底分支。'
   },
   {
-    type: 'number-condition-node',
+    type: 'NUMBER_CONDITION_NODE',
     label: '数值判断',
     category: '逻辑',
     implemented: true,
@@ -93,7 +93,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '按「变量/操作符/值」结构化条件把流程导向不同分支，运行时比值判定，并要求配置兜底分支。'
   },
   {
-    type: 'reply-node',
+    type: 'REPLY_NODE',
     label: '指定回复',
     category: '输出',
     implemented: true,
@@ -102,7 +102,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '流程出口。用固定模板回复，支持 {{节点id.字段名}} 变量引用。'
   },
   {
-    type: 'function-lib-node',
+    type: 'FUNCTION_LIB_NODE',
     label: '函数库',
     category: '扩展',
     implemented: false,
@@ -111,7 +111,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '规划中：声明可复用的外部函数库，供函数调用节点选用。当前版本不可拖入画布。'
   },
   {
-    type: 'function-node',
+    type: 'FUNCTION_NODE',
     label: '函数调用',
     category: '扩展',
     implemented: false,
@@ -120,7 +120,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '规划中：按函数库定义发起 HTTP/内部调用，把结果写入变量。当前版本不可拖入画布。'
   },
   {
-    type: 'reranker-node',
+    type: 'RERANKER_NODE',
     label: '重排序',
     category: '数据',
     implemented: false,
@@ -129,7 +129,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '规划中：对检索结果做重排序，提升 TopN 质量。当前版本不可拖入画布。'
   },
   {
-    type: 'application-node',
+    type: 'APPLICATION_NODE',
     label: '应用调用',
     category: '扩展',
     implemented: false,
@@ -138,7 +138,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '规划中：编排中调用另一个已发布应用，实现能力复用。当前版本不可拖入画布。'
   },
   {
-    type: 'document-extract-node',
+    type: 'DOCUMENT_EXTRACT_NODE',
     label: '文档提取',
     category: '预处理',
     implemented: false,
@@ -147,7 +147,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '规划中：从用户上传文档中抽取结构化字段。当前版本不可拖入画布。'
   },
   {
-    type: 'image-understand-node',
+    type: 'IMAGE_UNDERSTAND_NODE',
     label: '图像理解',
     category: '多模态',
     implemented: false,
@@ -156,7 +156,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '规划中：调用视觉模型理解图片内容。当前版本不可拖入画布。'
   },
   {
-    type: 'form-node',
+    type: 'FORM_NODE',
     label: '表单',
     category: '基础',
     implemented: false,
@@ -165,7 +165,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '规划中：比基本信息收集更复杂的表单编排（联动/校验规则）。当前版本不可拖入画布。'
   },
   {
-    type: 'text-to-speech-node',
+    type: 'TEXT_TO_SPEECH_NODE',
     label: '语音合成',
     category: '多模态',
     implemented: false,
@@ -174,7 +174,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '规划中：把回复文本合成语音。当前版本不可拖入画布。'
   },
   {
-    type: 'speech-to-text-node',
+    type: 'SPEECH_TO_TEXT_NODE',
     label: '语音识别',
     category: '多模态',
     implemented: false,
@@ -183,7 +183,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     description: '规划中：把用户语音转写为文本。当前版本不可拖入画布。'
   },
   {
-    type: 'image-generate-node',
+    type: 'IMAGE_GENERATE_NODE',
     label: '图像生成',
     category: '多模态',
     implemented: false,
@@ -200,7 +200,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
 const validNodes: WorkflowNode[] = [
   {
     id: 'start-1',
-    type: 'start-node',
+    type: 'START_NODE',
     title: '开始',
     position: { x: 40, y: 220 },
     config: {
@@ -210,7 +210,7 @@ const validNodes: WorkflowNode[] = [
   },
   {
     id: 'base-1',
-    type: 'base-node',
+    type: 'BASE_NODE',
     title: '收集合同信息',
     position: { x: 280, y: 220 },
     config: {
@@ -218,7 +218,7 @@ const validNodes: WorkflowNode[] = [
         {
           field: 'contract_type',
           label: '合同类型',
-          type: '单选',
+          type: 'SINGLE_SELECT',
           required: true,
           placeholder: '',
           options: ['采购合同', '销售合同', '服务合同']
@@ -226,14 +226,14 @@ const validNodes: WorkflowNode[] = [
         {
           field: 'clause_text',
           label: '待审条款',
-          type: '文本',
+          type: 'TEXT',
           required: true,
           placeholder: '粘贴需要研判的条款原文'
         },
         {
           field: 'amount',
           label: '合同金额（万元）',
-          type: '数字',
+          type: 'NUMBER',
           required: false,
           placeholder: '选填'
         }
@@ -244,7 +244,7 @@ const validNodes: WorkflowNode[] = [
   },
   {
     id: 'question-1',
-    type: 'question-node',
+    type: 'QUESTION_NODE',
     title: '改写检索问',
     position: { x: 520, y: 220 },
     config: {
@@ -255,17 +255,17 @@ const validNodes: WorkflowNode[] = [
   },
   {
     id: 'search-1',
-    type: 'search-dataset-node',
+    type: 'SEARCH_DATASET_NODE',
     title: '检索合同制度',
     position: { x: 760, y: 220 },
     config: {
       kbIds: ['kb1'],
-      retrieval: { mode: '混合检索', threshold: 0.5, topN: 5, noRefStrategy: '拒答' }
+      retrieval: { mode: 'HYBRID', threshold: 0.5, topN: 5, noRefStrategy: 'REFUSE' }
     }
   },
   {
     id: 'ai-chat-1',
-    type: 'ai-chat-node',
+    type: 'AI_CHAT_NODE',
     title: '风险研判',
     position: { x: 1000, y: 220 },
     config: {
@@ -274,14 +274,14 @@ const validNodes: WorkflowNode[] = [
         '你是企业合同审查助手。严格依据检索到的制度文件逐条列出风险，标注依据编号，给出可执行修改建议。不要编造不在引用中的条款。',
       promptIds: ['pc1'],
       kbIds: ['kb1'],
-      retrieval: { mode: '混合检索', threshold: 0.5, topN: 5, noRefStrategy: '拒答' },
+      retrieval: { mode: 'HYBRID', threshold: 0.5, topN: 5, noRefStrategy: 'REFUSE' },
       thinkingEnabled: true,
       multiTurn: false
     }
   },
   {
     id: 'condition-1',
-    type: 'condition-node',
+    type: 'CONDITION_NODE',
     title: '风险分流',
     position: { x: 1240, y: 220 },
     config: {
@@ -295,7 +295,7 @@ const validNodes: WorkflowNode[] = [
   },
   {
     id: 'reply-1',
-    type: 'reply-node',
+    type: 'REPLY_NODE',
     title: '高风险提示',
     position: { x: 1500, y: 60 },
     config: {
@@ -305,7 +305,7 @@ const validNodes: WorkflowNode[] = [
   },
   {
     id: 'reply-2',
-    type: 'reply-node',
+    type: 'REPLY_NODE',
     title: '一般结论',
     position: { x: 1500, y: 240 },
     config: {
@@ -314,7 +314,7 @@ const validNodes: WorkflowNode[] = [
   },
   {
     id: 'reply-3',
-    type: 'reply-node',
+    type: 'REPLY_NODE',
     title: '兜底回复',
     position: { x: 1500, y: 420 },
     config: {
@@ -363,21 +363,21 @@ export const sampleInvalidGraph: WorkflowGraph = {
   nodes: [
     {
       id: 'start-x1',
-      type: 'start-node',
+      type: 'START_NODE',
       title: '开始 A',
       position: { x: 40, y: 80 },
       config: { prologue: '违规示例：这里故意放了两个开始节点', quickQuestions: [] }
     },
     {
       id: 'start-x2',
-      type: 'start-node',
+      type: 'START_NODE',
       title: '开始 B',
       position: { x: 40, y: 240 },
       config: { prologue: '第二个开始节点，用来触发 start-node-count', quickQuestions: [] }
     },
     {
       id: 'a1',
-      type: 'ai-chat-node',
+      type: 'AI_CHAT_NODE',
       title: '环上节点 1',
       position: { x: 320, y: 80 },
       config: {
@@ -385,14 +385,14 @@ export const sampleInvalidGraph: WorkflowGraph = {
         rolePrompt: '成环演示',
         promptIds: [],
         kbIds: [],
-        retrieval: { mode: '向量检索', threshold: 0.5, topN: 3, noRefStrategy: '自由回答' },
+        retrieval: { mode: 'VECTOR', threshold: 0.5, topN: 3, noRefStrategy: 'FREE_ANSWER' },
         thinkingEnabled: false,
         multiTurn: false
       }
     },
     {
       id: 'a2',
-      type: 'ai-chat-node',
+      type: 'AI_CHAT_NODE',
       title: '环上节点 2',
       position: { x: 560, y: 80 },
       config: {
@@ -400,14 +400,14 @@ export const sampleInvalidGraph: WorkflowGraph = {
         rolePrompt: '成环演示',
         promptIds: [],
         kbIds: [],
-        retrieval: { mode: '向量检索', threshold: 0.5, topN: 3, noRefStrategy: '自由回答' },
+        retrieval: { mode: 'VECTOR', threshold: 0.5, topN: 3, noRefStrategy: 'FREE_ANSWER' },
         thinkingEnabled: false,
         multiTurn: false
       }
     },
     {
       id: 'a3',
-      type: 'ai-chat-node',
+      type: 'AI_CHAT_NODE',
       title: '环上节点 3',
       position: { x: 800, y: 80 },
       config: {
@@ -415,21 +415,21 @@ export const sampleInvalidGraph: WorkflowGraph = {
         rolePrompt: '成环演示',
         promptIds: [],
         kbIds: [],
-        retrieval: { mode: '向量检索', threshold: 0.5, topN: 3, noRefStrategy: '自由回答' },
+        retrieval: { mode: 'VECTOR', threshold: 0.5, topN: 3, noRefStrategy: 'FREE_ANSWER' },
         thinkingEnabled: false,
         multiTurn: false
       }
     },
     {
       id: 'orphan-1',
-      type: 'reply-node',
+      type: 'REPLY_NODE',
       title: '孤立节点',
       position: { x: 320, y: 400 },
       config: { content: '我是孤立节点，没有任何连线。' }
     },
     {
       id: 'condition-x',
-      type: 'condition-node',
+      type: 'CONDITION_NODE',
       title: '缺出边的分支',
       position: { x: 320, y: 540 },
       config: {
@@ -442,7 +442,7 @@ export const sampleInvalidGraph: WorkflowGraph = {
     },
     {
       id: 'ai-bad',
-      type: 'ai-chat-node',
+      type: 'AI_CHAT_NODE',
       title: '坏引用节点',
       position: { x: 560, y: 540 },
       config: {
@@ -450,7 +450,7 @@ export const sampleInvalidGraph: WorkflowGraph = {
         rolePrompt: '引用不存在的模型与知识库',
         promptIds: [],
         kbIds: ['kb-ghost'],
-        retrieval: { mode: '混合检索', threshold: 0.6, topN: 5, noRefStrategy: '拒答' },
+        retrieval: { mode: 'HYBRID', threshold: 0.6, topN: 5, noRefStrategy: 'REFUSE' },
         thinkingEnabled: false,
         multiTurn: false
       }
@@ -535,14 +535,14 @@ export const workflowVersions: Record<string, WorkflowVersionRecord[]> = {
         nodes: [
           {
             id: 'start-1',
-            type: 'start-node',
+            type: 'START_NODE',
             title: '开始',
             position: { x: 40, y: 160 },
             config: { prologue: '你好，我是合同风险研判助理。', quickQuestions: [] }
           },
           {
             id: 'ai-chat-1',
-            type: 'ai-chat-node',
+            type: 'AI_CHAT_NODE',
             title: '风险研判',
             position: { x: 320, y: 160 },
             config: {
@@ -550,14 +550,14 @@ export const workflowVersions: Record<string, WorkflowVersionRecord[]> = {
               rolePrompt: '审查合同条款风险。',
               promptIds: ['pc1'],
               kbIds: ['kb1'],
-              retrieval: { mode: '混合检索', threshold: 0.5, topN: 5, noRefStrategy: '拒答' },
+              retrieval: { mode: 'HYBRID', threshold: 0.5, topN: 5, noRefStrategy: 'REFUSE' },
               thinkingEnabled: true,
               multiTurn: false
             }
           },
           {
             id: 'reply-1',
-            type: 'reply-node',
+            type: 'REPLY_NODE',
             title: '结论',
             position: { x: 600, y: 160 },
             config: { content: '{{ai-chat-1.answer}}' }
@@ -584,16 +584,16 @@ export const workflowRecords: Record<string, WorkflowRecord[]> = {
       conversationId: null,
       input: '帮我看看付款条款有没有风险',
       nodeTrail: [
-        { nodeId: 'start-1', type: 'start-node', title: '开始', status: '成功', enteredAt: '2026-02-13T09:22:10Z', elapsedMs: 12 },
-        { nodeId: 'base-1', type: 'base-node', title: '收集合同信息', status: '成功', enteredAt: '2026-02-13T09:22:10Z', elapsedMs: 840 },
-        { nodeId: 'question-1', type: 'question-node', title: '改写检索问', status: '成功', enteredAt: '2026-02-13T09:22:10Z', elapsedMs: 460 },
-        { nodeId: 'search-1', type: 'search-dataset-node', title: '检索合同制度', status: '成功', enteredAt: '2026-02-13T09:22:11Z', elapsedMs: 320 },
-        { nodeId: 'ai-chat-1', type: 'ai-chat-node', title: '风险研判', status: '成功', enteredAt: '2026-02-13T09:22:11Z', elapsedMs: 3120 },
-        { nodeId: 'condition-1', type: 'condition-node', title: '风险分流', status: '成功', enteredAt: '2026-02-13T09:22:14Z', elapsedMs: 80 },
-        { nodeId: 'reply-1', type: 'reply-node', title: '高风险提示', status: '成功', enteredAt: '2026-02-13T09:22:14Z', elapsedMs: 5 }
+        { nodeId: 'start-1', type: 'START_NODE', title: '开始', status: 'SUCCEEDED', enteredAt: '2026-02-13T09:22:10Z', elapsedMs: 12 },
+        { nodeId: 'base-1', type: 'BASE_NODE', title: '收集合同信息', status: 'SUCCEEDED', enteredAt: '2026-02-13T09:22:10Z', elapsedMs: 840 },
+        { nodeId: 'question-1', type: 'QUESTION_NODE', title: '改写检索问', status: 'SUCCEEDED', enteredAt: '2026-02-13T09:22:10Z', elapsedMs: 460 },
+        { nodeId: 'search-1', type: 'SEARCH_DATASET_NODE', title: '检索合同制度', status: 'SUCCEEDED', enteredAt: '2026-02-13T09:22:11Z', elapsedMs: 320 },
+        { nodeId: 'ai-chat-1', type: 'AI_CHAT_NODE', title: '风险研判', status: 'SUCCEEDED', enteredAt: '2026-02-13T09:22:11Z', elapsedMs: 3120 },
+        { nodeId: 'condition-1', type: 'CONDITION_NODE', title: '风险分流', status: 'SUCCEEDED', enteredAt: '2026-02-13T09:22:14Z', elapsedMs: 80 },
+        { nodeId: 'reply-1', type: 'REPLY_NODE', title: '高风险提示', status: 'SUCCEEDED', enteredAt: '2026-02-13T09:22:14Z', elapsedMs: 5 }
       ],
       finalOutputPreview: '⚠️ 高风险提示：付款比例前置过高，尾款未与验收挂钩……',
-      status: '成功',
+      status: 'SUCCEEDED',
       failReason: null,
       elapsedMs: 4841,
       startedAt: '2026-02-13T09:22:10Z'
@@ -604,13 +604,13 @@ export const workflowRecords: Record<string, WorkflowRecord[]> = {
       conversationId: null,
       input: '违约责任怎么写更稳妥？',
       nodeTrail: [
-        { nodeId: 'start-1', type: 'start-node', title: '开始', status: '成功', enteredAt: '2026-02-13T10:05:44Z', elapsedMs: 10 },
-        { nodeId: 'base-1', type: 'base-node', title: '收集合同信息', status: '成功', enteredAt: '2026-02-13T10:05:44Z', elapsedMs: 210 },
-        { nodeId: 'question-1', type: 'question-node', title: '改写检索问', status: '成功', enteredAt: '2026-02-13T10:05:44Z', elapsedMs: 390 },
-        { nodeId: 'search-1', type: 'search-dataset-node', title: '检索合同制度', status: '失败', enteredAt: '2026-02-13T10:05:44Z', elapsedMs: 90, failReason: '向量服务超时' }
+        { nodeId: 'start-1', type: 'START_NODE', title: '开始', status: 'SUCCEEDED', enteredAt: '2026-02-13T10:05:44Z', elapsedMs: 10 },
+        { nodeId: 'base-1', type: 'BASE_NODE', title: '收集合同信息', status: 'SUCCEEDED', enteredAt: '2026-02-13T10:05:44Z', elapsedMs: 210 },
+        { nodeId: 'question-1', type: 'QUESTION_NODE', title: '改写检索问', status: 'SUCCEEDED', enteredAt: '2026-02-13T10:05:44Z', elapsedMs: 390 },
+        { nodeId: 'search-1', type: 'SEARCH_DATASET_NODE', title: '检索合同制度', status: 'FAILED', enteredAt: '2026-02-13T10:05:44Z', elapsedMs: 90, failReason: '向量服务超时' }
       ],
       finalOutputPreview: '',
-      status: '失败',
+      status: 'FAILED',
       failReason: '检索节点失败：向量服务超时',
       elapsedMs: 720,
       startedAt: '2026-02-13T10:05:44Z'
@@ -621,16 +621,16 @@ export const workflowRecords: Record<string, WorkflowRecord[]> = {
       conversationId: null,
       input: '服务合同的验收标准要注意什么？',
       nodeTrail: [
-        { nodeId: 'start-1', type: 'start-node', title: '开始', status: '成功', enteredAt: '2026-02-13T11:01:03Z', elapsedMs: 8 },
-        { nodeId: 'base-1', type: 'base-node', title: '收集合同信息', status: '成功', enteredAt: '2026-02-13T11:01:03Z', elapsedMs: 300 },
-        { nodeId: 'question-1', type: 'question-node', title: '改写检索问', status: '成功', enteredAt: '2026-02-13T11:01:03Z', elapsedMs: 420 },
-        { nodeId: 'search-1', type: 'search-dataset-node', title: '检索合同制度', status: '成功', enteredAt: '2026-02-13T11:01:03Z', elapsedMs: 280 },
-        { nodeId: 'ai-chat-1', type: 'ai-chat-node', title: '风险研判', status: '成功', enteredAt: '2026-02-13T11:01:04Z', elapsedMs: 2560 },
-        { nodeId: 'condition-1', type: 'condition-node', title: '风险分流', status: '成功', enteredAt: '2026-02-13T11:01:06Z', elapsedMs: 60 },
-        { nodeId: 'reply-2', type: 'reply-node', title: '一般结论', status: '成功', enteredAt: '2026-02-13T11:01:06Z', elapsedMs: 4 }
+        { nodeId: 'start-1', type: 'START_NODE', title: '开始', status: 'SUCCEEDED', enteredAt: '2026-02-13T11:01:03Z', elapsedMs: 8 },
+        { nodeId: 'base-1', type: 'BASE_NODE', title: '收集合同信息', status: 'SUCCEEDED', enteredAt: '2026-02-13T11:01:03Z', elapsedMs: 300 },
+        { nodeId: 'question-1', type: 'QUESTION_NODE', title: '改写检索问', status: 'SUCCEEDED', enteredAt: '2026-02-13T11:01:03Z', elapsedMs: 420 },
+        { nodeId: 'search-1', type: 'SEARCH_DATASET_NODE', title: '检索合同制度', status: 'SUCCEEDED', enteredAt: '2026-02-13T11:01:03Z', elapsedMs: 280 },
+        { nodeId: 'ai-chat-1', type: 'AI_CHAT_NODE', title: '风险研判', status: 'SUCCEEDED', enteredAt: '2026-02-13T11:01:04Z', elapsedMs: 2560 },
+        { nodeId: 'condition-1', type: 'CONDITION_NODE', title: '风险分流', status: 'SUCCEEDED', enteredAt: '2026-02-13T11:01:06Z', elapsedMs: 60 },
+        { nodeId: 'reply-2', type: 'REPLY_NODE', title: '一般结论', status: 'SUCCEEDED', enteredAt: '2026-02-13T11:01:06Z', elapsedMs: 4 }
       ],
       finalOutputPreview: '✅ 一般结论：验收标准应量化、可检测，避免「符合要求」等模糊表述……',
-      status: '成功',
+      status: 'SUCCEEDED',
       failReason: null,
       elapsedMs: 3632,
       startedAt: '2026-02-13T11:01:03Z'

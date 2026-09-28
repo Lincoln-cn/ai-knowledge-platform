@@ -12,7 +12,7 @@ import type { WorkflowGraph } from './workflow'
  * 「编排」是画布式流程，配置面在 `api/workflow.ts`（流程定义格式在那里冻结）。
  * 两者共用 Assistant 的元信息（名称、图标、发布态、凭证），差异只在配置体。
  */
-export type AssistantType = 'simple' | 'workflow'
+export type AssistantType = 'SIMPLE' | 'WORKFLOW'
 
 export interface Assistant {
   id: string
@@ -84,7 +84,7 @@ export interface WorkflowBrief {
  * 广场的来源分段（§六）：官方 / 他人分享 / 我的。
  * 判据是 `builtin` + `ownerId`，可客户端分流；作为查询参数时由服务端在分页前过滤。
  */
-export type AssistantOrigin = 'official' | 'shared' | 'mine'
+export type AssistantOrigin = 'OFFICIAL' | 'SHARED' | 'MINE'
 
 export interface AssistantQuery extends PageQuery {
   published?: boolean
@@ -94,8 +94,8 @@ export interface AssistantQuery extends PageQuery {
   mine?: boolean
   /** 按来源分段筛选；不传为全部 */
   origin?: AssistantOrigin
-  /** 排序：人气（调用次数）/ 最新（创建时间）/ 名称。不传 = 服务端默认序 */
-  sort?: 'popular' | 'latest' | 'name'
+  /** 排序：人气（调用次数）/ 最新（创建时间）/ 名称。不传 = 服务端默认序（2.4 补录换码） */
+  sort?: 'POPULAR' | 'LATEST' | 'NAME'
   /** 只看已收藏 */
   favorite?: boolean
   /** 按标签筛选 */
@@ -180,9 +180,12 @@ export interface AssistantBundle {
   dependencies: BundleDependency[]
 }
 
+/** 依赖种类（2.4 补录）。「WORKFLOW」是编排应用的画布定义；简单应用的清单里没有这一档 */
+export type BundleDependencyKind = 'MODEL' | 'KNOWLEDGE_BASE' | 'PROMPT' | 'WORKFLOW'
+
 export interface BundleDependency {
-  /** 「流程」是编排应用的画布定义；简单应用的清单里没有这一档 */
-  kind: '模型' | '知识库' | '提示词' | '流程'
+  /** 「WORKFLOW」是编排应用的画布定义；简单应用的清单里没有这一档 */
+  kind: BundleDependencyKind
   name: string
   /** 描述，如「本地推理 · 已加载」「128 个文档 · 412 个分段」 */
   detail: string

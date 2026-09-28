@@ -96,8 +96,8 @@
             <div class="ac-name-row">
               <span class="h3 ac-name">{{ a.name }}</span>
               <span class="ac-tags">
-                <el-tag v-if="originOf(a) === 'official'" size="small" effect="plain" type="info">官方</el-tag>
-                <el-tag v-else-if="originOf(a) === 'mine'" size="small" effect="plain" type="success">我的</el-tag>
+                <el-tag v-if="originOf(a) === 'OFFICIAL'" size="small" effect="plain" type="info">官方</el-tag>
+                <el-tag v-else-if="originOf(a) === 'MINE'" size="small" effect="plain" type="success">我的</el-tag>
                 <el-tag v-else size="small" effect="plain" type="warning">
                   由 {{ a.ownerName || '他人' }} 分享
                 </el-tag>
@@ -210,7 +210,7 @@ const readQueryFromUrl = () => {
     keyword: typeof q.keyword === 'string' ? q.keyword : '',
     origin: (typeof q.origin === 'string' ? q.origin : '') as '' | AssistantOrigin,
     tag: typeof q.tag === 'string' ? q.tag : '',
-    sort: (typeof q.sort === 'string' ? q.sort : 'popular') as 'popular' | 'latest' | 'name',
+    sort: (typeof q.sort === 'string' ? q.sort : 'popular') as 'POPULAR' | 'LATEST' | 'NAME',
     favorite: q.favorite === 'true',
     page: Number(q.page) > 0 ? Number(q.page) : 1
   }
@@ -224,7 +224,7 @@ const syncQueryToUrl = () => {
       ...(query.keyword ? { keyword: query.keyword } : {}),
       ...(query.origin ? { origin: query.origin } : {}),
       ...(query.tag ? { tag: query.tag } : {}),
-      ...(query.sort !== 'popular' ? { sort: query.sort } : {}),
+      ...(query.sort !== 'POPULAR' ? { sort: query.sort } : {}),
       ...(query.favorite ? { favorite: 'true' } : {}),
       ...(query.page > 1 ? { page: String(query.page) } : {})
     }
@@ -240,8 +240,8 @@ const hasFilter = computed(() =>
 const meId = computed(() => session.user?.id ?? '')
 
 const originOf = (a: Assistant): AssistantOrigin => {
-  if (a.builtin) return 'official'
-  return a.ownerId && a.ownerId === meId.value ? 'mine' : 'shared'
+  if (a.builtin) return 'OFFICIAL'
+  return a.ownerId && a.ownerId === meId.value ? 'MINE' : 'SHARED'
 }
 
 const emptyTitle = computed(() => {

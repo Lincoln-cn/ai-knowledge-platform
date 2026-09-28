@@ -62,7 +62,7 @@ const toPublicVersion = (v: WorkflowVersion): WorkflowVersion => ({
 
 /** 线性调试：从 start 沿唯一出边走到底；遇到条件节点走兜底（无兜底取第一个有出边的分支） */
 function debugLinear(graph: WorkflowGraph): DebugWorkflowResult | { error: string } {
-  const starts = graph.nodes.filter((n) => n.type === 'start-node')
+  const starts = graph.nodes.filter((n) => n.type === 'START_NODE')
   if (starts.length !== 1) {
     return { error: '调试仅支持线性流程，且需要恰好一个开始节点。条件分支的真实判定属后端执行引擎（V1.0）。' }
   }
@@ -87,7 +87,7 @@ function debugLinear(graph: WorkflowGraph): DebugWorkflowResult | { error: strin
       nodeId: id,
       type: node.type,
       title: node.title,
-      status: '成功',
+      status: 'SUCCEEDED',
       enteredAt: new Date().toISOString(),
       elapsedMs
     })
@@ -99,7 +99,7 @@ function debugLinear(graph: WorkflowGraph): DebugWorkflowResult | { error: strin
     if (outs.length === 0) break
     let nextEdge = outs[0]
     const node = byId.get(cur)
-    if (node?.type === 'condition-node') {
+    if (node?.type === 'CONDITION_NODE') {
       // 调试只走兜底分支：真实条件判定属后端执行引擎
       const cfg = node.config as { fallbackBranchId: string | null }
       const preferred = outs.find((e) => e.sourceHandle === cfg.fallbackBranchId)
@@ -117,12 +117,12 @@ function debugLinear(graph: WorkflowGraph): DebugWorkflowResult | { error: strin
     seen.add(nextId)
     record(nextId, 120)
     cur = nextId
-    if (byId.get(cur)?.type === 'reply-node') break
+    if (byId.get(cur)?.type === 'REPLY_NODE') break
   }
 
   const last = byId.get(cur)
   const finalOutput =
-    last?.type === 'reply-node'
+    last?.type === 'REPLY_NODE'
       ? String((last.config as { content: string }).content || '').slice(0, 200) || '（回复内容为空）'
       : '（线性调试未走到指定回复节点，仅展示轨迹）'
 
@@ -189,7 +189,7 @@ export const workflowRoutes: MockRoute[] = [
       const graph = graphFromBody(ctx, appId)
       const issues = validateGraph(graph, ctxFor())
       if (hasBlockingError(issues)) {
-        const count = issues.filter((i) => i.level === '错误').length
+        const count = issues.filter((i) => i.level === 'ERROR').length
         throw new ApiError(6001, `存在 ${count} 个阻断错误，无法发布`)
       }
 
@@ -278,8 +278,8 @@ export function workflowHasRunnableGraph(appId: string): {
   const graph = getWorkflowDraft(appId)
   const nodes = graph.nodes
   const issues: Array<{ code: string; message: string; hint: string }> = []
-  const hasStart = nodes.some((n) => n.type === 'start-node')
-  const hasReply = nodes.some((n) => n.type === 'reply-node')
+  const hasStart = nodes.some((n) => n.type === 'START_NODE')
+  const hasReply = nodes.some((n) => n.type === 'REPLY_NODE')
   const connected = graph.edges.length > 0
   const passed = nodes.length >= 2 && hasStart && hasReply && connected
 

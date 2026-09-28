@@ -22,7 +22,7 @@ export const assistants: Assistant[] = [
     name: '合同审查助手',
     icon: '⚖️',
     description: '基于《合同管理制度》与风险清单，辅助审查合同条款并给出修改建议',
-    type: 'simple',
+    type: 'SIMPLE',
     builtin: false,
     published: true,
     modelId: 'm2',
@@ -31,10 +31,10 @@ export const assistants: Assistant[] = [
     rolePrompt: '你是企业合同审查助手，需严格依据提供的制度文件给出风险提示。',
     promptIds: ['pc1'],
     retrieval: {
-      mode: '混合检索',
+      mode: 'HYBRID',
       threshold: 0.6,
       topN: 5,
-      noRefStrategy: '拒答'
+      noRefStrategy: 'REFUSE'
     },
     multiTurn: true,
     thinkingEnabled: true,
@@ -47,14 +47,14 @@ export const assistants: Assistant[] = [
     createdAt: '2026-01-05T09:00:00Z',
     // public：登录用户里人人可见（持有 assistant:view 即可），所以普通用户也看得见它
     ownerId: 'u3',
-    visibility: 'public'
+    visibility: 'PUBLIC'
   },
   {
     id: 'as2',
     name: '报销制度咨询',
     icon: '🧾',
     description: '解答差旅、招待、采购报销的限额与流程问题',
-    type: 'simple',
+    type: 'SIMPLE',
     builtin: false,
     published: true,
     modelId: 'm1',
@@ -63,10 +63,10 @@ export const assistants: Assistant[] = [
     rolePrompt: '你是财务制度咨询助手，依据《报销管理制度》回答限额与流程问题。',
     promptIds: ['pc4'],
     retrieval: {
-      mode: '全文检索',
+      mode: 'FULLTEXT',
       threshold: 0.5,
       topN: 3,
-      noRefStrategy: '自由回答'
+      noRefStrategy: 'FREE_ANSWER'
     },
     multiTurn: false,
     thinkingEnabled: false,
@@ -79,7 +79,7 @@ export const assistants: Assistant[] = [
     createdAt: '2026-01-12T10:00:00Z',
     // 共享给「普通用户」角色：可用，但共享里只给了 assistant:view（不能改配置）
     ownerId: 'u2',
-    visibility: 'shared',
+    visibility: 'SHARED',
     grants: assistantSharedWithUserRole
   },
   {
@@ -87,7 +87,7 @@ export const assistants: Assistant[] = [
     name: '供应商准入助手',
     icon: '🏭',
     description: '草稿：供应商资质与准入条件查询，尚未绑定完整知识库',
-    type: 'simple',
+    type: 'SIMPLE',
     builtin: false,
     published: false,
     modelId: 'm3',
@@ -96,10 +96,10 @@ export const assistants: Assistant[] = [
     rolePrompt: '',
     promptIds: [],
     retrieval: {
-      mode: '向量检索',
+      mode: 'VECTOR',
       threshold: 0.6,
       topN: 5,
-      noRefStrategy: '拒答'
+      noRefStrategy: 'REFUSE'
     },
     multiTurn: true,
     // ALWAYS_ON 模型：界面强制置开且禁用
@@ -112,14 +112,14 @@ export const assistants: Assistant[] = [
     tags: ['采购'],
     createdAt: '2026-02-01T14:00:00Z',
     ownerId: 'u2',
-    visibility: 'private'
+    visibility: 'PRIVATE'
   },
   {
     id: 'as4',
     name: '通用知识问答',
     icon: '🤖',
     description: '内置应用，挂载全部已启用知识库，仅供问答不可改对话设定',
-    type: 'simple',
+    type: 'SIMPLE',
     builtin: true,
     published: true,
     modelId: 'm1',
@@ -128,10 +128,10 @@ export const assistants: Assistant[] = [
     rolePrompt: '你是企业知识助理。优先依据知识库回答；没有覆盖时明确说明。',
     promptIds: ['pc6'],
     retrieval: {
-      mode: '混合检索',
+      mode: 'HYBRID',
       threshold: 0.6,
       topN: 5,
-      noRefStrategy: '自由回答'
+      noRefStrategy: 'FREE_ANSWER'
     },
     multiTurn: true,
     thinkingEnabled: false,
@@ -144,14 +144,14 @@ export const assistants: Assistant[] = [
     createdAt: '2025-12-01T08:00:00Z',
     // 内置应用：平台资产，归管理员名下、public（普通用户只能问答，不能改配置）
     ownerId: 'u1',
-    visibility: 'public'
+    visibility: 'PUBLIC'
   },
   {
     id: 'as5',
     name: '合同风险研判流程',
     icon: '🔀',
     description: '编排应用：信息收集 → 知识库检索 → AI 研判 → 指定回复，适合多步审查场景',
-    type: 'workflow',
+    type: 'WORKFLOW',
     builtin: false,
     published: false,
     // 编排应用**没有应用级模型**（模型在各 AI 节点里，可以一个流程用多个），
@@ -162,10 +162,10 @@ export const assistants: Assistant[] = [
     rolePrompt: '',
     promptIds: [],
     retrieval: {
-      mode: '混合检索',
+      mode: 'HYBRID',
       threshold: 0.6,
       topN: 5,
-      noRefStrategy: '拒答'
+      noRefStrategy: 'REFUSE'
     },
     multiTurn: true,
     thinkingEnabled: false,
@@ -178,7 +178,7 @@ export const assistants: Assistant[] = [
     createdAt: '2026-02-10T16:00:00Z',
     // 编排草稿：别人的 private —— 普通用户既看不见、也开不了它的会话
     ownerId: 'u3',
-    visibility: 'private'
+    visibility: 'PRIVATE'
   }
 ]
 
@@ -191,7 +191,7 @@ export const workflowDrafts: Record<string, WorkflowGraph> = {
     nodes: [
       {
         id: 'n-start',
-        type: 'start-node',
+        type: 'START_NODE',
         title: '开始',
         position: { x: 80, y: 160 },
         config: {
@@ -201,7 +201,7 @@ export const workflowDrafts: Record<string, WorkflowGraph> = {
       },
       {
         id: 'n-base',
-        type: 'base-node',
+        type: 'BASE_NODE',
         title: '信息收集',
         position: { x: 280, y: 160 },
         config: {
@@ -209,7 +209,7 @@ export const workflowDrafts: Record<string, WorkflowGraph> = {
             {
               field: 'clauseText',
               label: '合同条款',
-              type: '文本',
+              type: 'TEXT',
               required: true,
               placeholder: '粘贴需要审查的条款原文'
             }
@@ -220,7 +220,7 @@ export const workflowDrafts: Record<string, WorkflowGraph> = {
       },
       {
         id: 'n-chat',
-        type: 'ai-chat-node',
+        type: 'AI_CHAT_NODE',
         title: 'AI 研判',
         position: { x: 480, y: 160 },
         config: {
@@ -229,10 +229,10 @@ export const workflowDrafts: Record<string, WorkflowGraph> = {
           promptIds: ['pc1'],
           kbIds: ['kb1', 'kb2'],
           retrieval: {
-            mode: '混合检索',
+            mode: 'HYBRID',
             threshold: 0.6,
             topN: 5,
-            noRefStrategy: '拒答'
+            noRefStrategy: 'REFUSE'
           },
           thinkingEnabled: true,
           multiTurn: false
@@ -240,7 +240,7 @@ export const workflowDrafts: Record<string, WorkflowGraph> = {
       },
       {
         id: 'n-reply',
-        type: 'reply-node',
+        type: 'REPLY_NODE',
         title: '指定回复',
         position: { x: 680, y: 160 },
         config: {
@@ -339,28 +339,28 @@ export const apiKeys: Record<string, ApiKeyItem[]> = {
 export const sampleBundleDeps = {
   complete: [
     {
-      kind: '模型' as const,
+      kind: 'MODEL' as const,
       name: 'qwen3:8b',
       detail: '本地推理 · 已加载',
       satisfied: true,
       degrade: null
     },
     {
-      kind: '知识库' as const,
+      kind: 'KNOWLEDGE_BASE' as const,
       name: '合同管理制度',
       detail: '128 个文档 · 412 个分段',
       satisfied: true,
       degrade: null
     },
     {
-      kind: '知识库' as const,
+      kind: 'KNOWLEDGE_BASE' as const,
       name: '采购验收规范',
       detail: '36 个文档 · 180 个分段',
       satisfied: true,
       degrade: null
     },
     {
-      kind: '提示词' as const,
+      kind: 'PROMPT' as const,
       name: '合同审查助手',
       detail: '合同法务 · 被 2 个应用引用',
       satisfied: true,
@@ -369,21 +369,21 @@ export const sampleBundleDeps = {
   ],
   missing: [
     {
-      kind: '模型' as const,
+      kind: 'MODEL' as const,
       name: 'deepseek-r1:32b',
       detail: '外部API · 未注册',
       satisfied: false,
       degrade: '导入后需手动选择一个已加载的对话模型，否则应用无法发布'
     },
     {
-      kind: '知识库' as const,
+      kind: 'KNOWLEDGE_BASE' as const,
       name: '历史判例库',
       detail: '导出方 220 个文档 · 1,040 个分段',
       satisfied: false,
       degrade: '跳过该知识库后，相关判例问题将无引用或拒答'
     },
     {
-      kind: '提示词' as const,
+      kind: 'PROMPT' as const,
       name: '判例分析专家',
       detail: '导出方「司法」类型',
       satisfied: false,

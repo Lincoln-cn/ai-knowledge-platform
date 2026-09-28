@@ -19,8 +19,8 @@ class ModelStateMachineTest {
     return new Model(
         UUID.randomUUID(),
         "测试模型",
-        ModelKind.chat,
-        Supplier.外部API,
+        ModelKind.CHAT,
+        Supplier.EXTERNAL_API,
         "qwen3:8b",
         "http://localhost:11434/v1",
         null,
@@ -39,14 +39,14 @@ class ModelStateMachineTest {
   @Test
   void 合法路径_未加载到加载中到已加载() {
     Model model = newModel();
-    assertThat(model.status()).isEqualTo(ModelStatus.未加载);
+    assertThat(model.status()).isEqualTo(ModelStatus.NOT_LOADED);
     assertThat(model.enabled()).as("新建的模型不应被业务走到").isFalse();
 
     model.startLoad();
-    assertThat(model.status()).isEqualTo(ModelStatus.加载中);
+    assertThat(model.status()).isEqualTo(ModelStatus.LOADING);
 
     model.markLoaded();
-    assertThat(model.status()).isEqualTo(ModelStatus.已加载);
+    assertThat(model.status()).isEqualTo(ModelStatus.LOADED);
     assertThat(model.enabled()).as("加载成功后平台才允许启用").isTrue();
     assertThat(model.loadError()).isNull();
   }
@@ -57,15 +57,15 @@ class ModelStateMachineTest {
     model.startLoad();
     model.markFailed("网关不可达：连接 http://localhost:11434/v1 超时");
 
-    assertThat(model.status()).isEqualTo(ModelStatus.加载失败);
+    assertThat(model.status()).isEqualTo(ModelStatus.LOAD_FAILED);
     assertThat(model.loadError()).contains("超时");
     assertThat(model.enabled()).isFalse();
 
     // 失败后必须能重试 —— 重试走 startLoad() 回到「加载中」，再走结果
     model.startLoad();
-    assertThat(model.status()).isEqualTo(ModelStatus.加载中);
+    assertThat(model.status()).isEqualTo(ModelStatus.LOADING);
     model.markLoaded();
-    assertThat(model.status()).isEqualTo(ModelStatus.已加载);
+    assertThat(model.status()).isEqualTo(ModelStatus.LOADED);
     assertThat(model.loadError()).as("重新加载成功后必须清掉上一次的失败原因").isNull();
     assertThat(model.enabled()).isTrue();
   }
@@ -79,17 +79,19 @@ class ModelStateMachineTest {
     model.markFailed("模型权重文件损坏：checksum 不匹配");
 
     assertThat(model.loadError()).as("第二次失败的原因要覆盖第一次").contains("checksum");
-    assertThat(model.status()).isEqualTo(ModelStatus.加载失败);
+    assertThat(model.status()).isEqualTo(ModelStatus.LOAD_FAILED);
   }
 
   @Test
   void 任意态都可以重新发起加载() {
     for (ModelStatus prior :
-        new ModelStatus[] {ModelStatus.未加载, ModelStatus.加载中, ModelStatus.已加载, ModelStatus.加载失败}) {
+        new ModelStatus[] {
+          ModelStatus.NOT_LOADED, ModelStatus.LOADING, ModelStatus.LOADED, ModelStatus.LOAD_FAILED
+        }) {
       Model model = newModel();
       reach(model, prior);
       model.startLoad();
-      assertThat(model.status()).as("从「%s」发起加载应合法", prior).isEqualTo(ModelStatus.加载中);
+      assertThat(model.status()).as("从「%s」发起加载应合法", prior).isEqualTo(ModelStatus.LOADING);
     }
   }
 
@@ -102,7 +104,7 @@ class ModelStateMachineTest {
 
     model.clearEnable();
     assertThat(model.enabled()).isFalse();
-    assertThat(model.status()).as("clearEnable 只动 enabled，不动 status").isEqualTo(ModelStatus.已加载);
+    assertThat(model.status()).as("clearEnable 只动 enabled，不动 status").isEqualTo(ModelStatus.LOADED);
   }
 
   // ────────────────────────── 非法转移：必须拒绝且不改状态 ──────────────────────────
@@ -113,10 +115,10 @@ class ModelStateMachineTest {
 
     assertThatThrownBy(model::markLoaded)
         .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("未加载")
-        .hasMessageContaining("加载中");
+        .hasMessageContaining("NOT_LOADED")
+        .hasMessageContaining("LOADING");
 
-    assertThat(model.status()).as("被拒后状态不得改变").isEqualTo(ModelStatus.未加载);
+    assertThat(model.status()).as("被拒后状态不得改变").isEqualTo(ModelStatus.NOT_LOADED);
     assertThat(model.enabled()).isFalse();
     assertThat(model.loadError()).isNull();
   }
@@ -127,9 +129,9 @@ class ModelStateMachineTest {
 
     assertThatThrownBy(() -> model.markFailed("网关不可达：连接 http://x 超时"))
         .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("未加载");
+        .hasMessageContaining("NOT_LOADED");
 
-    assertThat(model.status()).isEqualTo(ModelStatus.未加载);
+    assertThat(model.status()).isEqualTo(ModelStatus.NOT_LOADED);
     assertThat(model.loadError()).isNull();
   }
 
@@ -141,10 +143,10 @@ class ModelStateMachineTest {
 
     assertThatThrownBy(model::markLoaded)
         .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("加载失败")
+        .hasMessageContaining("LOAD_FAILED")
         .hasMessageContaining("startLoad");
 
-    assertThat(model.status()).as("被拒后仍停在加载失败").isEqualTo(ModelStatus.加载失败);
+    assertThat(model.status()).as("被拒后仍停在加载失败").isEqualTo(ModelStatus.LOAD_FAILED);
     assertThat(model.loadError()).as("被拒后失败原因不得被清掉").contains("超时");
     assertThat(model.enabled()).isFalse();
   }
@@ -157,9 +159,9 @@ class ModelStateMachineTest {
 
     assertThatThrownBy(model::markLoaded)
         .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("已加载");
+        .hasMessageContaining("LOADED");
 
-    assertThat(model.status()).isEqualTo(ModelStatus.已加载);
+    assertThat(model.status()).isEqualTo(ModelStatus.LOADED);
   }
 
   @Test
@@ -170,9 +172,9 @@ class ModelStateMachineTest {
 
     assertThatThrownBy(() -> model.markFailed("随便一个原因"))
         .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("已加载");
+        .hasMessageContaining("LOADED");
 
-    assertThat(model.status()).isEqualTo(ModelStatus.已加载);
+    assertThat(model.status()).isEqualTo(ModelStatus.LOADED);
     assertThat(model.loadError()).isNull();
     assertThat(model.enabled()).as("被拒后 enabled 不得被关掉").isTrue();
   }
@@ -185,7 +187,7 @@ class ModelStateMachineTest {
 
     assertThatThrownBy(() -> model.markFailed("又一个原因"))
         .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("加载失败");
+        .hasMessageContaining("LOAD_FAILED");
 
     assertThat(model.loadError()).as("被拒后原失败原因不得被覆盖").contains("超时");
   }
@@ -196,7 +198,7 @@ class ModelStateMachineTest {
     Model model = newModel();
     model.startLoad();
     model.markLoaded();
-    assertThat(model.status()).isEqualTo(ModelStatus.已加载);
+    assertThat(model.status()).isEqualTo(ModelStatus.LOADED);
   }
 
   // ────────────────────────── 失败原因必须可读 ──────────────────────────
@@ -213,7 +215,7 @@ class ModelStateMachineTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("不能为空");
 
-    assertThat(model.status()).as("原因不合法时状态也不得改变").isEqualTo(ModelStatus.加载中);
+    assertThat(model.status()).as("原因不合法时状态也不得改变").isEqualTo(ModelStatus.LOADING);
   }
 
   @Test
@@ -221,14 +223,14 @@ class ModelStateMachineTest {
     Model model = newModel();
     model.startLoad();
 
-    assertThatThrownBy(() -> model.markFailed("加载失败"))
+    assertThatThrownBy(() -> model.markFailed("LOAD_FAILED"))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("排查");
     assertThatThrownBy(() -> model.markFailed("失败"))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("排查");
 
-    assertThat(model.status()).isEqualTo(ModelStatus.加载中);
+    assertThat(model.status()).isEqualTo(ModelStatus.LOADING);
   }
 
   @Test
@@ -250,8 +252,8 @@ class ModelStateMachineTest {
                 new Model(
                     UUID.randomUUID(),
                     "chat",
-                    ModelKind.chat,
-                    Supplier.本地推理,
+                    ModelKind.CHAT,
+                    Supplier.LOCAL_INFERENCE,
                     "qwen3:8b",
                     null,
                     null,
@@ -274,8 +276,8 @@ class ModelStateMachineTest {
                 new Model(
                     UUID.randomUUID(),
                     "embed",
-                    ModelKind.embedding,
-                    Supplier.外部API,
+                    ModelKind.EMBEDDING,
+                    Supplier.EXTERNAL_API,
                     "bge-m3",
                     "http://x",
                     null,
@@ -297,8 +299,8 @@ class ModelStateMachineTest {
         new Model(
             UUID.randomUUID(),
             "chat",
-            ModelKind.chat,
-            Supplier.本地推理,
+            ModelKind.CHAT,
+            Supplier.LOCAL_INFERENCE,
             "qwen3:8b",
             null,
             null,
@@ -317,8 +319,8 @@ class ModelStateMachineTest {
         new Model(
             UUID.randomUUID(),
             "embed",
-            ModelKind.embedding,
-            Supplier.外部API,
+            ModelKind.EMBEDDING,
+            Supplier.EXTERNAL_API,
             "bge-m3",
             "http://x",
             null,
@@ -340,8 +342,8 @@ class ModelStateMachineTest {
         new Model(
             UUID.randomUUID(),
             "m",
-            ModelKind.chat,
-            Supplier.本地推理,
+            ModelKind.CHAT,
+            Supplier.LOCAL_INFERENCE,
             "qwen3:8b",
             null,
             null,
@@ -356,7 +358,7 @@ class ModelStateMachineTest {
 
     assertThat(model.thinking()).isEqualTo(ThinkingMode.NONE);
     assertThat(model.tools()).isEqualTo(ToolsMode.UNSUPPORTED);
-    assertThat(model.status()).isEqualTo(ModelStatus.未加载);
+    assertThat(model.status()).isEqualTo(ModelStatus.NOT_LOADED);
     assertThat(model.enabled()).isFalse();
   }
 
@@ -365,15 +367,15 @@ class ModelStateMachineTest {
   /** 把模型推到指定状态（构造合法路径）。 */
   private static void reach(Model model, ModelStatus target) {
     switch (target) {
-      case 未加载 -> {
+      case NOT_LOADED -> {
         // 已经是
       }
-      case 加载中 -> model.startLoad();
-      case 已加载 -> {
+      case LOADING -> model.startLoad();
+      case LOADED -> {
         model.startLoad();
         model.markLoaded();
       }
-      case 加载失败 -> {
+      case LOAD_FAILED -> {
         model.startLoad();
         model.markFailed("测试用的可读原因：某处不可达");
       }

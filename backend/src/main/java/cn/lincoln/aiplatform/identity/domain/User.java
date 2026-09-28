@@ -112,7 +112,7 @@ public class User {
    * 后者会在"停用"之外多出"待审核"时被漏改（契约里就是三态： {@code 正常 / 停用 / 待审核}，只有"正常"能登录）。
    */
   public boolean canLogin() {
-    return status == UserStatus.正常;
+    return status == UserStatus.ACTIVE;
   }
 
   // ────────────────────────── 登录失败与锁定（等保） ──────────────────────────

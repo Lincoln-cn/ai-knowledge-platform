@@ -4,17 +4,17 @@ import type { PageQuery, PageResult } from './types'
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
 /**
- * 文档六态。进度的唯一真相源是后端：
- * 「向量化中」必须带 processedSegments/segmentCount，前端不做百分比猜测。
+ * 文档七态。进度的唯一真相源是后端：
+ * `EMBEDDING` 必须带 processedSegments/segmentCount，前端不做百分比猜测。
  */
 export type DocumentStatus =
-  | '待解析'
-  | '分段中'
-  | '待向量化'
-  | '向量化中'
-  | '成功'
-  | '分段失败'
-  | '向量化失败'
+  | 'PENDING_PARSE'
+  | 'SEGMENTING'
+  | 'PENDING_EMBEDDING'
+  | 'EMBEDDING'
+  | 'SUCCEEDED'
+  | 'SEGMENT_FAILED'
+  | 'EMBEDDING_FAILED'
 
 export interface DocumentItem {
   id: string
@@ -23,7 +23,7 @@ export interface DocumentItem {
   source: string
   status: DocumentStatus
   segmentCount: number
-  /** 已处理分段数。status 为「向量化中」时有意义 */
+  /** 已处理分段数。status 为 `EMBEDDING` 时有意义 */
   processedSegments: number
   charCount: number
   enabled: boolean
@@ -47,6 +47,9 @@ export interface IngestionProgress {
   running: boolean
 }
 
+/** 分段向量化状态（2.4 补录）。「EMBEDDING」是编辑后重新向量化时的过渡态（#10） */
+export type SegmentEmbeddingStatus = 'PENDING_EMBEDDING' | 'EMBEDDING' | 'EMBEDDED' | 'FAILED'
+
 export interface Segment {
   id: string
   documentId: string
@@ -55,8 +58,8 @@ export interface Segment {
   content: string
   charCount: number
   enabled: boolean
-  /** 「向量化中」是编辑后重新向量化时的过渡态（#10） */
-  embedding: '待向量化' | '向量化中' | '已向量化' | '失败'
+  /** 「EMBEDDING」是编辑后重新向量化时的过渡态（#10） */
+  embedding: SegmentEmbeddingStatus
 }
 
 export interface DocumentQuery extends PageQuery {
@@ -89,8 +92,8 @@ export interface PreviewSegmentationBody {
   segmentLength: number
   /** 重叠长度 */
   overlap: number
-  /** 切分策略 */
-  strategy: 'auto' | 'custom'
+  /** 切分策略（2.4 补录） */
+  strategy: 'AUTO' | 'CUSTOM'
   /** #11 暂存上传的文件 id；与 `documentId` 二选一，预览走**用户自己的文件** */
   uploadIds?: string[]
   /** #11 用户确认过的切分计划（含预览编辑）。不传则按规则自动切 */

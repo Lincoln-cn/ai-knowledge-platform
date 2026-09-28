@@ -15,35 +15,35 @@ import type { PageQuery, PageResult } from './types'
  *    —— 不让界面暗示一个不存在的能力。
  *  - 旧系统的节点配置散在各自的 `config` 里、无类型约束。这里按节点类型做成
  *    判别联合（discriminated union），配置面板与后端都按类型收窄。
- *  - 判断能力拆成两个节点：`condition-node`（语义判断，自然语言由模型判定）与
- *    `number-condition-node`（数值判断，变量/操作符/值结构化判定）。
+ *  - 判断能力拆成两个节点：`CONDITION_NODE`（语义判断，自然语言由模型判定）与
+ *    `NUMBER_CONDITION_NODE`（数值判断，变量/操作符/值结构化判定）。
  */
 
 /* ────────────────────────── 节点类型 ────────────────────────── */
 
 /** 已实现的节点类型（8 种） */
 export type ImplementedNodeType =
-  | 'start-node'
-  | 'base-node'
-  | 'ai-chat-node'
-  | 'search-dataset-node'
-  | 'question-node'
-  | 'condition-node'
-  | 'number-condition-node'
-  | 'reply-node'
+  | 'START_NODE'
+  | 'BASE_NODE'
+  | 'AI_CHAT_NODE'
+  | 'SEARCH_DATASET_NODE'
+  | 'QUESTION_NODE'
+  | 'CONDITION_NODE'
+  | 'NUMBER_CONDITION_NODE'
+  | 'REPLY_NODE'
 
 /** 规划中的节点类型（10 种）—— V1.0 之后逐批实现 */
 export type PlannedNodeType =
-  | 'function-lib-node'
-  | 'function-node'
-  | 'reranker-node'
-  | 'application-node'
-  | 'document-extract-node'
-  | 'image-understand-node'
-  | 'form-node'
-  | 'text-to-speech-node'
-  | 'speech-to-text-node'
-  | 'image-generate-node'
+  | 'FUNCTION_LIB_NODE'
+  | 'FUNCTION_NODE'
+  | 'RERANKER_NODE'
+  | 'APPLICATION_NODE'
+  | 'DOCUMENT_EXTRACT_NODE'
+  | 'IMAGE_UNDERSTAND_NODE'
+  | 'FORM_NODE'
+  | 'TEXT_TO_SPEECH_NODE'
+  | 'SPEECH_TO_TEXT_NODE'
+  | 'IMAGE_GENERATE_NODE'
 
 export type WorkflowNodeType = ImplementedNodeType | PlannedNodeType
 
@@ -82,11 +82,14 @@ export interface StartNodeConfig {
   quickQuestions: string[]
 }
 
+/** 基本信息收集的字段类型（2.4 补录） */
+export type UserInputFieldType = 'TEXT' | 'SINGLE_SELECT' | 'MULTI_SELECT' | 'DATE' | 'NUMBER'
+
 export interface UserInputField {
   /** 字段名，供其它节点用 {{nodeId.field}} 引用 */
   field: string
   label: string
-  type: '文本' | '单选' | '多选' | '日期' | '数字'
+  type: UserInputFieldType
   required: boolean
   placeholder: string
   /** 单选/多选的选项 */
@@ -155,26 +158,26 @@ export interface ConditionNodeConfig {
  * 数值判断的操作符。取值与画布组件 `compareList` 一一对应，不另造词。
  */
 export type NumberConditionOperator =
-  | 'is_null'
-  | 'is_not_null'
-  | 'contain'
-  | 'not_contain'
-  | 'eq'
-  | 'ge'
-  | 'gt'
-  | 'le'
-  | 'lt'
-  | 'len_eq'
-  | 'len_ge'
-  | 'len_gt'
-  | 'len_le'
-  | 'len_lt'
+  | 'IS_NULL'
+  | 'IS_NOT_NULL'
+  | 'CONTAIN'
+  | 'NOT_CONTAIN'
+  | 'EQ'
+  | 'GE'
+  | 'GT'
+  | 'LE'
+  | 'LT'
+  | 'LEN_EQ'
+  | 'LEN_GE'
+  | 'LEN_GT'
+  | 'LEN_LE'
+  | 'LEN_LT'
 
 /**
  * 数值判断的单个条件：变量 ⨯ 操作符 ⨯ 值。
  *
  * `variable` 是 `{{节点id.字段名}}` 的结构化形式 `[节点id, 字段名]`，
- * `null` 表示尚未选择；`value` 在 `is_null` / `is_not_null` 下可为 `null`。
+ * `null` 表示尚未选择；`value` 在 `IS_NULL` / `IS_NOT_NULL` 下可为 `null`。
  */
 export interface NumberConditionItem {
   variable: [string, string] | null
@@ -182,20 +185,23 @@ export interface NumberConditionItem {
   value: string | null
 }
 
-/** 数值判断分支：组内条件按 `logic` 组合（且 = 全部命中，或 = 任一命中） */
+/** 条件组内逻辑（2.4 补录）：AND = 全部命中，OR = 任一命中 */
+export type ConditionLogic = 'AND' | 'OR'
+
+/** 数值判断分支：组内条件按 `logic` 组合（AND = 全部命中，OR = 任一命中） */
 export interface NumberConditionBranch {
   /** 分支标识，出边用它做 sourceHandle */
   id: string
   label: string
-  logic: '且' | '或'
+  logic: ConditionLogic
   conditions: NumberConditionItem[]
 }
 
 /**
- * 数值判断节点（`number-condition-node`）。
+ * 数值判断节点（`NUMBER_CONDITION_NODE`）。
  *
  * 每个分支是一组「变量/操作符/值」条件，运行时按值比较判定，不经过模型。
- * 与 `condition-node`（语义判断）互补：一个结构化比值，一个自然语言判定。
+ * 与 `CONDITION_NODE`（语义判断）互补：一个结构化比值，一个自然语言判定。
  */
 export interface NumberConditionNodeConfig {
   branches: NumberConditionBranch[]
@@ -210,14 +216,14 @@ export interface ReplyNodeConfig {
 
 /** 按节点类型取配置类型。规划中的节点暂无配置定义 */
 export type NodeConfigOf<T extends WorkflowNodeType> =
-  T extends 'start-node' ? StartNodeConfig
-  : T extends 'base-node' ? BaseNodeConfig
-  : T extends 'ai-chat-node' ? AiChatNodeConfig
-  : T extends 'search-dataset-node' ? SearchDatasetNodeConfig
-  : T extends 'question-node' ? QuestionNodeConfig
-  : T extends 'condition-node' ? ConditionNodeConfig
-  : T extends 'number-condition-node' ? NumberConditionNodeConfig
-  : T extends 'reply-node' ? ReplyNodeConfig
+  T extends 'START_NODE' ? StartNodeConfig
+  : T extends 'BASE_NODE' ? BaseNodeConfig
+  : T extends 'AI_CHAT_NODE' ? AiChatNodeConfig
+  : T extends 'SEARCH_DATASET_NODE' ? SearchDatasetNodeConfig
+  : T extends 'QUESTION_NODE' ? QuestionNodeConfig
+  : T extends 'CONDITION_NODE' ? ConditionNodeConfig
+  : T extends 'NUMBER_CONDITION_NODE' ? NumberConditionNodeConfig
+  : T extends 'REPLY_NODE' ? ReplyNodeConfig
   : Record<string, never>
 
 export interface WorkflowNode<T extends WorkflowNodeType = WorkflowNodeType> {
@@ -266,14 +272,14 @@ export interface WorkflowRecord {
     nodeId: string
     type: WorkflowNodeType
     title: string
-    status: '成功' | '失败'
+    status: 'SUCCEEDED' | 'FAILED'
     enteredAt: string
     elapsedMs: number
     failReason?: string | null
   }>
   /** 最终答复的摘要（截断）。完整答复在会话里，记录只做排查线索 */
   finalOutputPreview: string
-  status: '成功' | '失败'
+  status: 'SUCCEEDED' | 'FAILED'
   failReason: string | null
   /** 整条记录的总耗时。不让界面自己把 trail 加起来 —— 两者的口径会漂移 */
   elapsedMs: number
@@ -291,7 +297,7 @@ export interface WorkflowRecordQuery extends PageQuery {
  * 草稿允许不合规（方便边画边存），发布前必须零错误。
  */
 export interface WorkflowValidationIssue {
-  level: '错误' | '警告'
+  level: 'ERROR' | 'WARNING'
   code: string
   message: string
   /** 可读的下一步 */

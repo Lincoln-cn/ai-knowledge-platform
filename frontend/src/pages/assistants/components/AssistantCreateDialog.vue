@@ -12,9 +12,9 @@
           <button
             type="button"
             class="type-card"
-            :class="{ on: form.type === 'simple' }"
+            :class="{ on: form.type === 'SIMPLE' }"
             :disabled="!!editing"
-            @click="form.type = 'simple'"
+            @click="form.type = 'SIMPLE'"
           >
             <div class="tc-title">简单应用</div>
             <div class="tc-desc">只需提示词约束 + 知识库，适合绝大多数问答场景</div>
@@ -22,9 +22,9 @@
           <button
             type="button"
             class="type-card"
-            :class="{ on: form.type === 'workflow' }"
+            :class="{ on: form.type === 'WORKFLOW' }"
             :disabled="!!editing"
-            @click="form.type = 'workflow'"
+            @click="form.type = 'WORKFLOW'"
           >
             <div class="tc-title">编排应用</div>
             <div class="tc-desc">画布式多步流程，适合分支、条件与多节点协作</div>
@@ -65,7 +65,7 @@
           <el-option v-for="m in chatModels" :key="m.id" :label="`${m.name}（已加载）`" :value="m.id" />
         </el-select>
         <div class="hint micro">
-          {{ form.type === 'workflow'
+          {{ form.type === 'WORKFLOW'
             ? '创建后进入编排画布配置流程；模型可作为 AI 节点默认值'
             : '创建后进入配置页补全角色设定、知识库与检索参数' }}
         </div>
@@ -110,7 +110,7 @@ const rules: FormRules = {
   type: [
     {
       validator: (_rule, value: AssistantType, callback) => {
-        if (value === 'simple' || value === 'workflow') callback()
+        if (value === 'SIMPLE' || value === 'WORKFLOW') callback()
         else callback(new Error('请选择应用类型'))
       },
       trigger: 'change'
@@ -132,7 +132,7 @@ const open = async (existing?: Assistant | null) => {
     form.modelId = existing.modelId ?? ''
   }
   visible.value = true
-  const result = await modelsApi.listModels({ kind: 'chat', status: '已加载', size: 50 })
+  const result = await modelsApi.listModels({ kind: 'CHAT', status: 'LOADED', size: 50 })
   chatModels.value = result.list
   if (!form.modelId && result.list.length) form.modelId = result.list[0].id
 }
@@ -140,7 +140,7 @@ const open = async (existing?: Assistant | null) => {
 const reset = () => {
   formRef.value?.clearValidate()
   editing.value = null
-  form.type = 'simple'
+  form.type = 'SIMPLE'
   form.name = ''
   form.icon = '🤖'
   form.description = ''
@@ -173,14 +173,14 @@ const submit = async () => {
         kbIds: [],
         rolePrompt: '',
         promptIds: [],
-        retrieval: { mode: '混合检索', threshold: 0.6, topN: 5, noRefStrategy: '拒答' },
+        retrieval: { mode: 'HYBRID', threshold: 0.6, topN: 5, noRefStrategy: 'REFUSE' },
         multiTurn: true,
         thinkingEnabled: false,
         prologue: '',
         quickQuestions: []
       })
       ElMessage.success(
-        form.type === 'workflow' ? '已创建，请进入编排画布配置流程' : '已创建，请继续完善配置'
+        form.type === 'WORKFLOW' ? '已创建，请进入编排画布配置流程' : '已创建，请继续完善配置'
       )
       visible.value = false
       emit('created')

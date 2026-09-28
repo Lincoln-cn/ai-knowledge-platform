@@ -28,7 +28,7 @@
           <el-input v-model="form.description" type="textarea" :rows="3" maxlength="200" show-word-limit :disabled="!canManage" />
         </el-form-item>
         <el-form-item label="导入类型">
-          <el-tag size="small" effect="plain">{{ kb.importType === 'local' ? '本地文档' : '在线抓取' }}</el-tag>
+          <el-tag size="small" effect="plain">{{ kb.importType === 'LOCAL' ? '本地文档' : '在线抓取' }}</el-tag>
           <span class="hint micro">创建后不可更改（BR-03-01）</span>
         </el-form-item>
         <el-form-item label="向量模型">
@@ -137,10 +137,10 @@ const form = reactive({
 })
 
 const retrieval = reactive<RetrievalParams>({
-  mode: '混合检索',
+  mode: 'HYBRID',
   threshold: 0.6,
   topN: 5,
-  noRefStrategy: '拒答'
+  noRefStrategy: 'REFUSE'
 })
 
 /** P1 设置面板改动静默丢失：脏标记上报给页面壳，切 Tab 前确认 */
@@ -279,7 +279,7 @@ watch(() => props.kb.id, loadForm)
 onMounted(async () => {
   loadForm()
   categories.value = await knowledgeApi.listKnowledgeCategories()
-  const models = await modelsApi.listModels({ kind: 'embedding', size: 50 })
+  const models = await modelsApi.listModels({ kind: 'EMBEDDING', size: 50 })
   embeddingModels.value = models.list
   await loadRetrieval()
 })

@@ -9,14 +9,15 @@ package cn.lincoln.aiplatform.platform.access;
  * <p>★ <strong>声明顺序即密级高低</strong>（{@code ordinal} 递增 = 越来越敏感）。 判定"能不能看"时用的是"资源的密级 ≤
  * 我的上限"，所以这个顺序是<em>语义的一部分</em>， 不是排版：往中间插一个级别会让所有历史比较悄悄变味。要加就在两端加。
  *
- * <p>★ 枚举名用中文，因为库里与契约里存的就是这四个中文字面量（同 {@code UserStatus} 的理由）——
- * 库、代码、契约三处是同一个字面量，中间少一层映射就少一处可能对不上的地方。
+ * <p>★ 取值用 <strong>SCREAMING_SNAKE_CASE 机器码</strong>（{@code PUBLIC / INTERNAL / SECRET /
+ * CONFIDENTIAL}）， 标识符 = 线上值 = 库存值三者同名。展示文案（"公开 / 内部 / 秘密 / 机密"）只出现在前端 label 映射里，
+ * <strong>不进标识符、不进线上值、不进库</strong> —— 机器码稳定、可比较、可排序；文案随时可改而不影响契约与数据。
  */
 public enum ClassificationLevel {
-  公开,
-  内部,
-  秘密,
-  机密;
+  PUBLIC,
+  INTERNAL,
+  SECRET,
+  CONFIDENTIAL;
 
   /** 这个密级是否**不高于**给定的上限（即"持有该上限的人能看它"）。 */
   public boolean within(ClassificationLevel ceiling) {

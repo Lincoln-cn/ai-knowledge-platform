@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -54,6 +55,8 @@ class UserRoleManagementTest {
 
   /** 直接调同步，模拟"重启"——这条是「重启不冲掉界面改动」断言的关键道具。 */
   @Autowired PermissionCatalog permissionCatalog;
+
+  @Autowired JdbcTemplate jdbc;
 
   private final HttpClient http = HttpClient.newHttpClient();
 
@@ -204,20 +207,20 @@ class UserRoleManagementTest {
     String creatorRoleId = roleIdOf("CREATOR", admin);
 
     try {
-      assertThat(signIn("admin", "admin").claims("scope")).as("ADMIN 初始是 all").isEqualTo("all");
+      assertThat(signIn("admin", "admin").claims("scope")).as("ADMIN 初始是 all").isEqualTo("ALL");
 
       HttpResponse<String> updated =
           put(
               "/api/v1/roles/" + creatorRoleId + "/data-scope",
-              "{\"dataScope\":\"shared\"}",
+              "{\"dataScope\":\"SHARED\"}",
               admin);
       assertThat(updated.statusCode()).isEqualTo(200);
-      assertThat(updated.body()).contains("\"dataScope\":\"shared\"");
+      assertThat(updated.body()).contains("\"dataScope\":\"SHARED\"");
 
       // 改的是 CREATOR，不影响 admin —— 这里顺带确认"改 A 不波及 B"
-      assertThat(signIn("admin", "admin").claims("scope")).isEqualTo("all");
+      assertThat(signIn("admin", "admin").claims("scope")).isEqualTo("ALL");
     } finally {
-      put("/api/v1/roles/" + creatorRoleId + "/data-scope", "{\"dataScope\":\"own\"}", admin);
+      put("/api/v1/roles/" + creatorRoleId + "/data-scope", "{\"dataScope\":\"OWN\"}", admin);
     }
   }
 
@@ -385,7 +388,7 @@ class UserRoleManagementTest {
     String adminRoleId = roleIdOf("ADMIN", admin);
 
     HttpResponse<String> res =
-        put("/api/v1/roles/" + adminRoleId + "/data-scope", "{\"dataScope\":\"own\"}", admin);
+        put("/api/v1/roles/" + adminRoleId + "/data-scope", "{\"dataScope\":\"OWN\"}", admin);
 
     assertThat(res.statusCode()).isEqualTo(400);
     assertThat(res.body()).contains("管理员角色的数据范围固定为全平台，不可修改");
@@ -602,6 +605,66 @@ class UserRoleManagementTest {
         "/api/v1/users/" + adminId,
         "{\"username\":\"admin\",\"displayName\":\"管理员\",\"roleId\":\"" + adminRoleId + "\"}",
         admin);
+  }
+
+  // ────────────────────────── 枚举新码钉死 ──────────────────────────
+
+  /**
+   * ★★ 库里存的就是新码（SCREAMING_SNAKE_CASE），不是中文、不是小写。
+   *
+   * <p>直接 JDBC 查原始值 —— 不经过 JPA/枚举转换，钉的是<strong>库存值本身</strong>。 避免有人加了 {@code @JsonValue} / {@code
+   * AttributeConverter} 又把中文写回去，而单元测试里看起来一切正常。
+   */
+  @Test
+  void 库里存的是新码不是中文() {
+    // iam_user.status：4 个 seed 账号都应是 ACTIVE
+    List<String> userStatuses =
+        jdbc.queryForList(
+            "select distinct status from iam_user where deleted_at is null", String.class);
+    assertThat(userStatuses).as("用户状态列只能出现新码").containsExactly("ACTIVE");
+
+    // iam_role.data_scope / max_classification
+    List<String> scopes =
+        jdbc.queryForList("select distinct data_scope from iam_role", String.class);
+    assertThat(scopes)
+        .as("数据范围列只能出现新码")
+        .allMatch(s -> s.equals("OWN") || s.equals("SHARED") || s.equals("ALL"));
+
+    List<String> classifications =
+        jdbc.queryForList("select distinct max_classification from iam_role", String.class);
+    assertThat(classifications)
+        .as("密级列只能出现新码")
+        .allMatch(
+            c ->
+                c.equals("PUBLIC")
+                    || c.equals("INTERNAL")
+                    || c.equals("SECRET")
+                    || c.equals("CONFIDENTIAL"));
+
+    // ★ ADMIN 的具体值也钉一下（V6 seed 后 V10 翻译的结果）
+    String adminScope =
+        jdbc.queryForObject("select data_scope from iam_role where code = 'ADMIN'", String.class);
+    assertThat(adminScope).isEqualTo("ALL");
+    String adminClearance =
+        jdbc.queryForObject(
+            "select max_classification from iam_role where code = 'ADMIN'", String.class);
+    assertThat(adminClearance).isEqualTo("CONFIDENTIAL");
+  }
+
+  /**
+   * ★ JSON 序列化值也是新码 —— 令牌里 scope/clearance 声明、接口响应里的 status 字段， 都应该是 SCREAMING_SNAKE_CASE。避免有人加了
+   * {@code @JsonValue} 又把中文写回去。
+   */
+  @Test
+  void JSON契约值是新码() throws Exception {
+    // 登录后的令牌里 scope/clearance 是新码
+    String admin = accessToken("admin", "admin");
+    assertThat(signIn("admin", "admin").claims("scope")).isEqualTo("ALL");
+    assertThat(signIn("admin", "admin").claims("clearance")).isEqualTo("CONFIDENTIAL");
+
+    // 用户列表响应里的 status 字段是新码
+    HttpResponse<String> res = get("/api/v1/users", admin);
+    assertThat(res.body()).contains("\"status\":\"ACTIVE\"");
   }
 
   // ────────────────────────── 工具 ──────────────────────────

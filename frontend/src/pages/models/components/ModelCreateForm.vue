@@ -15,8 +15,8 @@
           <div class="picked-main">
             <div class="picked-name">{{ form.baseModel }}</div>
             <div class="micro muted">
-              {{ form.supplier }} ·
-              {{ form.kind === 'embedding' ? `${pickedBase?.dimension} 维` : `${pickedBase?.contextWindow?.toLocaleString()} tokens` }}
+              {{ labelOf(SUPPLIER_LABELS, form.supplier) }} ·
+              {{ form.kind === 'EMBEDDING' ? `${pickedBase?.dimension} 维` : `${pickedBase?.contextWindow?.toLocaleString()} tokens` }}
             </div>
           </div>
           <el-button v-if="!isEdit" link size="small" @click="clearBase">移除</el-button>
@@ -32,10 +32,10 @@
         />
       </el-form-item>
 
-      <template v-if="form.kind === 'chat'">
+      <template v-if="form.kind === 'CHAT'">
         <el-form-item label="能力声明">
           <div class="cap-head">
-            <el-tag size="small" effect="plain" :type="capSource === '探测' ? 'success' : 'warning'">
+            <el-tag size="small" effect="plain" :type="capSource === 'PROBED' ? 'success' : 'warning'">
               来源：{{ capSource }}
             </el-tag>
             <el-button size="small" text :icon="MagicStick" :loading="probing" @click="probe">
@@ -100,12 +100,12 @@
           <div class="ci-main">
             <div class="ci-name">{{ item.baseModel }}</div>
             <div class="ci-meta micro muted">
-              {{ item.supplier }} ·
-              {{ item.kind === 'embedding' ? `${item.dimension} 维` : `${item.contextWindow?.toLocaleString()} tokens` }}
+              {{ labelOf(SUPPLIER_LABELS, item.supplier) }} ·
+              {{ item.kind === 'EMBEDDING' ? `${item.dimension} 维` : `${item.contextWindow?.toLocaleString()} tokens` }}
             </div>
           </div>
-          <el-tag size="small" effect="plain" :type="item.kind === 'embedding' ? 'warning' : 'info'">
-            {{ item.kind === 'embedding' ? '向量' : '对话' }}
+          <el-tag size="small" effect="plain" :type="item.kind === 'EMBEDDING' ? 'warning' : 'info'">
+            {{ item.kind === 'EMBEDDING' ? '向量' : '对话' }}
           </el-tag>
         </button>
 
@@ -132,6 +132,7 @@ import type {
   ToolsMode,
   UpsertModelBody
 } from '@/api/models'
+import { SUPPLIER_LABELS, labelOf } from '@/constants/labels'
 
 const props = defineProps<{
   /** 编辑时传入现有模型；null / 省略 = 新建 */
@@ -159,7 +160,7 @@ const formRef = ref<FormInstance>()
 const baseKeyword = ref('')
 const loadingBase = ref(false)
 const baseList = ref<BaseModelOption[]>([])
-const capSource = ref<'探测' | '手工声明'>('手工声明')
+const capSource = ref<'PROBED' | 'MANUAL'>('MANUAL')
 
 const isEdit = computed(() => !!props.model)
 
@@ -210,11 +211,11 @@ const loadBaseModels = async () => {
 const pickBase = (item: BaseModelOption) => {
   form.baseModel = item.baseModel
   form.supplier = item.supplier
-  form.dimension = item.kind === 'embedding' ? item.dimension : null
+  form.dimension = item.kind === 'EMBEDDING' ? item.dimension : null
   // 换基础模型等于换了模型，能力声明必须重来，避免把上一个模型的能力带过去
   form.thinking = 'NONE'
   form.tools = 'UNSUPPORTED'
-  capSource.value = '手工声明'
+  capSource.value = 'MANUAL'
   if (!form.name) form.name = item.baseModel
 }
 
@@ -258,8 +259,8 @@ const probe = async () => {
 
 const reset = () => {
   formRef.value?.clearValidate()
-  form.kind = 'chat'
-  form.supplier = props.supplier ?? '本地推理'
+  form.kind = 'CHAT'
+  form.supplier = props.supplier ?? 'LOCAL_INFERENCE'
   form.baseModel = ''
   form.name = ''
   form.thinking = 'NONE'
@@ -267,7 +268,7 @@ const reset = () => {
   form.dimension = null
   form.remark = ''
   baseKeyword.value = ''
-  capSource.value = '手工声明'
+  capSource.value = 'MANUAL'
 }
 
 const load = async () => {
@@ -283,7 +284,7 @@ const load = async () => {
     form.tools = m.tools
     form.dimension = m.dimension
     form.remark = m.remark ?? ''
-    capSource.value = '手工声明'
+    capSource.value = 'MANUAL'
   }
 }
 

@@ -11,8 +11,8 @@
         <div class="d-head-text">
           <div class="d-name-row">
             <span class="h3">{{ assistant.name }}</span>
-            <el-tag v-if="originOf(assistant) === 'official'" size="small" effect="plain" type="info">官方</el-tag>
-            <el-tag v-else-if="originOf(assistant) === 'mine'" size="small" effect="plain" type="success">我的</el-tag>
+            <el-tag v-if="originOf(assistant) === 'OFFICIAL'" size="small" effect="plain" type="info">官方</el-tag>
+            <el-tag v-else-if="originOf(assistant) === 'MINE'" size="small" effect="plain" type="success">我的</el-tag>
             <el-tag v-else size="small" effect="plain" type="warning">
               由 {{ assistant.ownerName || '他人' }} 分享
             </el-tag>
@@ -35,9 +35,9 @@
         <dl class="d-facts">
           <div class="fact">
             <dt class="label">类型</dt>
-            <dd>{{ assistant.type === 'workflow' ? '编排应用' : '简单应用' }}</dd>
+            <dd>{{ assistant.type === 'WORKFLOW' ? '编排应用' : '简单应用' }}</dd>
           </div>
-          <template v-if="assistant.type === 'workflow'">
+          <template v-if="assistant.type === 'WORKFLOW'">
             <div class="fact">
               <dt class="label">节点数</dt>
               <dd><span class="num">{{ assistant.workflow?.nodeCount ?? 0 }}</span> 个</dd>
@@ -121,8 +121,8 @@ const visible = ref(false)
 const meId = computed(() => session.user?.id ?? '')
 
 const originOf = (a: Assistant): AssistantOrigin => {
-  if (a.builtin) return 'official'
-  return a.ownerId && a.ownerId === meId.value ? 'mine' : 'shared'
+  if (a.builtin) return 'OFFICIAL'
+  return a.ownerId && a.ownerId === meId.value ? 'MINE' : 'SHARED'
 }
 
 const open = (a: Assistant) => {

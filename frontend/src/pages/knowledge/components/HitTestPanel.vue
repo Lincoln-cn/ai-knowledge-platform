@@ -53,7 +53,7 @@
     <!-- 单模式结果 -->
     <div v-if="singleResult && !compareResults.length" class="results">
       <div class="res-head">
-        <span class="res-title">{{ singleResult.mode }} · 命中 <b class="num">{{ singleResult.items.length }}</b> 条</span>
+        <span class="res-title">{{ labelOf(RETRIEVAL_MODE_LABELS, singleResult.mode) }} · 命中 <b class="num">{{ singleResult.items.length }}</b> 条</span>
         <span class="micro muted">耗时 <b class="num">{{ singleResult.elapsedMs }}</b>ms · 阈值 <b class="num">{{ form.threshold }}</b> · TopN <b class="num">{{ form.topN }}</b></span>
       </div>
       <div v-if="!singleResult.items.length" class="notice warn">
@@ -84,7 +84,7 @@
       <div class="compare-grid">
         <div v-for="result in compareResults" :key="result.mode" class="compare-col">
           <div class="cc-head">
-            <span class="cc-mode">{{ result.mode }}</span>
+            <span class="cc-mode">{{ labelOf(RETRIEVAL_MODE_LABELS, result.mode) }}</span>
             <span class="micro muted"><b class="num">{{ result.items.length }}</b> 条 · <b class="num">{{ result.elapsedMs }}</b>ms</span>
           </div>
           <div v-if="!result.items.length" class="cc-empty micro muted">无命中</div>
@@ -116,20 +116,21 @@ import { Search } from '@element-plus/icons-vue'
 import { retrievalApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { HitTestResult, RetrievalMode, RetrievalParams } from '@/api/retrieval'
+import { RETRIEVAL_MODE_LABELS, labelOf } from '@/constants/labels'
 
 const props = defineProps<{ kbId?: string }>()
 
 const MODES: Array<{ value: RetrievalMode; label: string; desc: string }> = [
-  { value: '向量检索', label: '向量检索', desc: '按语义相似度召回，适合同义改写' },
-  { value: '全文检索', label: '全文检索', desc: '按关键词精确匹配，适合专有名词' },
-  { value: '混合检索', label: '混合检索', desc: 'RRF 融合向量与全文，召回更稳（推荐）' }
+  { value: 'VECTOR', label: '向量检索', desc: '按语义相似度召回，适合同义改写' },
+  { value: 'FULLTEXT', label: '全文检索', desc: '按关键词精确匹配，适合专有名词' },
+  { value: 'HYBRID', label: '混合检索', desc: 'RRF 融合向量与全文，召回更稳（推荐）' }
 ]
 
 const form = reactive<RetrievalParams>({
-  mode: '混合检索',
+  mode: 'HYBRID',
   threshold: 0.6,
   topN: 5,
-  noRefStrategy: '拒答'
+  noRefStrategy: 'REFUSE'
 })
 
 const question = ref('')

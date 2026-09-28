@@ -57,7 +57,7 @@ export function formatBytes(size: number): string {
 
 /** 已生成但正文为空：要给提示，不能留白还照出操作条 */
 export function isEmptyAnswer(msg: ChatMessage): boolean {
-  return msg.role === 'assistant' && msg.status === '已生成' && !msg.content.trim()
+  return msg.role === 'ASSISTANT' && msg.status === 'GENERATED' && !msg.content.trim()
 }
 
 export function readAppBrief(raw: unknown): AppBrief | null {
@@ -267,7 +267,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
 
   const lastAssistant = computed(() => {
     for (let i = messages.value.length - 1; i >= 0; i -= 1) {
-      if (messages.value[i].role === 'assistant') return messages.value[i]
+      if (messages.value[i].role === 'ASSISTANT') return messages.value[i]
     }
     return null
   })
@@ -361,8 +361,8 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     handle = null
     generating.value = false
     for (const m of messages.value) {
-      if (m.status === '生成中') {
-        m.status = '已停止'
+      if (m.status === 'GENERATING') {
+        m.status = 'STOPPED'
       }
     }
   }
@@ -393,7 +393,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       assistant.failReason = null
       assistant.failHint = null
     }
-    assistant.status = '生成中'
+    assistant.status = 'GENERATING'
 
     handle = streamApi.chatStream({
       appId: options.appId,
@@ -404,7 +404,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       credentialToken: options.credentialToken,
       // 重生成/继续生成把目标消息 id 一并带上：服务端据此覆盖/续写，而不是新增一轮
       mode,
-      targetMessageId: mode && mode !== 'new' ? assistant.id : undefined,
+      targetMessageId: mode && mode !== 'NEW' ? assistant.id : undefined,
 
       onMeta: (meta) => {
         assistant.id = meta.messageId || assistant.id
@@ -423,7 +423,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       onError: (reason, hint) => {
         // 失败必须说话：原因 + 下一步
         streamError.value = { reason, hint }
-        assistant.status = '失败'
+        assistant.status = 'FAILED'
         assistant.failReason = reason
         assistant.failHint = hint ?? null
       },
@@ -433,7 +433,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
         assistant.durationMs = result.durationMs
         generating.value = false
         handle = null
-        if (result.status === '失败') {
+        if (result.status === 'FAILED') {
           if (!assistant.failReason) {
             assistant.failReason = '生成失败'
             assistant.failHint = '请稍后重试；若持续失败请联系管理员'
@@ -445,7 +445,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
           return
         }
         // 空回答：done=已生成但正文为空 —— 给可读提示，不留白、不照出操作条
-        if (result.status === '已生成' && !assistant.content.trim()) {
+        if (result.status === 'GENERATED' && !assistant.content.trim()) {
           assistant.failReason = '本次没有返回内容'
           assistant.failHint = '可以点「重新生成」再试一次，或换个问法'
         }
@@ -468,9 +468,9 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     const userMsg = toReactiveMessage({
       id: `u_${Date.now().toString(36)}`,
       conversationId,
-      role: 'user',
+      role: 'USER',
       content: text,
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -491,9 +491,9 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     const assistantMsg = toReactiveMessage({
       id: `a_${Date.now().toString(36)}`,
       conversationId,
-      role: 'assistant',
+      role: 'ASSISTANT',
       content: '',
-      status: '生成中',
+      status: 'GENERATING',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -521,7 +521,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     if (idx < 0) return
     let userMsg: ChatMessageEx | null = null
     for (let i = idx - 1; i >= 0; i -= 1) {
-      if (messages.value[i].role === 'user') {
+      if (messages.value[i].role === 'USER') {
         userMsg = messages.value[i]!
         break
       }
@@ -534,7 +534,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       assistant,
       attachmentIds: (userMsg.attachments ?? []).map((a) => a.id),
       overwrite: true,
-      mode: 'regenerate'
+      mode: 'REGENERATE'
     })
   }
 
@@ -548,7 +548,7 @@ export function useChatSession(options: ChatSessionOptions = {}) {
     const idx = messages.value.findIndex((m) => m.id === assistant.id)
     let userMsg: ChatMessageEx | null = null
     for (let i = idx - 1; i >= 0; i -= 1) {
-      if (messages.value[i].role === 'user') {
+      if (messages.value[i].role === 'USER') {
         userMsg = messages.value[i]!
         break
       }
@@ -561,12 +561,12 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       question: userMsg.content,
       assistant,
       attachmentIds: (userMsg.attachments ?? []).map((a) => a.id),
-      mode: 'continue'
+      mode: 'CONTINUE'
     })
   }
 
   /** 赞踩互斥且可撤销 */
-  const toggleFeedback = async (input: ChatMessage, type: 'up' | 'down') => {
+  const toggleFeedback = async (input: ChatMessage, type: 'UP' | 'DOWN') => {
     const msg = resolveMsg(input)
     const next = msg.feedback === type ? null : type
     const updated = await conversationsApi.submitMessageFeedback(msg.id, next)

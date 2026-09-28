@@ -390,7 +390,7 @@ const onContinue = (msg: ChatMessage) => {
   chat.continueGenerate(msg)
 }
 
-const onFeedback = async (msg: ChatMessage, type: 'up' | 'down') => {
+const onFeedback = async (msg: ChatMessage, type: 'UP' | 'DOWN') => {
   try {
     await chat.toggleFeedback(msg, type)
   } catch (error) {

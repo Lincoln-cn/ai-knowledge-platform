@@ -7,6 +7,77 @@
 
 ---
 
+## 0.1.3（进行中）· ★ 枚举取值统一为机器码（**破坏性契约变更**）
+
+> **真源见 [`系统设计方案/14-枚举与取值命名规范.md`](系统设计方案/14-枚举与取值命名规范.md)** —— 规则、全量映射表、边界都在那里。
+> 本节只记「改了什么、为什么、怎么验的」。
+
+### 这一版改的是「取值口径」
+
+**所有枚举的标识符 / 线上 JSON 值 / 库存值 三处同名，统一 `SCREAMING_SNAKE_CASE`**（多词用下划线）；
+**中文只做展示**（`frontend/src/constants/labels.ts` 的 label 映射），不进标识符、不进 JSON、不进库。
+
+```
+改前：public enum UserStatus { 正常, 停用, 待审核 }     // 中文写进了标识符
+改后：public enum UserStatus { ACTIVE, DISABLED, PENDING_REVIEW }
+
+改前：GET /users → {"status":"正常"}                    // 展示文案变成了机器码
+改后：GET /users → {"status":"ACTIVE"}                  // 界面查 label 显示「正常」
+```
+
+**为什么要改**：旧口径（「库、代码、契约三处同一个中文字面量，少一层映射少一处对不上」）确实省了一层映射，
+代价是**把展示文案变成了机器码** —— 中文进了 Java 标识符、进了 JSON、进了库约束：不符合开发规范、无法国际化、无法排序、对工具链不友好。
+新口径把两件事分开：**机器码稳定可比较；文案随时可改而不影响契约与数据**。
+
+### 交付物
+
+| # | 交付 | 关键点 |
+|---|---|---|
+| 1 | **规格文档 `14-枚举与取值命名规范`** | 规则三条 + 全量映射表（2.1 后端 / 2.2 契约 / 2.3 节点类型 / 2.4 补录）+ **边界**（改取值、不改展示文案与文件名） |
+| 2 | **后端 7 个枚举**改常量 | `ClassificationLevel`（★ 声明顺序即密级高低，**未调整顺序**）· `DataScope` · `Visibility` · `SubjectKind` · `UserStatus` · `ModelStatus` · `Supplier` · `ModelKind`；`ThinkingMode`/`ToolsMode`/`ErrorCode` 本就规范，不动 |
+| 3 | ★ **`VisibilityConverter` 删除** | 常量与值统一成大写后，那一层映射失去存在理由 —— 少一层映射正是本次目的 |
+| 4 | **三条迁移 V9/V10/V11** | `drop 旧约束 → update 翻译存量 → add 新约束`（顺序反了会被旧约束拒掉）；**不改 V3/V6/V8**（Flyway 校验和） |
+| 5 | **契约与前端全量换码** | `api/**` 的 union、`mock/**` 的数据与比较、`constants/labels.ts` 的 label 映射、`pages/**` 约 30 个文件的渲染点 |
+| 6 | **钉死新口径的断言** | JDBC 直查库断言存的是新码；Jackson 序列化断言出的是新码（防止有人加 `@JsonValue` 又把中文写回去） |
+
+### 验证记录（本地实跑）
+
+```
+后端  mvn -B -f backend/pom.xml verify → BUILD SUCCESS · Tests run: 152, Failures: 0
+前端  npm run typecheck → 0 错误 · build:mock 通过 · verify_refs / check_template_tags / check_design 全绿
+★ 真库迁移（开发库有中文存量数据）
+    V9 / V10 / V11 全部 success=t
+    iam_user.status          → ACTIVE（原「正常」）
+    iam_role.data_scope      → ALL / OWN / SHARED（原 all/own/shared）
+    iam_role.max_classification → CONFIDENTIAL / INTERNAL / SECRET / PUBLIC（原 中文）
+★ 接口与令牌里流通的取值（真请求实测）
+    令牌 scope=ALL  clearance=CONFIDENTIAL
+    GET /users  → status=ACTIVE
+    GET /roles  → dataScope/maxClassification = SHARED/PUBLIC · OWN/INTERNAL · ALL/INTERNAL · ALL/SECRET · ALL/CONFIDENTIAL
+    界面显示的仍是中文 —— 由 constants/labels.ts 的 label 映射给出
+```
+
+### ★ 这一版踩到的坑
+
+| # | 现象 | 根因 | 处理 |
+|---|---|---|---|
+| 1 | **改约束后再翻译数据 ⇒ 翻译被旧约束拒掉** | Flyway 迁移里 `update` 的新值过不了还没换掉的 check 约束 | 顺序固定为 **drop 旧约束 → update → add 新约束** |
+| 2 | ★ **第一轮改完还剩一半中文取值** | 规格表漏了 8 个「表外 union」（`WorkflowRecord.status`、`Segment.embedding`、`noRefStrategy`、`logic`、`ModelCapability.source`、`ChatMessage.role`…）—— 它们同样是被 `===` 比较 / 出现在 JSON 里的取值 | 补进规格 **2.4** 并一并换码。★ 判据要写死：**被 `===` 比较过、或出现在 JSON/库里 ⇒ 它就是取值** |
+| 3 | **盲替换会改坏撞词字面量** | `role: 'user'`（消息角色）、`source: 'local'`（文档来源）、`key: 'workflow'`（发布检查项的键）与枚举撞词 | 换码前先确认是不是本表里的枚举取值；**碰撞词保留** |
+| 4 | `npm run build:mock` 一直红 | 它是 `vue-tsc --noEmit && vite build`，前半段被页面的类型错挡住 | 分段验证：先 typecheck 归零，再跑整条；`npx vite build` 可单独验构建半段 |
+| 5 | 模板里 `{{ row.status }}` 这类**裸渲染不产生类型错** | 只换 TS 字面量不会被抓到 | 靠 grep 扫出裸渲染点，改成 `labelOf(...)`（本次扫出并改了约 10 处） |
+
+### ⚠️ 待确认 / 欠账
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 1 | **这是破坏性契约变更**（打破冻结契约的「只加可选字段」） | 已在本节与规格文档记录。任何仍持有旧取值的调用方（含旧 mock 快照）会失效 |
+| 2 | **`models/Index.vue` 的 `KIND_LABEL` 是页面级短标签**（对话/向量），与 `MODEL_KIND_LABELS`（对话模型/向量模型）文案不同 | 按「展示文案不动」保留了本地 map。两处文案并存，将来要合并成一份 |
+| 3 | `pages/workflow/enums/common.ts` 的 `ValidType.User = 'user'` 是画布级联选择器**内部**枚举 | 不是契约 `SubjectKind`，未改。它是否也该进规格，待定 |
+| 4 | **第 4 周的 `/models` 端点尚未实现** | 本次枚举改造覆盖了 `modelcatalog` 的领域与库，端点在下一段（T187/T188） |
+
+---
+
 ## 0.1.2 · 第 3 周 · M1 角色 / 权限点 / **数据范围 + 密级**
 
 > ★ **版本号顺延（先说清，免得又出现两套编号）**：`ROADMAP §4.7.3` 原把第 3 周定为 `0.1.1`，

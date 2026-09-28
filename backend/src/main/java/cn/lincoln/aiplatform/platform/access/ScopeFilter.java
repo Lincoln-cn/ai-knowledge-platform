@@ -40,7 +40,7 @@ public record ScopeFilter(
       //   免登录面走的是公开凭证那条独立链路（07 §3.1：public 是"登录用户里人人可见"）
       return false;
     }
-    if (scope == DataScope.all) {
+    if (scope == DataScope.ALL) {
       return true;
     }
     if (me.equals(resource.ownerId())) {
@@ -55,7 +55,7 @@ public record ScopeFilter(
       // ★ `own` 是**个人沙箱**（07 §3.2）：连"别人分享给我的"也不看。
       //   少了这一行，own 与 shared 就退化成同一档 —— 而那正是 07 册特意保留两档的理由
       //   （"我只管我建的"与"我用别人给我的"是两个不同的人）。
-      if (scope == DataScope.own) {
+      if (scope == DataScope.OWN) {
         return false;
       }
       return resource.grants().stream()
@@ -87,7 +87,7 @@ public record ScopeFilter(
 
   /** 无限制的范围（系统内部任务、定时任务用；★ 不要用在请求路径上）。 */
   public static ScopeFilter unrestricted(UUID me, Set<String> myRoles) {
-    return new ScopeFilter(me, DataScope.all, myRoles, ClassificationLevel.机密, Set.of());
+    return new ScopeFilter(me, DataScope.ALL, myRoles, ClassificationLevel.CONFIDENTIAL, Set.of());
   }
 
   /**
@@ -97,7 +97,7 @@ public record ScopeFilter(
    * 否则任何一次令牌结构变更都会静默地把所有人变成全平台可见。
    */
   public static ScopeFilter nobody() {
-    return new ScopeFilter(null, DataScope.own, Set.of(), null, Set.of());
+    return new ScopeFilter(null, DataScope.OWN, Set.of(), null, Set.of());
   }
 
   private boolean grantCoversMe(Grant grant) {
@@ -107,8 +107,8 @@ public record ScopeFilter(
     }
     // ★ kind 与 id 一起比 —— 部门「3」不是角色「3」
     return switch (subject.kind()) {
-      case user -> me != null && me.toString().equals(subject.id());
-      case role -> myRoles != null && myRoles.contains(subject.id());
+      case USER -> me != null && me.toString().equals(subject.id());
+      case ROLE -> myRoles != null && myRoles.contains(subject.id());
       default -> false;
     };
   }

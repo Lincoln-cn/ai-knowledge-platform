@@ -124,7 +124,7 @@ function stagedText(upload: StagedUpload): string {
 function applySegmentationPlan(doc: DocumentItem, plan: SegmentationPlanItem[]) {
   doc.segmentCount = plan.length
   doc.processedSegments = 0
-  doc.status = '待向量化'
+  doc.status = 'PENDING_EMBEDDING'
   doc.charCount = plan.reduce((s, p) => s + p.content.length, 0)
   for (const p of plan) {
     const seg: Segment = {
@@ -135,7 +135,7 @@ function applySegmentationPlan(doc: DocumentItem, plan: SegmentationPlanItem[]) 
       content: p.content,
       charCount: p.content.length,
       enabled: true,
-      embedding: '待向量化'
+      embedding: 'PENDING_EMBEDDING'
     }
     const idx = segments.findIndex((s) => s.id === seg.id)
     if (idx >= 0) segments.splice(idx, 1, seg)
@@ -180,7 +180,7 @@ const stopEmbedTimer = (id: string) => {
 /** 模拟向量化：从 processedSegments 推进到 segmentCount */
 const runEmbedding = (doc: DocumentItem) => {
   stopEmbedTimer(doc.id)
-  doc.status = '向量化中'
+  doc.status = 'EMBEDDING'
   doc.failReason = null
   doc.failHint = null
 
@@ -193,9 +193,9 @@ const runEmbedding = (doc: DocumentItem) => {
 
     if (doc.processedSegments >= doc.segmentCount) {
       stopEmbedTimer(doc.id)
-      doc.status = '成功'
+      doc.status = 'SUCCEEDED'
       for (const seg of segments.filter((s) => s.documentId === doc.id)) {
-        seg.embedding = '已向量化'
+        seg.embedding = 'EMBEDDED'
       }
       touchKbCounters(doc.kbId)
     }
@@ -209,9 +209,9 @@ const segEmbedTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const runSegmentEmbedding = (seg: Segment) => {
   const prev = segEmbedTimers.get(seg.id)
   if (prev) clearTimeout(prev)
-  seg.embedding = '向量化中'
+  seg.embedding = 'EMBEDDING'
   const timer = setTimeout(() => {
-    seg.embedding = '已向量化'
+    seg.embedding = 'EMBEDDED'
     segEmbedTimers.delete(seg.id)
   }, EMBED_TICK_MS * 2)
   segEmbedTimers.set(seg.id, timer)
@@ -226,7 +226,7 @@ const runDocumentReembed = (doc: DocumentItem) => {
   for (const s of segs) runSegmentEmbedding(s)
   doc.segmentCount = segs.length
   doc.processedSegments = 0
-  doc.status = '向量化中'
+  doc.status = 'EMBEDDING'
   doc.failReason = null
   doc.failHint = null
   doc.updatedAt = new Date().toISOString()
@@ -236,9 +236,9 @@ const runDocumentReembed = (doc: DocumentItem) => {
     doc.updatedAt = new Date().toISOString()
     if (doc.processedSegments >= doc.segmentCount) {
       stopEmbedTimer(doc.id)
-      doc.status = '成功'
+      doc.status = 'SUCCEEDED'
       for (const s of segments.filter((x) => x.documentId === doc.id)) {
-        s.embedding = '已向量化'
+        s.embedding = 'EMBEDDED'
       }
       touchKbCounters(doc.kbId)
     }
@@ -248,17 +248,17 @@ const runDocumentReembed = (doc: DocumentItem) => {
 
 /** 模拟解析 + 切分：待解析 → 分段中 → 待向量化 */
 const runParse = (doc: DocumentItem, opts?: { failSplit?: boolean }) => {
-  doc.status = '待解析'
+  doc.status = 'PENDING_PARSE'
   doc.failReason = null
   doc.failHint = null
 
   setTimeout(() => {
-    doc.status = '分段中'
+    doc.status = 'SEGMENTING'
     doc.updatedAt = new Date().toISOString()
 
     setTimeout(() => {
       if (opts?.failSplit) {
-        doc.status = '分段失败'
+        doc.status = 'SEGMENT_FAILED'
         doc.segmentCount = 0
         doc.processedSegments = 0
         doc.failReason = '该 PDF 为扫描件，未检测到文本层，无法提取内容。'
@@ -268,7 +268,7 @@ const runParse = (doc: DocumentItem, opts?: { failSplit?: boolean }) => {
         const count = Math.max(3, Math.round(doc.charCount / 450))
         doc.segmentCount = count
         doc.processedSegments = 0
-        doc.status = '待向量化'
+        doc.status = 'PENDING_EMBEDDING'
         for (let i = 0; i < Math.min(count, 4); i += 1) {
           const seg: Segment = {
             id: `seg_${doc.id}_${i + 1}`,
@@ -278,7 +278,7 @@ const runParse = (doc: DocumentItem, opts?: { failSplit?: boolean }) => {
             content: `这是从「${doc.name}」切分出的第 ${i + 1} 段内容，用于验证入库流水线的分段阶段。`,
             charCount: 40 + i * 8,
             enabled: true,
-            embedding: '待向量化'
+            embedding: 'PENDING_EMBEDDING'
           }
           if (!segments.some((s) => s.id === seg.id)) segments.push(seg)
         }
@@ -328,7 +328,7 @@ const buildPreview = (
   if (buf.trim()) chunks.push(buf)
 
   // 自定义模式下故意制造一条超长段，让 SEG-I1 在预览里可见
-  if (body.strategy === 'custom' && chunks.length > 0) {
+  if (body.strategy === 'CUSTOM' && chunks.length > 0) {
     chunks[0] = chunks[0] + '　'.repeat(Math.max(0, MODEL_LIMIT - chunks[0].length + 200))
   }
 
@@ -414,7 +414,7 @@ export const ingestionRoutes: MockRoute[] = [
             kbId,
             name: up.name,
             source: 'local',
-            status: '待解析',
+            status: 'PENDING_PARSE',
             segmentCount: 0,
             processedSegments: 0,
             charCount: up.size || 10000,
@@ -460,7 +460,7 @@ export const ingestionRoutes: MockRoute[] = [
           kbId,
           name: f.name,
           source: 'local',
-          status: '待解析',
+          status: 'PENDING_PARSE',
           segmentCount: 0,
           processedSegments: 0,
           charCount: f.size ?? 10000,
@@ -491,22 +491,22 @@ export const ingestionRoutes: MockRoute[] = [
       const docs = documents.filter((d) => d.kbId === kbId)
 
       const stages = ([
-        '待解析',
-        '分段中',
-        '待向量化',
-        '向量化中',
-        '成功',
-        '分段失败',
-        '向量化失败'
+        'PENDING_PARSE',
+        'SEGMENTING',
+        'PENDING_EMBEDDING',
+        'EMBEDDING',
+        'SUCCEEDED',
+        'SEGMENT_FAILED',
+        'EMBEDDING_FAILED'
       ] as const).map((status) => ({
         status,
         count: docs.filter((d) => d.status === status).length
       }))
 
-      const done = docs.filter((d) => d.status === '成功').length
-      const failed = docs.filter((d) => d.status === '分段失败' || d.status === '向量化失败').length
+      const done = docs.filter((d) => d.status === 'SUCCEEDED').length
+      const failed = docs.filter((d) => d.status === 'SEGMENT_FAILED' || d.status === 'EMBEDDING_FAILED').length
       const running = docs.some(
-        (d) => d.status === '待解析' || d.status === '分段中' || d.status === '向量化中'
+        (d) => d.status === 'PENDING_PARSE' || d.status === 'SEGMENTING' || d.status === 'EMBEDDING'
       )
 
       return {
@@ -569,12 +569,12 @@ export const ingestionRoutes: MockRoute[] = [
     ({ path, token }) => {
       const doc = findDoc(path.id)
       gateKb(doc.kbId, token, PERM.documentUpload, '文档', doc.id)
-      if (doc.status !== '分段失败' && doc.status !== '向量化失败') {
+      if (doc.status !== 'SEGMENT_FAILED' && doc.status !== 'EMBEDDING_FAILED') {
         throw new ApiError(3010, `文档当前状态为「${doc.status}」，无需重试`)
       }
 
       // 从失败阶段继续：分段失败 → 重新解析；向量化失败 → 从断点继续向量化
-      if (doc.status === '分段失败') {
+      if (doc.status === 'SEGMENT_FAILED') {
         // 重试后不再失败（用户已按建议处理过文件）
         runParse(doc, { failSplit: false })
       } else {
@@ -590,7 +590,7 @@ export const ingestionRoutes: MockRoute[] = [
     ({ path, token }) => {
       const doc = findDoc(path.id)
       gateKb(doc.kbId, token, PERM.documentUpload, '文档', doc.id)
-      if (doc.status !== '待向量化') {
+      if (doc.status !== 'PENDING_EMBEDDING') {
         throw new ApiError(
           3011,
           `文档当前状态为「${doc.status}」，不能开始向量化`,
@@ -692,7 +692,7 @@ export const ingestionRoutes: MockRoute[] = [
         seg.content = input.content
         seg.charCount = input.content.length
         // 内容变了需要重新向量化
-        seg.embedding = '待向量化'
+        seg.embedding = 'PENDING_EMBEDDING'
       }
       return seg
     }
@@ -742,7 +742,7 @@ export const ingestionRoutes: MockRoute[] = [
         gateKb(kbIdOfSeg(id), token, PERM.segmentEdit, '分段', id)
         const sourceDocId = seg.documentId
         seg.documentId = targetDocumentId
-        seg.embedding = '待向量化'
+        seg.embedding = 'PENDING_EMBEDDING'
         moved += 1
         // 源文档分段数 -1，目标 +1
         const src = documents.find((d) => d.id === sourceDocId)
@@ -821,7 +821,7 @@ export const ingestionRoutes: MockRoute[] = [
       const seg = findSeg(path.id)
       gateKb(kbIdOfSeg(seg.id), token, PERM.segmentEdit, '分段', seg.id)
       // 编辑后是「待向量化」；失败态也允许重跑。已向量化的强制重跑也放行（用户显式动作）
-      if (seg.embedding === '向量化中') {
+      if (seg.embedding === 'EMBEDDING') {
         throw new ApiError(3026, '该分段正在向量化中，无需重复提交')
       }
       runSegmentEmbedding(seg)

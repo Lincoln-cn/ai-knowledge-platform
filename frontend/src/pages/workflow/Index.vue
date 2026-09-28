@@ -227,7 +227,7 @@ function renderGraphData(graph: WorkflowGraph) {
     })
     // 开场白来自 start-node 的 config（契约字段）
     const prologue =
-        (graph.nodes.find((n) => n.type === 'start-node')?.config as { prologue?: string } | undefined)
+        (graph.nodes.find((n) => n.type === 'START_NODE')?.config as { prologue?: string } | undefined)
             ?.prologue || ''
     detail.value = { ...(detail.value ?? {}), workFlow: lf, prologue }
 }
@@ -351,7 +351,7 @@ async function loadValidateCtx() {
 
 /** 把阻断项一次列全（只报第一条会让人来回试很多次）。文案都是代码常量，不含用户输入 */
 function showBlockingIssues(issues: ReturnType<typeof validateGraph>) {
-    const errors = issues.filter((i) => i.level === '错误')
+    const errors = issues.filter((i) => i.level === 'ERROR')
     const rows = errors
         .map((e, i) => {
             const hint = e.hint ? `<br/><span style="color:var(--color-muted)">→ ${e.hint}</span>` : ''

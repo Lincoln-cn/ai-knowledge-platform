@@ -59,25 +59,25 @@ export const ErrorCode = {
 /**
  * 角色侧的数据范围（07 §3.2）。
  *
- * `own` 只有自己建的 · `shared` 自己建的 + 被共享给自己的 · `all` 全平台。
+ * `OWN` 只有自己建的 · `SHARED` 自己建的 + 被共享给自己的 · `ALL` 全平台。
  * 三档是**预设档位**，不是唯一形状 —— 范围规则的逃生口见 §8.3（`dataScopeRule`）。
  */
-export type DataScope = 'own' | 'shared' | 'all'
+export type DataScope = 'OWN' | 'SHARED' | 'ALL'
 
-/** 资源侧的可见性（07 §3.1）。**`public` 不等于免登录** —— 它是"登录用户里人人可见" */
-export type ResourceVisibility = 'private' | 'shared' | 'public'
+/** 资源侧的可见性（07 §3.1）。**`PUBLIC` 不等于免登录** —— 它是"登录用户里人人可见" */
+export type ResourceVisibility = 'PRIVATE' | 'SHARED' | 'PUBLIC'
 
 /**
  * 密级（企业四级）。
  *
  * ★ 这四级是**工程惯例，不是法定密级** —— 法定的只有《保守国家秘密法》的
- * 绝密 / 机密 / 秘密。用"公开/内部/秘密/机密"是因为企业内控需要这四档，
+ * 绝密 / 机密 / 秘密。企业内控需要这四档（公开/内部/秘密/机密），
  * 但**不要**在文档或界面上声称它是法定定密（13 册 §1.1）。
  */
-export type ClassificationLevel = '公开' | '内部' | '秘密' | '机密'
+export type ClassificationLevel = 'PUBLIC' | 'INTERNAL' | 'SECRET' | 'CONFIDENTIAL'
 
-/** 共享主体种类。MVP 只填 `user` / `role`；加"共享给部门"只是多一个枚举值（07 §8.1） */
-export type SubjectKind = 'user' | 'role' | 'org' | 'group' | 'link'
+/** 共享主体种类。MVP 只填 `USER` / `ROLE`；加"共享给部门"只是多一个枚举值（07 §8.1） */
+export type SubjectKind = 'USER' | 'ROLE' | 'ORG' | 'GROUP' | 'LINK'
 
 /** 一个共享主体。判定里按 `kind` + `id` 一起比对 —— 部门「3」不是角色「3」（07 §8.2） */
 export interface Subject {

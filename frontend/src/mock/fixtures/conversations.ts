@@ -113,7 +113,7 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     updatedAt: iso(0.2 * hour),
     app: appBriefs.as1,
     ownerId: 'u1',
-    visibility: 'private'
+    visibility: 'PRIVATE'
   },
   {
     id: 'c2',
@@ -123,7 +123,7 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     turnCount: 1,
     updatedAt: iso(1.5 * hour),
     ownerId: 'u4',
-    visibility: 'private'
+    visibility: 'PRIVATE'
   },
   {
     id: 'c3',
@@ -134,7 +134,7 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     updatedAt: iso(5 * hour),
     app: appBriefs.as1,
     ownerId: 'u2',
-    visibility: 'private'
+    visibility: 'PRIVATE'
   },
   {
     id: 'c4',
@@ -145,7 +145,7 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     updatedAt: iso(day + 2 * hour),
     app: appBriefs.as2,
     ownerId: 'u3',
-    visibility: 'private'
+    visibility: 'PRIVATE'
   },
   {
     id: 'c5',
@@ -155,7 +155,7 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     turnCount: 2,
     updatedAt: iso(day + 6 * hour),
     ownerId: 'u4',
-    visibility: 'private'
+    visibility: 'PRIVATE'
   },
   {
     id: 'c6',
@@ -166,7 +166,7 @@ export const conversations: Array<Conversation & { app?: AppBrief }> = [
     updatedAt: iso(3 * day),
     app: appBriefs.as1,
     ownerId: 'u2',
-    visibility: 'private'
+    visibility: 'PRIVATE'
   }
 ]
 
@@ -176,9 +176,9 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm101',
       conversationId: 'c1',
-      role: 'user',
+      role: 'USER',
       content: '审查这份采购合同有什么风险？',
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -191,10 +191,10 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm102',
       conversationId: 'c1',
-      role: 'assistant',
+      role: 'ASSISTANT',
       content:
         '根据《合同管理制度》的相关规定，我查到以下要点：\n\n1. **付款比例控制** — 前期付款比例原则上不超过合同总额的 30%，尾款需在验收合格后支付 [1]\n2. **付款节点** — 应与履约进度挂钩，不得以单纯时间节点作为唯一付款依据 [1]\n3. **逾期责任** — 合同须明确约定逾期付款的违约责任与计算方式 [2]\n\n建议在合同评审时重点核对以上三项，缺少任一项都应退回业务部门补充。',
-      status: '已生成',
+      status: 'GENERATED',
       refs: withRefs([
         {
           index: 1,
@@ -214,7 +214,7 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
         }
       ]),
       suggestions: ['如果对方不同意改怎么处理？', '帮我起草一段修改意见'],
-      feedback: 'up',
+      feedback: 'UP',
       tokens: 1120,
       durationMs: 3800,
       failReason: null,
@@ -224,9 +224,9 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm103',
       conversationId: 'c1',
-      role: 'user',
+      role: 'USER',
       content: '这些风险如何规避？',
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -239,10 +239,10 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm104',
       conversationId: 'c1',
-      role: 'assistant',
+      role: 'ASSISTANT',
       content:
         '规避建议如下：\n\n1. **付款条款**：补充「逾期按日万分之五支付违约金」，并明确尾款与验收合格挂钩 [1]\n2. **验收标准**：改为可量化指标（如尺寸公差、合格率），附验收清单 [2]\n3. **争议解决**：改约定甲方所在地法院，避免客场诉讼。\n\n需要我按上述三点起草修改意见原文吗？',
-      status: '已停止',
+      status: 'STOPPED',
       refs: withRefs([
         {
           index: 1,
@@ -274,9 +274,9 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm201',
       conversationId: 'c2',
-      role: 'user',
+      role: 'USER',
       content: '报销一般需要哪些材料？',
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -289,10 +289,10 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm202',
       conversationId: 'c2',
-      role: 'assistant',
+      role: 'ASSISTANT',
       content:
         '这是一个不依赖知识库的通用问题。当前会话未挂载知识库，因此回答基于模型自身知识，不提供引用来源。\n\n通常报销需要：发票、费用明细、审批单、支付凭证。具体清单请以公司财务制度为准——如需基于公司制度的准确答案，请切换到已挂载知识库的应用。',
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -307,9 +307,9 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm301',
       conversationId: 'c3',
-      role: 'user',
+      role: 'USER',
       content: '供应商准入需要满足什么条件？',
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -322,10 +322,10 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm302',
       conversationId: 'c3',
-      role: 'assistant',
+      role: 'ASSISTANT',
       content:
         '供应商准入一般需具备：有效营业执照、相关资质证书、近三年无重大违法记录，并通过现场或书面评审 [1]。\n\n建议在准入清单中明确必备材料与评分项，避免口头约定。',
-      status: '已生成',
+      status: 'GENERATED',
       refs: withRefs([
         {
           index: 1,
@@ -337,7 +337,7 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
         }
       ]),
       suggestions: [],
-      feedback: 'down',
+      feedback: 'DOWN',
       tokens: 510,
       durationMs: 1900,
       failReason: null,
@@ -349,9 +349,9 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm401',
       conversationId: 'c4',
-      role: 'user',
+      role: 'USER',
       content: '季度考核指标怎么定？',
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -364,9 +364,9 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm402',
       conversationId: 'c4',
-      role: 'assistant',
+      role: 'ASSISTANT',
       content: '',
-      status: '失败',
+      status: 'FAILED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -381,9 +381,9 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm501',
       conversationId: 'c5',
-      role: 'user',
+      role: 'USER',
       content: '入职第一天要做什么？',
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -396,9 +396,9 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm502',
       conversationId: 'c5',
-      role: 'assistant',
+      role: 'ASSISTANT',
       content: '入职第一天通常包括：签署劳动合同、领取办公用品、开通账号、参加入职培训。请以人事部门当日安排为准。',
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -413,9 +413,9 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm601',
       conversationId: 'c6',
-      role: 'user',
+      role: 'USER',
       content: '采购合同逾期付款怎么追责？',
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -428,9 +428,9 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
     {
       id: 'm602',
       conversationId: 'c6',
-      role: 'assistant',
+      role: 'ASSISTANT',
       content: '应依据合同中约定的逾期违约责任条款追责，一般按日计算违约金 [1]。若合同未约定，需先补充协议再主张。',
-      status: '已生成',
+      status: 'GENERATED',
       refs: withRefs([
         {
           index: 1,
@@ -492,9 +492,9 @@ export const publicMessages: Record<string, ChatMessage[]> = {
     {
       id: 'pm1',
       conversationId: 'public:pub_ok_demo',
-      role: 'user',
+      role: 'USER',
       content: '付款比例上限是多少？',
-      status: '已生成',
+      status: 'GENERATED',
       refs: [],
       suggestions: [],
       feedback: null,
@@ -507,9 +507,9 @@ export const publicMessages: Record<string, ChatMessage[]> = {
     {
       id: 'pm2',
       conversationId: 'public:pub_ok_demo',
-      role: 'assistant',
+      role: 'ASSISTANT',
       content: '前期付款比例原则上不超过合同总额的 30%，尾款须在验收合格后支付 [1]。',
-      status: '已生成',
+      status: 'GENERATED',
       refs: withRefs([
         {
           index: 1,

@@ -159,7 +159,7 @@ const submit = async () => {
     // 契约把「沉淀」收在 handleFeedback.promoteToKbId 上：
     // 必须同时回传 status / assignee / resolution，这里保持原值不越权改状态
     await feedbackApi.handleFeedback(props.item.id, {
-      status: form.close ? '已处理' : props.item.status,
+      status: form.close ? 'RESOLVED' : props.item.status,
       assignee: props.item.assignee,
       resolution,
       promoteToKbId: form.kbId

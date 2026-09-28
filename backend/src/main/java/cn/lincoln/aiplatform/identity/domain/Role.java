@@ -79,7 +79,7 @@ public class Role {
    * <p>它的用途是测试与临时装配，不要把"默认值"当成"合理值"用在真实角色上。
    */
   public Role(UUID id, String name, String code) {
-    this(id, name, code, DataScope.own, null, ClassificationLevel.公开, List.of());
+    this(id, name, code, DataScope.OWN, null, ClassificationLevel.PUBLIC, List.of());
   }
 
   public Role(

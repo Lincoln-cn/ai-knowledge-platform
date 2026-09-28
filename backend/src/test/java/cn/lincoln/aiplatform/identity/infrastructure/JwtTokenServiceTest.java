@@ -168,7 +168,7 @@ class JwtTokenServiceTest {
         "管理员",
         "$2a$10$notarealhash",
         UUID.randomUUID(),
-        UserStatus.正常,
+        UserStatus.ACTIVE,
         false);
   }
 }

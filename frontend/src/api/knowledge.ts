@@ -4,7 +4,7 @@ import type { Grant, PageQuery, PageResult, ResourceVisibility } from './types'
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
 /** 导入类型在创建时选定，之后不可更改（BR-03-01） */
-export type ImportType = 'local' | 'online'
+export type ImportType = 'LOCAL' | 'ONLINE'
 
 export interface KnowledgeBase {
   id: string
@@ -25,7 +25,7 @@ export interface KnowledgeBase {
   createdAt: string
   /**
    * 归属与可见性（07 §3.1 的 `OwnedResource`）。**由后端写入**：创建时自动写
-   * `ownerId = 当前用户` / `visibility = 'private'`，所以契约里没有对应的请求字段。
+   * `ownerId = 当前用户` / `visibility = 'PRIVATE'`，所以契约里没有对应的请求字段。
    * `ownerId` 不可变 —— 转让是显式动作，不是改个字段。
    */
   ownerId?: string

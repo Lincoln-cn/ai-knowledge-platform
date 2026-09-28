@@ -20,7 +20,7 @@
       <div class="micro muted">是否含文档：{{ exportPreview.includesDocuments ? '是' : '否' }}</div>
       <div class="deps">
         <div v-for="(d, i) in exportPreview.dependencies" :key="i" class="dep micro">
-          <el-tag size="small" effect="plain">{{ d.kind }}</el-tag>
+          <el-tag size="small" effect="plain">{{ labelOf(BUNDLE_DEPENDENCY_KIND_LABELS, d.kind) }}</el-tag>
           <span>{{ d.name }}</span>
           <span class="muted">{{ d.detail }}</span>
         </div>
@@ -51,7 +51,7 @@
 
         <el-table :data="checkResult.dependencies" size="small" style="margin-top: var(--space-xs)">
           <el-table-column label="类型" width="80">
-            <template #default="{ row }">{{ row.kind }}</template>
+            <template #default="{ row }">{{ labelOf(BUNDLE_DEPENDENCY_KIND_LABELS, row.kind) }}</template>
           </el-table-column>
           <el-table-column label="名称" prop="name" min-width="120" />
           <el-table-column label="说明" min-width="140">
@@ -101,6 +101,7 @@ import type { UploadFile } from 'element-plus'
 import { assistantsApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { AssistantBundle, BundleCheckResult } from '@/api/assistants'
+import { BUNDLE_DEPENDENCY_KIND_LABELS, labelOf } from '@/constants/labels'
 
 const props = defineProps<{ appId: string }>()
 const emit = defineEmits<{ imported: [] }>()

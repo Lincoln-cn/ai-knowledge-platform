@@ -13,7 +13,7 @@ import { kbSharedWithChenjun, kbSharedWithUserRole } from './grants'
  *  - 启用/停用知识库、文档、分段
  *  - 空库（用于空态）、已有向量化内容（向量模型锁定 KB-I4）
  *  - 归属分散在 u1–u4、三种可见性各至少一个（07 §3.1）：这样才验证得出过滤真的生效 ——
- *    chenjun（普通用户，`dataScope: 'shared'`）看得见 kb1 / kb3 / kb4，看不见 kb2（别人的 private）
+ *    chenjun（普通用户，`dataScope: 'SHARED'`）看得见 kb1 / kb3 / kb4，看不见 kb2（别人的 private）
  */
 
 const now = '2026-02-13T11:18:37Z'
@@ -32,7 +32,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     category: '制度规范',
     description: '合同订立、履行、变更与争议解决相关制度，支撑合同审查类问答',
     icon: '📘',
-    importType: 'local',
+    importType: 'LOCAL',
     embeddingModelId: 'm5',
     embeddingModelName: 'mofanke/dmeta-embedding-zh',
     embeddingLocked: true,
@@ -43,7 +43,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     createdAt: '2026-02-01T09:00:00Z',
     ownerId: 'u2',
     // 共享给「普通用户」角色 → 普通用户只读可见
-    visibility: 'shared',
+    visibility: 'SHARED',
     grants: kbSharedWithUserRole
   },
   {
@@ -52,7 +52,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     category: '制度规范',
     description: '采购验收流程、质检标准与不合格处置。当前已停用，不参与检索',
     icon: '📗',
-    importType: 'local',
+    importType: 'LOCAL',
     embeddingModelId: 'm5',
     embeddingModelName: 'mofanke/dmeta-embedding-zh',
     embeddingLocked: true,
@@ -63,7 +63,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     createdAt: '2026-02-03T14:20:00Z',
     // 别人的 private：只有归属人（u2）与全平台档（ADMIN/KB_OPERATOR/APP_CONFIG）看得见
     ownerId: 'u2',
-    visibility: 'private'
+    visibility: 'PRIVATE'
   },
   {
     id: 'kb3',
@@ -71,7 +71,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     category: '产品资料',
     description: '产品架构、能力边界与部署说明',
     icon: '📙',
-    importType: 'local',
+    importType: 'LOCAL',
     embeddingModelId: 'm5',
     embeddingModelName: 'mofanke/dmeta-embedding-zh',
     embeddingLocked: true,
@@ -82,7 +82,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     createdAt: '2026-02-05T10:30:00Z',
     ownerId: 'u3',
     // 共享给 chenjun 本人（`user` 主体，与 kb1 的 `role` 主体并存）→ 演示两种主体都生效
-    visibility: 'shared',
+    visibility: 'SHARED',
     grants: kbSharedWithChenjun
   },
   {
@@ -91,7 +91,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     category: '行业标准',
     description: '相关国标、行标摘录。刚建好，还没有导入文档',
     icon: '📕',
-    importType: 'local',
+    importType: 'LOCAL',
     embeddingModelId: 'm6',
     embeddingModelName: 'bge-m3',
     embeddingLocked: false,
@@ -102,7 +102,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     createdAt: '2026-02-12T16:00:00Z',
     // public = 登录用户里人人可见（**不等于免登录**）；持有 knowledge:view 即可见
     ownerId: 'u1',
-    visibility: 'public'
+    visibility: 'PUBLIC'
   }
 ]
 
@@ -112,7 +112,7 @@ export const documents: DocumentItem[] = [
     kbId: 'kb1',
     name: '采购管理制度.pdf',
     source: 'local',
-    status: '成功',
+    status: 'SUCCEEDED',
     segmentCount: 128,
     processedSegments: 128,
     charCount: 62000,
@@ -127,7 +127,7 @@ export const documents: DocumentItem[] = [
     kbId: 'kb1',
     name: '合同模板汇总.docx',
     source: 'local',
-    status: '向量化中',
+    status: 'EMBEDDING',
     segmentCount: 340,
     processedSegments: 196,
     charCount: 128000,
@@ -142,7 +142,7 @@ export const documents: DocumentItem[] = [
     kbId: 'kb1',
     name: '扫描件_履约材料.pdf',
     source: 'local',
-    status: '分段失败',
+    status: 'SEGMENT_FAILED',
     segmentCount: 0,
     processedSegments: 0,
     charCount: 0,
@@ -157,7 +157,7 @@ export const documents: DocumentItem[] = [
     kbId: 'kb1',
     name: '供应商准入条件.md',
     source: 'local',
-    status: '待向量化',
+    status: 'PENDING_EMBEDDING',
     segmentCount: 42,
     processedSegments: 0,
     charCount: 18000,
@@ -172,7 +172,7 @@ export const documents: DocumentItem[] = [
     kbId: 'kb2',
     name: '验收标准摘录.docx',
     source: 'local',
-    status: '成功',
+    status: 'SUCCEEDED',
     segmentCount: 54,
     processedSegments: 54,
     charCount: 26000,
@@ -187,7 +187,7 @@ export const documents: DocumentItem[] = [
     kbId: 'kb2',
     name: '不合格品处置流程.pdf',
     source: 'local',
-    status: '向量化失败',
+    status: 'EMBEDDING_FAILED',
     segmentCount: 32,
     processedSegments: 12,
     charCount: 15200,
@@ -202,7 +202,7 @@ export const documents: DocumentItem[] = [
     kbId: 'kb3',
     name: '产品白皮书_v2.pdf',
     source: 'local',
-    status: '成功',
+    status: 'SUCCEEDED',
     segmentCount: 96,
     processedSegments: 96,
     charCount: 45000,
@@ -217,7 +217,7 @@ export const documents: DocumentItem[] = [
     kbId: 'kb3',
     name: '部署指南.md',
     source: 'local',
-    status: '分段中',
+    status: 'SEGMENTING',
     segmentCount: 0,
     processedSegments: 0,
     charCount: 22000,
@@ -232,7 +232,7 @@ export const documents: DocumentItem[] = [
     kbId: 'kb3',
     name: '能力边界说明.md',
     source: 'local',
-    status: '待解析',
+    status: 'PENDING_PARSE',
     segmentCount: 0,
     processedSegments: 0,
     charCount: 8000,
@@ -259,7 +259,7 @@ export const segments: Segment[] = [
       '为规范合同管理，防范经营风险，保障公司合法权益，根据国家有关法律法规及公司章程，制定本制度。本制度适用于公司及所属各单位对外签订的各类合同，包括但不限于采购合同、销售合同、服务合同、租赁合同等。',
     charCount: 142,
     enabled: true,
-    embedding: '已向量化'
+    embedding: 'EMBEDDED'
   },
   {
     id: 'seg2',
@@ -270,7 +270,7 @@ export const segments: Segment[] = [
       '合同订立前应完成对方主体资格审查，包括营业执照、资质证书、法定代表人身份证明等。重大合同应当组织法律、财务、业务联合评审，并留存评审记录。',
     charCount: 118,
     enabled: true,
-    embedding: '已向量化'
+    embedding: 'EMBEDDED'
   },
   {
     id: 'seg3',
@@ -281,7 +281,7 @@ export const segments: Segment[] = [
       '付款方式应明确约定付款比例、付款节点与发票要求。前期付款比例原则上不超过合同总额的百分之三十，尾款须在验收合格后支付。付款节点应与履约进度挂钩，不得以单纯时间节点作为唯一付款依据。逾期付款应约定违约责任与计算方式。合同金额超过五十万元的，应约定分期付款并设置质量保证金。付款账户必须是对公账户，不接受个人账户收款要求。涉及外币结算的，应明确汇率确定方式与汇率波动分担机制。预付款项须提供等额预付款保函或公司认可的担保方式。财务部门有权对付款条款的合规性提出异议并要求修改。（本段落刻意写得很长，用于验证超长分段的标红与建议）',
     charCount: 1680,
     enabled: true,
-    embedding: '已向量化'
+    embedding: 'EMBEDDED'
   },
   {
     id: 'seg4',
@@ -292,7 +292,7 @@ export const segments: Segment[] = [
       '验收标准应量化、可检测，避免「符合要求」等模糊表述。争议解决方式优先协商，协商不成的，约定向公司所在地人民法院提起诉讼。',
     charCount: 96,
     enabled: true,
-    embedding: '已向量化'
+    embedding: 'EMBEDDED'
   },
   {
     id: 'seg5',
@@ -303,7 +303,7 @@ export const segments: Segment[] = [
       '合同原件由档案管理部门统一保管，业务部门留存复印件。合同履行完毕后应及时归档，保存期限不少于十年。',
     charCount: 72,
     enabled: false,
-    embedding: '已向量化'
+    embedding: 'EMBEDDED'
   },
   {
     id: 'seg6',
@@ -314,7 +314,7 @@ export const segments: Segment[] = [
       '本模板适用于公司常规采购业务。使用前须根据具体业务场景调整标的、数量、价款、履行期限等要素，不得直接套用未经审查的空白条款。',
     charCount: 98,
     enabled: true,
-    embedding: '已向量化'
+    embedding: 'EMBEDDED'
   },
   {
     id: 'seg7',
@@ -326,7 +326,7 @@ export const segments: Segment[] = [
       '详细描述：乙方应按照甲方确认的服务方案提供服务，服务方案作为本合同不可分割的附件。服务过程中如需调整服务内容，应提前五个工作日书面通知甲方并取得甲方书面同意。甲方有权对服务质量进行检查与考核，考核结果作为付款依据。乙方应配备足够数量的专业人员，主要人员变更须经甲方同意。服务期间产生的所有工作成果知识产权归甲方所有，乙方不得擅自使用或转让给第三方。保密义务在合同终止后继续有效，期限为三年。乙方应建立完善的服务记录制度，按月向甲方提交服务报告。甲方对服务报告有异议的，应在收到报告后五个工作日内提出。因乙方原因导致服务中断的，应按照中断时长扣减相应服务费用。不可抗力情形下，双方应及时通知对方并采取措施减少损失。',
     charCount: 1420,
     enabled: true,
-    embedding: '待向量化'
+    embedding: 'PENDING_EMBEDDING'
   },
   {
     id: 'seg8',
@@ -336,7 +336,7 @@ export const segments: Segment[] = [
     content: '双方对在合同签订与履行过程中知悉的对方商业秘密负有保密义务，保密期限自合同生效之日起三年。',
     charCount: 68,
     enabled: true,
-    embedding: '待向量化'
+    embedding: 'PENDING_EMBEDDING'
   },
   {
     id: 'seg9',
@@ -347,7 +347,7 @@ export const segments: Segment[] = [
       '供应商应具备独立法人资格，注册资本不少于人民币一百万元，近三年无重大违法记录，具备与所提供产品或服务相匹配的资质证书。',
     charCount: 92,
     enabled: true,
-    embedding: '待向量化'
+    embedding: 'PENDING_EMBEDDING'
   },
   {
     id: 'seg10',
@@ -357,7 +357,7 @@ export const segments: Segment[] = [
     content: '同一批次到货按百分之五比例抽样，批量不足一百件的至少抽样五件。抽样不合格率超过百分之三的，该批次整批拒收。',
     charCount: 88,
     enabled: true,
-    embedding: '已向量化'
+    embedding: 'EMBEDDED'
   },
   {
     id: 'seg11',
@@ -367,7 +367,7 @@ export const segments: Segment[] = [
     content: '验收不合格的，应在三个工作日内书面通知供应商。可返工的限期返工，不可返工的作退货或索赔处理。',
     charCount: 72,
     enabled: true,
-    embedding: '已向量化'
+    embedding: 'EMBEDDED'
   },
   {
     id: 'seg12',
@@ -378,16 +378,16 @@ export const segments: Segment[] = [
       '本产品是面向企业内网部署的知识助理平台，核心能力是把业务文档变成可检索、可引用的知识，并支撑带引用的问答。',
     charCount: 78,
     enabled: true,
-    embedding: '已向量化'
+    embedding: 'EMBEDDED'
   }
 ]
 
 /** 每个知识库的检索参数。命中测试页会读取并允许调参 */
 export const retrievalParams: Record<string, RetrievalParams> = {
-  kb1: { mode: '混合检索', threshold: 0.6, topN: 5, noRefStrategy: '拒答' },
-  kb2: { mode: '向量检索', threshold: 0.5, topN: 5, noRefStrategy: '拒答' },
-  kb3: { mode: '全文检索', threshold: 0.4, topN: 8, noRefStrategy: '自由回答' },
-  kb4: { mode: '混合检索', threshold: 0.6, topN: 5, noRefStrategy: '拒答' }
+  kb1: { mode: 'HYBRID', threshold: 0.6, topN: 5, noRefStrategy: 'REFUSE' },
+  kb2: { mode: 'VECTOR', threshold: 0.5, topN: 5, noRefStrategy: 'REFUSE' },
+  kb3: { mode: 'FULLTEXT', threshold: 0.4, topN: 8, noRefStrategy: 'FREE_ANSWER' },
+  kb4: { mode: 'HYBRID', threshold: 0.6, topN: 5, noRefStrategy: 'REFUSE' }
 }
 
 /** 命中测试语料：按问题关键字给出不同命中集合，三种模式分数不同 */

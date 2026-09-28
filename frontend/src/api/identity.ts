@@ -29,7 +29,7 @@ export interface User {
   displayName: string
   roleId: string
   roleName: string
-  status: '正常' | '停用' | '待审核'
+  status: 'ACTIVE' | 'DISABLED' | 'PENDING_REVIEW'
   lastLoginAt: string | null
   /**
    * 初始口令。★ **仅创建且未指定 password 时返回一次**，不是可重查的口令。

@@ -68,11 +68,11 @@ export const modelRoutes: MockRoute[] = [
       }
 
       const capability: ModelCapability = {
-        thinking: input.kind === 'chat' ? probed.thinking : 'NONE',
-        tools: input.kind === 'chat' ? probed.tools : 'UNSUPPORTED',
+        thinking: input.kind === 'CHAT' ? probed.thinking : 'NONE',
+        tools: input.kind === 'CHAT' ? probed.tools : 'UNSUPPORTED',
         contextWindow: base.contextWindow,
         dimension: base.dimension,
-        source: '探测'
+        source: 'PROBED'
       }
       return capability
     }
@@ -96,9 +96,9 @@ export const modelRoutes: MockRoute[] = [
       }
       // 模型类型必须与基础模型一致，否则向量维度/上下文窗口会张冠李戴
       if (base.kind !== input.kind) {
-        throw new ApiError(4003, `基础模型「${base.baseModel}」是${base.kind === 'chat' ? '对话' : '向量'}模型，与所选类型不一致`)
+        throw new ApiError(4003, `基础模型「${base.baseModel}」是${base.kind === 'CHAT' ? '对话' : '向量'}模型，与所选类型不一致`)
       }
-      if (input.kind === 'embedding' && !input.dimension) {
+      if (input.kind === 'EMBEDDING' && !input.dimension) {
         throw new ApiError(4004, '向量模型必须显式声明向量维度 —— 维度与向量表绑定，不能靠猜')
       }
 
@@ -108,11 +108,11 @@ export const modelRoutes: MockRoute[] = [
         kind: input.kind,
         supplier: input.supplier,
         baseModel: input.baseModel,
-        status: '未加载',
+        status: 'NOT_LOADED',
         contextWindow: base.contextWindow,
-        dimension: input.kind === 'embedding' ? (input.dimension ?? base.dimension) : null,
-        thinking: input.kind === 'chat' ? (input.thinking ?? 'NONE') : 'NONE',
-        tools: input.kind === 'chat' ? (input.tools ?? 'UNSUPPORTED') : 'UNSUPPORTED',
+        dimension: input.kind === 'EMBEDDING' ? (input.dimension ?? base.dimension) : null,
+        thinking: input.kind === 'CHAT' ? (input.thinking ?? 'NONE') : 'NONE',
+        tools: input.kind === 'CHAT' ? (input.tools ?? 'UNSUPPORTED') : 'UNSUPPORTED',
         builtin: false,
         remark: input.remark
       }
@@ -135,7 +135,7 @@ export const modelRoutes: MockRoute[] = [
       if (input.baseModel && input.baseModel !== model.baseModel) {
         throw new ApiError(4005, '基础模型不可修改；如需更换请新建模型')
       }
-      if (model.kind === 'embedding' && input.dimension && input.dimension !== model.dimension) {
+      if (model.kind === 'EMBEDDING' && input.dimension && input.dimension !== model.dimension) {
         throw new ApiError(
           ErrorCode.EMBEDDING_LOCKED,
           '向量维度不可修改 —— 维度与向量表绑定，改则需重建向量表并全量重灌'
@@ -144,7 +144,7 @@ export const modelRoutes: MockRoute[] = [
 
       if (input.name) model.name = input.name
       if (input.remark !== undefined) model.remark = input.remark
-      if (model.kind === 'chat') {
+      if (model.kind === 'CHAT') {
         if (input.thinking) model.thinking = input.thinking
         if (input.tools) model.tools = input.tools
       }
@@ -187,12 +187,12 @@ export const modelRoutes: MockRoute[] = [
     '/models/:id/load',
     ({ path }) => {
       const model = findModel(path.id)
-      if (model.status === '加载中') throw new ApiError(4008, '该模型正在加载中，请勿重复提交')
+      if (model.status === 'LOADING') throw new ApiError(4008, '该模型正在加载中，请勿重复提交')
 
-      model.status = '加载中'
+      model.status = 'LOADING'
       // 异步转「已加载」。界面靠刷新/轮询看到变化，与真实后端一致
       setTimeout(() => {
-        model.status = '已加载'
+        model.status = 'LOADED'
       }, LOAD_MS)
 
       return model
@@ -220,7 +220,7 @@ export const modelRoutes: MockRoute[] = [
         tools: probed.tools,
         contextWindow: model.contextWindow,
         dimension: model.dimension,
-        source: '探测'
+        source: 'PROBED'
       }
       return capability
     }

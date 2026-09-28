@@ -92,13 +92,13 @@ public class AccessScopeAdapter implements AccessScopePort {
   private static DataScope parseDataScope(String raw) {
     if (raw == null) {
       log.warn("令牌里没有 scope 声明 ⇒ 按最窄范围 own 处理（是不是签发时漏了？）");
-      return DataScope.own;
+      return DataScope.OWN;
     }
     try {
       return DataScope.valueOf(raw);
     } catch (IllegalArgumentException e) {
       log.warn("令牌里的 scope 无法识别：{} ⇒ 按最窄范围 own 处理", raw);
-      return DataScope.own;
+      return DataScope.OWN;
     }
   }
 
@@ -106,13 +106,13 @@ public class AccessScopeAdapter implements AccessScopePort {
   private static ClassificationLevel parseClearance(String raw) {
     if (raw == null) {
       log.warn("令牌里没有 clearance 声明 ⇒ 按最低密级处理");
-      return ClassificationLevel.公开;
+      return ClassificationLevel.PUBLIC;
     }
     try {
       return ClassificationLevel.valueOf(raw);
     } catch (IllegalArgumentException e) {
       log.warn("令牌里的 clearance 无法识别：{} ⇒ 按最低密级处理", raw);
-      return ClassificationLevel.公开;
+      return ClassificationLevel.PUBLIC;
     }
   }
 

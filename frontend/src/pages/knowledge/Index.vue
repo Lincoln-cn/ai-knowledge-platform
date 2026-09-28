@@ -270,7 +270,7 @@ const canCreate = computed(() => session.can(PERM.knowledgeCreate))
  *
  * ★ 这只是 UX —— 后端按 `dataScope` 过滤列表与写操作前置校验才是边界（07 §3.3）。
  */
-const consumer = computed(() => session.dataScope === 'shared')
+const consumer = computed(() => session.dataScope === 'SHARED')
 
 const TABS = [
   { key: 'documents', label: '文档' },
@@ -426,7 +426,7 @@ const ingestProgress = ref<IngestionProgress | null>(null)
 
 /** 进行中的三个阶段。判据与 DocumentPanel 的 `isRunning` 一致：
  *  「待向量化」是排队等用户点「开始向量化」，不算机器正在做。 */
-const RUNNING_STAGES: DocumentStatus[] = ['待解析', '分段中', '向量化中']
+const RUNNING_STAGES: DocumentStatus[] = ['PENDING_PARSE', 'SEGMENTING', 'EMBEDDING']
 
 const fetchProgress = async () => {
   const id = currentKb.value?.id

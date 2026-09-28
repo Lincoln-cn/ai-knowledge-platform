@@ -4,8 +4,8 @@ import type { Grant, PageQuery, PageResult, ResourceVisibility } from './types'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
-/** 消息状态机：生成中 → 已生成 | 已停止 | 失败（02:336） */
-export type MessageStatus = '生成中' | '已生成' | '已停止' | '失败'
+/** 消息状态机：GENERATING → GENERATED | STOPPED | FAILED（02:336） */
+export type MessageStatus = 'GENERATING' | 'GENERATED' | 'STOPPED' | 'FAILED'
 
 /** 聊天附件回执。上传后按 id 挂到消息上（`ChatMessage.attachments`） */
 export interface ChatAttachment {
@@ -15,15 +15,20 @@ export interface ChatAttachment {
   mime?: string
 }
 
+/** 消息角色（2.4 补录） */
+export type ChatRole = 'USER' | 'ASSISTANT'
+/** 赞踩（2.4 补录）。与 `FeedbackItem.type`、`submitMessageFeedback` 同口径 */
+export type MessageFeedback = 'UP' | 'DOWN'
+
 export interface ChatMessage {
   id: string
   conversationId: string
-  role: 'user' | 'assistant'
+  role: ChatRole
   content: string
   status: MessageStatus
   refs: SourceRef[]
   suggestions: string[]
-  feedback: 'up' | 'down' | null
+  feedback: MessageFeedback | null
   tokens: number
   durationMs: number
   failReason: string | null
@@ -41,7 +46,7 @@ export interface Conversation {
   turnCount: number
   updatedAt: string
   /**
-   * 归属与可见性（07 §3.1）。会话是私人对话：默认 `private` + `ownerId = 当前用户`，
+   * 归属与可见性（07 §3.1）。会话是私人对话：默认 `PRIVATE` + `ownerId = 当前用户`，
    * 所以"会话只有自己的"由归属判定落地，不靠前端过滤（§4.2 会话一行）。
    */
   ownerId?: string
@@ -78,7 +83,7 @@ export interface ConversationShare {
 }
 
 /** 分享范围：整应用 / 整会话 / 单条消息 */
-export type ShareScope = 'app' | 'conversation' | 'message'
+export type ShareScope = 'APP' | 'CONVERSATION' | 'MESSAGE'
 
 export interface CreateShareBody {
   scope: ShareScope
@@ -152,7 +157,7 @@ export const getSegment = (id: string) =>
   request<SegmentBrief>({ method: 'GET', url: '/segments/:id', path: { id } })
 
 /** 赞踩互斥且可撤销：type 传 null 表示取消 */
-export const submitMessageFeedback = (messageId: string, type: 'up' | 'down' | null) =>
+export const submitMessageFeedback = (messageId: string, type: MessageFeedback | null) =>
   request<ChatMessage>({
     method: 'POST',
     url: '/messages/:messageId/feedback',

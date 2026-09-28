@@ -26,13 +26,13 @@ const all = permissions.map((p) => p.code)
 
 export const roles: Role[] = [
   // 数据范围（07 §3.2）：ADMIN / KB_OPERATOR / APP_CONFIG 是全平台口径，USER 是「共享档」
-  { id: 'r1', name: '管理员', code: 'ADMIN', memberCount: 1, permissions: all, dataScope: 'all' },
+  { id: 'r1', name: '管理员', code: 'ADMIN', memberCount: 1, permissions: all, dataScope: 'ALL' },
   {
     id: 'r2',
     name: '知识运营',
     code: 'KB_OPERATOR',
     memberCount: 3,
-    dataScope: 'all',
+    dataScope: 'ALL',
     permissions: [
       PERM.knowledgeView,
       PERM.knowledgeCreate,
@@ -52,7 +52,7 @@ export const roles: Role[] = [
     name: '应用配置',
     code: 'APP_CONFIG',
     memberCount: 2,
-    dataScope: 'all',
+    dataScope: 'ALL',
     permissions: [
       PERM.knowledgeView,
       PERM.hitTest,
@@ -70,7 +70,7 @@ export const roles: Role[] = [
     code: 'USER',
     memberCount: 68,
     // 只看得见「被共享给自己的」+ 公开的（07 §4.2 知识库/应用两行）
-    dataScope: 'shared',
+    dataScope: 'SHARED',
     permissions: [
       PERM.knowledgeView,
       PERM.assistantView,
@@ -93,7 +93,7 @@ export const users: Array<User & { password: string; mustChangePassword: boolean
     displayName: '管理员',
     roleId: 'r1',
     roleName: '管理员',
-    status: '正常',
+    status: 'ACTIVE',
     lastLoginAt: '2026-02-13 08:30',
     mustChangePassword: false
   },
@@ -104,7 +104,7 @@ export const users: Array<User & { password: string; mustChangePassword: boolean
     displayName: '张云',
     roleId: 'r2',
     roleName: '知识运营',
-    status: '正常',
+    status: 'ACTIVE',
     lastLoginAt: '2026-02-13 09:12',
     mustChangePassword: false
   },
@@ -115,7 +115,7 @@ export const users: Array<User & { password: string; mustChangePassword: boolean
     displayName: '李伟',
     roleId: 'r3',
     roleName: '应用配置',
-    status: '正常',
+    status: 'ACTIVE',
     lastLoginAt: '2026-02-12 17:44',
     mustChangePassword: false
   },
@@ -126,7 +126,7 @@ export const users: Array<User & { password: string; mustChangePassword: boolean
     displayName: '陈军',
     roleId: 'r4',
     roleName: '普通用户',
-    status: '正常',
+    status: 'ACTIVE',
     lastLoginAt: '2026-02-13 10:05',
     mustChangePassword: false
   }

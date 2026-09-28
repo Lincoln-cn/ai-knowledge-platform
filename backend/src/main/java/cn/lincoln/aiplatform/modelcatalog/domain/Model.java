@@ -134,7 +134,7 @@ public class Model {
   /**
    * 新建模型。
    *
-   * <p>★ 新建一律落 {@link ModelStatus#未加载} + {@code enabled=false}：刚录入的资产还没加载成功， 不应被业务走到。
+   * <p>★ 新建一律落 {@link ModelStatus#NOT_LOADED} + {@code enabled=false}：刚录入的资产还没加载成功， 不应被业务走到。
    */
   public Model(
       UUID id,
@@ -168,7 +168,7 @@ public class Model {
     this.builtin = builtin;
     this.remark = remark;
     this.createdBy = createdBy;
-    this.status = ModelStatus.未加载;
+    this.status = ModelStatus.NOT_LOADED;
     this.enabled = false;
   }
 
@@ -180,11 +180,11 @@ public class Model {
    * ConstraintViolationException}。
    */
   private static void validateCapacity(ModelKind kind, Integer contextWindow, Integer dimension) {
-    if (kind == ModelKind.chat && dimension != null) {
+    if (kind == ModelKind.CHAT && dimension != null) {
       throw new IllegalArgumentException(
           "对话模型不产出向量，dimension 必须为 null（向量维度是 embedding 模型的字段；填了它，界面会把「改维度需全量重灌」的警示挂到错误的模型上）");
     }
-    if (kind == ModelKind.embedding && contextWindow != null) {
+    if (kind == ModelKind.EMBEDDING && contextWindow != null) {
       throw new IllegalArgumentException(
           "向量模型没有对话上下文窗口，contextWindow 必须为 null（填了它，界面会把「上下文窗口」渲染到一个根本没有对话能力的模型上）");
     }
@@ -193,38 +193,39 @@ public class Model {
   // ────────────────────────── 四态状态机 ──────────────────────────
 
   /**
-   * 发起加载：任意态 → {@link ModelStatus#加载中}。
+   * 发起加载：任意态 → {@link ModelStatus#LOADING}。
    *
    * <p>★ <strong>任意态都可以发起</strong>，包括 {@code 加载失败} 的重试与 {@code 已加载} 的重载 —— 重载是运维的日常动作（换了 apiBase /
    * key 之后总要再点一次）。
    */
   public void startLoad() {
-    this.status = ModelStatus.加载中;
+    this.status = ModelStatus.LOADING;
   }
 
   /**
-   * 加载成功：{@code 加载中} → {@link ModelStatus#已加载}，并清 {@code loadError}、置 {@code enabled=true}。
+   * 加载成功：{@code 加载中} → {@link ModelStatus#LOADED}，并清 {@code loadError}、置 {@code enabled=true}。
    *
    * <p>★ 只接受来自 {@code 加载中} 的转移。{@code 未加载} 直接 {@code markLoaded()}、{@code 加载失败} 直接 {@code
    * markLoaded()} 都是<strong>非法转移</strong> —— 后者意味着「失败原因还没被处理就当成功」，界面会把一个其实没起来的模型显示成可用。
    */
   public void markLoaded() {
-    requireStatus(ModelStatus.加载中, "标记加载成功");
-    this.status = ModelStatus.已加载;
+    requireStatus(ModelStatus.LOADING, "标记加载成功");
+    this.status = ModelStatus.LOADED;
     this.loadError = null;
     this.enabled = true;
   }
 
   /**
-   * 加载失败：{@code 加载中} → {@link ModelStatus#加载失败}，存<strong>可读原因</strong>，并置 {@code enabled=false}。
+   * 加载失败：{@code 加载中} → {@link ModelStatus#LOAD_FAILED}，存<strong>可读原因</strong>，并置 {@code
+   * enabled=false}。
    *
    * @param reason 能照着排查的那句话（如「网关不可达：连接 http://… 超时」）。 ★ 不是「加载失败」四个字 ——
    *     后者等于让用户停在原地。空原因与仅重复状态名的原因都会被拒绝。
    */
   public void markFailed(String reason) {
-    requireStatus(ModelStatus.加载中, "标记加载失败");
+    requireStatus(ModelStatus.LOADING, "标记加载失败");
     String readable = requireReadableReason(reason);
-    this.status = ModelStatus.加载失败;
+    this.status = ModelStatus.LOAD_FAILED;
     this.loadError = readable;
     this.enabled = false;
   }
@@ -263,7 +264,10 @@ public class Model {
       throw new IllegalArgumentException("加载失败原因不能为空 —— 请写能照着排查的那句话，如「网关不可达：连接 http://… 超时」");
     }
     String trimmed = reason.trim();
-    if (trimmed.equals("加载失败") || trimmed.equals("失败") || trimmed.equals("error")) {
+    if (trimmed.equals("LOAD_FAILED")
+        || trimmed.equals("加载失败")
+        || trimmed.equals("失败")
+        || trimmed.equals("error")) {
       throw new IllegalArgumentException(
           "加载失败原因不能只重复状态名（「" + trimmed + "」）—— 请写能照着排查的那句话，如「网关不可达：连接 http://… 超时」");
     }

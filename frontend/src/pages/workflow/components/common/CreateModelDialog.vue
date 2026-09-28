@@ -35,7 +35,7 @@ const dialogVisible = ref<boolean>(false)
 const supplierNameOf = (p: unknown): Supplier | undefined => {
     const raw = p as Record<string, unknown> | null | undefined
     const name = String(raw?.value ?? raw?.key ?? raw?.name ?? raw?.provider ?? '')
-    return name === '本地推理' || name === '外部API' ? name : undefined
+    return name === 'LOCAL_INFERENCE' || name === 'EXTERNAL_API' ? name : undefined
 }
 
 const providerValue = ref<Provider>()

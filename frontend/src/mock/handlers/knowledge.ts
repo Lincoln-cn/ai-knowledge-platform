@@ -98,7 +98,7 @@ export const knowledgeRoutes: MockRoute[] = [
       if (!input.embeddingModelId) {
         throw new ApiError(3003, '必须指定向量模型 —— 维度与向量表绑定，创建后不可随意更换')
       }
-      const embeddingModel = models.find((m) => m.id === input.embeddingModelId && m.kind === 'embedding')
+      const embeddingModel = models.find((m) => m.id === input.embeddingModelId && m.kind === 'EMBEDDING')
       if (!embeddingModel) {
         throw new ApiError(3004, `向量模型「${input.embeddingModelId}」不存在或不是向量模型`)
       }
@@ -121,7 +121,7 @@ export const knowledgeRoutes: MockRoute[] = [
         // 归属由"后端"写：ownerId 从主体集合取（**绝不从请求体取**，否则就是客户端自封归属），
         // 默认可见性 private（07 §7 第 4 问的建议 4(a)：安全默认，要共享得显式动作）
         ownerId: selfId(subjects),
-        visibility: 'private'
+        visibility: 'PRIVATE'
       }
       knowledgeBases.unshift(created)
       if (requestId) createRequestIdToKbId.set(requestId, created.id)

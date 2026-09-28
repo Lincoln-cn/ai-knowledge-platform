@@ -9,7 +9,7 @@
  *   refs     检索先于生成，引用先到，可边看答案边点引用
  *   delta    逐字增量
  *   artifact 结构化产物（当前为 suggestions）
- *   done     终态收尾：已生成 / 已停止 / 失败
+ *   done     终态收尾：GENERATED / STOPPED / FAILED
  *   error    失败原因与下一步；之后仍会走 done 收尾
  *
  * 传输层保证（lib/sse.ts）：无论正常收尾、用户 abort、半途断流还是闲置超时，
@@ -17,7 +17,6 @@
  *
  * 后端用 SSE(text/event-stream) 实现；前端换传输只需替换 lib 层实现，本文件不变。
  */
-
 /* ────────────────────────── 传输层硬保证（契约，不是注释装饰） ────────────────────────── *
  *
  * 下面四条是**后端必须实现**的形状与行为。没写进这里的保证，后端可以合理地不做；
@@ -71,14 +70,14 @@ export const IDLE_TIMEOUT_MS = 60_000
  * 服务端 `error` 帧之后仍必须跟 `done` 帧收尾（error 不是终态，done 才是）。
  */
 export type StreamTerminationPath =
-  /** 正常写完 → done(已生成|失败) */
-  | 'complete'
-  /** 用户主动停止 → done(已停止) */
-  | 'abort'
-  /** 连接断开 / 半途断流 → error? + done(失败) */
-  | 'disconnect'
-  /** 闲置超时 → error + done(失败) */
-  | 'idle-timeout'
+  /** 正常写完 → done(GENERATED|FAILED) */
+  | 'COMPLETE'
+  /** 用户主动停止 → done(STOPPED) */
+  | 'ABORT'
+  /** 连接断开 / 半途断流 → error? + done(FAILED) */
+  | 'DISCONNECT'
+  /** 闲置超时 → error + done(FAILED) */
+  | 'IDLE_TIMEOUT'
 
 /**
  * ③ 任务推进与前端连接无关。
@@ -125,7 +124,7 @@ export type Artifact =
   | { type: 'chart'; spec: unknown }
   | { type: 'mindmap'; spec: unknown }
 
-export type StreamStatus = '已生成' | '已停止' | '失败'
+export type StreamStatus = 'GENERATED' | 'STOPPED' | 'FAILED'
 
 export interface StreamDone {
   status: StreamStatus
@@ -135,11 +134,11 @@ export interface StreamDone {
 }
 
 /**
- * 生成模式。缺省 `new` = 正常新一轮。
- *  - `regenerate` 覆盖 `targetMessageId` 对应的原答案（不新增消息对）
- *  - `continue`   接着 `targetMessageId` 已生成的内容续写（不伪造新问句）
+ * 生成模式。缺省 `NEW` = 正常新一轮。
+ *  - `REGENERATE` 覆盖 `targetMessageId` 对应的原答案（不新增消息对）
+ *  - `CONTINUE`   接着 `targetMessageId` 已生成的内容续写（不伪造新问句）
  */
-export type ChatMode = 'new' | 'regenerate' | 'continue'
+export type ChatMode = 'NEW' | 'REGENERATE' | 'CONTINUE'
 
 export interface ChatStreamOptions {
   /** 应用 id；不传为通用问答 */

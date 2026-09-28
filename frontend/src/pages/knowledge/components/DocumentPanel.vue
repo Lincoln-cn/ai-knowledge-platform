@@ -56,7 +56,7 @@
             <span class="status" :class="statusClass(row.status as DocumentStatus)">
               <el-icon v-if="isRunning(row.status as DocumentStatus)" class="is-loading"><Loading /></el-icon>
               <i v-else class="dot" :class="statusDot(row.status as DocumentStatus)" />
-              {{ row.status }}
+              {{ labelOf(DOCUMENT_STATUS_LABELS, row.status) }}
             </span>
           </template>
         </el-table-column>
@@ -64,7 +64,7 @@
         <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
             <!-- 行内进度：向量化中时展示 processed/total，不是百分比 -->
-            <span v-if="row.status === '向量化中'" class="row-progress">
+            <span v-if="row.status === 'EMBEDDING'" class="row-progress">
               <span class="rp-bar">
                 <span class="rp-fill" :style="{ width: embedPercent(row) + '%' }" />
               </span>
@@ -72,14 +72,14 @@
             </span>
 
             <el-button
-              v-if="row.status === '待向量化' && canUpload"
+              v-if="row.status === 'PENDING_EMBEDDING' && canUpload"
               link size="small" type="primary"
               @click="startEmbed(row)"
             >开始向量化</el-button>
 
             <!-- #10 文档级重新向量化入口 -->
             <el-button
-              v-if="row.status === '成功' && canUpload"
+              v-if="row.status === 'SUCCEEDED' && canUpload"
               link size="small"
               @click="reembed(row)"
             >重新向量化</el-button>
@@ -92,7 +92,7 @@
             </template>
 
             <el-button
-              v-if="row.status === '成功'"
+              v-if="row.status === 'SUCCEEDED'"
               link size="small"
               @click="emit('gotoSegments', row.id)"
             >查看分段</el-button>
@@ -143,6 +143,7 @@ import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 import GlobalProgress from './GlobalProgress.vue'
 import UploadDialog from './UploadDialog.vue'
+import { DOCUMENT_STATUS_LABELS, labelOf } from '@/constants/labels'
 
 const props = defineProps<{ kbId: string }>()
 const emit = defineEmits<{ gotoSegments: [documentId: string] }>()
@@ -152,37 +153,37 @@ const canUpload = computed(() => session.can(PERM.documentUpload))
 const canManage = computed(() => session.can(PERM.knowledgeManage))
 
 const STATUSES: DocumentStatus[] = [
-  '待解析',
-  '分段中',
-  '待向量化',
-  '向量化中',
-  '成功',
-  '分段失败',
-  '向量化失败'
+  'PENDING_PARSE',
+  'SEGMENTING',
+  'PENDING_EMBEDDING',
+  'EMBEDDING',
+  'SUCCEEDED',
+  'SEGMENT_FAILED',
+  'EMBEDDING_FAILED'
 ]
 
 const STATUS_CLASS: Record<DocumentStatus, string> = {
-  待解析: 'st-idle',
-  分段中: 'st-loading',
-  待向量化: 'st-warn',
-  向量化中: 'st-loading',
-  成功: 'st-ok',
-  分段失败: 'st-err',
-  向量化失败: 'st-err'
+  PENDING_PARSE: 'st-idle',
+  SEGMENTING: 'st-loading',
+  PENDING_EMBEDDING: 'st-warn',
+  EMBEDDING: 'st-loading',
+  SUCCEEDED: 'st-ok',
+  SEGMENT_FAILED: 'st-err',
+  EMBEDDING_FAILED: 'st-err'
 }
 
 const STATUS_DOT: Record<DocumentStatus, string> = {
-  待解析: '',
-  分段中: 'warn',
-  待向量化: 'warn',
-  向量化中: 'warn',
-  成功: 'ok',
-  分段失败: 'err',
-  向量化失败: 'err'
+  PENDING_PARSE: '',
+  SEGMENTING: 'warn',
+  PENDING_EMBEDDING: 'warn',
+  EMBEDDING: 'warn',
+  SUCCEEDED: 'ok',
+  SEGMENT_FAILED: 'err',
+  EMBEDDING_FAILED: 'err'
 }
 
-const isRunning = (s: DocumentStatus) => s === '待解析' || s === '分段中' || s === '向量化中'
-const isFailed = (s: DocumentStatus) => s === '分段失败' || s === '向量化失败'
+const isRunning = (s: DocumentStatus) => s === 'PENDING_PARSE' || s === 'SEGMENTING' || s === 'EMBEDDING'
+const isFailed = (s: DocumentStatus) => s === 'SEGMENT_FAILED' || s === 'EMBEDDING_FAILED'
 const statusClass = (s: DocumentStatus) => STATUS_CLASS[s] ?? 'st-idle'
 const statusDot = (s: DocumentStatus) => STATUS_DOT[s] ?? ''
 

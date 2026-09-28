@@ -209,7 +209,7 @@ const loadCredentials = async () => {
 const publishRows = computed<InstrumentRow[]>(() => {
   const a = props.assistant
   if (!a) return []
-  const workflow = a.type === 'workflow'
+  const workflow = a.type === 'WORKFLOW'
 
   const rows: InstrumentRow[] = [
     {

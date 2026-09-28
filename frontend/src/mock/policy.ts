@@ -12,7 +12,7 @@ import { roles, userFromToken } from './fixtures/identity'
  *
  * ```sql
  * WHERE owner_id = :me
- *    OR visibility = 'public'
+ *    OR visibility = 'PUBLIC'
  *    OR EXISTS (SELECT 1 FROM grants g
  *                WHERE g.resource_id = r.id
  *                  AND g.subject IN (:subjects)
@@ -42,7 +42,7 @@ export interface SubjectSet {
   keys: Set<string>
   /** 主体权限点并集：供 `public` 分支判定「动作 ∈ 主体权限点」 */
   permissions: Set<string>
-  /** 主体的数据范围档位：任一为 `'all'` 即全平台可见 */
+  /** 主体的数据范围档位：任一为 `'ALL'` 即全平台可见 */
   scopes: DataScope[]
 }
 
@@ -67,12 +67,12 @@ export function subjectSetOf(
 /**
  * 主体集合 S 的**现在**：{该用户, 其角色} 两项。
  *
- * 角色带进来两样东西：权限点（`public` 分支要查）与数据范围档位（`'all'` 短路）。
+ * 角色带进来两样东西：权限点（`PUBLIC` 分支要查）与数据范围档位（`'ALL'` 短路）。
  */
 export function subjectsOf(user: { id: string; roleId: string }): SubjectSet {
   const role = roles.find((r) => r.id === user.roleId)
-  const subjects: Subject[] = [{ kind: 'user', id: user.id }]
-  if (role) subjects.push({ kind: 'role', id: role.id })
+  const subjects: Subject[] = [{ kind: 'USER', id: user.id }]
+  if (role) subjects.push({ kind: 'ROLE', id: role.id })
   return subjectSetOf(subjects, role?.permissions ?? [], role?.dataScope ? [role.dataScope] : [])
 }
 
@@ -90,7 +90,7 @@ export function currentSubjects(token: string): SubjectSet {
 
 /** S 里那个「本人」的 id。新建资源写 `ownerId` 只能从这里取 —— 绝不从请求体取 */
 export function selfId(subjects: SubjectSet): string {
-  const self = subjects.subjects.find((s) => s.kind === 'user')
+  const self = subjects.subjects.find((s) => s.kind === 'USER')
   if (!self) throw new ApiError(ErrorCode.UNAUTHORIZED, '登录已过期，请重新登录')
   return self.id
 }
@@ -98,28 +98,28 @@ export function selfId(subjects: SubjectSet): string {
 /**
  * `可见(资源, 主体集合 S, 动作)` —— §8.2 的四项，书写顺序即短路顺序：
  *
- *  ① `scope(角色) === 'all'`                            → 全平台
+ *  ① `scope(角色) === 'ALL'`                            → 全平台
  *  ② `资源.ownerId ∈ S.ids`                             → 我建的
  *  ③ `∃ g ∈ grants: g.subject ∈ S ∧ 动作 ∈ g.actions`    → 共享给我的
- *  ④ `visibility === 'public' ∧ 动作 ∈ 主体权限点`       → 公开的（登录用户里人人可见）
+ *  ④ `visibility === 'PUBLIC' ∧ 动作 ∈ 主体权限点`       → 公开的（登录用户里人人可见）
  *
  * 动作取**现有权限点词汇**（`src/constants/permissions.ts`）：同一份资源在"看"与"改"
  * 上要分别问一次，所以调用方每次都必须显式给动作，共享里授予的 `actions` 也用同一套词。
  *
  * 三处刻意的"没做"，都不是漏：
- *  - `'own'` 档不做收窄：§8.2 只对 `'all'` 短路（`own` / `shared` 的差别留给页面形态），
+ *  - `'OWN'` 档不做收窄：§8.2 只对 `'ALL'` 短路（`OWN` / `SHARED` 的差别留给页面形态），
  *    实现严格照 §8.2，不自行加一条判定
- *  - ③ 不再额外要求 `visibility === 'shared'`：与 §8.2 逐字一致；夹具也只把 grants 挂在 shared 上
+ *  - ③ 不再额外要求 `visibility === 'SHARED'`：与 §8.2 逐字一致；夹具也只把 grants 挂在 shared 上
  *  - `grants[].expiresAt` / `canDelegate` 不解析：§8.1 的形状口子，MVP 不填也不读
  */
 export function visibleTo(resource: ResourceLike, subjects: SubjectSet, action: string): boolean {
-  if (subjects.scopes.includes('all')) return true
+  if (subjects.scopes.includes('ALL')) return true
   if (resource.ownerId && subjects.ids.has(resource.ownerId)) return true
   for (const grant of resource.grants ?? []) {
     if (!grant.actions.includes(action)) continue
     if (subjects.keys.has(subjectKey(grant.subject))) return true
   }
-  if (resource.visibility === 'public' && subjects.permissions.has(action)) return true
+  if (resource.visibility === 'PUBLIC' && subjects.permissions.has(action)) return true
   return false
 }
 

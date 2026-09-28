@@ -8,7 +8,7 @@ export default [
     component: () => import('./Index.vue'),
     // 数据范围维度（07 §五）：应用管理只在 own / all 下有形态（建设面）。
     // 消费者（shared）去 /market（应用市场）。
-    meta: { title: '应用管理', permission: PERM.assistantView, scopeForms: ['own', 'all'] }
+    meta: { title: '应用管理', permission: PERM.assistantView, scopeForms: ['OWN', 'ALL'] }
   },
   {
     // 提示词是配置资产（写应用时才用），不是终端用户内容 ⇒ 用 edit 而不是 view。

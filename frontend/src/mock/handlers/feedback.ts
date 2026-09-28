@@ -46,10 +46,10 @@ function requireHandle(token: string): void {
  */
 const TRANSITIONS: Record<FeedbackStatus, FeedbackStatus[]> = {
   // 同态更新（补记沉淀 / 改处理说明）也走 PATCH，故把当前状态算作合法目标
-  待处理: ['待处理', '处理中', '已处理', '已忽略'],
-  处理中: ['处理中', '已处理', '已忽略'],
-  已处理: ['已处理'],
-  已忽略: ['已忽略']
+  PENDING: ['PENDING', 'PROCESSING', 'RESOLVED', 'IGNORED'],
+  PROCESSING: ['PROCESSING', 'RESOLVED', 'IGNORED'],
+  RESOLVED: ['RESOLVED'],
+  IGNORED: ['IGNORED']
 }
 
 const now = () => {
@@ -83,7 +83,7 @@ export const feedbackRoutes: MockRoute[] = [
         .slice()
         .sort((a, b) => {
           const rank = (s: FeedbackStatus) =>
-            s === '待处理' ? 0 : s === '处理中' ? 1 : s === '已处理' ? 2 : 3
+            s === 'PENDING' ? 0 : s === 'PROCESSING' ? 1 : s === 'RESOLVED' ? 2 : 3
           const diff = rank(a.status) - rank(b.status)
           if (diff !== 0) return diff
           return b.createdAt.localeCompare(a.createdAt)
@@ -99,10 +99,10 @@ export const feedbackRoutes: MockRoute[] = [
     (): FeedbackStats => {
       const count = (s: FeedbackStatus) => feedbacks.filter((f) => f.status === s).length
       return {
-        待处理: count('待处理'),
-        处理中: count('处理中'),
-        已处理: count('已处理'),
-        已忽略: count('已忽略')
+        PENDING: count('PENDING'),
+        PROCESSING: count('PROCESSING'),
+        RESOLVED: count('RESOLVED'),
+        IGNORED: count('IGNORED')
       }
     }
   ],
@@ -155,7 +155,7 @@ export const feedbackRoutes: MockRoute[] = [
           rejected.push({
             id,
             reason:
-              item.status === '已处理' || item.status === '已忽略'
+              item.status === 'RESOLVED' || item.status === 'IGNORED'
                 ? `「${item.status}」不能改状态；换状态请先「重新打开」`
                 : `不能从「${item.status}」流转到「${input.status}」`
           })
@@ -163,7 +163,7 @@ export const feedbackRoutes: MockRoute[] = [
         }
 
         // 与单条办理同一条规则：已处理必须有结论，否则闭环是空壳
-        if (input.status === '已处理' && !input.resolution?.trim()) {
+        if (input.status === 'RESOLVED' && !input.resolution?.trim()) {
           rejected.push({ id, reason: '流转到「已处理」必须填写处理说明' })
           continue
         }
@@ -178,10 +178,10 @@ export const feedbackRoutes: MockRoute[] = [
         }
 
         const enteredTerminal =
-          prevStatus !== input.status && (input.status === '已处理' || input.status === '已忽略')
+          prevStatus !== input.status && (input.status === 'RESOLVED' || input.status === 'IGNORED')
         if (enteredTerminal) {
           item.handledAt = now()
-        } else if (input.status === '待处理' || input.status === '处理中') {
+        } else if (input.status === 'PENDING' || input.status === 'PROCESSING') {
           item.handledAt = null
         }
 
@@ -205,14 +205,14 @@ export const feedbackRoutes: MockRoute[] = [
         throw new ApiError(
           4001,
           `不能从「${item.status}」流转到「${input.status}」`,
-          item.status === '已处理' || item.status === '已忽略'
+          item.status === 'RESOLVED' || item.status === 'IGNORED'
             ? '已办结的反馈不能改状态；补记沉淀可直接保存，换状态请先「重新打开」'
             : '请按 状态机：待处理 → 处理中 → 已处理 / 已忽略 操作'
         )
       }
 
       // 已处理必须有结论 —— 否则「处理记录」只是个空壳，闭环名存实亡
-      if (input.status === '已处理' && !input.resolution?.trim()) {
+      if (input.status === 'RESOLVED' && !input.resolution?.trim()) {
         throw new ApiError(4002, '流转到「已处理」必须填写处理说明', '写清定位结论与采取的动作，便于回访与复盘')
       }
 
@@ -223,10 +223,10 @@ export const feedbackRoutes: MockRoute[] = [
 
       // 同态补记（如事后沉淀）不刷新办结时间；真正进入终态才盖时间戳
       const enteredTerminal =
-        prevStatus !== input.status && (input.status === '已处理' || input.status === '已忽略')
+        prevStatus !== input.status && (input.status === 'RESOLVED' || input.status === 'IGNORED')
       if (enteredTerminal) {
         item.handledAt = now()
-      } else if (input.status === '待处理' || input.status === '处理中') {
+      } else if (input.status === 'PENDING' || input.status === 'PROCESSING') {
         item.handledAt = null
       }
 
@@ -253,11 +253,11 @@ export const feedbackRoutes: MockRoute[] = [
     ({ path, token }) => {
       requireHandle(token)
       const item = findFeedback(path.id)
-      if (item.status !== '已处理' && item.status !== '已忽略') {
+      if (item.status !== 'RESOLVED' && item.status !== 'IGNORED') {
         throw new ApiError(4004, `「${item.status}」状态的反馈无需重新打开`, '只有已处理 / 已忽略可以重新打开')
       }
       // 契约：已处理/已忽略 → 处理中，并清空处理时间
-      item.status = '处理中'
+      item.status = 'PROCESSING'
       item.handledAt = null
       return item
     }

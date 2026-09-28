@@ -40,38 +40,38 @@
     </div>
 
     <div v-loading="loading" class="grid">
-      <el-card v-for="m in list" :key="m.id" shadow="never" class="model-card" :class="{ failed: m.status === '加载失败' }">
+      <el-card v-for="m in list" :key="m.id" shadow="never" class="model-card" :class="{ failed: m.status === 'LOAD_FAILED' }">
         <div class="mc-head">
           <span class="mc-name ellipsis">{{ m.name }}</span>
           <el-tag v-if="m.builtin" size="small" effect="plain" type="info">内置</el-tag>
           <span class="grow" />
           <span class="status" :class="STATUS_CLASS[m.status]">
-            <el-icon v-if="m.status === '加载中'" class="is-loading"><Loading /></el-icon>
+            <el-icon v-if="m.status === 'LOADING'" class="is-loading"><Loading /></el-icon>
             <i v-else class="dot" :class="STATUS_DOT[m.status]" />
-            {{ m.status }}
+            {{ labelOf(MODEL_STATUS_LABELS, m.status) }}
           </span>
         </div>
 
         <dl class="mc-facts">
           <div class="fact">
             <dt class="label">类型</dt>
-            <dd>{{ KIND_LABEL[m.kind] }} · {{ m.supplier }}</dd>
+            <dd>{{ KIND_LABEL[m.kind] }} · {{ labelOf(SUPPLIER_LABELS, m.supplier) }}</dd>
           </div>
           <div class="fact">
             <dt class="label">基础模型</dt>
             <dd class="ellipsis">{{ m.baseModel }}</dd>
           </div>
           <div class="fact">
-            <dt class="label">{{ m.kind === 'embedding' ? '向量维度' : '上下文窗口' }}</dt>
+            <dt class="label">{{ m.kind === 'EMBEDDING' ? '向量维度' : '上下文窗口' }}</dt>
             <dd>
-              <template v-if="m.kind === 'embedding'">
+              <template v-if="m.kind === 'EMBEDDING'">
                 <span class="num">{{ m.dimension }}</span> 维
                 <span class="micro muted">（与向量表绑定）</span>
               </template>
               <template v-else><span class="num">{{ m.contextWindow?.toLocaleString() }}</span> tokens</template>
             </dd>
           </div>
-          <div v-if="m.kind === 'chat'" class="fact">
+          <div v-if="m.kind === 'CHAT'" class="fact">
             <dt class="label">能力</dt>
             <dd class="caps">
               <span class="cap">
@@ -88,17 +88,17 @@
 
         <p v-if="m.remark" class="mc-remark micro muted">{{ m.remark }}</p>
 
-        <div v-if="m.status === '加载失败'" class="notice err mc-fail">
+        <div v-if="m.status === 'LOAD_FAILED'" class="notice err mc-fail">
           <el-icon><WarningFilled /></el-icon>
           <span>点「重新加载」可重试。若持续失败，检查模型网关是否可达、该基础模型是否在上游清单中。</span>
         </div>
 
         <div class="mc-actions">
           <el-button
-            v-if="m.status !== '加载中'"
+            v-if="m.status !== 'LOADING'"
             link size="small" type="primary"
             @click="reload(m)"
-          >{{ m.status === '已加载' ? '重新加载' : '加载' }}</el-button>
+          >{{ m.status === 'LOADED' ? '重新加载' : '加载' }}</el-button>
           <el-button v-else link size="small" disabled>加载中…</el-button>
 
           <el-button link size="small" type="primary" @click="openEdit(m)">编辑</el-button>
@@ -154,10 +154,11 @@ import type { ModelInfo, ModelKind, ModelStatus } from '@/api/models'
 import { ApiError } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import ModelFormDialog from './components/ModelFormDialog.vue'
+import { MODEL_STATUS_LABELS, SUPPLIER_LABELS, labelOf } from '@/constants/labels'
 
-const STATUSES: ModelStatus[] = ['未加载', '加载中', '已加载', '加载失败']
+const STATUSES: ModelStatus[] = ['NOT_LOADED', 'LOADING', 'LOADED', 'LOAD_FAILED']
 
-const KIND_LABEL: Record<ModelKind, string> = { chat: '对话', embedding: '向量' }
+const KIND_LABEL: Record<ModelKind, string> = { CHAT: '对话', EMBEDDING: '向量' }
 const THINKING_LABEL = {
   NONE: '无',
   TOGGLEABLE: '可开关',
@@ -169,16 +170,16 @@ const TOOLS_LABEL = {
   PARALLEL: '支持并行'
 } as const
 const STATUS_CLASS: Record<ModelStatus, string> = {
-  未加载: 'st-idle',
-  加载中: 'st-loading',
-  已加载: 'st-ok',
-  加载失败: 'st-err'
+  NOT_LOADED: 'st-idle',
+  LOADING: 'st-loading',
+  LOADED: 'st-ok',
+  LOAD_FAILED: 'st-err'
 }
 const STATUS_DOT: Record<ModelStatus, string> = {
-  未加载: '',
-  加载中: 'warn',
-  已加载: 'ok',
-  加载失败: 'err'
+  NOT_LOADED: '',
+  LOADING: 'warn',
+  LOADED: 'ok',
+  LOAD_FAILED: 'err'
 }
 /** 能力三态的点色：不支持=灰、可开关/支持=琥珀、强制/并行=绿 */
 const CAP_DOT: Record<string, string> = {
@@ -222,7 +223,7 @@ const syncUrl = () => {
 /** 全平台「加载中」的模型数 —— 跨页统计，不是只看当前页 */
 const globalLoadingCount = ref(0)
 const loadingCount = computed(() =>
-  Math.max(globalLoadingCount.value, list.value.filter((m) => m.status === '加载中').length)
+  Math.max(globalLoadingCount.value, list.value.filter((m) => m.status === 'LOADING').length)
 )
 
 const fetchList = async () => {
@@ -254,7 +255,7 @@ const fetchList = async () => {
  */
 const fetchGlobalLoadingCount = async () => {
   try {
-    const result = await modelsApi.listModels({ status: '加载中', size: 1 })
+    const result = await modelsApi.listModels({ status: 'LOADING', size: 1 })
     globalLoadingCount.value = result.total
   } catch {
     // 静默：计数失败不影响主列表

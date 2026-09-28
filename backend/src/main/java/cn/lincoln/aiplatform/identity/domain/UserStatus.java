@@ -3,14 +3,12 @@ package cn.lincoln.aiplatform.identity.domain;
 /**
  * 用户状态。
  *
- * <p>★ 枚举名刻意用**中文字面量**，而不是 {@code ACTIVE/SUSPENDED} + 一个 Converter —— 因为契约里就是这三个中文值（{@code
- * frontend/src/api/identity.ts:24} 的 {@code status: '正常' | '停用' | '待审核'}）。用中文名配
- * {@code @Enumerated(STRING)}， 库、代码、契约三处是同一个字面量，中间少一层映射就少一处可能对不上的地方。
- *
- * <p>代价是要接受"枚举名不是英文"这件事 —— 在本项目的语境里（全中文契约）这笔账是划算的。
+ * <p>★ 取值用 <strong>SCREAMING_SNAKE_CASE 机器码</strong>（{@code ACTIVE / DISABLED / PENDING_REVIEW}），
+ * 标识符 = 线上值 = 库存值三者同名。展示文案（"正常 / 停用 / 待审核"）只出现在前端 label 映射里， <strong>不进标识符、不进线上值、不进库</strong> ——
+ * 机器码稳定、可比较、可排序；文案随时可改而不影响契约与数据。
  */
 public enum UserStatus {
-  正常,
-  停用,
-  待审核
+  ACTIVE,
+  DISABLED,
+  PENDING_REVIEW
 }

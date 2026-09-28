@@ -16,7 +16,7 @@ type WithDeclaredScope = { dataScope?: DataScope }
 
 const declaredScope = (user: CurrentUser | null): DataScope | undefined => {
   const raw = (user as WithDeclaredScope | null)?.dataScope
-  return raw === 'own' || raw === 'shared' || raw === 'all' ? raw : undefined
+  return raw === 'OWN' || raw === 'SHARED' || raw === 'ALL' ? raw : undefined
 }
 
 /** `mustChangePassword` 跨刷新存活：登录响应一次性下发，刷新后只能靠本地记 */
@@ -53,9 +53,9 @@ export const useSessionStore = defineStore('session', {
      * 当前角色的**数据范围**（07 §二/§三）：只有自己的 / 自己+被共享的 / 全平台。
      *
      * 来源只有一个：角色自带的 `dataScope`。它还没下发时按权限点降级 ——
-     * 能管全平台资产（知识库治理 / 应用配置）的角色是 `all`，其余是 `shared`
+     * 能管全平台资产（知识库治理 / 应用配置）的角色是 `ALL`，其余是 `SHARED`
      * （对应 07 §2.2 的「消费者」）。降级是**同一个判据的替代品**，两者不会同时生效，
-     * 也就不会出现「角色说 shared、权限点说 all」这种没人知道该信谁的场面。
+     * 也就不会出现「角色说 SHARED、权限点说 ALL」这种没人知道该信谁的场面。
      *
      * ★ 前端的数据范围**只是 UX**，不是安全边界 —— 真正的边界在后端（07 §3.3）：
      * 这里少渲染一个模块 ≠ 后端会拒绝直连接口，可见性判定只在后端实现一次。
@@ -66,7 +66,7 @@ export const useSessionStore = defineStore('session', {
       const permissions = state.user?.permissions ?? []
       const platformWide =
         permissions.includes(PERM.knowledgeManage) || permissions.includes(PERM.assistantEdit)
-      return platformWide ? 'all' : 'shared'
+      return platformWide ? 'ALL' : 'SHARED'
     },
 
     /** 权限不足时按钮不渲染，而不是渲染后报错 */

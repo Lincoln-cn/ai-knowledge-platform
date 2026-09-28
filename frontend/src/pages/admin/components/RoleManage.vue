@@ -156,17 +156,17 @@ interface ScopeOption {
 /** 三档的集合关系（07 §3.2）：own ⊂ shared ⊂ all。每档都带人读解释，不是只摆英文枚举 */
 const scopeOptions: ScopeOption[] = [
   {
-    value: 'own',
+    value: 'OWN',
     label: '仅自己',
     desc: '只看得到自己创建的资源 —— 个人沙箱，别人分享给我的也不出现在列表里。'
   },
   {
-    value: 'shared',
+    value: 'SHARED',
     label: '自己 + 共享',
     desc: '自己创建的，加上被共享给自己的资源 —— 使用者档，最常见的默认值。'
   },
   {
-    value: 'all',
+    value: 'ALL',
     label: '全平台',
     desc: '全平台的资源都可见 —— 知识运营 / 应用配置 / 管理员这类岗位档。'
   }
@@ -181,8 +181,8 @@ const selected = ref<Role | null>(null)
 const checked = ref<string[]>([])
 /** 已保存的数据范围 —— 与 draftScope 对比得脏。独立 ref 是因为 mock 返回同一对象引用时，
  *  selected.value 不会触发依赖它的 computed 重算。 */
-const savedScope = ref<DataScope>('shared')
-const draftScope = ref<DataScope>('shared')
+const savedScope = ref<DataScope>('SHARED')
+const draftScope = ref<DataScope>('SHARED')
 const loading = ref(false)
 const saving = ref(false)
 const savingScope = ref(false)
@@ -230,7 +230,7 @@ const toggleModule = (group: PermGroup, on: boolean) => {
 const applyRole = (role: Role) => {
   selected.value = role
   checked.value = [...role.permissions]
-  const scope = role.dataScope ?? 'shared'
+  const scope = role.dataScope ?? 'SHARED'
   savedScope.value = scope
   draftScope.value = scope
 }

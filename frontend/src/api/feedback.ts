@@ -4,10 +4,10 @@ import type { PageQuery, PageResult } from './types'
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
 /**
- * 反馈处理状态机：待处理 → 处理中 → 已处理 / 已忽略；
- * 已处理与已忽略都可重新打开（05 §四 增强 3 / MISS-01）。
+ * 反馈处理状态机：PENDING → PROCESSING → RESOLVED / IGNORED；
+ * RESOLVED 与 IGNORED 都可重新打开（05 §四 增强 3 / MISS-01）。
  */
-export type FeedbackStatus = '待处理' | '处理中' | '已处理' | '已忽略'
+export type FeedbackStatus = 'PENDING' | 'PROCESSING' | 'RESOLVED' | 'IGNORED'
 
 export interface FeedbackItem {
   id: string
@@ -15,14 +15,15 @@ export interface FeedbackItem {
   appName: string
   conversationId: string | null
   conversationTitle: string | null
-  type: 'up' | 'down'
+  /** 赞踩（2.4 补录），与 `ChatMessage.feedback` 同口径 */
+  type: 'UP' | 'DOWN'
   question: string
   answer: string
   comment: string
   status: FeedbackStatus
   assignee: string | null
   resolution: string
-  /** 处理为「已处理」时可勾选沉淀为知识库问题 */
+  /** 处理为「已处理」(RESOLVED) 时可勾选沉淀为知识库问题 */
   promotedToKbId: string | null
   promotedToKbName: string | null
   createdAt: string
@@ -32,10 +33,10 @@ export interface FeedbackItem {
 }
 
 export interface FeedbackStats {
-  待处理: number
-  处理中: number
-  已处理: number
-  已忽略: number
+  PENDING: number
+  PROCESSING: number
+  RESOLVED: number
+  IGNORED: number
 }
 
 export interface FeedbackQuery extends PageQuery {
@@ -57,7 +58,7 @@ export interface HandleFeedbackBody {
  * 批量办理请求（P2）。整批一个目标状态；`assigneeId` 传用户 id（与单条办理的
  * `assignee` 显示名不同 —— 批量走 id，避免同名歧义，也和用户目录主键对齐）。
  * `assigneeId` 省略 = 不动人；传 null = 清空处理人。
- * `resolution` 仅在目标为「已处理」时必填（与单条办理同一条规则）。
+ * `resolution` 仅在目标为「已处理」(RESOLVED) 时必填（与单条办理同一条规则）。
  */
 export interface BatchHandleFeedbackBody {
   ids: string[]
@@ -105,6 +106,6 @@ export const handleFeedback = (id: string, body: HandleFeedbackBody) =>
 export const batchHandleFeedbacks = (body: BatchHandleFeedbackBody) =>
   request<BatchHandleFeedbackResult>({ method: 'PATCH', url: '/feedbacks/batch', body })
 
-/** 重新打开：已处理/已忽略 → 处理中，并清空处理时间 */
+/** 重新打开：RESOLVED/IGNORED → PROCESSING，并清空处理时间 */
 export const reopenFeedback = (id: string) =>
   request<FeedbackItem>({ method: 'POST', url: '/feedbacks/:id/reopen', path: { id } })

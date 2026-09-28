@@ -15,10 +15,10 @@ import { ElMessageBox } from 'element-plus'
 import { MsgError, MsgWarning, MsgConfirm } from '@/utils/message'
 
 /** 单例节点：画布上只允许出现一个 */
-const SINGLETON_TYPES: ReadonlySet<string> = new Set(['start-node'])
+const SINGLETON_TYPES: ReadonlySet<string> = new Set(['START_NODE'])
 
 const SINGLETON_LABELS: Record<string, string> = {
-  'start-node': '开始节点'
+  'START_NODE': '开始节点'
 }
 
 export function isSingletonType(type: string | undefined): boolean {

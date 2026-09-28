@@ -3,11 +3,11 @@ package cn.lincoln.aiplatform.platform.access;
 /**
  * 资源的**可见性**（{@code 07 §3.1}）—— 回答"这条记录对谁可见"。
  *
- * <p>★ <strong>{@link #public} 不等于免登录</strong>：它是"<em>登录用户里</em>人人可见"。 免登录只有公开凭证（{@code
+ * <p>★ <strong>{@link #PUBLIC} 不等于免登录</strong>：它是"<em>登录用户里</em>人人可见"。 免登录只有公开凭证（{@code
  * AccessCredential} / 分享链接）那一条链路。 两者混淆过一次就够造成越权了，所以这句话同时写在文档、契约与本枚举上。
  *
- * <p>★ 枚举名用大写下划线（{@code private} 是 Java 关键字，不能直接做标识符）， 而库里与契约里存的是小写 —— 由 {@code
- * VisibilityConverter} 负责这层映射。 映射只放在一处，避免"有的地方存小写、有的地方存大写"。
+ * <p>★ 取值用 <strong>SCREAMING_SNAKE_CASE 机器码</strong>（{@code PRIVATE / SHARED / PUBLIC}）， 标识符 = 线上值
+ * = 库存值三者同名。展示文案不进标识符、不进线上值、不进库。 {@code private} 是 Java 关键字不能直接做标识符，但常量名 {@code PRIVATE} 没有这个问题。
  */
 public enum Visibility {
   /** 仅自己（默认值，见 {@code 08 §4.4.4}：新建资源一律收窄 —— 权限放开容易，收回难） */

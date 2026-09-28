@@ -3,7 +3,10 @@ import { request } from '@/lib/http'
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
 /** 三种检索模式。混合模式用 RRF 融合向量与全文结果 */
-export type RetrievalMode = '向量检索' | '全文检索' | '混合检索'
+export type RetrievalMode = 'VECTOR' | 'FULLTEXT' | 'HYBRID'
+
+/** 无引用时的策略（2.4 补录） */
+export type NoRefStrategy = 'REFUSE' | 'FREE_ANSWER'
 
 export interface RetrievalParams {
   mode: RetrievalMode
@@ -11,7 +14,7 @@ export interface RetrievalParams {
   threshold: number
   topN: number
   /** 无引用时的策略 */
-  noRefStrategy: '拒答' | '自由回答'
+  noRefStrategy: NoRefStrategy
 }
 
 export interface HitItem {
@@ -46,7 +49,7 @@ export const hitTest = (body: HitTestRequest) =>
 /** 并发跑三种模式，用于「对比模式」并列展示 */
 export const hitTestCompare = (body: Omit<HitTestRequest, 'mode'>) =>
   Promise.all(
-    (['向量检索', '全文检索', '混合检索'] as RetrievalMode[]).map((mode) =>
+    (['VECTOR', 'FULLTEXT', 'HYBRID'] as RetrievalMode[]).map((mode) =>
       hitTest({ ...body, mode })
     )
   )

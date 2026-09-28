@@ -24,13 +24,13 @@ const wrap = <T>(payload: T) => ({ data: { data: payload } })
  *  ① **改名**：旧组件读 `modelName` / `model_type`，契约叫 `name` / `kind`。
  *     不改名的话下拉里每行的 label 都是 `undefined`（「没有正确展示可用模型」的根因）。
  *  ② **只给对话模型**：编排节点的「AI 模型」选的是对话模型，
- *     向量模型放进去选了也调不动（`kind: 'embedding'`）。
+ *     向量模型放进去选了也调不动（`kind: 'EMBEDDING'`）。
  */
 export const getAiList = () =>
   request<{ list: ModelInfo[] }>({ method: 'GET', url: '/models', query: { size: 200 } }).then((r) =>
     wrap(
       (r.list ?? [])
-        .filter((m) => m.kind === 'chat')
+        .filter((m) => m.kind === 'CHAT')
         .map((m) => ({ ...m, modelName: m.name, model_type: m.kind }))
     )
   )

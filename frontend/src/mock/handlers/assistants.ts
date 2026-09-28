@@ -86,16 +86,16 @@ const runPublishCheck = (app: Assistant): PublishCheckResult => {
   items.push({
     key: 'model',
     label: '对话模型已加载',
-    passed: !!model && model.status === '已加载',
+    passed: !!model && model.status === 'LOADED',
     detail:
       !model
         ? '未选择对话模型。请选择一个「已加载」的对话模型'
-        : model.status !== '已加载'
+        : model.status !== 'LOADED'
           ? `模型「${model.name}」当前状态为「${model.status}」，请先在模型管理中加载完成`
           : null
   })
 
-  if (app.type === 'workflow') {
+  if (app.type === 'WORKFLOW') {
     /*
      * 编排应用**不查应用级模型** —— 它压根没有这个字段（见 api/assistants.ts）。
      * 改为逐个检查流程里 AI 类节点的模型：这才是"这条流程能不能跑"的真实前提。
@@ -103,13 +103,13 @@ const runPublishCheck = (app: Assistant): PublishCheckResult => {
     const graph = workflowDrafts[app.id]
     const nodes = graph?.nodes ?? []
     const graphModelIds = nodes
-      .filter((n) => n.type === 'ai-chat-node' || n.type === 'question-node')
+      .filter((n) => n.type === 'AI_CHAT_NODE' || n.type === 'QUESTION_NODE')
       .map((n) => (n.config as { modelId?: string | null } | undefined)?.modelId)
       .filter((id): id is string => !!id)
 
     const notLoaded = graphModelIds.filter((id) => {
       const m = models.find((x) => x.id === id)
-      return !m || m.status !== '已加载'
+      return !m || m.status !== 'LOADED'
     })
     items.push({
       key: 'node-models',
@@ -120,8 +120,8 @@ const runPublishCheck = (app: Assistant): PublishCheckResult => {
         : null
     })
 
-    const hasStart = nodes.some((n) => n.type === 'start-node')
-    const hasReply = nodes.some((n) => n.type === 'reply-node')
+    const hasStart = nodes.some((n) => n.type === 'START_NODE')
+    const hasReply = nodes.some((n) => n.type === 'REPLY_NODE')
     const connected = (graph?.edges.length ?? 0) > 0
     const passed = nodes.length >= 2 && hasStart && hasReply && connected
     items.push({
@@ -200,18 +200,18 @@ export const assistantRoutes: MockRoute[] = [
       const subjects = currentSubjects(token)
       const keyword = String(query.keyword ?? '')
       const published = query.published === true || query.published === 'true'
-      const type = query.type === 'simple' || query.type === 'workflow' ? (query.type as AssistantType) : null
+      const type = query.type === 'SIMPLE' || query.type === 'WORKFLOW' ? (query.type as AssistantType) : null
       // mine=true 只看自己名下的（07 §六 阶段 1 的唯一新增查询参数）
       const mine = query.mine === true || query.mine === 'true'
       const origin =
-        query.origin === 'official' || query.origin === 'shared' || query.origin === 'mine'
+        query.origin === 'OFFICIAL' || query.origin === 'SHARED' || query.origin === 'MINE'
           ? (query.origin as AssistantOrigin)
           : null
       const me = selfId(subjects)
       // 市场三件套：排序 / 标签 / 只看收藏
       const sort =
-        query.sort === 'popular' || query.sort === 'latest' || query.sort === 'name'
-          ? (query.sort as 'popular' | 'latest' | 'name')
+        query.sort === 'POPULAR' || query.sort === 'LATEST' || query.sort === 'NAME'
+          ? (query.sort as 'POPULAR' | 'LATEST' | 'NAME')
           : null
       const tag = typeof query.tag === 'string' && query.tag ? query.tag : null
       const favoriteOnly = query.favorite === true || query.favorite === 'true'
@@ -227,11 +227,11 @@ export const assistantRoutes: MockRoute[] = [
         list = list.filter((a) => a.type === type)
       }
       // 来源分段与卡片徽标同一套判据：builtin 优先归「官方」，其余按 ownerId 分流
-      if (origin === 'official') {
+      if (origin === 'OFFICIAL') {
         list = list.filter((a) => a.builtin)
-      } else if (origin === 'mine') {
+      } else if (origin === 'MINE') {
         list = list.filter((a) => !a.builtin && a.ownerId === me)
-      } else if (origin === 'shared') {
+      } else if (origin === 'SHARED') {
         list = list.filter((a) => !a.builtin && a.ownerId !== me)
       }
       if (tag) {
@@ -242,11 +242,11 @@ export const assistantRoutes: MockRoute[] = [
         list = list.filter((a) => favs.has(a.id))
       }
       // 排序在过滤后、分页前
-      if (sort === 'popular') {
+      if (sort === 'POPULAR') {
         list = [...list].sort((a, b) => b.callCount - a.callCount)
-      } else if (sort === 'latest') {
+      } else if (sort === 'LATEST') {
         list = [...list].sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')))
-      } else if (sort === 'name') {
+      } else if (sort === 'NAME') {
         list = [...list].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
       }
       const page = paginate(list, query)
@@ -261,7 +261,7 @@ export const assistantRoutes: MockRoute[] = [
       const subjects = currentSubjects(token)
       const input = body as UpsertAssistantBody
       // type 创建时必填且此后不可改（SRS 02 / FR-04）
-      if (input.type !== 'simple' && input.type !== 'workflow') {
+      if (input.type !== 'SIMPLE' && input.type !== 'WORKFLOW') {
         throw new ApiError(4004, '创建应用必须指定类型', '请选择「简单应用」或「编排应用」。类型创建后不可更改')
       }
       if (assistants.some((a) => a.name === input.name)) {
@@ -297,14 +297,14 @@ export const assistantRoutes: MockRoute[] = [
         satisfaction: null,
         // 归属由"后端"写，不从请求体读（07 §六 阶段 1）：ownerId 取主体集合里的本人
         ownerId: selfId(subjects),
-        visibility: 'private'
+        visibility: 'PRIVATE'
       }
       // 引用计数
       for (const pid of created.promptIds) {
         const p = promptConfigs.find((c) => c.id === pid)
         if (p) p.usageCount += 1
       }
-      if (created.type === 'workflow' && !workflowDrafts[created.id]) {
+      if (created.type === 'WORKFLOW' && !workflowDrafts[created.id]) {
         workflowDrafts[created.id] = { nodes: [], edges: [] }
       }
       assistants.unshift(created)
@@ -361,7 +361,7 @@ export const assistantRoutes: MockRoute[] = [
         throw new ApiError(4002, `应用名称「${config.name}」已存在，请先改名再导入`)
       }
       // 旧包可能没有 type；缺省按简单应用，避免导入后类型不明
-      const importedType: AssistantType = config.type === 'workflow' ? 'workflow' : 'simple'
+      const importedType: AssistantType = config.type === 'WORKFLOW' ? 'WORKFLOW' : 'SIMPLE'
       const created: Assistant = {
         id: `as${Date.now()}`,
         name: config.name,
@@ -373,7 +373,7 @@ export const assistantRoutes: MockRoute[] = [
         modelId: config.modelId,
         modelName: modelNameOf(config.modelId),
         kbIds: input.skipMissingReferences ? config.kbIds.filter((id) => !id.startsWith('missing')) : config.kbIds,
-        rolePrompt: missing.some((m) => m.kind === '提示词') && input.skipMissingReferences ? '' : config.rolePrompt,
+        rolePrompt: missing.some((m) => m.kind === 'PROMPT') && input.skipMissingReferences ? '' : config.rolePrompt,
         promptIds: input.skipMissingReferences
           ? config.promptIds.filter((id) => promptConfigs.some((p) => p.id === id))
           : config.promptIds,
@@ -387,10 +387,10 @@ export const assistantRoutes: MockRoute[] = [
         satisfaction: null,
         // 导入也是新建：归属给导入人，默认 private
         ownerId: selfId(subjects),
-        visibility: 'private'
+        visibility: 'PRIVATE'
       }
       // 编排应用：包里带了流程定义就恢复进草稿，否则建一个空画布（与新建同形）
-      if (importedType === 'workflow') {
+      if (importedType === 'WORKFLOW') {
         const restored: WorkflowGraph = config.workflow ?? { nodes: [], edges: [] }
         workflowDrafts[created.id] = restored
         created.workflow = {
@@ -436,7 +436,7 @@ export const assistantRoutes: MockRoute[] = [
         throw new ApiError(
           4003,
           '应用类型创建后不可更改；如需改为编排/简单，请新建应用',
-          `当前是「${app.type === 'workflow' ? '编排' : '简单'}」应用`
+          `当前是「${app.type === 'WORKFLOW' ? '编排' : '简单'}」应用`
         )
       }
       if (input.name && input.name !== app.name && assistants.some((a) => a.name === input.name)) {
@@ -543,7 +543,7 @@ export const assistantRoutes: MockRoute[] = [
         throw new ApiError(4006, `「${app.name}」是内置应用，可见性由平台统一维护`)
       }
       const { visibility } = body as { visibility: ResourceVisibility }
-      if (visibility !== 'private' && visibility !== 'shared' && visibility !== 'public') {
+      if (visibility !== 'PRIVATE' && visibility !== 'SHARED' && visibility !== 'PUBLIC') {
         throw new ApiError(4004, '可见性只能是 private / shared / public')
       }
       app.visibility = visibility
@@ -567,11 +567,11 @@ export const assistantRoutes: MockRoute[] = [
       for (const g of grants) {
         const kind = g.subject?.kind
         const id = g.subject?.id
-        if ((kind !== 'user' && kind !== 'role') || !id) {
+        if ((kind !== 'USER' && kind !== 'ROLE') || !id) {
           throw new ApiError(4004, '共享主体只支持账号（user）与角色（role）')
         }
         const exists =
-          kind === 'user' ? users.some((u) => u.id === id) : roles.some((r) => r.id === id)
+          kind === 'USER' ? users.some((u) => u.id === id) : roles.some((r) => r.id === id)
         if (!exists) {
           throw new ApiError(4004, `共享主体不存在：${kind} ${id}`)
         }
@@ -751,13 +751,13 @@ export const assistantRoutes: MockRoute[] = [
        * AI 节点用到的模型（去重）。
        * 编排应用另加一档「流程」：画布定义随包走，否则导入后流程是空的（P1）。
        */
-      const graph = app.type === 'workflow' ? (workflowDrafts[app.id] ?? { nodes: [], edges: [] }) : null
+      const graph = app.type === 'WORKFLOW' ? (workflowDrafts[app.id] ?? { nodes: [], edges: [] }) : null
       const modelNames =
-        app.type === 'workflow'
+        app.type === 'WORKFLOW'
           ? [
               ...new Set(
                 (graph?.nodes ?? [])
-                  .filter((n) => n.type === 'ai-chat-node' || n.type === 'question-node')
+                  .filter((n) => n.type === 'AI_CHAT_NODE' || n.type === 'QUESTION_NODE')
                   .map((n) => (n.config as { modelId?: string | null } | undefined)?.modelId)
                   .filter((id): id is string => !!id)
                   .map((id) => models.find((m) => m.id === id)?.name ?? id)
@@ -768,7 +768,7 @@ export const assistantRoutes: MockRoute[] = [
         ? sampleBundleDeps.missing
         : [
             {
-              kind: '模型',
+              kind: 'MODEL',
               name: modelNames.join('、'),
               detail: '本地推理 · 已加载',
               satisfied: true,
@@ -776,7 +776,7 @@ export const assistantRoutes: MockRoute[] = [
             },
             ...app.kbIds.map(
               (id): BundleDependency => ({
-                kind: '知识库',
+                kind: 'KNOWLEDGE_BASE',
                 name: id === 'kb1' ? '合同管理制度' : id === 'kb2' ? '采购验收规范' : '报销制度',
                 detail: id === 'kb1' ? '128 个文档 · 412 个分段' : '36 个文档 · 180 个分段',
                 satisfied: true,
@@ -786,7 +786,7 @@ export const assistantRoutes: MockRoute[] = [
             ...app.promptIds.map((id): BundleDependency => {
               const p = promptConfigs.find((c) => c.id === id)
               return {
-                kind: '提示词',
+                kind: 'PROMPT',
                 name: p?.roleName ?? id,
                 detail: p ? `${p.typeName} · 被 ${p.usageCount} 个应用引用` : '未知提示词',
                 satisfied: !!p,
@@ -797,7 +797,7 @@ export const assistantRoutes: MockRoute[] = [
             ...(graph
               ? [
                   {
-                    kind: '流程' as const,
+                    kind: 'WORKFLOW' as const,
                     name: `${graph.nodes.length} 个节点 · ${graph.edges.length} 条连线`,
                     detail: '画布流程定义，随包导出',
                     satisfied: true,

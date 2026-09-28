@@ -93,13 +93,13 @@
               <span class="h3 ac-name">{{ a.name }}</span>
               <span class="ac-tags">
                 <el-tag size="small" effect="plain" class="ac-type-tag">
-                  {{ a.type === 'workflow' ? '编排' : '简单' }}
+                  {{ a.type === 'WORKFLOW' ? '编排' : '简单' }}
                 </el-tag>
                 <!--
                   来源徽标三态（§六 2 / #8）：官方 / 由 X 分享 / 我的。
                 -->
-                <el-tag v-if="originOf(a) === 'official'" size="small" effect="plain" type="info">官方</el-tag>
-                <el-tag v-else-if="originOf(a) === 'mine'" size="small" effect="plain" type="success">我的</el-tag>
+                <el-tag v-if="originOf(a) === 'OFFICIAL'" size="small" effect="plain" type="info">官方</el-tag>
+                <el-tag v-else-if="originOf(a) === 'MINE'" size="small" effect="plain" type="success">我的</el-tag>
                 <el-tag v-else size="small" effect="plain" type="warning">
                   由 {{ a.ownerName || '他人' }} 分享
                 </el-tag>
@@ -121,18 +121,18 @@
           -->
           <div class="fact-group">
             <div class="fact">
-              <dt class="label">{{ a.type === 'workflow' ? '节点' : '模型' }}</dt>
-              <dd :title="a.type === 'workflow' ? '' : a.modelName">
-                <template v-if="a.type === 'workflow'">
+              <dt class="label">{{ a.type === 'WORKFLOW' ? '节点' : '模型' }}</dt>
+              <dd :title="a.type === 'WORKFLOW' ? '' : a.modelName">
+                <template v-if="a.type === 'WORKFLOW'">
                   <span class="num">{{ a.workflow?.nodeCount ?? 0 }}</span> 个
                 </template>
                 <template v-else>{{ a.modelName || '—' }}</template>
               </dd>
             </div>
             <div class="fact">
-              <dt class="label">{{ a.type === 'workflow' ? '版本' : '知识库' }}</dt>
+              <dt class="label">{{ a.type === 'WORKFLOW' ? '版本' : '知识库' }}</dt>
               <dd>
-                <template v-if="a.type === 'workflow'">
+                <template v-if="a.type === 'WORKFLOW'">
                   <span v-if="a.workflow?.publishedVersion" class="num">v{{ a.workflow.publishedVersion }}</span>
                   <span v-else class="faint">未发布</span>
                 </template>
@@ -174,7 +174,7 @@
             link size="small"
             type="primary"
             @click="openConfig(a)"
-          >{{ a.type === 'workflow' ? '编排' : '配置' }}</el-button>
+          >{{ a.type === 'WORKFLOW' ? '编排' : '配置' }}</el-button>
           <el-button
             v-if="showShare(a)"
             link size="small"
@@ -184,9 +184,9 @@
           <el-button
             link
             size="small"
-            :type="originOf(a) === 'mine' ? undefined : 'primary'"
+            :type="originOf(a) === 'MINE' ? undefined : 'primary'"
             @click="demo(a)"
-          >{{ originOf(a) === 'mine' ? '演示' : '开始对话' }}</el-button>
+          >{{ originOf(a) === 'MINE' ? '演示' : '开始对话' }}</el-button>
           <el-button
             v-if="showPublish(a)"
             link size="small"
@@ -239,7 +239,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { assistantsApi } from '@/api'
 import { ApiError } from '@/api/types'
-import type { Assistant, AssistantOrigin } from '@/api/assistants'
+import type { Assistant, AssistantOrigin, AssistantType } from '@/api/assistants'
 import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 import PageHeader from '@/components/PageHeader.vue'
@@ -270,7 +270,7 @@ const readQueryFromUrl = () => {
   return {
     keyword: typeof q.keyword === 'string' ? q.keyword : '',
     published: (typeof q.published === 'string' ? q.published : '') as '' | 'true' | 'false',
-    type: (typeof q.type === 'string' ? q.type : '') as '' | 'simple' | 'workflow',
+    type: (typeof q.type === 'string' ? q.type : '') as '' | AssistantType,
     origin: (typeof q.origin === 'string' ? q.origin : '') as '' | AssistantOrigin,
     page: Number(q.page) > 0 ? Number(q.page) : 1
   }
@@ -303,20 +303,20 @@ const meId = computed(() => session.user?.id ?? '')
  * 其余按 ownerId 分流：我的 / 他人分享。
  */
 const originOf = (a: Assistant): AssistantOrigin => {
-  if (a.builtin) return 'official'
-  return a.ownerId && a.ownerId === meId.value ? 'mine' : 'shared'
+  if (a.builtin) return 'OFFICIAL'
+  return a.ownerId && a.ownerId === meId.value ? 'MINE' : 'SHARED'
 }
 
 // 主操作按来源分化（§六 3）：官方与他人分享只有「开始对话」，我的才有配置/分享/概览
 const showConfig = (a: Assistant) =>
-  can(PERM.assistantEdit) && originOf(a) === 'mine'
+  can(PERM.assistantEdit) && originOf(a) === 'MINE'
 const showShare = (a: Assistant) =>
-  can(PERM.assistantEdit) && originOf(a) === 'mine'
-const showOverview = (a: Assistant) => originOf(a) === 'mine'
+  can(PERM.assistantEdit) && originOf(a) === 'MINE'
+const showOverview = (a: Assistant) => originOf(a) === 'MINE'
 const showPublish = (a: Assistant) =>
-  can(PERM.assistantPublish) && originOf(a) === 'mine'
+  can(PERM.assistantPublish) && originOf(a) === 'MINE'
 const showDelete = (a: Assistant) =>
-  can(PERM.assistantEdit) && originOf(a) === 'mine'
+  can(PERM.assistantEdit) && originOf(a) === 'MINE'
 
 const emptyTitle = computed(() => {
   if (hasFilter.value) return '当前筛选下没有应用'
@@ -409,7 +409,7 @@ const openWorkflow = (a: Assistant) => {
 
 const openConfig = (a: Assistant) => {
   // 编排应用没有提示词/检索配置面，配置即画布
-  if (a.type === 'workflow') {
+  if (a.type === 'WORKFLOW') {
     openWorkflow(a)
     return
   }

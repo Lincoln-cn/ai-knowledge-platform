@@ -41,7 +41,7 @@
           <template #default="{ row }">
             <span class="status" :class="STATUS_CLASS[row.status as User['status']]">
               <i class="dot" :class="STATUS_DOT[row.status as User['status']]" />
-              {{ row.status }}
+              {{ labelOf(USER_STATUS_LABELS, row.status) }}
             </span>
           </template>
         </el-table-column>
@@ -89,18 +89,19 @@ import { ApiError } from '@/api/types'
 import type { Role, User } from '@/api/identity'
 import { useSessionStore } from '@/stores/session'
 import UserFormDialog from './UserFormDialog.vue'
+import { USER_STATUS_LABELS, labelOf } from '@/constants/labels'
 
-const STATUSES: Array<User['status']> = ['正常', '停用', '待审核']
+const STATUSES: Array<User['status']> = ['ACTIVE', 'DISABLED', 'PENDING_REVIEW']
 
 const STATUS_CLASS: Record<User['status'], string> = {
-  正常: 'st-ok',
-  停用: 'st-err',
-  待审核: 'st-warn'
+  ACTIVE: 'st-ok',
+  DISABLED: 'st-err',
+  PENDING_REVIEW: 'st-warn'
 }
 const STATUS_DOT: Record<User['status'], string> = {
-  正常: 'ok',
-  停用: 'err',
-  待审核: 'warn'
+  ACTIVE: 'ok',
+  DISABLED: 'err',
+  PENDING_REVIEW: 'warn'
 }
 
 const session = useSessionStore()

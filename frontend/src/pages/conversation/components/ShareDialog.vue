@@ -148,7 +148,7 @@ const create = async () => {
   creating.value = true
   try {
     const created = await conversationsApi.createConversationShare(conversationId, {
-      scope: props.messageId ? 'message' : 'conversation',
+      scope: props.messageId ? 'MESSAGE' : 'CONVERSATION',
       messageId: props.messageId || undefined,
       expiresAt:
         expiresMode.value === 'date' && expiresAt.value

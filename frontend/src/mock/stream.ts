@@ -20,7 +20,7 @@ import { enrichRef } from './fixtures/conversations'
  * 而不是假动画。换成真实 SSE 只取决于 config/env.ts 的 USE_MOCK。
  *
  * 落库（#4）：三种终态（已生成 / 已停止 / 失败）都在**收尾函数里同步落**，
- * 见 `finish`。用户点「停止」→ `abort()` → `finish('已停止')` → 已生成的半截
+ * 见 `finish`。用户点「停止」→ `abort()` → `finish('STOPPED')` → 已生成的半截
  * 内容一并写入存储，所以刷新页面不会丢。落库先于 `onDone` 回调：UI 收到
  * 终态时数据已经在库里，不存在「界面已收尾、落库还在路上」的窗口。
  *
@@ -91,7 +91,7 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
    * 三种终态都进这里 —— 已生成（跑完）/ 已停止（abort）/ 失败（触发失败条件）。
    */
   const finish = (
-    status: '已生成' | '已停止' | '失败',
+    status: 'GENERATED' | 'STOPPED' | 'FAILED',
     tokens: { prompt: number; completion: number; total: number }
   ) => {
     if (closed) return
@@ -131,7 +131,7 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
     failHint = hint ?? null
     // error 之后仍要走 done 收尾（契约 stream-types.ts 顶部注释）
     options.onError?.(reason, hint)
-    finish('失败', { prompt: 0, completion: 0, total: 0 })
+    finish('FAILED', { prompt: 0, completion: 0, total: 0 })
   }
 
   // 通用问答不带知识库，因此不带引用 —— 与页面上的「不显示引用来源区块」一致
@@ -145,7 +145,7 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
    * 先按 targetMessageId 找到已生成的部分，再从其长度处切开 canned 文本。
    */
   const resumeFrom = (() => {
-    if (options.mode !== 'continue' || !options.targetMessageId) return 0
+    if (options.mode !== 'CONTINUE' || !options.targetMessageId) return 0
     const prev = findMessage(options.targetMessageId)
     return prev ? prev.content.length : 0
   })()
@@ -187,12 +187,12 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
     }
     if (shouldEmpty) {
       // 空回答：不推任何 delta，直接以「已生成」收尾 —— 让空回答提示可被实测
-      finish('已生成', { prompt: 512, completion: 0, total: 512 })
+      finish('GENERATED', { prompt: 512, completion: 0, total: 512 })
       return
     }
     // 继续生成：从已写到的位置接着吐；重生成/新一轮从头吐
     const text =
-      options.mode === 'continue' && resumeFrom > 0
+      options.mode === 'CONTINUE' && resumeFrom > 0
         ? payload.text.slice(resumeFrom)
         : payload.text
     let cursor = 0
@@ -212,7 +212,7 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
           emittedSuggestions = payload.suggestions
           options.onArtifact?.({ type: 'suggestions', items: payload.suggestions })
         }
-        finish('已生成', {
+        finish('GENERATED', {
           prompt: 812,
           completion: Math.round(text.length / 2.2),
           total: 812 + Math.round(text.length / 2.2)
@@ -231,7 +231,7 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
       aborted = true
       // 已生成的半截照样落库 —— 这是「用户点停止后数据不能丢」的兑现点
       const completion = Math.round(Math.max(emittedText.length, 1) / 2.2)
-      finish('已停止', { prompt: 812, completion, total: 812 + completion })
+      finish('STOPPED', { prompt: 812, completion, total: 812 + completion })
     }
   }
 }

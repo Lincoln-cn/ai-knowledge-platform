@@ -146,7 +146,7 @@ export function chatStreamViaSse(options: ChatStreamOptions): StreamHandle {
       options.onError?.(reason, hint)
     }
     finish({
-      status: '失败',
+      status: 'FAILED',
       messageId,
       tokens: { prompt: 0, completion: 0, total: 0 },
       durationMs: 0
@@ -220,7 +220,7 @@ export function chatStreamViaSse(options: ChatStreamOptions): StreamHandle {
     if (controller.signal.aborted) {
       // 主动停止：不算错误，但必须给出「已停止」终态，否则界面永远停在生成中
       finish({
-        status: '已停止',
+        status: 'STOPPED',
         messageId,
         tokens: { prompt: 0, completion: 0, total: 0 },
         durationMs: 0

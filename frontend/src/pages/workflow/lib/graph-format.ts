@@ -47,9 +47,9 @@ export interface LogicFlowGraph {
 /* ────────────────────────── 共享：检索参数 ────────────────────────── */
 
 const searchModeToRetrieval: Record<string, RetrievalMode> = {
-  embedding: '向量检索',
-  keywords: '全文检索',
-  blend: '混合检索'
+  embedding: 'VECTOR',
+  keywords: 'FULLTEXT',
+  blend: 'HYBRID'
 }
 const retrievalToSearchMode: Record<string, string> = {
   向量检索: 'embedding',
@@ -65,7 +65,7 @@ function datasetSettingToRetrieval(ds: any): { retrieval: RetrievalParams; extra
     threshold: typeof ds?.similarity === 'number' ? ds.similarity : 0.6,
     topN: typeof ds?.top_n === 'number' ? ds.top_n : 5,
     // 自由回答 ↔ ai_questioning（继续问模型）；拒答 ↔ designated_answer
-    noRefStrategy: ds?.no_references_setting?.status === 'ai_questioning' ? '自由回答' : '拒答'
+    noRefStrategy: ds?.no_references_setting?.status === 'ai_questioning' ? 'FREE_ANSWER' : 'REFUSE'
   }
   return {
     retrieval,
@@ -85,11 +85,11 @@ function retrievalToDatasetSetting(
   retrieval: RetrievalParams | undefined,
   extras?: Record<string, unknown>
 ): Record<string, unknown> {
-  const r = retrieval ?? { mode: '混合检索', threshold: 0.6, topN: 5, noRefStrategy: '拒答' }
+  const r = retrieval ?? { mode: '混合检索', threshold: 0.6, topN: 5, noRefStrategy: 'REFUSE' }
   const maxChars = (extras?.max_paragraph_char_number as number) ?? 5000
   const noRef = (extras?.no_references_setting as any) ?? {
-    status: r.noRefStrategy === '自由回答' ? 'ai_questioning' : 'designated_answer',
-    value: r.noRefStrategy === '自由回答' ? '{question}' : ''
+    status: r.noRefStrategy === 'FREE_ANSWER' ? 'ai_questioning' : 'designated_answer',
+    value: r.noRefStrategy === 'FREE_ANSWER' ? '{question}' : ''
   }
   return {
     search_mode: retrievalToSearchMode[r.mode] ?? 'blend',
@@ -112,13 +112,13 @@ const contractTypeToInputType: Record<string, string> = {
   数字: 'Slider'
 }
 const inputTypeToContractType: Record<string, UserInputField['type']> = {
-  TextInput: '文本',
-  Slider: '数字',
-  SwitchInput: '文本',
-  SingleSelect: '单选',
-  MultiSelect: '多选',
-  RadioCard: '单选',
-  DatePicker: '日期'
+  TextInput: 'TEXT',
+  Slider: 'NUMBER',
+  SwitchInput: 'TEXT',
+  SingleSelect: 'SINGLE_SELECT',
+  MultiSelect: 'MULTI_SELECT',
+  RadioCard: 'SINGLE_SELECT',
+  DatePicker: 'DATE'
 }
 
 function userFieldToLegacy(f: UserInputField & Record<string, any>): Record<string, any> {
@@ -148,7 +148,7 @@ function userFieldFromLegacy(f: any): UserInputField & Record<string, any> {
     ? f.option_list.map((o: any) => (typeof o === 'string' ? o : (o.value ?? o.key)))
     : f?.optionList
   const type: UserInputField['type'] =
-    f?.type === '文本' || f?.type === '单选' || f?.type === '多选' || f?.type === '日期' || f?.type === '数字'
+    f?.type === 'TEXT' || f?.type === 'SINGLE_SELECT' || f?.type === 'MULTI_SELECT' || f?.type === 'DATE' || f?.type === 'NUMBER'
       ? f.type
       : inputTypeToContractType[f?.input_type] ?? '文本'
   return {
@@ -418,7 +418,7 @@ function conditionFromLegacy(nd: any): ConditionNodeConfig & Record<string, any>
  * | `variable: [nodeId, field]\|null`  | `conditions[].field`（数组，空=未选）|
  * | `operator`                         | `conditions[].compare`             |
  * | `value`                            | `conditions[].value`               |
- * | `logic: '且'\|'或'`                | `condition: 'and'\|'or'`            |
+ * | `logic: 'AND'\|'或'`                | `condition: 'and'\|'or'`            |
  * | `branches`                         | `branch`                           |
  * | `fallbackBranchId`                 | `_fallbackBranchId`（双写 type=ELSE）|
  */
@@ -431,7 +431,7 @@ function numberConditionToLegacy(
     id: b.id,
     type: b.type ?? (b.id === fallback ? 'ELSE' : i === 0 ? 'IF' : `ELSE IF ${i}`),
     // 契约 logic ↔ 旧 condition（组件读写旧名）
-    condition: b.condition ?? (b.logic === '或' ? 'or' : 'and'),
+    condition: b.condition ?? (b.logic === 'OR' ? 'or' : 'and'),
     logic: b.logic ?? (b.condition === 'or' ? '或' : '且'),
     // 契约 NumberConditionItem ↔ 旧 conditions[].field/compare/value
     conditions: (b.conditions ?? []).map((c: NumberConditionItem & Record<string, any>) => ({
@@ -523,21 +523,21 @@ function replyFromLegacy(nd: any): ReplyNodeConfig & Record<string, any> {
 
 function toLegacy(type: string, config: any): LegacyBundle {
   switch (type as ImplementedNodeType) {
-    case 'start-node':
+    case 'START_NODE':
       return startToLegacy(config)
-    case 'base-node':
+    case 'BASE_NODE':
       return baseToLegacy(config)
-    case 'ai-chat-node':
+    case 'AI_CHAT_NODE':
       return aiChatToLegacy(config)
-    case 'search-dataset-node':
+    case 'SEARCH_DATASET_NODE':
       return searchToLegacy(config)
-    case 'question-node':
+    case 'QUESTION_NODE':
       return questionToLegacy(config)
-    case 'condition-node':
+    case 'CONDITION_NODE':
       return conditionToLegacy(config)
-    case 'number-condition-node':
+    case 'NUMBER_CONDITION_NODE':
       return numberConditionToLegacy(config)
-    case 'reply-node':
+    case 'REPLY_NODE':
       return replyToLegacy(config)
     default:
       return { node_data: { ...config } }
@@ -546,21 +546,21 @@ function toLegacy(type: string, config: any): LegacyBundle {
 
 function fromLegacy(type: string, nd: any, props: any): Record<string, any> {
   switch (type as ImplementedNodeType) {
-    case 'start-node':
+    case 'START_NODE':
       return startFromLegacy(nd)
-    case 'base-node':
+    case 'BASE_NODE':
       return baseFromLegacy(nd, props)
-    case 'ai-chat-node':
+    case 'AI_CHAT_NODE':
       return aiChatFromLegacy(nd)
-    case 'search-dataset-node':
+    case 'SEARCH_DATASET_NODE':
       return searchFromLegacy(nd)
-    case 'question-node':
+    case 'QUESTION_NODE':
       return questionFromLegacy(nd)
-    case 'condition-node':
+    case 'CONDITION_NODE':
       return conditionFromLegacy(nd)
-    case 'number-condition-node':
+    case 'NUMBER_CONDITION_NODE':
       return numberConditionFromLegacy(nd)
-    case 'reply-node':
+    case 'REPLY_NODE':
       return replyFromLegacy(nd)
     default:
       return { ...nd }
@@ -584,7 +584,7 @@ function parseSourceHandle(sourceAnchorId: unknown, sourceNodeId: string): strin
 export function toLogicFlow(graph: WorkflowGraph): LogicFlowGraph {
   // 开场白镜像：契约在 start-node，旧 UI 在 base-node 上编辑
   const startPrologue =
-    (graph.nodes.find((n) => n.type === 'start-node')?.config as StartNodeConfig | undefined)?.prologue ??
+    (graph.nodes.find((n) => n.type === 'START_NODE')?.config as StartNodeConfig | undefined)?.prologue ??
     ''
 
   const nodes = graph.nodes.map((n) => {
@@ -593,7 +593,7 @@ export function toLogicFlow(graph: WorkflowGraph): LogicFlowGraph {
     // （LogicFlow/Vue 会报 "same observable object cannot appear twice"）
     const bundle = cloneDeep(toLegacy(n.type, config))
     // base-node 的开场白镜像自 start-node（用户在 base 表单里改的就是这一份）
-    if (n.type === 'base-node' && (config.prologue === undefined || config.prologue === '')) {
+    if (n.type === 'BASE_NODE' && (config.prologue === undefined || config.prologue === '')) {
       bundle.node_data.prologue = startPrologue
     }
 
@@ -672,8 +672,8 @@ export function fromLogicFlow(graph: LogicFlowGraph): WorkflowGraph {
   })
 
   // 开场白以 base-node 表单的编辑结果为准，写回 start-node 的契约字段
-  const start = nodes.find((n) => n.type === 'start-node')
-  const base = nodes.find((n) => n.type === 'base-node')
+  const start = nodes.find((n) => n.type === 'START_NODE')
+  const base = nodes.find((n) => n.type === 'BASE_NODE')
   if (start && base) {
     const basePrologue = (base.config as any).prologue
     if (typeof basePrologue === 'string') {

@@ -9,12 +9,12 @@
     <div v-if="item" class="body">
       <section class="ctx panel">
         <div class="ctx-head">
-          <el-tag size="small" effect="plain" :type="item.type === 'up' ? 'success' : 'danger'">
-            {{ item.type === 'up' ? '赞' : '踩' }}
+          <el-tag size="small" effect="plain" :type="item.type === 'UP' ? 'success' : 'danger'">
+            {{ item.type === 'UP' ? '赞' : '踩' }}
           </el-tag>
           <span class="micro muted">{{ item.appName }}</span>
           <span class="grow" />
-          <el-tag size="small" effect="plain" :type="STATUS_TAG[item.status]">{{ item.status }}</el-tag>
+          <el-tag size="small" effect="plain" :type="STATUS_TAG[item.status]">{{ labelOf(FEEDBACK_STATUS_LABELS, item.status) }}</el-tag>
         </div>
         <dl class="ctx-facts">
           <div class="fact">
@@ -93,7 +93,7 @@
           />
         </el-form-item>
 
-        <el-form-item v-if="form.status === '已处理'" label="沉淀问答对">
+        <el-form-item v-if="form.status === 'RESOLVED'" label="沉淀问答对">
           <el-checkbox v-model="form.promote" :disabled="readonly || !!item.promotedToKbId">
             沉淀为知识库问题（优化答案 · FR-03-12）
           </el-checkbox>
@@ -139,20 +139,21 @@ import { ApiError } from '@/api/types'
 import type { FeedbackItem, FeedbackStatus } from '@/api/feedback'
 import type { User } from '@/api/identity'
 import type { KnowledgeBase } from '@/api/knowledge'
+import { FEEDBACK_STATUS_LABELS, labelOf } from '@/constants/labels'
 
 const STATUS_TAG: Record<FeedbackStatus, 'info' | 'warning' | 'success' | 'danger'> = {
-  待处理: 'warning',
-  处理中: 'info',
-  已处理: 'success',
-  已忽略: 'danger'
+  PENDING: 'warning',
+  PROCESSING: 'info',
+  RESOLVED: 'success',
+  IGNORED: 'danger'
 }
 
 /** 状态机允许的目标（与 mock / 契约注释一致） */
 const ALLOWED: Record<FeedbackStatus, FeedbackStatus[]> = {
-  待处理: ['处理中', '已处理', '已忽略'],
-  处理中: ['处理中', '已处理', '已忽略'],
-  已处理: ['已处理'],
-  已忽略: ['已忽略']
+  PENDING: ['PROCESSING', 'RESOLVED', 'IGNORED'],
+  PROCESSING: ['PROCESSING', 'RESOLVED', 'IGNORED'],
+  RESOLVED: ['RESOLVED'],
+  IGNORED: ['IGNORED']
 }
 
 const props = defineProps<{ item: FeedbackItem | null }>()
@@ -180,7 +181,7 @@ const DEMO_KBS = [
 ]
 
 const form = reactive({
-  status: '处理中' as FeedbackStatus,
+  status: 'PROCESSING' as FeedbackStatus,
   assignee: '',
   resolution: '',
   promote: false,
@@ -192,7 +193,7 @@ const rules: FormRules = {
   resolution: [
     {
       validator: (_rule, value, callback) => {
-        if (form.status === '已处理' && !String(value ?? '').trim()) {
+        if (form.status === 'RESOLVED' && !String(value ?? '').trim()) {
           callback(new Error('流转到「已处理」必须填写处理说明'))
           return
         }
@@ -211,11 +212,11 @@ const statusOptions = computed<FeedbackStatus[]>(() => {
 const statusHint = computed(() => {
   if (readonly.value) return '已办结的反馈如需继续跟进，请先「重新打开」'
   switch (form.status) {
-    case '处理中':
+    case 'PROCESSING':
       return '指派处理人并记录进展。可从待处理直接进入'
-    case '已处理':
+    case 'RESOLVED':
       return '必须填写处理说明；确认是知识缺失时可一并沉淀为问答对'
-    case '已忽略':
+    case 'IGNORED':
       return '判定无需处理。已忽略仍可重新打开'
     default:
       return ''
@@ -264,7 +265,7 @@ const open = (options: { readonly?: boolean } = {}) => {
 
   const item = props.item
   if (!item) return
-  form.status = item.status === '待处理' ? '处理中' : item.status
+  form.status = item.status === 'PENDING' ? 'PROCESSING' : item.status
   form.assignee = item.assignee ?? ''
   form.resolution = item.resolution ?? ''
   form.promote = false
@@ -273,7 +274,7 @@ const open = (options: { readonly?: boolean } = {}) => {
 
 const reset = () => {
   formRef.value?.clearValidate()
-  form.status = '处理中'
+  form.status = 'PROCESSING'
   form.assignee = ''
   form.resolution = ''
   form.promote = false
@@ -298,7 +299,7 @@ const submit = async () => {
       resolution: form.resolution,
       promoteToKbId: form.promote ? form.promoteToKbId : undefined
     })
-    ElMessage.success(form.status === '已处理' ? '已办结' : '已保存')
+    ElMessage.success(form.status === 'RESOLVED' ? '已办结' : '已保存')
     visible.value = false
     emit('saved')
   } catch (error) {

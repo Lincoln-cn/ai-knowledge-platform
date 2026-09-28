@@ -22,7 +22,7 @@
     <div v-if="!loadError" class="gp-stages micro">
       <span v-for="s in visibleStages" :key="s.status" class="gp-stage">
         <i class="dot" :class="STAGE_DOT[s.status]" />
-        {{ s.status }}
+        {{ labelOf(DOCUMENT_STATUS_LABELS, s.status) }}
         <b class="num">{{ s.count }}</b>
       </span>
     </div>
@@ -33,6 +33,7 @@
 import { computed } from 'vue'
 import { CircleCheckFilled, Loading, WarningFilled } from '@element-plus/icons-vue'
 import type { DocumentStatus, IngestionProgress } from '@/api/ingestion'
+import { DOCUMENT_STATUS_LABELS, labelOf } from '@/constants/labels'
 
 const props = defineProps<{
   progress: IngestionProgress
@@ -43,13 +44,13 @@ const props = defineProps<{
 const emit = defineEmits<{ retry: [] }>()
 
 const STAGE_DOT: Record<DocumentStatus, string> = {
-  待解析: '',
-  分段中: 'warn',
-  待向量化: 'warn',
-  向量化中: 'warn',
-  成功: 'ok',
-  分段失败: 'err',
-  向量化失败: 'err'
+  PENDING_PARSE: '',
+  SEGMENTING: 'warn',
+  PENDING_EMBEDDING: 'warn',
+  EMBEDDING: 'warn',
+  SUCCEEDED: 'ok',
+  SEGMENT_FAILED: 'err',
+  EMBEDDING_FAILED: 'err'
 }
 
 const percent = computed(() => {
@@ -59,7 +60,7 @@ const percent = computed(() => {
 
 const runningCount = computed(() =>
   props.progress.stages
-    .filter((s) => s.status === '待解析' || s.status === '分段中' || s.status === '向量化中')
+    .filter((s) => s.status === 'PENDING_PARSE' || s.status === 'SEGMENTING' || s.status === 'EMBEDDING')
     .reduce((sum, s) => sum + s.count, 0)
 )
 

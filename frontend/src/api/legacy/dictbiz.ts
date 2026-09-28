@@ -15,7 +15,7 @@ const wrap = <T>(payload: T) => ({ data: { data: payload } })
 
 const TABLES: Record<string, string[]> = {
   // 旧调用点会 `.slice(1)` 丢掉第一项（约定的「全部」），故「全部」排最前
-  supplier: ['全部', '本地推理', '外部API']
+  supplier: ['全部', 'LOCAL_INFERENCE', 'EXTERNAL_API']
 }
 
 export const getDictionary = (params: { code: string }) =>

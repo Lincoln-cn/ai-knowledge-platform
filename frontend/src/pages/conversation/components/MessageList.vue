@@ -36,21 +36,21 @@
         >
           <!-- 角色：mono 小标签，不靠气泡左右/颜色区分 -->
           <header class="msg-head">
-            <span class="label">{{ msg.role === 'user' ? 'QUERY' : 'ANSWER' }}</span>
-            <span v-if="msg.role !== 'user' && botIcon" class="bot-name tiny muted ellipsis">{{ botIcon }}</span>
-            <span v-if="msg.status === '生成中'" class="stat">
+            <span class="label">{{ msg.role === 'USER' ? 'QUERY' : 'ANSWER' }}</span>
+            <span v-if="msg.role !== 'USER' && botIcon" class="bot-name tiny muted ellipsis">{{ botIcon }}</span>
+            <span v-if="msg.status === 'GENERATING'" class="stat">
               <span class="dot ok" /><span class="tiny muted">生成中</span>
             </span>
-            <span v-else-if="msg.status === '已停止'" class="stat">
+            <span v-else-if="msg.status === 'STOPPED'" class="stat">
               <span class="dot warn" /><span class="tiny muted">已停止</span>
             </span>
-            <span v-else-if="msg.status === '失败'" class="stat">
+            <span v-else-if="msg.status === 'FAILED'" class="stat">
               <span class="dot err" /><span class="tiny muted">失败</span>
             </span>
           </header>
 
           <div class="msg-body">
-            <template v-if="msg.role === 'user'">
+            <template v-if="msg.role === 'USER'">
               <div class="user-text">{{ msg.content }}</div>
               <div v-if="attsOf(msg).length" class="msg-atts">
                 <span v-for="a in attsOf(msg)" :key="a.id" class="msg-att">
@@ -60,7 +60,7 @@
               </div>
             </template>
             <template v-else>
-              <div v-if="msg.status === '生成中' && !msg.content" class="thinking">
+              <div v-if="msg.status === 'GENERATING' && !msg.content" class="thinking">
                 <span class="dot ok" />
                 <span class="micro muted">正在检索并生成…</span>
               </div>
@@ -77,11 +77,11 @@
               <AnswerBody
                 v-else
                 :text="msg.content"
-                :streaming="msg.status === '生成中'"
+                :streaming="msg.status === 'GENERATING'"
                 @cite="(n) => emit('cite', msg, n)"
               />
 
-              <div v-if="msg.status === '失败'" class="fail-box notice err">
+              <div v-if="msg.status === 'FAILED'" class="fail-box notice err">
                 <div><b>生成失败：</b>{{ msg.failReason || '未知原因' }}</div>
                 <div v-if="msg.failHint" class="micro">{{ msg.failHint }}</div>
                 <div class="fail-actions">
@@ -94,7 +94,7 @@
           </div>
 
           <!-- 引用来源：空应用 / 无引用时不显示 -->
-          <div v-if="msg.role !== 'user' && msg.refs.length" class="ref-block">
+          <div v-if="msg.role !== 'USER' && msg.refs.length" class="ref-block">
             <div class="label">SOURCES</div>
             <div class="ref-chips">
               <button
@@ -114,7 +114,7 @@
 
           <!-- 操作条：空回答只留提示内的「重新生成」，不照常出整条 -->
           <div
-            v-if="msg.role !== 'user' && msg.status !== '生成中' && !isEmptyAnswer(msg)"
+            v-if="msg.role !== 'USER' && msg.status !== 'GENERATING' && !isEmptyAnswer(msg)"
             class="actions"
           >
             <button type="button" class="act" @click="emit('copy', msg)">复制</button>
@@ -122,16 +122,16 @@
               <button
                 type="button"
                 class="act"
-                :class="{ on: msg.feedback === 'up' }"
-                @click="emit('feedback', msg, 'up')"
+                :class="{ on: msg.feedback === 'UP' }"
+                @click="emit('feedback', msg, 'UP')"
               >
                 赞
               </button>
               <button
                 type="button"
                 class="act"
-                :class="{ on: msg.feedback === 'down' }"
-                @click="emit('feedback', msg, 'down')"
+                :class="{ on: msg.feedback === 'DOWN' }"
+                @click="emit('feedback', msg, 'DOWN')"
               >
                 踩
               </button>
@@ -143,7 +143,7 @@
               class="act"
               @click="emit('share', msg)"
             >分享</button>
-            <template v-if="msg.status === '已停止'">
+            <template v-if="msg.status === 'STOPPED'">
               <button type="button" class="act" @click="emit('continue', msg)">继续</button>
             </template>
             <span v-if="msg.tokens" class="meta num faint">
@@ -152,7 +152,7 @@
           </div>
 
           <!-- 推荐问题 -->
-          <div v-if="msg.role !== 'user' && msg.suggestions.length && isLast(msg)" class="suggestions">
+          <div v-if="msg.role !== 'USER' && msg.suggestions.length && isLast(msg)" class="suggestions">
             <div class="label">猜你想问</div>
             <div class="chips">
               <button
@@ -204,7 +204,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   cite: [msg: ChatMessage, index: number]
   copy: [msg: ChatMessage]
-  feedback: [msg: ChatMessage, type: 'up' | 'down']
+  feedback: [msg: ChatMessage, type: 'UP' | 'DOWN']
   regenerate: [msg: ChatMessage]
   continue: [msg: ChatMessage]
   share: [msg: ChatMessage]

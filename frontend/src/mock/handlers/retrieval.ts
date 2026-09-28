@@ -17,9 +17,9 @@ const gateKb = (kbId: string, token: string, action: string) =>
 
 /** 不同检索模式的分数偏移与截断策略 —— 让「对比模式」真的能看出差异 */
 const MODE_PROFILE: Record<RetrievalMode, { scoreBoost: number; cutRatio: number; elapsed: number }> = {
-  向量检索: { scoreBoost: 0.0, cutRatio: 1.0, elapsed: 42 },
-  全文检索: { scoreBoost: -0.06, cutRatio: 0.8, elapsed: 18 },
-  混合检索: { scoreBoost: 0.03, cutRatio: 1.0, elapsed: 56 }
+  VECTOR: { scoreBoost: 0.0, cutRatio: 1.0, elapsed: 42 },
+  FULLTEXT: { scoreBoost: -0.06, cutRatio: 0.8, elapsed: 18 },
+  HYBRID: { scoreBoost: 0.03, cutRatio: 1.0, elapsed: 56 }
 }
 
 const findParams = (kbId: string): RetrievalParams => {
@@ -27,10 +27,10 @@ const findParams = (kbId: string): RetrievalParams => {
   // P1 新库检索参数：回**默认值**而不是 404 —— 否则设置面板刚建好的库会弹「不存在」
   if (!p) {
     const defaults: RetrievalParams = {
-      mode: '混合检索',
+      mode: 'HYBRID',
       threshold: 0.6,
       topN: 5,
-      noRefStrategy: '拒答'
+      noRefStrategy: 'REFUSE'
     }
     retrievalParams[kbId] = defaults
     return defaults
@@ -47,7 +47,7 @@ const pickCorpus = (question: string) => {
 }
 
 const runHitTest = (body: HitTestRequest): HitTestResult => {
-  const profile = MODE_PROFILE[body.mode] ?? MODE_PROFILE['混合检索']
+  const profile = MODE_PROFILE[body.mode] ?? MODE_PROFILE['HYBRID']
   const corpus = pickCorpus(body.question)
 
   // 先过滤阈值，再取 TopN —— 顺序反了会把噪声带进上下文

@@ -78,9 +78,9 @@
         <el-table-column v-if="canHandle" type="selection" width="42" />
         <el-table-column label="赞踩" width="64" align="center">
           <template #default="{ row }">
-            <span class="vote" :class="row.type === 'up' ? 'up' : 'down'">
-              <i class="dot" :class="row.type === 'up' ? 'ok' : 'err'" />
-              {{ row.type === 'up' ? '赞' : '踩' }}
+            <span class="vote" :class="row.type === 'UP' ? 'up' : 'down'">
+              <i class="dot" :class="row.type === 'UP' ? 'ok' : 'err'" />
+              {{ row.type === 'UP' ? '赞' : '踩' }}
             </span>
           </template>
         </el-table-column>
@@ -121,7 +121,7 @@
           <template #default="{ row }">
             <span class="status-cell" :class="statusDot(row.status)">
               <i class="dot" :class="statusDot(row.status)" />
-              {{ row.status }}
+              {{ labelOf(FEEDBACK_STATUS_LABELS, row.status) }}
             </span>
           </template>
         </el-table-column>
@@ -213,7 +213,7 @@
           </el-radio-group>
           <div class="hint micro">已办结的反馈不能改状态，需先「重新打开」</div>
         </el-form-item>
-        <el-form-item v-if="batchStatus === '已处理'" label="处理说明">
+        <el-form-item v-if="batchStatus === 'RESOLVED'" label="处理说明">
           <el-input
             v-model="batchResolution"
             type="textarea"
@@ -250,7 +250,7 @@
           <div class="receipt-head micro ok">已办成</div>
           <ul class="receipt-list">
             <li v-for="item in receipt.accepted" :key="item.id">
-              <span class="ok">✓</span> {{ item.id }} · {{ item.status }}
+              <span class="ok">✓</span> {{ item.id }} · {{ labelOf(FEEDBACK_STATUS_LABELS, item.status) }}
               <span class="muted micro">{{ item.question }}</span>
             </li>
           </ul>
@@ -290,14 +290,15 @@ import { useSessionStore } from '@/stores/session'
 import PageHeader from '@/components/PageHeader.vue'
 import HandleDialog from './components/HandleDialog.vue'
 import PromoteDialog from './components/PromoteDialog.vue'
+import { FEEDBACK_STATUS_LABELS, labelOf } from '@/constants/labels'
 
-const STATUSES: FeedbackStatus[] = ['待处理', '处理中', '已处理', '已忽略']
+const STATUSES: FeedbackStatus[] = ['PENDING', 'PROCESSING', 'RESOLVED', 'IGNORED']
 
 const STATUS_DOT: Record<FeedbackStatus, string> = {
-  待处理: 'warn',
-  处理中: '',
-  已处理: 'ok',
-  已忽略: 'err'
+  PENDING: 'warn',
+  PROCESSING: '',
+  RESOLVED: 'ok',
+  IGNORED: 'err'
 }
 const statusDot = (status: string) => STATUS_DOT[status as FeedbackStatus] ?? ''
 
@@ -315,7 +316,7 @@ const pageSize = 10
 /** 默认只看待处理 —— 形成工作队列，而不是又一个只读日志。筛选/分页入 URL */
 const query = reactive({
   keyword: (route.query.keyword as string) ?? '',
-  status: ((route.query.status as string) ?? '待处理') as FeedbackStatus | '',
+  status: ((route.query.status as string) ?? 'PENDING') as FeedbackStatus | '',
   appId: (route.query.appId as string) ?? ''
 })
 const page = ref(Number(route.query.page) || 1)
@@ -332,7 +333,7 @@ const syncUrl = () => {
   })
 }
 
-const emptyStats: FeedbackStats = { 待处理: 0, 处理中: 0, 已处理: 0, 已忽略: 0 }
+const emptyStats: FeedbackStats = { PENDING: 0, PROCESSING: 0, RESOLVED: 0, IGNORED: 0 }
 const stats = ref<FeedbackStats>({ ...emptyStats })
 
 const current = ref<FeedbackItem | null>(null)
@@ -345,7 +346,7 @@ const selectedRows = ref<FeedbackItem[]>([])
 const batchVisible = ref(false)
 const batchLoading = ref(false)
 const batchMode = ref<'status' | 'assign'>('status')
-const batchStatus = ref<FeedbackStatus>('处理中')
+const batchStatus = ref<FeedbackStatus>('PROCESSING')
 const batchResolution = ref('')
 const batchAssigneeId = ref('')
 const batchUsers = ref<User[]>([])
@@ -353,7 +354,7 @@ const receiptVisible = ref(false)
 const receipt = ref<BatchHandleFeedbackResult | null>(null)
 
 /** 批量改状态可选目标：不含「待处理」（不是工作队列的前进方向） */
-const batchStatusOptions: FeedbackStatus[] = ['处理中', '已处理', '已忽略']
+const batchStatusOptions: FeedbackStatus[] = ['PROCESSING', 'RESOLVED', 'IGNORED']
 
 const onSelectionChange = (rows: FeedbackItem[]) => {
   selectedRows.value = rows
@@ -372,7 +373,7 @@ const loadBatchUsers = async () => {
 const openBatch = (mode: 'status' | 'assign') => {
   if (!selectedRows.value.length) return
   batchMode.value = mode
-  batchStatus.value = '处理中'
+  batchStatus.value = 'PROCESSING'
   batchResolution.value = ''
   batchAssigneeId.value = ''
   batchVisible.value = true
@@ -381,19 +382,19 @@ const openBatch = (mode: 'status' | 'assign') => {
 
 const submitBatch = async () => {
   if (!selectedRows.value.length) return
-  if (batchStatus.value === '已处理' && !batchResolution.value.trim()) {
+  if (batchStatus.value === 'RESOLVED' && !batchResolution.value.trim()) {
     ElMessage.warning('流转到「已处理」必须填写处理说明')
     return
   }
   batchLoading.value = true
   try {
     // 指派入口也带状态（契约 body 必有 status）：指派默认推进到「处理中」
-    const status: FeedbackStatus = batchMode.value === 'assign' ? '处理中' : batchStatus.value
+    const status: FeedbackStatus = batchMode.value === 'assign' ? 'PROCESSING' : batchStatus.value
     const result = await feedbackApi.batchHandleFeedbacks({
       ids: selectedRows.value.map((r) => r.id),
       status,
       ...(batchAssigneeId.value ? { assigneeId: batchAssigneeId.value } : {}),
-      ...(status === '已处理' ? { resolution: batchResolution.value } : {})
+      ...(status === 'RESOLVED' ? { resolution: batchResolution.value } : {})
     })
     receipt.value = result
     batchVisible.value = false
@@ -427,11 +428,11 @@ const collectApps = (items: FeedbackItem[]) => {
   appOptions.value = [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
-const isOpen = (row: FeedbackItem) => row.status === '待处理' || row.status === '处理中'
-const isClosed = (row: FeedbackItem) => row.status === '已处理' || row.status === '已忽略'
+const isOpen = (row: FeedbackItem) => row.status === 'PENDING' || row.status === 'PROCESSING'
+const isClosed = (row: FeedbackItem) => row.status === 'RESOLVED' || row.status === 'IGNORED'
 
 const rowClass = ({ row }: { row: FeedbackItem }) =>
-  row.status === '待处理' ? 'row-pending' : row.type === 'down' ? 'row-down' : ''
+  row.status === 'PENDING' ? 'row-pending' : row.type === 'DOWN' ? 'row-down' : ''
 
 const fetchList = async () => {
   loading.value = true

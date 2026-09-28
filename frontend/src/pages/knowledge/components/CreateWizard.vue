@@ -111,7 +111,7 @@
           <el-radio-button value="custom">自定义</el-radio-button>
         </el-radio-group>
         <div class="hint micro">
-          {{ segForm.strategy === 'auto' ? '自动按段落与语义边界切分，适合大多数文档' : '按固定长度切分，适合结构化文档' }}
+          {{ segForm.strategy === 'AUTO' ? '自动按段落与语义边界切分，适合大多数文档' : '按固定长度切分，适合结构化文档' }}
         </div>
 
         <div class="slider-row">
@@ -198,8 +198,8 @@
           <span class="status" :class="STATUS_CLASS[doc.status as DocumentStatus]">
             <el-icon v-if="isRunning(doc.status as DocumentStatus)" class="is-loading"><Loading /></el-icon>
             <i v-else class="dot" :class="STATUS_DOT[doc.status as DocumentStatus]" />
-            {{ doc.status }}
-            <template v-if="doc.status === '向量化中'"> {{ doc.processedSegments }}/{{ doc.segmentCount }}</template>
+            {{ labelOf(DOCUMENT_STATUS_LABELS, doc.status) }}
+            <template v-if="doc.status === 'EMBEDDING'"> {{ doc.processedSegments }}/{{ doc.segmentCount }}</template>
           </span>
         </div>
       </div>
@@ -255,30 +255,31 @@ import type {
   SegmentationPlanItem,
   UploadPolicy
 } from '@/api/ingestion'
+import { DOCUMENT_STATUS_LABELS, labelOf } from '@/constants/labels'
 
 const emit = defineEmits<{ created: [kb: KnowledgeBase] }>()
 
 const ICONS = ['📘', '📗', '📙', '📕', '📒', '📂', '💼', '🏛']
 
 const STATUS_CLASS: Record<DocumentStatus, string> = {
-  待解析: 'st-idle',
-  分段中: 'st-loading',
-  待向量化: 'st-warn',
-  向量化中: 'st-loading',
-  成功: 'st-ok',
-  分段失败: 'st-err',
-  向量化失败: 'st-err'
+  PENDING_PARSE: 'st-idle',
+  SEGMENTING: 'st-loading',
+  PENDING_EMBEDDING: 'st-warn',
+  EMBEDDING: 'st-loading',
+  SUCCEEDED: 'st-ok',
+  SEGMENT_FAILED: 'st-err',
+  EMBEDDING_FAILED: 'st-err'
 }
 const STATUS_DOT: Record<DocumentStatus, string> = {
-  待解析: '',
-  分段中: 'warn',
-  待向量化: 'warn',
-  向量化中: 'warn',
-  成功: 'ok',
-  分段失败: 'err',
-  向量化失败: 'err'
+  PENDING_PARSE: '',
+  SEGMENTING: 'warn',
+  PENDING_EMBEDDING: 'warn',
+  EMBEDDING: 'warn',
+  SUCCEEDED: 'ok',
+  SEGMENT_FAILED: 'err',
+  EMBEDDING_FAILED: 'err'
 }
-const isRunning = (s: DocumentStatus) => s === '待解析' || s === '分段中' || s === '向量化中'
+const isRunning = (s: DocumentStatus) => s === 'PENDING_PARSE' || s === 'SEGMENTING' || s === 'EMBEDDING'
 
 const visible = ref(false)
 const step = ref(0)
@@ -312,7 +313,7 @@ const uploadPolicy = ref<UploadPolicy | null>(null)
 const fileRejects = ref<Array<{ name: string; reason: string }>>([])
 
 const segForm = reactive({
-  strategy: 'auto' as 'auto' | 'custom',
+  strategy: 'AUTO' as 'AUTO' | 'CUSTOM',
   segmentLength: 500,
   overlap: 60
 })
@@ -345,8 +346,8 @@ const open = async () => {
   visible.value = true
   step.value = 0
   categories.value = await knowledgeApi.listKnowledgeCategories()
-  const models = await modelsApi.listModels({ kind: 'embedding', size: 50 })
-  embeddingModels.value = models.list.filter((m) => m.status === '已加载' || m.status === '未加载')
+  const models = await modelsApi.listModels({ kind: 'EMBEDDING', size: 50 })
+  embeddingModels.value = models.list.filter((m) => m.status === 'LOADED' || m.status === 'NOT_LOADED')
   try {
     // 上传策略挂在已有库上；新库还没建，先用一个可见的库拿策略，拿不到就用默认提示
     const anyKb = await knowledgeApi.listKnowledgeBases({ page: 1, size: 1 })
@@ -364,12 +365,12 @@ const reset = () => {
   baseForm.category = ''
   baseForm.icon = '📘'
   baseForm.description = ''
-  baseForm.importType = 'local'
+  baseForm.importType = 'LOCAL'
   baseForm.embeddingModelId = ''
   files.value = []
   fileList.value = []
   fileRejects.value = []
-  segForm.strategy = 'auto'
+  segForm.strategy = 'AUTO'
   segForm.segmentLength = 500
   segForm.overlap = 60
   preview.value = null

@@ -229,7 +229,7 @@ const form = reactive({
     mode: '混合检索' as RetrievalMode,
     threshold: 0.6,
     topN: 5,
-    noRefStrategy: '拒答' as RetrievalParams['noRefStrategy']
+    noRefStrategy: 'REFUSE' as RetrievalParams['noRefStrategy']
   },
   prologue: '',
   multiTurn: true,
@@ -305,7 +305,7 @@ const removeKb = (id: string) => {
 
 const loadOptions = async () => {
   const [modelResult, kbResult] = await Promise.all([
-    modelsApi.listModels({ kind: 'chat', status: '已加载', size: 50 }),
+    modelsApi.listModels({ kind: 'CHAT', status: 'LOADED', size: 50 }),
     knowledgeApi.listKnowledgeBases({ size: 50 }).catch(() => ({ list: [], total: 0, page: 1, size: 50 }))
   ])
   chatModels.value = modelResult.list
