@@ -28,6 +28,12 @@ export interface ModelInfo {
   /** 是否内置（硬编码不可删） */
   builtin: boolean
   remark?: string
+  /**
+   * 加载失败的可读排查原因。
+   * 仅 `LOAD_FAILED` 时有值，是能照着排查的那句话（不是「加载失败」四个字）；
+   * 其余状态省略本字段。冻结契约只加可选字段。
+   */
+  loadError?: string
 }
 
 /** 从供应商拉取到的可注册基础模型 */

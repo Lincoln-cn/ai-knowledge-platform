@@ -57,13 +57,28 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ────────────────────────────── 模型清单与行为设定 ──────────────────────────────
 
-#: 对话模型 → 它的"思考"行为。
-#: ★ 这三个值是我**刻意设定**的，用来让"探测三态"的代码有东西可测；
+#: 对话模型 → 行为设定 + 能力元数据。
+#: ★ thinking 的三个值是我**刻意设定**的，用来让"探测三态"的代码有东西可测；
 #:   它们不是任何真实模型的能力。
+#: ★ context_window / tools 是能力探测（POST /models/probe）的元数据来源 ——
+#:   探测策略是「元数据优先 + 行为探针兜底」，这两项从 /v1/models 元数据读，
+#:   思考三态走行为探针（带/不带 reasoning_effort 看是否产出 reasoning）。
 CHAT_MODELS = {
-    "stub-think-toggleable": "TOGGLEABLE",  # 认 reasoning_effort：传 none 就没思考
-    "stub-think-always": "ALWAYS_ON",       # 忽略 reasoning_effort，永远有思考
-    "stub-plain": "NONE",                   # 从不思考
+    "stub-think-toggleable": {
+        "thinking": "TOGGLEABLE",   # 认 reasoning_effort：传 none 就没思考
+        "context_window": 32768,
+        "tools": "PARALLEL",
+    },
+    "stub-think-always": {
+        "thinking": "ALWAYS_ON",    # 忽略 reasoning_effort，永远有思考
+        "context_window": 65536,
+        "tools": "SUPPORTED",
+    },
+    "stub-plain": {
+        "thinking": "NONE",         # 从不思考
+        "context_window": 8192,
+        "tools": "UNSUPPORTED",
+    },
 }
 
 EMBED_MODEL = "stub-embed"
@@ -178,7 +193,8 @@ def reasoning_for(model: str, reasoning_effort: str | None) -> str | None:
 
     ★ 这段逻辑就是"三态"的定义：能关的是 TOGGLEABLE，关不掉的是 ALWAYS_ON，从不产出的是 NONE。
     """
-    behavior = CHAT_MODELS.get(model, "NONE")
+    entry = CHAT_MODELS.get(model)
+    behavior = entry["thinking"] if entry else "NONE"
     if behavior == "NONE":
         return None
     if behavior == "ALWAYS_ON":
@@ -378,12 +394,35 @@ class StubHandler(BaseHTTPRequestHandler):
 
     # ── 具体端点 ──
     def _models_payload(self):
-        data = [
-            {"id": name, "object": "model", "created": 0, "owned_by": "stub"}
-            for name in CHAT_MODELS
-        ]
+        """
+        模型清单。★ 除 OpenAI 标准字段外，附带能力元数据：
+
+        - context_window / tools：能力探测的「元数据优先」来源
+        - dimension：向量模型的维度提示（探测仍会调 embeddings 实测长度）
+
+        这些扩展字段是我们自己约定的 —— 不依赖网关专有字段（service_type/adapter），
+        换真 Ollama / JAiRouter 时探测会自动降级到行为探针。
+        """
+        data = []
+        for name, meta in CHAT_MODELS.items():
+            data.append(
+                {
+                    "id": name,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "stub",
+                    "context_window": meta["context_window"],
+                    "tools": meta["tools"],
+                }
+            )
         data.append(
-            {"id": EMBED_MODEL, "object": "model", "created": 0, "owned_by": "stub"}
+            {
+                "id": EMBED_MODEL,
+                "object": "model",
+                "created": 0,
+                "owned_by": "stub",
+                "dimension": _EMBED_DIM,
+            }
         )
         return {"object": "list", "data": data}
 

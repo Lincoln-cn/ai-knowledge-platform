@@ -239,6 +239,54 @@ public class Model {
     this.enabled = false;
   }
 
+  // ────────────────────────── 更新变更方法 ──────────────────────────
+
+  /** 改显示名。★ 不是基础模型名（那是另一个字段，且不可改）。 */
+  public void name(String name) {
+    this.name = name;
+  }
+
+  /** 改备注。 */
+  public void remark(String remark) {
+    this.remark = remark;
+  }
+
+  /** 改思考模式能力声明（只对对话模型有意义）。 */
+  public void thinking(ThinkingMode thinking) {
+    this.thinking = thinking == null ? ThinkingMode.NONE : thinking;
+  }
+
+  /** 改工具调用能力声明（只对对话模型有意义）。 */
+  public void tools(ToolsMode tools) {
+    this.tools = tools == null ? ToolsMode.UNSUPPORTED : tools;
+  }
+
+  /**
+   * 改向量维度。
+   *
+   * <p>★ 调用方（{@code ModelService.update}）必须先检查 {@code status != LOADED} —— 已加载的模型改维度需全量重灌向量表，
+   * 不能悄悄改。这里不做状态检查是因为"改维度"本身是合法操作，非法的是"在错误的时机改"。
+   */
+  public void dimension(Integer dimension) {
+    this.dimension = dimension;
+  }
+
+  /** 改上游地址（换了供应商端点是日常运维动作）。 */
+  public void apiBase(String apiBase) {
+    this.apiBase = apiBase;
+  }
+
+  /** 更新 API key 的密文与 IV。★ 明文永远不进这个方法 —— 调用方先加密。 */
+  public void apiKey(String cipher, String iv) {
+    this.apiKeyCipher = cipher;
+    this.apiKeyIv = iv;
+  }
+
+  /** 记录更新者。 */
+  public void updatedBy(UUID updatedBy) {
+    this.updatedBy = updatedBy;
+  }
+
   /** 只有「加载中」才允许走到加载结果。★ 非法转移必须拒绝并说清原因，并且<strong>不改状态</strong>。 */
   private void requireStatus(ModelStatus expected, String action) {
     if (this.status != expected) {

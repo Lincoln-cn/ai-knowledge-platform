@@ -203,13 +203,13 @@ class ModelPersistenceTest {
     Model emb = embeddingModel(null, null, null);
     models.save(emb);
 
-    assertThat(models.countSearch(ModelKind.CHAT, null)).isEqualTo(2);
-    assertThat(models.countSearch(ModelKind.EMBEDDING, null)).isEqualTo(1);
-    assertThat(models.countSearch(null, ModelStatus.NOT_LOADED)).isEqualTo(1);
-    assertThat(models.countSearch(null, ModelStatus.LOADED)).isEqualTo(2);
+    assertThat(models.countSearch(null, ModelKind.CHAT, null)).isEqualTo(2);
+    assertThat(models.countSearch(null, ModelKind.EMBEDDING, null)).isEqualTo(1);
+    assertThat(models.countSearch(null, null, ModelStatus.NOT_LOADED)).isEqualTo(1);
+    assertThat(models.countSearch(null, null, ModelStatus.LOADED)).isEqualTo(2);
 
-    assertThat(models.search(ModelKind.EMBEDDING, null, 0, 10)).hasSize(1);
-    assertThat(models.search(ModelKind.CHAT, ModelStatus.LOADED, 0, 10)).hasSize(2);
+    assertThat(models.search(null, ModelKind.EMBEDDING, null, 0, 10)).hasSize(1);
+    assertThat(models.search(null, ModelKind.CHAT, ModelStatus.LOADED, 0, 10)).hasSize(2);
   }
 
   // ────────────────────────── dimension / contextWindow 的 null 语义（库层也钉） ──────────────────────────

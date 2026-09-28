@@ -74,7 +74,25 @@
 | 1 | **这是破坏性契约变更**（打破冻结契约的「只加可选字段」） | 已在本节与规格文档记录。任何仍持有旧取值的调用方（含旧 mock 快照）会失效 |
 | 2 | **`models/Index.vue` 的 `KIND_LABEL` 是页面级短标签**（对话/向量），与 `MODEL_KIND_LABELS`（对话模型/向量模型）文案不同 | 按「展示文案不动」保留了本地 map。两处文案并存，将来要合并成一份 |
 | 3 | `pages/workflow/enums/common.ts` 的 `ValidType.User = 'user'` 是画布级联选择器**内部**枚举 | 不是契约 `SubjectKind`，未改。它是否也该进规格，待定 |
-| 4 | **第 4 周的 `/models` 端点尚未实现** | 本次枚举改造覆盖了 `modelcatalog` 的领域与库，端点在下一段（T187/T188） |
+| 4 | ~~**第 4 周的 `/models` 端点尚未实现**~~ | ✅ 已在本版落地（见下方「/models 全链路」） |
+
+### `/models` 全链路（同版 0.1.3 · 第 4 周）
+
+> 枚举改造之后接上端点：上游目录 / 能力探测 / 注册 CRUD / load 语义。
+
+| # | 交付 | 关键点 |
+|---|---|---|
+| 1 | **8 个端点**全部落地，均带 `@PreAuthorize("hasAuthority('model:manage')")`（含 GET） | `GET /models` · `GET /models/base-models` · `POST /models` · `PUT /models/:id` · `DELETE /models/:id` · `POST /models/:id/load` · `POST /models/:id/probe` · `POST /models/probe` |
+| 2 | **能力探测**：元数据优先 + 行为探针兜底 | contextWindow/tools 从 `/v1/models` 元数据读；dimension 调 embeddings 实测；thinking 三态发带/不带 `reasoning_effort` 的 chat 看行为 |
+| 3 | **load 语义** = 平台启用位 + 上游可用性校验，不操纵上游实例 | 异步：置 LOADING 立即返回，后台校验 → LOADED + enabled=true 或 LOAD_FAILED + 可读原因 |
+| 4 | **视图绝不回传 apiKey 明文** | `ModelView` 显式列出出网字段（与 `UserView` 不含 `passwordHash` 同纪律） |
+| 5 | **维度校验** | embedding 缺 dimension 拒绝；chat 带 dimension 拒绝；LOADED 后改 dimension 拒绝（需全量重灌向量表） |
+| 6 | **桩服务扩了能力元数据** | `/v1/models` 带 `context_window` / `tools` / `dimension`，四类能力都能被探出来 |
+
+**⚠️ 钩子：DELETE 的「被应用/知识库引用」检查**
+删除的拒绝条件是「被应用/知识库引用」而不是「已加载」（契约只有 load 没有 unload，否则加载过的模型永远删不掉）。
+当前 `assistant` / `knowledge` 两张表是第 5 周的，**引用检查留成钩子**（代码注释已标），两张表落地后在此处加引用计数查询。
+builtin=true 仍拒绝删除；删除时清掉启用位。
 
 ---
 

@@ -90,7 +90,11 @@
 
         <div v-if="m.status === 'LOAD_FAILED'" class="notice err mc-fail">
           <el-icon><WarningFilled /></el-icon>
-          <span>点「重新加载」可重试。若持续失败，检查模型网关是否可达、该基础模型是否在上游清单中。</span>
+          <span>
+            <!-- 可读排查原因（契约 loadError，仅 LOAD_FAILED 有值）；没有原因时才退回静态文案 -->
+            <b>{{ labelOf(MODEL_STATUS_LABELS, m.status) }}：</b>{{ m.loadError || '原因未知' }}
+            <span class="micro">点「重新加载」可重试。</span>
+          </span>
         </div>
 
         <div class="mc-actions">

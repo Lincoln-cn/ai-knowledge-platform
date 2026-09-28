@@ -65,9 +65,10 @@ class ContractDriftTest {
    *
    * <p>★ 按域名前缀列（不是逐条 URL）：同一个域下的几十条端点会一起落地，逐条登记会把清单变成第二份契约。
    *
-   * <p>★ 理由写在这里，而不是散落在失败信息里：前端已经跑在后端前面（{@code ROADMAP §3.1}）—— 契约约 115 个端点， 后端目前主要实现了身份域（模型域的 REST
-   * 还在 {@code modelcatalog} 迁移/领域模型阶段）。 不能要求后端立刻把它们都实现，但<strong>每一项都要能回答"计划落在哪一周"</strong>（见 {@code
-   * docs/ROADMAP.md §4.7.3}）。 清单一旦失去可审阅性，它就变成永久黑洞 —— 那正是这条规则要防的。
+   * <p>★ 理由写在这里，而不是散落在失败信息里：前端已经跑在后端前面（{@code ROADMAP §3.1}）—— 契约约 115 个端点，
+   * 后端目前实现了身份域与模型域（modelcatalog 的 REST 已在 0.1.3 落地）。
+   * 不能要求后端立刻把它们都实现，但<strong>每一项都要能回答"计划落在哪一周"</strong>（见 {@code docs/ROADMAP.md §4.7.3}）。
+   * 清单一旦失去可审阅性，它就变成永久黑洞 —— 那正是这条规则要防的。
    */
   private static final Set<String> UNIMPLEMENTED_PREFIXES =
       Set.of(
@@ -79,9 +80,6 @@ class ContractDriftTest {
           "/segments",
           // 第 7 周 0.2.2：切分预览（预览与入库用同一个分块器）
           "/segmentation",
-          // 第 4 周 0.1.3：模型注册 / 能力探测 / load。
-          // ★ 与任务描述的差异见报告：modelcatalog 目前只有领域/配置，REST 控制器还没落
-          "/models",
           // 第 15 周 0.4.3：应用配置 + 发布校验（§3.1 记 M4）；含 import/export/credentials/api-keys
           "/assistants",
           // §3.1 M4：提示词管理页（pages/assistants/prompts/）—— 前端已存在，后端随 assistant 域

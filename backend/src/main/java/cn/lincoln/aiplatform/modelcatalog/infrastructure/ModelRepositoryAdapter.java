@@ -48,17 +48,18 @@ public class ModelRepositoryAdapter implements ModelRepository {
   }
 
   @Override
-  public List<Model> search(ModelKind kind, ModelStatus status, int offset, int limit) {
+  public List<Model> search(
+      String keyword, ModelKind kind, ModelStatus status, int offset, int limit) {
     // 领域给的是 offset/limit；Spring Data 要的是"第几页、每页几条"。
     // limit 恒 > 0（调用方已归一化），所以这里的整除是安全的
-    return jpa.findAll(filter(kind, status), PageRequest.of(offset / limit, limit, sort()))
+    return jpa.findAll(filter(keyword, kind, status), PageRequest.of(offset / limit, limit, sort()))
         .getContent();
   }
 
   @Override
-  public long countSearch(ModelKind kind, ModelStatus status) {
+  public long countSearch(String keyword, ModelKind kind, ModelStatus status) {
     // ★ 与 search 共用同一份谓词 —— 两处各拼一遍必然漂移，症状是"列表 3 条、total 却是 10"
-    return jpa.count(filter(kind, status));
+    return jpa.count(filter(keyword, kind, status));
   }
 
   // ────────────────────────── 内部 ──────────────────────────
@@ -72,10 +73,21 @@ public class ModelRepositoryAdapter implements ModelRepository {
    *
    * <p>★ 空条件<strong>不拼</strong>谓词（而不是拼 {@code :param is null or ...}）：后者在 HQL 里会让无类型的 null
    * 绑定污染查询计划。
+   *
+   * <p>★ keyword 的 pattern 在 Java 侧拼好并 {@code toLowerCase}，列侧用 {@code lower(...)} 对齐 —— 与 {@code
+   * UserRepositoryAdapter} 同一口径（SQL 里再套 {@code lower(concat(...))} 会把类型推断弄丢）。 中文没有大小写，但 baseModel
+   * 是英文，用户不会记得注册时用的是大写还是小写。
    */
-  private static Specification<Model> filter(ModelKind kind, ModelStatus status) {
+  private static Specification<Model> filter(String keyword, ModelKind kind, ModelStatus status) {
     return (root, query, cb) -> {
       List<Predicate> predicates = new ArrayList<>();
+      if (keyword != null && !keyword.isBlank()) {
+        String pattern = "%" + keyword.trim().toLowerCase() + "%";
+        predicates.add(
+            cb.or(
+                cb.like(cb.lower(root.get("name")), pattern),
+                cb.like(cb.lower(root.get("baseModel")), pattern)));
+      }
       if (kind != null) {
         predicates.add(cb.equal(root.get("kind"), kind));
       }

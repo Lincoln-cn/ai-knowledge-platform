@@ -65,7 +65,9 @@ export const models: ModelInfo[] = [
     thinking: 'NONE',
     tools: 'UNSUPPORTED',
     builtin: false,
-    remark: '加载失败：显存不足，需先释放资源'
+    remark: '加载失败：显存不足，需先释放资源',
+    // 仅 LOAD_FAILED 时有值 —— 可读的排查原因，界面不能只显示「加载失败」四个字
+    loadError: '上游清单里没有这个基础模型：Qwen2-7B-Instruct。请确认模型已在上游部署，并检查 apiBase 是否指向了正确的服务'
   },
   {
     id: 'm5',

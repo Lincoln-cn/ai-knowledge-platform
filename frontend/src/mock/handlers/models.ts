@@ -141,6 +141,13 @@ export const modelRoutes: MockRoute[] = [
           '向量维度不可修改 —— 维度与向量表绑定，改则需重建向量表并全量重灌'
         )
       }
+      // 不适用的字段一律拒绝，不静默丢 —— 与后端 create/update 同口径
+      if (model.kind === 'CHAT' && input.dimension != null) {
+        throw new ApiError(4001, '对话模型不产出向量，dimension 必须为空')
+      }
+      if (model.kind === 'EMBEDDING' && (input.thinking || input.tools)) {
+        throw new ApiError(4001, '能力声明只对对话模型有意义：向量模型不接受 thinking / tools')
+      }
 
       if (input.name) model.name = input.name
       if (input.remark !== undefined) model.remark = input.remark
