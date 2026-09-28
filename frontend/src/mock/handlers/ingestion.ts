@@ -22,6 +22,72 @@ import { currentSubjects, requireVisible, visibleTo, type SubjectSet } from '../
  */
 const kbIdOfDoc = (docId: string) => documents.find((d) => d.id === docId)?.kbId
 
+/** 密级序数：声明顺序即高低（labels.ts / 13 §6）—— ceiling 判定用 */
+const CLASS_ORDER: Record<string, number> = {
+  PUBLIC: 0,
+  INTERNAL: 1,
+  SECRET: 2,
+  CONFIDENTIAL: 3
+}
+const CLASS_LABEL: Record<string, string> = {
+  PUBLIC: '公开',
+  INTERNAL: '内部',
+  SECRET: '秘密',
+  CONFIDENTIAL: '机密'
+}
+
+/**
+ * 建档必填三项 + ceiling 校验（12 §5.1 / 13 §6）。
+ * 文案与后端 `DocumentService` 一字不差 —— 界面展示的是后端可读原因原文，mock 不得另编。
+ */
+function assertDocMeta(body: {
+  docType?: string
+  department?: string
+  classification?: string
+}): void {
+  if (!body.docType?.trim()) {
+    throw new ApiError(
+      400,
+      '文种必填',
+      '选择这份文档的文种（合同/制度/报销规定…）—— 它决定召回前缀，不能有默认值（12 §5.1）'
+    )
+  }
+  if (!body.department?.trim()) {
+    throw new ApiError(
+      400,
+      '责任部门必填',
+      '填写这份文档的责任部门 —— 它决定召回前缀，不能有默认值（12 §5.1）'
+    )
+  }
+  if (!body.classification) {
+    throw new ApiError(
+      400,
+      '密级必填',
+      '为这份文档选择密级（公开/内部/秘密/机密）—— 它进安全过滤，不能有默认值（12 §5.1）'
+    )
+  }
+}
+
+/** ceiling 校验：文档密级 > 库上限 ⇒ 拒绝 + 可读原因（含两个中文密级名） */
+function assertWithinCeiling(
+  kbId: string,
+  classification: string
+): void {
+  const kb = knowledgeBases.find((k) => k.id === kbId)
+  const ceiling = kb?.maxClassification
+  if (!ceiling) return
+  const docOrd = CLASS_ORDER[classification]
+  const ceilOrd = CLASS_ORDER[ceiling]
+  if (docOrd == null || ceilOrd == null) return
+  if (docOrd > ceilOrd) {
+    throw new ApiError(
+      400,
+      `文档密级（${CLASS_LABEL[classification]}）高于知识库的密级上限（${CLASS_LABEL[ceiling]}）—— 请提高库的上限，或改用更合适的库`,
+      '库的密级上限是入库校验的依据（13 §6）：只有不高于上限的文档才能进这个库'
+    )
+  }
+}
+
 const kbIdOfSeg = (segmentId: string) => {
   const seg = segments.find((s) => s.id === segmentId)
   return seg ? kbIdOfDoc(seg.documentId) : undefined
@@ -376,23 +442,39 @@ export const ingestionRoutes: MockRoute[] = [
       const kbId = path.kbId
       gateKb(kbId, token, PERM.documentUpload, '知识库', kbId)
 
-      // #11 新路径：JSON 体带 uploadIds / segmentationPlan → 回执形态
-      const importBody = body as ImportDocumentsBody | null
+      // #11 新路径：JSON 体带 uploadIds / segmentationPlan / names → 回执形态
+      // ★ 真栈建档最小形态是 `names`（文件名清单）；mock 与它对齐，否则两侧契约会漂
+      const importBody = body as ImportDocumentsBody & { names?: string[] } | null
       const isImport =
         !!importBody &&
         typeof importBody === 'object' &&
         !(typeof (importBody as FormData).entries === 'function') &&
-        (Array.isArray(importBody.uploadIds) || Array.isArray(importBody.segmentationPlan))
+        (Array.isArray(importBody.uploadIds) ||
+          Array.isArray(importBody.segmentationPlan) ||
+          Array.isArray(importBody.names))
 
       if (isImport && importBody) {
+        // ★ 建档必填三项 + ceiling（12 §5.1 / 13 §6）—— 与后端同文案
+        assertDocMeta(importBody)
+        assertWithinCeiling(kbId, String(importBody.classification))
+
         const accepted: DocumentItem[] = []
         const rejected: UploadReceipt['rejected'] = []
 
         const uploadIds = importBody.uploadIds ?? []
-        if (!uploadIds.length) {
+        // names 兜底：真栈建档走文件名清单；mock 也收，保证两侧同一条提交路径
+        const nameList = importBody.names ?? []
+        const meta = {
+          docType: String(importBody.docType ?? ''),
+          department: String(importBody.department ?? ''),
+          classification: importBody.classification
+        }
+
+        if (!uploadIds.length && !nameList.length) {
           throw new ApiError(3021, '没有可导入的暂存文件', '请先选择文件并暂存上传')
         }
 
+        // 先按 uploadIds（暂存文件）建；再按 names（纯文件名清单）补
         for (const uid of uploadIds) {
           const up = stagedUploads.get(uid)
           if (!up) {
@@ -422,7 +504,10 @@ export const ingestionRoutes: MockRoute[] = [
             failReason: null,
             failHint: null,
             createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+            updatedAt: new Date().toISOString(),
+            docType: meta.docType,
+            department: meta.department,
+            classification: meta.classification
           }
           documents.unshift(doc)
           const isScan = /扫描|scan/i.test(up.name)
@@ -436,6 +521,37 @@ export const ingestionRoutes: MockRoute[] = [
           }
           accepted.push(doc)
           stagedUploads.delete(uid)
+        }
+
+        for (const name of nameList) {
+          const doc: DocumentItem = {
+            id: `doc${Date.now()}_n${accepted.length}`,
+            kbId,
+            name,
+            source: 'local',
+            status: 'PENDING_PARSE',
+            segmentCount: 0,
+            processedSegments: 0,
+            charCount: 10000,
+            enabled: true,
+            failReason: null,
+            failHint: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            docType: meta.docType,
+            department: meta.department,
+            classification: meta.classification
+          }
+          documents.unshift(doc)
+          const isScan = /扫描|scan/i.test(name)
+          if (isScan) {
+            runParse(doc, { failSplit: true })
+          } else if (importBody.segmentationPlan?.length) {
+            applySegmentationPlan(doc, importBody.segmentationPlan)
+          } else {
+            runParse(doc, { failSplit: false })
+          }
+          accepted.push(doc)
         }
 
         touchKbCounters(kbId)

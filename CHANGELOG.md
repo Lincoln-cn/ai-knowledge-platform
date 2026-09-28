@@ -7,6 +7,71 @@
 
 ---
 
+## 0.2.0（进行中）· 第 5 周 · M2-a 建档（密级必填 + ceiling）
+
+### 这一版能做什么
+
+**建知识库 → 给文档建档，密级从头管到尾**：
+
+```
+POST /api/v1/knowledge-bases                    → 必须选「密级上限」（ceiling），缺了 400
+POST /api/v1/knowledge-bases/:id/documents      → 文种 / 责任部门 / 密级 **三项必填**，缺哪项点哪项
+                                                 文档密级 > 库 ceiling ⇒ 400「文档密级（机密）高于
+                                                 知识库的密级上限（秘密）—— 请提高库的上限…」
+GET  /api/v1/knowledge-bases                    → 按 dataScope 过滤（拼进查询）
+GET  /api/v1/knowledge-bases/:id                → 看不见 ⇒ **404**（不是 403）
+POST /api/v1/knowledge-bases  + clientRequestId → 同一键重试 ⇒ 返**首次那条**（不报「已存在」）
+```
+
+### 交付物
+
+| # | 交付 | 关键点 |
+|---|---|---|
+| 1 | **知识库 7 端点** + 迁移 V12 | 含 categories / enabled；`kb_knowledge_base_grant` 用 `07 §8.1` 的可长形状（不用 `{userIds, roleCodes}`） |
+| 2 | ★ **第一个归属资源落地** | `ownerId` 由后端写（JWT 的 `sub`，**不接受前端传**）；`visibility` 默认 `PRIVATE`（一律收窄）；**列表按 `dataScope` 拼进查询**（`Specification`，search/count 共用一份谓词）；**看不见 ⇒ 404** |
+| 3 | ★ **幂等** `clientRequestId` | 同一键重试 ⇒ 返首次那条。★ 唯一键取 `(client_request_id, owner_id)` 而非全平台唯一 —— 幂等是"同一调用方的重试"，全局唯一会让用户 B 撞上 A 的键时莫名失败，也多一处信息泄漏面 |
+| 4 | **ceiling（`maxClassification`）服务端必填** | 缺失 ⇒ 400 说清原因，不静默给默认值（`13 §6`：默认要么全放行要么全拦，都是错的） |
+| 5 | **文档建档** + 迁移 V13 | 三项必填（`12 §5.1`：决定召回前缀与安全过滤，**不能有默认值**）；ceiling 校验的拒绝原因**带两个密级的中文展示名**（机器码进错误消息不可读）；**可见性继承库**（同一判定，不另写一套） |
+| 6 | **前端** | 建库表单加「密级上限」· 文档三项必填 · ceiling 超限把后端原因**原文**展示（不代写）· 越权深链给可读提示 · 新闸门 `check_knowledge_form.py` |
+| 7 | 契约**只加可选字段** | `KnowledgeBase.maxClassification?` · `DocumentItem.docType?/department?/classification?` · 导入入参同名三项 |
+
+### 验证记录（本地实跑）
+
+```
+后端  mvn -B -f backend/pom.xml verify → BUILD SUCCESS · Tests run: 194（189+5）
+前端  typecheck / build:mock / verify_refs / check_template_tags / check_design → 通过
+闸门  check_knowledge_form.py  24/24（mock）· 24/24（真栈）
+      check_models_form.py     38/38（mock）· 38/38（真栈）—— 未破坏
+★ 联调（真前端代理 + 真后端 + 真 PG）
+    三项必填逐项点名（「文种必填」「责任部门必填」「密级必填」）
+    ceiling：等于/低于放行；高于 ⇒ 400 +「文档密级（机密）高于知识库的密级上限（秘密）…」
+    越权：看库 ⇒ 404、看其文档 ⇒ 404、建档 ⇒ 404（可见性继承库）
+    ★ 写操作探针（临时给 USER 开动作权限、不动它的 SHARED 范围）：
+      越权建档 ⇒ 404 且**没写进去** —— 7/7；库侧同样 12/12
+```
+
+### ★ 这一版踩到的坑
+
+| # | 现象 | 根因 | 处理 |
+|---|---|---|---|
+| 1 | ★ **真栈建库直接 400「请求体不是合法 JSON」** | `importType` 还是小写 `local`/`online` —— **枚举换码漏了它**（后端是 `LOCAL`/`ONLINE`） | 改成 `SCREAMING_SNAKE_CASE`（`14` 规范） |
+| 2 | **批 2 的 TDD 红阶段没留证据** | 测试先于实现写了，但**没先跑出红再实现** —— 断言先于实现存在，红→绿证据链不完整 | 如实记录。下批要求红阶段必须有构建日志 |
+| 3 | **真栈 `documents` 端点 404** | `live-run.jar`（21:06）比 `DocumentController.java`（21:58）**旧** —— jar 与源码脱节 | 跑真栈闸门前先核对 jar 时间戳 vs 最新源码 |
+| 4 | **契约形状差**：后端收 `names[]`，契约写的是 `uploadIds` | 建档入参走了最简形态，契约没跟上 | 两侧共存时提交体同时带 `names`；**待收敛**（见欠账） |
+| 5 | ★ **无动作权限的用户对写操作拿 403，不是 404** | `@PreAuthorize` 先拦，对**任何** id 都 403 ⇒ 不泄漏存在性，**这是对的** | 「看不见 ⇒ 404」针对的是**有动作权限但范围受限**那一类。两版探针都按这个口径验（库 12/12、文档 7/7） |
+
+### ⚠️ 待确认 / 欠账
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 1 | **`names` 与 `uploadIds` 的契约形状差要收敛** | 后端建档收 `names[]`，契约 `ImportDocumentsBody` 是 `uploadIds`。要么契约加 `names?`，要么后端收 `uploadIds` —— 现在是"两侧共存"，长期必漂 |
+| 2 | **`stageUploads` / `upload-policy` / `segmentation/preview` / `ingestion-progress` 仍未实现** | 向导这几步在真栈会 404；前端已做容错（暂存失败退回建档、预览改为可选）。`ContractDriftTest` 已标欠账 |
+| 3 | **文档列表不按 dataScope 再筛一次** | 文档可见性**继承库**，范围判定只在「找库」一处 —— 两套判定迟早分叉（刻意的，注释已记） |
+| 4 | `department` 用 `varchar(64)` 而不是 `uuid` | `02` 的 `dept_id uuid` 需要部门字典表（本批没有）；契约也是 `string`。形状先占住 |
+| 5 | 逐篇覆盖文档标签 | 本批三项是**批级**（一次导入同一套）；逐篇覆盖是后续 |
+
+---
+
 ## 0.1.3 · 第 4 周 · M1 模型资产全链路（含 ★ 枚举取值统一为机器码 —— **破坏性契约变更**）
 
 > **真源见 [`系统设计方案/14-枚举与取值命名规范.md`](系统设计方案/14-枚举与取值命名规范.md)** —— 规则、全量映射表、边界都在那里。

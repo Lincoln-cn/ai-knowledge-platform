@@ -95,6 +95,14 @@ export const knowledgeRoutes: MockRoute[] = [
       if (knowledgeBases.some((k) => k.name === input.name.trim())) {
         throw new ApiError(3002, `知识库名称「${input.name}」已存在`)
       }
+      // ★ ceiling 必填（13 §6）：缺了它「文档密级 ≤ ceiling」就没有依据 —— 与后端同文案
+      if (!input.maxClassification) {
+        throw new ApiError(
+          400,
+          '库的密级上限必填',
+          '为这个知识库选择允许装入的最高密级（公开/内部/秘密/机密）—— 它是入库校验的依据（13 §6）'
+        )
+      }
       if (!input.embeddingModelId) {
         throw new ApiError(3003, '必须指定向量模型 —— 维度与向量表绑定，创建后不可随意更换')
       }
@@ -118,6 +126,8 @@ export const knowledgeRoutes: MockRoute[] = [
         segmentCount: 0,
         charCount: 0,
         createdAt: new Date().toISOString(),
+        // ceiling（13 §6）：创建时必填，存下来供建档校验用
+        maxClassification: input.maxClassification,
         // 归属由"后端"写：ownerId 从主体集合取（**绝不从请求体取**，否则就是客户端自封归属），
         // 默认可见性 private（07 §7 第 4 问的建议 4(a)：安全默认，要共享得显式动作）
         ownerId: selfId(subjects),

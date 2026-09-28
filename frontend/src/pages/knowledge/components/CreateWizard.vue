@@ -42,10 +42,21 @@
         </el-form-item>
         <el-form-item label="导入类型" prop="importType">
           <el-radio-group v-model="baseForm.importType">
-            <el-radio-button value="local">本地文档</el-radio-button>
-            <el-radio-button value="online">在线抓取</el-radio-button>
+            <el-radio-button value="LOCAL">本地文档</el-radio-button>
+            <el-radio-button value="ONLINE">在线抓取</el-radio-button>
           </el-radio-group>
           <div class="hint micro">创建后不可更改（BR-03-01）</div>
+        </el-form-item>
+        <el-form-item label="密级上限" prop="maxClassification">
+          <el-select v-model="baseForm.maxClassification" style="width: 220px" placeholder="选择密级上限">
+            <el-option
+              v-for="c in CLASSIFICATION_LEVEL_VALUES"
+              :key="c"
+              :label="labelOf(CLASSIFICATION_LEVEL_LABELS, c)"
+              :value="c"
+            />
+          </el-select>
+          <div class="hint micro">这个库允许装入的最高密级（13 §6）—— 文档密级超过它会被拒绝入库</div>
         </el-form-item>
         <el-form-item label="向量模型" prop="embeddingModelId">
           <el-select v-model="baseForm.embeddingModelId" style="width: 280px" placeholder="选择向量模型">
@@ -128,6 +139,26 @@
           ⚠ 当前向量模型上限约 <b class="num">{{ modelLimit }}</b> 字<br />
           超出部分将被截断，影响召回
         </div>
+
+        <!-- ★ 建档必填三项（12 §5.1）：文种 / 责任部门 / 密级 —— 批级，一次导入同一套标签 -->
+        <el-form ref="docMetaFormRef" :model="docMeta" :rules="docMetaRules" label-width="72px" class="doc-meta-form">
+          <el-form-item label="文种" prop="docType">
+            <el-input v-model="docMeta.docType" maxlength="32" placeholder="例如：合同 / 制度" />
+          </el-form-item>
+          <el-form-item label="责任部门" prop="department">
+            <el-input v-model="docMeta.department" maxlength="32" placeholder="例如：法务部" />
+          </el-form-item>
+          <el-form-item label="密级" prop="classification">
+            <el-select v-model="docMeta.classification" style="width: 100%" placeholder="选择密级">
+              <el-option
+                v-for="c in CLASSIFICATION_LEVEL_VALUES"
+                :key="c"
+                :label="labelOf(CLASSIFICATION_LEVEL_LABELS, c)"
+                :value="c"
+              />
+            </el-select>
+          </el-form-item>
+        </el-form>
 
         <el-button type="primary" class="preview-btn" :loading="previewing" @click="generatePreview">
           生成预览
@@ -246,16 +277,24 @@ import {
 import { Loading, UploadFilled } from '@element-plus/icons-vue'
 import { ingestionApi, knowledgeApi, modelsApi } from '@/api'
 import { ApiError } from '@/api/types'
+import type { ClassificationLevel } from '@/api/types'
 import type { ImportType, KnowledgeBase, KnowledgeCategory } from '@/api/knowledge'
 import type { ModelInfo } from '@/api/models'
 import type {
   DocumentItem,
   DocumentStatus,
+  ImportDocumentsBody,
   PreviewSegmentationResult,
   SegmentationPlanItem,
-  UploadPolicy
+  UploadPolicy,
+  UploadReceipt
 } from '@/api/ingestion'
-import { DOCUMENT_STATUS_LABELS, labelOf } from '@/constants/labels'
+import {
+  CLASSIFICATION_LEVEL_LABELS,
+  CLASSIFICATION_LEVEL_VALUES,
+  DOCUMENT_STATUS_LABELS,
+  labelOf
+} from '@/constants/labels'
 
 const emit = defineEmits<{ created: [kb: KnowledgeBase] }>()
 
@@ -296,15 +335,19 @@ const baseForm = reactive({
   category: '',
   icon: '📘',
   description: '',
-  importType: 'local' as ImportType,
-  embeddingModelId: ''
+  // ★ 取值必须是 SCREAMING_SNAKE_CASE（14 §2.1）：与后端 ImportType 枚举同名，否则真栈建库 400
+  importType: 'LOCAL' as ImportType,
+  embeddingModelId: '',
+  /** 库的密级上限（ceiling，13 §6）—— 必填，缺了不让提交 */
+  maxClassification: '' as ClassificationLevel | ''
 })
 
 const baseRules: FormRules = {
   name: [{ required: true, message: '请输入知识库名称', trigger: 'blur' }],
   category: [{ required: true, message: '请选择分类', trigger: 'change' }],
   importType: [{ required: true, message: '请选择导入类型', trigger: 'change' }],
-  embeddingModelId: [{ required: true, message: '请选择向量模型', trigger: 'change' }]
+  embeddingModelId: [{ required: true, message: '请选择向量模型', trigger: 'change' }],
+  maxClassification: [{ required: true, message: '请选择密级上限', trigger: 'change' }]
 }
 
 const files = ref<File[]>([])
@@ -317,6 +360,19 @@ const segForm = reactive({
   segmentLength: 500,
   overlap: 60
 })
+
+/** 建档必填三项（12 §5.1）—— 批级，一次导入同一套标签 */
+const docMeta = reactive({
+  docType: '',
+  department: '',
+  classification: '' as ClassificationLevel | ''
+})
+const docMetaFormRef = ref<FormInstance>()
+const docMetaRules: FormRules = {
+  docType: [{ required: true, message: '请选择文种', trigger: 'blur' }],
+  department: [{ required: true, message: '请填写责任部门', trigger: 'blur' }],
+  classification: [{ required: true, message: '请选择密级', trigger: 'change' }]
+}
 
 const preview = ref<PreviewSegmentationResult | null>(null)
 const previewError = ref('')
@@ -367,12 +423,16 @@ const reset = () => {
   baseForm.description = ''
   baseForm.importType = 'LOCAL'
   baseForm.embeddingModelId = ''
+  baseForm.maxClassification = ''
   files.value = []
   fileList.value = []
   fileRejects.value = []
   segForm.strategy = 'AUTO'
   segForm.segmentLength = 500
   segForm.overlap = 60
+  docMeta.docType = ''
+  docMeta.department = ''
+  docMeta.classification = ''
   preview.value = null
   previewError.value = ''
   stageError.value = ''
@@ -470,6 +530,7 @@ const ensureKb = async (): Promise<KnowledgeBase> => {
     icon: baseForm.icon,
     importType: baseForm.importType,
     embeddingModelId: baseForm.embeddingModelId,
+    maxClassification: baseForm.maxClassification,
     clientRequestId: clientRequestId.value
   })
   return createdKb.value
@@ -497,8 +558,13 @@ const next = async () => {
     try {
       // #12 先幂等建库，再暂存上传 —— 任一步失败都可以直接重试「下一步」
       const kb = await ensureKb()
-      const staged = await ingestionApi.stageUploads(kb.id, files.value)
-      uploadIds.value = staged.uploadIds
+      // 真栈可能还没有暂存端点（uploads 随上传链补）—— 失败不挡建档，退回文件名清单
+      try {
+        const staged = await ingestionApi.stageUploads(kb.id, files.value)
+        uploadIds.value = staged.uploadIds
+      } catch {
+        uploadIds.value = []
+      }
       step.value = 2
     } catch (error) {
       stageError.value = error instanceof ApiError ? error.message : '暂存上传失败，请重试'
@@ -547,11 +613,11 @@ const savePreviewEdit = (seg: { ordinal: number; content: string; charCount: num
 }
 
 const startImport = async () => {
-  if (!preview.value) {
-    ElMessage.warning('请先生成预览，确认切分结果后再导入')
-    return
-  }
-  if (!uploadIds.value.length) {
+  // ★ 建档三项必填先校验（12 §5.1）：缺任一就在表单上给出可读原因，不要被预览检查抢在前面
+  const metaValid = await docMetaFormRef.value?.validate().catch(() => false)
+  if (!metaValid) return
+  // 预览是增强项：真栈暂无 segmentation/preview 端点时，没有预览也应能建档
+  if (!uploadIds.value.length && !files.value.length) {
     stageError.value = '暂存文件已丢失，请回到上一步重新选择文件'
     ElMessage.error(stageError.value)
     return
@@ -562,18 +628,26 @@ const startImport = async () => {
     // #12 库已用 clientRequestId 幂等创建；这里只做导入，失败可直接重试
     const kb = await ensureKb()
     // #11 把预览里编辑过的分段作为切分计划提交 —— 不再"只改本地数组"
+    // names：真栈建档最小形态（RegisterDocumentsBody.names）；mock 也收
     const receipt = await ingestionApi.importDocuments(kb.id, {
-      uploadIds: uploadIds.value,
-      segmentationPlan: toPlan(preview.value)
-    })
-    resultDocs.value = receipt.accepted
-    imported.value = receipt.accepted.length > 0
-    if (receipt.rejected.length) {
-      importError.value = `成功 ${receipt.accepted.length} 个，失败 ${receipt.rejected.length} 个：${receipt.rejected[0].reason}`
+      uploadIds: uploadIds.value.length ? uploadIds.value : undefined,
+      names: files.value.map((f) => f.name),
+      segmentationPlan: preview.value ? toPlan(preview.value) : undefined,
+      docType: docMeta.docType.trim(),
+      department: docMeta.department.trim(),
+      classification: docMeta.classification
+    } as ImportDocumentsBody)
+    const raw = receipt as unknown as UploadReceipt | DocumentItem[]
+    const norm: UploadReceipt = Array.isArray(raw) ? { accepted: raw, rejected: [] } : raw
+    resultDocs.value = norm.accepted
+    imported.value = norm.accepted.length > 0
+    if (norm.rejected.length) {
+      importError.value = `成功 ${norm.accepted.length} 个，失败 ${norm.rejected.length} 个：${norm.rejected[0].reason}`
     }
     step.value = 3
     emit('created', kb)
   } catch (error) {
+    // ★ 后端可读原因原文展示（如 ceiling 超限）—— 不代写
     importError.value = error instanceof ApiError ? error.message : '导入失败，请重试'
   } finally {
     submitting.value = false
@@ -700,6 +774,10 @@ defineExpose({ open })
 
 .limit-notice {
   margin: 0;
+}
+
+.doc-meta-form {
+  margin-top: var(--space-xs);
 }
 
 .preview-btn {

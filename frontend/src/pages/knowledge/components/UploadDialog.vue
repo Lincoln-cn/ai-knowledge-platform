@@ -30,9 +30,35 @@
       </template>
     </el-upload>
 
+    <!-- ★ 建档必填三项（12 §5.1）：文种 / 责任部门 / 密级 —— 决定召回前缀与安全过滤，不能有默认值 -->
+    <el-form ref="metaFormRef" :model="meta" :rules="metaRules" label-width="96px" class="meta-form">
+      <el-form-item label="文种" prop="docType">
+        <el-input v-model="meta.docType" maxlength="32" placeholder="例如：合同 / 制度 / 报销规定" />
+      </el-form-item>
+      <el-form-item label="责任部门" prop="department">
+        <el-input v-model="meta.department" maxlength="32" placeholder="例如：法务部 / 采购部" />
+      </el-form-item>
+      <el-form-item label="密级" prop="classification">
+        <el-select v-model="meta.classification" style="width: 220px" placeholder="选择密级">
+          <el-option
+            v-for="c in CLASSIFICATION_LEVEL_VALUES"
+            :key="c"
+            :label="labelOf(CLASSIFICATION_LEVEL_LABELS, c)"
+            :value="c"
+          />
+        </el-select>
+      </el-form-item>
+    </el-form>
+
     <div v-if="rejected.length" class="notice warn reject-list">
       <div><b>以下文件未通过校验：</b></div>
       <div v-for="r in rejected" :key="r.name" class="micro">{{ r.name }} —— {{ r.reason }}</div>
+    </div>
+
+    <!-- 后端可读原因原文（如 ceiling 超限）—— 不代写、不吞掉 hint -->
+    <div v-if="submitError" class="notice err submit-error">
+      <div><b>提交失败：</b>{{ submitError }}</div>
+      <div v-if="submitHint" class="micro">{{ submitHint }}</div>
     </div>
 
     <template #footer>
@@ -45,12 +71,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { ElMessage, type UploadFile, type UploadFiles } from 'element-plus'
+import { computed, reactive, ref } from 'vue'
+import { ElMessage, type FormInstance, type FormRules, type UploadFile, type UploadFiles } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 import { ingestionApi } from '@/api'
 import { ApiError } from '@/api/types'
-import type { UploadPolicy } from '@/api/ingestion'
+import type { ImportDocumentsBody, UploadPolicy, UploadReceipt, DocumentItem } from '@/api/ingestion'
+import {
+  CLASSIFICATION_LEVEL_LABELS,
+  CLASSIFICATION_LEVEL_VALUES,
+  labelOf
+} from '@/constants/labels'
+import type { ClassificationLevel } from '@/api/types'
 
 const props = defineProps<{ kbId: string }>()
 const emit = defineEmits<{ uploaded: [] }>()
@@ -61,6 +93,21 @@ const files = ref<File[]>([])
 const fileList = ref<UploadFiles>([])
 const policy = ref<UploadPolicy | null>(null)
 const rejected = ref<Array<{ name: string; reason: string }>>([])
+const submitError = ref('')
+const submitHint = ref('')
+
+/** 建档必填三项（12 §5.1） */
+const meta = reactive({
+  docType: '',
+  department: '',
+  classification: '' as ClassificationLevel | ''
+})
+const metaFormRef = ref<FormInstance>()
+const metaRules: FormRules = {
+  docType: [{ required: true, message: '请选择文种', trigger: 'blur' }],
+  department: [{ required: true, message: '请填写责任部门', trigger: 'blur' }],
+  classification: [{ required: true, message: '请选择密级', trigger: 'change' }]
+}
 
 const acceptAttr = computed(() =>
   policy.value?.acceptedExtensions.length ? policy.value.acceptedExtensions.join(',') : '.pdf,.docx,.doc,.md,.txt'
@@ -69,6 +116,8 @@ const acceptAttr = computed(() =>
 const open = async () => {
   visible.value = true
   rejected.value = []
+  submitError.value = ''
+  submitHint.value = ''
   try {
     policy.value = await ingestionApi.getUploadPolicy(props.kbId)
   } catch {
@@ -122,20 +171,52 @@ const reset = () => {
   fileList.value = []
   rejected.value = []
   policy.value = null
+  meta.docType = ''
+  meta.department = ''
+  meta.classification = ''
+  submitError.value = ''
+  submitHint.value = ''
+  metaFormRef.value?.clearValidate()
 }
 
 const submit = async () => {
   if (!files.value.length) return
+  // ★ 建档三项必填：缺任一不让提交（前端拦一道；后端也拦）
+  const metaValid = await metaFormRef.value?.validate().catch(() => false)
+  if (!metaValid) return
+
   const bad = validate(files.value)
   if (bad.length) {
     rejected.value = bad
     return
   }
   uploading.value = true
+  submitError.value = ''
+  submitHint.value = ''
   try {
-    // 走暂存 + 导入，拿到部分失败回执
-    const staged = await ingestionApi.stageUploads(props.kbId, files.value)
-    const receipt = await ingestionApi.importDocuments(props.kbId, { uploadIds: staged.uploadIds })
+    // 走暂存 + 导入，拿到部分失败回执。真栈若无暂存端点则退回文件名清单建档。
+    let uploadIds: string[] = []
+    try {
+      const staged = await ingestionApi.stageUploads(props.kbId, files.value)
+      uploadIds = staged.uploadIds
+    } catch {
+      uploadIds = []
+    }
+    // names：真栈建档最小形态（RegisterDocumentsBody.names）。mock 也收，两侧同一条提交路径。
+    const body = {
+      uploadIds: uploadIds.length ? uploadIds : undefined,
+      names: files.value.map((f) => f.name),
+      docType: meta.docType.trim(),
+      department: meta.department.trim(),
+      classification: meta.classification
+    } as ImportDocumentsBody
+    const raw = (await ingestionApi.importDocuments(props.kbId, body)) as unknown as
+      | UploadReceipt
+      | DocumentItem[]
+    // 真栈回 DocumentItem[]（建档最小形态）；mock 回 UploadReceipt —— 两种都收
+    const receipt: UploadReceipt = Array.isArray(raw)
+      ? { accepted: raw, rejected: [] }
+      : raw
     if (receipt.rejected.length) {
       rejected.value = receipt.rejected
       ElMessage.warning(`成功 ${receipt.accepted.length} 个，失败 ${receipt.rejected.length} 个`)
@@ -146,7 +227,10 @@ const submit = async () => {
     }
     if (receipt.accepted.length) emit('uploaded')
   } catch (error) {
+    // ★ 后端可读原因原文展示（如 ceiling 超限：「文档密级（机密）高于知识库的密级上限（秘密）…」）
     const message = error instanceof ApiError ? error.message : '上传失败，请稍后重试'
+    submitError.value = message
+    submitHint.value = error instanceof ApiError ? error.hint || '' : ''
     ElMessage.error(message)
   } finally {
     uploading.value = false
@@ -197,7 +281,15 @@ defineExpose({ open })
   text-underline-offset: 2px;
 }
 
+.meta-form {
+  margin-top: var(--space-md);
+}
+
 .reject-list {
+  margin-top: var(--space-sm);
+}
+
+.submit-error {
   margin-top: var(--space-sm);
 }
 </style>

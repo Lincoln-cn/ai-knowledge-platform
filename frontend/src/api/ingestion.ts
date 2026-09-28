@@ -1,5 +1,5 @@
 import { request } from '@/lib/http'
-import type { PageQuery, PageResult } from './types'
+import type { ClassificationLevel, PageQuery, PageResult } from './types'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
@@ -33,6 +33,15 @@ export interface DocumentItem {
   failHint: string | null
   createdAt: string
   updatedAt: string
+  /**
+   * 文种（合同/制度/报销规定…）。★ 建档必填三项之一（12 §5.1），
+   * 冻结契约只加可选字段，故此处 `?`。
+   */
+  docType?: string
+  /** 责任部门。★ 建档必填三项之一 */
+  department?: string
+  /** 密级。★ 建档必填三项之一，且必须 ≤ 所属库的 `maxClassification`（ceiling，13 §6） */
+  classification?: ClassificationLevel
 }
 
 /** 库级进度聚合：阶段 + 计数，用于页面顶部进度条 */
@@ -118,6 +127,13 @@ export interface StageUploadsResult {
 export interface ImportDocumentsBody {
   uploadIds?: string[]
   segmentationPlan?: SegmentationPlanItem[]
+  /**
+   * 建档必填三项（12 §5.1）—— **批级**：一次导入给这批文档同一套标签。
+   * ★ 逐篇覆盖是后续（等单篇编辑端点落地），本批不做。
+   */
+  docType?: string
+  department?: string
+  classification?: ClassificationLevel
 }
 
 /** P1 上传回执：部分失败必须逐条给原因，不许只回一个总数 */

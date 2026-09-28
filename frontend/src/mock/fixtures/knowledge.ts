@@ -41,6 +41,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     segmentCount: 510,
     charCount: 210800,
     createdAt: '2026-02-01T09:00:00Z',
+    maxClassification: 'SECRET',
     ownerId: 'u2',
     // 共享给「普通用户」角色 → 普通用户只读可见
     visibility: 'SHARED',
@@ -61,6 +62,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     segmentCount: 86,
     charCount: 41200,
     createdAt: '2026-02-03T14:20:00Z',
+    maxClassification: 'INTERNAL',
     // 别人的 private：只有归属人（u2）与全平台档（ADMIN/KB_OPERATOR/APP_CONFIG）看得见
     ownerId: 'u2',
     visibility: 'PRIVATE'
@@ -80,6 +82,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     segmentCount: 220,
     charCount: 98000,
     createdAt: '2026-02-05T10:30:00Z',
+    maxClassification: 'CONFIDENTIAL',
     ownerId: 'u3',
     // 共享给 chenjun 本人（`user` 主体，与 kb1 的 `role` 主体并存）→ 演示两种主体都生效
     visibility: 'SHARED',
@@ -100,6 +103,7 @@ export const knowledgeBases: KnowledgeBase[] = [
     segmentCount: 0,
     charCount: 0,
     createdAt: '2026-02-12T16:00:00Z',
+    maxClassification: 'PUBLIC',
     // public = 登录用户里人人可见（**不等于免登录**）；持有 knowledge:view 即可见
     ownerId: 'u1',
     visibility: 'PUBLIC'

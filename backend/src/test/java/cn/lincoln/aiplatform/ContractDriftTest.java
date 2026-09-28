@@ -82,9 +82,10 @@ class ContractDriftTest {
    */
   private static final Set<String> UNIMPLEMENTED_PREFIXES =
       Set.of(
-          // ★ 建档 7 个端点已于第 5 周 0.2.0 批 1 落地，但本前缀下仍有欠账：
-          //   /knowledge-bases/{*}/documents · uploads · ingestion-progress · reembed
-          //   · upload-policy · retrieval（在 api/ingestion.ts / api/retrieval.ts 里）。
+          // ★ 建档 7 个端点已于第 5 周 0.2.0 批 1 落地；documents 子资源的建档
+          //   （POST/GET /knowledge-bases/{*}/documents）已于批 2 落地。
+          //   但本前缀下仍有欠账：uploads · ingestion-progress · reembed ·
+          //   upload-policy · retrieval（在 api/ingestion.ts / api/retrieval.ts 里）。
           //   防黑洞测试要求「欠账仍在」而不是逼你删 —— 等这批子资源也落地再删本前缀。
           "/knowledge-bases",
           // 第 5–8 周 0.2.x–0.3.0：文档上传、解析、入库（含 enabled/retry/embedding/reembed）
