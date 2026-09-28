@@ -132,6 +132,13 @@ export const changePassword = (body: ChangePasswordBody) =>
 export const listUsers = (query: UserQuery = {}) =>
   request<PageResult<User>>({ method: 'GET', url: '/users', query })
 
+/**
+ * 用户详情。后端早有 GET /users/:id，契约此前只登记了同路径的 PUT/DELETE ——
+ * 只对路径的契约闸门看不见这种「同路径、方法漏登记」，方法+路径对账才抓住。
+ */
+export const getUser = (id: string) =>
+  request<User>({ method: 'GET', url: '/users/:id', path: { id } })
+
 export const createUser = (body: UpsertUserBody) =>
   request<User>({ method: 'POST', url: '/users', body })
 

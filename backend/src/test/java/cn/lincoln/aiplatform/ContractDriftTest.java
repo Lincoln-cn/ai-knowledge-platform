@@ -7,9 +7,11 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -39,6 +41,13 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  *       但清单必须<strong>显式、可审阅</strong>，否则它会变成一个永久的黑洞。
  * </ol>
  *
+ * <p>★ 对账维度是<strong>方法 + 路径</strong>，不是只对路径：只对路径时，同路径 {@code GET→POST} 的单边变更
+ * 两边都能"看起来对上"，闸门全程绿（{@code listBaseModels} 真漏过一次）。 路径维度的两条规则语义不变；HTTP 方法是<strong>叠加约束</strong> ——
+ * 路径两边都有时，方法集合必须一致。
+ *
+ * <p>★ 任意方法不算漂移：后端 {@code @RequestMapping} 不写 {@code method} 时是任意方法，按"匹配所有"处理，
+ * <strong>不与契约的具体方法逐一对账</strong> —— 否则会把合法的宽松映射误报成漂移。
+ *
  * <p>★ 归一化（不做会被命名差异吵聋）：TS 的 {@code /users/:id} 与 Spring 的 {@code /users/{id}} 归一成 {@code
  * /users/{*}} 再比对 —— <strong>路径参数名字不同不算漂移</strong>。 查询参数不参与比对（只比路径）。后端的 {@code /api/v1} 前缀剥掉 （契约里的
  * {@code url} 不带它）。
@@ -46,8 +55,9 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * <p>★ 与 {@code AuthorizationDeclarationTest} / {@code ModuleBoundaryTest} 同构：
  * <strong>同一规则跑两组数据</strong> —— 真实契约必须过、金丝雀样本必须不过。 若金丝雀通过了，说明这条闸门已经失效，主代码的绿说明不了任何事。
  *
- * <p>★ 读法：后端侧用 {@link RequestMappingHandlerMapping} 的真实映射（{@code @RestController} 拼出的完整路径模板），
- * 前端侧<strong>只读 TS 源码里的 {@code url: '...'} 字面量</strong>（正则解析，不引 TS 解析器、不起前端、不跑 Node）。
+ * <p>★ 读法：后端侧用 {@link RequestMappingHandlerMapping} 的真实映射（{@code @RestController} 拼出的完整路径模板 +
+ * {@code getMethodsCondition()} 的方法集合）， 前端侧<strong>只读 TS 源码里 {@code request({ method, url })}
+ * 字面量</strong>（正则 + 花括号配对，不引 TS 解析器、不起前端、不跑 Node）。
  */
 @SpringBootTest
 @Testcontainers
@@ -118,21 +128,40 @@ class ContractDriftTest {
           "/workflow/demo/invalid-graph",
           "/workflow/demo/valid-graph");
 
-  /** TS 里 {@code url: '/x/:id'} 或 {@code url: `/x/${id}`} 或 {@code url: "/x"} 的字面量。 */
+  /**
+   * {@code request({ method: 'GET', url: '/x' })} 的选项对象起始 —— 锚定左花括号。
+   *
+   * <p>★ 只认 {@code request(...)} 的内联对象字面量：method 与 url 必须在<strong>同一个</strong>对象里成对取出，
+   * 否则同文件里两条相邻调用会把 method 配错对。 泛型允许一层嵌套（{@code PageResult<ModelInfo>}）。
+   */
+  private static final Pattern REQUEST_OPTIONS_OPEN =
+      Pattern.compile("\\brequest\\s*(?:<[^<>]*(?:<[^<>]*>[^<>]*)*>)?\\s*\\(\\s*\\{");
+
+  /** 选项对象里的 {@code method: 'GET'}（可小写）；省略时按 {@code lib/http.ts} 默认 GET。 */
+  private static final Pattern METHOD_LITERAL =
+      Pattern.compile("method\\s*:\\s*['\"]([A-Za-z]+)['\"]");
+
+  /** 选项对象里的 {@code url: '/x/:id'} / {@code url: `/x/${id}`} / {@code url: "/x"} 字面量。 */
   private static final Pattern URL_LITERAL = Pattern.compile("url\\s*:\\s*(['\"`])([^'\"`]+)\\1");
 
   /** 后端 {@code /api/v1} 前缀 —— 契约里的 {@code url} 不带它，比对前要剥掉。 */
   private static final String API_PREFIX = "/api/v1";
 
+  /**
+   * 方法集合的空集哨兵：后端 {@code @RequestMapping} 不写 {@code method} 时 {@code getMethods()} 为空，
+   * 表示<strong>任意方法</strong>（匹配所有）。
+   */
+  private static final Set<String> ANY_METHODS = Set.of();
+
   // ────────────────────────── 主闸门 ──────────────────────────
 
   @Test
   void 契约与后端必须双向对得上() {
-    Set<String> backend = backendPaths();
-    Set<String> contract = contractPaths();
+    Map<String, Set<String>> backend = backendEndpoints();
+    Map<String, Set<String>> contract = contractEndpoints();
 
     assertThat(backend).as("后端映射为空 ⇒ RequestMappingHandlerMapping 没拿到，这条闸门在空跑").isNotEmpty();
-    assertThat(contract).as("契约解析为空 ⇒ url 字面量正则失效或 api 目录读错，这条闸门在空跑").isNotEmpty();
+    assertThat(contract).as("契约解析为空 ⇒ request 选项对象解析失效或 api 目录读错，这条闸门在空跑").isNotEmpty();
 
     assertNoDrift(backend, contract, UNIMPLEMENTED_PREFIXES, KNOWN_EXCEPTIONS);
   }
@@ -141,17 +170,19 @@ class ContractDriftTest {
    * ★ 未实现清单不得变成黑洞：某前缀已经<strong>全部</strong>落地时，必须从清单里删掉。
    *
    * <p>否则清单会慢慢堆积"曾经欠过、现在早已实现"的项，审阅者再也分不清哪些是真欠账。
+   *
+   * <p>★ 仍按<strong>路径</strong>维度查欠账（与清单语义一致）：方法差异由主闸门的方法约束单独盯。
    */
   @Test
   void 未实现清单里的域名必须仍然有欠账() {
-    Set<String> backend = backendPaths();
-    Set<String> contract = contractPaths();
+    Map<String, Set<String>> backend = backendEndpoints();
+    Map<String, Set<String>> contract = contractEndpoints();
 
     for (String prefix : UNIMPLEMENTED_PREFIXES) {
       Set<String> stillMissing =
-          contract.stream()
+          contract.keySet().stream()
               .filter(p -> underPrefix(p, prefix))
-              .filter(p -> !backend.contains(p))
+              .filter(p -> !backend.containsKey(p))
               .collect(Collectors.toCollection(TreeSet::new));
       assertThat(stillMissing)
           .as("未实现清单里的 %s 在契约中已无欠账（后端全实现了，或契约里根本没这个域）⇒ 请从清单删除，" + "否则它会变成没人再看的黑洞", prefix)
@@ -173,9 +204,9 @@ class ContractDriftTest {
             () ->
                 assertNoDrift(
                     // 后端：一条常规端点
-                    Set.of("/users", "/users/{*}"),
+                    endpoints("GET", "/users", "GET", "/users/{*}"),
                     // 契约：多出一条后端没有的 /ghost —— 且未实现清单/例外都是空的
-                    Set.of("/users", "/users/{*}", "/ghost"),
+                    endpoints("GET", "/users", "GET", "/users/{*}", "GET", "/ghost"),
                     Set.of(),
                     Set.of()))
         .as("坏样本没被拦下 ⇒ 这条闸门已经失效，主代码的绿说明不了任何事")
@@ -193,9 +224,9 @@ class ContractDriftTest {
             () ->
                 assertNoDrift(
                     // 后端：多出一条契约没有的 /secret-endpoint
-                    Set.of("/users", "/secret-endpoint"),
+                    endpoints("GET", "/users", "POST", "/secret-endpoint"),
                     // 契约：只登记了 /users
-                    Set.of("/users"),
+                    endpoints("GET", "/users"),
                     Set.of(),
                     Set.of()))
         .as("坏样本没被拦下 ⇒ 这条闸门已经失效，主代码的绿说明不了任何事")
@@ -212,13 +243,60 @@ class ContractDriftTest {
     assertThatThrownBy(
             () ->
                 assertNoDrift(
-                    Set.of("/users/{*}", "/auth/login"),
+                    endpoints("GET", "/users/{*}", "POST", "/auth/login"),
                     // 多一条 /ghost，且缺了 /auth/login
-                    Set.of("/users/{*}", "/ghost"),
+                    endpoints("GET", "/users/{*}", "GET", "/ghost"),
                     Set.of(),
                     Set.of()))
         .as("双向坏样本没被拦下 ⇒ 这条闸门已经失效")
         .isInstanceOf(AssertionError.class);
+  }
+
+  /**
+   * 金丝雀（方法维度）：同路径上「契约 GET / 后端 POST」——以及反过来——都必须失败。
+   *
+   * <p>★ 这是 {@code listBaseModels} 真实漏过一次的形状：路径对得上、方法对不上，只对路径的闸门全程绿。 两个方向都要红：只写一边的话，单向失明会被另一向的红掩盖。
+   */
+  @Test
+  void 金丝雀_同路径方法漂移必须被抓到() {
+    assertThatThrownBy(
+            () ->
+                assertNoDrift(
+                    // 后端只有 POST /models/base-models
+                    endpoints("POST", "/models/base-models"),
+                    // 契约却声明 GET —— 路径相同、方法不同
+                    endpoints("GET", "/models/base-models"),
+                    Set.of(),
+                    Set.of()))
+        .as("契约 GET / 后端 POST 的单边变更没被拦下 ⇒ 方法维度的闸门已经失效")
+        .isInstanceOf(AssertionError.class);
+
+    assertThatThrownBy(
+            () ->
+                assertNoDrift(
+                    // 反过来：后端只有 GET
+                    endpoints("GET", "/models/base-models"),
+                    // 契约却声明 POST
+                    endpoints("POST", "/models/base-models"),
+                    Set.of(),
+                    Set.of()))
+        .as("契约 POST / 后端 GET 的单边变更没被拦下 ⇒ 方法维度的闸门已经失效")
+        .isInstanceOf(AssertionError.class);
+  }
+
+  /**
+   * 反金丝雀：后端任意方法（{@code @RequestMapping} 不写 method）不得被误报成方法漂移。
+   *
+   * <p>★ 闸门升级到方法维度后，最容易犯的错是拿空方法集去和契约的具体方法逐一对账 —— 那会把所有宽松映射打成漂移。这里钉死"任意方法 = 匹配所有"的语义。
+   */
+  @Test
+  void 任意方法的后端映射不得误报方法漂移() {
+    // 不抛异常即通过 —— 任意方法吸收契约上的任意具体方法
+    assertNoDrift(
+        Map.of("/models/base-models", ANY_METHODS),
+        endpoints("GET", "/models/base-models", "POST", "/models/base-models"),
+        Set.of(),
+        Set.of());
   }
 
   // ────────────────────────── 规则本体 ──────────────────────────
@@ -226,19 +304,21 @@ class ContractDriftTest {
   /**
    * 双向对账规则。同一规则跑两组数据：真实契约必须过、金丝雀样本必须不过。
    *
-   * @param backendPaths 后端路径（已归一）
-   * @param contractPaths 契约路径（已归一）
+   * <p>路径维度沿用既有两条规则；方法维度是叠加约束（路径两边都有时，方法集合必须一致）。
+   *
+   * @param backendEndpoints 后端端点：归一化路径 → 方法集合（空集 = 任意方法）
+   * @param contractEndpoints 契约端点：归一化路径 → 方法集合（省略 method 时默认 GET）
    * @param unimplementedPrefixes 未实现清单（域名前缀；契约有、后端没有时必须落在这里）
    * @param knownExceptions 已知例外（精确路径，双向都不比对）
    */
   private static void assertNoDrift(
-      Collection<String> backendPaths,
-      Collection<String> contractPaths,
+      Map<String, Set<String>> backendEndpoints,
+      Map<String, Set<String>> contractEndpoints,
       Set<String> unimplementedPrefixes,
       Set<String> knownExceptions) {
 
-    Set<String> backend = new TreeSet<>(backendPaths);
-    Set<String> contract = new TreeSet<>(contractPaths);
+    Set<String> backend = new TreeSet<>(backendEndpoints.keySet());
+    Set<String> contract = new TreeSet<>(contractEndpoints.keySet());
 
     // ── 规则 1：后端有、契约没有 ⇒ 直接失败（最危险：偷偷加的端点，前端永远不知道）──
     Set<String> backendOnly =
@@ -266,6 +346,44 @@ class ContractDriftTest {
                 + "要么把它的域名前缀加进 UNIMPLEMENTED_PREFIXES 并注明计划周次。"
                 + "清单必须显式可审阅，否则会变成永久黑洞")
         .isEmpty();
+
+    // ── 方法维度（叠加约束）：路径两边都有时，方法集合必须一致 ──
+    // ★ 路径对得上、方法对不上，是只对路径的闸门看不见的漂移（listBaseModels 的 GET→POST 真漏过）。
+    // ★ 未实现清单只豁免"整条路径后端还没有"；路径已在后端落了却方法不对，必须红。
+    // ★ 已知例外双向都不比对 —— 连同方法一起跳过。
+    for (String path : backend) {
+      if (!contract.contains(path) || knownExceptions.contains(path)) {
+        continue;
+      }
+      Set<String> backendMethods = backendEndpoints.get(path);
+      Set<String> contractMethods = contractEndpoints.get(path);
+      if (backendMethods.isEmpty()) {
+        // 后端任意方法（@RequestMapping 不写 method）⇒ 匹配所有，不与契约逐一对账
+        continue;
+      }
+      Set<String> backendOnlyMethods =
+          backendMethods.stream()
+              .filter(m -> !contractMethods.contains(m))
+              .collect(Collectors.toCollection(TreeSet::new));
+      assertThat(backendOnlyMethods)
+          .as(
+              "同路径 %s 上，后端有、契约没有的 HTTP 方法（规则 1 的方法维度）⇒ "
+                  + "必须在 frontend/src/api/*.ts 里登记对应 method。"
+                  + "只对路径不对方法时，同路径的方法单边变更会静默漂移",
+              path)
+          .isEmpty();
+      Set<String> contractOnlyMethods =
+          contractMethods.stream()
+              .filter(m -> !backendMethods.contains(m))
+              .collect(Collectors.toCollection(TreeSet::new));
+      assertThat(contractOnlyMethods)
+          .as(
+              "同路径 %s 上，契约有、后端没有的 HTTP 方法（规则 2 的方法维度）⇒ "
+                  + "要么把后端方法改对，要么改契约里的 method。"
+                  + "只对路径不对方法时，同路径的方法单边变更会静默漂移",
+              path)
+          .isEmpty();
+    }
   }
 
   /** 路径是否落在某个域名前缀下：{@code /knowledge-bases/{*}/documents} 落在 {@code /knowledge-bases} 下。 */
@@ -273,29 +391,57 @@ class ContractDriftTest {
     return normalizedPath.equals(prefix) || normalizedPath.startsWith(prefix + "/");
   }
 
+  /**
+   * 金丝雀样本构造：把 {@code method, path, method, path...} 收成「路径 → 方法集合」。
+   *
+   * <p>★ 样本里写死方法，是为了让方法维度的金丝雀能精确表达「同路径、不同方法」的坏形状。
+   */
+  private static Map<String, Set<String>> endpoints(String... methodPathPairs) {
+    if (methodPathPairs.length % 2 != 0) {
+      throw new IllegalArgumentException("method/path 必须成对出现");
+    }
+    Map<String, Set<String>> map = new TreeMap<>();
+    for (int i = 0; i < methodPathPairs.length; i += 2) {
+      String method = methodPathPairs[i].toUpperCase(Locale.ROOT);
+      map.computeIfAbsent(methodPathPairs[i + 1], k -> new TreeSet<>()).add(method);
+    }
+    return map;
+  }
+
   // ────────────────────────── 后端侧 ──────────────────────────
 
   /**
-   * 从 {@link RequestMappingHandlerMapping} 拼出真实映射，只保留 {@code /api/v1/**}，剥前缀后归一。
+   * 从 {@link RequestMappingHandlerMapping} 拼出真实映射：路径模板 + HTTP 方法集合。
    *
    * <p>★ 用真实映射而不是扫注解：注解扫描会漏掉组合注解、接口默认方法、以及将来通过 {@code WebMvcRegistrations} 注册的端点 ——
    * 而"前端调的路径"与"DispatcherServlet 真认识的路径"是否一致，恰恰是本测试要回答的问题。
+   *
+   * <p>★ {@code getMethodsCondition().getMethods()} 为空 ⇒ {@code @RequestMapping} 没写 {@code method}
+   * ⇒ 任意方法。原样保留空集，比对时按"匹配所有"处理，不展开成具体方法清单（展开会制造误报）。
    */
-  private Set<String> backendPaths() {
+  private Map<String, Set<String>> backendEndpoints() {
     RequestMappingHandlerMapping mapping =
         applicationContext.getBean(
             "requestMappingHandlerMapping", RequestMappingHandlerMapping.class);
 
-    Set<String> paths = new TreeSet<>();
+    Map<String, Set<String>> endpoints = new TreeMap<>();
     mapping
         .getHandlerMethods()
         .keySet()
         .forEach(
-            info -> info.getPatternValues().forEach(pattern -> addBackendPattern(paths, pattern)));
-    return paths;
+            info -> {
+              Set<String> methods =
+                  info.getMethodsCondition().getMethods().stream()
+                      .map(Enum::name)
+                      .collect(Collectors.toCollection(TreeSet::new));
+              info.getPatternValues()
+                  .forEach(pattern -> addBackendPattern(endpoints, pattern, methods));
+            });
+    return endpoints;
   }
 
-  private static void addBackendPattern(Set<String> paths, String rawPattern) {
+  private static void addBackendPattern(
+      Map<String, Set<String>> endpoints, String rawPattern, Set<String> methods) {
     // 只对账业务 API；actuator / error 等不参与（契约里也没有）
     if (!rawPattern.startsWith(API_PREFIX)) {
       return;
@@ -304,39 +450,64 @@ class ContractDriftTest {
     if (withoutPrefix.isEmpty()) {
       withoutPrefix = "/";
     }
-    paths.add(normalize(withoutPrefix));
+    String path = normalize(withoutPrefix);
+    endpoints.merge(
+        path,
+        new TreeSet<>(methods),
+        (existing, incoming) -> {
+          // 任意方法吸收一切：只要有一条映射不写 method，整条路径就按任意方法处理
+          if (existing.isEmpty() || incoming.isEmpty()) {
+            return ANY_METHODS;
+          }
+          Set<String> merged = new TreeSet<>(existing);
+          merged.addAll(incoming);
+          return merged;
+        });
   }
 
   // ────────────────────────── 契约侧 ──────────────────────────
 
   /**
-   * 解析 {@code frontend/src/api} 下所有 {@code .ts} 的 {@code url: '...'} 字面量。
+   * 解析 {@code frontend/src/api} 下所有 {@code .ts} 的 {@code request({ method, url })} 字面量。
    *
    * <p>★ 只读源码，不引 TS 解析器、不起前端、不跑 Node —— 这道闸门要能在任何构建机上跑。
+   *
+   * <p>★ method 与 url 从<strong>同一个</strong>选项对象里取出（花括号配对）：跨对象抓 method 会把相邻调用配错对。 method
+   * 可小写、可省略（{@code lib/http.ts} 缺省 GET）。
    */
-  private static Set<String> contractPaths() {
+  private static Map<String, Set<String>> contractEndpoints() {
     Path apiDir = resolveFrontendApiDir();
-    Set<String> paths = new TreeSet<>();
+    Map<String, Set<String>> endpoints = new TreeMap<>();
     try (Stream<Path> files = Files.walk(apiDir)) {
       for (Path file : files.filter(p -> p.getFileName().toString().endsWith(".ts")).toList()) {
-        collectUrlsFromFile(file, paths);
+        collectEndpointsFromFile(file, endpoints);
       }
     } catch (IOException e) {
       throw new UncheckedIOException("读取前端契约目录失败：" + apiDir, e);
     }
-    return paths;
+    return endpoints;
   }
 
-  private static void collectUrlsFromFile(Path file, Set<String> paths) {
+  private static void collectEndpointsFromFile(Path file, Map<String, Set<String>> endpoints) {
     String source;
     try {
       source = Files.readString(file);
     } catch (IOException e) {
       throw new UncheckedIOException("读取前端契约文件失败：" + file, e);
     }
-    Matcher m = URL_LITERAL.matcher(source);
-    while (m.find()) {
-      String url = m.group(2);
+    Matcher call = REQUEST_OPTIONS_OPEN.matcher(source);
+    while (call.find()) {
+      // pattern 以 { 结尾，open 即选项对象的左花括号
+      int open = call.end() - 1;
+      int close = matchBrace(source, open, file);
+      String body = source.substring(open + 1, close);
+
+      Matcher urlMatcher = URL_LITERAL.matcher(body);
+      if (!urlMatcher.find()) {
+        // request({...}) 里没有 url 字面量（动态拼装等）—— 不是可对账的契约项，跳过
+        continue;
+      }
+      String url = urlMatcher.group(2);
       // 查询参数不参与比对（只比路径）
       int query = url.indexOf('?');
       if (query >= 0) {
@@ -344,11 +515,51 @@ class ContractDriftTest {
       }
       if (!url.startsWith("/")) {
         throw new AssertionError(
-            "契约里的 url 必须以 / 开头（相对路径会随 baseURL 漂移）：" + file + " → " + m.group(0));
+            "契约里的 url 必须以 / 开头（相对路径会随 baseURL 漂移）：" + file + " → " + urlMatcher.group(0));
       }
+
+      // method 可小写、可省略；省略时按 lib/http.ts 的默认 GET（const { method = 'GET', ... }）
+      Matcher methodMatcher = METHOD_LITERAL.matcher(body);
+      String method =
+          methodMatcher.find() ? methodMatcher.group(1).toUpperCase(Locale.ROOT) : "GET";
+
       // 模板串 url: `/x/${id}` 与 :id 占位一起归一；${...} → {*} 在 normalize 里处理
-      paths.add(normalize(url));
+      String path = normalize(url);
+      endpoints.computeIfAbsent(path, k -> new TreeSet<>()).add(method);
     }
+  }
+
+  /**
+   * 从 {@code open} 处的 {@code '{'} 起配对花括号，返回闭合 {@code '}'} 的下标。
+   *
+   * <p>★ 必须跳过字符串/模板串：{@code url: `/x/${id}`} 里的 <code>${}</code> 花括号若计入深度， 会把选项对象截断，后面的 method/url
+   * 就丢了。
+   */
+  private static int matchBrace(String source, int open, Path file) {
+    int depth = 0;
+    char quote = 0;
+    for (int i = open; i < source.length(); i++) {
+      char c = source.charAt(i);
+      if (quote != 0) {
+        if (c == '\\' && i + 1 < source.length()) {
+          i++; // 跳过转义字符
+        } else if (c == quote) {
+          quote = 0;
+        }
+        continue;
+      }
+      if (c == '\'' || c == '"' || c == '`') {
+        quote = c;
+      } else if (c == '{') {
+        depth++;
+      } else if (c == '}') {
+        depth--;
+        if (depth == 0) {
+          return i;
+        }
+      }
+    }
+    throw new AssertionError("request 选项对象花括号不匹配：" + file);
   }
 
   /**
