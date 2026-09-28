@@ -61,9 +61,37 @@ class ModelApiTest {
   private static Process stubProcess;
   private static int stubPort;
 
+  /**
+   * ★ 第二套桩：不同端口 + 不同 embedding 维度（512 vs 默认 768）。
+   *
+   * <p>用来证明「目录跟着 apiBase 走」—— 两套桩的模型名相同，但 dimension 不同， 目录内容就能被区分开（改模型名需要动桩脚本，--dim 差异已足够）。
+   */
+  private static Process stub2Process;
+
+  private static int stub2Port;
+
   @BeforeAll
   static void startStub() throws Exception {
     stubPort = freePort();
+    stubProcess = launchStub(stubPort, 768);
+    awaitStub(stubPort);
+
+    stub2Port = freePort();
+    stub2Process = launchStub(stub2Port, 512);
+    awaitStub(stub2Port);
+  }
+
+  @AfterAll
+  static void stopStub() {
+    if (stubProcess != null) {
+      stubProcess.destroyForcibly();
+    }
+    if (stub2Process != null) {
+      stub2Process.destroyForcibly();
+    }
+  }
+
+  private static String stubScriptPath() {
     String stubPath =
         java.nio.file.Path.of(System.getProperty("user.dir"))
             .resolve("../backend/tools/openai_stub.py")
@@ -77,19 +105,31 @@ class ModelApiTest {
               .normalize()
               .toString();
     }
+    return stubPath;
+  }
+
+  private static Process launchStub(int port, int dim) throws Exception {
     ProcessBuilder pb =
-        new ProcessBuilder("python", stubPath, "--port", String.valueOf(stubPort), "--dim", "768");
+        new ProcessBuilder(
+            "python",
+            stubScriptPath(),
+            "--port",
+            String.valueOf(port),
+            "--dim",
+            String.valueOf(dim));
     pb.redirectErrorStream(true);
-    stubProcess = pb.start();
-    // 等桩起来（最多 5 秒）
+    return pb.start();
+  }
+
+  /** 等桩起来（最多 5 秒）。 */
+  private static void awaitStub(int port) throws Exception {
     long deadline = System.currentTimeMillis() + 5000;
     while (System.currentTimeMillis() < deadline) {
       try {
         HttpResponse<String> res =
             HttpClient.newHttpClient()
                 .send(
-                    HttpRequest.newBuilder(
-                            URI.create("http://localhost:" + stubPort + "/v1/models"))
+                    HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/v1/models"))
                         .timeout(Duration.ofSeconds(1))
                         .GET()
                         .build(),
@@ -102,14 +142,7 @@ class ModelApiTest {
       }
       TimeUnit.MILLISECONDS.sleep(200);
     }
-    throw new IllegalStateException("桩服务启动失败（端口 " + stubPort + "）");
-  }
-
-  @AfterAll
-  static void stopStub() {
-    if (stubProcess != null) {
-      stubProcess.destroyForcibly();
-    }
+    throw new IllegalStateException("桩服务启动失败（端口 " + port + "）");
   }
 
   @DynamicPropertySource
@@ -505,6 +538,105 @@ class ModelApiTest {
 
     HttpResponse<String> list = get("/api/v1/models", adminToken);
     assertThat(list.body()).doesNotContain("待删除模型");
+  }
+
+  // ── 基础模型目录（POST /models/base-models · ROADMAP 0.1.3 ⑤⑥）──
+
+  @Test
+  @Order(50)
+  void 目录_跟着apiBase走_不传时用默认上游() throws Exception {
+    // 不传 apiBase ⇒ 默认上游那套（stubPort，--dim 768）
+    HttpResponse<String> defaultRes = post("/api/v1/models/base-models", "{}", adminToken);
+    assertThat(defaultRes.statusCode()).isEqualTo(200);
+    assertThat(defaultRes.body())
+        .as("不传 apiBase 必须走默认上游那套（dimension 768）—— 现行为不回归")
+        .contains("\"dimension\":768");
+
+    // 传另一套上游（stub2Port，--dim 512）⇒ 目录内容必须不同
+    HttpResponse<String> otherRes =
+        post(
+            "/api/v1/models/base-models",
+            "{\"apiBase\":\"http://localhost:" + stub2Port + "/v1\"}",
+            adminToken);
+    assertThat(otherRes.statusCode()).isEqualTo(200);
+    assertThat(otherRes.body())
+        .as("传了 apiBase 就必须拉那一套的目录（dimension 512）")
+        .contains("\"dimension\":512");
+    assertThat(otherRes.body())
+        .as("两套上游的目录内容必须不同 —— 否则说明 apiBase 根本没被用上")
+        .doesNotContain("\"dimension\":768");
+  }
+
+  @Test
+  @Order(51)
+  void 注册_向量模型带thinking或tools必须拒绝且不落库() throws Exception {
+    // create 与 update 同口径：能力声明只对对话模型有意义，传了就 400，不静默改写
+    jdbc.update("delete from ai_model");
+
+    HttpResponse<String> thinkingRes =
+        post(
+            "/api/v1/models",
+            "{\"name\":\"非法能力向量A\",\"kind\":\"EMBEDDING\",\"supplier\":\"LOCAL_INFERENCE\",\"baseModel\":\"stub-embed\",\"dimension\":768,\"thinking\":\"ALWAYS_ON\"}",
+            adminToken);
+    assertThat(thinkingRes.statusCode())
+        .as("create 对 embedding+thinking 必须与 update 同口径 400，不能静默改写")
+        .isEqualTo(400);
+    assertThat(thinkingRes.body()).contains("能力声明只对对话模型有意义");
+
+    HttpResponse<String> toolsRes =
+        post(
+            "/api/v1/models",
+            "{\"name\":\"非法能力向量B\",\"kind\":\"EMBEDDING\",\"supplier\":\"LOCAL_INFERENCE\",\"baseModel\":\"stub-embed\",\"dimension\":768,\"tools\":\"PARALLEL\"}",
+            adminToken);
+    assertThat(toolsRes.statusCode()).as("create 对 embedding+tools 同样必须 400").isEqualTo(400);
+    assertThat(toolsRes.body()).contains("能力声明只对对话模型有意义");
+
+    // ★ 400 的请求绝不能落库 —— 「拒绝」必须是真的拒绝
+    Integer count =
+        jdbc.queryForObject(
+            "select count(*) from ai_model where name in (?, ?)",
+            Integer.class,
+            "非法能力向量A",
+            "非法能力向量B");
+    assertThat(count).as("被拒绝的 create 不能写进库里").isZero();
+  }
+
+  @Test
+  @Order(52)
+  void 目录_上游不可达时空列表加可读hint() throws Exception {
+    // 起一个临时桩、确认能通、再停掉它 —— 就是「停掉桩」这个场景
+    int deadPort = freePort();
+    Process tempStub = launchStub(deadPort, 256);
+    try {
+      awaitStub(deadPort);
+    } finally {
+      tempStub.destroyForcibly();
+      tempStub.waitFor(5, TimeUnit.SECONDS);
+    }
+
+    HttpResponse<String> res =
+        post(
+            "/api/v1/models/base-models",
+            "{\"apiBase\":\"http://localhost:" + deadPort + "/v1\"}",
+            adminToken);
+    assertThat(res.statusCode()).as("上游不可达不该 500 —— 目录是新建弹窗的数据源，挂了不该让管理页崩掉").isEqualTo(200);
+    assertThat(res.body()).as("不可达 ⇒ 空列表").contains("\"data\":[]");
+
+    String hint = jsonField(res.body(), "hint");
+    assertThat(hint).as("空列表不能干巴巴 —— 包络的 hint 必须给出可读提示").isNotBlank();
+    assertThat(hint).as("hint 要能照着排查（检查服务地址 / 服务是否已启动）").containsAnyOf("服务地址", "已启动", "未从上游", "检查");
+  }
+
+  @Test
+  @Order(53)
+  void 目录_响应里不得出现请求里的apiKey() throws Exception {
+    String secret = "sk-catalog-must-not-echo-9527";
+    HttpResponse<String> res =
+        post("/api/v1/models/base-models", "{\"apiKey\":\"" + secret + "\"}", adminToken);
+    assertThat(res.statusCode()).isEqualTo(200);
+    // ★ 密钥进了查询串会进日志/代理/浏览器历史（所以目录改 POST）；
+    //   进了响应体则是直接泄露。断言的是「全文都没有那个字符串」。
+    assertThat(res.body()).as("目录响应里绝不能回显 apiKey").doesNotContain(secret);
   }
 
   // ────────────────────────── 工具 ──────────────────────────

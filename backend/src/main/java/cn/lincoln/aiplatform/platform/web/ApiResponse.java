@@ -37,6 +37,15 @@ public record ApiResponse<T>(int code, String message, T data, String hint) {
     return new ApiResponse<>(ErrorCode.OK.code(), message, data, null);
   }
 
+  /**
+   * 成功，带可读 hint（如目录为空时告诉用户下一步做什么）。
+   *
+   * <p>★ 不叫 {@code ok(T, String)}：那会与 {@link #ok(String, Object)} 在 {@code T=String} 时产生重载歧义。
+   */
+  public static <T> ApiResponse<T> okWithHint(T data, String hint) {
+    return new ApiResponse<>(ErrorCode.OK.code(), OK_MESSAGE, data, hint);
+  }
+
   /** 失败，用错误码的兜底文案。★ 只在确实没有更具体的话可说时用。 */
   public static <T> ApiResponse<T> fail(ErrorCode code) {
     return new ApiResponse<>(code.code(), code.defaultMessage(), null, null);

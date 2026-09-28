@@ -121,27 +121,36 @@ public class ModelService {
    *
    * <p>★ 上游不可达 ⇒ <strong>空列表 + 可读 hint</strong>（不是 500）： 基础模型目录是"新建模型弹窗"的数据源，上游挂了不应该让整个管理页 500。
    *
+   * <p>★ {@code apiBase} / {@code apiKey} 为空时照旧走默认上游（现行为不回归）； 给了就走指定上游 —— 外部 API 的模型目录这才看得见。
+   *
    * <p>★ 不在平台里维护第二份上游清单（{@code 09 §3.13.5} 纪律 2）。
    */
   @Transactional(readOnly = true)
-  public List<BaseModelOption> baseModels(String supplierRaw, String kindRaw) {
+  public BaseModelCatalog baseModels(
+      String supplierRaw, String kindRaw, String apiBase, String apiKey) {
     Supplier supplier = supplierRaw == null ? null : parseSupplier(supplierRaw);
     ModelKind kind = kindRaw == null ? null : parseKind(kindRaw);
 
     List<UpstreamGateway.UpstreamModel> catalog;
     try {
-      catalog = gateway.listModels(null, null);
+      catalog = gateway.listModels(apiBase, apiKey);
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       log.warn("拉取上游模型目录失败：{}", e.getMessage());
       // ★ 空列表 + 可读 hint，不是 500 —— 上游挂了不应该让管理页崩掉
-      return List.of();
+      return BaseModelCatalog.empty("未从上游拉到模型：请检查服务地址是否正确、服务是否已启动");
+    }
+    if (catalog.isEmpty()) {
+      // 上游可达但清单为空 —— 同样给可读提示，不干巴巴甩个空数组
+      return BaseModelCatalog.empty("上游返回了空的模型清单：请确认服务上已部署模型");
     }
 
-    return catalog.stream()
-        .map(m -> toBaseOption(m, supplier))
-        .filter(o -> kind == null || o.kind() == kind)
-        .filter(o -> supplier == null || o.supplier() == supplier)
-        .toList();
+    List<BaseModelOption> options =
+        catalog.stream()
+            .map(m -> toBaseOption(m, supplier))
+            .filter(o -> kind == null || o.kind() == kind)
+            .filter(o -> supplier == null || o.supplier() == supplier)
+            .toList();
+    return new BaseModelCatalog(options, null);
   }
 
   // ────────────────────────── 注册 CRUD ──────────────────────────
@@ -161,6 +170,8 @@ public class ModelService {
           "对话模型不产出向量，dimension 必须为空",
           "向量维度是 embedding 模型的字段；填了它，界面会把「改维度需全量重灌」的警示挂到错误的模型上");
     }
+    // ★ 与 update 同口径：能力声明只对对话模型有意义，传了就 400，不静默改写
+    validateCapabilityFields(command.kind(), command.thinking(), command.tools());
     validateSupplier(command.supplier(), command.apiBase());
 
     // ★ contextWindow 不在契约的 UpsertModelBody 里 —— 它从上游目录的元数据派生（best-effort）。
@@ -218,13 +229,8 @@ public class ModelService {
           "对话模型不产出向量，dimension 必须为空",
           "向量维度是 embedding 模型的字段；填了它，界面会把「改维度需全量重灌」的警示挂到错误的模型上");
     }
-    if (model.kind() == ModelKind.EMBEDDING
-        && (command.thinking() != null || command.tools() != null)) {
-      throw new BusinessException(
-          ErrorCode.BAD_REQUEST,
-          "能力声明只对对话模型有意义：向量模型不接受 thinking / tools",
-          "思考模式与工具调用是对话模型的能力；向量模型固定为 NONE / UNSUPPORTED —— 请去掉这两个字段");
-    }
+    // ★ create / update 同一条口径：能力声明只对对话模型有意义
+    validateCapabilityFields(model.kind(), command.thinking(), command.tools());
 
     // ★ 改 dimension 需全量重灌向量表 ⇒ 已加载的模型改 dimension 必须拒绝
     //   （未加载的允许改 —— 还没灌过向量）
@@ -445,6 +451,21 @@ public class ModelService {
     }
   }
 
+  /**
+   * 能力声明（thinking / tools）只对对话模型有意义 —— create / update 共用这一句。
+   *
+   * <p>★ 传了就 400，不静默改写成 NONE / UNSUPPORTED： 「看起来改了、实际没改」比 400 更伤人，且两条路径口径必须一致。
+   */
+  private static void validateCapabilityFields(
+      ModelKind kind, ThinkingMode thinking, ToolsMode tools) {
+    if (kind == ModelKind.EMBEDDING && (thinking != null || tools != null)) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "能力声明只对对话模型有意义：向量模型不接受 thinking / tools",
+          "思考模式与工具调用是对话模型的能力；向量模型固定为 NONE / UNSUPPORTED —— 请去掉这两个字段");
+    }
+  }
+
   private static BaseModelOption toBaseOption(UpstreamGateway.UpstreamModel m, Supplier supplier) {
     ModelKind kind = guessKind(m);
     // 供应商：上游清单里没有这个信息，按配置的默认值（本地推理）填
@@ -512,4 +533,16 @@ public class ModelService {
       ThinkingMode thinking,
       ToolsMode tools,
       String remark) {}
+
+  /**
+   * 基础模型目录结果：选项列表 + 上游不可达/为空时的可读 hint。
+   *
+   * <p>★ 成功时 {@code hint} 为 null；失败时 options 为空列表 —— 调用方（Web 层）把 hint 放进包络的 {@code hint} 字段，
+   * 让界面能显示「请检查服务地址」而不是干巴巴一个空数组。
+   */
+  public record BaseModelCatalog(List<BaseModelOption> options, String hint) {
+    public static BaseModelCatalog empty(String hint) {
+      return new BaseModelCatalog(List.of(), hint);
+    }
+  }
 }

@@ -63,6 +63,21 @@ export interface ProbeBaseModelBody {
   kind: ModelKind
 }
 
+/**
+ * 基础模型目录查询入参。
+ *
+ * ★ 用 POST body 而不是查询串：`apiKey` 进 URL 会进日志 / 代理 / 浏览器历史。
+ * `apiBase` / `apiKey` 为空时走默认上游（现行为不回归）；给了就拉指定上游的目录。
+ */
+export interface BaseModelsQuery {
+  supplier?: Supplier
+  kind?: ModelKind
+  /** 指定上游服务地址；为空时用默认上游 */
+  apiBase?: string
+  /** 上游 API key；只进 body，绝不进 URL */
+  apiKey?: string
+}
+
 export interface ModelQuery extends PageQuery {
   kind?: ModelKind
   status?: ModelStatus
@@ -87,8 +102,12 @@ export interface UpsertModelBody {
 export const listModels = (query: ModelQuery = {}) =>
   request<PageResult<ModelInfo>>({ method: 'GET', url: '/models', query })
 
-export const listBaseModels = (query: { supplier?: Supplier; kind?: ModelKind } = {}) =>
-  request<BaseModelOption[]>({ method: 'GET', url: '/models/base-models', query })
+/**
+ * 基础模型目录。★ 契约由 GET 改成 POST（密钥不能进查询串）；返回形状不变（BaseModelOption[]）。
+ * 上游不可达时返回空数组，可读提示在包络的 `hint` 字段 —— 用 `onHint` 收（成功包络也可能带 hint）。
+ */
+export const listBaseModels = (body: BaseModelsQuery = {}, onHint?: (hint?: string) => void) =>
+  request<BaseModelOption[]>({ method: 'POST', url: '/models/base-models', body, onHint })
 
 export const createModel = (body: UpsertModelBody) =>
   request<ModelInfo>({ method: 'POST', url: '/models', body })

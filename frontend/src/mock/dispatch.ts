@@ -13,6 +13,19 @@ export interface MockContext {
   token: string
 }
 
+/**
+ * 带包络 hint 的 mock 结果。
+ *
+ * 真实后端的 `ApiResponse` 在**成功**时也可能带 hint（如「空目录 + 为什么空」），
+ * mock 不表达这一形状就会让「界面显示 hint」这条路径在 mock 模式下永远走不到。
+ */
+export class MockEnvelope<T> {
+  constructor(
+    readonly data: T,
+    readonly hint?: string
+  ) {}
+}
+
 export type MockHandler = (ctx: MockContext) => unknown | Promise<unknown>
 
 export type MockRoute = [method: HttpMethod, pattern: string, handler: MockHandler]
@@ -83,6 +96,11 @@ export async function dispatchMock<T>(options: RequestOptions): Promise<T> {
       body: options.body,
       token: options.token ?? ''
     })
+    // 带 hint 的成功包络：把 hint 交出去，数据本体照常返回
+    if (data instanceof MockEnvelope) {
+      options.onHint?.(data.hint)
+      return data.data as T
+    }
     return data as T
   }
 

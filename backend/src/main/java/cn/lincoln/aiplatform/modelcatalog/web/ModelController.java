@@ -71,14 +71,21 @@ public class ModelController {
   /**
    * 基础模型目录（画布"新建模型"弹窗的卡片列表）。
    *
-   * <p>★ 上游不可达 ⇒ 空列表（不是 500）—— 由 {@link ModelService#baseModels} 保证。
+   * <p>★ <b>由 GET 改成 POST</b>（契约 {@code listBaseModels}）： 请求里要带 {@code apiKey}，
+   * 密钥<strong>不能进查询串</strong>（会进日志 / 代理 / 浏览器历史）。 返回形状不变（{@code BaseModelOption[]}）。
+   *
+   * <p>★ {@code apiBase} / {@code apiKey} 为空时照旧走默认上游（现行为不回归）； 给了就走指定上游 —— 外部 API 的模型目录这才看得见。
+   *
+   * <p>★ 上游不可达 ⇒ 200 + 空列表 + 包络 {@code hint}（不是 500，也不是干巴巴的空数组）。
    */
-  @GetMapping("/base-models")
+  @PostMapping("/base-models")
   @PreAuthorize("hasAuthority('model:manage')")
-  public ApiResponse<List<BaseModelOption>> baseModels(
-      @RequestParam(required = false) String supplier,
-      @RequestParam(required = false) String kind) {
-    return ApiResponse.ok(modelService.baseModels(supplier, kind));
+  public ApiResponse<List<BaseModelOption>> baseModels(@RequestBody BaseModelsBody body) {
+    ModelService.BaseModelCatalog catalog =
+        modelService.baseModels(body.supplier(), body.kind(), body.apiBase(), body.apiKey());
+    return catalog.hint() == null
+        ? ApiResponse.ok(catalog.options())
+        : ApiResponse.okWithHint(catalog.options(), catalog.hint());
   }
 
   // ────────────────────────── 注册 CRUD ──────────────────────────
@@ -174,4 +181,14 @@ public class ModelController {
 
   /** 探测能力的请求体（契约 {@code ProbeBaseModelBody}）。 */
   record ProbeBaseModelBody(@NotBlank String baseModel, Supplier supplier, ModelKind kind) {}
+
+  /**
+   * 基础模型目录的请求体（契约 {@code listBaseModels} 入参）。
+   *
+   * <p>★ {@code apiKey} 只走 body，绝不进 URL —— 密钥进查询串会进日志 / 代理 / 浏览器历史。
+   *
+   * @param apiBase 指定上游服务地址；为空走默认上游
+   * @param apiKey 上游 API key；为空用默认 key
+   */
+  record BaseModelsBody(String supplier, String kind, String apiBase, String apiKey) {}
 }

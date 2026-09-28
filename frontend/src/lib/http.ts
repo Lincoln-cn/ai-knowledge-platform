@@ -18,6 +18,11 @@ export interface RequestOptions {
   /** 登录与刷新令牌接口自身调用时置 true，避免 401 递归刷新 */
   skipAuthRetry?: boolean
   /**
+   * 成功包络里的可读 hint（如空目录时的排查提示）。
+   * ★ 成功响应也可能带 hint —— 只在错误分支读它会漏掉「200 + 空列表 + hint」这种形状。
+   */
+  onHint?: (hint?: string) => void
+  /**
    * 仅 mock 传输层使用。真实实现从 Authorization 头取令牌（见下方拦截器），
    * mock 拿到它才能像真实后端一样按令牌识别用户。
    */
@@ -72,7 +77,8 @@ client.interceptors.response.use(
     // 非包体（如文件流）直接透传
     if (!payload || typeof payload !== 'object' || !('code' in payload)) return response
     if (payload.code !== ErrorCode.OK) {
-      return Promise.reject(new ApiError(payload.code, payload.message))
+      // ★ hint 必须透传 —— 后端包络里带了可行动的排查提示，丢了就只剩干巴巴的 message
+      return Promise.reject(new ApiError(payload.code, payload.message, payload.hint))
     }
     return response
   },
@@ -105,13 +111,13 @@ client.interceptors.response.use(
       : '无法连接后端（请检查网络与后端是否启动）'
 
     return Promise.reject(
-      new ApiError(body?.code ?? status ?? -1, body?.message || fallback)
+      new ApiError(body?.code ?? status ?? -1, body?.message || fallback, body?.hint)
     )
   }
 )
 
 function viaHttp<T>(options: RequestOptions): Promise<T> {
-  const { method = 'GET', url, path, query, body, skipAuthRetry } = options
+  const { method = 'GET', url, path, query, body, skipAuthRetry, onHint } = options
   const config: AxiosRequestConfig & { skipAuthRetry?: boolean } = {
     method,
     url: resolvePath(url, path),
@@ -119,7 +125,11 @@ function viaHttp<T>(options: RequestOptions): Promise<T> {
     data: body,
     skipAuthRetry
   }
-  return client.request<ApiResult<T>>(config).then((res) => res.data.data)
+  return client.request<ApiResult<T>>(config).then((res) => {
+    // 成功包络也可能带 hint（如「空目录 + 为什么空」）—— 不能只在错误分支读
+    onHint?.(res.data.hint)
+    return res.data.data
+  })
 }
 
 /**

@@ -2,10 +2,49 @@
   <div class="body">
     <!-- 左：表单 -->
     <el-form ref="formRef" :model="form" :rules="rules" label-width="88px" class="form">
+      <!-- ★ 先定连哪个服务，再谈选哪个模型 —— 顺序反了就变成「先选基础模型才谈供应商」 -->
+      <el-form-item label="供应商" prop="supplier">
+        <el-radio-group v-model="form.supplier" :disabled="supplierLocked" @change="onUpstreamChange">
+          <el-radio-button
+            v-for="s in SUPPLIER_VALUES" :key="s"
+            :value="s"
+          >{{ labelOf(SUPPLIER_LABELS, s) }}</el-radio-button>
+        </el-radio-group>
+        <div class="hint micro">
+          {{ form.supplier === 'EXTERNAL_API'
+            ? '外部 API：必须给出服务地址，目录从该服务拉取'
+            : '本地推理：走本机默认推理服务' }}
+        </div>
+      </el-form-item>
+
+      <el-form-item label="服务地址" prop="apiBase">
+        <el-input
+          v-model="form.apiBase" clearable
+          :placeholder="form.supplier === 'EXTERNAL_API' ? '必填，例如 https://api.openai.com/v1' : '选填'"
+          @change="onUpstreamChange"
+        />
+        <div class="hint micro">
+          {{ form.supplier === 'EXTERNAL_API'
+            ? '外部 API 的推理服务地址是必填项'
+            : '留空 = 使用默认服务' }}
+        </div>
+      </el-form-item>
+
+      <el-form-item label="密钥" prop="apiKey">
+        <el-input
+          v-model="form.apiKey" type="password" show-password clearable
+          placeholder="留空则不修改"
+          @change="onUpstreamChange"
+        />
+        <div class="hint micro">只写不回显：保存后不再展示，留空表示不改动已有密钥</div>
+      </el-form-item>
+
       <el-form-item label="模型类型" prop="kind">
         <el-radio-group v-model="form.kind" :disabled="isEdit" @change="onKindChange">
-          <el-radio-button value="chat">对话模型</el-radio-button>
-          <el-radio-button value="embedding">向量模型</el-radio-button>
+          <el-radio-button
+            v-for="k in MODEL_KIND_VALUES" :key="k"
+            :value="k"
+          >{{ labelOf(MODEL_KIND_LABELS, k) }}</el-radio-button>
         </el-radio-group>
         <div v-if="isEdit" class="hint micro">创建后不可更改类型</div>
       </el-form-item>
@@ -36,7 +75,7 @@
         <el-form-item label="能力声明">
           <div class="cap-head">
             <el-tag size="small" effect="plain" :type="capSource === 'PROBED' ? 'success' : 'warning'">
-              来源：{{ capSource }}
+              来源：{{ labelOf(MODEL_CAPABILITY_SOURCE_LABELS, capSource) }}
             </el-tag>
             <el-button size="small" text :icon="MagicStick" :loading="probing" @click="probe">
               自动探测
@@ -109,8 +148,10 @@
           </el-tag>
         </button>
 
-        <div v-if="!loadingBase && !filteredBase.length" class="catalog-empty micro muted">
-          没有匹配的基础模型
+        <!-- 空态 ≠ 只说「没有匹配」：上游不可达时要给能照着排查的那句话 -->
+        <div v-if="!loadingBase && !filteredBase.length" class="catalog-empty">
+          <div class="micro">{{ catalogEmptyTitle }}</div>
+          <div v-if="catalogHint" class="micro muted catalog-hint">{{ catalogHint }}</div>
         </div>
       </div>
     </div>
@@ -118,7 +159,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { MagicStick, Search } from '@element-plus/icons-vue'
 import { modelsApi } from '@/api'
@@ -132,7 +173,14 @@ import type {
   ToolsMode,
   UpsertModelBody
 } from '@/api/models'
-import { SUPPLIER_LABELS, labelOf } from '@/constants/labels'
+import {
+  MODEL_CAPABILITY_SOURCE_LABELS,
+  MODEL_KIND_LABELS,
+  MODEL_KIND_VALUES,
+  SUPPLIER_LABELS,
+  SUPPLIER_VALUES,
+  labelOf
+} from '@/constants/labels'
 
 const props = defineProps<{
   /** 编辑时传入现有模型；null / 省略 = 新建 */
@@ -160,13 +208,21 @@ const formRef = ref<FormInstance>()
 const baseKeyword = ref('')
 const loadingBase = ref(false)
 const baseList = ref<BaseModelOption[]>([])
+/** 包络 hint：上游不可达/为空时后端给的可读排查提示 */
+const catalogHint = ref('')
 const capSource = ref<'PROBED' | 'MANUAL'>('MANUAL')
 
 const isEdit = computed(() => !!props.model)
+/** 编排画布已预选供应商时不许改，否则预筛会被用户改穿 */
+const supplierLocked = computed(() => !!props.supplier)
 
 const form = reactive({
-  kind: 'chat' as ModelKind,
-  supplier: '本地推理' as Supplier,
+  kind: 'CHAT' as ModelKind,
+  supplier: 'LOCAL_INFERENCE' as Supplier,
+  /** 外部 API 必填；本地推理可留空 = 默认服务 */
+  apiBase: '',
+  /** 只写不回显：编辑时永远不回填 */
+  apiKey: '',
   baseModel: '',
   name: '',
   thinking: 'NONE' as ThinkingMode,
@@ -180,7 +236,19 @@ const rules: FormRules = {
   baseModel: [{ required: true, message: '请选择基础模型', trigger: 'change' }],
   name: [{ required: true, message: '请输入模型名称', trigger: 'blur' }],
   thinking: [{ required: true, message: '请选择思考模式', trigger: 'change' }],
-  tools: [{ required: true, message: '请选择工具调用能力', trigger: 'change' }]
+  tools: [{ required: true, message: '请选择工具调用能力', trigger: 'change' }],
+  apiBase: [
+    {
+      validator: (_rule, value, callback) => {
+        if (form.supplier === 'EXTERNAL_API' && !String(value ?? '').trim()) {
+          callback(new Error('外部API 必须填写服务地址'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ]
 }
 
 const pickedBase = computed(() => baseList.value.find((b) => b.baseModel === form.baseModel))
@@ -192,25 +260,70 @@ const filteredBase = computed(() =>
     .filter((b) => !baseKeyword.value || b.baseModel.toLowerCase().includes(baseKeyword.value.toLowerCase()))
 )
 
+const catalogEmptyTitle = computed(() => {
+  if (baseKeyword.value && baseList.value.length) return '没有匹配的基础模型'
+  return catalogHint.value ? '未从上游拉到模型' : '没有匹配的基础模型'
+})
+
 const thinkingHint = computed(
   () => THINKING_OPTIONS.find((o) => o.value === form.thinking)?.hint ?? ''
 )
 
 const loadBaseModels = async () => {
   loadingBase.value = true
+  catalogHint.value = ''
   try {
-    baseList.value = await modelsApi.listBaseModels({
-      kind: form.kind,
-      ...(props.supplier ? { supplier: props.supplier } : {})
-    })
+    baseList.value = await modelsApi.listBaseModels(
+      {
+        kind: form.kind,
+        supplier: form.supplier,
+        // ★ 把当前表单的上游地址/密钥传进去 —— 目录跟着所连服务走
+        ...(form.apiBase.trim() ? { apiBase: form.apiBase.trim() } : {}),
+        ...(form.apiKey ? { apiKey: form.apiKey } : {}),
+        ...(props.supplier ? { supplier: props.supplier } : {})
+      },
+      (hint) => {
+        catalogHint.value = hint ?? ''
+      }
+    )
+  } catch (error) {
+    baseList.value = []
+    catalogHint.value =
+      error instanceof ApiError && error.hint
+        ? error.hint
+        : error instanceof ApiError
+          ? error.message
+          : '未从上游拉到模型：请检查服务地址是否正确、服务是否已启动'
   } finally {
     loadingBase.value = false
   }
 }
 
+/** 供应商 / 服务地址 / 密钥 任一变更 ⇒ 重新拉目录 */
+const onUpstreamChange = () => {
+  // 换了上游，原来选中的基础模型不一定还在新目录里
+  if (!isEdit.value) clearBase()
+  loadBaseModels()
+}
+
+// 文本框连续输入走防抖，避免每敲一个字符拉一次
+let upstreamTimer: ReturnType<typeof setTimeout> | undefined
+watch(
+  () => [form.apiBase, form.apiKey] as const,
+  () => {
+    if (isEdit.value && form.baseModel) {
+      // 编辑态基础模型锁定，但目录仍要跟着上游变（方便核对）
+    } else if (!isEdit.value) {
+      clearBase()
+    }
+    clearTimeout(upstreamTimer)
+    upstreamTimer = setTimeout(() => loadBaseModels(), 400)
+  }
+)
+
 const pickBase = (item: BaseModelOption) => {
   form.baseModel = item.baseModel
-  form.supplier = item.supplier
+  // ★ supplier 由用户在顶部先选定，不再从目录项反推
   form.dimension = item.kind === 'EMBEDDING' ? item.dimension : null
   // 换基础模型等于换了模型，能力声明必须重来，避免把上一个模型的能力带过去
   form.thinking = 'NONE'
@@ -261,6 +374,9 @@ const reset = () => {
   formRef.value?.clearValidate()
   form.kind = 'CHAT'
   form.supplier = props.supplier ?? 'LOCAL_INFERENCE'
+  form.apiBase = ''
+  // 密钥永不回显 —— 连编辑态也不回填
+  form.apiKey = ''
   form.baseModel = ''
   form.name = ''
   form.thinking = 'NONE'
@@ -268,14 +384,15 @@ const reset = () => {
   form.dimension = null
   form.remark = ''
   baseKeyword.value = ''
+  catalogHint.value = ''
   capSource.value = 'MANUAL'
 }
 
 const load = async () => {
   reset()
-  await loadBaseModels()
   if (props.model) {
     const m = props.model
+    // 先落定 kind/供应商再拉目录 —— 否则目录按新建默认的 CHAT 拉，编辑向量模型时右侧全空
     form.kind = m.kind
     form.supplier = m.supplier
     form.baseModel = m.baseModel
@@ -284,8 +401,11 @@ const load = async () => {
     form.tools = m.tools
     form.dimension = m.dimension
     form.remark = m.remark ?? ''
+    // ★ 编辑态：apiKey 不回填（契约 ModelInfo 本就不含密钥）；apiBase 可改但不强制重填
+    form.apiKey = ''
     capSource.value = 'MANUAL'
   }
+  await loadBaseModels()
 }
 
 const submit = async (): Promise<boolean> => {
@@ -294,12 +414,18 @@ const submit = async (): Promise<boolean> => {
 
   saving.value = true
   try {
+    // 密钥只写不回显：留空 = 不修改，绝不把空串当成「清空密钥」下发
+    const upstream: Partial<UpsertModelBody> = {
+      ...(form.apiBase.trim() ? { apiBase: form.apiBase.trim() } : {}),
+      ...(form.apiKey ? { apiKey: form.apiKey } : {})
+    }
     if (isEdit.value && props.model) {
       await modelsApi.updateModel(props.model.id, {
         name: form.name,
         thinking: form.thinking,
         tools: form.tools,
-        remark: form.remark
+        remark: form.remark,
+        ...upstream
       })
       ElMessage.success('已保存')
     } else {
@@ -311,7 +437,8 @@ const submit = async (): Promise<boolean> => {
         dimension: form.dimension,
         thinking: form.thinking,
         tools: form.tools,
-        remark: form.remark
+        remark: form.remark,
+        ...upstream
       }
       await modelsApi.createModel(body)
       ElMessage.success('已保存。在列表中点「加载」即可启用该模型')
@@ -320,7 +447,8 @@ const submit = async (): Promise<boolean> => {
     return true
   } catch (error) {
     const message = error instanceof ApiError ? error.message : '保存失败，请稍后重试'
-    ElMessage.error(message)
+    const hint = error instanceof ApiError && error.hint ? ` ${error.hint}` : ''
+    ElMessage.error(`${message}${hint}`)
     return false
   } finally {
     saving.value = false

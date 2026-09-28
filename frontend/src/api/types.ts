@@ -5,6 +5,12 @@ export interface ApiResult<T> {
   code: number
   message: string
   data: T
+  /**
+   * 可行动提示（如「未从上游拉到模型：请检查服务地址…」）。
+   * ★ 后端包络会带；**成功响应也可能有**（空目录 + hint），只在错误分支读它会漏掉。
+   * 契约允许只加可选字段。
+   */
+  hint?: string
 }
 
 /** 分页请求。原项目同时存在 page/size、current/size 两套，这里只留一套。 */

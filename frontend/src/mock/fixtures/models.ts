@@ -116,6 +116,18 @@ export const baseModels: BaseModelOption[] = [
 ]
 
 /**
+ * 指定 `apiBase` 时拉到的目录（外部 API 上游那套）。
+ * ★ 与 `baseModels` 刻意**不重叠** —— mock 模式下要能看出「目录跟着上游走」，
+ * 两套一样就分不清 apiBase 到底有没有被用上。
+ */
+export const externalBaseModels: BaseModelOption[] = [
+  { baseModel: 'gpt-4o', kind: 'CHAT', supplier: 'EXTERNAL_API', contextWindow: 128000, dimension: null },
+  { baseModel: 'gpt-4o-mini', kind: 'CHAT', supplier: 'EXTERNAL_API', contextWindow: 128000, dimension: null },
+  { baseModel: 'claude-sonnet-4', kind: 'CHAT', supplier: 'EXTERNAL_API', contextWindow: 200000, dimension: null },
+  { baseModel: 'text-embedding-3-large', kind: 'EMBEDDING', supplier: 'EXTERNAL_API', contextWindow: null, dimension: 3072 }
+]
+
+/**
  * 能力探测表：模拟「后端去问供应商」的结果。
  * 探测不到时返回 null，由用户在界面上手工声明 —— 界面必须区分标注来源。
  *

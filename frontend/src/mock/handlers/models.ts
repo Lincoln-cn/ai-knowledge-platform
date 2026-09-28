@@ -1,11 +1,11 @@
 import { ApiError, ErrorCode } from '@/api/types'
-import type { ModelCapability, ModelInfo, UpsertModelBody } from '@/api/models'
+import type { BaseModelOption, ModelCapability, ModelInfo, UpsertModelBody } from '@/api/models'
 import type { ProbeBaseModelBody } from '@/api/models'
 import type { MockRoute } from '../dispatch'
-import { paginate } from '../dispatch'
+import { MockEnvelope, paginate } from '../dispatch'
 import { assistants } from '../fixtures/assistants'
 import { knowledgeBases } from '../fixtures/knowledge'
-import { baseModels, models, probedCapabilities } from '../fixtures/models'
+import { baseModels, externalBaseModels, models, probedCapabilities } from '../fixtures/models'
 
 /** 加载是异步的：先置「加载中」，若干秒后转「已加载」。与真实后端行为一致 */
 const LOAD_MS = 4000
@@ -15,6 +15,11 @@ const findModel = (id: string) => {
   if (!model) throw new ApiError(ErrorCode.NOT_FOUND, '模型不存在')
   return model
 }
+
+/** 两套上游目录合成一个查找表（指定 apiBase 时模型在外套里，不指定在默认套里） */
+const allBaseModels = (): BaseModelOption[] => [...baseModels, ...externalBaseModels]
+
+const findBaseModel = (name: string) => allBaseModels().find((b) => b.baseModel === name)
 
 export const modelRoutes: MockRoute[] = [
   [
@@ -35,17 +40,48 @@ export const modelRoutes: MockRoute[] = [
   ],
 
   [
-    'GET',
+    // ★ 契约已由 GET 改成 POST（apiKey 不能进查询串）；入参走 body，按 apiBase 分支上游
+    'POST',
     '/models/base-models',
-    ({ query }) => {
-      const supplier = query.supplier ? String(query.supplier) : ''
-      const kind = query.kind ? String(query.kind) : ''
-      const keyword = String(query.keyword ?? '')
+    ({ body }) => {
+      const input = (body ?? {}) as {
+        supplier?: string
+        kind?: string
+        keyword?: string
+        apiBase?: string
+        apiKey?: string
+      }
+      const supplierRaw = input.supplier ? String(input.supplier) : ''
+      const kind = input.kind ? String(input.kind) : ''
+      const keyword = String(input.keyword ?? '')
+      const apiBase = String(input.apiBase ?? '').trim()
 
-      return baseModels
-        .filter((b) => !supplier || b.supplier === supplier)
+      // 模拟「上游不可达」：空列表 + 可读 hint（与后端 BaseModelCatalog.empty 同形状）
+      if (apiBase && /dead|unreachable|127\.0\.0\.1:1/i.test(apiBase)) {
+        return new MockEnvelope(
+          [] as BaseModelOption[],
+          '未从上游拉到模型：请检查服务地址是否正确、服务是否已启动'
+        )
+      }
+
+      // ★ 目录跟着上游走：给了 apiBase 就拉那一套（外部 API），没给走默认（本地推理）
+      const catalog = apiBase ? externalBaseModels : baseModels
+
+      // 与后端 toBaseOption 同口径：supplier 由用户选定后**盖**到每一条上，不是拿来过滤的
+      const resolvedSupplier = (supplierRaw || 'LOCAL_INFERENCE') as BaseModelOption['supplier']
+
+      const list = catalog
+        .map((b) => ({ ...b, supplier: resolvedSupplier }))
         .filter((b) => !kind || b.kind === kind)
         .filter((b) => !keyword || b.baseModel.toLowerCase().includes(keyword.toLowerCase()))
+
+      if (!catalog.length) {
+        return new MockEnvelope(
+          [] as BaseModelOption[],
+          '上游返回了空的模型清单：请确认服务上已部署模型'
+        )
+      }
+      return list
     }
   ],
 
@@ -54,7 +90,7 @@ export const modelRoutes: MockRoute[] = [
     '/models/probe',
     ({ body }) => {
       const input = body as ProbeBaseModelBody
-      const base = baseModels.find((b) => b.baseModel === input.baseModel)
+      const base = findBaseModel(input.baseModel)
       if (!base) throw new ApiError(4003, `基础模型「${input.baseModel}」不在可选目录中`)
 
       const probed = probedCapabilities[input.baseModel]
@@ -87,13 +123,18 @@ export const modelRoutes: MockRoute[] = [
         throw new ApiError(4002, `模型名称「${input.name}」已存在`)
       }
 
-      const base = baseModels.find((b) => b.baseModel === input.baseModel)
+      // 外部 API 必须带 apiBase —— 与后端 validateSupplier 同口径，前端校验被绕过时也拦得住
+      if (input.supplier === 'EXTERNAL_API' && !input.apiBase?.trim()) {
+        throw new ApiError(
+          ErrorCode.BAD_REQUEST,
+          '外部 API 模型必须提供 apiBase',
+          '外部 API 的推理服务地址是必填项 —— 本地推理才可以留空（用默认上游）'
+        )
+      }
+
+      const base = findBaseModel(input.baseModel)
       if (!base) throw new ApiError(4003, `基础模型「${input.baseModel}」不在可选目录中`)
 
-      // 迁移自旧实现的「供应商与平台不匹配」校验：选的基础模型必须属于所选供应商
-      if (base.supplier !== input.supplier) {
-        throw new ApiError(4003, `基础模型「${base.baseModel}」属于「${base.supplier}」，与所选供应商不一致`)
-      }
       // 模型类型必须与基础模型一致，否则向量维度/上下文窗口会张冠李戴
       if (base.kind !== input.kind) {
         throw new ApiError(4003, `基础模型「${base.baseModel}」是${base.kind === 'CHAT' ? '对话' : '向量'}模型，与所选类型不一致`)
