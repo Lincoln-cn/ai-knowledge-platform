@@ -50,17 +50,44 @@
       </el-form-item>
 
       <el-form-item label="基础模型" prop="baseModel">
-        <div v-if="form.baseModel" class="picked">
+        <!-- 手填模式：目录里没有时的逃生口 —— 后端创建时不校验真伪，加载时才验 -->
+        <div v-if="baseManualMode && !isEdit" class="manual-base">
+          <div class="manual-base-row">
+            <el-input
+              v-model="manualBaseName"
+              clearable
+              placeholder="输入基础模型名，例如 my-custom-model"
+              @update:model-value="onManualBaseInput"
+            />
+            <el-tag size="small" effect="plain" type="warning" class="source-tag">
+              来源：{{ labelOf(VALUE_SOURCE_LABELS, baseSource) }}
+            </el-tag>
+          </div>
+          <div class="hint micro">
+            手填的基础模型在加载时才会验证 —— 上游没有它会加载失败并给出原因，不阻断录入
+          </div>
+        </div>
+        <div v-else-if="form.baseModel" class="picked">
           <div class="picked-main">
-            <div class="picked-name">{{ form.baseModel }}</div>
+            <div class="picked-name-row">
+              <div class="picked-name">{{ form.baseModel }}</div>
+              <el-tag size="small" effect="plain" :type="baseSource === 'MANUAL' ? 'warning' : 'info'" class="source-tag">
+                来源：{{ labelOf(VALUE_SOURCE_LABELS, baseSource) }}
+              </el-tag>
+            </div>
             <div class="micro muted">
               {{ labelOf(SUPPLIER_LABELS, form.supplier) }} ·
-              {{ form.kind === 'EMBEDDING' ? `${pickedBase?.dimension} 维` : `${pickedBase?.contextWindow?.toLocaleString()} tokens` }}
+              <template v-if="form.kind === 'EMBEDDING'">
+                {{ pickedBase?.dimension ?? form.dimension ?? '—' }} 维
+              </template>
+              <template v-else>
+                {{ pickedBase?.contextWindow?.toLocaleString() ?? '—' }} tokens
+              </template>
             </div>
           </div>
           <el-button v-if="!isEdit" link size="small" @click="clearBase">移除</el-button>
         </div>
-        <div v-else class="picked empty micro muted">从右侧目录中选择一个基础模型</div>
+        <div v-else class="picked empty micro muted">从右侧目录中选择，或在目录区手动填写</div>
         <div v-if="isEdit" class="hint micro">基础模型不可修改；如需更换请新建模型</div>
       </el-form-item>
 
@@ -107,11 +134,24 @@
         </el-form-item>
       </template>
 
-      <el-form-item v-else label="向量维度">
+      <el-form-item v-else label="向量维度" prop="dimension">
         <div class="dim">
-          <b class="num">{{ form.dimension ?? pickedBase?.dimension ?? '—' }}</b> 维
-          <span class="hint micro">维度与向量表绑定，创建后不可更改</span>
+          <el-input
+            v-model="dimText"
+            class="dim-input"
+            placeholder="正整数，例如 768"
+            :disabled="isEdit"
+            @update:model-value="onDimInput"
+          />
+          <el-tag
+            size="small" effect="plain"
+            :type="dimSource === 'MANUAL' ? 'warning' : dimSource === 'PROBED' ? 'success' : 'info'"
+            class="source-tag"
+          >
+            来源：{{ labelOf(VALUE_SOURCE_LABELS, dimSource) }}
+          </el-tag>
         </div>
+        <div class="hint micro">维度与向量表绑定，创建后不可更改；不确定先用探测</div>
       </el-form-item>
 
       <el-form-item label="备注">
@@ -154,6 +194,23 @@
           <div v-if="catalogHint" class="micro muted catalog-hint">{{ catalogHint }}</div>
         </div>
       </div>
+
+      <!-- 目录里没有？手动填写 —— 后端 baseModel 就是字符串，创建不校验，加载时才验 -->
+      <div class="catalog-foot">
+        <template v-if="!baseManualMode">
+          <el-button
+            v-if="!isEdit" link type="primary" size="small"
+            class="manual-escape"
+            @click="enableManualBase"
+          >
+            目录里没有？手动填写
+          </el-button>
+        </template>
+        <template v-else>
+          <div class="micro manual-mode-hint">正在手动填写基础模型</div>
+          <el-button v-if="!isEdit" link size="small" @click="disableManualBase">返回目录选择</el-button>
+        </template>
+      </div>
     </div>
   </div>
 </template>
@@ -179,8 +236,12 @@ import {
   MODEL_KIND_VALUES,
   SUPPLIER_LABELS,
   SUPPLIER_VALUES,
+  VALUE_SOURCE_LABELS,
   labelOf
 } from '@/constants/labels'
+
+/** 基础模型 / 维度的取值来源：目录带出 / 探测 / 手填 —— 界面必须标出来 */
+type ValueSource = 'CATALOG' | 'PROBED' | 'MANUAL'
 
 const props = defineProps<{
   /** 编辑时传入现有模型；null / 省略 = 新建 */
@@ -211,6 +272,13 @@ const baseList = ref<BaseModelOption[]>([])
 /** 包络 hint：上游不可达/为空时后端给的可读排查提示 */
 const catalogHint = ref('')
 const capSource = ref<'PROBED' | 'MANUAL'>('MANUAL')
+/** 目录里没有？手动填写 —— 逃生口开关 */
+const baseManualMode = ref(false)
+const manualBaseName = ref('')
+const baseSource = ref<ValueSource>('CATALOG')
+const dimSource = ref<ValueSource>('CATALOG')
+/** 维度输入框的原文（正整数校验吃字符串，0/负数/非数字都要能被拦） */
+const dimText = ref('')
 
 const isEdit = computed(() => !!props.model)
 /** 编排画布已预选供应商时不许改，否则预筛会被用户改穿 */
@@ -233,10 +301,32 @@ const form = reactive({
 
 const rules: FormRules = {
   kind: [{ required: true, message: '请选择模型类型', trigger: 'change' }],
-  baseModel: [{ required: true, message: '请选择基础模型', trigger: 'change' }],
+  baseModel: [{ required: true, message: '请选择或填写基础模型', trigger: 'change' }],
   name: [{ required: true, message: '请输入模型名称', trigger: 'blur' }],
   thinking: [{ required: true, message: '请选择思考模式', trigger: 'change' }],
   tools: [{ required: true, message: '请选择工具调用能力', trigger: 'change' }],
+  dimension: [
+    {
+      validator: (_rule, _value, callback) => {
+        if (form.kind !== 'EMBEDDING') {
+          callback()
+          return
+        }
+        const raw = dimText.value.trim()
+        if (!raw) {
+          callback(new Error('请填写向量维度'))
+          return
+        }
+        const n = Number(raw)
+        if (!Number.isInteger(n) || n <= 0) {
+          callback(new Error('向量维度必须是正整数'))
+          return
+        }
+        callback()
+      },
+      trigger: 'blur'
+    }
+  ],
   apiBase: [
     {
       validator: (_rule, value, callback) => {
@@ -322,9 +412,15 @@ watch(
 )
 
 const pickBase = (item: BaseModelOption) => {
+  // 从目录点选 ⇒ 来源是目录；先退出手填模式，避免两套输入打架
+  baseManualMode.value = false
+  manualBaseName.value = ''
   form.baseModel = item.baseModel
+  baseSource.value = 'CATALOG'
   // ★ supplier 由用户在顶部先选定，不再从目录项反推
   form.dimension = item.kind === 'EMBEDDING' ? item.dimension : null
+  dimText.value = item.kind === 'EMBEDDING' && item.dimension != null ? String(item.dimension) : ''
+  dimSource.value = item.kind === 'EMBEDDING' && item.dimension != null ? 'CATALOG' : 'MANUAL'
   // 换基础模型等于换了模型，能力声明必须重来，避免把上一个模型的能力带过去
   form.thinking = 'NONE'
   form.tools = 'UNSUPPORTED'
@@ -335,12 +431,64 @@ const pickBase = (item: BaseModelOption) => {
 const clearBase = () => {
   form.baseModel = ''
   form.dimension = null
+  dimText.value = ''
+  baseSource.value = 'CATALOG'
+  dimSource.value = 'MANUAL'
+  manualBaseName.value = ''
+  // 保留 baseManualMode：清掉已填内容后仍可继续手填
+}
+
+const enableManualBase = () => {
+  baseManualMode.value = true
+  // 手填时 contextWindow / dimension 无从带出 —— 用户自行决定填不填
+  form.baseModel = manualBaseName.value.trim()
+  baseSource.value = 'MANUAL'
+  form.dimension = null
+  dimText.value = ''
+  dimSource.value = 'MANUAL'
+  form.thinking = 'NONE'
+  form.tools = 'UNSUPPORTED'
+  capSource.value = 'MANUAL'
+}
+
+const disableManualBase = () => {
+  baseManualMode.value = false
+  manualBaseName.value = ''
+  form.baseModel = ''
+  form.dimension = null
+  dimText.value = ''
+  baseSource.value = 'CATALOG'
+  dimSource.value = 'MANUAL'
+}
+
+const onManualBaseInput = (val: string) => {
+  manualBaseName.value = val
+  form.baseModel = val.trim()
+  baseSource.value = 'MANUAL'
+  // 手填换名 = 换模型，能力重来
+  form.thinking = 'NONE'
+  form.tools = 'UNSUPPORTED'
+  capSource.value = 'MANUAL'
+}
+
+const onDimInput = (val: string) => {
+  dimText.value = val
+  dimSource.value = 'MANUAL'
+  const raw = val.trim()
+  if (!raw) {
+    form.dimension = null
+    return
+  }
+  const n = Number(raw)
+  form.dimension = Number.isFinite(n) ? n : null
 }
 
 const onKindChange = () => {
   clearBase()
   form.thinking = 'NONE'
   form.tools = 'UNSUPPORTED'
+  dimText.value = ''
+  dimSource.value = 'MANUAL'
   loadBaseModels()
 }
 
@@ -359,6 +507,12 @@ const probe = async () => {
     form.thinking = capability.thinking
     form.tools = capability.tools
     capSource.value = capability.source
+    // ★ 维度也从探测带出，并标「探测」—— 与手填/目录分得开
+    if (form.kind === 'EMBEDDING' && capability.dimension != null) {
+      form.dimension = capability.dimension
+      dimText.value = String(capability.dimension)
+      dimSource.value = 'PROBED'
+    }
     ElMessage.success('已探测到能力，可在下方手工覆盖')
   } catch (error) {
     // 探测失败不阻断流程，但要说清为什么、下一步怎么办
@@ -386,6 +540,11 @@ const reset = () => {
   baseKeyword.value = ''
   catalogHint.value = ''
   capSource.value = 'MANUAL'
+  baseManualMode.value = false
+  manualBaseName.value = ''
+  baseSource.value = 'CATALOG'
+  dimSource.value = 'MANUAL'
+  dimText.value = ''
 }
 
 const load = async () => {
@@ -401,6 +560,11 @@ const load = async () => {
     form.tools = m.tools
     form.dimension = m.dimension
     form.remark = m.remark ?? ''
+    dimText.value = m.dimension != null ? String(m.dimension) : ''
+    // 编辑已有模型：值来自库，不是本次手填；仍标「目录」以外的来源会让用户误解，
+    // 这里统一按「目录/带出」展示（编辑态不可改基础模型与维度）。
+    baseSource.value = 'CATALOG'
+    dimSource.value = 'CATALOG'
     // ★ 编辑态：apiKey 不回填（契约 ModelInfo 本就不含密钥）；apiBase 可改但不强制重填
     form.apiKey = ''
     capSource.value = 'MANUAL'
@@ -429,15 +593,24 @@ const submit = async (): Promise<boolean> => {
       })
       ElMessage.success('已保存')
     } else {
+      // 维度以输入框为准：手填/目录/探测最终都落到 dimText，提交前再解析一次
+      let dimension: number | null = null
+      if (form.kind === 'EMBEDDING') {
+        const raw = dimText.value.trim()
+        const n = Number(raw)
+        dimension = raw && Number.isInteger(n) && n > 0 ? n : null
+      }
       const body: UpsertModelBody = {
         name: form.name,
         kind: form.kind,
         supplier: form.supplier,
         baseModel: form.baseModel,
-        dimension: form.dimension,
-        thinking: form.thinking,
-        tools: form.tools,
+        dimension,
         remark: form.remark,
+        // ★ 向量模型不接受 thinking/tools（后端 400）—— 只在对话模型时下发
+        ...(form.kind === 'CHAT'
+          ? { thinking: form.thinking, tools: form.tools }
+          : {}),
         ...upstream
       }
       await modelsApi.createModel(body)
@@ -506,6 +679,36 @@ defineExpose({ load, submit, reset })
   font-variant-numeric: tabular-nums;
 }
 
+.picked-name-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+
+.source-tag {
+  flex-shrink: 0;
+}
+
+.manual-base {
+  width: 100%;
+}
+
+.manual-base-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  width: 100%;
+}
+
+.manual-base-row .el-input {
+  flex: 1;
+}
+
+.manual-base .hint {
+  margin-top: var(--space-3xs);
+}
+
 .cap-head {
   display: flex;
   align-items: center;
@@ -514,9 +717,26 @@ defineExpose({ load, submit, reset })
 
 .dim {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-2xs);
+  align-items: center;
+  gap: var(--space-xs);
   font-size: var(--text-xs);
+}
+
+.dim-input {
+  width: 160px;
+}
+
+.catalog-foot {
+  padding: var(--space-xs) var(--space-sm);
+  border-top: 1px solid var(--color-rule-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+}
+
+.manual-mode-hint {
+  color: var(--color-muted);
 }
 
 .catalog {

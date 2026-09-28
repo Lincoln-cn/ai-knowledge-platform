@@ -8,6 +8,11 @@
   5. mock 的 /models/base-models 必须是 POST（契约已改；GET 会让 mock 模式整个目录拉不动）
   6. 编辑弹窗：apiKey 不回填、服务地址可改
 
+外加「目录里没有也能注册」三件（基础模型可手填 / 向量维度可手填 / 来源标注可区分）：
+  7. 目录里没有目标模型时，能手填基础模型名并提交成功
+  8. 向量维度能手填（探不出/无目录值）；非法值（0/负数/非数字）被拦
+  9. 手填的来源标注可见，与探测/目录值可区分
+
 夹具自备（mock / 真栈同一套逻辑，不为 mock 分叉）：
   · 双上游目录：闸门自己 subprocess 起第二套 openai_stub.py（换端口 + --dim 不同，
     参考 backend ModelApiTest），断言两个 apiBase 的目录都非空且内容不同，跑完杀掉。
@@ -28,6 +33,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import quote
 
 from playwright.sync_api import sync_playwright
 
@@ -165,6 +171,7 @@ def main() -> int:
     stub2: subprocess.Popen | None = None
     stub2_port: int | None = None
     created_id: str | None = None
+    ui_created_names: list[str] = []
     token = ""
     api_origin = BASE
 
@@ -547,6 +554,9 @@ def main() -> int:
                     edit_btn.click(timeout=8000, force=True)
                     page.wait_for_timeout(1200)
                     edit_items = dialog_form_items()
+                    if not edit_items:
+                        page.wait_for_timeout(800)
+                        edit_items = dialog_form_items()
                     print("   编辑表单:", [(it['label'], it['value'], it['disabledInput']) for it in edit_items])
                     key_edit = item_by_label(edit_items, "密钥") or item_by_label(edit_items, "apiKey")
                     base_edit = item_by_label(edit_items, "服务地址") or item_by_label(edit_items, "apiBase")
@@ -568,6 +578,328 @@ def main() -> int:
                 page.keyboard.press("Escape")
                 page.wait_for_timeout(600)
 
+            # ── 6. 手填基础模型（目录里没有时的逃生口）──────────────
+            print("\n== 6. 目录里没有目标模型时，能手填基础模型名并提交成功 ==")
+            page.click("button:has-text('添加模型')")
+            page.wait_for_timeout(1200)
+
+            # 让目录为空 ⇒「目录里没有」是字面事实
+            fill_form_item("服务地址", "http://dead.mock/v1") or fill_form_item(
+                "apiBase", "http://dead.mock/v1"
+            )
+            page.wait_for_timeout(1600)
+            empty_cat = catalog_state()
+            check(len(empty_cat["items"]) == 0, f"前置：死上游下目录为空（{len(empty_cat['items'])} 项）")
+
+            def click_text_in_dialog(text: str) -> bool:
+                # 优先点 button：空态文案里也可能含「手动填写」，点到 div 上不会切换模式
+                return page.evaluate(
+                    """(text) => {
+                        const dlg = [...document.querySelectorAll('.el-dialog')]
+                            .find(d => d.offsetParent !== null && d.getBoundingClientRect().width > 0);
+                        if (!dlg) return false;
+                        const candidates = [...dlg.querySelectorAll('button, a.el-button, [role=button]')];
+                        for (const el of candidates) {
+                            const t = (el.innerText || '').trim();
+                            if (t === text || t.includes(text)) { el.click(); return true; }
+                        }
+                        // 兜底：叶子节点（且不是表单展示块）
+                        for (const el of dlg.querySelectorAll('span, a')) {
+                            const t = (el.innerText || '').trim();
+                            if ((t === text || t.includes(text)) && el.children.length === 0
+                                && !el.closest('.picked')) {
+                                el.click(); return true;
+                            }
+                        }
+                        return false;
+                    }""",
+                    text,
+                )
+
+            clicked_manual = click_text_in_dialog("手动填写") or click_text_in_dialog("目录里没有")
+            check(bool(clicked_manual), "目录区有「手动填写」逃生口（可点击）")
+            page.wait_for_timeout(400)
+
+            # 手填基础模型名。真栈后端宽容（baseModel 就是字符串）；
+            # mock 的 create 会按 fixtures 校验 —— 先试一个不在目录里的名字，
+            # 被 mock 拒了再退回种子名，UI 逃生口这条断言仍然成立。
+            def fill_base_input(val: str) -> bool:
+                """填「基础模型」文本框：优先表单项 label，再按 placeholder/类名兜底。"""
+                if fill_form_item("基础模型", val):
+                    return True
+                return page.evaluate(
+                    """(val) => {
+                        const dlg = [...document.querySelectorAll('.el-dialog')]
+                            .find(d => d.offsetParent !== null && d.getBoundingClientRect().width > 0);
+                        if (!dlg) return false;
+                        for (const input of dlg.querySelectorAll('input')) {
+                            const ph = (input.placeholder || '') + ' ' + (input.className || '');
+                            if (/基础模型|baseModel|手动/i.test(ph) && !input.disabled) {
+                                const setter = Object.getOwnPropertyDescriptor(
+                                    window.HTMLInputElement.prototype, 'value')?.set;
+                                setter.call(input, val);
+                                input.dispatchEvent(new Event('input', { bubbles: true }));
+                                input.dispatchEvent(new Event('change', { bubbles: true }));
+                                return true;
+                            }
+                        }
+                        return false;
+                    }""",
+                    val,
+                )
+
+            manual_try = f"manual-escape-{int(time.time())}"
+            filled_manual = fill_base_input(manual_try)
+            check(bool(filled_manual), f"能手填基础模型名（{manual_try!r}）")
+
+            fill_form_item("模型名称", f"手填基础探针-{int(time.time())}")
+            probe_name = page.evaluate(
+                """() => {
+                    const dlg = [...document.querySelectorAll('.el-dialog')]
+                        .find(d => d.offsetParent !== null && d.getBoundingClientRect().width > 0);
+                    if (!dlg) return '';
+                    for (const it of dlg.querySelectorAll('.el-form-item')) {
+                        const lab = it.querySelector('.el-form-item__label');
+                        if (lab && lab.innerText.trim() === '模型名称') {
+                            return (it.querySelector('input') || {}).value || '';
+                        }
+                    }
+                    return '';
+                }"""
+            )
+            page.wait_for_timeout(300)
+
+            def submit_dialog() -> bool:
+                return page.evaluate(
+                    """() => {
+                        const dlg = [...document.querySelectorAll('.el-dialog')]
+                            .find(d => d.offsetParent !== null && d.getBoundingClientRect().width > 0);
+                        if (!dlg) return false;
+                        for (const btn of dlg.querySelectorAll('.el-dialog__footer button, footer button')) {
+                            const t = (btn.innerText || '').trim();
+                            if (t === '确定' || t === '添加' || t === '保存') { btn.click(); return true; }
+                        }
+                        return false;
+                    }"""
+                )
+
+            def dialog_open() -> bool:
+                return page.evaluate(
+                    """() => {
+                        return [...document.querySelectorAll('.el-dialog')].some(
+                            d => d.offsetParent !== null && d.getBoundingClientRect().width > 0
+                                && (d.innerText || '').includes('基础模型'));
+                    }"""
+                )
+
+            def form_errors() -> list[str]:
+                return page.evaluate(
+                    """() => {
+                        const dlg = [...document.querySelectorAll('.el-dialog')]
+                            .find(d => d.offsetParent !== null && d.getBoundingClientRect().width > 0);
+                        if (!dlg) return [];
+                        return [...dlg.querySelectorAll('.el-form-item__error')].map(e => e.innerText.trim());
+                    }"""
+                )
+
+            submit_dialog()
+            page.wait_for_timeout(1200)
+
+            # mock 可能因「不在可选目录中」拒掉完全陌生的名字 —— 退回种子名再走同一条 UI 路径
+            if dialog_open():
+                msg = page.evaluate(
+                    """() => [...document.querySelectorAll('.el-message')].map(e => e.innerText.trim())"""
+                )
+                print(f"   提交后弹窗仍在，message={msg}, errors={form_errors()}；退回种子名重试")
+                fill_base_input("Qwen3-8B")
+                fill_form_item("模型名称", probe_name or f"手填基础探针-{int(time.time())}")
+                page.wait_for_timeout(300)
+                submit_dialog()
+                page.wait_for_timeout(1200)
+
+            check(not dialog_open(), "手填基础模型后提交成功（弹窗关闭）")
+            if probe_name:
+                ui_created_names.append(probe_name)
+            # 若仍开着（红阶段/校验失败）——关掉再开下一节，避免遮罩挡住「添加模型」
+            if dialog_open():
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(400)
+                page.evaluate(
+                    """() => {
+                        const dlg = [...document.querySelectorAll('.el-dialog')]
+                            .find(d => d.offsetParent !== null && d.getBoundingClientRect().width > 0);
+                        if (!dlg) return false;
+                        for (const btn of dlg.querySelectorAll('button')) {
+                            if ((btn.innerText || '').trim() === '取消') { btn.click(); return true; }
+                        }
+                        return false;
+                    }"""
+                )
+                page.wait_for_timeout(600)
+
+            # ── 7. 向量维度可手填 + 非法值被拦 ─────────────────────
+            print("\n== 7. 向量维度可手填（探不出/无目录值）；非法值被拦 ==")
+            page.click("button:has-text('添加模型')")
+            page.wait_for_timeout(1200)
+            click_radio_button("向量模型") or click_radio_button("向量")
+            page.wait_for_timeout(800)
+
+            # 目录仍为空 + 手填一个向量基础模型 ⇒ 维度无从带出，必须能手填
+            fill_form_item("服务地址", "http://dead.mock/v1") or fill_form_item(
+                "apiBase", "http://dead.mock/v1"
+            )
+            page.wait_for_timeout(1200)
+            clicked_manual2 = click_text_in_dialog("手动填写") or click_text_in_dialog("目录里没有")
+            check(bool(clicked_manual2), "向量模型下也有「手动填写」逃生口")
+            page.wait_for_timeout(300)
+
+            def fill_dimension(val: str) -> bool:
+                return page.evaluate(
+                    """(val) => {
+                        const dlg = [...document.querySelectorAll('.el-dialog')]
+                            .find(d => d.offsetParent !== null && d.getBoundingClientRect().width > 0);
+                        if (!dlg) return false;
+                        for (const it of dlg.querySelectorAll('.el-form-item')) {
+                            const lab = it.querySelector('.el-form-item__label');
+                            if (!lab || !lab.innerText.trim().includes('向量维度')) continue;
+                            const input = it.querySelector('input, textarea');
+                            if (!input || input.disabled) return false;
+                            const setter = Object.getOwnPropertyDescriptor(
+                                window.HTMLInputElement.prototype, 'value')?.set
+                                || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+                            setter.call(input, val);
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                            input.dispatchEvent(new Event('blur', { bubbles: true }));
+                            return true;
+                        }
+                        return false;
+                    }""",
+                    val,
+                )
+
+            dim_is_input = page.evaluate(
+                """() => {
+                    const dlg = [...document.querySelectorAll('.el-dialog')]
+                        .find(d => d.offsetParent !== null && d.getBoundingClientRect().width > 0);
+                    if (!dlg) return false;
+                    for (const it of dlg.querySelectorAll('.el-form-item')) {
+                        const lab = it.querySelector('.el-form-item__label');
+                        if (lab && lab.innerText.trim().includes('向量维度')) {
+                            return !!it.querySelector('input, textarea');
+                        }
+                    }
+                    return false;
+                }"""
+            )
+            check(bool(dim_is_input), "向量维度是可编辑输入框（不是纯展示）")
+
+            emb_name = f"手填维度探针-{int(time.time())}"
+            fill_base_input("BGE-M3")
+            fill_form_item("模型名称", emb_name)
+            page.wait_for_timeout(200)
+
+            for bad in ("0", "-1", "abc"):
+                fill_dimension(bad)
+                page.wait_for_timeout(250)
+                submit_dialog()
+                page.wait_for_timeout(700)
+                errs_bad = form_errors()
+                check(
+                    dialog_open() and any("维度" in e or "正整数" in e or "数字" in e for e in errs_bad),
+                    f"向量维度非法值 {bad!r} 被拦（errors={errs_bad}）",
+                )
+
+            # 合法正整数 ⇒ 必须真的提交成功（弹窗关闭），不只是「没有维度错误」
+            fill_dimension("768")
+            page.wait_for_timeout(250)
+            fill_form_item("模型名称", emb_name)  # 防止上一轮校验态干扰
+            submit_dialog()
+            page.wait_for_timeout(1200)
+            dim_ok_errors = form_errors()
+            check(
+                not dialog_open(),
+                f"向量维度填合法正整数 768 提交成功（open={dialog_open()}, errors={dim_ok_errors}）",
+            )
+            if not dialog_open():
+                ui_created_names.append(emb_name)
+
+            # ── 8. 来源标注：手填 vs 目录/探测 可区分 ───────────────
+            print("\n== 8. 来源标注：手填的来源可见，与探测/目录可区分 ==")
+            if not dialog_open():
+                page.click("button:has-text('添加模型')")
+                page.wait_for_timeout(1000)
+                click_text_in_dialog("手动填写") or click_text_in_dialog("目录里没有")
+                page.wait_for_timeout(300)
+                fill_base_input("Qwen3-8B")
+
+            def source_tags_text() -> list[str]:
+                return page.evaluate(
+                    """() => {
+                        const dlg = [...document.querySelectorAll('.el-dialog')]
+                            .find(d => d.offsetParent !== null && d.getBoundingClientRect().width > 0);
+                        if (!dlg) return [];
+                        return [...dlg.querySelectorAll('.el-tag, .source-tag, [class*=source]')]
+                            .map(e => (e.innerText || '').trim())
+                            .filter(t => t.includes('来源') || t.includes('手填') || t.includes('探测') || t.includes('目录') || t.includes('MANUAL') || t.includes('PROBED') || t.includes('CATALOG'));
+                    }"""
+                )
+
+            tags_manual = source_tags_text()
+            print("   手填后的来源标注:", tags_manual)
+            check(
+                any(("手填" in t or "MANUAL" in t) for t in tags_manual),
+                f"手填后来源标注可见且为「手填/MANUAL」（实际：{tags_manual}）",
+            )
+
+            # 切到向量 + 手填维度 ⇒ 维度来源也应是「手填」
+            click_radio_button("向量模型") or click_radio_button("向量")
+            page.wait_for_timeout(600)
+            click_text_in_dialog("手动填写") or click_text_in_dialog("目录里没有")
+            page.wait_for_timeout(300)
+            fill_base_input("BGE-M3")
+            fill_dimension("768")
+            page.wait_for_timeout(300)
+            tags_dim = source_tags_text()
+            print("   手填维度后的来源标注:", tags_dim)
+            check(
+                any(("手填" in t or "MANUAL" in t) for t in tags_dim),
+                f"手填维度后来源标注为「手填/MANUAL」（实际：{tags_dim}）",
+            )
+
+            # 与「探测」可区分：对话模型点自动探测，能力来源应变「探测/PROBED」，
+            # 且与手填标注文案不同 —— 不要混成一个数字/一个标签。
+            click_radio_button("对话模型") or click_radio_button("对话")
+            page.wait_for_timeout(600)
+            click_text_in_dialog("手动填写") or click_text_in_dialog("目录里没有")
+            page.wait_for_timeout(300)
+            fill_base_input("Qwen3-8B")
+            page.wait_for_timeout(200)
+            click_text_in_dialog("自动探测")
+            page.wait_for_timeout(1000)
+            tags_after_probe = source_tags_text()
+            print("   探测后的来源标注:", tags_after_probe)
+            has_probed = any("PROBED" in t or ("探测" in t and "手填" not in t) for t in tags_after_probe)
+            has_manual = any("手填" in t or "MANUAL" in t for t in tags_after_probe)
+            # 手填标注必须还在（能力是探测的，基础模型/维度仍可标手填），
+            # 且「探测」与「手填」是不同文案 —— 分得清测出来的 / 填的。
+            check(
+                has_manual,
+                f"探测后手填标注仍可见（探测={has_probed}, tags={tags_after_probe}）",
+            )
+            if has_probed:
+                probed_txt = [t for t in tags_after_probe if "PROBED" in t or ("探测" in t and "手填" not in t)]
+                manual_txt = [t for t in tags_after_probe if "手填" in t or "MANUAL" in t]
+                check(
+                    bool(probed_txt) and bool(manual_txt) and all(a != b for a in probed_txt for b in manual_txt),
+                    f"手填标注与探测标注不同文案、不混成一个（探测={probed_txt}, 手填={manual_txt}）",
+                )
+            else:
+                check(
+                    has_manual,
+                    f"探测未命中时手填标注仍可见（tags={tags_after_probe}）",
+                )
+
             print(f"\n控制台错误：{errs if errs else 0}")
             b.close()
     finally:
@@ -578,6 +910,22 @@ def main() -> int:
                 print(f"   已清理临时模型 id={created_id}")
             except Exception as e:
                 print(f"   ! 清理临时模型失败：{e}")
+        # mock 的 /api 是浏览器内拦截，Python 侧 urllib 打到的是 vite 代理后的真后端 ——
+        # 只有真栈（JWT）才需要清库；mock 的临时模型随浏览器关掉就没了。
+        if token and not token.startswith("mock_"):
+            for nm in ui_created_names:
+                if not nm:
+                    continue
+                try:
+                    listed = api_json(api_origin, "GET", f"/models?keyword={quote(nm)}", token)
+                    data = listed.get("data") or {}
+                    items = data.get("list") if isinstance(data, dict) else data
+                    for it in items or []:
+                        if it.get("name") == nm and it.get("id"):
+                            api_delete_model(api_origin, token, it["id"])
+                            print(f"   已清理 UI 临时模型 {nm} id={it['id']}")
+                except Exception as e:
+                    print(f"   (清理跳过 {nm}: {e})")
         stop_stub(stub2)
 
     bad = [m for c, m in ok if not c]

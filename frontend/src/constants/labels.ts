@@ -391,6 +391,17 @@ export const MODEL_CAPABILITY_SOURCE_LABELS: Record<ModelCapabilitySource, strin
 }
 export const MODEL_CAPABILITY_SOURCE_VALUES: ModelCapabilitySource[] = ['PROBED', 'MANUAL']
 
+/**
+ * 基础模型 / 向量维度取值来源。
+ * 与能力声明 PROBED/MANUAL 同思想，多一个「目录带出」——
+ * 界面必须让人分得清「测出来的 / 目录带的 / 填的」，不能混成一个数字。
+ */
+export const VALUE_SOURCE_LABELS: Record<'CATALOG' | 'PROBED' | 'MANUAL', string> = {
+  CATALOG: '目录',
+  PROBED: '探测',
+  MANUAL: '手填'
+}
+
 /** 消息角色 */
 export const CHAT_ROLE_LABELS: Record<ChatRole, string> = {
   USER: '用户',
