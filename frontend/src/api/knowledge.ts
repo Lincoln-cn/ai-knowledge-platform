@@ -24,6 +24,12 @@ export interface KnowledgeBase {
   charCount: number
   createdAt: string
   /**
+   * 库的密级上限（ceiling，13 §6）：这个库**允许装**的最高密级。
+   * ★ 与「谁能看这个库」（Role.maxClassification）正交，不要混。
+   * 服务端必填校验：创建时缺失 ⇒ 400「库的密级上限必填」。
+   */
+  maxClassification?: string
+  /**
    * 归属与可见性（07 §3.1 的 `OwnedResource`）。**由后端写入**：创建时自动写
    * `ownerId = 当前用户` / `visibility = 'PRIVATE'`，所以契约里没有对应的请求字段。
    * `ownerId` 不可变 —— 转让是显式动作，不是改个字段。
@@ -53,6 +59,11 @@ export interface CreateKnowledgeBaseBody {
   icon: string
   importType: ImportType
   embeddingModelId: string
+  /**
+   * 库的密级上限（ceiling，13 §6）。★ **服务端必填**（缺失 ⇒ 400「库的密级上限必填」），
+   * 契约上仍声明为可选以守住「只加可选字段」的冻结约定。
+   */
+  maxClassification?: string
   /**
    * 幂等键（#12）。同一 `clientRequestId` 重复创建返回**既有库**而不是「名称已存在」——
    * 建库成功但后续上传失败后，重试「开始导入」不应被卡死，也不该留下孤儿库。
