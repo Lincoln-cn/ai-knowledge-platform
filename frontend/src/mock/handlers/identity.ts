@@ -124,8 +124,9 @@ function mockCaptchaImage(): string {
 }
 
 export const identityRoutes: MockRoute[] = [
-  // 登录验证码（等保要求）。真后端出的是 Java2D 渲染的 PNG，形状一致
-  ['GET', '/auth/captcha', () => ({ id: `mock_captcha_${Date.now()}`, image: mockCaptchaImage() })],
+  // 登录验证码（等保要求）。真后端出的是 Java2D 渲染的 PNG，形状一致。
+  // `required` 恒 true：mock 模式要与「验证码开启」的真后端长得一样。
+  ['GET', '/auth/captcha', () => ({ id: `mock_captcha_${Date.now()}`, image: mockCaptchaImage(), required: true })],
   [
     'POST',
     '/auth/login',

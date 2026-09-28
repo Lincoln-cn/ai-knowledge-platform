@@ -102,6 +102,13 @@ export interface UpsertUserBody {
 export interface Captcha {
   id: string
   image: string
+  /**
+   * 是否需要用户填写。后端 `app.security.captcha.enabled` 的镜像：开关关时为 `false`。
+   *
+   * ★ 可选 —— 冻结契约只加可选字段；未下发时前端仍按「需要」渲染（兼容旧后端）。
+   * ★ 仍不加前端必填校验：是否强制由后端开关决定（既有设计）。
+   */
+  required?: boolean
 }
 
 /** 取一张新验证码。★ 每次调用都会作废此前发出的验证码（避免囤积一批再暴力试） */

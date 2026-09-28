@@ -132,6 +132,19 @@ class UserRoleManagementTest {
     assertThat(res.body()).contains("\"code\":400");
   }
 
+  /**
+   * ★ 与「非法 UUID ⇒ 500」同族：请求体不是合法 JSON 也是<strong>调用方传错了</strong>（400）， 落进兜底
+   * {@code @ExceptionHandler(Exception.class)} 会变成 500「服务内部错误」（得来找后端翻堆栈）。 实测形态：{@code
+   * {username:admin}} —— 字段名/字符串没加双引号。
+   */
+  @Test
+  void 非法JSON请求体变成400而不是500() throws Exception {
+    HttpResponse<String> res = post("/api/v1/auth/login", "{username:admin}", null);
+
+    assertThat(res.statusCode()).as("请求体不是合法 JSON 是调用方能修的 4xx；500 会把人指到后端翻堆栈").isEqualTo(400);
+    assertThat(res.body()).as("包络 code 与 HTTP 状态同值，前端按 code 分支").contains("\"code\":400");
+  }
+
   @Test
   void 权限点清单来自代码目录() throws Exception {
     HttpResponse<String> res = get("/api/v1/permissions", accessToken("admin", "admin"));

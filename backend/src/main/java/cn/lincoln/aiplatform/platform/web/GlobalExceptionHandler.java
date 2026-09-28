@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -75,6 +76,27 @@ public class GlobalExceptionHandler {
   }
 
   /**
+   * 请求体不是合法 JSON（如 {@code {username:admin}} —— 字段名/字符串没加双引号）。
+   *
+   * <p>★ 必须显式处理，否则会被下面的兜底 handler 抓成 <strong>500</strong>： {@code HttpMessageNotReadableException}
+   * 继承自 {@code Exception}。它与"非法 UUID ⇒ 500"同族 —— <strong>是你传错了</strong>（400，调用方自己能修），
+   * 被报成"我崩了"（500，得来找后端翻堆栈）。
+   *
+   * <p>★ 陷阱（与 {@link #onNoHandler} / {@link #onTypeMismatch} 同一条）： <strong>兜底
+   * {@code @ExceptionHandler(Exception.class)} 会把"请求格式错误"改写成 500</strong>。
+   * 凡是"调用方能修的输入问题"，必须在兜底之前有明确的 4xx 映射。
+   */
+  @ExceptionHandler(HttpMessageNotReadableException.class)
+  public ResponseEntity<ApiResponse<Void>> onUnreadableBody(HttpMessageNotReadableException cause) {
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .body(
+            ApiResponse.fail(
+                ErrorCode.BAD_REQUEST,
+                "请求体不是合法 JSON",
+                "请检查请求体是否为合法 JSON、字段名用双引号（如 {\"username\":\"admin\"}）"));
+  }
+
+  /**
    * 路径参数类型不匹配（如 {@code /users/not-a-uuid}）。
    *
    * <p>★ 必须显式映射成 <strong>400</strong>：它是"调用方传错了 id"（他自己能修）， 落进兜底 handler 会变成 500「服务内部错误」（得来找后端）。
@@ -112,7 +134,14 @@ public class GlobalExceptionHandler {
         .body(ApiResponse.fail(ErrorCode.FORBIDDEN, "无权限", "请联系管理员为你的角色勾选该权限点"));
   }
 
-  /** 兜底：未预期的异常也要是可读的包络，不能漏出堆栈（{@code ROADMAP §7.3} 第 ③ 条：不存在静默失效）。 */
+  /**
+   * 兜底：未预期的异常也要是可读的包络，不能漏出堆栈（{@code ROADMAP §7.3} 第 ③ 条：不存在静默失效）。
+   *
+   * <p>★ 陷阱：这个"匹配一切"的 handler 会把<strong>请求格式错误</strong>也改写成 500 —— {@code
+   * HttpMessageNotReadableException}（非法 JSON）、 {@code MethodArgumentTypeMismatchException}（非法
+   * UUID）、 {@code NoResourceFoundException} 都继承 {@code Exception}。 凡是"调用方能修的输入问题"必须在上面显式映射成 4xx，
+   * 否则联调时会看到"传错了 body / id"被报成"服务内部错误"， 人被指到后端去翻堆栈。
+   */
   @ExceptionHandler(Exception.class)
   public ResponseEntity<ApiResponse<Void>> onUnexpected(Exception cause) {
     log.error("未预期的异常", cause);

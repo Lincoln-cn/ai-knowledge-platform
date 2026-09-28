@@ -52,9 +52,13 @@ public class CaptchaService {
   private final Cache<String, String> store;
   private final SecureRandom random = new SecureRandom();
 
+  /** 与 {@code app.security.captcha.enabled} 同源 —— 发码时一并回给前端，让"关掉"在界面上可见。 */
+  private final boolean required;
+
   public CaptchaService(CaptchaProperties properties) {
     Duration ttl = properties.ttl();
     this.store = Caffeine.newBuilder().expireAfterWrite(ttl).maximumSize(MAX_STORED).build();
+    this.required = properties.enabled();
   }
 
   /** 发一张新验证码。 */
@@ -62,7 +66,7 @@ public class CaptchaService {
     String code = randomCode();
     String id = UUID.randomUUID().toString();
     store.put(id, code);
-    return new CaptchaView(id, render(code));
+    return new CaptchaView(id, render(code), required);
   }
 
   /**

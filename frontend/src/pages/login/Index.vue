@@ -43,7 +43,7 @@
               autocomplete="current-password"
             />
           </el-form-item>
-          <el-form-item label="验证码" prop="captchaCode">
+          <el-form-item v-if="captcha.required" label="验证码" prop="captchaCode">
             <div class="captcha-row">
               <el-input
                 v-model="form.captchaCode"
@@ -64,6 +64,9 @@
               </button>
             </div>
           </el-form-item>
+          <!-- ★ 开关关掉时不再渲染一个「看着在要、实际不认」的框 —— 那种状态会把
+               「关掉验证码」伪装成产品 bug。改成一句轻量说明，让「关掉」本身可见。 -->
+          <p v-else class="micro muted captcha-off-note">当前未启用验证码校验（自动化/压测模式）</p>
         </el-form>
 
         <el-alert v-if="errorText" :title="errorText" type="error" :closable="false" show-icon />
@@ -116,8 +119,12 @@ const dataModeText = USE_MOCK ? '当前走 mock' : '当前连的是真后端'
  * ★ 它是**一次性**的：服务端无论校验成功还是失败都会把它作废，
  * 所以任何一次登录失败之后都必须换一张 —— 否则用户重试时提交的是一张已作废的验证码，
  * 界面会一直说"验证码不正确"，而用户明明照着图输对了。这是最容易漏掉的一处。
+ *
+ * ★ `required` 默认 true：契约里是可选字段，旧后端/mock 缺字段时不能让验证码凭空消失。
+ *   后端下发 `required: false`（`app.security.captcha.enabled=false`）时才收起输入框 ——
+ *   否则会出现「界面在要验证码、后端不认」的误导形态（本次 bug 的真因形态）。
  */
-const captcha = reactive({ id: '', image: '', loading: false })
+const captcha = reactive({ id: '', image: '', loading: false, required: true })
 
 const refreshCaptcha = async () => {
   captcha.loading = true
@@ -126,6 +133,7 @@ const refreshCaptcha = async () => {
     const fresh = await identityApi.getCaptcha()
     captcha.id = fresh.id
     captcha.image = fresh.image
+    captcha.required = fresh.required !== false
   } catch {
     // 取不到图不该拦住登录动作本身（后端可能把验证码关掉了），
     // 让它降级成"没有验证码"的形态，而不是在页面上报一个取图错误
@@ -389,6 +397,11 @@ const submit = async () => {
 
 .captcha-pic-fallback {
   font-size: var(--text-sm);
+}
+
+/* 验证码关闭时的轻量说明：不抢视觉，只让「关掉」这件事看得见 */
+.captcha-off-note {
+  margin: 0;
 }
 
 code {
