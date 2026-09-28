@@ -73,7 +73,7 @@
         </el-button>
 
         <div class="notice info">
-          接口已固定、当前走 mock。可用账号：<code>admin / admin</code>、
+          接口已固定、{{ dataModeText }}。可用账号：<code>admin / admin</code>、
           <code>zhangyun / 123456</code>（知识运营）、<code>liwei / 123456</code>（应用配置）、
           <code>chenjun / 123456</code>（普通用户）。后两个角色权限不同，可观察按钮是否渲染。
         </div>
@@ -88,7 +88,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import BrandMark from '@/components/BrandMark.vue'
 import { ApiError, identityApi } from '@/api'
-import { APP_TITLE } from '@/config/env'
+import { APP_TITLE, USE_MOCK } from '@/config/env'
 import { useSessionStore } from '@/stores/session'
 
 const route = useRoute()
@@ -100,6 +100,15 @@ const loading = ref(false)
 const errorText = ref('')
 
 const form = reactive({ username: 'admin', password: 'admin', captchaCode: '' })
+
+/**
+ * 底部说明里的「当前走哪条链路」必须**跟着环境变**。
+ *
+ * ★ 之前写死「当前走 mock」：`VITE_USE_MOCK=false` 真联调时界面在说谎 ——
+ *   排查「怎么还在走 mock」会白白绕一圈。文案与 USE_MOCK 同源，
+ *   切 .env 即换口径，不留第二处会漂移的说法。
+ */
+const dataModeText = USE_MOCK ? '当前走 mock' : '当前连的是真后端'
 
 /**
  * 验证码（等保要求）。

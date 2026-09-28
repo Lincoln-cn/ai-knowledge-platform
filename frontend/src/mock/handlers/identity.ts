@@ -12,6 +12,77 @@ import { permissions, roles, userFromToken, users } from '../fixtures/identity'
 const DEFAULT_INITIAL_PASSWORD = 'ChangeMe@2026'
 
 /**
+ * 口令强度校验 —— **真源是后端** `identity/domain/PasswordPolicy.java`（`violationOf`）。
+ *
+ * ★ mock 必须严格到与后端同一口径：若 mock 只查「至少 8 位」，弱口令会在 mock
+ *   模式下被放过、直到真联调才被后端拒绝 —— mock 就掩盖了策略差异，而不是提前
+ *   暴露它。两端的失败原因文案也逐字对齐，排查时不会面对两套话术。
+ *
+ * 规则（与 PasswordPolicy 一一对应）：
+ *   1. 非空
+ *   2. 长度 8–64（上限是 BCrypt 72 字节静默截断的诚实性口子）
+ *   3. 大写 / 小写 / 数字 / 特殊四类中至少命中 3 类
+ *   4. 不含账号名（忽略大小写）
+ *
+ * @returns 违规原因；合格时 null。只在「写入口令」的端点调用（改密 / 新建 / 重置）——
+ *   登录比对的是已存口令，不走强度校验（演示账号 `123456` 因此仍可登录）。
+ */
+function passwordPolicyViolation(
+  rawPassword: string | null | undefined,
+  username: string | null | undefined
+): string | null {
+  if (rawPassword == null || rawPassword.trim() === '') {
+    return '密码不能为空'
+  }
+  if (rawPassword.length < 8) {
+    return '密码长度至少 8 位'
+  }
+  if (rawPassword.length > 64) {
+    return '密码长度不能超过 64 位'
+  }
+  if (characterKinds(rawPassword) < 3) {
+    return '密码需包含大写字母、小写字母、数字、特殊字符中的至少 3 类'
+  }
+  if (
+    username != null &&
+    username.trim() !== '' &&
+    rawPassword.toLowerCase().includes(username.toLowerCase())
+  ) {
+    return '密码不能包含账号名'
+  }
+  return null
+}
+
+/** 命中的字符类别数（大写 / 小写 / 数字 / 特殊）—— 与 PasswordPolicy.characterKinds 同口径 */
+function characterKinds(rawPassword: string): number {
+  let upper = false
+  let lower = false
+  let digit = false
+  let other = false
+  for (const c of rawPassword) {
+    if (/\p{Lu}/u.test(c)) upper = true
+    else if (/\p{Ll}/u.test(c)) lower = true
+    else if (/\p{Nd}/u.test(c)) digit = true
+    else other = true
+  }
+  return (upper ? 1 : 0) + (lower ? 1 : 0) + (digit ? 1 : 0) + (other ? 1 : 0)
+}
+
+/**
+ * 不合格就抛 —— 码值与提示也与后端 `BusinessException(PASSWORD_TOO_WEAK, reason, hint)` 同口径。
+ */
+function assertPasswordPolicy(rawPassword: string, username: string): void {
+  const reason = passwordPolicyViolation(rawPassword, username)
+  if (reason) {
+    throw new ApiError(
+      ErrorCode.PASSWORD_TOO_WEAK,
+      reason,
+      '密码需包含大写字母、小写字母、数字、特殊字符中的至少 3 类，且不含账号名'
+    )
+  }
+}
+
+/**
  * 「令牌 → 用户」的约定只有一处实现（夹具层），数据权限判定（`mock/policy.ts`）也用它 ——
  * 两处各写一遍迟早会漂移。
  */
@@ -98,7 +169,8 @@ export const identityRoutes: MockRoute[] = [
       if (!user) throw new ApiError(ErrorCode.UNAUTHORIZED, '登录已过期，请重新登录')
       const { oldPassword, newPassword } = body as { oldPassword: string; newPassword: string }
       if (user.password !== oldPassword) throw new ApiError(4001, '原密码不正确')
-      if (newPassword.length < 8) throw new ApiError(4001, '新密码至少 8 位')
+      // 与后端 PasswordPolicy 同口径 —— 不是「至少 8 位」就完事
+      assertPasswordPolicy(newPassword, user.username)
       user.password = newPassword
       user.mustChangePassword = false
       return undefined
@@ -133,6 +205,9 @@ export const identityRoutes: MockRoute[] = [
       }
       const role = roles.find((r) => r.id === input.roleId)
       if (!role) throw new ApiError(4002, '请选择一个有效的角色')
+
+      // 指定口令时才校验强度；未指定走 DEFAULT_INITIAL_PASSWORD（它本身已满足策略）
+      if (input.password) assertPasswordPolicy(input.password, input.username)
 
       const created = {
         id: `u${Date.now()}`,
@@ -174,6 +249,8 @@ export const identityRoutes: MockRoute[] = [
       user.roleId = role.id
       user.roleName = role.name
       if (input.password) {
+        // 重置口令与改密同一套策略（真源 PasswordPolicy），否则弱口令会被 mock 放行
+        assertPasswordPolicy(input.password, user.username)
         user.password = input.password
         user.mustChangePassword = false
       }
