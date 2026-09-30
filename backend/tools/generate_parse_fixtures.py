@@ -18,6 +18,12 @@
   3. gbk-text.txt      GBK 编码中文
   4. encrypted.pdf     打开密码的 PDF ⇒ 解析失败但原因可读
   5. truncated.docx    ZIP 尾部截断的 DOCX ⇒ 失败但可能残留部分正文
+
+批 2（噪声剥离 + 数字表）新增：
+  6. noisy.docx        页眉页脚/页码/目录/版权/空白 + 已知正文结构
+  7. noisy.pdf         多页 PDF：页眉重复 + 页码 + 版权 + 正文
+  8. scanned-like.pdf  纯图形无文本层 ⇒ 模拟扫描件（结构 100% 丢失）
+  9. ground-truth.json 每份夹具的基准结构/噪声行/正文行 —— 数字表从这里算，不手抄
 """
 
 from __future__ import annotations
@@ -238,6 +244,230 @@ def build_md(path: Path) -> None:
     )
 
 
+# ── 批 2：噪声夹具 ────────────────────────────────────────────────────────
+# ★ 噪声/正文的划分写死在这里，ground-truth.json 原样导出 —— 数字表只认这份基准，
+#   不在 Java 里手抄行名单（抄错一位误杀率就失真）。
+
+HEADER_LINE = "某某集团内部管理制度"
+FOOTER_LINE = "内部资料 请勿外传"
+PAGE_NUM_LINES = ["3", "第 7 页 共 12 页", "vii"]
+COPYRIGHT_LINE = "© 2024 某某集团有限公司 版权所有"
+TOC_LINES = [
+    "第一章 总则 ........ 1",
+    "1.1 制定目的 ........ 2",
+    "1.1.1 适用范围 ........ 3",
+    "第二章 报销标准 ........ 5",
+    "2.1 住宿标准 ........ 6",
+    "2.2 交通标准 ........ 7",
+]
+# 正文行：噪声剥离不许碰（误杀率的分母）
+BODY_LINES = [
+    "本制度规定如下要点：",
+    "适用公司各部门",
+    "适用正式员工",
+    "适用外包人员须另签协议",
+    "提交申请",
+    "部门审批",
+    "归档备案",
+    "住宿标准为一线城市每人每天不超过伍佰元，超标部分不予报销。",
+    "交通费用实报实销，需提供合规票据作为报销依据。",
+    "出差前须提交书面申请，经部门负责人批准后方可出行。",
+    "本规定自发布之日起施行，由人力资源部负责解释。",
+]
+
+
+def _noise_body_paragraphs():
+    """夹具正文序列：噪声与正文交错，模拟真实文档页眉页脚混进段落流的形态。"""
+    parts = []
+    parts.append(HEADER_LINE)
+    parts.append(TITLE_L1)
+    parts.append(HEADER_LINE)
+    parts.append(BODY_LINES[0])
+    parts.append("")
+    parts.append(TOC_LINES[0])
+    parts.extend(TOC_LINES[1:])
+    parts.append(PAGE_NUM_LINES[0])
+    parts.append(TITLE_L2)
+    parts.append(HEADER_LINE)
+    for b in BODY_LINES[1:7]:
+        parts.append(b)
+    parts.append("")
+    parts.append(COPYRIGHT_LINE)
+    parts.append(PAGE_NUM_LINES[1])
+    parts.append(TITLE_L3)
+    parts.append(FOOTER_LINE)
+    for b in BODY_LINES[7:]:
+        parts.append(b)
+    parts.append(PAGE_NUM_LINES[2])
+    parts.append(HEADER_LINE)
+    parts.append(FOOTER_LINE)
+    return parts
+
+
+def build_noisy_docx(path: Path) -> None:
+    """带页眉页脚/页码/目录/版权噪声的 DOCX —— 误杀率与结构丢失率共用这一份。"""
+    doc = Document()
+    section = doc.sections[0]
+    header = section.header
+    header.paragraphs[0].text = HEADER_LINE
+    footer = section.footer
+    footer.paragraphs[0].text = FOOTER_LINE
+
+    # 目录页（连续 ≥5 行「…… 数字」结尾）
+    for line in TOC_LINES:
+        doc.add_paragraph(line)
+    doc.add_paragraph(PAGE_NUM_LINES[0])
+
+    doc.add_heading(TITLE_L1, level=1)
+    doc.add_paragraph(BODY_LINES[0])
+    doc.add_heading(TITLE_L2, level=2)
+    doc.add_heading(TITLE_L3, level=3)
+    doc.add_heading("无序列表", level=2)
+    for item in UL_ITEMS:
+        doc.add_paragraph(item, style="List Bullet")
+    doc.add_heading("有序列表", level=2)
+    for item in OL_ITEMS:
+        doc.add_paragraph(item, style="List Number")
+    doc.add_heading("标准表", level=2)
+    table = doc.add_table(rows=len(TABLE), cols=3)
+    table.style = "Table Grid"
+    for r, row in enumerate(TABLE):
+        for c, cell in enumerate(row):
+            table.rows[r].cells[c].text = cell
+
+    # 正文段落 + 噪声行交错
+    # ★ 页眉/页脚行要在正文里重复 ≥3 次才够「跨页重复」阈值（12 §2.4）——
+    #   节眉节脚 Tika 只抽一次，不补次数规则根本触发不了。
+    for line in BODY_LINES[7:]:
+        doc.add_paragraph(line)
+    doc.add_paragraph(COPYRIGHT_LINE)
+    doc.add_paragraph(PAGE_NUM_LINES[1])
+    doc.add_paragraph(HEADER_LINE)
+    doc.add_paragraph(FOOTER_LINE)
+    doc.add_paragraph(PAGE_NUM_LINES[2])
+    doc.add_paragraph(HEADER_LINE)
+    doc.add_paragraph(FOOTER_LINE)
+    # 空白段落（连续空行要折叠）
+    doc.add_paragraph("")
+    doc.add_paragraph("")
+    doc.save(path)
+
+
+class _NoisyPdf(FPDF):
+    """多页 PDF：每页页眉页脚都写同一行 —— 解析后就是「跨页重复短行」。"""
+
+    def header(self) -> None:  # noqa: D102
+        self.set_font("simhei", size=10)
+        self.cell(0, 8, HEADER_LINE, new_x="LMARGIN", new_y="NEXT")
+
+    def footer(self) -> None:  # noqa: D102
+        self.set_y(-15)
+        self.set_font("simhei", size=10)
+        self.cell(0, 10, FOOTER_LINE, align="C")
+
+
+def build_noisy_pdf(path: Path) -> None:
+    pdf = _NoisyPdf()
+    pdf.add_font("simhei", "", r"C:\Windows\Fonts\simhei.ttf")
+    # 第 1 页：目录 + 页码
+    pdf.add_page()
+    pdf.set_font("simhei", size=11)
+    for line in TOC_LINES:
+        pdf.cell(0, 8, line, new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, PAGE_NUM_LINES[0], new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, COPYRIGHT_LINE, new_x="LMARGIN", new_y="NEXT")
+
+    # 第 2 页起：正文（页眉/页脚由 header/footer 回调自动重复）
+    pdf.add_page()
+    pdf.set_font("simhei", size=12)
+    pdf.cell(0, 8, TITLE_L1, new_x="LMARGIN", new_y="NEXT")
+    for b in BODY_LINES:
+        pdf.cell(0, 8, b, new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, PAGE_NUM_LINES[1], new_x="LMARGIN", new_y="NEXT")
+
+    pdf.add_page()
+    pdf.set_font("simhei", size=12)
+    pdf.cell(0, 8, TITLE_L2, new_x="LMARGIN", new_y="NEXT")
+    for item in UL_ITEMS:
+        pdf.cell(0, 8, f"- {item}", new_x="LMARGIN", new_y="NEXT")
+    for i, item in enumerate(OL_ITEMS, start=1):
+        pdf.cell(0, 8, f"{i}. {item}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, PAGE_NUM_LINES[2], new_x="LMARGIN", new_y="NEXT")
+    pdf.output(path)
+
+
+def build_scanned_like_pdf(path: Path) -> None:
+    """纯图形 PDF（无文本层）—— 模拟扫描件：Tika 抽出 0 字符，结构丢失率 = 100%。"""
+    pdf = FPDF()
+    pdf.add_page()
+    # 画几个矩形当「版面」，不写任何 Tj/TJ 文本算符
+    pdf.set_fill_color(180, 180, 180)
+    pdf.rect(20, 20, 170, 12, style="F")
+    pdf.rect(20, 45, 170, 8, style="F")
+    pdf.rect(20, 60, 170, 8, style="F")
+    pdf.rect(20, 80, 80, 60, style="F")
+    pdf.rect(110, 80, 80, 60, style="F")
+    pdf.output(path)
+
+
+def build_ground_truth(path: Path) -> None:
+    """导出基准结构 / 噪声行 / 正文行 —— 数字表的唯一数据源。"""
+    import json
+
+    docx_out = {
+        "kind": "docx",
+        "headings": [TITLE_L1, TITLE_L2, TITLE_L3, "无序列表", "有序列表", "标准表"],
+        "listItems": UL_ITEMS + OL_ITEMS,
+        "tableCells": [c for row in TABLE for c in row],
+        "noiseLines": [HEADER_LINE, FOOTER_LINE, COPYRIGHT_LINE] + PAGE_NUM_LINES + TOC_LINES,
+        "bodyLines": BODY_LINES,
+    }
+    pdf_out = {
+        "kind": "pdf",
+        "headings": [TITLE_L1, TITLE_L2],
+        "listItems": UL_ITEMS + OL_ITEMS,
+        "tableCells": [],
+        "noiseLines": [HEADER_LINE, FOOTER_LINE, COPYRIGHT_LINE] + PAGE_NUM_LINES + TOC_LINES,
+        "bodyLines": BODY_LINES,
+    }
+    scanned_out = {
+        "kind": "scanned",
+        "headings": [],
+        "listItems": [],
+        "tableCells": [],
+        "noiseLines": [],
+        "bodyLines": [],
+    }
+    path.write_text(
+        json.dumps(
+            {
+                "noisy.docx": docx_out,
+                "noisy.pdf": pdf_out,
+                "scanned-like.pdf": scanned_out,
+                "structured.docx": {
+                    "kind": "docx-clean",
+                    "headings": [TITLE_L1, TITLE_L2, TITLE_L3, "无序列表", "有序列表", "标准表"],
+                    "listItems": UL_ITEMS + OL_ITEMS,
+                    "tableCells": [c for row in TABLE for c in row],
+                    "noiseLines": [],
+                    "bodyLines": BODY_LINES[:7],
+                },
+                "structured.pdf": {
+                    "kind": "pdf-clean",
+                    "headings": [TITLE_L1, TITLE_L2, TITLE_L3],
+                    "listItems": UL_ITEMS + OL_ITEMS,
+                    "tableCells": [c for row in TABLE for c in row],
+                    "noiseLines": [],
+                    "bodyLines": BODY_LINES[:7],
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     FIXTURES.mkdir(parents=True, exist_ok=True)
     docx_path = FIXTURES / "structured.docx"
@@ -252,6 +482,11 @@ def main() -> None:
     build_md(FIXTURES / "structured.md")
     # 纯字节垃圾：比 truncated 更彻底的「打不开」，用于失败原因可读性
     (FIXTURES / "garbage.bin").write_bytes(b"\x00\x01\x02 not a document \xff\xfe")
+    # 批 2：噪声夹具 + 基准结构（数字表数据源）
+    build_noisy_docx(FIXTURES / "noisy.docx")
+    build_noisy_pdf(FIXTURES / "noisy.pdf")
+    build_scanned_like_pdf(FIXTURES / "scanned-like.pdf")
+    build_ground_truth(FIXTURES / "ground-truth.json")
     for f in sorted(FIXTURES.iterdir()):
         print(f"  {f.name:20s} {f.stat().st_size:7d} bytes")
 
