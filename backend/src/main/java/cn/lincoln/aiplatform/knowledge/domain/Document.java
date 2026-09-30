@@ -77,6 +77,16 @@ public class Document {
   @Column(name = "fail_hint")
   private String failHint;
 
+  /**
+   * 解析出的 Markdown（第 6 周 · 0.2.1）。
+   *
+   * <p>★ 失败时也可能是<strong>部分内容</strong>（{@code 12 §2.1}：解析中途失败保留 handler 已缓冲的片段） —— 「解析失败 =
+   * 整篇丢弃」会让用户对着空文档猜内容。
+   */
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
+  @Column(name = "parsed_content")
+  private String parsedContent;
+
   /** 总字符数。本批恒 0，随加工链回填。 */
   @Column(name = "char_count", nullable = false)
   private long charCount;
@@ -184,6 +194,38 @@ public class Document {
     this.failHint = hint;
   }
 
+  /**
+   * 解析成功（第 6 周 · 0.2.1）—— 状态走到「待向量化」。
+   *
+   * <p>★ 成功路径要<strong>清掉上一次的失败原因</strong>， 否则界面会把旧错误挂在已恢复的文档上（与 {@code Model#markLoaded} 同一条纪律）。
+   *
+   * @param markdown 解析出的 Markdown 正文
+   */
+  public void recordParseSuccess(String markdown) {
+    this.status = DocumentStatus.PENDING_EMBEDDING;
+    this.parsedContent = markdown == null ? "" : markdown;
+    this.charCount = this.parsedContent.length();
+    this.failReason = null;
+    this.failHint = null;
+  }
+
+  /**
+   * 解析失败（第 6 周 · 0.2.1）—— 状态到「分段失败」+ 可读原因（{@code DOC-I2}）。
+   *
+   * <p>★ {@code partialMarkdown} 是解析中途已缓冲的片段，<strong>必须留下</strong>（{@code 12 §2.1}）。
+   *
+   * @param reason 可读原因（必填，不是堆栈）
+   * @param hint 下一步建议（可空）
+   * @param partialMarkdown 已解析出的部分正文（可为空串，但不许丢掉非空片段）
+   */
+  public void recordParseFailure(String reason, String hint, String partialMarkdown) {
+    recordFailure(DocumentStatus.SEGMENT_FAILED, reason, hint);
+    this.parsedContent = partialMarkdown == null ? "" : partialMarkdown;
+    if (!this.parsedContent.isEmpty()) {
+      this.charCount = this.parsedContent.length();
+    }
+  }
+
   public void markDeleted(Instant at, UUID by) {
     this.deletedAt = at;
     this.updatedBy = by;
@@ -229,6 +271,11 @@ public class Document {
 
   public String failHint() {
     return failHint;
+  }
+
+  /** 解析出的 Markdown（失败时可能是部分内容）。 */
+  public String parsedContent() {
+    return parsedContent;
   }
 
   public long charCount() {

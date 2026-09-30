@@ -24,6 +24,13 @@
     <spring-ai.version>2.0.1</spring-ai.version>
     <archunit.version>1.5.1</archunit.version>
     <spotless.version>3.10.3</spotless.version>
+    <!-- ★ Tika 版本口径（第 6 周 0.2.1 · 12 §一，已对 Maven Central 核过）：
+         - 4.0.0 目前只有 4.0.0-alpha-1，生产不引 alpha；
+         - ToMarkdownContentHandler 自 3.3.0 起在 tika-core（CHANGES: TIKA-4563），
+           javadoc 写 @since 3.2 与发布记录不符 ⇒ 以 3.3.0 为下限，不能降到 3.2；
+         - 3.3.1 是当前最新稳定版，且 tika-bom 存在，parser 模块坐标由 BOM 对齐。
+         3.x 起解析器拆成 tika-parser-*-module（2.x 是 tika-parsers 聚合包），坐标名不同。 -->
+    <tika.version>3.3.1</tika.version>
     <!-- 源码里有中文（错误文案与测试方法名），编码必须显式钉住。
          Boot parent 已经设过，这里再写一次是为了让"UTF-8"这件事在文件里可见 —— 它一旦失守，
          表现是测试名变乱码而不是编译失败，最难发现。 -->
@@ -58,6 +65,15 @@
         <groupId>org.springframework.ai</groupId>
         <artifactId>spring-ai-bom</artifactId>
         <version>${spring-ai.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <!-- ★ Tika BOM：统一 core 与三个细粒度 parser 模块的版本（12 §1.1）。
+           不引 tika-parsers-standard-package（4.0 起是 POM 聚合包，会拖 OCR/CAD/音视频）。 -->
+      <dependency>
+        <groupId>org.apache.tika</groupId>
+        <artifactId>tika-bom</artifactId>
+        <version>${tika.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -133,6 +149,32 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- ─── 文档解析（第 6 周 0.2.1 · 12 §一）：Tika 统一管线出 Markdown ───
+         ★ 精准组合 = tika-core + 三个细粒度 parser 模块（不是聚合包、也不是纯 core）：
+           - tika-core：MIME 嗅探 + ToMarkdownContentHandler（XHTML→Markdown 序列化器）
+           - tika-parser-pdf-module：PDF → PDFBox 3（内部锁定 PDFBox，不另引）
+           - tika-parser-microsoft-module：docx/doc → POI（内部锁定 POI，不另引）
+           - tika-parser-text-module：md / txt / csv + 编码检测（CharsetDetector）
+         ★ 只引 core + PDFBox/POI 自己抽文本是错的：AutoDetectParser 靠 SPI 装配 Parser，
+           没有 parser 模块时它无实现可用（12 §一）。
+         ★ 编码检测用 Tika 自带 CharsetDetector（12 §一 选型口径），不另引编码库。 -->
+    <dependency>
+      <groupId>org.apache.tika</groupId>
+      <artifactId>tika-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.tika</groupId>
+      <artifactId>tika-parser-pdf-module</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.tika</groupId>
+      <artifactId>tika-parser-microsoft-module</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.tika</groupId>
+      <artifactId>tika-parser-text-module</artifactId>
     </dependency>
 
     <!-- ─── PostgreSQL 驱动 ─── -->
