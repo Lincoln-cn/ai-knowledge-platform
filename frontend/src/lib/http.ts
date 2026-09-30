@@ -126,6 +126,12 @@ function viaHttp<T>(options: RequestOptions): Promise<T> {
     data: body,
     skipAuthRetry
   }
+  // ★ FormData（multipart 上传）必须**放掉**默认的 application/json —— 否则 boundary 不见了，
+  //   服务端的 multipart 解析器拿到 0 个 part ⇒「至少要有一份文档」。axios 对 FormData
+  //   会自己带 Content-Type（含 boundary），这里只要不挡它。
+  if (typeof FormData !== 'undefined' && body instanceof FormData) {
+    config.headers = { 'Content-Type': undefined as unknown as string }
+  }
   return client.request<ApiResult<T>>(config).then((res) => {
     // 成功包络也可能带 hint（如「空目录 + 为什么空」）—— 不能只在错误分支读
     onHint?.(res.data.hint)
