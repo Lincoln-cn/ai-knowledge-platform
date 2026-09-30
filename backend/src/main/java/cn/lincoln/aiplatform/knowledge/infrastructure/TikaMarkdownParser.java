@@ -28,6 +28,7 @@ import org.xml.sax.SAXException;
  * 必须<strong>可读</strong> （「PDF 加密，无法解析」这种），不是堆栈或异常类名； {@link ParseResult#markdown()} 保留 handler
  * 已缓冲的片段，不整篇丢。
  */
+@org.springframework.stereotype.Component
 public class TikaMarkdownParser {
 
   /** 扩展名白名单（{@code 09 §10.2 #2}：改扩展名绕过 ⇒ MIME 嗅探不匹配即拒）。 与批 1 解析范围对齐：DOCX / PDF / TXT / MD。 */

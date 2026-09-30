@@ -43,10 +43,15 @@ public class DocumentService {
 
   private final DocumentRepository documents;
   private final KnowledgeBaseService knowledgeBases;
+  private final cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser parser;
 
-  public DocumentService(DocumentRepository documents, KnowledgeBaseService knowledgeBases) {
+  public DocumentService(
+      DocumentRepository documents,
+      KnowledgeBaseService knowledgeBases,
+      cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser parser) {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
+    this.parser = parser;
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -78,6 +83,7 @@ public class DocumentService {
    * <p>★ 库不可见 ⇒ <strong>404</strong>（写也一样）—— 与 {@link #list} 同一判定。
    *
    * @param names 文件名清单（一批文档的显示名）；空清单 ⇒ 400
+   * @param contents 与 {@code names} 等长的文件字节（multipart 上传时给）；null 或不给 ⇒ 只登记元数据，不解析
    * @param docType 文种（批次级）★ 必填
    * @param department 责任部门（批次级）★ 必填
    * @param classification 密级（批次级）★ 必填
@@ -86,6 +92,7 @@ public class DocumentService {
   public List<DocumentView> register(
       UUID kbId,
       List<String> names,
+      List<byte[]> contents,
       String docType,
       String department,
       ClassificationLevel classification,
@@ -123,7 +130,8 @@ public class DocumentService {
     }
 
     List<DocumentView> created = new ArrayList<>();
-    for (String name : names) {
+    for (int i = 0; i < names.size(); i++) {
+      String name = names.get(i);
       if (name == null || name.isBlank()) {
         throw new BusinessException(ErrorCode.BAD_REQUEST, "文档名称不能为空");
       }
@@ -137,6 +145,16 @@ public class DocumentService {
               department,
               classification,
               currentUserId);
+      // ★ 带了文件字节就**建档即解析**：成功 ⇒ 待向量化 + parsedContent；
+      //   失败 ⇒ 分段失败 + 可读原因 + 已缓冲部分（12 §2.1）。不给字节 ⇒ 只登记元数据。
+      if (contents != null && i < contents.size() && contents.get(i) != null) {
+        var parsed = parser.parse(contents.get(i), name);
+        if (parsed.success()) {
+          document.recordParseSuccess(parsed.markdown());
+        } else {
+          document.recordParseFailure(parsed.failReason(), "修复文件后重新上传，或改用其它格式。", parsed.markdown());
+        }
+      }
       created.add(DocumentView.from(documents.save(document)));
     }
     return created;

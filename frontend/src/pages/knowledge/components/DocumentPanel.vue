@@ -61,7 +61,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="320" fixed="right">
+        <el-table-column label="操作" width="400" fixed="right">
           <template #default="{ row }">
             <!-- 行内进度：向量化中时展示 processed/total，不是百分比 -->
             <span v-if="row.status === 'EMBEDDING'" class="row-progress">
@@ -97,6 +97,13 @@
               @click="emit('gotoSegments', row.id)"
             >查看分段</el-button>
 
+            <!-- 解析结果：所有文档都能看 ——
+                 待解析时是空态（「尚未解析」），失败态展示 failReason + 部分正文 -->
+            <el-button
+              link size="small"
+              @click="openParseResult(row)"
+            >解析结果</el-button>
+
             <el-button v-if="canManage" link size="small" @click="toggleEnabled(row)">
               {{ row.enabled ? '停用' : '启用' }}
             </el-button>
@@ -129,6 +136,7 @@
     </div>
 
     <UploadDialog ref="uploadRef" :kb-id="kbId" @uploaded="onUploaded" />
+    <ParseResultDialog ref="parseResultRef" />
   </div>
 </template>
 
@@ -143,6 +151,7 @@ import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 import GlobalProgress from './GlobalProgress.vue'
 import UploadDialog from './UploadDialog.vue'
+import ParseResultDialog from './ParseResultDialog.vue'
 import { DOCUMENT_STATUS_LABELS, labelOf } from '@/constants/labels'
 
 const props = defineProps<{ kbId: string }>()
@@ -329,8 +338,12 @@ onBeforeUnmount(() => {
 
 /* ── 操作 ── */
 const uploadRef = ref<InstanceType<typeof UploadDialog>>()
+const parseResultRef = ref<InstanceType<typeof ParseResultDialog>>()
 
 const openUpload = () => uploadRef.value?.open()
+
+/** 打开「解析结果」弹窗：渲染 parsedContent，失败态一并展示 failReason / failHint 原文 */
+const openParseResult = (row: DocumentItem) => parseResultRef.value?.open(row)
 
 const onUploaded = async () => {
   await refreshAll()

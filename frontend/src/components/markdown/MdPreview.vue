@@ -1,7 +1,13 @@
 <template>
   <div class="md-preview" @click="onClick">
     <template v-for="(block, i) in blocks" :key="i">
-      <p v-if="block.type === 'p'" class="md-p" v-html="block.html" />
+      <component
+        :is="headingTag(block)"
+        v-if="block.type === 'h'"
+        class="md-h"
+        v-html="block.html"
+      />
+      <p v-else-if="block.type === 'p'" class="md-p" v-html="block.html" />
       <ul v-else-if="block.type === 'ul'" class="md-ul">
         <li v-for="(item, j) in block.items" :key="j" v-html="item" />
       </ul>
@@ -9,6 +15,18 @@
         <li v-for="(item, j) in block.items" :key="j" v-html="item" />
       </ol>
       <pre v-else-if="block.type === 'code'" class="md-code"><code :class="block.lang ? 'lang-' + block.lang : ''" v-html="block.html" /></pre>
+      <table v-else-if="block.type === 'table'" class="md-table">
+        <thead>
+          <tr>
+            <th v-for="(cell, j) in block.header" :key="j" v-html="cell" />
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(row, r) in block.rows" :key="r">
+            <td v-for="(cell, c) in row" :key="c" v-html="cell" />
+          </tr>
+        </tbody>
+      </table>
     </template>
   </div>
 </template>
@@ -43,6 +61,12 @@ const blocks = computed(() =>
   parseMarkdown(props.source, { citations: props.citations } satisfies MdRenderOptions)
 )
 
+/** 标题级别夹到 [1,6]，避免 level 越界产生非法标签 */
+function headingTag(block: { type: string; level?: number }): string {
+  const lv = Math.min(6, Math.max(1, block.level ?? 1))
+  return `h${lv}`
+}
+
 function onClick(e: MouseEvent) {
   if (!props.citations) return
   const n = citeIndexFromEvent(e)
@@ -67,6 +91,26 @@ function onClick(e: MouseEvent) {
   margin-bottom: 0;
 }
 
+/* 标题：沿用设计令牌，中文字距为 0（中文标题字距纪律） */
+.md-h {
+  margin: var(--space-sm) 0 var(--space-xs);
+  font-weight: 600;
+  line-height: var(--leading-tight);
+  color: var(--color-ink);
+  letter-spacing: 0;
+}
+
+.md-h:first-child {
+  margin-top: 0;
+}
+
+h1.md-h { font-size: var(--text-lg); }
+h2.md-h { font-size: var(--text-md); }
+h3.md-h { font-size: var(--text-sm); }
+h4.md-h,
+h5.md-h,
+h6.md-h { font-size: var(--text-sm); }
+
 .md-ul,
 .md-ol {
   margin: 0 0 var(--space-xs);
@@ -76,6 +120,29 @@ function onClick(e: MouseEvent) {
 .md-ul :deep(li),
 .md-ol :deep(li) {
   margin: var(--space-3xs) 0;
+}
+
+/* 表格：发丝线分面，不靠阴影 */
+.md-table {
+  margin: 0 0 var(--space-xs);
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--text-2xs);
+  line-height: var(--leading-body);
+}
+
+.md-table th,
+.md-table td {
+  border: 1px solid var(--color-rule);
+  padding: var(--space-2xs) var(--space-xs);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md-table th {
+  background: var(--color-sunken);
+  font-weight: 600;
+  color: var(--color-ink);
 }
 
 .md-code {

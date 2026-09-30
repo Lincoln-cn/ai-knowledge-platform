@@ -2,9 +2,13 @@
 
 export type MdBlock =
   | { type: 'p'; html: string }
+  /** ATX 标题：`#` ~ `######`，level ∈ [1,6] */
+  | { type: 'h'; level: number; html: string }
   | { type: 'ul'; items: string[] }
   | { type: 'ol'; items: string[] }
   | { type: 'code'; html: string; lang: string }
+  /** GFM 管道表格：header + 行数据；cell 已过 renderInline（转义 + 行内语法） */
+  | { type: 'table'; header: string[]; rows: string[][] }
 
 /** MdRenderer 把源文本切成的段落块 */
 export type MdSection =

@@ -91,6 +91,7 @@ public class DocumentController {
         documentService.register(
             kbId,
             body.names(),
+            null,
             body.docType(),
             body.department(),
             body.classification(),
@@ -117,6 +118,42 @@ public class DocumentController {
    * @param department 责任部门 ★ <b>必填</b>
    * @param classification 密级 ★ <b>必填</b> —— 且必须 ≤ 库的 ceiling
    */
+  /**
+   * ★ 带文件字节的建档（契约的 {@code uploadDocuments}）：multipart 上传 ⇒ <strong>建档即解析</strong>。
+   *
+   * <p>与 JSON 形态（{@link #register}）共用同一套校验与同一套解析 —— 只是多了字节，于是能真的把 DOCX/PDF 解析成 Markdown（第 6 周演示判据）。
+   */
+  @PostMapping(
+      value = "/{kbId}/documents",
+      consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+  @PreAuthorize("hasAuthority('knowledge:document:upload')")
+  public ApiResponse<List<DocumentView>> registerFiles(
+      @PathVariable UUID kbId,
+      @org.springframework.web.bind.annotation.RequestParam("files")
+          List<org.springframework.web.multipart.MultipartFile> files,
+      @org.springframework.web.bind.annotation.RequestParam("docType") String docType,
+      @org.springframework.web.bind.annotation.RequestParam("department") String department,
+      @org.springframework.web.bind.annotation.RequestParam("classification")
+          ClassificationLevel classification,
+      @AuthenticationPrincipal Jwt jwt)
+      throws java.io.IOException {
+    java.util.List<String> names = new java.util.ArrayList<>();
+    java.util.List<byte[]> contents = new java.util.ArrayList<>();
+    for (org.springframework.web.multipart.MultipartFile file : files) {
+      names.add(file.getOriginalFilename());
+      contents.add(file.getBytes());
+    }
+    return ApiResponse.ok(
+        documentService.register(
+            kbId,
+            names,
+            contents,
+            docType,
+            department,
+            classification,
+            UUID.fromString(jwt.getSubject())));
+  }
+
   record RegisterDocumentsBody(
       List<String> names,
       List<String> uploadIds,

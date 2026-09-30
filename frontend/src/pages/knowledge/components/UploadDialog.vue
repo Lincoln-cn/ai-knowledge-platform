@@ -76,13 +76,13 @@ import { ElMessage, type FormInstance, type FormRules, type UploadFile, type Upl
 import { UploadFilled } from '@element-plus/icons-vue'
 import { ingestionApi } from '@/api'
 import { ApiError } from '@/api/types'
-import type { ImportDocumentsBody, UploadPolicy, UploadReceipt, DocumentItem } from '@/api/ingestion'
+import type { UploadPolicy, UploadReceipt, DocumentItem } from '@/api/ingestion'
+import type { ClassificationLevel } from '@/api/types'
 import {
   CLASSIFICATION_LEVEL_LABELS,
   CLASSIFICATION_LEVEL_VALUES,
   labelOf
 } from '@/constants/labels'
-import type { ClassificationLevel } from '@/api/types'
 
 const props = defineProps<{ kbId: string }>()
 const emit = defineEmits<{ uploaded: [] }>()
@@ -194,30 +194,17 @@ const submit = async () => {
   submitError.value = ''
   submitHint.value = ''
   try {
-    // 走暂存 + 导入，拿到部分失败回执。真栈若无暂存端点则退回文件名清单建档。
-    let uploadIds: string[] = []
-    try {
-      const staged = await ingestionApi.stageUploads(props.kbId, files.value)
-      uploadIds = staged.uploadIds
-    } catch {
-      uploadIds = []
-    }
-    // names：轻量建档（当前后端唯一消费的建档入参）。uploadIds 保留但后端尚未消费
-    // —— 同时给时以 names 为准，只传 uploadIds 会被 400 拒绝（禁止静默忽略）。
-    const body = {
-      uploadIds: uploadIds.length ? uploadIds : undefined,
-      names: files.value.map((f) => f.name),
+    // ★ 走 multipart 上传（契约 uploadDocuments）：带上文件字节 ⇒ 后端**建档即解析**，
+    //   解析出的 Markdown 进 parsedContent、失败态带可读原因。
+    //   （旧的 stageUploads / importDocuments 形态只登记元数据、不带字节，解析无从发生。）
+    const raw = (await ingestionApi.uploadDocuments(props.kbId, files.value, {
       docType: meta.docType.trim(),
       department: meta.department.trim(),
-      classification: meta.classification
-    } as ImportDocumentsBody
-    const raw = (await ingestionApi.importDocuments(props.kbId, body)) as unknown as
-      | UploadReceipt
-      | DocumentItem[]
-    // 真栈回 DocumentItem[]（建档最小形态）；mock 回 UploadReceipt —— 两种都收
-    const receipt: UploadReceipt = Array.isArray(raw)
-      ? { accepted: raw, rejected: [] }
-      : raw
+      // ★ metaValid 已保证三项必填（表单 rules），此处分类必非空串 —— 类型上仍是 '' | Level
+      classification: meta.classification as ClassificationLevel
+    })) as unknown as UploadReceipt | DocumentItem[]
+    // 真栈回 DocumentItem[]；mock 若回 UploadReceipt 也收 —— 两种都归一
+    const receipt: UploadReceipt = Array.isArray(raw) ? { accepted: raw, rejected: [] } : raw
     if (receipt.rejected.length) {
       rejected.value = receipt.rejected
       ElMessage.warning(`成功 ${receipt.accepted.length} 个，失败 ${receipt.rejected.length} 个`)

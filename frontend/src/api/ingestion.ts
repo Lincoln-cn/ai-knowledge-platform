@@ -42,6 +42,12 @@ export interface DocumentItem {
   department?: string
   /** 密级。★ 建档必填三项之一，且必须 ≤ 所属库的 `maxClassification`（ceiling，13 §6） */
   classification?: ClassificationLevel
+  /**
+   * 解析出的 Markdown 正文（V14 列，0.2.1）。★ 冻结契约只加可选字段，故 `?`。
+   * 失败时可能是**部分内容**（handler 已缓冲片段）—— 与 `failReason` 并存，
+   * 不许把「解析失败」做成整篇丢弃（12 §2.1）。
+   */
+  parsedContent?: string
 }
 
 /** 库级进度聚合：阶段 + 计数，用于页面顶部进度条 */
@@ -190,9 +196,20 @@ export const listDocuments = (kbId: string, query: DocumentQuery = {}) =>
   })
 
 /** 上传文档。走 multipart，与其它接口共用同一出口 */
-export const uploadDocuments = (kbId: string, files: File[]) => {
+export const uploadDocuments = (
+  kbId: string,
+  files: File[],
+  meta?: { docType: string; department: string; classification: ClassificationLevel }
+) => {
   const form = new FormData()
   files.forEach((file) => form.append('files', file))
+  // ★ 建档必填三项随文件一起走（multipart 的普通字段）—— 后端**建档即解析**，
+  //   解析出的 Markdown 进 parsedContent；缺任一仍会被后端 400 拒（前端先拦一道）。
+  if (meta) {
+    form.append('docType', meta.docType)
+    form.append('department', meta.department)
+    form.append('classification', meta.classification)
+  }
   return request<DocumentItem[]>({
     method: 'POST',
     url: '/knowledge-bases/:kbId/documents',

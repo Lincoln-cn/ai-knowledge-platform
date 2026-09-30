@@ -192,6 +192,8 @@ function applySegmentationPlan(doc: DocumentItem, plan: SegmentationPlanItem[]) 
   doc.processedSegments = 0
   doc.status = 'PENDING_EMBEDDING'
   doc.charCount = plan.reduce((s, p) => s + p.content.length, 0)
+  // 用户确认的切分计划 = 解析正文（预览里看到的即解析产物）
+  doc.parsedContent = plan.map((p) => (p.title ? `## ${p.title}\n\n` : '') + p.content).join('\n\n')
   for (const p of plan) {
     const seg: Segment = {
       id: `seg_${doc.id}_${p.ordinal}`,
@@ -317,6 +319,8 @@ const runParse = (doc: DocumentItem, opts?: { failSplit?: boolean }) => {
   doc.status = 'PENDING_PARSE'
   doc.failReason = null
   doc.failHint = null
+  // 解析开始前清空上次正文 —— 「重试」后不能把旧结果冒充新解析
+  doc.parsedContent = ''
 
   setTimeout(() => {
     doc.status = 'SEGMENTING'
@@ -329,12 +333,37 @@ const runParse = (doc: DocumentItem, opts?: { failSplit?: boolean }) => {
         doc.processedSegments = 0
         doc.failReason = '该 PDF 为扫描件，未检测到文本层，无法提取内容。'
         doc.failHint = '建议：转为可检索 PDF 或改用 Markdown 格式后重新上传。'
+        // 扫描件：解析正文为空串（与 V14 口径一致，「连半个字都没解出来」）
+        doc.parsedContent = ''
+        doc.charCount = 0
       } else {
         // 按文件大小粗算分段数，制造真实感
         const count = Math.max(3, Math.round(doc.charCount / 450))
         doc.segmentCount = count
         doc.processedSegments = 0
         doc.status = 'PENDING_EMBEDDING'
+        // ★ 解析成功：写入带标题/列表/表格的 Markdown，供「解析结果」按结构渲染
+        doc.parsedContent = [
+          `# ${doc.name.replace(/\.[^.]+$/, '')}`,
+          '',
+          '## 正文摘录',
+          '',
+          `这是从「${doc.name}」解析出的正文，用于验证解析结果视图的结构化渲染。`,
+          '',
+          '### 要点',
+          '',
+          '- 要点一：解析链产物是 Markdown',
+          '- 要点二：标题 / 列表 / 表格按结构渲染',
+          '',
+          '| 项目 | 说明 |',
+          '| --- | --- |',
+          '| 解析器 | Tika → Markdown |',
+          '| 展示 | MdPreview 结构渲染 |',
+          '',
+          '1. 上传文档',
+          '2. 查看解析结果',
+          '3. 确认后进入分段'
+        ].join('\n')
         for (let i = 0; i < Math.min(count, 4); i += 1) {
           const seg: Segment = {
             id: `seg_${doc.id}_${i + 1}`,
@@ -498,6 +527,7 @@ export const ingestionRoutes: MockRoute[] = [
             enabled: true,
             failReason: null,
             failHint: null,
+            parsedContent: '',
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             docType: meta.docType,
@@ -546,6 +576,7 @@ export const ingestionRoutes: MockRoute[] = [
           enabled: true,
           failReason: null,
           failHint: null,
+          parsedContent: '',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }

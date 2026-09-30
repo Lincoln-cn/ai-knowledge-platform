@@ -18,6 +18,37 @@ import { kbSharedWithChenjun, kbSharedWithUserRole } from './grants'
 
 const now = '2026-02-13T11:18:37Z'
 
+/**
+ * 演示用解析正文：故意覆盖 标题 / 列表 / 表格 三种块结构 ——
+ * 「解析结果按结构渲染」是 0.2.1 批 3 的演示判据，夹具里必须真有结构可看。
+ */
+const PARSED_SAMPLE = `# 采购管理制度
+
+## 第一章 总则
+
+为规范合同管理，防范经营风险，保障公司合法权益，根据国家有关法律法规及公司章程，制定本制度。
+
+## 第二章 采购流程
+
+### 2.1 供应商准入
+
+- 供应商应具备独立法人资格
+- 注册资本不少于人民币一百万元
+- 近三年无重大违法记录
+
+### 2.2 验收标准
+
+| 项目 | 标准 | 责任部门 |
+| --- | --- | --- |
+| 外观检查 | 无破损、无污渍 | 采购部 |
+| 数量核对 | 与合同一致 | 仓储部 |
+| 质量抽检 | 合格率 ≥ 97% | 质量部 |
+
+1. 验收不合格的，应在三个工作日内书面通知供应商
+2. 可返工的限期返工，不可返工的作退货或索赔处理
+3. 验收记录归档保存不少于十年
+`
+
 export const knowledgeCategories: KnowledgeCategory[] = [
   { id: 'cat1', name: '制度规范', baseCount: 2 },
   { id: 'cat2', name: '产品资料', baseCount: 1 },
@@ -123,6 +154,8 @@ export const documents: DocumentItem[] = [
     enabled: true,
     failReason: null,
     failHint: null,
+    // ★ 解析结果带标题/列表/表格 —— 演示判据：Markdown 要按结构渲染
+    parsedContent: PARSED_SAMPLE,
     createdAt: '2026-02-01T09:10:00Z',
     updatedAt: '2026-02-01T09:25:00Z'
   },
@@ -138,6 +171,7 @@ export const documents: DocumentItem[] = [
     enabled: true,
     failReason: null,
     failHint: null,
+    parsedContent: '# 合同模板汇总\n\n## 通用条款\n\n- 标的、数量、价款须明确\n- 履行期限不得空白\n\n| 条款 | 要求 |\n| --- | --- |\n| 付款 | 对公账户 |\n| 违约 | 约定计算方式 |\n',
     createdAt: '2026-02-01T09:10:00Z',
     updatedAt: now
   },
@@ -151,8 +185,11 @@ export const documents: DocumentItem[] = [
     processedSegments: 0,
     charCount: 0,
     enabled: true,
+    // ★ 失败态：failReason + failHint 必须原文可见（0 字符/扫描件提示）
     failReason: '该 PDF 为扫描件，未检测到文本层，无法提取内容。',
     failHint: '建议：转为可检索 PDF 或改用 Markdown 格式后重新上传。',
+    // 扫描件无文本层 ⇒ 解析正文为空串（V14 口径：「连半个字都没解出来」）
+    parsedContent: '',
     createdAt: '2026-02-01T09:10:00Z',
     updatedAt: '2026-02-01T09:12:00Z'
   },
@@ -168,6 +205,7 @@ export const documents: DocumentItem[] = [
     enabled: true,
     failReason: null,
     failHint: null,
+    parsedContent: '# 供应商准入条件\n\n- 独立法人资格\n- 注册资本不少于一百万元\n- 近三年无重大违法记录\n',
     createdAt: '2026-02-01T09:10:00Z',
     updatedAt: '2026-02-01T09:18:00Z'
   },
@@ -183,6 +221,7 @@ export const documents: DocumentItem[] = [
     enabled: true,
     failReason: null,
     failHint: null,
+    parsedContent: '# 验收标准摘录\n\n1. 按百分之五比例抽样\n2. 批量不足一百件至少抽样五件\n\n| 场景 | 处置 |\n| --- | --- |\n| 抽样不合格率 > 3% | 整批拒收 |\n',
     createdAt: '2026-02-03T14:30:00Z',
     updatedAt: '2026-02-03T14:40:00Z'
   },
@@ -198,6 +237,8 @@ export const documents: DocumentItem[] = [
     enabled: true,
     failReason: '向量服务连接超时（3 次重试均失败）。',
     failHint: '建议：检查向量模型是否已加载，然后点「重试」从断点继续。',
+    // 向量化失败不影响解析结果 —— 正文仍在，可读
+    parsedContent: '# 不合格品处置流程\n\n- 三个工作日内书面通知供应商\n- 可返工限期返工\n- 不可返工作退货或索赔\n',
     createdAt: '2026-02-03T14:30:00Z',
     updatedAt: '2026-02-03T14:50:00Z'
   },
@@ -213,6 +254,7 @@ export const documents: DocumentItem[] = [
     enabled: true,
     failReason: null,
     failHint: null,
+    parsedContent: '# 产品白皮书\n\n## 产品定位\n\n面向企业内网部署的知识助理平台。\n\n| 能力 | 说明 |\n| --- | --- |\n| 检索 | 向量/全文/混合 |\n| 问答 | 带引用 |\n',
     createdAt: '2026-02-05T10:40:00Z',
     updatedAt: '2026-02-05T10:55:00Z'
   },
@@ -228,6 +270,7 @@ export const documents: DocumentItem[] = [
     enabled: true,
     failReason: null,
     failHint: null,
+    parsedContent: '# 部署指南\n\n1. 准备 JDK 21\n2. 配置数据库\n3. 启动服务\n',
     createdAt: now,
     updatedAt: now
   },
@@ -243,6 +286,8 @@ export const documents: DocumentItem[] = [
     enabled: true,
     failReason: null,
     failHint: null,
+    // 待解析：尚无解析结果
+    parsedContent: '',
     createdAt: now,
     updatedAt: now
   }

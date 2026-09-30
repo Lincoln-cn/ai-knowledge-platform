@@ -1,7 +1,11 @@
 /**
  * 轻量 Markdown 渲染（先转义再拼标签）。
- * 支持：段落 / 有序·无序列表 / **粗体** / `行内代码` / ```代码块``` / 换行 / 可选引注 [N]。
+ * 支持：标题 # ~ ###### / 段落 / 有序·无序列表 / 表格（GFM 管道）/ **粗体** / `行内代码` / ```代码块``` / 换行 / 可选引注 [N]。
  * 与会话模块 AnswerBody.vue 的引注 DOM 口径一致。
+ *
+ * ★ 选型理由（0.2.1 批 3）：项目已有 `components/markdown/` 轻量渲染器（先 escape 再拼标签，
+ * 从根上防 v-html 注入），本批只需补「标题 / 表格」两种块级语法即可满足「解析结果按结构渲染」，
+ * 没有引入 `marked` 的必要 —— 新依赖会扩大供应链面，且与现有引注/转义口径要再对齐一遍。
  */
 import type { MdBlock, MdRenderOptions, MdSection } from './types'
 
@@ -32,7 +36,7 @@ export function renderInline(raw: string, options: MdRenderOptions = {}): string
 
 /**
  * 把 Markdown 文本解析为块列表。
- * 空行分段；单换行渲染为 <br>；``` 围栏为代码块。
+ * 空行分段；单换行渲染为 <br>；``` 围栏为代码块；# 标题；| 管道表格。
  */
 export function parseMarkdown(text: string, options: MdRenderOptions = {}): MdBlock[] {
   const src = text || ''
@@ -68,7 +72,8 @@ export function parseMarkdown(text: string, options: MdRenderOptions = {}): MdBl
     flushOl()
   }
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!
     // 代码块围栏
     const fence = /^```(\S*)\s*$/.exec(line)
     if (fence) {
@@ -92,6 +97,42 @@ export function parseMarkdown(text: string, options: MdRenderOptions = {}): MdBl
     if (!trimmed) {
       flushAll()
       continue
+    }
+
+    // ATX 标题：# ~ ######（必须独占一行，# 后至少一个空格）
+    const hMatch = /^(#{1,6})\s+(.*)$/.exec(trimmed)
+    if (hMatch) {
+      flushAll()
+      const level = hMatch[1]!.length
+      blocks.push({ type: 'h', level, html: renderInline(hMatch[2]!, options) })
+      continue
+    }
+
+    // GFM 管道表格：当前行是 | 开头，且下一行是分隔行 |---|---|
+    if (trimmed.startsWith('|') && i + 1 < lines.length) {
+      const sep = lines[i + 1]!.trim()
+      if (/^\|[\s:|-]+\|$/.test(sep)) {
+        flushAll()
+        const parseRow = (raw: string): string[] =>
+          raw
+            .trim()
+            .replace(/^\|/, '')
+            .replace(/\|$/, '')
+            .split('|')
+            .map((c) => renderInline(c.trim(), options))
+        const header = parseRow(trimmed)
+        const rows: string[][] = []
+        i += 2 // 跳过表头 + 分隔行
+        while (i < lines.length) {
+          const bodyLine = lines[i]!.trim()
+          if (!bodyLine.startsWith('|')) break
+          rows.push(parseRow(bodyLine))
+          i += 1
+        }
+        i -= 1 // for 循环还会 +1
+        blocks.push({ type: 'table', header, rows })
+        continue
+      }
     }
 
     const ulMatch = /^[-*]\s+(.*)$/.exec(trimmed)

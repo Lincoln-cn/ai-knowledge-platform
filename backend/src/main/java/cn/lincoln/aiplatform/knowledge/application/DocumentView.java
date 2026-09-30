@@ -28,7 +28,8 @@ public record DocumentView(
     Instant updatedAt,
     String docType,
     String department,
-    ClassificationLevel classification) {
+    ClassificationLevel classification,
+    String parsedContent) {
 
   /** 契约 {@code DocumentStatus} 的出网形态 —— 与领域枚举同名，避免多一层映射。 */
   public enum DocumentStatusView {
@@ -58,6 +59,7 @@ public record DocumentView(
         document.updatedAt(),
         document.docType(),
         document.department(),
-        document.classification());
+        document.classification(),
+        document.parsedContent());
   }
 }
