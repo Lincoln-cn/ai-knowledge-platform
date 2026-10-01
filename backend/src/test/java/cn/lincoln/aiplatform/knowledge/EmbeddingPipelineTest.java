@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -69,6 +71,86 @@ class EmbeddingPipelineTest {
     assumeThat(reachable()).as("桩服务不在 " + STUB_API_BASE + " ⇒ 跳过").isTrue();
   }
 
+  // ────────────────────────── 库级进度 / 重试 / 重新向量化 ──────────────────────────
+
+  /**
+   * ★ 库级进度必须与库里的状态一致，且全部完成后 {@code running=false}（前端据此停止轮询）。
+   *
+   * <p>★ 「等用户点开始向量化」的 {@code PENDING_EMBEDDING} <strong>不算在跑</strong> ——
+   * 算进去的话前端会一直轮询一个不会变化的数字（{@code 03 §3.4}：全部完成即停）。
+   */
+  @Test
+  void 库级进度与库里的状态一致() throws Exception {
+    String admin = token("admin", "admin");
+    String kbId = createKb(admin);
+    String docId = uploadDocx(admin, kbId, "structured.docx");
+
+    JsonNode before = progress(admin, kbId);
+    assertThat(before.get("total").asInt()).isEqualTo(1);
+    assertThat(before.get("done").asInt()).isZero();
+    assertThat(before.get("stages").toString()).contains("PENDING_EMBEDDING");
+    assertThat(before.get("running").asBoolean()).as("等用户点开始向量化不算「在跑」").isFalse();
+
+    post("/api/v1/documents/" + docId + "/embedding", null, admin);
+    assertThat(waitForTerminalStatus(docId, 60)).isEqualTo("SUCCEEDED");
+
+    JsonNode after = progress(admin, kbId);
+    assertThat(after.get("done").asInt()).as("已完成数来自库里的状态").isEqualTo(1);
+    assertThat(after.get("stages").toString()).contains("SUCCEEDED");
+    assertThat(after.get("running").asBoolean()).as("全部完成 ⇒ 前端该停轮询").isFalse();
+    assertThat(after.get("failed").asInt()).isZero();
+  }
+
+  /** ★ 重新向量化：分段要退回待向量化并真的重算（否则「一个都不做」却显示在跑）。 */
+  @Test
+  void 重新向量化会把分段退回待向量化并重算() throws Exception {
+    String admin = token("admin", "admin");
+    String kbId = createKb(admin);
+    String docId = uploadDocx(admin, kbId, "structured.docx");
+
+    post("/api/v1/documents/" + docId + "/embedding", null, admin);
+    assertThat(waitForTerminalStatus(docId, 60)).isEqualTo("SUCCEEDED");
+    int segments = segmentCount(docId);
+
+    HttpResponse<String> res = post("/api/v1/documents/" + docId + "/reembed", null, admin);
+    assertThat(res.statusCode()).as("重新向量化：" + res.body()).isEqualTo(200);
+
+    assertThat(waitForTerminalStatus(docId, 60)).isEqualTo("SUCCEEDED");
+    assertThat(processed(docId)).as("重算后进度必须再次走满").isEqualTo(segments);
+    assertThat(vectorCount(docId)).as("向量条数不该翻倍（幂等 upsert）").isEqualTo(segments);
+  }
+
+  /**
+   * ★ 失败文档的重试按<strong>阶段</strong>分流（{@code 03 §3.5}）： 分段失败需要原始文件 ⇒
+   * 如实拒绝并说清下一步，而不是假装重试（那会让用户反复点、状态不变）。
+   */
+  @Test
+  void 分段失败的文档重试如实拒绝() throws Exception {
+    String admin = token("admin", "admin");
+    String kbId = createKb(admin);
+    // 空文档 ⇒ 「0 字符 ≠ 成功」（0.2.1 的 DOC-I2）⇒ SEGMENT_FAILED
+    String badDoc = uploadDocx(admin, kbId, "empty.docx");
+    assertThat(waitForTerminalStatus(badDoc, 30)).isEqualTo("SEGMENT_FAILED");
+
+    HttpResponse<String> res = post("/api/v1/documents/" + badDoc + "/retry", null, admin);
+    assertThat(res.statusCode()).isEqualTo(400);
+    assertThat(res.body()).as("要说清「为什么不给重试」以及「下一步做什么」").contains("原始文件").contains("重新上传");
+  }
+
+  /** 已完成的文档重试 ⇒ 明确拒绝（不是静默重跑一遍）。 */
+  @Test
+  void 已完成的文档重试被拒() throws Exception {
+    String admin = token("admin", "admin");
+    String kbId = createKb(admin);
+    String docId = uploadDocx(admin, kbId, "structured.docx");
+    post("/api/v1/documents/" + docId + "/embedding", null, admin);
+    assertThat(waitForTerminalStatus(docId, 60)).isEqualTo("SUCCEEDED");
+
+    HttpResponse<String> res = post("/api/v1/documents/" + docId + "/retry", null, admin);
+    assertThat(res.statusCode()).isEqualTo(400);
+    assertThat(res.body()).contains("无需重试");
+  }
+
   // ────────────────────────── 主链路 ──────────────────────────
 
   /** ★ 上传真实 DOCX → 分块 → 开始向量化 → 库里看到「全部完成 + 每段都有向量」。 */
@@ -76,7 +158,7 @@ class EmbeddingPipelineTest {
   void 开始向量化后库里能看到完成的进度与向量() throws Exception {
     String admin = token("admin", "admin");
     String kbId = createKb(admin);
-    String docId = uploadDocx(admin, kbId);
+    String docId = uploadDocx(admin, kbId, "structured.docx");
 
     int segmentCount = segmentCount(docId);
     assertThat(segmentCount).as("夹具前提：文档必须切出多段").isGreaterThan(1);
@@ -101,7 +183,7 @@ class EmbeddingPipelineTest {
   void 写入的向量必须精确对应那一段文本() throws Exception {
     String admin = token("admin", "admin");
     String kbId = createKb(admin);
-    String docId = uploadDocx(admin, kbId);
+    String docId = uploadDocx(admin, kbId, "structured.docx");
     String modelId = modelIdOf(kbId);
 
     post("/api/v1/documents/" + docId + "/embedding", null, admin);
@@ -124,7 +206,7 @@ class EmbeddingPipelineTest {
   void 重复点击开始向量化被可读拒绝() throws Exception {
     String admin = token("admin", "admin");
     String kbId = createKb(admin);
-    String docId = uploadDocx(admin, kbId);
+    String docId = uploadDocx(admin, kbId, "structured.docx");
 
     assertThat(post("/api/v1/documents/" + docId + "/embedding", null, admin).statusCode())
         .isEqualTo(200);
@@ -172,9 +254,9 @@ class EmbeddingPipelineTest {
   }
 
   /** 上传真实 DOCX（multipart）—— 建档即解析 + 入库即分块。 */
-  private String uploadDocx(String token, String kbId) throws Exception {
+  private String uploadDocx(String token, String kbId, String fixture) throws Exception {
     byte[] bytes;
-    try (InputStream in = getClass().getResourceAsStream("/fixtures/structured.docx")) {
+    try (InputStream in = getClass().getResourceAsStream("/fixtures/" + fixture)) {
       assertThat(in).as("夹具不在 classpath").isNotNull();
       bytes = in.readAllBytes();
     }
@@ -188,9 +270,9 @@ class EmbeddingPipelineTest {
               .getBytes(StandardCharsets.UTF_8));
     }
     buf.write(
-        ("--%s\r\nContent-Disposition: form-data; name=\"files\"; filename=\"structured.docx\"\r\n"
+        ("--%s\r\nContent-Disposition: form-data; name=\"files\"; filename=\"%s\"\r\n"
                 + "Content-Type: application/octet-stream\r\n\r\n")
-            .formatted(boundary)
+            .formatted(boundary, fixture)
             .getBytes(StandardCharsets.UTF_8));
     buf.write(bytes);
     buf.write("\r\n".getBytes(StandardCharsets.UTF_8));
@@ -218,6 +300,14 @@ class EmbeddingPipelineTest {
 
   private HttpResponse<String> post(String path, String body, String bearer) throws Exception {
     return send("POST", path, body, bearer);
+  }
+
+  /** 读库级进度（契约 {@code getIngestionProgress}）并把 {@code data} 取出来。 */
+  private JsonNode progress(String token, String kbId) throws Exception {
+    HttpResponse<String> res =
+        send("GET", "/api/v1/knowledge-bases/" + kbId + "/ingestion-progress", null, token);
+    assertThat(res.statusCode()).as("读进度失败：" + res.body()).isEqualTo(200);
+    return new ObjectMapper().readTree(res.body()).get("data");
   }
 
   private HttpResponse<String> send(String method, String path, String body, String bearer) {

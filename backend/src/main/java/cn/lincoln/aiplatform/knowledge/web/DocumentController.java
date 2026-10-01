@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.knowledge.web;
 
 import cn.lincoln.aiplatform.knowledge.application.DocumentService;
 import cn.lincoln.aiplatform.knowledge.application.DocumentView;
+import cn.lincoln.aiplatform.knowledge.application.IngestionProgressView;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -61,6 +62,20 @@ public class DocumentController {
       @RequestParam(required = false) Integer page,
       @RequestParam(required = false) Integer size) {
     return ApiResponse.ok(documentService.list(kbId, page, size));
+  }
+
+  /**
+   * 库级入库进度（契约 {@code getIngestionProgress}）—— 库页面顶部进度条的<strong>唯一数据源</strong>。
+   *
+   * <p>★ 放在这里（而不是 {@code KnowledgeBaseController}）是因为它统计的是<strong>文档</strong>：
+   * 与文档列表同源、同一条可见性判定，改的时候不会漏。
+   *
+   * <p>★ 前端只在 {@code running} 为 true 时轮询（{@code 03 §3.4}），所以这个字段的语义必须准。
+   */
+  @GetMapping("/{kbId}/ingestion-progress")
+  @PreAuthorize("hasAuthority('knowledge:view')")
+  public ApiResponse<IngestionProgressView> ingestionProgress(@PathVariable UUID kbId) {
+    return ApiResponse.ok(documentService.progress(kbId));
   }
 
   /**

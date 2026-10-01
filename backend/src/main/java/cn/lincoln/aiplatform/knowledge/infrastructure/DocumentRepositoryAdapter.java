@@ -2,7 +2,10 @@ package cn.lincoln.aiplatform.knowledge.infrastructure;
 
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
+import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
@@ -46,6 +49,16 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
   public long countByKbId(UUID kbId) {
     // ★ 与 findByKbId 共用同一份谓词 —— 两处各拼一遍必然漂移
     return jpa.count(filter(kbId));
+  }
+
+  @Override
+  public Map<DocumentStatus, Long> countByStatus(UUID kbId) {
+    // ★ 分组计数在库里做（见 JpaDocumentRepository 的注释）：取回来再数会在分页上限处静默算错
+    Map<DocumentStatus, Long> counts = new EnumMap<>(DocumentStatus.class);
+    for (Object[] row : jpa.countGroupedByStatus(kbId)) {
+      counts.put((DocumentStatus) row[0], ((Number) row[1]).longValue());
+    }
+    return counts;
   }
 
   // ────────────────────────── 内部 ──────────────────────────

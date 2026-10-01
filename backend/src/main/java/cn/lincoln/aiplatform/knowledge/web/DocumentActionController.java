@@ -46,4 +46,26 @@ public class DocumentActionController {
   public ApiResponse<DocumentView> startEmbedding(@PathVariable UUID id) {
     return ApiResponse.ok(documentService.startEmbedding(id));
   }
+
+  /**
+   * 重试（契约 {@code retryDocument}）—— 从失败阶段继续（{@code 03 §3.5}）。
+   *
+   * <p>★ 分段失败的重试如实拒绝（需要原始文件，本版不保留）—— 假装重试一次会让用户反复点、 状态一直不变，然后去翻日志。
+   */
+  @PostMapping("/{id}/retry")
+  @PreAuthorize("hasAuthority('knowledge:document:upload')")
+  public ApiResponse<DocumentView> retry(@PathVariable UUID id) {
+    return ApiResponse.ok(documentService.retry(id));
+  }
+
+  /**
+   * 重新向量化（契约 {@code reembedDocument}）—— 例如换了向量模型之后。
+   *
+   * <p>★ 它会把该文档的全部分段退回「待向量化」—— 只改文档状态不改分段的话，向量化器会因为 「已完成的分段跳过」而一个都不做，界面却显示在跑。
+   */
+  @PostMapping("/{id}/reembed")
+  @PreAuthorize("hasAuthority('knowledge:document:upload')")
+  public ApiResponse<DocumentView> reembed(@PathVariable UUID id) {
+    return ApiResponse.ok(documentService.reembed(id));
+  }
 }

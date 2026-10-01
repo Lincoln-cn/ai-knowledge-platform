@@ -207,6 +207,16 @@ public class Segment {
     this.embeddingStatus = SegmentEmbeddingStatus.FAILED;
   }
 
+  /**
+   * 退回待向量化（重新向量化时用）。
+   *
+   * <p>★ 为什么必须显式退回：向量化器只处理 {@code embedding_status <> EMBEDDED} 的分段 （续跑口径，{@code 03 §3.5}）——
+   * 不退回的话"重新向量化"会一个分段都不做。
+   */
+  public void markPendingEmbedding() {
+    this.embeddingStatus = SegmentEmbeddingStatus.PENDING_EMBEDDING;
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {
