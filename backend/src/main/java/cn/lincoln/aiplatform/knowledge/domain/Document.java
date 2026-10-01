@@ -210,6 +210,23 @@ public class Document {
   }
 
   /**
+   * 分块成功（第 7 周 · 0.2.2 批 2b）—— 回填分段进度列，状态保持「待向量化」。
+   *
+   * <p>★ 状态是 {@code PENDING_EMBEDDING} 而不是 {@code SUCCEEDED} —— 向量化还没做，那是下一周。
+   * 界面会把「已分段、待向量化」与「全部完成」区分开。
+   *
+   * @param segmentCount 分段数
+   * @param charCount 分段正文总字符数
+   */
+  public void recordSegmentSuccess(int segmentCount, long charCount) {
+    this.segmentCount = segmentCount;
+    this.charCount = charCount;
+    this.status = DocumentStatus.PENDING_EMBEDDING;
+    this.failReason = null;
+    this.failHint = null;
+  }
+
+  /**
    * 解析失败（第 6 周 · 0.2.1）—— 状态到「分段失败」+ 可读原因（{@code DOC-I2}）。
    *
    * <p>★ {@code partialMarkdown} 是解析中途已缓冲的片段，<strong>必须留下</strong>（{@code 12 §2.1}）。

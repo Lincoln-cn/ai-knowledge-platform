@@ -74,6 +74,16 @@ app:
     #    生成自己的密钥：[Convert]::ToBase64String((1..32|%{Get-Random -Max 256}))
     api-key-secret: ${MODEL_API_KEY_SECRET:ZGV2LW9ubHktYXBpLWtleS1zZWNyZXQtMzJieXRlcyE=}
 
+  segmentation:
+    # 分块目标长度默认值。★ 与前端向导 CreateWizard.vue 的 segForm.segmentLength 默认值一致 ——
+    #   否则用户在预览里看到的与入库得到的不同。
+    segment-length: ${SEGMENT_LENGTH:500}
+    # 重叠字符数默认值。★ 与前端 segForm.overlap 默认值一致。
+    overlap: ${SEGMENT_OVERLAP:60}
+    # 向量模型字符上限的回落值。① KB 绑定的向量模型有 contextWindow 则用它（近似）；
+    #   ② 否则用这里的默认 1200 —— ★ 与前端 mock 的 MODEL_LIMIT = 1200 一致，避免 mock/真栈漂移。
+    max-chars: ${SEGMENT_MAX_CHARS:1200}
+
 server:
   port: ${SERVER_PORT:8080}
 

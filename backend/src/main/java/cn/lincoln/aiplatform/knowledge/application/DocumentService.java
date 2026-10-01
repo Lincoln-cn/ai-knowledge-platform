@@ -2,6 +2,12 @@ package cn.lincoln.aiplatform.knowledge.application;
 
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
+import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
+import cn.lincoln.aiplatform.knowledge.domain.PlannedSegment;
+import cn.lincoln.aiplatform.knowledge.domain.Segment;
+import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
+import cn.lincoln.aiplatform.knowledge.domain.Segmenter;
+import cn.lincoln.aiplatform.knowledge.infrastructure.SegmentationProperties;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -13,7 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 文档建档（第 5 周 · 0.2.0 批 2）—— 元数据必填 + ceiling 校验。
+ * 文档建档（第 5 周 · 0.2.0 批 2）—— 元数据必填 + ceiling 校验 + 入库即分块（第 7 周 · 0.2.2 批 2b）。
  *
  * <h3>★ 建档必填三项（{@code 12 §5.1} / {@code DOC-I6}）</h3>
  *
@@ -23,18 +29,22 @@ import org.springframework.transaction.annotation.Transactional;
  * <h3>★ ceiling 校验（{@code 13 §6}）</h3>
  *
  * <p>文档密级<strong>高于</strong>库的 {@code maxClassification} ⇒ 拒绝 + 可读原因（含两个密级值）。 等于/低于 ⇒ 放行。
- * 原因必须能照着改：「请提高库的上限，或改用更合适的库」。
  *
- * <h3>★ 可见性继承库</h3>
+ * <h3>★ 入库即分块（第 7 周 · 0.2.2 批 2b）</h3>
  *
- * <p>文档<strong>不是</strong> {@code OwnedResource}：谁能看它由所属知识库决定。 判定走批 1 的 {@link
- * KnowledgeBaseService#get}（同一个 {@code accessScope.canSee}）—— <strong>不另写一套</strong>。
- * 两套判定迟早分叉，而分叉点不会报错。
+ * <p>{@code recordParseSuccess} 之后立刻调 {@link Segmenter#plan} 分块并落库。 参数口径：
  *
- * <h3>★ 本批不做</h3>
+ * <ul>
+ *   <li>{@code segmentLength} 默认 500、{@code overlap} 默认 60 —— 与前端向导 {@code CreateWizard.vue} 的
+ *       {@code segForm} 默认值一致，否则预览与入库结果不同
+ *   <li>{@code maxChars}：① KB 绑定的向量模型有 {@code contextWindow} 则用它（近似）；② 否则回落配置 {@code
+ *       app.segmentation.max-chars}，默认 1200 —— 与前端 mock 的 {@code MODEL_LIMIT} 一致
+ * </ul>
  *
- * <p>解析 / 分块 / 向量化是第 6–7 周的事。本批只负责「把文档建出来、元数据收准」。 建档形态是<strong>最小可用</strong>：按文件名清单建行（真文件暂存与
- * multipart 随上传链补），批次级三项标签一次给定 —— 逐篇覆盖是后续（契约 {@code ImportDocumentsBody} 注释里记了一笔）。
+ * <p>成功 ⇒ 落 segments + 回填 {@code segmentCount}/{@code charCount} + 状态 {@code PENDING_EMBEDDING} （不是
+ * {@code SUCCEEDED} —— 向量化还没做）。 失败 ⇒ {@code SEGMENT_FAILED} + 可读原因（不许堆栈、不许静默）。
+ *
+ * <p>★ 重入幂等：同一文档重复分块不产生重复行（先删后写）。
  */
 @Service
 public class DocumentService {
@@ -44,14 +54,24 @@ public class DocumentService {
   private final DocumentRepository documents;
   private final KnowledgeBaseService knowledgeBases;
   private final cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser parser;
+  private final SegmentRepository segments;
+  private final MaxCharsResolver maxCharsResolver;
+  private final SegmentationProperties segmentationProperties;
+  private final Segmenter segmenter = new Segmenter();
 
   public DocumentService(
       DocumentRepository documents,
       KnowledgeBaseService knowledgeBases,
-      cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser parser) {
+      cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser parser,
+      SegmentRepository segments,
+      MaxCharsResolver maxCharsResolver,
+      SegmentationProperties segmentationProperties) {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
     this.parser = parser;
+    this.segments = segments;
+    this.maxCharsResolver = maxCharsResolver;
+    this.segmentationProperties = segmentationProperties;
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -155,9 +175,75 @@ public class DocumentService {
           document.recordParseFailure(parsed.failReason(), "修复文件后重新上传，或改用其它格式。", parsed.markdown());
         }
       }
-      created.add(DocumentView.from(documents.save(document)));
+      // ★ 先存文档（segments 的外键引用它），再分块落库
+      Document saved = documents.save(document);
+      // ★ 入库即分块（批 2b）：解析成功时立刻分块并落库
+      if (contents != null
+          && i < contents.size()
+          && contents.get(i) != null
+          && document.status() == DocumentStatus.PENDING_EMBEDDING) {
+        segmentAndPersist(saved, currentUserId);
+        saved = documents.save(saved);
+      }
+      created.add(DocumentView.from(saved));
     }
     return created;
+  }
+
+  // ────────────────────────── 入库即分块（批 2b） ──────────────────────────
+
+  /**
+   * 入库即分块：调 {@link Segmenter#plan} 分块并落库（第 7 周 · 0.2.2 批 2b）。
+   *
+   * <p>★ 参数口径（领域配置，不是常量）：
+   *
+   * <ul>
+   *   <li>{@code segmentLength} 默认 500、{@code overlap} 默认 60 —— 与前端向导 {@code CreateWizard.vue} 的
+   *       {@code segForm} 默认值一致，否则预览与入库结果不同
+   *   <li>{@code maxChars}：① KB 绑定的向量模型有 {@code contextWindow} 则用它（近似）；② 否则回落配置 {@code
+   *       app.segmentation.max-chars}，默认 1200 —— 与前端 mock 的 {@code MODEL_LIMIT} 一致
+   * </ul>
+   *
+   * <p>★ 成功 ⇒ 落 segments + 回填 {@code segmentCount}/{@code charCount} + 状态 {@code PENDING_EMBEDDING}
+   * （不是 {@code SUCCEEDED} —— 向量化还没做，那是下一周）。 失败 ⇒ {@code SEGMENT_FAILED} + 可读原因 （{@code
+   * DOC-I2}：不许堆栈、不许静默）。
+   *
+   * <p>★ 重入幂等：先删后写 —— 同一文档重复分块不产生重复行（{@code (document_id, ordinal)} 唯一约束兜底）。
+   *
+   * <p>★ 与预览同源（判据 ④）：两边都只调 {@link Segmenter#plan}，不允许各自再拼一遍 {@code search_text}。
+   */
+  private void segmentAndPersist(Document document, UUID currentUserId) {
+    try {
+      int maxChars = maxCharsResolver.resolve(document.kbId(), segmentationProperties.maxChars());
+      List<PlannedSegment> plan =
+          segmenter.plan(
+              document.parsedContent(),
+              segmentationProperties.segmentLength(),
+              segmentationProperties.overlap(),
+              maxChars,
+              document.docType(),
+              document.department(),
+              document.name());
+
+      // ★ 重入幂等：先删后写 —— 同一文档重复分块不产生重复行
+      segments.deleteByDocumentId(document.id());
+
+      List<Segment> toSave = new ArrayList<>(plan.size());
+      for (PlannedSegment p : plan) {
+        toSave.add(
+            new Segment(UUID.randomUUID(), document.id(), document.kbId(), p, currentUserId));
+      }
+      segments.saveAll(toSave);
+
+      // ★ 回填进度列 + 状态置 PENDING_EMBEDDING（不是 SUCCEEDED —— 向量化还没做）
+      document.recordSegmentSuccess(
+          plan.size(), toSave.stream().mapToInt(Segment::charCount).sum());
+    } catch (BusinessException e) {
+      // ★ Segmenter 抛的可读异常 ⇒ SEGMENT_FAILED + 可读原因（不许堆栈、不许静默）
+      document.recordFailure(DocumentStatus.SEGMENT_FAILED, e.getMessage(), e.hint());
+    } catch (IllegalArgumentException e) {
+      document.recordFailure(DocumentStatus.SEGMENT_FAILED, e.getMessage(), "请检查文档正文是否可正常解析");
+    }
   }
 
   // ────────────────────────── 内部 ──────────────────────────

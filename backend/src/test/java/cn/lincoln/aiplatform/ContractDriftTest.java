@@ -90,10 +90,14 @@ class ContractDriftTest {
           "/knowledge-bases",
           // 第 5–8 周 0.2.x–0.3.0：文档上传、解析、入库（含 enabled/retry/embedding/reembed）
           "/documents",
-          // 第 7 周 0.2.2：分块 + 结构化前缀 + 切分预览（segments CRUD / batch-move）
+          // 第 7 周 0.2.2：分块 + 结构化前缀 + 切分预览。
+          // ★ 本前缀下的 segments CRUD 已落地（GET /segments、GET|PUT|DELETE /segments/{id}），
+          //   仍欠账（都在 api/ingestion.ts）：PATCH /segments/{id}/enabled（启停开关）、
+          //   POST /segments/batch-move（跨库搬移，属 P1）、DELETE /segments/batch（批量删）、
+          //   POST /segments/{id}/embedding（逐段重向量，随 0.3.x 向量链）。
           "/segments",
-          // 第 7 周 0.2.2：切分预览（预览与入库用同一个分块器）
-          "/segmentation",
+          // ★ /segmentation 已于第 7 周 0.2.2 全部落地（POST /segmentation/preview）⇒ 从这里删除。
+          //   防黑洞测试会逼着删：留着它就成了「曾经欠过、现在早已实现」的永久噪音。
           // 第 15 周 0.4.3：应用配置 + 发布校验（§3.1 记 M4）；含 import/export/credentials/api-keys
           "/assistants",
           // §3.1 M4：提示词管理页（pages/assistants/prompts/）—— 前端已存在，后端随 assistant 域
