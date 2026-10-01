@@ -296,6 +296,9 @@ class ParseMetricsTest {
     if (!existing.startsWith("# 0.2.1")) {
       existing = header + existing;
     }
+    // ★ 规范化空白：按节替换是字符串手术，残留的空行会**每次运行累加一行** ⇒ 报告文件反复变脏。
+    // 幂等是这份报告的硬要求（它是生成物，diff 应该只反映数字变化）。
+    existing = normalizeBlankRuns(existing);
     // 按节替换：找到 "## <title>" 到下一个 "---" 为止
     String marker = "## " + title;
     int start = existing.indexOf(marker);
@@ -310,7 +313,13 @@ class ParseMetricsTest {
       }
     }
     Files.createDirectories(report.getParent());
-    Files.writeString(report, existing, StandardCharsets.UTF_8);
+    Files.writeString(report, normalizeBlankRuns(existing), StandardCharsets.UTF_8);
+  }
+
+  /** 把连续 3 个以上的换行压成 1 个空行（保证报告幂等：重复运行 ⇒ 字节完全一致）。 */
+  private static String normalizeBlankRuns(String text) {
+    String normalized = text.replaceAll("\n{3,}", "\n\n");
+    return normalized.endsWith("\n") ? normalized : normalized + "\n";
   }
 
   private static Path resolveReportPath() {
