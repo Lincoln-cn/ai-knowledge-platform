@@ -180,6 +180,10 @@
           </span>
           <span class="micro muted">可编辑 · 导入时按此计划切分</span>
         </div>
+        <!-- ★ 多文件时预览只展示**第一个**文档：不说清的话，用户会以为这一份预览涵盖了全部文件 -->
+        <div v-if="preview && files.length > 1" class="micro muted">
+          预览展示第一个文档（{{ files[0]?.name }}）；其余 {{ files.length - 1 }} 个按相同参数切分
+        </div>
 
         <div v-if="previewError" class="notice err preview-error">
           <div><b>生成预览失败：</b>{{ previewError }}</div>
@@ -213,7 +217,7 @@
             />
             <p v-else class="pi-content" @click="startPreviewEdit(seg)">{{ seg.content }}</p>
             <div v-if="seg.oversized" class="pi-advice">
-              该段将被向量模型截断。建议：按段落切分为 2 段，或调小分段长度
+              该段超过向量模型上限，<b>入库会被拒绝</b>（不会静默截断）。建议：调小分段长度，或按段落拆分
             </div>
           </div>
         </div>
@@ -290,11 +294,8 @@ import type { ModelInfo } from '@/api/models'
 import type {
   DocumentItem,
   DocumentStatus,
-  ImportDocumentsBody,
   PreviewSegmentationResult,
-  SegmentationPlanItem,
-  UploadPolicy,
-  UploadReceipt
+  UploadPolicy
 } from '@/api/ingestion'
 import {
   CLASSIFICATION_LEVEL_LABELS,
@@ -400,8 +401,15 @@ const createdKb = ref<KnowledgeBase | null>(null)
 const resultDocs = ref<DocumentItem[]>([])
 /** #12 幂等键：一次向导会话内不变。重试「开始导入」不会二次建库 */
 const clientRequestId = ref('')
-/** #11 暂存上传 id */
-const uploadIds = ref<string[]>([])
+/**
+ * 已经建档（并已解析、已分块）的文档 —— 一次向导会话内只上传一次。
+ *
+ * ★ 走「建档即解析 + 入库即分块」这条真实链路（0.2.1/0.2.2）：上传即建档，预览按 documentId 做
+ *   （预览与入库用同一个分块器，第 7 周判据 ④）。
+ * ⚠️ 早先这里走的是 mock 时代的「暂存上传 uploadIds → 按暂存文件预览」，而 `/uploads` 至今未实现
+ *   ⇒ 真栈下预览必然 400，等于「创建知识库 + 生成预览」整条不可用。
+ */
+const ingestedDocs = ref<DocumentItem[]>([])
 /** 是否已经把文档导进去过（用来决定关闭时要不要清孤儿库） */
 const imported = ref(false)
 
@@ -454,7 +462,7 @@ const reset = () => {
   editedOrdinals.value = new Set()
   createdKb.value = null
   resultDocs.value = []
-  uploadIds.value = []
+  ingestedDocs.value = []
   imported.value = false
   baseFormRef.value?.clearValidate()
 }
@@ -566,50 +574,89 @@ const next = async () => {
       fileRejects.value = bad
       return
     }
-    submitting.value = true
-    stageError.value = ''
-    try {
-      // #12 先幂等建库，再暂存上传 —— 任一步失败都可以直接重试「下一步」
-      const kb = await ensureKb()
-      // 真栈可能还没有暂存端点（uploads 随上传链补）—— 失败不挡建档，退回文件名清单
-      try {
-        const staged = await ingestionApi.stageUploads(kb.id, files.value)
-        uploadIds.value = staged.uploadIds
-      } catch {
-        uploadIds.value = []
-      }
-      step.value = 2
-    } catch (error) {
-      stageError.value = error instanceof ApiError ? error.message : '暂存上传失败，请重试'
-    } finally {
-      submitting.value = false
-    }
+    // ★ 这一步不再调服务：上传要带上建档三项（文种/责任部门/密级），而它们在下一步。
+    //   早先在这里调 stageUploads（真栈未实现、失败还被 catch 吞掉）⇒ 预览拿到空 uploadIds ⇒ 必然 400。
+    step.value = 2
   }
 }
 
+/**
+ * 建档：把选中的文件真正上传（**建档即解析 + 入库即分块**）。
+ *
+ * <p>同步实现语义：一次会话内只上传一次；重复点「生成预览」不会重复建档（也就不产生重复文档）。
+ */
+const ingestFiles = async (): Promise<DocumentItem[]> => {
+  if (ingestedDocs.value.length) {
+    return ingestedDocs.value
+  }
+  const kb = await ensureKb()
+  const accepted = await ingestionApi.uploadDocuments(kb.id, files.value, {
+    docType: docMeta.docType.trim(),
+    department: docMeta.department.trim(),
+    classification: docMeta.classification as ClassificationLevel
+  })
+  ingestedDocs.value = accepted
+  imported.value = accepted.length > 0
+  return accepted
+}
+
+/**
+ * 把预览里编辑过的分段逐条提交。
+ *
+ * ★ 真栈只有**逐条编辑**端点（`PUT /segments/:id`），没有"整份计划覆盖"；
+ *   所以这里按 ordinal 把预览结果映射回库里的分段再逐条改 —— 而不是"收下编辑但不用"
+ *   （那会让用户以为改生效了）。
+ */
+const applyEditedSegments = async (documentId: string): Promise<number> => {
+  if (!editedOrdinals.value.size || !preview.value) {
+    return 0
+  }
+  const page = await ingestionApi.listSegments({ documentId, page: 1, size: 200 })
+  const byOrdinal = new Map(page.list.map((s) => [s.ordinal, s]))
+  let applied = 0
+  for (const seg of preview.value.segments) {
+    if (!editedOrdinals.value.has(seg.ordinal)) continue
+    const target = byOrdinal.get(seg.ordinal)
+    if (!target) continue
+    await ingestionApi.updateSegment(target.id, { content: seg.content })
+    applied += 1
+  }
+  return applied
+}
+
 const generatePreview = async () => {
+  // ★ 建档三项要先齐：上传时它们随文件一起走（后端缺任一即 400）
+  const metaValid = await docMetaFormRef.value?.validate().catch(() => false)
+  if (!metaValid) {
+    previewError.value = '请先填写文种 / 责任部门 / 密级 —— 它们在建档时随文件一起提交'
+    return
+  }
   previewing.value = true
   previewError.value = ''
   try {
-    // #11 预览基于**用户暂存的文件**，不是内置语料；带 segmentationPlan 则按编辑后的计划展示
+    // ★ 真实链路：先把文件建了档（解析 + 分块），再按 **documentId** 预览。
+    //   预览与入库走同一个分块器 ⇒ 预览里看到的就是入库后会得到的（第 7 周判据 ④）。
+    const docs = await ingestFiles()
+    if (!docs.length) {
+      previewError.value = '没有建档成功的文档，无法生成预览'
+      return
+    }
     preview.value = await ingestionApi.previewSegmentation({
-      documentId: null,
+      documentId: docs[0].id,
       segmentLength: segForm.segmentLength,
       overlap: segForm.overlap,
-      strategy: segForm.strategy,
-      uploadIds: uploadIds.value.length ? uploadIds.value : undefined,
-      segmentationPlan: editedOrdinals.value.size && preview.value ? toPlan(preview.value) : undefined
+      strategy: segForm.strategy
     })
     modelLimit.value = preview.value.modelLimit
+    editedOrdinals.value = new Set<number>()
   } catch (error) {
+    // ★ 非 ApiError（前端异常）必须留下可定位的痕迹：泛化文案会把真因藏起来
+    console.error('[创建向导] 生成预览失败', error)
     previewError.value = error instanceof ApiError ? error.message : '生成预览失败'
   } finally {
     previewing.value = false
   }
 }
-
-const toPlan = (p: PreviewSegmentationResult): SegmentationPlanItem[] =>
-  p.segments.map((s) => ({ ordinal: s.ordinal, content: s.content }))
 
 const startPreviewEdit = (seg: { ordinal: number; content: string }) => {
   editingOrdinal.value = seg.ordinal
@@ -626,40 +673,36 @@ const savePreviewEdit = (seg: { ordinal: number; content: string; charCount: num
 }
 
 const startImport = async () => {
-  // ★ 建档三项必填先校验（12 §5.1）：缺任一就在表单上给出可读原因，不要被预览检查抢在前面
+  // ★ 建档三项必填先校验（12 §5.1）：缺任一就在表单上给出可读原因
   const metaValid = await docMetaFormRef.value?.validate().catch(() => false)
   if (!metaValid) return
-  // 预览是增强项：真栈暂无 segmentation/preview 端点时，没有预览也应能建档
-  if (!uploadIds.value.length && !files.value.length) {
-    stageError.value = '暂存文件已丢失，请回到上一步重新选择文件'
+  if (!files.value.length && !ingestedDocs.value.length) {
+    stageError.value = '文件已丢失，请回到上一步重新选择文件'
     ElMessage.error(stageError.value)
     return
   }
   submitting.value = true
   importError.value = ''
   try {
-    // #12 库已用 clientRequestId 幂等创建；这里只做导入，失败可直接重试
-    const kb = await ensureKb()
-    // #11 把预览里编辑过的分段作为切分计划提交 —— 不再"只改本地数组"
-    // names：轻量建档（当前后端唯一消费的建档入参）；uploadIds 保留但后端尚未消费
-    // —— 同时给时以 names 为准，只传 uploadIds 会被 400 拒绝（禁止静默忽略）
-    const receipt = await ingestionApi.importDocuments(kb.id, {
-      uploadIds: uploadIds.value.length ? uploadIds.value : undefined,
-      names: files.value.map((f) => f.name),
-      segmentationPlan: preview.value ? toPlan(preview.value) : undefined,
-      docType: docMeta.docType.trim(),
-      department: docMeta.department.trim(),
-      classification: docMeta.classification
-    } as ImportDocumentsBody)
-    const raw = receipt as unknown as UploadReceipt | DocumentItem[]
-    const norm: UploadReceipt = Array.isArray(raw) ? { accepted: raw, rejected: [] } : raw
-    resultDocs.value = norm.accepted
-    imported.value = norm.accepted.length > 0
-    if (norm.rejected.length) {
-      importError.value = `成功 ${norm.accepted.length} 个，失败 ${norm.rejected.length} 个：${norm.rejected[0].reason}`
+    // ★ 提交必须**确保文件真的建过档**：没走预览就提交时在这里补上传 ——
+    //   否则会"提交成功但库里什么都没有"（早先的 names-only 轻量建档就是这个后果：
+    //   建出来的是不带字节的空文档，解析与分段全空）。
+    const docs = await ingestFiles()
+    if (!docs.length) {
+      importError.value = '没有建档成功的文档'
+      return
+    }
+    // 预览里编辑过的分段逐条提交（真栈只有逐条编辑端点）
+    const applied = await applyEditedSegments(docs[0].id)
+    resultDocs.value = docs
+    imported.value = true
+    if (applied > 0) {
+      ElMessage.success(`已应用 ${applied} 处分段编辑`)
     }
     step.value = 3
-    emit('created', kb)
+    if (createdKb.value) {
+      emit('created', createdKb.value)
+    }
   } catch (error) {
     // ★ 后端可读原因原文展示（如 ceiling 超限）—— 不代写
     importError.value = error instanceof ApiError ? error.message : '导入失败，请重试'

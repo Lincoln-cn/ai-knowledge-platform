@@ -380,10 +380,44 @@ def main() -> int:
             print("   缺密级错误:", errs2b)
             check(any("密级" in e for e in errs2b), f"缺密级仍被拦（errors={errs2b}）")
 
-            # ── 2b. 三项齐全（密级=内部 ≤ ceiling=秘密）⇒ 提交成功 ──
+            # ── 2b. 三项齐全（密级=内部 ≤ ceiling=秘密）⇒ ★ 生成预览 → 提交成功 ──
             check(select_by_label("密级", "内部"), "能选中「密级」选项（内部）")
+
+            # ★ 「生成预览」是这条链上最容易整段失效的一步：它要先把文件建档（解析 + 分块），
+            #   再按 documentId 拿预览。曾因向导走「暂存上传」（真栈未实现）而必然 400。
+            click_btn("生成预览", "智能分段", "生成")
+            page.wait_for_timeout(4000)
+            body_prev = active_step_body() or dlg_text()
+            notif_prev = page.evaluate(
+                "() => [...document.querySelectorAll('.notice, .el-message')].map(e => e.innerText).join('\\n')"
+            )
+            # ★ 「生成预览失败」是模板里的**静态标签**（<b>生成预览失败：</b>{{ previewError }}），
+            #   出现即代表预览报了错；真正的原因在标签后面 —— 所以要把详情打出来。
+            idx = body_prev.find("生成预览失败")
+            detail = body_prev[idx : idx + 200] if idx >= 0 else ""
+            check(idx < 0, f"点「生成预览」不报错（错误详情：{detail!r}）")
+            # ★ 精确信号：预览区**真的渲染了分段卡**（不是"页面里有『字』就算过"）
+            prev_items, prev_head = page.evaluate(
+                """() => {
+                    const items = [...document.querySelectorAll('.preview-item')]
+                        .filter(x => x.offsetParent !== null);
+                    const head = [...document.querySelectorAll('span')]
+                        .map(x => (x.innerText || '').trim())
+                        .find(t => t.includes('切分预览')) || '';
+                    return [items.length, head];
+                }"""
+            )
+            check(
+                prev_items > 0,
+                f"★ 预览区真的渲染了分段卡（{prev_items} 张；标题「{prev_head}」）",
+            )
+            check(
+                "共" in prev_head and "段" in prev_head,
+                f"预览标题给出分段数（实际「{prev_head}」）",
+            )
+
             click_btn("开始导入")
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(3000)
             body3 = active_step_body() or dlg_text()
             notif = page.evaluate(
                 "() => [...document.querySelectorAll('.notice, .el-message')].map(e => e.innerText).join('\\n')"
