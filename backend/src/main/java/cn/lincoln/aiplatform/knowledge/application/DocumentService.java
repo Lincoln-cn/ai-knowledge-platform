@@ -5,6 +5,7 @@ import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
 import cn.lincoln.aiplatform.knowledge.domain.PlannedSegment;
 import cn.lincoln.aiplatform.knowledge.domain.Segment;
+import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingRepository;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.Segmenter;
 import cn.lincoln.aiplatform.knowledge.infrastructure.SegmentationProperties;
@@ -55,6 +56,7 @@ public class DocumentService {
   private final KnowledgeBaseService knowledgeBases;
   private final cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser parser;
   private final SegmentRepository segments;
+  private final SegmentEmbeddingRepository segmentEmbeddings;
   private final MaxCharsResolver maxCharsResolver;
   private final SegmentationProperties segmentationProperties;
   private final Segmenter segmenter = new Segmenter();
@@ -64,12 +66,14 @@ public class DocumentService {
       KnowledgeBaseService knowledgeBases,
       cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser parser,
       SegmentRepository segments,
+      SegmentEmbeddingRepository segmentEmbeddings,
       MaxCharsResolver maxCharsResolver,
       SegmentationProperties segmentationProperties) {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
     this.parser = parser;
     this.segments = segments;
+    this.segmentEmbeddings = segmentEmbeddings;
     this.maxCharsResolver = maxCharsResolver;
     this.segmentationProperties = segmentationProperties;
   }
@@ -227,6 +231,8 @@ public class DocumentService {
 
       // ★ 重入幂等：先删后写 —— 同一文档重复分块不产生重复行
       segments.deleteByDocumentId(document.id());
+      // ★ 向量也要跟着清：旧分段的向量留着的话，检索会命中已经不存在于分段表里的内容
+      segmentEmbeddings.deleteByDocumentId(document.id());
 
       List<Segment> toSave = new ArrayList<>(plan.size());
       for (PlannedSegment p : plan) {

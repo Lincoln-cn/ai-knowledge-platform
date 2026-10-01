@@ -6,6 +6,7 @@ import cn.lincoln.aiplatform.knowledge.domain.PlannedSegment;
 import cn.lincoln.aiplatform.knowledge.domain.SearchText;
 import cn.lincoln.aiplatform.knowledge.domain.Segment;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentContent;
+import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingRepository;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.Segmenter;
 import cn.lincoln.aiplatform.knowledge.infrastructure.SegmentationProperties;
@@ -46,6 +47,7 @@ public class SegmentService {
   private static final int MAX_PAGE_SIZE = 100;
 
   private final SegmentRepository segments;
+  private final SegmentEmbeddingRepository segmentEmbeddings;
   private final DocumentRepository documents;
   private final KnowledgeBaseService knowledgeBases;
   private final AccessScopePort accessScope;
@@ -55,12 +57,14 @@ public class SegmentService {
 
   public SegmentService(
       SegmentRepository segments,
+      SegmentEmbeddingRepository segmentEmbeddings,
       DocumentRepository documents,
       KnowledgeBaseService knowledgeBases,
       AccessScopePort accessScope,
       SegmentationProperties properties,
       MaxCharsResolver maxCharsResolver) {
     this.segments = segments;
+    this.segmentEmbeddings = segmentEmbeddings;
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
     this.accessScope = accessScope;
@@ -270,6 +274,8 @@ public class SegmentService {
             .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "分段不存在"));
     Document document = requireVisibleDocument(segment.documentId());
     segments.delete(segment);
+    // ★ 向量必须跟着删：否则被删掉的分段仍然能被检索到（界面不显示、检索却答得出来）
+    segmentEmbeddings.deleteBySegmentId(id);
     List<Segment> remaining = segments.findByDocumentId(document.id());
     document.recordSegmentSuccess(
         remaining.size(), remaining.stream().mapToInt(Segment::charCount).sum());

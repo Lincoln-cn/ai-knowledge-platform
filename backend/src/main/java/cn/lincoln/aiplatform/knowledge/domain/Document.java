@@ -189,6 +189,7 @@ public class Document {
     if (reason == null || reason.isBlank()) {
       throw new IllegalArgumentException("失败原因必填 —— 不许静默失败（DOC-I2）");
     }
+    DocumentStatus.requireLegal(this.status, failedStatus, "记录加工失败");
     this.status = failedStatus;
     this.failReason = reason;
     this.failHint = hint;
@@ -202,6 +203,12 @@ public class Document {
    * @param markdown 解析出的 Markdown 正文
    */
   public void recordParseSuccess(String markdown) {
+    // ★ 走状态机：未解析 → 分段中 → 待向量化。
+    //   当前解析与分块是同步的，两个转移落在同一事务里 ⇒ 外部只看得到最终态「待向量化」；
+    //   「分段中」仍然被走过（等改成异步流水线时它就是在途态，届时不必改状态机）。
+    DocumentStatus.requireLegal(status, DocumentStatus.SEGMENTING, "记录解析成功");
+    this.status = DocumentStatus.SEGMENTING;
+    DocumentStatus.requireLegal(status, DocumentStatus.PENDING_EMBEDDING, "记录解析成功");
     this.status = DocumentStatus.PENDING_EMBEDDING;
     this.parsedContent = markdown == null ? "" : markdown;
     this.charCount = this.parsedContent.length();
@@ -219,11 +226,119 @@ public class Document {
    * @param charCount 分段正文总字符数
    */
   public void recordSegmentSuccess(int segmentCount, long charCount) {
+    DocumentStatus.requireLegal(this.status, DocumentStatus.PENDING_EMBEDDING, "回填分段结果");
     this.segmentCount = segmentCount;
     this.charCount = charCount;
     this.status = DocumentStatus.PENDING_EMBEDDING;
+    // ★ 分段结果变了 ⇒ 进度必须归零：旧进度是上一轮的段数口径，留着就是错的
+    this.processedSegments = 0;
     this.failReason = null;
     this.failHint = null;
+  }
+
+  // ────────────────────────── 行为：向量化阶段（第 8 周 · 0.3.0） ──────────────────────────
+
+  /**
+   * 开始向量化 —— {@code PENDING_EMBEDDING → EMBEDDING}，并把进度归零。
+   *
+   * <p>★ 在这里归零的理由：进度是「本轮向量化」的事实，不是文档的终身累计。重新向量化时它必须回到 0/N， 否则界面会出现「已经 100%
+   * 但还在跑」的自相矛盾。同时这也把「进度不回退」的规则限定在**同一轮**内 —— 否则跨轮的重置会被单调性挡住。
+   */
+  public void startEmbedding() {
+    DocumentStatus.requireLegal(status, DocumentStatus.EMBEDDING, "开始向量化");
+    this.status = DocumentStatus.EMBEDDING;
+    this.processedSegments = 0;
+    this.failReason = null;
+    this.failHint = null;
+  }
+
+  /**
+   * 回写向量化进度（{@code 03 §3.4} 真实进度）—— <strong>覆盖写</strong>，不是累加。
+   *
+   * <p>★ {@code 03 §3.3} 的原话：{@code processedSegments} 必须覆盖写而不是 {@code += 1}，
+   * 「单次执行看起来完全正确，只有在事件重投时才暴露为进度变成 200%」。所以本方法**不接受增量参数** —— 传进来的就是「已经完成多少段」这个<strong>事实</strong>。
+   *
+   * <p>★ 回退（比当前值小）<strong>不报错、也不改变进度</strong>：模块间是「至少一次投递」（{@code 03 §3.3}）， 重投的旧事件必须是无害的 no-op ——
+   * 报错会让一次本来无害的重投变成一次失败。
+   *
+   * @param processed 已完成的段数（0 ≤ processed ≤ segmentCount）
+   * @throws IllegalStateException 不在向量化中（别让"没开始就报进度"静默生效）
+   * @throws IllegalArgumentException 越界
+   */
+  public void reportEmbeddingProgress(int processed) {
+    // ★ 就地更新（状态不变）⇒ 校验的是「当前是不是向量化中」，不是一次转移
+    DocumentStatus.requireInState(status, DocumentStatus.EMBEDDING, "回写向量化进度");
+    if (processed < 0 || processed > segmentCount) {
+      throw new IllegalArgumentException(
+          "向量化进度越界：" + processed + " 不在 0.." + segmentCount + "（分段总数）");
+    }
+    if (processed < this.processedSegments) {
+      return;
+    }
+    this.processedSegments = processed;
+  }
+
+  /**
+   * 向量化完成 —— {@code EMBEDDING → SUCCEEDED}。
+   *
+   * <p>★ <strong>只有 {@code processedSegments == segmentCount} 才允许置成功</strong>（{@code 02} 的库约束
+   * {@code chk_ready} 也钉了这条）：否则界面显示「已完成」，而库里有分段根本没进向量 —— 「看起来在做、实际没生效」最贵的一种。
+   */
+  public void markEmbedded() {
+    DocumentStatus.requireLegal(status, DocumentStatus.SUCCEEDED, "标记向量化完成");
+    if (processedSegments != segmentCount) {
+      throw new IllegalStateException(
+          "不能标记向量化完成：已完成 "
+              + processedSegments
+              + " 段、共 "
+              + segmentCount
+              + " 段 —— 还有 "
+              + (segmentCount - processedSegments)
+              + " 段没进向量（状态未改变）");
+    }
+    this.status = DocumentStatus.SUCCEEDED;
+    this.failReason = null;
+    this.failHint = null;
+  }
+
+  /** 向量化失败：{@code EMBEDDING → EMBEDDING_FAILED} + 可读原因（{@code DOC-I2}）。 */
+  public void markEmbeddingFailed(String reason, String hint) {
+    recordFailure(DocumentStatus.EMBEDDING_FAILED, reason, hint);
+  }
+
+  /** 重试向量化：{@code EMBEDDING_FAILED → PENDING_EMBEDDING}，进度归零、清失败原因。 */
+  public void retryEmbedding() {
+    DocumentStatus.requireLegal(status, DocumentStatus.PENDING_EMBEDDING, "重试向量化");
+    this.status = DocumentStatus.PENDING_EMBEDDING;
+    this.processedSegments = 0;
+    this.failReason = null;
+    this.failHint = null;
+  }
+
+  /**
+   * 重试分段：{@code SEGMENT_FAILED → SEGMENTING}（重新解析与分块）。
+   *
+   * <p>保留已解析出的正文（{@code 12 §2.1}：中途失败的部分内容要留下，便于定位与人工兜底）。
+   */
+  public void retrySegmentation() {
+    DocumentStatus.requireLegal(status, DocumentStatus.SEGMENTING, "重试分段");
+    this.status = DocumentStatus.SEGMENTING;
+    this.failReason = null;
+    this.failHint = null;
+  }
+
+  /**
+   * 向量已过期（分段被编辑或删除后）—— {@code SUCCEEDED → PENDING_EMBEDDING}（{@code SEG-I7}）。
+   *
+   * <p>★ 内容变了向量就旧了：不回到「待向量化」的话，检索会用旧向量答新内容，界面上什么都看不出来。 已经在待向量化时是 no-op（重复编辑不该报错）。
+   */
+  public void markVectorsStale() {
+    if (status == DocumentStatus.PENDING_EMBEDDING) {
+      return;
+    }
+    DocumentStatus.requireLegal(status, DocumentStatus.PENDING_EMBEDDING, "标记向量已过期");
+    this.status = DocumentStatus.PENDING_EMBEDDING;
+    this.processedSegments = 0;
   }
 
   /**
