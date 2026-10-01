@@ -148,7 +148,7 @@ mvn -B -f backend/pom.xml verify → BUILD SUCCESS · Tests run: 221（基线 19
 
 ---
 
-## 0.2.0（进行中）· 第 5 周 · M2-a 建档（密级必填 + ceiling）
+## 0.2.0 · 第 5 周 · M2-a 建档（密级必填 + ceiling）
 
 ### 这一版能做什么
 
