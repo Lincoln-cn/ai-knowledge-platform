@@ -421,6 +421,37 @@ class SegmentIngestionTest {
     assertThat(doc.body()).as("少了一段 ⇒ 向量就旧了，状态要回到待向量化").contains("PENDING_EMBEDDING");
   }
 
+  // ────────────────────────── 13 · 长标题不能把建档整体打挂 ──────────────────────────
+
+  /**
+   * ★ 首段很长、通篇没有标题的文档 ⇒ 分段标题会顶到**设计上限 256 字**（{@code 12 §3.4}）。
+   *
+   * <p>真事故：库列曾是 {@code varchar(255)} ⇒ 一个字符之差，插入直接 {@code value too long for type character
+   * varying(255)}，整篇建档 500 —— 用户在界面上看到的是「生成预览失败：服务内部错误」（因为预览前会先建档）。
+   *
+   * <p>修法两处：域侧 {@code Segment.clampTitle} 夹到上限（覆盖标题的三个来源），库侧 V17 把列放宽到 512。
+   */
+  @Test
+  void 首段很长且无标题的文档也必须建档成功() throws Exception {
+    String admin = accessToken("admin", "admin");
+    String kbId = createKb(admin, "长标题库", "INTERNAL");
+
+    // 300 字、无句号、无换行 ⇒ 分块器只能把整段截取成标题（上限 256）
+    String longParagraph = "长".repeat(300);
+    String docId = uploadDocument(admin, kbId, "长首段.md", longParagraph, "制度", "采购部", "INTERNAL");
+
+    HttpResponse<String> docs =
+        get("/api/v1/knowledge-bases/" + kbId + "/documents?page=1&size=10", admin);
+    assertThat(docs.body()).as("建档不能因为标题超长而整体失败（文档必须落在待向量化，而不是 500）").contains("PENDING_EMBEDDING");
+
+    HttpResponse<String> segs =
+        get("/api/v1/segments?documentId=" + docId + "&page=1&size=20", admin);
+    assertThat(segs.statusCode()).isEqualTo(200);
+    Matcher m = Pattern.compile("\"title\":\"([^\"]*)\"").matcher(segs.body());
+    assertThat(m.find()).as("分段必须真的落库并带上标题").isTrue();
+    assertThat(m.group(1).length()).as("标题必须被夹到设计上限（256），而不是靠库列「撑」").isLessThanOrEqualTo(256);
+  }
+
   // ────────────────────────── 工具 ──────────────────────────
 
   /** 生成一段足够长的 Markdown，能被切成多个分段（> 500 字）。 */

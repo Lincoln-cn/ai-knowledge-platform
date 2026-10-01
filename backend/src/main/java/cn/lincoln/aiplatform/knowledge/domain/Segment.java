@@ -135,7 +135,7 @@ public class Segment {
     this.documentId = documentId;
     this.kbId = kbId;
     this.ordinal = planned.ordinal();
-    this.title = planned.title();
+    this.title = clampTitle(planned.title());
     this.titlePath = planned.titlePath();
     // ★ content 是原文，searchText 是前缀 + 正文 —— 两列各有用途（12 §4.2 纪律 1）
     this.content = planned.content();
@@ -153,6 +153,22 @@ public class Segment {
   }
 
   // ────────────────────────── 行为 ──────────────────────────
+
+  /**
+   * 标题长度上限（{@code 12 §3.4}：无标题块取首个句子截取 ≤256 字）。
+   *
+   * <p>★ 为什么在这里夹而不是只在分块器里夹：标题来自<strong>三处</strong>（章节标题、无标题块的首句、 表格块的表头首行），任何一处漏夹都会变成一次**插入失败**。
+   * 真事故：库列是 {@code varchar(255)}，而分块器的上限是 256 ⇒ 首段稍长的文档一上传就 {@code value too long for type
+   * character varying(255)}，整篇建档 500。 夹在<strong>落库的必经之路上</strong>，三处来源就都被覆盖了。
+   */
+  public static final int MAX_TITLE_LENGTH = 256;
+
+  static String clampTitle(String title) {
+    if (title == null) {
+      return null;
+    }
+    return title.length() <= MAX_TITLE_LENGTH ? title : title.substring(0, MAX_TITLE_LENGTH);
+  }
 
   /**
    * 编辑正文（{@code PUT /segments/:id}）。
@@ -178,8 +194,12 @@ public class Segment {
     this.updatedBy = updatedBy;
   }
 
-  /** 改标题（不动正文 ⇒ 向量不用重算）。 */
+  /** 改标题（不动正文 ⇒ 向量不用重算）。★ 超长<strong>明确拒绝</strong>：这是用户输入，不该被静默截断。 */
   public void updateTitle(String title, UUID updatedBy) {
+    if (title != null && title.length() > MAX_TITLE_LENGTH) {
+      throw new IllegalArgumentException(
+          "分段标题不能超过 " + MAX_TITLE_LENGTH + " 字（当前 " + title.length() + " 字）");
+    }
     this.title = title;
     this.updatedBy = updatedBy;
   }
