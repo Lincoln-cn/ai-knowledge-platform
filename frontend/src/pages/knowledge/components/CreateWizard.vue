@@ -147,13 +147,34 @@
           超过上限的分段会被<b>拒绝</b>（不会静默截断），请调小分段长度或换长上下文模型
         </div>
 
-        <!-- ★ 建档必填三项（12 §5.1）：文种 / 责任部门 / 密级 —— 批级，一次导入同一套标签 -->
-        <el-form ref="docMetaFormRef" :model="docMeta" :rules="docMetaRules" label-width="72px" class="doc-meta-form">
+        <!-- ★ 建档必填三项（12 §5.1）：文种 / 责任部门 / 密级 —— 批级，一次导入同一套标签
+             ★ 文种与部门是**选择**（可现场新增）而不是纯手填：手填最容易出现同义不同写
+               （「采购部」/「采购部门」/「采购」），而它们会进召回前缀、要参与过滤 ⇒ 值必须收敛。
+               ⚠️ 部门的数据源应当是「部门管理」（组织机构模块）；文种字典应当由后端下发 —— 两条都记在欠账里。 -->
+        <el-form ref="docMetaFormRef" :model="docMeta" :rules="docMetaRules" label-width="92px" class="doc-meta-form">
           <el-form-item label="文种" prop="docType">
-            <el-input v-model="docMeta.docType" maxlength="32" placeholder="例如：合同 / 制度" />
+            <el-select
+              v-model="docMeta.docType"
+              filterable
+              allow-create
+              default-first-option
+              style="width: 100%"
+              placeholder="选择或输入文种"
+            >
+              <el-option v-for="t in DOC_TYPE_SUGGESTIONS" :key="t" :label="t" :value="t" />
+            </el-select>
           </el-form-item>
           <el-form-item label="责任部门" prop="department">
-            <el-input v-model="docMeta.department" maxlength="32" placeholder="例如：法务部" />
+            <el-select
+              v-model="docMeta.department"
+              filterable
+              allow-create
+              default-first-option
+              style="width: 100%"
+              placeholder="选择或输入部门"
+            >
+              <el-option v-for="d in DEPARTMENT_SUGGESTIONS" :key="d" :label="d" :value="d" />
+            </el-select>
           </el-form-item>
           <el-form-item label="密级" prop="classification">
             <el-select v-model="docMeta.classification" style="width: 100%" placeholder="选择密级">
@@ -300,6 +321,8 @@ import type {
 import {
   CLASSIFICATION_LEVEL_LABELS,
   CLASSIFICATION_LEVEL_VALUES,
+  DEPARTMENT_SUGGESTIONS,
+  DOC_TYPE_SUGGESTIONS,
   DOCUMENT_STATUS_LABELS,
   labelOf
 } from '@/constants/labels'

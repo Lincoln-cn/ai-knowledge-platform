@@ -216,6 +216,40 @@ export const STREAM_TERMINATION_PATH_VALUES: StreamTerminationPath[] = [
 
 /* ────────────────────────── 知识 / 应用 ────────────────────────── */
 
+/**
+ * 文种建议值 —— ★ 只是**建议**，不是约束：后端只要求非空且 ≤32 字，所以选择器允许现场新增。
+ *
+ * ⚠️ 欠账：文种字典应当**由后端下发**（像 `upload-policy` 那样），否则前后端各存一份迟早漂移。
+ *    当前形态是「前端常量 + 允许自定义」，保证"能选也能填"。
+ */
+export const DOC_TYPE_SUGGESTIONS = [
+  '制度',
+  '合同',
+  '报销规定',
+  '管理办法',
+  '操作规程',
+  '通知公告',
+  '工作报告',
+  '培训手册'
+]
+
+/**
+ * 责任部门建议值。
+ *
+ * ⚠️ 欠账：真正的形态是**部门管理**（组织机构模块 —— 部门列表由管理员维护、文档归属可校验），
+ *    规划见 `ROADMAP` 的「部门内传阅 + 组织机构管理」。当前是常量 + 允许自定义。
+ */
+export const DEPARTMENT_SUGGESTIONS = [
+  '采购部',
+  '财务部',
+  '法务部',
+  '人事部',
+  '技术部',
+  '行政部',
+  '市场部',
+  '生产部'
+]
+
 export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
   PENDING_PARSE: '待解析',
   SEGMENTING: '分段中',
