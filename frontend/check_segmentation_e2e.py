@@ -52,6 +52,25 @@ def psql(sql: str) -> str:
     return out.stdout.strip()
 
 
+def psql_int(sql: str) -> int:
+    value = psql(sql)
+    return int(value) if value.strip() else 0
+
+
+def wait_status(doc_id: str, expected: str, seconds: int) -> str:
+    """轮询**库里**的文档状态直到 expected（或超时返回当前值）。
+
+    ★ 前端也是这样轮询的 —— 进度与状态的事实源是库，不是内存。
+    """
+    status = ""
+    for _ in range(seconds * 2):
+        status = psql(f"select status from kb_document where id='{doc_id}'")
+        if status == expected or status.endswith("FAILED"):
+            return status
+        time.sleep(0.5)
+    return status
+
+
 def api(method: str, path: str, token: str, body: dict | None = None) -> tuple[int, dict]:
     req = urllib.request.Request(
         API + path,
@@ -348,6 +367,56 @@ def main() -> int:  # noqa: C901
             check(st_g == 200 and (got.get("data") or {}).get("id") == seg_id, f"单条取分段（{st_g}）")
             st_404, _ = api("GET", f"/segments/{'0' * 8}-0000-0000-0000-000000000000", token)
             check(st_404 == 404, f"不存在的分段 ⇒ 404（实际 {st_404}）")
+
+            # ────────────── 8 · 真实进度与「刷新不重置」（第 8 周演示判据） ──────────────
+            print("== 8. 开始向量化 → 进度 → ★ 刷新不重置 ==")
+            page.goto(f"{BASE}/#/knowledge", wait_until="networkidle")
+            page.wait_for_timeout(3000)
+            card = page.locator(f".kb-card:has-text('E2E分段库-{ts}')").first
+            if card.count() == 0:
+                card = page.locator(".kb-card").first
+            card.click()
+            page.wait_for_timeout(3000)  # 文档 Tab 默认激活
+
+            # 点该文档行的「开始向量化」（用户显式动作，后端不自动推进）
+            clicked = page.evaluate(
+                """(docName) => {
+                    const rows = [...document.querySelectorAll('.el-table__row, .doc-row')];
+                    const row = rows.find(r => (r.innerText || '').includes(docName));
+                    if (!row) return false;
+                    const btn = [...row.querySelectorAll('button')]
+                        .find(b => (b.innerText || '').includes('开始向量化'));
+                    if (btn) { btn.click(); return true; }
+                    return false;
+                }""",
+                "structured.docx",
+            )
+            check(clicked, f"文档行有「开始向量化」入口且能点（库里 {len(db_rows)} 段）")
+            page.wait_for_timeout(1500)
+
+            # 等**库里**跑完（服务端事实；这也顺带证明进度真的落库）
+            status = wait_status(doc_id, "SUCCEEDED", 60)
+            check(status == "SUCCEEDED", f"六态走到终点（实际 {status}）")
+            db_processed = psql_int(f"select processed_segments from kb_document where id='{doc_id}'")
+            db_segments = psql_int(f"select segment_count from kb_document where id='{doc_id}'")
+            check(
+                db_processed == db_segments and db_segments > 0,
+                f"库里进度走满：{db_processed}/{db_segments}",
+            )
+            vectors = psql_int(
+                f"select count(*) from vec_embedding_768 where metadata::jsonb ->> 'document_id' = '{doc_id}'"
+            )
+            check(vectors == db_segments, f"向量条数 == 分段数（{vectors} / {db_segments}）")
+
+            # ★ 刷新页面：进度与状态必须**仍在**（读的是库里的数字，不是前端状态）
+            page.reload(wait_until="networkidle")
+            page.wait_for_timeout(3500)
+            body = page.inner_text("body")
+            check(
+                f"{db_segments}/{db_segments}" in body or "成功" in body,
+                "★ 刷新后进度/状态仍在（「刷新页面不重置」—— 读数来自库）",
+            )
+            check("向量化中" not in body, "刷新后不再是「向量化中」（没有停滞的假进度）")
         finally:
             # ────────────── 收尾：删掉夹具库（连带文档与分段） ──────────────
             try:

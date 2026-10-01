@@ -7,6 +7,79 @@
 
 ---
 
+## 0.3.0 · 第 8 周 · M3-a 写入 + 向量化 + 真实进度
+
+### 这一版能做什么
+
+**上传一个真实文档 → 点「开始向量化」→ 看着进度走满 → 刷新页面进度还在**：
+
+```
+上传   POST /knowledge-bases/:id/documents   → 建档即解析 → 入库即分块（0.2.2）
+       ↓ 状态 PENDING_EMBEDDING（等用户点，后端**不自动推进**）
+向量化 POST /documents/:id/embedding         → 立刻返回「向量化中」；真正的工作在后台分批跑
+       每批：调上游 /embeddings（20 段/批）→ 写向量表（幂等 upsert）→ 标分段 EMBEDDED
+             → 回写进度（**覆盖写**）→ 发布 EmbeddingProgressed（带真实数字）
+       ↓ 全部完成才置 SUCCEEDED（差一段就拒绝标成功）
+进度   GET /knowledge-bases/:id/ingestion-progress
+       → total / done / failed / stages[] / running ★ 读数全部来自库 ⇒ **刷新页面不重置**
+       ★ running 只算「自己会往前走」的状态：PENDING_EMBEDDING 不算（它在等用户点）
+重试   POST /documents/:id/retry     → 按**失败阶段**分流：向量化失败 ⇒ 重排队重跑；
+                                        分段失败 ⇒ 如实拒绝（要原始文件，本版不保留上传字节）
+重算   POST /documents/:id/reembed   → 换向量模型后重算（分段退回待向量化 → 进度走满）
+```
+
+### 交付物
+
+| # | 交付 | 关键点 |
+|---|---|---|
+| 1 | **文档状态机** | 转移表是**唯一真源**（目标 → 允许的来源），实体的每个行为都过守卫。★ 反例与正例一样多：跳过分段直接成功、失败态直接成功、向量化中退回改分段、成功后回退到未解析 —— 这些「跳步」不会报错，只会让界面把没加工的文档显示成可用 |
+| 2 | **进度覆盖写** | `reportEmbeddingProgress(已完成的段数)`——**不接受增量参数**。`03 §3.3` 的原话：累加「单次执行看起来完全正确，只有在事件重投时才暴露为进度变成 200%」。回退值（旧事件重投）是无害 no-op |
+| 3 | ★ **向量化端口**（`platform.model.EmbeddingPort`） | 端口在我们这边：业务模块只要「给我向量」，**解密 API key 留在 modelcatalog**（风险 R9 的退路靠它成立）。★ 顺序必须严格对齐：返回的第 i 个向量对应第 i 段文本 —— 错配不报错，只会让检索返回「别的内容」的邻居 |
+| 4 | **向量表**（迁移 V16 `vec_embedding_768`） | 列形照 Spring AI `PgVectorStore` **硬编码的列名**（将来接框架检索不用改表）；表名带维度后缀是刻意的（`vector(N)` 是列类型）；`id = segmentId` ⇒ `on conflict do update` 天然幂等 |
+| 5 | **后台向量化器** | 虚拟线程后台跑 + **每批回写进度**（同步跑意味着请求挂几十秒、且「0/N 与 N/N 同时返回」）；★ **可续跑**：从分段的实际状态算待办，只处理未完成的段（`03 §3.5`）——「跑到一半挂了」的重试只补没做完的 |
+| 6 | **`EmbeddingProgressed`** | 全项目第一个领域事件，带**落库之后的事实**（不是调用方传来的数）；失败的调用一个事件都不发 |
+
+### ★ 判据与证据（`ROADMAP` 第 8 周）
+
+| 判据 | 证据 |
+|---|---|
+| ① 六态状态机单测（非法转移被拒） | `DocumentStateMachineTest` 28 条（含 11 条非法反例） |
+| ② ★ 进度覆盖写（重投事件后不翻倍） | `DocumentProgressTest` 10 条 + `EmbeddingProgressServiceTest` 5 条（重投同一批仍是 3，不是 6） |
+| ③ 幂等 upsert（同 `segmentId` 重复写覆盖） | `SegmentEmbeddingRepositoryTest` 5 条（写两次仍一行、内容是第二次的） |
+| ④ `EmbeddingProgressed` 按事实发布 | 事件带落库后的当前值；`@RecordApplicationEvents` 抓真实事件 |
+| 演示 | ★ 真栈闸门 `check_segmentation_e2e.py` 36/36：点「开始向量化」→ 库里 4/4 → 4 条向量 → **刷新后进度仍在** |
+
+### 验证记录
+
+```
+mvn -B -f backend/pom.xml verify      → BUILD SUCCESS · Tests run: 337（基线 277 → 325 → 337）
+python check_segmentation_e2e.py      → 通过 36/36（真栈 + 真浏览器；含「刷新不重置」）
+python check_knowledge_parse.py       → 通过 9/9（本版顺带修好了它长期 2/8 的红）
+```
+
+### ★ 这一版踩到的坑
+
+| # | 现象 | 根因 | 处理 |
+|---|---|---|---|
+| 1 | ★★ **一批 4 段文本，上游只回 1 个向量** | 我手拼 payload 的 `escape()` **只转义 `\\` 与 `"`、不转义换行**，而分段的 `search_text` 里**正好含换行**（前缀与正文的分隔符）⇒ 发出去的 JSON 非法 | 改用 **Jackson 生成报文**，不再手拼转义。★ 抓到它的正是「向量条数必须等于文本条数」那道守卫 —— 第一次真跑就挣回了自己 |
+| 2 | ★ **桩服务把非法请求体静默吞掉** | `_read_json` 已标记 `__unparsable__`，但 embeddings 处理函数没查这个标记 ⇒ 非法请求被当成「一条空文本」，返回 **200 + 1 个向量** | 桩**明确回 400**（真 OpenAI 兼容服务也如此）。测试替身回退成默认值掩盖的是**客户端 bug** |
+| 3 | **跨模块端口被判越界** | Modulith 的 `@ApplicationModule` 默认 **CLOSED**：模块子包（如 `modelcatalog.domain`）不对外暴露 ⇒ `depends on non-exposed type` | 端口移到 **`platform.model`**（本项目既有约定：跨模块 SPI 放 platform、实现放提供方模块，如 `platform.access.AccessScopePort`） |
+| 4 | **非法状态转移返回 500** | `IllegalStateException` 落进兜底 handler | 映射成 **400 + 原文原因**：状态机抛的消息本来就写给用户看（「当前状态是「成功」，不允许…」），500 会把它盖成「服务内部错误」 |
+| 5 | **删分段/重新分块会留下孤儿向量** | 向量表按框架列形建，没有外键 | 删分段与重新分块时连带删向量 —— 否则**被删掉的分段仍然能被检索到**（界面不显示、检索却答得出来） |
+
+### ⚠️ 待确认 / 欠账
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 1 | **多维度向量表路由未做** | 只有 `vec_embedding_768`。换维度是换表（`vector(N)` 是列类型），自动路由/按需建表随第一个不同维度的模型落地；维度不匹配现在是**明确失败**（不补零、不截断） |
+| 2 | **`event_publication` 还没有行** | Modulith 按「每个监听者一条」记录，而本版还没有事件消费者。第一个真正的消费者落地时补「落表」断言 |
+| 3 | **分段失败的「重试」** | 需要原始文件，本版不保留上传字节 ⇒ 如实拒绝并提示重新上传。要真重试得先做文件留存（`03 §3.5` 的「失败样本留存」） |
+| 4 | **KB 级 reembed / 分段级重试 UI** | 契约里的 `POST /knowledge-bases/:id/reembed`、`PATCH /segments/:id/enabled`、`POST /segments/batch-move`、`DELETE /segments/batch`、`POST /segments/:id/embedding` 仍未落（漂移闸门清单里挂着） |
+| 5 | **`/documents/{id}` 的改名/启停/删除** | 同族端点仍未落（新增 `/documents/:id/embedding|retry|reembed` 三个已落） |
+| 6 | `/api/v1/analytics/*` 仍 404 | 既有欠账，闸门控制台里能看到那几条噪声 |
+
+---
+
 ## 0.2.2 · 第 7 周 · M2-c 分块 · 结构化前缀 · 切分预览
 
 ### 这一版能做什么
