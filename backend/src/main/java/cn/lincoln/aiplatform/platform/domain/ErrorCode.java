@@ -56,6 +56,8 @@ public enum ErrorCode {
 
   /** 模型尚未加载完成等可重试状态（modelcatalog）。 */
   MODEL_NOT_READY(2001, "模型未就绪"),
+  /** 上游模型服务不可用（连不上 / 响应不合规）—— 与 400 分开：用户改不动请求，下一步是查服务或重试。 */
+  UPSTREAM_UNAVAILABLE(2002, "上游模型服务不可用"),
 
   /** 知识库已有向量化内容，向量模型被锁定（knowledge · 不变量 {@code KB-I4}）。 */
   EMBEDDING_LOCKED(3001, "向量模型已锁定"),

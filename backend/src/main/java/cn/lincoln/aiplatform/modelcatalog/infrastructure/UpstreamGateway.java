@@ -118,6 +118,78 @@ public class UpstreamGateway {
     }
   }
 
+  // ────────────────────────── 向量化 ──────────────────────────
+
+  /**
+   * 把一批文本向量化（第 8 周 · 0.3.0 入库链用）。
+   *
+   * <p>★ <strong>顺序必须严格对齐</strong>：返回的第 i 个向量必须对应入参的第 i 段文本。 向量与文本错配是最难发现的一类事故 —— 检索能返回结果，只是返回的是
+   * <em>别的内容</em>的邻居，而且没有任何报错。所以这里：① 要求条数与入参一致；② 按响应里的 {@code index} 归位（不是按数组顺序想当然）； ③ 缺哪一条就报哪一条。
+   *
+   * @param model 上游模型名（{@code baseModel}）
+   * @param texts 待向量化的文本（顺序即结果顺序）
+   * @return 与 {@code texts} 一一对应的向量
+   * @throws UpstreamUnreachableException 上游不可达、响应不合规、或条数/index 对不上
+   */
+  public List<float[]> embed(String model, List<String> texts, String apiBase, String apiKey) {
+    if (texts == null || texts.isEmpty()) {
+      return List.of();
+    }
+    StringBuilder input = new StringBuilder("[");
+    for (int i = 0; i < texts.size(); i++) {
+      if (i > 0) {
+        input.append(',');
+      }
+      input.append('"').append(escape(texts.get(i))).append('"');
+    }
+    input.append(']');
+    String payload = "{\"model\":\"" + escape(model) + "\",\"input\":" + input + "}";
+
+    String body = post(resolve(apiBase, "/embeddings"), payload, apiKey);
+    try {
+      JsonNode data = json.readTree(body).path("data");
+      if (!data.isArray() || data.size() != texts.size()) {
+        throw new UpstreamUnreachableException(
+            "上游返回的向量条数（"
+                + data.size()
+                + "）与请求的文本数（"
+                + texts.size()
+                + "）不一致 —— 顺序无法保证，拒绝入库。响应片段："
+                + abbreviate(body));
+      }
+      float[][] ordered = new float[texts.size()][];
+      int fallbackIndex = 0;
+      for (JsonNode item : data) {
+        int index = item.hasNonNull("index") ? item.get("index").asInt() : fallbackIndex;
+        if (index < 0 || index >= texts.size() || ordered[index] != null) {
+          throw new UpstreamUnreachableException(
+              "上游返回的向量 index 异常：" + index + "（本批共 " + texts.size() + " 条）");
+        }
+        ordered[index] = toFloats(item.path("embedding"), body);
+        fallbackIndex = index + 1;
+      }
+      for (int i = 0; i < ordered.length; i++) {
+        if (ordered[i] == null) {
+          throw new UpstreamUnreachableException("上游未返回第 " + i + " 条文本的向量");
+        }
+      }
+      return List.of(ordered);
+    } catch (IOException e) {
+      throw new UpstreamUnreachableException("上游返回的 embeddings 响应不是合法 JSON：" + e.getMessage(), e);
+    }
+  }
+
+  private static float[] toFloats(JsonNode array, String body) {
+    if (!array.isArray() || array.isEmpty()) {
+      throw new UpstreamUnreachableException("上游返回的向量为空或不是数组 —— 无法入库。响应片段：" + abbreviate(body));
+    }
+    float[] vector = new float[array.size()];
+    for (int i = 0; i < array.size(); i++) {
+      vector[i] = (float) array.get(i).asDouble();
+    }
+    return vector;
+  }
+
   // ────────────────────────── 思考三态 ──────────────────────────
 
   /**
