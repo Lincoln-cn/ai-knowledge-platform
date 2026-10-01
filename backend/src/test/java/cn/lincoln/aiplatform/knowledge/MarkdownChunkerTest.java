@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.knowledge;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.lincoln.aiplatform.knowledge.domain.MarkdownChunker;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentChunk;
@@ -290,6 +291,194 @@ class MarkdownChunkerTest {
   void 空输入返回空列表() {
     assertThat(chunker.chunk("", 100)).isEmpty();
     assertThat(chunker.chunk(null, 100)).isEmpty();
+  }
+
+  // ────────────────────────── 重叠（12 §3.3 · 批 2a） ──────────────────────────
+
+  /**
+   * ★ {@code 12 §3.3}：重叠区从前一块尾部取，起点必须落在句/行边界，长度 ≤ overlap。
+   *
+   * <p>夹具：两段短句，每段各成一块（装箱上限 6，两段合计 10 装不下）。 前块尾部完整句是「丙丁。」3 字 ⇒ overlap=4 时应取到这 3 字， <strong>而不是硬凑 4
+   * 字从「丁」开始</strong>（宁可少重叠，也不要从半个字开始）。
+   */
+  @Test
+  void 重叠区从前块尾部按句边界截取_长度不超过overlap() {
+    String md =
+        """
+        甲乙。丙丁。
+
+        戊己。
+        """;
+    // 夹具前提：甲乙。丙丁。=6 字、戊己。=3 字
+    assertThat("甲乙。丙丁。".length()).isEqualTo(6);
+    assertThat("戊己。".length()).isEqualTo(3);
+
+    List<SegmentChunk> chunks = chunker.chunk(md, 10, 4);
+
+    assertThat(chunks).hasSize(2);
+    String region = overlapRegion(chunks.get(0), chunks.get(1));
+    assertThat(region).as("重叠区必须是前块尾部的完整句「丙丁。」—— 不许从句中半个字起").isEqualTo("丙丁。");
+    assertThat(region.length()).isLessThanOrEqualTo(4);
+    assertThat(chunks.get(1).content()).isEqualTo("丙丁。" + "戊己。");
+    assertThat(chunks.get(0).content()).as("首块不加任何重叠前缀").isEqualTo("甲乙。丙丁。");
+  }
+
+  /** ★ 取不到句/行边界就<strong>不</strong>重叠（宁可少重叠）—— overlap=2 时尾部 2 字落在句中，必须放弃。 */
+  @Test
+  void 取不到句边界就放弃重叠() {
+    String md =
+        """
+        甲乙。丙丁。
+
+        戊己。
+        """;
+
+    List<SegmentChunk> chunks = chunker.chunk(md, 10, 2);
+
+    assertThat(chunks).hasSize(2);
+    assertThat(overlapRegion(chunks.get(0), chunks.get(1)))
+        .as("overlap=2 落在句中 ⇒ 取不到句边界，必须零重叠")
+        .isEmpty();
+    assertThat(chunks.get(1).content()).isEqualTo("戊己。");
+  }
+
+  /** ★ {@code 12 §3.3}：只在同一章节内重叠（判据 titlePath 相同）—— 跨章节会稀释语义。 */
+  @Test
+  void 不同章节绝不重叠() {
+    String md =
+        """
+        # 章一
+
+        甲乙。丙丁。
+
+        # 章二
+
+        戊己。
+        """;
+
+    List<SegmentChunk> chunks = chunker.chunk(md, 20, 4);
+
+    assertThat(chunks).hasSize(2);
+    assertThat(chunks.get(0).titlePath()).isEqualTo("章一");
+    assertThat(chunks.get(1).titlePath()).isEqualTo("章二");
+    assertThat(overlapRegion(chunks.get(0), chunks.get(1)))
+        .as("titlePath 不同 ⇒ 绝不重叠（12 §3.3）")
+        .isEmpty();
+    assertThat(chunks.get(1).content()).isEqualTo("# 章二\n戊己。");
+  }
+
+  /** ★ {@code 12 §3.3} 规则 5 + 硬规则 1/2：表/代码独占块不参与重叠 —— 它们整块保留， 尾部不是「可续写的正文」，拷进相邻块只会制造噪声。 */
+  @Test
+  void 表格与代码块不参与重叠() {
+    String md =
+        """
+        甲乙。丙丁。
+
+        | a | b |
+        | --- | --- |
+        | 1 | 2 |
+
+        ```yaml
+        k: v
+        ```
+
+        戊己。
+        """;
+    // 夹具前提：整表 3 行约 33 字，必须装进 packLimit（50-8=42）才验证「整表一块」
+    int segmentLength = 50;
+    int overlap = 8;
+
+    List<SegmentChunk> chunks = chunker.chunk(md, segmentLength, overlap);
+
+    assertThat(chunks).hasSize(4);
+    assertThat(chunks.get(1).isTable()).isTrue();
+    assertThat(chunks.get(1).content())
+        .as("硬规则 1：整表一块")
+        .contains("| a | b |")
+        .contains("| 1 | 2 |");
+    assertThat(chunks.get(2).isCode()).isTrue();
+    for (int i = 1; i < chunks.size(); i++) {
+      SegmentChunk prev = chunks.get(i - 1);
+      SegmentChunk curr = chunks.get(i);
+      if (prev.isTable() || prev.isCode() || curr.isTable() || curr.isCode()) {
+        assertThat(overlapRegion(prev, curr)).as("表/代码块两侧都不许重叠（12 §3.3 规则 5）").isEmpty();
+      }
+    }
+  }
+
+  /**
+   * ★ 分块器契约（{@code 12 §3.2} 硬规则 3）：任何块<strong>含重叠后</strong>都不得超过 segmentLength。
+   *
+   * <p>实现上必须「先按 segmentLength - overlap 装箱再补重叠前缀」—— 若先按 segmentLength 装箱再硬拼前缀， 这里会立刻红，而入库时 {@code
+   * SEG-I1} 会拒整篇。
+   */
+  @Test
+  void 重叠后仍不得超过segmentLength() {
+    String sentence = "短句。"; // 3 字：短到整句可作重叠区
+    assertThat(sentence.length()).isEqualTo(3);
+    String md = sentence.repeat(5);
+
+    int segmentLength = 8;
+    int overlap = 3;
+    List<SegmentChunk> chunks = chunker.chunk(md, segmentLength, overlap);
+
+    assertThat(chunks.size()).isGreaterThanOrEqualTo(2);
+    for (SegmentChunk chunk : chunks) {
+      assertThat(chunk.charCount())
+          .as("含重叠前缀在内的整块都不得超过 segmentLength")
+          .isLessThanOrEqualTo(segmentLength);
+    }
+    // 确实补上了重叠（否则这条契约测试是空转）
+    assertThat(chunks.get(0).content()).isEqualTo("短句。");
+    assertThat(chunks.get(1).content()).isEqualTo("短句。短句。");
+  }
+
+  /** ★ {@code 12 §3.3} 参数纪律：overlap 越界必须拒绝，禁止静默纠正（静默纠正是最难查的一类 bug）。 */
+  @Test
+  void 非法overlap参数必须拒绝() {
+    String md = "甲乙。丙丁。";
+
+    assertThatThrownBy(() -> chunker.chunk(md, 10, -1))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> chunker.chunk(md, 10, 10))
+        .as("overlap >= segmentLength 时装箱上限为 0，必须显式拒绝")
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> chunker.chunk(md, 10, 11))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  /** ★ 2 参重载必须等于 overlap=0 —— 批 1 的 25 条行为不许被重叠改动碰坏。 */
+  @Test
+  void 无重叠时与2参重载行为一致() {
+    String md =
+        """
+        # 制度
+
+        第一条 本办法适用于公司全体员工的差旅报销管理活动。
+        第二条 住宿标准见下表，超标部分由个人承担。
+        """;
+
+    List<SegmentChunk> two = chunker.chunk(md, 50);
+    List<SegmentChunk> zero = chunker.chunk(md, 50, 0);
+
+    assertThat(zero).isEqualTo(two);
+  }
+
+  /**
+   * 相邻块的重叠区 = 前块尾部 ∩ 后块头部（我们拼进去的就是这段）。
+   *
+   * <p>用「最长公共 前缀/后缀」量出来，而不是手数字数 —— 手数字数最容易看走眼。
+   */
+  private static String overlapRegion(SegmentChunk prev, SegmentChunk curr) {
+    String a = prev.content();
+    String b = curr.content();
+    int max = Math.min(a.length(), b.length());
+    for (int n = max; n > 0; n--) {
+      if (b.startsWith(a.substring(a.length() - n))) {
+        return a.substring(a.length() - n);
+      }
+    }
+    return "";
   }
 
   private static int indexOfChunkContaining(List<SegmentChunk> chunks, String anchor) {

@@ -30,7 +30,8 @@ import java.util.regex.Pattern;
  *   <li><strong>表格与代码围栏是独占块</strong>（{@code 12 §3.2} 硬规则 1 / 2 的推论）—— 不与相邻正文合并， 否则"表头不在同一块"的那一半失去意义
  * </ol>
  *
- * <p>★ 本类<strong>不</strong>处理重叠（{@code 12 §3.3}）：重叠只在同一章节内、参数由切分预览页下发，属批 2 范围。
+ * <p>★ 重叠（{@code 12 §3.3}）在装箱<strong>之后</strong>按后处理补前缀：先按 {@code segmentLength - overlap}
+ * 装箱，再从同章节前块尾部取句/行对齐的重叠区贴到后块开头。表/代码独占块不参与。
  */
 public class MarkdownChunker {
 
@@ -67,20 +68,54 @@ public class MarkdownChunker {
       Pattern.compile("([-*+]|[0-9]{1,3}[.)、）])[ \\u3000]");
 
   /**
-   * 按四层优先级切分。
+   * 按四层优先级切分（不重叠）。
    *
    * @param markdown 解析产物 Markdown（{@code Document.parsedContent}）
    * @param segmentLength 分块目标长度（字符）
    * @return 有序 chunk 列表；空输入返回空列表
    */
   public List<SegmentChunk> chunk(String markdown, int segmentLength) {
+    return chunk(markdown, segmentLength, 0);
+  }
+
+  /**
+   * 按四层优先级切分，并在同章节相邻块之间加重叠（{@code 12 §3.3}）。
+   *
+   * <p>★ 重叠的四条硬规则（{@code 12 §3.3}，缺一条就会产生静默故障）：
+   *
+   * <ol>
+   *   <li><strong>只在同一章节内</strong>（判据 {@code titlePath} 相同）—— 跨章节重叠会把上一章尾巴混进下一章
+   *   <li>重叠区从<strong>前块尾部</strong>取，起点落在句/行边界；取不到就不重叠（宁可少重叠）
+   *   <li>重叠区<strong>不算独立内容</strong>：贴到后块 {@code content} 开头，不额外产生 chunk
+   *   <li>任何块（含重叠后）不得超过 {@code segmentLength} —— 所以先按 {@code segmentLength - overlap}
+   *       装箱再补前缀；补完仍超限则该块不加重叠（契约见 {@code 12 §3.2} 硬规则 3）
+   * </ol>
+   *
+   * @param markdown 解析产物 Markdown（{@code Document.parsedContent}）
+   * @param segmentLength 分块目标长度（字符，<strong>含</strong>重叠前缀）
+   * @param overlap 重叠字符数；必须 {@code 0 ≤ overlap < segmentLength}
+   * @return 有序 chunk 列表；空输入返回空列表
+   * @throws IllegalArgumentException 参数非法（禁止静默纠正）
+   */
+  public List<SegmentChunk> chunk(String markdown, int segmentLength, int overlap) {
     if (segmentLength <= 0) {
       throw new IllegalArgumentException("分块长度必须为正数，当前：" + segmentLength);
+    }
+    if (overlap < 0 || overlap >= segmentLength) {
+      throw new IllegalArgumentException(
+          "重叠必须满足 0 ≤ overlap < segmentLength，当前 overlap="
+              + overlap
+              + "、segmentLength="
+              + segmentLength);
     }
     if (markdown == null || markdown.isBlank()) {
       return List.of();
     }
-    return assemble(parse(markdown.replace("\r\n", "\n").replace('\r', '\n')), segmentLength);
+    // 有效目标长度：为 overlap 预留 —— 先按 segmentLength - overlap 装箱，再补重叠前缀
+    int packLimit = segmentLength - overlap;
+    List<SegmentChunk> chunks =
+        assemble(parse(markdown.replace("\r\n", "\n").replace('\r', '\n')), packLimit);
+    return applyOverlap(chunks, overlap, segmentLength);
   }
 
   // ────────────────────────── L1 + L2：Markdown ⇒ 语义单元序列 ──────────────────────────
@@ -349,6 +384,86 @@ public class MarkdownChunker {
       next++;
     }
     return next;
+  }
+
+  // ────────────────────────── 重叠（12 §3.3 · 批 2a） ──────────────────────────
+
+  /**
+   * 同章节相邻块补重叠前缀（{@code 12 §3.3}）。 不产生额外 chunk，也不改 ordinal/title。
+   *
+   * <p>★ 长度契约：装箱时已按 {@code packLimit = segmentLength - overlap} 预留， 故「前缀 ≤ overlap + 正文 ≤
+   * packLimit」⇒ 拼接后 ≤ {@code segmentLength}。 仍超限的极端情况直接放弃该块的重叠（宁可少重叠，不可超长 —— 超长会被 {@code SEG-I1}
+   * 拒整篇）。
+   */
+  private List<SegmentChunk> applyOverlap(
+      List<SegmentChunk> chunks, int overlap, int segmentLength) {
+    if (overlap == 0 || chunks.size() < 2) {
+      return chunks;
+    }
+    List<SegmentChunk> out = new ArrayList<>(chunks.size());
+    out.add(chunks.getFirst());
+    for (int i = 1; i < chunks.size(); i++) {
+      SegmentChunk prev = chunks.get(i - 1);
+      SegmentChunk curr = chunks.get(i);
+      out.add(overlapInto(prev, curr, overlap, segmentLength));
+    }
+    return out;
+  }
+
+  /** 规则 1/4/5：同章节、非表/代码、拼完不超长 —— 任一不满足就原样返回。 */
+  private SegmentChunk overlapInto(
+      SegmentChunk prev, SegmentChunk curr, int overlap, int segmentLength) {
+    if (prev.isTable()
+        || prev.isCode()
+        || curr.isTable()
+        || curr.isCode()
+        || !prev.titlePath().equals(curr.titlePath())) {
+      return curr;
+    }
+    String tail = extractOverlapTail(prev.content(), overlap);
+    if (tail.isEmpty()) {
+      return curr;
+    }
+    String joined = tail + curr.content();
+    if (joined.length() > segmentLength) {
+      return curr;
+    }
+    return new SegmentChunk(
+        curr.ordinal(),
+        joined,
+        curr.title(),
+        curr.titlePath(),
+        curr.isTable(),
+        curr.isCode(),
+        curr.oversizedRisk());
+  }
+
+  /**
+   * 从 {@code prev} 尾部取重叠区（{@code 12 §3.3}）：长度 ≤ overlap，起点必须落在句/行边界。
+   *
+   * <p>★ 取不到边界就返回空 —— <strong>宁可少重叠，也不要从半个字开始</strong>。 句边界看句末标点之后，行边界看 {@code \n}
+   * 之后；起点取「窗口内最早的合法边界」⇒ 在对齐前提下尽量吃满 overlap。
+   */
+  private static String extractOverlapTail(String prev, int overlap) {
+    if (prev.isEmpty() || overlap <= 0) {
+      return "";
+    }
+    int minStart = Math.max(0, prev.length() - overlap);
+    for (int start = minStart; start < prev.length(); start++) {
+      if (isBoundaryStart(prev, start)) {
+        return prev.substring(start);
+      }
+    }
+    return "";
+  }
+
+  /** 位置 {@code index} 是否可作「句/行起点」：文首，或前一字符是句末标点 / 换行。 */
+  private static boolean isBoundaryStart(String text, int index) {
+    if (index <= 0) {
+      return true;
+    }
+    char before = text.charAt(index - 1);
+    return before == '\n' || SENTENCE_END.indexOf(before) >= 0;
   }
 
   // ────────────────────────── L3 / L4 ──────────────────────────
