@@ -21,6 +21,7 @@ import re
 import sys
 import time
 import urllib.request
+from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
@@ -34,6 +35,8 @@ LIST_RE = re.compile(r"<(ul|ol)[\s>]", re.I)
 TABLE_RE = re.compile(r"<table[\s>]", re.I)
 
 # 真栈夹具：与 check_knowledge_form.py 同口径 —— 用登录态走接口造数，跑完清掉
+# 真栈夹具：与后端测试共用同一批样张（structured.md 有标题/列表/表格；empty.docx 必然解析失败）
+FIXTURES = Path(__file__).resolve().parent.parent / "backend/src/test/resources/fixtures"
 API = BASE + "/api/v1"
 
 
@@ -48,6 +51,41 @@ def api_json(method: str, path: str, token: str, body: dict | None = None) -> di
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode("utf-8") or "{}")
     except Exception as e:
+        return {"code": -1, "message": str(e)}
+
+
+def api_multipart(path: str, token: str, fields: dict[str, str], file) -> dict:
+    """真上传（multipart）。
+
+    ★ 闸门夹具必须走真上传：0.2.1 起「建档即解析」只在**带了文件字节**时才发生，
+      只传 names 的轻量建档不会解析 ⇒ parsedContent 必然空，闸门会红在一个与产品无关的地方
+      （这条曾长期挂在「已知红项」里）。
+    """
+    boundary = "----gateparse0boundary"
+    buf = b""
+    for k, v in fields.items():
+        buf += (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'
+        ).encode("utf-8")
+    buf += (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="files"; '
+        f'filename="{file.name}"\r\nContent-Type: application/octet-stream\r\n\r\n'
+    ).encode("utf-8")
+    buf += file.read_bytes() + b"\r\n"
+    buf += f"--{boundary}--\r\n".encode("utf-8")
+    req = urllib.request.Request(
+        API + path,
+        data=buf,
+        method="POST",
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Authorization": f"Bearer {token}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read().decode("utf-8") or "{}")
+    except Exception as e:  # noqa: BLE001
         return {"code": -1, "message": str(e)}
 
 
@@ -124,17 +162,19 @@ def main() -> int:
                 fixture_kb_id = (kb.get("data") or {}).get("id")
                 print(f"   夹具：真栈建库 id={fixture_kb_id}")
                 if fixture_kb_id:
-                    api_json(
-                        "POST",
-                        f"/knowledge-bases/{fixture_kb_id}/documents",
-                        token,
-                        {
-                            "names": ["解析闸门文档.md"],
-                            "docType": "制度",
-                            "department": "采购部",
-                            "classification": "INTERNAL",
-                        },
+                    meta = {"docType": "制度", "department": "采购部", "classification": "INTERNAL"}
+                    # ① 结构化文档（标题/列表/表格都有）⇒ 验「解析结果按结构渲染」
+                    ok_doc = api_multipart(
+                        f"/knowledge-bases/{fixture_kb_id}/documents", token, meta, FIXTURES / "structured.docx"
                     )
+                    fixture_doc_id = ((ok_doc.get("data") or [{}])[0]).get("id")
+                    print(f"   夹具：上传 structured.docx → doc={fixture_doc_id}")
+                    # ② 空文档 ⇒ 验「0 字符 ≠ 成功」的失败原因可见（0.2.1 的 DOC-I2）
+                    bad_doc = api_multipart(
+                        f"/knowledge-bases/{fixture_kb_id}/documents", token, meta, FIXTURES / "empty.docx"
+                    )
+                    fixture_bad_id = ((bad_doc.get("data") or [{}])[0]).get("id")
+                    print(f"   夹具：上传 empty.docx（预期解析失败）→ doc={fixture_bad_id}")
 
             # ────────────── 进入知识库 → 文档面板 ──────────────
             page.goto(f"{BASE}/#/knowledge", wait_until="networkidle")
@@ -152,6 +192,28 @@ def main() -> int:
 
             # ────────────── 1. 解析结果视图能打开 ──────────────
             print("== 1. 解析结果视图能打开 ==")
+            def open_parse_panel(name_hint: str = "") -> bool:
+                """点开指定行（按名字定位）的「解析结果」。
+
+                ★ 行序随上传时间变：不按名字定位，闸门在真栈上会开到"刚上传的失败样张"，
+                  然后拿「结构渲染」去断言一篇本来就解析失败的文档 —— 红在一个与产品无关的地方。
+                """
+                clicked = page.evaluate(
+                    """(name) => {
+                        const rows = [...document.querySelectorAll('.el-table__row')];
+                        const row = name ? rows.find(r => (r.innerText || '').includes(name)) : rows[0];
+                        if (!row) return false;
+                        const btn = [...row.querySelectorAll('button')]
+                            .find(b => (b.innerText || '').includes('解析结果'));
+                        if (btn) { btn.click(); return true; }
+                        return false;
+                    }""",
+                    name_hint,
+                )
+                if clicked:
+                    page.wait_for_timeout(900)
+                return bool(clicked)
+
             parse_btn = page.locator("button:has-text('解析结果')").first
             has_btn = parse_btn.count() > 0
             check(has_btn, "文档行有「解析结果」入口")
@@ -166,8 +228,10 @@ def main() -> int:
                     print("  - " + m)
                 return 1
 
-            parse_btn.click()
-            page.wait_for_timeout(900)
+            # 真栈打开结构化样张（structured.md）；mock 的种子名不同 ⇒ 回退到第一行
+            if not open_parse_panel("structured.docx"):
+                parse_btn.click()
+                page.wait_for_timeout(900)
 
             def parse_panel_text() -> str:
                 return page.evaluate(
@@ -238,6 +302,27 @@ def main() -> int:
             # mock 种子（fixtures/knowledge.ts doc3）的 failReason / failHint 原文 —— 不许代写
             RAW_REASON = "该 PDF 为扫描件，未检测到文本层，无法提取内容。"
             RAW_HINT = "建议：转为可检索 PDF 或改用 Markdown 格式后重新上传。"
+            # ★ 真栈：文案由**后端**给，闸门不代写 —— 直接问后端要这篇（empty.docx）的
+            #   failReason/failHint，再断言界面上原文可见。
+            #   （mock 模式下 Python 侧打到的是代理后的真后端，拿不到 mock 种子 ⇒ 仍用上面固定文案）
+            if is_real and fixture_bad_id:
+                docs = api_json("GET", f"/knowledge-bases/{fixture_kb_id}/documents?page=1&size=20", token)
+                mine = next(
+                    (
+                        d
+                        for d in ((docs.get("data") or {}).get("list") or [])
+                        if d.get("id") == fixture_bad_id
+                    ),
+                    {},
+                )
+                RAW_REASON = (mine.get("failReason") or "").strip()
+                RAW_HINT = (mine.get("failHint") or "").strip()
+                print(f"   真栈空文档 failReason：{RAW_REASON!r}")
+                print(f"   真栈空文档 failHint  ：{RAW_HINT!r}")
+                check(
+                    bool(RAW_REASON) and bool(RAW_HINT),
+                    "空文档解析失败带可读原因 + 下一步建议（DOC-I2，不是堆栈）",
+                )
 
             # 优先走「解析结果」—— 失败态原文应一并展示；退回既有「查看原因」展开
             parsed_fail_shown = False
@@ -248,7 +333,11 @@ def main() -> int:
                     continue
                 name_cell = row.inner_text()
                 # 只开失败/扫描行，保证断言的就是 failReason 所在的文档
-                if not ("扫描" in name_cell or "失败" in name_cell):
+                # （★ 真栈的失败样张叫 empty.docx —— 它既不含「扫描」也不含「失败」）
+                if is_real:
+                    if "empty.docx" not in name_cell:
+                        continue
+                elif not ("扫描" in name_cell or "失败" in name_cell):
                     continue
                 btn = row.locator("button:has-text('解析结果')")
                 if not btn.count():
@@ -256,7 +345,8 @@ def main() -> int:
                 btn.first.click()
                 page.wait_for_timeout(800)
                 body = page.evaluate("() => document.body.innerText")
-                if RAW_REASON in body and RAW_HINT in body:
+                # ★ 空串必须挡住：`"" in body` 永远为真 —— 那会变成「拿不到原因也算通过」
+                if RAW_REASON and RAW_HINT and RAW_REASON in body and RAW_HINT in body:
                     parsed_fail_shown = True
                     check(True, "解析结果视图内 failReason 原文完整可见")
                     check(True, "解析结果视图内 failHint 原文完整可见")
@@ -270,8 +360,11 @@ def main() -> int:
                     fail_btn.click()
                     page.wait_for_timeout(600)
                     body = page.evaluate("() => document.body.innerText")
-                    check(RAW_REASON in body, f"failReason 原文可见（期望含：{RAW_REASON!r}）")
-                    check(RAW_HINT in body, f"failHint 原文可见（期望含：{RAW_HINT!r}）")
+                    check(
+                        bool(RAW_REASON) and RAW_REASON in body,
+                        f"failReason 原文可见（期望含：{RAW_REASON!r}）",
+                    )
+                    check(bool(RAW_HINT) and RAW_HINT in body, f"failHint 原文可见（期望含：{RAW_HINT!r}）")
                 else:
                     check(False, "能找到失败原因的展示入口（解析结果或查看原因）")
                     check(False, "failHint 原文可见")
