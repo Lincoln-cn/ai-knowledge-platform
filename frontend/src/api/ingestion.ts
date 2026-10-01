@@ -68,6 +68,10 @@ export type SegmentEmbeddingStatus = 'PENDING_EMBEDDING' | 'EMBEDDING' | 'EMBEDD
 export interface Segment {
   id: string
   documentId: string
+  /**
+   * 文档内序号。★ **从 0 起**（数据/契约口径，与后端领域层的 chunk 序号一致）。
+   * 界面要展示「第 N 段」时用 `ordinal + 1` —— 两套基准混用会得到整体差 1 的错位编号。
+   */
   ordinal: number
   title: string
   content: string
@@ -121,6 +125,11 @@ export interface PreviewSegmentationResult {
   charCount: number
   /** 当前向量模型的分段长度上限，用于界面左侧实时提示 */
   modelLimit: number
+  /**
+   * 分段列表。★ `ordinal` 从 **0** 起（同 `Segment.ordinal`）；界面展示用 `ordinal + 1`。
+   * `oversized` 对应后端 `oversizedRisk`（兜底层硬切的标记），不是「字数超上限」——
+   * 超上限的分段根本进不了库（SEG-I1 会拒绝）。
+   */
   segments: Array<{ ordinal: number; content: string; charCount: number; oversized: boolean }>
 }
 

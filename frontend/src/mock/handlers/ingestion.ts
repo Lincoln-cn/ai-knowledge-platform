@@ -199,7 +199,8 @@ function applySegmentationPlan(doc: DocumentItem, plan: SegmentationPlanItem[]) 
       id: `seg_${doc.id}_${p.ordinal}`,
       documentId: doc.id,
       ordinal: p.ordinal,
-      title: p.title || `${doc.name.replace(/\.[^.]+$/, '')} · 第 ${p.ordinal} 段`,
+      // ★ ordinal 是 0 起的数据口径，展示给人看时 +1（见 api/ingestion.ts 的口径注释）
+      title: p.title || `${doc.name.replace(/\.[^.]+$/, '')} · 第 ${p.ordinal + 1} 段`,
       content: p.content,
       charCount: p.content.length,
       enabled: true,
@@ -366,9 +367,10 @@ const runParse = (doc: DocumentItem, opts?: { failSplit?: boolean }) => {
         ].join('\n')
         for (let i = 0; i < Math.min(count, 4); i += 1) {
           const seg: Segment = {
-            id: `seg_${doc.id}_${i + 1}`,
+            id: `seg_${doc.id}_${i}`,
             documentId: doc.id,
-            ordinal: i + 1,
+            // ★ 0 起（与真后端入库即分块一致）
+            ordinal: i,
             title: `${doc.name.replace(/\.[^.]+$/, '')} · 第 ${i + 1} 段`,
             content: `这是从「${doc.name}」切分出的第 ${i + 1} 段内容，用于验证入库流水线的分段阶段。`,
             charCount: 40 + i * 8,
@@ -390,22 +392,27 @@ const buildPreview = (
   sourceText: string
 ): PreviewSegmentationResult => {
   const limit = body.segmentLength > 0 ? body.segmentLength : 500
-  const overlap = Math.max(0, Math.min(body.overlap, limit - 1))
 
-  // 用固定语料做切分演示，保证同一参数下结果稳定
-  const text =
-    sourceText ||
-    '为规范合同管理，防范经营风险，保障公司合法权益，根据国家有关法律法规及公司章程，制定本制度。' +
-      '本制度适用于公司及所属各单位对外签订的各类合同。' +
-      '合同订立前应完成对方主体资格审查，包括营业执照、资质证书、法定代表人身份证明等。' +
-      '重大合同应当组织法律、财务、业务联合评审，并留存评审记录。' +
-      '付款方式应明确约定付款比例、付款节点与发票要求。前期付款比例原则上不超过合同总额的百分之三十，尾款须在验收合格后支付。' +
-      '付款节点应与履约进度挂钩，不得以单纯时间节点作为唯一付款依据。逾期付款应约定违约责任与计算方式。' +
-      '合同金额超过五十万元的，应约定分期付款并设置质量保证金。付款账户必须是对公账户，不接受个人账户收款要求。' +
-      '涉及外币结算的，应明确汇率确定方式与汇率波动分担机制。预付款项须提供等额预付款保函或公司认可的担保方式。' +
-      '财务部门有权对付款条款的合规性提出异议并要求修改。验收标准应量化、可检测，避免「符合要求」等模糊表述。' +
-      '争议解决方式优先协商，协商不成的，约定向公司所在地人民法院提起诉讼。' +
-      '合同原件由档案管理部门统一保管，业务部门留存复印件。合同履行完毕后应及时归档，保存期限不少于十年。'
+  // ★ 与真后端同口径：超上限 / 非法重叠必须**明确拒绝**，绝不静默夹紧。
+  //   （静默夹紧 = 用户以为按他的参数切了、实际不是 —— 与「收下但不用」同族的病）
+  if (limit > MODEL_LIMIT) {
+    throw new ApiError(
+      400,
+      `分段长度 ${limit} 超过当前向量模型上限 ${MODEL_LIMIT} 字`,
+      `请调小分段长度至 ${MODEL_LIMIT} 字以内，或切换至长上下文向量模型`
+    )
+  }
+  if (body.overlap < 0 || body.overlap >= limit) {
+    throw new ApiError(
+      400,
+      `重叠必须满足 0 ≤ overlap < segmentLength，当前 overlap=${body.overlap}、segmentLength=${limit}`
+    )
+  }
+  const overlap = body.overlap
+
+  // ★ 切的就是调用方给的正文（真文档的解析产物 / 暂存文件）——
+  //   不再拿内置语料兜底：那会让 mock 的「预览」与真栈根本不在比同一条链（调用方已保证非空）
+  const text = sourceText
 
   // 按句号/换行粗切，再按 limit 合并 —— 足够演示「可编辑 + 超长标红」
   const sentences = text.split(/(?<=[。！？；\n])/).filter((s) => s.trim())
@@ -422,18 +429,17 @@ const buildPreview = (
   }
   if (buf.trim()) chunks.push(buf)
 
-  // 自定义模式下故意制造一条超长段，让 SEG-I1 在预览里可见
-  if (body.strategy === 'CUSTOM' && chunks.length > 0) {
-    chunks[0] = chunks[0] + '　'.repeat(Math.max(0, MODEL_LIMIT - chunks[0].length + 200))
-  }
-
+  // ★ 与真后端同口径：ordinal 从 **0** 起（数据/契约口径），界面展示用 ordinal + 1
   const result = chunks.map((content, index) => {
     const charCount = content.length
     return {
-      ordinal: index + 1,
+      ordinal: index,
       content,
       charCount,
-      oversized: charCount > MODEL_LIMIT
+      // ★ 契约 oversized 对应真后端的 oversizedRisk（L4 硬切标记）：
+      //   这里"单句就超限、只能整句硬塞进一块"正是同一种情形 —— 语义边界没能守住。
+      //   用 limit（而不是 MODEL_LIMIT）判，才与「切不动了」这件事对应。
+      oversized: charCount > limit
     }
   })
 
@@ -721,6 +727,16 @@ export const ingestionRoutes: MockRoute[] = [
     ({ body, token }) => {
       const input = body as PreviewSegmentationBody & { content?: string }
 
+      // ★ 与真后端同口径：strategy 必须被**消费**（本版只实现 AUTO）。
+      //   mock 若照旧接受 CUSTOM，闸门就是绿的、而真栈 400 —— 那正是「mock 宽松掩盖真后端严口径」
+      if (input.strategy && input.strategy !== 'AUTO') {
+        throw new ApiError(
+          400,
+          `不支持的切分策略：${input.strategy}`,
+          'CUSTOM（按固定长度切分）本版尚未实现；请使用 AUTO（按段落与语义边界切分）'
+        )
+      }
+
       // #11 优先走暂存 uploadIds —— 预览必须基于**用户自己的文件**，不是内置语料
       let sourceText = input.content ?? ''
       if (input.uploadIds?.length) {
@@ -733,24 +749,46 @@ export const ingestionRoutes: MockRoute[] = [
         sourceText = parts.join('\n')
       } else if (input.documentId) {
         const doc = documents.find((d) => d.id === input.documentId)
-        // 文档存在才判可见性：传了不存在的 documentId 时保持"纯计算预览"的旧行为
-        if (doc) gateKb(doc.kbId, token, PERM.segmentEdit, '文档', doc.id)
-        const segs = segments.filter((s) => s.documentId === input.documentId)
-        sourceText = segs.map((s) => s.content).join('\n')
-        if (!sourceText) {
-          sourceText = doc ? `${doc.name} 的正文内容占位……`.repeat(20) : ''
+        // ★ 与真后端同口径：不存在/不可见 ⇒ 404（不泄漏存在性），不再"保持纯计算预览"的旧行为
+        if (!doc) throw new ApiError(404, '文档不存在', '它可能已被删除，或你没有访问权限')
+        gateKb(doc.kbId, token, PERM.segmentEdit, '文档', doc.id)
+        // ★ 与真后端同口径：预览读的是**该文档的解析产物**（parsedContent）——
+        //   不是已有分段、更不是内置语料。否则 mock 的「预览」与真栈根本不在比同一条链。
+        sourceText = doc.parsedContent ?? ''
+        if (!sourceText.trim()) {
+          throw new ApiError(
+            400,
+            '文档解析尚未完成，无法预览切分',
+            '请等待文档解析完成后再试；若解析失败，请查看文档的失败原因并修复后重新上传'
+          )
         }
+      } else if (!input.segmentationPlan?.length) {
+        // ★ 与真后端同口径：既没有文档、又没有计划 ⇒ 400（不是拿内置语料假装切了）
+        throw new ApiError(
+          400,
+          '请提供 documentId 或 segmentationPlan',
+          '预览需要已解析的文档正文（documentId），或用户确认过的切分计划（segmentationPlan）'
+        )
       }
 
       // #11 用户已确认的切分计划（含预览编辑）优先于自动切分
       if (input.segmentationPlan?.length) {
         const result = input.segmentationPlan.map((p) => {
           const charCount = p.content.length
+          // ★ 与真后端同口径：用户粘进超长内容必须**拒绝**（SEG-I1），不能只标红。
+          //   ⚠️ 边界略松：真后端按 searchText（含结构化前缀）全长判，mock 这里只看正文长度。
+          if (charCount > MODEL_LIMIT) {
+            throw new ApiError(
+              3002,
+              `该内容 ${charCount} 字，超出当前向量模型上限 ${MODEL_LIMIT} 字。`,
+              '建议按段落切分为多段，或切换至长上下文向量模型。'
+            )
+          }
           return {
             ordinal: p.ordinal,
             content: p.content,
             charCount,
-            oversized: charCount > MODEL_LIMIT
+            oversized: false
           }
         })
         return {

@@ -7,6 +7,85 @@
 
 ---
 
+## 0.2.2 · 第 7 周 · M2-c 分块 · 结构化前缀 · 切分预览
+
+### 这一版能做什么
+
+**上传一个真实文档 → 它被切成带来源前缀的分段落到库里 → 切分预览与库里的分段逐项一致**：
+
+```
+上传   POST /api/v1/knowledge-bases/:id/documents   → 建档即解析，**解析成功即分块**
+                                                      状态 PENDING_EMBEDDING（不是「已完成」——向量化还没做）
+分块   L1 标题为章节锚点（titlePath = H1 > H2 > H3）
+       L2 语义单元：第X条/（一）/1.1 法条锚点 · 列表项 · 空行段落 · 表格/代码围栏整块
+       L3 句边界（。！？；……）   L4 硬切 + oversizedRisk
+       ★ 表格/代码**独占块**（不与正文混块）· 超长表按行分组并**重复表头**
+       ★ 重叠只在同一章节内、对齐句/行边界、不算独立内容（12 §3.3）
+前缀   库里 search_text = 【文种·部门·文档名｜章节路径】+ 正文
+       ★ 前缀**绝不进 content**（引用展示要看到干净原文）
+       ★ contentHash 含前缀完整组成 ⇒ 改标签就必须重新向量化（SEG-I7）
+预览   POST /api/v1/segmentation/preview   → ★ 与入库**同一个分块器**：同文档同参数 ⇒ 逐项相同
+分段   GET  /api/v1/segments          （按 dataScope 过滤，不可见的库不返回）
+       GET|PUT|DELETE /api/v1/segments/:id
+       ★ 改内容重跑 SEG-I1 + 重算 hash + 状态回到「待向量化」
+拒绝   strategy=CUSTOM / uploadIds（暂存上传）/ segmentLength > 向量模型上限
+       → 一律**明确 400 + 可读建议**，绝不「收下但不用」、绝不静默夹紧
+```
+
+### 交付物
+
+| # | 交付 | 关键点 |
+|---|---|---|
+| 1 | **四层分块器**（`MarkdownChunker`，自研） | Spring AI 的 `TokenTextSplitter` 用不了（12 §3.1 核过源码：单位是 token、无 overlap、无结构感知、无长度上限拦截）。★ 两条被测试钉住的纪律：**标题行不单独成块**（6 个字的块进向量就是噪声）、**表格/代码独占块** |
+| 2 | **`Segmenter`：唯一分块入口** | 预览与入库都只调它 —— 不允许各自再拼一遍 `search_text`，「预览好看、入库难看」的分叉正是这么来的（12 §3.5） |
+| 3 | **`kb_segment`**（迁移 V15） | 分段是**子实体**（文档是聚合根）⇒ 没有 `deleted_at`；`(document_id, ordinal)` 唯一；`content` 与 `search_text` 分两列 |
+| 4 | ★ **SEG-I1 构造即拒绝** | 超限**拒绝 + 可读原因 + 下一步建议**，绝不静默截断（02 §2.3 的真实事故：向量上下文约 1K token，超出部分被静默截断，运营完全不知情）。上限是**参数不是常量**（随向量模型变化），金丝雀：把上限调小照样起效 |
+| 5 | **入库即分块** | 落库 + 回填 `segmentCount`/`charCount` + 状态 `PENDING_EMBEDDING`；失败 ⇒ `SEGMENT_FAILED` + 可读原因；重复分块幂等（先删后写） |
+| 6 | **参数口径与前端对齐** | `segmentLength 500` / `overlap 60` = 向导默认值；`maxChars` 优先取 KB 绑定向量模型的 `contextWindow`，否则回落 `app.segmentation.max-chars=1200`（= 前端 mock 的 `MODEL_LIMIT`，避免 mock/真栈漂移） |
+
+### ★ 判据（`ROADMAP` 第 7 周四条，全部有实测）
+
+| 判据 | 证据 |
+|---|---|
+| ① 分块四层表驱动单测（含「第X条不跨切」「表格不跨块」） | `MarkdownChunkerTest` 19 条（含黄金用例：关掉法条锚点立刻红） |
+| ② 金丝雀：超长 chunk 必被 `SEG-I1` 拒绝 | `SegmentContentTest` 7 条 + `SegmenterTest` 11 条（上限调小照样拒） |
+| ③ `search_text` = 前缀 + 正文（断言前缀构成与长度上限） | `SearchTextTest` 6 条 + ★ 真栈闸门**直接查库**：`search_text` 以「制度·采购部·…｜」开头、`content` 不含前缀 |
+| ④ **预览与入库用同一个分块器**（同输入 ⇒ 同输出） | ★ 闸门逐项比对：预览的 `ordinal/content/charCount` 与库里分段**完全相同** |
+
+### 验证记录
+
+```
+mvn -B -f backend/pom.xml verify            → BUILD SUCCESS · Tests run: 277（基线 221 → 246 → 264 → 277）
+python check_segmentation_e2e.py            → 通过 30/30（真栈：上传真实 DOCX → 库里 search_text → 预览一致性 → 分段页）
+python check_knowledge_form.py              → 通过 24/24      python check_models_form.py 保持不破
+npm run typecheck · build:mock · verify_refs · check_template_tags · check_design  → 全过
+```
+
+### ★ 这一版踩到的坑（清一色「看起来在做、实际没生效」）
+
+| # | 现象 | 根因 | 处理 |
+|---|---|---|---|
+| 1 | ★★ **分段长度接近上限的文档会被整篇判死** | 装箱预算按「文档级前缀」（约 14 字）估，硬校验却用「真实前缀」（含章节路径，最坏 80 字）⇒ 估算器与校验器自相矛盾。实测：`segmentLength=1200`（= 默认上限，滑块上很自然）+ 48 字章节标题 ⇒ `该内容 1250 字，超出上限 1200 字` | 预算改按**最坏前缀**估 ⇒ `searchText ≤ maxChars` 成为**算术恒等式**，自动路径永不整篇失败（代价 ≤4% 预算）。12 §10.2 风险 1 定的处置方式本就是「设前缀上限」而不是「拒绝整篇」 |
+| 2 | **长条文被切进条中间** | 只按句装箱，没有 L2 的「第X条」锚点 ⇒ 切出「第一条的尾巴 + 第二条的前半」。★ 块数与长度都正常，**只有边界断言看得见** | 补法条/列表项锚点；新增表驱动用例把这条钉死（关掉锚点立刻红） |
+| 3 | **无标题段落流的标题变成整段 135 字** | 「首个句子」只认句号，而 PDF 段落流通篇没有句号 | 行尾也算断点 |
+| 4 | **契约里的 `strategy` 被静默忽略** | 界面写着「智能分段 / 按固定长度切分」，后端一律按 AUTO 处理 | CUSTOM **明确 400 + 可读建议**（本版只实现 AUTO），记入欠账 |
+| 5 | **同一条路径只实现一半** | 契约里 `/segments/{id}` 还声明了 GET（对话引用回溯用）与 DELETE，只落了 PUT | 契约漂移闸门直接红 ⇒ 补齐两个方法；`/segmentation` 欠账还清后从「未实现清单」删除 |
+| 6 | **mock 比真后端宽松四处** | ①`ordinal` 基准 1 起（真栈 0 起）②`segmentLength` 超上限不拒 ③编辑过的计划不跑 SEG-I1 ④预览用**内置语料**而不是文档的解析产物 | 四处按真栈对齐；★ 统一「数据 0 起、界面 +1」，并写进契约注释 |
+| 7 | **界面文案与实现相反** | 两处写着「超出部分将被**截断**，影响召回」—— 而我们的设计是**拒绝**（静默截断正是 SEG-I1 要消灭的事故形态） | 文案改为「会被拒绝（不会静默截断）」；向导滑块上限绑到 `modelLimit`，不再让用户拖到必被后端拒的值 |
+
+### ⚠️ 待确认 / 欠账
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 1 | **`stageUploads` 链未实现** | 建库向导的「暂存上传 → 按 uploadIds 预览」在真栈走不通（`/uploads` 404）。本版预览按 `documentId`（= 库内分段管理页那条路，闸门已覆盖）；暂存链随上传链补 |
+| 2 | `strategy=CUSTOM`（按固定长度切分） | 明确 400 而不是静默按 AUTO 处理；实现它需要一套独立切分规则 |
+| 3 | `PATCH /segments/:id/enabled` · `POST /segments/batch-move` · `DELETE /segments/batch` · `POST /segments/:id/embedding` | 仍在契约漂移闸门的「未实现清单」下挂着（计划见 `ROADMAP §4.7.3`） |
+| 4 | ★ `Segment` 视图没有 `oversizedRisk` | 界面按 `charCount > modelLimit` 判「超长」，而该条件在自动路径下**不可能成立**（预算已预留前缀）⇒ 那个标记等于永不显示。应把 `oversizedRisk` 加进 `Segment`（可选字段） |
+| 5 | mock 的计划路径 SEG-I1 略松 | mock 只按正文长度判，真后端按 `searchText`（含前缀）全长判；方向一致、边界略松 |
+| 6 | `/api/v1/analytics/*` 仍 404 | 既有欠账（查看板页必然空），闸门控制台里能看到这几条噪声 |
+
+---
+
 ## 0.2.1 · 第 6 周 · M2-b Tika 解析成 Markdown（含噪声剥离与实测数字）
 
 ### 这一版能做什么

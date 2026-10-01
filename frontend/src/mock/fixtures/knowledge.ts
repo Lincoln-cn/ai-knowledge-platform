@@ -302,7 +302,7 @@ export const segments: Segment[] = [
   {
     id: 'seg1',
     documentId: 'doc1',
-    ordinal: 1,
+    ordinal: 0,
     title: '第一条 总则',
     content:
       '为规范合同管理，防范经营风险，保障公司合法权益，根据国家有关法律法规及公司章程，制定本制度。本制度适用于公司及所属各单位对外签订的各类合同，包括但不限于采购合同、销售合同、服务合同、租赁合同等。',
@@ -313,7 +313,7 @@ export const segments: Segment[] = [
   {
     id: 'seg2',
     documentId: 'doc1',
-    ordinal: 2,
+    ordinal: 1,
     title: '第二条 合同订立',
     content:
       '合同订立前应完成对方主体资格审查，包括营业执照、资质证书、法定代表人身份证明等。重大合同应当组织法律、财务、业务联合评审，并留存评审记录。',
@@ -324,7 +324,7 @@ export const segments: Segment[] = [
   {
     id: 'seg3',
     documentId: 'doc1',
-    ordinal: 3,
+    ordinal: 2,
     title: '第三条 付款条款要求',
     content:
       '付款方式应明确约定付款比例、付款节点与发票要求。前期付款比例原则上不超过合同总额的百分之三十，尾款须在验收合格后支付。付款节点应与履约进度挂钩，不得以单纯时间节点作为唯一付款依据。逾期付款应约定违约责任与计算方式。合同金额超过五十万元的，应约定分期付款并设置质量保证金。付款账户必须是对公账户，不接受个人账户收款要求。涉及外币结算的，应明确汇率确定方式与汇率波动分担机制。预付款项须提供等额预付款保函或公司认可的担保方式。财务部门有权对付款条款的合规性提出异议并要求修改。（本段落刻意写得很长，用于验证超长分段的标红与建议）',
@@ -335,7 +335,7 @@ export const segments: Segment[] = [
   {
     id: 'seg4',
     documentId: 'doc1',
-    ordinal: 4,
+    ordinal: 3,
     title: '第四条 验收标准与争议解决',
     content:
       '验收标准应量化、可检测，避免「符合要求」等模糊表述。争议解决方式优先协商，协商不成的，约定向公司所在地人民法院提起诉讼。',
@@ -346,7 +346,7 @@ export const segments: Segment[] = [
   {
     id: 'seg5',
     documentId: 'doc1',
-    ordinal: 5,
+    ordinal: 4,
     title: '第五条 档案管理',
     content:
       '合同原件由档案管理部门统一保管，业务部门留存复印件。合同履行完毕后应及时归档，保存期限不少于十年。',
@@ -357,7 +357,7 @@ export const segments: Segment[] = [
   {
     id: 'seg6',
     documentId: 'doc2',
-    ordinal: 1,
+    ordinal: 0,
     title: '采购合同模板 · 通用条款',
     content:
       '本模板适用于公司常规采购业务。使用前须根据具体业务场景调整标的、数量、价款、履行期限等要素，不得直接套用未经审查的空白条款。',
@@ -368,7 +368,7 @@ export const segments: Segment[] = [
   {
     id: 'seg7',
     documentId: 'doc2',
-    ordinal: 2,
+    ordinal: 1,
     title: '服务合同模板 · 服务范围',
     content:
       '服务范围应以附件形式列明服务内容、服务标准、服务期限与服务地点。变更服务范围须签订补充协议。（本段同样超长，验证多条超长并存的界面表现。）' +
@@ -380,7 +380,7 @@ export const segments: Segment[] = [
   {
     id: 'seg8',
     documentId: 'doc2',
-    ordinal: 3,
+    ordinal: 2,
     title: '保密协议要点',
     content: '双方对在合同签订与履行过程中知悉的对方商业秘密负有保密义务，保密期限自合同生效之日起三年。',
     charCount: 68,
@@ -390,7 +390,7 @@ export const segments: Segment[] = [
   {
     id: 'seg9',
     documentId: 'doc4',
-    ordinal: 1,
+    ordinal: 0,
     title: '供应商准入条件',
     content:
       '供应商应具备独立法人资格，注册资本不少于人民币一百万元，近三年无重大违法记录，具备与所提供产品或服务相匹配的资质证书。',
@@ -401,7 +401,7 @@ export const segments: Segment[] = [
   {
     id: 'seg10',
     documentId: 'doc5',
-    ordinal: 1,
+    ordinal: 0,
     title: '验收抽样规则',
     content: '同一批次到货按百分之五比例抽样，批量不足一百件的至少抽样五件。抽样不合格率超过百分之三的，该批次整批拒收。',
     charCount: 88,
@@ -411,7 +411,7 @@ export const segments: Segment[] = [
   {
     id: 'seg11',
     documentId: 'doc5',
-    ordinal: 2,
+    ordinal: 1,
     title: '不合格品处置',
     content: '验收不合格的，应在三个工作日内书面通知供应商。可返工的限期返工，不可返工的作退货或索赔处理。',
     charCount: 72,
@@ -421,7 +421,7 @@ export const segments: Segment[] = [
   {
     id: 'seg12',
     documentId: 'doc7',
-    ordinal: 1,
+    ordinal: 0,
     title: '产品定位',
     content:
       '本产品是面向企业内网部署的知识助理平台，核心能力是把业务文档变成可检索、可引用的知识，并支撑带引用的问答。',

@@ -27,7 +27,7 @@
 
     <div v-if="oversizedCount > 0" class="notice warn">
       ⚠ 当前有 <b>{{ oversizedCount }}</b> 个超长分段（超过向量模型上限约 {{ modelLimit }} 字）。
-      超出部分将被截断，影响召回。建议：按段落切分，或调小分段长度后重新切分。
+      超过上限的分段会被<b>拒绝</b>入库（不会静默截断）。建议：按段落切分，或调小分段长度后重新切分。
     </div>
 
     <div v-loading="loading" class="grid">

@@ -127,7 +127,14 @@
 
         <div class="slider-row">
           <span class="slider-label">分段长度</span>
-          <el-slider v-model="segForm.segmentLength" :min="100" :max="2000" :step="50" show-input :show-input-controls="false" />
+          <el-slider
+            v-model="segForm.segmentLength"
+            :min="100"
+            :max="segmentLengthMax"
+            :step="50"
+            show-input
+            :show-input-controls="false"
+          />
         </div>
         <div class="slider-row">
           <span class="slider-label">重叠长度</span>
@@ -137,7 +144,7 @@
         <!-- 本方案新增：左侧实时提示向量模型上限 -->
         <div class="notice warn limit-notice">
           ⚠ 当前向量模型上限约 <b class="num">{{ modelLimit }}</b> 字<br />
-          超出部分将被截断，影响召回
+          超过上限的分段会被<b>拒绝</b>（不会静默截断），请调小分段长度或换长上下文模型
         </div>
 
         <!-- ★ 建档必填三项（12 §5.1）：文种 / 责任部门 / 密级 —— 批级，一次导入同一套标签 -->
@@ -191,7 +198,7 @@
             :class="{ oversized: seg.oversized }"
           >
             <div class="pi-head">
-              <span class="micro muted">#{{ seg.ordinal }} · {{ seg.charCount }} 字</span>
+              <span class="micro muted">#{{ seg.ordinal + 1 }} · {{ seg.charCount }} 字</span>
               <span v-if="seg.oversized" class="pi-warn">⚠ 超长</span>
               <span v-if="editedOrdinals.has(seg.ordinal)" class="pi-edited">已编辑</span>
             </div>
@@ -379,6 +386,12 @@ const previewError = ref('')
 const stageError = ref('')
 const importError = ref('')
 const modelLimit = ref(1200)
+/**
+ * 分段长度滑块上限：向量模型上限更紧时用它。
+ * ★ 否则用户能把滑块拖到 2000、而模型上限只有 1200 —— 提交必被后端拒（mock 与真栈同口径 400），
+ * 界面却允许他选，属于"让用户撞墙再告诉他不行"。
+ */
+const segmentLengthMax = computed(() => Math.max(100, Math.min(2000, modelLimit.value || 2000)))
 const editingOrdinal = ref<number | null>(null)
 const editingContent = ref('')
 const editedOrdinals = ref(new Set<number>())
