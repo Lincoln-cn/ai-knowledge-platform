@@ -372,8 +372,10 @@ def main() -> int:
                 or any("密级" in e for e in errs2),
                 f"缺建档三项被拦（errors={errs2}）",
             )
-            fill_input("文种", "制度")
-            fill_input("责任部门", "采购部")
+            # ★ 文种/部门现在是**下拉选择**（允许现场新增）：往 input 里塞 value 不会改 v-model，
+            #   必须真的点开下拉选一项 —— 与用户的操作一致（这条曾是闸门的假绿灯来源）
+            check(select_by_label("文种", "制度"), "能选中「文种」选项（制度）")
+            check(select_by_label("责任部门", "采购部"), "能选中「责任部门」选项（采购部）")
             click_btn("开始导入")
             page.wait_for_timeout(900)
             errs2b = form_errors()
@@ -452,8 +454,8 @@ def main() -> int:
             set_files(".el-dialog input[type=file]", str(tmp)) or set_files("input[type=file]", str(tmp))
             page.wait_for_timeout(800)
 
-            fill_input("文种", "合同")
-            fill_input("责任部门", "法务部")
+            check(select_by_label("文种", "合同"), "能选中「文种」选项（合同）")
+            check(select_by_label("责任部门", "法务部"), "能选中「责任部门」选项（法务部）")
             check(select_by_label("密级", "机密"), "能选中「密级」选项（机密）")
             page.wait_for_timeout(300)
             check(click_upload_btn(), "点了上传提交按钮")

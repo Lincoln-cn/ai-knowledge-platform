@@ -33,10 +33,28 @@
     <!-- ★ 建档必填三项（12 §5.1）：文种 / 责任部门 / 密级 —— 决定召回前缀与安全过滤，不能有默认值 -->
     <el-form ref="metaFormRef" :model="meta" :rules="metaRules" label-width="96px" class="meta-form">
       <el-form-item label="文种" prop="docType">
-        <el-input v-model="meta.docType" maxlength="32" placeholder="例如：合同 / 制度 / 报销规定" />
+        <el-select
+          v-model="meta.docType"
+          filterable
+          allow-create
+          default-first-option
+          style="width: 220px"
+          placeholder="选择或输入文种"
+        >
+          <el-option v-for="t in DOC_TYPE_SUGGESTIONS" :key="t" :label="t" :value="t" />
+        </el-select>
       </el-form-item>
       <el-form-item label="责任部门" prop="department">
-        <el-input v-model="meta.department" maxlength="32" placeholder="例如：法务部 / 采购部" />
+        <el-select
+          v-model="meta.department"
+          filterable
+          allow-create
+          default-first-option
+          style="width: 220px"
+          placeholder="选择或输入部门"
+        >
+          <el-option v-for="d in DEPARTMENT_SUGGESTIONS" :key="d" :label="d" :value="d" />
+        </el-select>
       </el-form-item>
       <el-form-item label="密级" prop="classification">
         <el-select v-model="meta.classification" style="width: 220px" placeholder="选择密级">
@@ -81,6 +99,8 @@ import type { ClassificationLevel } from '@/api/types'
 import {
   CLASSIFICATION_LEVEL_LABELS,
   CLASSIFICATION_LEVEL_VALUES,
+  DEPARTMENT_SUGGESTIONS,
+  DOC_TYPE_SUGGESTIONS,
   labelOf
 } from '@/constants/labels'
 
