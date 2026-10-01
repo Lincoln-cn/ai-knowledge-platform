@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import cn.lincoln.aiplatform.modelcatalog.domain.EmbeddingPort;
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
@@ -13,6 +12,7 @@ import cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode;
 import cn.lincoln.aiplatform.modelcatalog.domain.ToolsMode;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;

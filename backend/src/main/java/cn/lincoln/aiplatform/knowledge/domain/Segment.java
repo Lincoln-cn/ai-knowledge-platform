@@ -184,6 +184,29 @@ public class Segment {
     this.updatedBy = updatedBy;
   }
 
+  // ────────────────────────── 行为：向量化（第 8 周 · 0.3.0） ──────────────────────────
+
+  /**
+   * 本段的向量已写入向量表。
+   *
+   * <p>★ 与 {@code vec_embedding_<维度>} 的一行一一对应（{@code id = segmentId}）。
+   * 「写入成功」与「状态已改」是同一件事的两面：只写向量不改状态，重试会重跑全部； 只改状态不写向量，检索会缺内容 —— 两者都看不见。
+   */
+  public void markEmbedded() {
+    this.embeddingStatus = SegmentEmbeddingStatus.EMBEDDED;
+  }
+
+  /**
+   * 本段向量化失败。
+   *
+   * <p>★ 失败原因记在<strong>文档级</strong> {@code failReason} 上，分段级只留状态： 一个批次里 3 段超时，可读原因是一样的，逐段复制只会让原因散开。
+   * 状态是用来<strong>筛重试范围</strong>的（{@code 03 §3.5}：只重试 {@code embedding_status <> EMBEDDED} 的分段，
+   * 代价从分钟级降到秒级）。
+   */
+  public void markEmbeddingFailed() {
+    this.embeddingStatus = SegmentEmbeddingStatus.FAILED;
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {

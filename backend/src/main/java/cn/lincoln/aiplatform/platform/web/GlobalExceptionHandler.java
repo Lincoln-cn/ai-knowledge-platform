@@ -41,6 +41,22 @@ public class GlobalExceptionHandler {
   }
 
   /**
+   * <strong>状态不允许</strong>这个动作（如「已完成的文档再次开始向量化」）⇒ 400 + <strong>原文展示原因</strong>。
+   *
+   * <p>★ 不能让它落进兜底 handler 变成 500：状态机抛的消息本来就是<strong>写给用户看的</strong>
+   * （「当前状态是「SUCCEEDED」，不允许转到「EMBEDDING」（允许的来源状态：…）」）。 500 会把它盖成「服务内部错误」，用户既不知道发生了什么、也不知道下一步做什么 ——
+   * 而这类拒绝的真实语义是「你这个动作在当前状态下不合法」，属于调用方可以照着改的一类。
+   *
+   * <p>★ {@code IllegalArgumentException} 同族处理（领域校验如「分段正文不能为空」「向量维度不匹配」）—— 它们的消息同样是写给人看的中文，没有理由降级成
+   * 500。
+   */
+  @ExceptionHandler({IllegalStateException.class, IllegalArgumentException.class})
+  public ResponseEntity<ApiResponse<Void>> onIllegalState(RuntimeException cause) {
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .body(ApiResponse.fail(ErrorCode.BAD_REQUEST, cause.getMessage()));
+  }
+
+  /**
    * 请求体校验失败。
    *
    * <p>★ 这里把<strong>字段名</strong>带上（"password: 不能为空"），而不是笼统说"参数不合法" —— 缺字段的是调用方，可读的原因能让对接的人自己修好。

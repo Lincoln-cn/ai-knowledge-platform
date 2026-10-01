@@ -59,6 +59,7 @@ public class DocumentService {
   private final SegmentEmbeddingRepository segmentEmbeddings;
   private final MaxCharsResolver maxCharsResolver;
   private final SegmentationProperties segmentationProperties;
+  private final EmbeddingRunner runner;
   private final Segmenter segmenter = new Segmenter();
 
   public DocumentService(
@@ -68,7 +69,8 @@ public class DocumentService {
       SegmentRepository segments,
       SegmentEmbeddingRepository segmentEmbeddings,
       MaxCharsResolver maxCharsResolver,
-      SegmentationProperties segmentationProperties) {
+      SegmentationProperties segmentationProperties,
+      EmbeddingRunner runner) {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
     this.parser = parser;
@@ -76,6 +78,7 @@ public class DocumentService {
     this.segmentEmbeddings = segmentEmbeddings;
     this.maxCharsResolver = maxCharsResolver;
     this.segmentationProperties = segmentationProperties;
+    this.runner = runner;
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -95,6 +98,38 @@ public class DocumentService {
     long total = documents.countByKbId(kbId);
     return PageResult.of(
         found.stream().map(DocumentView::from).toList(), total, safePage, safeSize);
+  }
+
+  // ────────────────────────── 向量化（第 8 周 · 0.3.0） ──────────────────────────
+
+  /**
+   * 开始向量化（契约 {@code startEmbedding}：<strong>用户显式动作</strong>，后端不自动推进）。
+   *
+   * <p>★ 越权/不可见 ⇒ 404（与 {@link #list} 同一判定）。
+   *
+   * <p>★ 立刻返回：真正跑向量化的是 {@link EmbeddingRunner} 的后台任务，每批回写进度 —— 前端靠轮询看进度，靠的就是"进度在库里"（判据「刷新页面不重置」）。
+   *
+   * @param documentId 文档 id
+   * @throws BusinessException 文档不可见/不存在、知识库未绑定向量模型
+   * @throws IllegalStateException 当前状态不允许开始向量化（状态机守卫，重复点击会拿到可读拒绝）
+   */
+  public DocumentView startEmbedding(UUID documentId) {
+    Document document = requireVisibleDocument(documentId);
+    runner.startAsync(documentId);
+    // 回读一次：状态已由 startAsync 推进到「向量化中」，返回给前端的必须是推进后的状态
+    return DocumentView.from(documents.findById(document.id()).orElse(document));
+  }
+
+  /** 按 id 取文档并做可见性判定（不可见与不存在同一个 404 —— 不泄漏存在性）。 */
+  private Document requireVisibleDocument(UUID documentId) {
+    Document document =
+        documents
+            .findById(documentId)
+            .orElseThrow(
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "文档不存在", "它可能已被删除，或你没有访问权限"));
+    // ★ 可见性继承库（07 §3.3）：库不可见 ⇒ 文档也不可见
+    knowledgeBases.get(document.kbId());
+    return document;
   }
 
   // ────────────────────────── 建档 ──────────────────────────

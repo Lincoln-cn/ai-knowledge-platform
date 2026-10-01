@@ -1,11 +1,11 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
-import cn.lincoln.aiplatform.modelcatalog.domain.EmbeddingPort;
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Component;

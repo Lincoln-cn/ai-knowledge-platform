@@ -362,6 +362,23 @@ class StubHandler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         body = self._read_json()
 
+        # ★ 请求体解析不了就必须 400 —— 不能让"非法请求"看起来像一次成功的调用。
+        #   真实事故：客户端忘了转义换行 ⇒ 上游收到非法 JSON；桩这里原本默默按「一条空文本」处理，
+        #   返回 200 + 1 个向量 ⇒ 客户端以为自己发对了，排查时只能对着"怎么只回了 1 条"猜。
+        #   桩的职责是把上游的拒绝如实演出来（真 OpenAI 兼容服务会回 400 invalid JSON）。
+        if isinstance(body, dict) and "__unparsable__" in body:
+            self._send_json(
+                400,
+                {
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "请求体不是合法 JSON（多半是字符串里的控制字符没转义，如换行）",
+                        "raw_prefix": str(body["__unparsable__"])[:200],
+                    }
+                },
+            )
+            return
+
         if path == "/__stub/reset":
             with _LOCK:
                 _REQUESTS.clear()

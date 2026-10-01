@@ -10,6 +10,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -135,15 +136,11 @@ public class UpstreamGateway {
     if (texts == null || texts.isEmpty()) {
       return List.of();
     }
-    StringBuilder input = new StringBuilder("[");
-    for (int i = 0; i < texts.size(); i++) {
-      if (i > 0) {
-        input.append(',');
-      }
-      input.append('"').append(escape(texts.get(i))).append('"');
-    }
-    input.append(']');
-    String payload = "{\"model\":\"" + escape(model) + "\",\"input\":" + input + "}";
+    // ★ 用 Jackson 生成 JSON，**不手拼字符串**。
+    //   手拼的转义（只处理 \\ 与 "）在遇到换行/制表符时会发出**非法 JSON**，
+    //   而分段的 search_text 里正好含换行（前缀与正文的分隔符）—— 真事故：
+    //   非法请求被上游按 400 拒（或被桩服务当成空请求）⇒ 表现为"怎么只回了 1 条向量"。
+    String payload = json.valueToTree(Map.of("model", model, "input", texts)).toString();
 
     String body = post(resolve(apiBase, "/embeddings"), payload, apiKey);
     try {
@@ -154,7 +151,9 @@ public class UpstreamGateway {
                 + data.size()
                 + "）与请求的文本数（"
                 + texts.size()
-                + "）不一致 —— 顺序无法保证，拒绝入库。响应片段："
+                + "）不一致 —— 顺序无法保证，拒绝入库。请求片段："
+                + abbreviate(payload)
+                + "；响应片段："
                 + abbreviate(body));
       }
       float[][] ordered = new float[texts.size()][];
