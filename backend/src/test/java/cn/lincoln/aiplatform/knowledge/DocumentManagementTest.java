@@ -274,22 +274,150 @@ class DocumentManagementTest {
     assertThat(processed(good)).isEqualTo(segmentCount(good));
   }
 
+  // ────────────────────────── 批量动作 ──────────────────────────
+
+  /**
+   * ★ 批量删除是<strong>尽力而为</strong>：一条 id 不存在不阻断其余，逐条给可读原因。
+   *
+   * <p>用户选了一屏、其中一条已被别人删掉就整批白做，是最让人恼火的一种「严格」。
+   */
+  @Test
+  void 批量删除按条给回执且不阻断其余() throws Exception {
+    String admin = token("admin", "admin");
+    String kbId = createKb(admin);
+    String docId = uploadDocx(admin, kbId, "structured.docx");
+    int before = segmentCount(docId);
+    assertThat(before).as("夹具前提：至少 3 段").isGreaterThanOrEqualTo(3);
+
+    List<String> ids = segmentIds(docId);
+    String ghost = "00000000-0000-0000-0000-000000000000";
+    String body = "{\"ids\":[\"" + ids.get(0) + "\",\"" + ids.get(1) + "\",\"" + ghost + "\"]}";
+
+    HttpResponse<String> res = deleteWithBody("/api/v1/segments/batch", body, admin);
+    assertThat(res.statusCode()).as("批量删除：" + res.body()).isEqualTo(200);
+
+    JsonNode data = new ObjectMapper().readTree(res.body()).get("data");
+    assertThat(data.get("deleted").asInt()).as("两条真实存在的要删掉").isEqualTo(2);
+    assertThat(data.get("failed")).as("不存在的那条要进 failed，而不是让整批失败").hasSize(1);
+    assertThat(data.get("failed").get(0).get("reason").asText()).as("失败要给可读原因").contains("不存在");
+
+    assertThat(segmentCountRows(docId)).as("库里少了两段").isEqualTo(before - 2);
+    assertThat(segmentCount(docId)).as("文档计数跟着回填（不是留在旧数字上）").isEqualTo(before - 2);
+    assertThat(ordinals(docId))
+        .as("剩余分段序号要重编成 0..n-1 —— 否则界面显示「#0 #2 #3」而总数是 3")
+        .containsExactlyElementsOf(
+            java.util.stream.IntStream.range(0, before - 2).boxed().toList());
+  }
+
+  /** ★ 批量迁移 = 源删除 + 目标写入，三件事必须一起发生： ①②前缀按<strong>目标文档</strong>重算、序号追加到目标末尾；③两边文档的计数都要回填。 */
+  @Test
+  void 批量迁移把前缀与序号换到目标文档() throws Exception {
+    String admin = token("admin", "admin");
+    String kbId = createKb(admin);
+    String source = uploadDocx(admin, kbId, "structured.docx");
+    String target = uploadDocx(admin, kbId, "structured.docx");
+    assertThat(waitForTerminal(target, 30)).isNotNull();
+    // ★ 目标文档必须与源**名字不同**，否则两篇的检索前缀一模一样（前缀里含文档名），
+    //   这条断言就证明不了任何东西 —— 第一版正是这么写的，被断言自己抓了出来
+    assertThat(patch("/api/v1/documents/" + target, "{\"name\":\"目标文档甲\"}", admin).statusCode())
+        .isEqualTo(200);
+
+    String moved = segmentIds(source).get(0);
+    int sourceBefore = segmentCount(source);
+    int targetBefore = segmentCount(target);
+
+    HttpResponse<String> res =
+        post(
+            "/api/v1/segments/batch-move",
+            "{\"segmentIds\":[\"" + moved + "\"],\"targetDocumentId\":\"" + target + "\"}",
+            admin);
+    assertThat(res.statusCode()).as("批量迁移：" + res.body()).isEqualTo(200);
+    JsonNode data = new ObjectMapper().readTree(res.body()).get("data");
+    assertThat(data.get("moved").asInt()).isEqualTo(1);
+
+    assertThat(documentIdOf(moved)).as("这一段现在属于目标文档").isEqualTo(target);
+    assertThat(searchTextOf(moved))
+        .as("前缀必须按**目标文档**重算 —— 否则检索文本里写的是原来那篇的名字")
+        .startsWith("制度·采购部·目标文档甲｜");
+    assertThat(embeddingStatusOf(moved)).as("换了文档与前缀 ⇒ 向量旧了，必须重新排队").isEqualTo("PENDING_EMBEDDING");
+    assertThat(vectorRowsOf(moved)).as("旧向量的归属是错的 ⇒ 必须删掉，不能只标「待向量化」").isZero();
+
+    assertThat(segmentCount(source)).as("源文档计数回填").isEqualTo(sourceBefore - 1);
+    assertThat(segmentCount(target))
+        .as("★ 目标文档计数也要回填（只回填一边，另一边会一直显示旧数字）")
+        .isEqualTo(targetBefore + 1);
+    assertThat(ordinals(source))
+        .as("源文档剩余序号重编")
+        .containsExactlyElementsOf(
+            java.util.stream.IntStream.range(0, sourceBefore - 1).boxed().toList());
+    assertThat(maxOrdinal(target))
+        .as("★ 搬进来的段追加在目标文档**末尾**（不是插到中间去挤掉别人的序号）")
+        .isEqualTo(targetBefore);
+  }
+
+  /** 把分段搬到它已经在的那篇文档 ⇒ 整批拒绝并说清（半途而废会把文档的分段劈到两个地方）。 */
+  @Test
+  void 批量迁移拒绝搬到同一篇文档() throws Exception {
+    String admin = token("admin", "admin");
+    String kbId = createKb(admin);
+    String docId = uploadDocx(admin, kbId, "structured.docx");
+    String segmentId = segmentIds(docId).get(0);
+
+    HttpResponse<String> res =
+        post(
+            "/api/v1/segments/batch-move",
+            "{\"segmentIds\":[\"" + segmentId + "\"],\"targetDocumentId\":\"" + docId + "\"}",
+            admin);
+
+    assertThat(res.statusCode()).isEqualTo(400);
+    assertThat(res.body()).as("要说清「迁移是搬到别的文档」").contains("已经属于目标文档");
+    assertThat(segmentCount(docId)).as("拒绝就必须一段都没动").isEqualTo(segmentIds(docId).size());
+  }
+
+  /**
+   * 目标文档正在向量化中 ⇒ 迁移被拒（在途那一轮已经取好了分段清单，此刻的改动它看不到）。
+   *
+   * <p>★ 用 JDBC 直接把状态置成 {@code EMBEDDING} 是为了<strong>确定性地</strong>造出这个前置条件 —— 靠"快点点一下"去抢窗口，测试会时红时绿。
+   */
+  @Test
+  void 目标文档向量化中时迁移被拒() throws Exception {
+    String admin = token("admin", "admin");
+    String kbId = createKb(admin);
+    String source = uploadDocx(admin, kbId, "structured.docx");
+    String target = uploadDocx(admin, kbId, "structured.docx");
+    jdbc.update("update kb_document set status = 'EMBEDDING' where id = ?::uuid", target);
+
+    HttpResponse<String> res =
+        post(
+            "/api/v1/segments/batch-move",
+            "{\"segmentIds\":[\""
+                + segmentIds(source).get(0)
+                + "\"],\"targetDocumentId\":\""
+                + target
+                + "\"}",
+            admin);
+
+    assertThat(res.statusCode()).isEqualTo(400);
+    assertThat(res.body()).contains("向量化中");
+    assertThat(segmentCountRows(source)).as("拒绝就必须一段都没搬走").isEqualTo(segmentCount(source));
+  }
+
   // ────────────────────────── 平台层：不许把"方法写错"说成"服务器崩了" ──────────────────────────
 
   /**
    * ★ 路径认识、方法不对 ⇒ <strong>405 + 可用方法</strong>（曾经是 500「服务内部错误」）。
    *
-   * <p>{@code POST /segments/batch-move} 是前端契约里<b>尚未实现</b>的一条；Spring 把它匹配到 {@code GET
-   * /segments/{id}}（占位符吃到 {@code batch-move}）⇒ {@code HttpRequestMethodNotSupportedException}。 落进兜底
-   * handler 时，用户看到的是「服务内部错误，请把时间反馈给管理员」—— 一句把人引向后端堆栈、 而真实原因只是「这个接口还没做」的话。
+   * <p>{@code /segments/batch} 只注册了 {@code DELETE}（批量删）。对它发 {@code POST} 时 Spring 会匹配到那条 映射、方法不符 ⇒
+   * {@code HttpRequestMethodNotSupportedException}。 落进兜底 handler 时，用户看到的是 「服务内部错误，请把时间反馈给管理员」——
+   * 一句把人引向后端堆栈、 而真实原因只是「方法写错了/接口还没做」的话。
    */
   @Test
   void 方法不符返回405而不是500() throws Exception {
     String admin = token("admin", "admin");
-    HttpResponse<String> res = post("/api/v1/segments/batch-move", "{\"segmentIds\":[]}", admin);
+    HttpResponse<String> res = post("/api/v1/segments/batch", "{\"ids\":[]}", admin);
 
     assertThat(res.statusCode()).as("必须是 405，不是 500：" + res.body()).isEqualTo(405);
-    assertThat(res.body()).contains("请求方法不被允许").contains("GET");
+    assertThat(res.body()).contains("请求方法不被允许").contains("DELETE");
     assertThat(res.body()).doesNotContain("服务内部错误");
   }
 
@@ -399,6 +527,12 @@ class DocumentManagementTest {
 
   private HttpResponse<String> delete(String path, String bearer) throws Exception {
     return send("DELETE", path, null, bearer);
+  }
+
+  /** DELETE 带请求体（契约 {@code batchDeleteSegments} 把 ids 放在 body 里）。 */
+  private HttpResponse<String> deleteWithBody(String path, String body, String bearer)
+      throws Exception {
+    return send("DELETE", path, body, bearer);
   }
 
   private HttpResponse<String> send(String method, String path, String body, String bearer) {
@@ -511,6 +645,41 @@ class DocumentManagementTest {
         "select content_hash from kb_segment where document_id = ?::uuid order by ordinal",
         String.class,
         docId);
+  }
+
+  private List<Integer> ordinals(String docId) {
+    return jdbc.queryForList(
+        "select ordinal from kb_segment where document_id = ?::uuid order by ordinal",
+        Integer.class,
+        docId);
+  }
+
+  private Integer maxOrdinal(String docId) {
+    return jdbc.queryForObject(
+        "select max(ordinal) from kb_segment where document_id = ?::uuid", Integer.class, docId);
+  }
+
+  private String documentIdOf(String segmentId) {
+    return jdbc.queryForObject(
+        "select document_id::text from kb_segment where id = ?::uuid", String.class, segmentId);
+  }
+
+  private String searchTextOf(String segmentId) {
+    return jdbc.queryForObject(
+        "select search_text from kb_segment where id = ?::uuid", String.class, segmentId);
+  }
+
+  private String embeddingStatusOf(String segmentId) {
+    return jdbc.queryForObject(
+        "select embedding_status from kb_segment where id = ?::uuid", String.class, segmentId);
+  }
+
+  /** 该分段在向量表里的行数（迁移后旧向量必须被删掉）。 */
+  private int vectorRowsOf(String segmentId) {
+    Integer count =
+        jdbc.queryForObject(
+            "select count(*) from vec_embedding_768 where id = ?::uuid", Integer.class, segmentId);
+    return count == null ? 0 : count;
   }
 
   private Boolean segmentEnabled(String segmentId) {

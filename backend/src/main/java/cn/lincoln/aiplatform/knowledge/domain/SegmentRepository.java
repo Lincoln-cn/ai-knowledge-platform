@@ -23,6 +23,13 @@ public interface SegmentRepository {
   /** 批量保存（入库即分块时一次写入整篇的分段）。 */
   List<Segment> saveAll(List<Segment> segments);
 
+  /**
+   * 按 id 批量取（批量删除 / 批量迁移用）。
+   *
+   * <p>★ 返回的条数<strong>可能少于传入的 id 数</strong>（有的不存在）—— 调用方必须自己比对， 不能假设"传了 N 个就有 N 个"。
+   */
+  List<Segment> findAllById(List<UUID> ids);
+
   /** 按文档有序查出（{@code ordinal} 升序）。★ 入库比对与文档级重分块都走这里。 */
   List<Segment> findByDocumentId(UUID documentId);
 

@@ -248,6 +248,45 @@ public class Segment {
     this.updatedBy = updatedBy;
   }
 
+  /**
+   * 重编文档内序号（集合增删之后用）。
+   *
+   * <p>★ 为什么必须重编：删掉中间一段、或从中间搬走一段之后，剩余分段的 {@code ordinal} 会留空洞 （0/1/3/4），而 {@code segmentCount} 是 4
+   * ⇒ 界面会显示「#0 #1 #3 #4」这种自相矛盾的序号。 序号<strong>不进</strong> {@code contentHash} ⇒ 重编不会让向量过期。
+   */
+  public void renumber(int ordinal, UUID updatedBy) {
+    if (ordinal < 0) {
+      throw new IllegalArgumentException("分段序号不能为负");
+    }
+    this.ordinal = ordinal;
+    this.updatedBy = updatedBy;
+  }
+
+  /**
+   * 搬到另一个文档（契约 {@code batchMoveSegments} 的搬移语义：源删除 + 目标写入）。
+   *
+   * <p>★ {@code searchText} 与 {@code contentHash} 必须按<strong>目标文档</strong>的 文种/部门/名 重算 （{@code 12
+   * §4.2}）：搬过去之后这一段属于另一篇文档，检索文本里写着的却还是原来那篇的名字 —— 与「改名不重写前缀」是同一个坑，只是这次连 {@code kbId} 都可能变。
+   */
+  public void moveTo(
+      UUID documentId,
+      UUID kbId,
+      int ordinal,
+      String searchText,
+      String contentHash,
+      UUID updatedBy) {
+    if (documentId == null || kbId == null) {
+      throw new IllegalArgumentException("目标文档与目标知识库不能为空");
+    }
+    renumber(ordinal, updatedBy);
+    this.documentId = documentId;
+    this.kbId = kbId;
+    this.searchText = searchText;
+    this.contentHash = contentHash;
+    // ★ 换了文档、换了前缀 ⇒ 向量旧了，必须重新排队（不回退的话向量化器会跳过它，而状态显示"已完成"）
+    this.embeddingStatus = SegmentEmbeddingStatus.PENDING_EMBEDDING;
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {

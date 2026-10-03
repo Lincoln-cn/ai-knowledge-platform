@@ -36,6 +36,11 @@ BACKEND = "http://127.0.0.1:8080/api/v1"
 FIXTURE = Path(__file__).parent.parent / "backend/src/test/resources/fixtures/structured.docx"
 
 DOC_NAME = "structured.docx"
+# ★ 两篇文档都由夹具**显式改名**成不同的名字，闸门再按名字定位行 ——
+#   不这么做就有两个隐含假设会咬人：① 列表按创建时间倒序，第一行不是"我上传的那一篇"；
+#   ② 前缀里含文档名，两篇同名时"迁移后前缀是否换了"根本看不出来。
+MAIN_DOC = "主文档甲"
+TARGET_DOC = "迁移目标文档乙"
 RENAMED = "改名后的制度文件"
 
 ok: list[tuple[bool, str]] = []
@@ -133,7 +138,16 @@ def setup_fixture(token: str) -> tuple[str, str, str]:
     )
     with urllib.request.urlopen(req, timeout=60) as r:
         uploaded = json.loads(r.read().decode("utf-8", "replace"))
-    return kb_id, uploaded["data"][0]["id"], kb_name
+    doc_id = uploaded["data"][0]["id"]
+    call("PATCH", f"/documents/{doc_id}", token, {"name": MAIN_DOC})
+
+    # 第二篇文档：批量迁移的**目标**
+    with urllib.request.urlopen(req, timeout=60) as r:
+        second = json.loads(r.read().decode("utf-8", "replace"))
+    target_id = second["data"][0]["id"]
+    call("PATCH", f"/documents/{target_id}", token, {"name": TARGET_DOC})
+
+    return kb_id, doc_id, kb_name, target_id
 
 
 def db_row(token: str, kb_id: str, doc_id: str):
@@ -185,19 +199,37 @@ def tab(page, label: str) -> None:
     page.wait_for_timeout(2500)
 
 
-def doc_row_status(page) -> str:
-    """文档表格第一行的状态文案（界面上用户看到的那个字）。"""
-    cells = page.locator("tr.el-table__row .status")
-    return cells.first.inner_text().strip() if cells.count() else "(没有行)"
+def doc_row(page, name: str):
+    """按文档名定位表格行 —— **不假设它在第几行**。"""
+    return page.locator("tr.el-table__row", has_text=name)
 
 
-def wait_doc_row(page, wanted: set[str], seconds: int = 70) -> str:
+def doc_row_status(page, name: str) -> str:
+    """该文档行的状态文案（界面上用户看到的那个字）。"""
+    cell = doc_row(page, name).locator(".status")
+    return cell.first.inner_text().strip() if cell.count() else "(没有行)"
+
+
+def wait_doc_row(page, name: str, wanted: set[str], seconds: int = 70) -> str:
     for _ in range(seconds * 2):
-        text = doc_row_status(page)
+        text = doc_row_status(page, name)
         if any(w in text for w in wanted):
             return text
         page.wait_for_timeout(500)
-    return doc_row_status(page)
+    return doc_row_status(page, name)
+
+
+def filter_segments_by_doc(page, name: str) -> None:
+    """把分段面板筛到某一篇文档。
+
+    ★ 不做这一步就没有确定性：面板默认「全部文档」，卡片按 (documentId, ordinal) 排 ——
+    「勾第一张卡」勾中的可能是**另一篇**文档的分段，于是批量迁移会撞上
+    「第 N 段已经属于目标文档」而看起来像功能坏了。
+    """
+    page.locator(".seg-panel .toolbar .el-select").first.click()
+    page.wait_for_timeout(700)
+    page.locator(f".el-select-dropdown__item:has-text('{name}')").last.click()
+    page.wait_for_timeout(2200)
 
 
 def main() -> int:
@@ -241,47 +273,51 @@ def main() -> int:
             if not check(bool(token) and not token.startswith("mock_"), "连的是真后端（token 非 mock_）"):
                 return 1
 
-            kb_id, doc_id, kb_name = setup_fixture(token)
-            print(f"  · 夹具库 {kb_name} / 文档 {doc_id}")
+            kb_id, doc_id, kb_name, target_id = setup_fixture(token)
+            print(f"  · 夹具库 {kb_name} / 主文档 {doc_id} / 迁移目标 {target_id}")
 
             # ── 1 · 向量化（前置：让后续的"重新向量化"入口有意义） ──
             print("\n== 1. 文档列表：开始向量化 ==")
             open_kb(page, kb_name)
             tab(page, "文档")
-            check(DOC_NAME in page.inner_text("body"), "文档行出现在列表里")
-            page.click("tr.el-table__row button:has-text('开始向量化')")
-            text = wait_doc_row(page, {"成功", "向量化失败"})
+            check(MAIN_DOC in page.inner_text("body"), "夹具文档出现在列表里")
+            doc_row(page, MAIN_DOC).locator("button:has-text('开始向量化')").click()
+            text = wait_doc_row(page, MAIN_DOC, {"成功", "向量化失败"})
             check("成功" in text, f"「开始向量化」推进到成功（行上实际：{text}）")
             check(not drain_error_toasts(page), "开始向量化没有错误提示")
 
             # ── 2 · 重命名 ──
             print("\n== 2. 重命名文档（界面按钮）==")
-            page.locator("tr.el-table__row").first.locator(".rename-btn").click()
+            doc_row(page, MAIN_DOC).locator(".rename-btn").click()
             asked = answer_dialog(page, "保存", value=RENAMED)
             check(asked, "重命名弹出了输入框（按钮真的接上了动作）")
             page.wait_for_timeout(1500)
             check(RENAMED in page.inner_text("body"), "改名后行上显示新名字（点了真的生效）")
             check(not drain_error_toasts(page), "改名没有错误提示")
-            text = wait_doc_row(page, {"待向量化"})
+            text = wait_doc_row(page, RENAMED, {"待向量化"})
             check("待向量化" in text, f"改名后向量过期 ⇒ 行上回到待向量化（实际：{text}）")
             row = db_row(token, kb_id, doc_id)
             check(row is not None and row["name"] == RENAMED, "库里名字也变了（不是只改界面）")
+            check(
+                db_row(token, kb_id, target_id)["name"] == TARGET_DOC,
+                "★ 改的是这一篇：迁移目标文档的名字不受影响（按名字定位行，不靠「第一行」）",
+            )
 
             # ── 3 · 停用 / 启用 ──
             print("\n== 3. 停用 / 启用文档 ==")
-            page.click("tr.el-table__row button:has-text('停用')")
+            doc_row(page, RENAMED).locator("button:has-text('停用')").click()
             check(answer_dialog(page, "停用"), "停用弹出了确认框")
             page.wait_for_timeout(1500)
             row = db_row(token, kb_id, doc_id)
             check(row is not None and not row["enabled"], "点「停用」后库里 enabled=false")
             check(
-                page.locator("tr.el-table__row button:has-text('启用')").count() > 0,
+                doc_row(page, RENAMED).locator("button:has-text('启用')").count() > 0,
                 "行上的按钮变成「启用」（界面跟着状态走）",
             )
             check(not drain_error_toasts(page), "停用没有错误提示")
 
             # ★ 「启用」不弹确认框 —— 等框会白等 6 秒，然后误判成"动作没接上"
-            page.click("tr.el-table__row button:has-text('启用')")
+            doc_row(page, RENAMED).locator("button:has-text('启用')").click()
             page.wait_for_timeout(2500)
             row = db_row(token, kb_id, doc_id)
             check(row is not None and row["enabled"], "点「启用」后库里 enabled=true（这条不弹确认框）")
@@ -291,12 +327,17 @@ def main() -> int:
             print("\n== 4. 分段面板：启停开关 ==")
             tab(page, "分段")
             check(page.locator(".seg-card").count() > 0, "分段卡片渲染出来了")
+            filter_segments_by_doc(page, RENAMED)
+            main_segs = db_segments(token, doc_id)
+            check(
+                page.locator(".seg-card").count() == len(main_segs),
+                f"筛到该文档后卡片数 == 库里该文档的分段数（界面 {page.locator('.seg-card').count()} / 库 {len(main_segs)}）",
+            )
             page.locator(".seg-card").first.locator(".el-switch").click()
             page.wait_for_timeout(1800)
             check(not drain_error_toasts(page), "分段启停开关没有错误提示")
-            segs = db_segments(token, doc_id)
             check(
-                any(not s["enabled"] for s in segs),
+                any(not s["enabled"] for s in db_segments(token, doc_id)),
                 "库里确实有一段被停用了（开关不是只动了前端）",
             )
 
@@ -339,17 +380,88 @@ def main() -> int:
                 f"库级重算后文档走完（库里实际：{row['status'] if row else '无'}）",
             )
 
-            # ── 5 · 删除 ──
-            print("\n== 7. 删除文档 ==")
-            tab(page, "文档")
-            page.click("tr.el-table__row button:has-text('删除')")
+            # ── 7 · 批量删除（分段） ──
+            print("\n== 7. 批量删除分段 ==")
+            page.click("button:has-text('批量选择')")
+            page.wait_for_timeout(1200)
+            boxes = page.locator(".seg-card .el-checkbox")
+            assert boxes.count() >= 2, f"批量选择下至少要能看到 2 个分段，实际 {boxes.count()}"
+            boxes.nth(0).click()
+            boxes.nth(1).click()
+            page.wait_for_timeout(600)
+            before = page.locator(".seg-card").count()
+            page.click("button:has-text('批量删除')")
+            answered = answer_dialog(page, "删除")
+            check(answered, "批量删除弹出了确认框")
+            page.wait_for_timeout(2500)
+            after = page.locator(".seg-card").count()
+            check(after == before - 2, f"批量删除后卡片少 2 张（{before} → {after}）")
+            check(not drain_error_toasts(page), "批量删除没有错误提示")
+            segs = db_segments(token, doc_id)
+            check(
+                len(segs) == after,
+                f"库里也正好少了 2 段（界面剩 {after}，库里剩 {len(segs)}）",
+            )
+            # 剩余分段的序号必须是连着的 0..n-1（删中间一段会留空洞）
+            ordinals = sorted(s["ordinal"] for s in segs)
+            check(
+                ordinals == list(range(len(segs))),
+                f"删完之后序号重编成 0..n-1 —— 否则界面显示「#0 #2 #3」而总数是 3（实际 {ordinals}）",
+            )
+
+            # ── 8 · 批量迁移（分段搬到另一个文档） ──
+            print("\n== 8. 批量迁移分段 ==")
+            source_before = db_row(token, kb_id, doc_id)["segmentCount"]
+            target_before = db_row(token, kb_id, target_id)["segmentCount"]
+            page.click("button:has-text('批量选择')")
+            page.wait_for_timeout(1200)
+            moved_id = db_segments(token, doc_id)[0]["id"]
+            page.locator(".seg-card .el-checkbox").first.click()
+            page.wait_for_timeout(600)
+            page.click("button:has-text('批量迁移')")
+            page.wait_for_timeout(1200)
+            check(page.locator(".el-dialog:visible").count() > 0,
+                "批量迁移弹出了目标文档选择框",
+            )
+            # Element Plus 的下拉是挂在 body 上的 popper ⇒ 先点开 select，再点选项
+            page.locator(".el-dialog:visible").last.locator(".el-select").click()
+            page.wait_for_timeout(800)
+            page.locator(f".el-select-dropdown__item:has-text('{TARGET_DOC}')").last.click()
+            page.wait_for_timeout(600)
+            page.locator(".el-dialog:visible").last.locator("button:has-text('迁移')").click()
+            page.wait_for_timeout(3000)
+            check(not drain_error_toasts(page), "批量迁移没有错误提示")
+
+            moved = db_row(token, kb_id, doc_id)
+            check(
+                moved["segmentCount"] == source_before - 1,
+                f"源文档少了一段（{source_before} → {moved['segmentCount']}）",
+            )
+            check(
+                db_row(token, kb_id, target_id)["segmentCount"] == target_before + 1,
+                f"★ 目标文档多了一段（{target_before} → {db_row(token, kb_id, target_id)['segmentCount']}）",
+            )
+            rows = call("GET", f"/segments?documentId={target_id}&page=1&size=50", token)[1]["data"]
+            landed = next((s for s in rows["list"] if s["id"] == moved_id), None)
+            check(landed is not None, "被搬的那一段现在查在目标文档下")
+            if landed:
+                check(
+                    landed["embedding"] == "PENDING_EMBEDDING",
+                    f"搬过去之后向量旧了 ⇒ 待向量化（实际 {landed['embedding']}）",
+                )
+
+            # ── 8 · 删除文档 ──
+            print("\n== 9. 删除文档 ==")
+            page.click("button.side-item:has-text('文档')")
+            page.wait_for_timeout(2000)
+            page.locator("tr.el-table__row", has_text=RENAMED).locator("button:has-text('删除')").click()
             check(answer_dialog(page, "删除"), "删除弹出了确认框")
             page.wait_for_timeout(2000)
             check(RENAMED not in page.inner_text("body"), "删除后行从列表消失")
             check(not drain_error_toasts(page), "删除没有错误提示")
             check(db_row(token, kb_id, doc_id) is None, "库里也查不到它了（软删 + 分段与向量连带）")
 
-            print("\n== 8. 刷新不重置 ==")
+            print("\n== 10. 刷新不重置 ==")
             open_kb(page, kb_name)
             tab(page, "文档")
             check(

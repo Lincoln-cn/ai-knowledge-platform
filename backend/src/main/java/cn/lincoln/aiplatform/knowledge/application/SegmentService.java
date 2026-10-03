@@ -16,7 +16,9 @@ import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -267,11 +269,11 @@ public class SegmentService {
    *
    * <p>★ 分段没有软删列（子实体，{@code 02 §5.1}）⇒ 真删。
    *
-   * <p>★ 删完必须回填文档的进度列、并把状态置回 {@code PENDING_EMBEDDING}：少了一段，向量就旧了。 不回填的话界面会一直显示「5 段 / 已完成」，而库里只剩 4
-   * 段 —— 又一处「看起来是对的」。
+   * <p>★ 删完必须回填文档的进度列、重编剩余分段的序号、并把状态置回 {@code PENDING_EMBEDDING}：少了一段向量就旧了。 不回填的话界面会一直显示「5 段 /
+   * 已完成」而库里只剩 4 段；不重编序号则会留下「#0 #1 #3 #4」这种与总数对不上的展示 —— 两处都属于「看起来是对的」。
    */
   @Transactional
-  public void delete(UUID id) {
+  public void delete(UUID id, UUID currentUserId) {
     Segment segment =
         segments
             .findById(id)
@@ -280,10 +282,7 @@ public class SegmentService {
     segments.delete(segment);
     // ★ 向量必须跟着删：否则被删掉的分段仍然能被检索到（界面不显示、检索却答得出来）
     segmentEmbeddings.deleteBySegmentId(id);
-    List<Segment> remaining = segments.findByDocumentId(document.id());
-    document.recordSegmentSuccess(
-        remaining.size(), remaining.stream().mapToInt(Segment::charCount).sum());
-    documents.save(document);
+    recomputeDocument(document.id(), currentUserId);
   }
 
   // ────────────────────────── 启停与逐段重向量 ──────────────────────────
@@ -325,6 +324,161 @@ public class SegmentService {
     documents.save(document);
     runner.startAsync(document.id());
     return SegmentView.from(segments.findById(id).orElse(segment));
+  }
+
+  // ────────────────────────── 批量动作（契约 batchDeleteSegments / batchMoveSegments）
+  // ──────────────────────────
+
+  /**
+   * 批量删除分段（契约 {@code batchDeleteSegments}）—— <strong>尽力而为</strong>，逐条给回执。
+   *
+   * <p>★ 一个 id 不存在/不可见<strong>不该让整批失败</strong>：用户选了一屏，其中一条已被别人删掉就整批白做， 是最让人恼火的一种「严格」。所以这两类收进 {@code
+   * failed} 并写明原因，其余照删。
+   *
+   * <p>★「文档正在向量化中」也按条拒绝而不是整批拒绝 —— 用户在途时删别的不该被连带挡住。
+   */
+  @Transactional
+  public BatchDeleteSegmentsView batchDelete(List<UUID> ids, UUID currentUserId) {
+    if (ids == null || ids.isEmpty()) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "没有选中分段", "先勾选要删除的分段再提交");
+    }
+    List<Segment> deletable = new ArrayList<>();
+    List<BatchDeleteSegmentsView.Failure> failed = new ArrayList<>();
+    for (UUID id : ids) {
+      Segment segment = segments.findById(id).orElse(null);
+      if (segment == null) {
+        failed.add(new BatchDeleteSegmentsView.Failure(id.toString(), "分段不存在（可能已被删除）"));
+        continue;
+      }
+      try {
+        Document document = requireVisibleDocument(segment.documentId());
+        if (document.status() == DocumentStatus.EMBEDDING) {
+          failed.add(new BatchDeleteSegmentsView.Failure(id.toString(), "该文档正在向量化中，请等它跑完"));
+          continue;
+        }
+      } catch (BusinessException e) {
+        failed.add(new BatchDeleteSegmentsView.Failure(id.toString(), "你没有该分段所属知识库的访问权限"));
+        continue;
+      }
+      deletable.add(segment);
+    }
+
+    Set<UUID> affected = new LinkedHashSet<>();
+    for (Segment segment : deletable) {
+      affected.add(segment.documentId());
+      segments.delete(segment);
+      // ★ 向量必须跟着删：留着的话被删掉的分段仍然能被检索到（界面不显示、检索却答得出来）
+      segmentEmbeddings.deleteBySegmentId(segment.id());
+    }
+    affected.forEach(documentId -> recomputeDocument(documentId, currentUserId));
+    return new BatchDeleteSegmentsView(deletable.size(), failed);
+  }
+
+  /**
+   * 批量迁移分段（契约 {@code batchMoveSegments}）—— 搬移语义：源文档删除 + 目标文档写入。
+   *
+   * <p>★ 三处必须一起做，少一处就会静默出错：
+   *
+   * <ol>
+   *   <li>前缀按<strong>目标文档</strong>重算（{@code searchText} + {@code contentHash}）—— 换了文档不换前缀，
+   *       检索文本里写的就是原来那篇的名字
+   *   <li>序号<strong>追加到目标文档末尾</strong>，并把源文档剩余分段重编 —— 否则两边都会出现序号空洞
+   *   <li>源、目标<strong>两篇</strong>文档的计数与状态都要回填 —— 只回填一边，另一边的界面会一直显示旧数字
+   * </ol>
+   *
+   * <p>★ 旧向量<strong>直接删掉</strong>（而不是留着只标「待向量化」）：它的 metadata 里带着旧文档/旧库的归属， 留着会让检索（以及第 11 周的密级
+   * pre-filter）按<strong>错误的归属</strong>看到它。
+   */
+  @Transactional
+  public BatchMoveView batchMove(List<UUID> segmentIds, UUID targetDocumentId, UUID currentUserId) {
+    if (segmentIds == null || segmentIds.isEmpty()) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "没有选中分段", "先勾选要迁移的分段再提交");
+    }
+    Document target = requireVisibleDocument(targetDocumentId);
+    requireNotEmbedding(target, "迁移");
+
+    List<Segment> moving = new ArrayList<>();
+    Set<UUID> sources = new LinkedHashSet<>();
+    for (UUID id : segmentIds) {
+      Segment segment = requireVisibleSegment(id);
+      if (segment.documentId().equals(targetDocumentId)) {
+        throw new BusinessException(
+            ErrorCode.BAD_REQUEST,
+            "第 " + (segment.ordinal() + 1) + " 段已经属于目标文档",
+            "迁移是「搬到别的文档」，请只勾选其它文档的分段");
+      }
+      sources.add(segment.documentId());
+      moving.add(segment);
+    }
+    // 源文档也逐个守卫：把分段从一篇正在向量化的文档里搬走，同样会和在途任务打架
+    for (UUID sourceId : sources) {
+      requireNotEmbedding(requireVisibleDocument(sourceId), "迁移");
+    }
+
+    List<Segment> targetSegments = segments.findByDocumentId(targetDocumentId);
+    int nextOrdinal =
+        targetSegments.isEmpty() ? 0 : targetSegments.get(targetSegments.size() - 1).ordinal() + 1;
+    int maxChars = maxCharsResolver.resolve(target.kbId(), properties.maxChars());
+
+    for (Segment segment : moving) {
+      String prefix =
+          SearchText.prefix(
+              target.docType(), target.department(), target.name(), segment.titlePath());
+      String searchText;
+      try {
+        searchText = SegmentContent.ofSearchText(prefix, segment.content(), maxChars).text();
+      } catch (BusinessException e) {
+        throw new BusinessException(
+            ErrorCode.BAD_REQUEST,
+            "迁移被拒绝：第 " + (segment.ordinal() + 1) + " 段在目标文档的前缀下超出上限（" + e.getMessage() + "）",
+            "目标文档的 文种/部门/名 会成为它的新前缀 ⇒ 前缀更长；请改选别的目标文档，或先缩短目标文档的名称");
+      }
+      String contentHash =
+          SearchText.contentHash(
+              target.docType(),
+              target.department(),
+              target.name(),
+              segment.titlePath(),
+              segment.content());
+      // 旧向量按「错误归属」存在库里 ⇒ 先删；重算时会按新归属重新写入
+      segmentEmbeddings.deleteBySegmentId(segment.id());
+      segment.moveTo(
+          targetDocumentId, target.kbId(), nextOrdinal++, searchText, contentHash, currentUserId);
+    }
+    segments.saveAll(moving);
+
+    // ★ 两边的计数都要回填（含源文档剩余分段的序号重编）
+    sources.forEach(sourceId -> recomputeDocument(sourceId, currentUserId));
+    recomputeDocument(targetDocumentId, currentUserId);
+    return new BatchMoveView(moving.size());
+  }
+
+  /**
+   * 回填某文档的分段计数、重编序号，并把状态置回「待向量化」。
+   *
+   * <p>★ 集合一有增删就必须做：不回填的话界面会一直显示「5 段 / 已完成」而库里只剩 4 段 —— 又一处「看起来是对的」。
+   */
+  private void recomputeDocument(UUID documentId, UUID currentUserId) {
+    Document document = documents.findById(documentId).orElse(null);
+    if (document == null) {
+      return;
+    }
+    List<Segment> remaining = segments.findByDocumentId(documentId);
+    for (int i = 0; i < remaining.size(); i++) {
+      remaining.get(i).renumber(i, currentUserId);
+    }
+    segments.saveAll(remaining);
+    document.recordSegmentSuccess(
+        remaining.size(), remaining.stream().mapToInt(Segment::charCount).sum());
+    documents.save(document);
+  }
+
+  /** 拒绝在「向量化中」做会与在途任务打架的批量动作。 */
+  private static void requireNotEmbedding(Document document, String action) {
+    if (document.status() == DocumentStatus.EMBEDDING) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "文档正在向量化中，不能" + action, "等这一轮跑完（进度会自己往前走）再操作");
+    }
   }
 
   /** 按 id 取分段 + 可见性判定（不可见与不存在同一个 404 —— 不泄漏存在性）。 */

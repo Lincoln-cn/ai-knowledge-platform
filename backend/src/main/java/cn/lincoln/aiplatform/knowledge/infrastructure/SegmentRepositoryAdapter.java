@@ -61,6 +61,11 @@ public class SegmentRepositoryAdapter implements SegmentRepository {
   }
 
   @Override
+  public List<Segment> findAllById(List<UUID> ids) {
+    return jpa.findAllById(ids);
+  }
+
+  @Override
   public List<Segment> findByDocumentId(UUID documentId) {
     return jpa.findAll(
             (root, query, cb) -> cb.equal(root.get("documentId"), documentId),

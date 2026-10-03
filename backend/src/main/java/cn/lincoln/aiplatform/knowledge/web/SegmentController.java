@@ -1,9 +1,12 @@
 package cn.lincoln.aiplatform.knowledge.web;
 
+import cn.lincoln.aiplatform.knowledge.application.BatchDeleteSegmentsView;
+import cn.lincoln.aiplatform.knowledge.application.BatchMoveView;
 import cn.lincoln.aiplatform.knowledge.application.SegmentService;
 import cn.lincoln.aiplatform.knowledge.application.SegmentView;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
 import cn.lincoln.aiplatform.platform.web.PageResult;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -116,13 +119,45 @@ public class SegmentController {
   /**
    * 删除分段（契约 {@code deleteSegment}）。
    *
-   * <p>★ 分段是子实体、没有软删列 ⇒ 真删；删完回填文档进度列并把状态置回「待向量化」（向量旧了）。
+   * <p>★ 分段是子实体、没有软删列 ⇒ 真删；删完回填文档进度列并重编剩余序号、状态置回「待向量化」（向量旧了）。
    */
   @DeleteMapping("/{id}")
   @PreAuthorize("hasAuthority('knowledge:segment:edit')")
-  public ApiResponse<Void> delete(@PathVariable UUID id) {
-    segmentService.delete(id);
+  public ApiResponse<Void> delete(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    segmentService.delete(id, UUID.fromString(jwt.getSubject()));
     return ApiResponse.ok();
+  }
+
+  // ────────────────────────── 批量动作（契约的两条 P1） ──────────────────────────
+
+  /**
+   * 批量删除分段（契约 {@code batchDeleteSegments}）—— <strong>尽力而为</strong>，回执区分 {@code deleted} 与 {@code
+   * failed}。
+   *
+   * <p>★ 路径用字面量 {@code /batch} 而不是让 {@code /{id}} 去接：Spring 的路径匹配**字面量优先于占位符**， 所以 {@code DELETE
+   * /segments/batch} 会进到这里 —— 而在落这条之前，它被 {@code DELETE /segments/{id}}
+   * 接走了，返回的是「参数类型不正确：id」（一个把"功能没做"说成"你传错了"的报错）。
+   */
+  @DeleteMapping("/batch")
+  @PreAuthorize("hasAuthority('knowledge:segment:edit')")
+  public ApiResponse<BatchDeleteSegmentsView> batchDelete(
+      @RequestBody BatchIdsBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        segmentService.batchDelete(body.ids(), UUID.fromString(jwt.getSubject())));
+  }
+
+  /**
+   * 批量迁移分段（契约 {@code batchMoveSegments}）—— 搬移语义：源删除 + 目标写入。
+   *
+   * <p>★ 整批全成或全不成（目标是同一篇文档、目标不可见、任一段在目标前缀下超长 ⇒ 整批拒绝并说清原因）： 半途而废的搬移会把一篇文档的分段**劈到两个地方**，而两边都显示得挺正常。
+   */
+  @PostMapping("/batch-move")
+  @PreAuthorize("hasAuthority('knowledge:segment:edit')")
+  public ApiResponse<BatchMoveView> batchMove(
+      @RequestBody BatchMoveBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        segmentService.batchMove(
+            body.segmentIds(), body.targetDocumentId(), UUID.fromString(jwt.getSubject())));
   }
 
   /** 编辑请求体（契约 {@code updateSegment} 的 body）。 */
@@ -130,4 +165,10 @@ public class SegmentController {
 
   /** 启用位请求体（契约 {@code setSegmentEnabled} 的 body）。 */
   record EnabledBody(boolean enabled) {}
+
+  /** 批量删除请求体（契约 {@code batchDeleteSegments} 的 body）。 */
+  record BatchIdsBody(List<UUID> ids) {}
+
+  /** 批量迁移请求体（契约 {@code batchMoveSegments} 的 body）。 */
+  record BatchMoveBody(List<UUID> segmentIds, UUID targetDocumentId) {}
 }

@@ -479,7 +479,7 @@ F3 跟着 M4a/M4b；F4 在 M6 前收口。
 | `check_knowledge_parse.py` | 解析链：Markdown 结构（标题/列表/表格）可见 + 失败原因可读 + 下一步建议 | 9 |
 | `check_knowledge_form.py` | 建库向导 + 建档表单 + 生成预览（契约字段与下拉的交互一致） | 31 |
 | `check_segmentation_e2e.py` | 分段 / 向量化 / ★「刷新页面不重置」 | 36 |
-| ★ `check_document_actions.py` | **界面按钮真的生效**：文档重命名 · 启停 · 删除 · 分段启停 · 逐段与库级重向量 | 30 |
+| ★ `check_document_actions.py` | **界面按钮真的生效**：文档重命名 · 启停 · 删除 · 分段启停 · 逐段与库级重向量 · 批量删 · 批量迁移 | 43 |
 | ★ `check_flow_walkthrough.py` | 逐页走查 12 页，分三档记账（见下） | 13 |
 
 ★ 后两道是 0.3.0 补记时补的，**因为它们盯的是既有闸门没覆盖的两类**：
