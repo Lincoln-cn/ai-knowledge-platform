@@ -84,17 +84,21 @@ class ContractDriftTest {
       Set.of(
           // ★ 建档 7 个端点已于第 5 周 0.2.0 批 1 落地；documents 子资源的建档
           //   （POST/GET /knowledge-bases/{*}/documents）已于批 2 落地。
-          //   但本前缀下仍有欠账：uploads · ingestion-progress · reembed ·
-          //   upload-policy · retrieval（在 api/ingestion.ts / api/retrieval.ts 里）。
-          //   防黑洞测试要求「欠账仍在」而不是逼你删 —— 等这批子资源也落地再删本前缀。
+          //   本前缀下仍欠账两条（都在 api/ingestion.ts，属 P1）：
+          //   · POST /knowledge-bases/{*}/uploads（暂存上传：向导已改成"上传即建档"，不再需要它）
+          //   · GET  /knowledge-bases/{*}/upload-policy（上传前的大小/数量/扩展名策略，
+          //     界面已有前端常量兜底，故至今没挡住任何流程）
+          //   ★ /knowledge-bases/{*}/reembed 已于 0.3.1 落地（库级重新向量化），从本条注释撤下。
           "/knowledge-bases",
-          // 第 5–8 周 0.2.x–0.3.0：文档上传、解析、入库（含 enabled/retry/embedding/reembed）
-          "/documents",
+          // ★ /documents 已于 0.3.1 全部落地（改名 PATCH /{id}、启停 PATCH /{id}/enabled、
+          //   删除 DELETE /{id}，加上原有的 embedding/retry/reembed）⇒ 从清单删除。
+          //   删除是被"防黑洞"测试逼出来的：留着它就成了"曾经欠过、现在早已实现"的噪音。
           // 第 7 周 0.2.2：分块 + 结构化前缀 + 切分预览。
           // ★ 本前缀下的 segments CRUD 已落地（GET /segments、GET|PUT|DELETE /segments/{id}），
-          //   仍欠账（都在 api/ingestion.ts）：PATCH /segments/{id}/enabled（启停开关）、
-          //   POST /segments/batch-move（跨库搬移，属 P1）、DELETE /segments/batch（批量删）、
-          //   POST /segments/{id}/embedding（逐段重向量，随 0.3.x 向量链）。
+          //   且 0.3.1 补上了 PATCH /segments/{*}/enabled（启停）与 POST /segments/{*}/embedding（逐段重向量）。
+          //   仍欠账两条（都在 api/ingestion.ts，属 P1 批量动作 —— 需要单独设计搬移语义）：
+          //   · POST /segments/batch-move（跨文档搬移：要重编 ordinal、按目标文档重算前缀）
+          //   · DELETE /segments/batch（批量删：要定"部分成功"的回执语义）
           "/segments",
           // ★ /segmentation 已于第 7 周 0.2.2 全部落地（POST /segmentation/preview）⇒ 从这里删除。
           //   防黑洞测试会逼着删：留着它就成了「曾经欠过、现在早已实现」的永久噪音。

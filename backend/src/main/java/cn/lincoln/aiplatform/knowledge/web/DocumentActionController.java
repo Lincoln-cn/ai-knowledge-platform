@@ -5,8 +5,13 @@ import cn.lincoln.aiplatform.knowledge.application.DocumentView;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -23,8 +28,8 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>★ 写端点必须带 {@code @PreAuthorize}：{@code AuthorizationDeclarationTest} 构建期检查。
  *
- * <p>⚠️ 本批只落 {@code POST /{id}/embedding}。契约里同一族还有 {@code retry} / {@code reembed} / 改名 / 启停 / 删除
- * —— 它们仍欠着（见 {@code ContractDriftTest} 的未实现清单与 CHANGELOG）。
+ * <p>⚠️ 本类已覆盖契约里该族的全部端点（{@code embedding} / {@code retry} / {@code reembed} / 改名 / 启停 / 删除）。★
+ * 这一族曾经长期是「界面有按钮、后端 404」的重灾区：用户点「重命名」拿到的是一句 「接口不存在」，而这句话看起来像环境问题、不像功能没做。
  */
 @RestController
 @RequestMapping("/api/v1/documents")
@@ -68,4 +73,47 @@ public class DocumentActionController {
   public ApiResponse<DocumentView> reembed(@PathVariable UUID id) {
     return ApiResponse.ok(documentService.reembed(id));
   }
+
+  // ────────────────────────── 改名 / 启停 / 删除（契约 ingestion.ts 的三条） ──────────────────────────
+
+  /**
+   * 改名（契约 {@code renameDocument}）。
+   *
+   * <p>★ 权限点是 {@code knowledge:manage}，与<strong>前端那个按钮的可见条件</strong>一致 （{@code DocumentPanel.vue} 的
+   * {@code canManage}）：界面给了入口、后端却 403，是最容易被误读成 「权限配错了」的一类不一致。改名是库管理者的动作，不是上传者的。
+   */
+  @PatchMapping("/{id}")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<DocumentView> rename(
+      @PathVariable UUID id, @RequestBody RenameBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        documentService.rename(id, body.name(), UUID.fromString(jwt.getSubject())));
+  }
+
+  /** 启用/停用（契约 {@code setDocumentEnabled}）。停用后不参与检索，数据保留。 */
+  @PatchMapping("/{id}/enabled")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<DocumentView> setEnabled(
+      @PathVariable UUID id, @RequestBody EnabledBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        documentService.setEnabled(id, body.enabled(), UUID.fromString(jwt.getSubject())));
+  }
+
+  /**
+   * 删除（契约 {@code deleteDocument}）。
+   *
+   * <p>★ 文档软删、分段与向量真删（理由见 {@code DocumentService#delete}）：只软删文档会把它的内容 留在检索里 —— 列表看不见、检索答得出来。
+   */
+  @DeleteMapping("/{id}")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<Void> delete(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    documentService.delete(id, UUID.fromString(jwt.getSubject()));
+    return ApiResponse.ok();
+  }
+
+  /** 改名请求体（契约 {@code renameDocument} 的 body）。 */
+  record RenameBody(String name) {}
+
+  /** 启用位请求体（契约 {@code setDocumentEnabled} 的 body，与知识库那条同形）。 */
+  record EnabledBody(boolean enabled) {}
 }

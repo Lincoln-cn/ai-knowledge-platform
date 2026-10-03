@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -110,6 +111,35 @@ public class GlobalExceptionHandler {
                 ErrorCode.BAD_REQUEST,
                 "请求体不是合法 JSON",
                 "请检查请求体是否为合法 JSON、字段名用双引号（如 {\"username\":\"admin\"}）"));
+  }
+
+  /**
+   * 路径存在、但<strong>方法不对</strong>（如对只注册了 {@code GET} 的路径发 {@code POST}）⇒ 405 + 可用方法。
+   *
+   * <p>★ 必须显式处理，否则会被兜底 handler 抓成 <strong>500「服务内部错误」</strong>。 这条的真实现场（不是假设）：前端契约里有一条 {@code POST
+   * /segments/batch-move}，后端还没实现它， 而 Spring 会把这条路径匹配到 {@code GET /segments/{id}}（占位符吃到 {@code
+   * batch-move}）， 方法不符 ⇒ {@code HttpRequestMethodNotSupportedException}；
+   * 于是联调时看到的是「服务内部错误，请把这次操作的时间反馈给管理员」—— 一句把运维引向后端堆栈、而真实原因只是「这个接口还没做 / 方法写错了」的话。
+   *
+   * <p>★ 与 {@link #onNoHandler} 的区别值得写清：那里是「路径都不认识」（404），这里是「路径认识、方法不认识」（405）。 两者都属于「调用方能自己修」，都不能是
+   * 500。
+   */
+  @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+  public ResponseEntity<ApiResponse<Void>> onMethodNotSupported(
+      HttpRequestMethodNotSupportedException cause) {
+    String supported =
+        cause.getSupportedHttpMethods() == null
+            ? "未知"
+            : cause.getSupportedHttpMethods().stream()
+                .map(org.springframework.http.HttpMethod::name)
+                .sorted()
+                .collect(Collectors.joining("/"));
+    return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+        .body(
+            ApiResponse.fail(
+                ErrorCode.BAD_REQUEST,
+                "请求方法不被允许：" + cause.getMethod() + " 该路径",
+                "该路径只接受 " + supported + " —— 若这是前端契约里已声明、后端尚未实现的端点，" + "它在后端还不存在（不是服务器故障）"));
   }
 
   /**

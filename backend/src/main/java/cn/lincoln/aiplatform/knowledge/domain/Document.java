@@ -328,13 +328,19 @@ public class Document {
   }
 
   /**
-   * 向量已过期（分段被编辑或删除后）—— {@code SUCCEEDED → PENDING_EMBEDDING}（{@code SEG-I7}）。
+   * 向量已过期（分段被编辑、删除或文档改名后）—— {@code SUCCEEDED → PENDING_EMBEDDING}（{@code SEG-I7}）。
    *
    * <p>★ 内容变了向量就旧了：不回到「待向量化」的话，检索会用旧向量答新内容，界面上什么都看不出来。 已经在待向量化时是 no-op（重复编辑不该报错）。
+   *
+   * <p>★ 那三个「本来就没有新鲜向量」的状态同样是 no-op（未解析 / 分段中 / 分段失败）： 它们身上没有需要作废的向量， 硬套转移矩阵会给一次合法操作抛「不允许转到待向量化」——
+   * 那是<strong>把"无事可做"报成"做错了"</strong>。 真正要拦的是 {@code EMBEDDING}（向量化正在跑，此刻作废会与在途任务打架），调用方应先显式拒绝它。
    */
   public void markVectorsStale() {
-    if (status == DocumentStatus.PENDING_EMBEDDING) {
-      return;
+    switch (status) {
+      case PENDING_EMBEDDING, PENDING_PARSE, SEGMENTING, SEGMENT_FAILED -> {
+        return;
+      }
+      default -> {}
     }
     DocumentStatus.requireLegal(status, DocumentStatus.PENDING_EMBEDDING, "标记向量已过期");
     this.status = DocumentStatus.PENDING_EMBEDDING;
@@ -360,6 +366,38 @@ public class Document {
 
   public void markDeleted(Instant at, UUID by) {
     this.deletedAt = at;
+    this.updatedBy = by;
+  }
+
+  /** 文档名长度上限。★ 与库列 {@code kb_document.name varchar(255)} 一致 —— 领域不管住它就会变成一次插入失败。 */
+  public static final int MAX_NAME_LENGTH = 255;
+
+  /**
+   * 改名（契约 {@code PATCH /documents/:id}）。
+   *
+   * <p>★ 超长<strong>明确拒绝</strong>、不静默截断：名字是用户输入，而且它还是结构化前缀的一段 （{@code 12 §4.2}）， 截断会悄悄改变检索文本。
+   *
+   * <p>★ 只改聚合根本身。<strong>分段的 {@code searchText}/{@code contentHash} 里含文档名</strong>，
+   * 重写它们属于跨聚合的编排，由应用层（{@code DocumentService#rename}）负责。
+   */
+  public void rename(String newName) {
+    if (newName == null || newName.isBlank() || newName.length() > MAX_NAME_LENGTH) {
+      throw new IllegalArgumentException("文档名称必须是 1–" + MAX_NAME_LENGTH + " 字");
+    }
+    this.name = newName.trim();
+  }
+
+  /** 启用（停用的文档不参与检索，数据保留）。 */
+  public void enable() {
+    this.enabled = true;
+  }
+
+  /** 停用（同上）。 */
+  public void disable() {
+    this.enabled = false;
+  }
+
+  public void setUpdatedBy(UUID by) {
     this.updatedBy = by;
   }
 

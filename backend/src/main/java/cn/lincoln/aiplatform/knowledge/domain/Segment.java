@@ -237,6 +237,17 @@ public class Segment {
     this.embeddingStatus = SegmentEmbeddingStatus.PENDING_EMBEDDING;
   }
 
+  /**
+   * 启用/停用这一段（契约 {@code setSegmentEnabled}）。
+   *
+   * <p>★ 与文档级启停是<strong>两件事、互不替代</strong>：文档停用是整篇不参与检索，分段停用是这一段不参与检索。 只改 {@code enabled} 位，正文与向量都留着
+   * —— 重新启用后无需重新向量化。
+   */
+  public void setEnabled(boolean enabled, UUID updatedBy) {
+    this.enabled = enabled;
+    this.updatedBy = updatedBy;
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {

@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.knowledge.web;
 import cn.lincoln.aiplatform.knowledge.application.DocumentService;
 import cn.lincoln.aiplatform.knowledge.application.DocumentView;
 import cn.lincoln.aiplatform.knowledge.application.IngestionProgressView;
+import cn.lincoln.aiplatform.knowledge.application.ReembedKbView;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -76,6 +77,23 @@ public class DocumentController {
   @PreAuthorize("hasAuthority('knowledge:view')")
   public ApiResponse<IngestionProgressView> ingestionProgress(@PathVariable UUID kbId) {
     return ApiResponse.ok(documentService.progress(kbId));
+  }
+
+  /**
+   * 库级重新向量化（契约 {@code reembedKnowledgeBase}）—— 整库排队，回执只给 {@code queued} 数。
+   *
+   * <p>★ 放在这里（而不是 {@code KnowledgeBaseController}）是因为它编排的是<strong>文档与分段</strong>： 与 {@link
+   * #ingestionProgress} 同源，改的时候不会漏。
+   *
+   * <p>★ 权限点 {@code knowledge:segment:edit} —— 与前端那个「全部重新向量化」按钮的可见条件一致 （{@code SegmentPanel.vue} 的
+   * {@code canEdit}）。
+   */
+  @PostMapping("/{kbId}/reembed")
+  @PreAuthorize("hasAuthority('knowledge:segment:edit')")
+  public ApiResponse<ReembedKbView> reembed(
+      @PathVariable UUID kbId, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        documentService.reembedKnowledgeBase(kbId, UUID.fromString(jwt.getSubject())));
   }
 
   /**

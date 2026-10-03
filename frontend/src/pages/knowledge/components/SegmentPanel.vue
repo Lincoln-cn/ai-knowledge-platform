@@ -226,9 +226,18 @@ const fetchDocs = async () => {
 
 /** 从切分预览拿 modelLimit（契约里 Segment 本身不带该字段） */
 const fetchModelLimit = async () => {
+  // ★ 契约要求预览必须给 documentId 或 segmentationPlan（后端会明确 400）。
+  //   而「全部文档」时 query.documentId 是空串 ⇒ 原样发出去是一个**注定 400** 的请求，
+  //   被下面的 catch 吞掉，于是 modelLimit 永远停在写死的默认值 —— 「看起来在读模型上限，其实没读到」。
+  //   模型上限是**库级**属性（同一个库绑同一个向量模型）⇒ 随便借本库的一篇文档去问，问出来的就是同一个数。
+  const probe = query.documentId || docOptions.value[0]?.id
+  if (!probe) {
+    // 库里还没有文档 ⇒ 也没有分段要判「超长」，不必发那个请求
+    return
+  }
   try {
     const preview = await ingestionApi.previewSegmentation({
-      documentId: query.documentId || null,
+      documentId: probe,
       segmentLength: 500,
       overlap: 60,
       strategy: 'AUTO'
@@ -397,8 +406,9 @@ watch(
   }
 )
 
-onMounted(() => {
-  fetchDocs()
+onMounted(async () => {
+  // ★ 顺序有意义：模型上限要借一篇文档去问，所以文档清单必须先到（原来是并发发的，谁先到看运气）
+  await fetchDocs()
   fetchModelLimit()
   fetchList()
 })

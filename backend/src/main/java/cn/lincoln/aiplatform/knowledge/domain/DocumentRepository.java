@@ -22,6 +22,14 @@ public interface DocumentRepository {
   /** 按库分页查文档（创建时间倒序）。★ 软删的不进列表。 */
   List<Document> findByKbId(UUID kbId, int offset, int limit);
 
+  /**
+   * 按库查<strong>全部</strong>文档（不分页）。★ 给「库级重新向量化」这类要遍历整库的动作用。
+   *
+   * <p>★ 为什么另开一个方法而不是「用一个很大的 limit 调 {@link #findByKbId}」：那样在文档数超过那个 limit 时
+   * 会<strong>静默漏掉剩余文档</strong>，而回执上的数字看起来很正常（"已排队 100 篇"）。 「静默截断」在本项目是一条明确的禁令（{@code SEG-I1} 同族）。
+   */
+  List<Document> findAllByKbId(UUID kbId);
+
   /** 与 {@link #findByKbId} 同条件的总数。★ 过滤之后的数，不能是表行数。 */
   long countByKbId(UUID kbId);
 

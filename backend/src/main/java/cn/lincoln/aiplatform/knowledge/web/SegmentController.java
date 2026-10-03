@@ -10,7 +10,9 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -88,6 +90,30 @@ public class SegmentController {
   }
 
   /**
+   * 启用/停用分段（契约 {@code setSegmentEnabled}）。
+   *
+   * <p>★ 权限点 {@code knowledge:segment:edit} —— 与前端那个开关的可见条件一致（{@code SegmentEditDialog}）。
+   */
+  @PatchMapping("/{id}/enabled")
+  @PreAuthorize("hasAuthority('knowledge:segment:edit')")
+  public ApiResponse<SegmentView> setEnabled(
+      @PathVariable UUID id, @RequestBody EnabledBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        segmentService.setEnabled(id, body.enabled(), UUID.fromString(jwt.getSubject())));
+  }
+
+  /**
+   * 单段重新向量化（契约 {@code reembedSegment}）。
+   *
+   * <p>★ 它复用文档级执行器（只重算未完成的分段），理由见 {@code SegmentService#reembed}。
+   */
+  @PostMapping("/{id}/embedding")
+  @PreAuthorize("hasAuthority('knowledge:segment:edit')")
+  public ApiResponse<SegmentView> reembed(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(segmentService.reembed(id, UUID.fromString(jwt.getSubject())));
+  }
+
+  /**
    * 删除分段（契约 {@code deleteSegment}）。
    *
    * <p>★ 分段是子实体、没有软删列 ⇒ 真删；删完回填文档进度列并把状态置回「待向量化」（向量旧了）。
@@ -101,4 +127,7 @@ public class SegmentController {
 
   /** 编辑请求体（契约 {@code updateSegment} 的 body）。 */
   record UpdateSegmentBody(String title, String content) {}
+
+  /** 启用位请求体（契约 {@code setSegmentEnabled} 的 body）。 */
+  record EnabledBody(boolean enabled) {}
 }

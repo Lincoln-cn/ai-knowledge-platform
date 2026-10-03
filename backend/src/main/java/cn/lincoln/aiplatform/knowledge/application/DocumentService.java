@@ -4,7 +4,9 @@ import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
 import cn.lincoln.aiplatform.knowledge.domain.PlannedSegment;
+import cn.lincoln.aiplatform.knowledge.domain.SearchText;
 import cn.lincoln.aiplatform.knowledge.domain.Segment;
+import cn.lincoln.aiplatform.knowledge.domain.SegmentContent;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingRepository;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.Segmenter;
@@ -13,6 +15,7 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.PageResult;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -204,6 +207,159 @@ public class DocumentService {
     documents.save(document);
     runner.startAsync(documentId);
     return DocumentView.from(documents.findById(documentId).orElse(document));
+  }
+
+  // ────────────────────────── 文档管理：改名 / 启停 / 删除 ──────────────────────────
+
+  /**
+   * 改名（契约 {@code renameDocument}：{@code PATCH /documents/{id}}）。
+   *
+   * <p>★ 光改文档行是不够的：结构化前缀里就有文档名（{@code 12 §4.2}），而它已经写进了每个分段的 {@code search_text}/{@code
+   * content_hash}。只改聚合根会留下「文档叫 A、它所有分段的检索文本里写着 B」——按新名字召回不到， 而两处各自看起来都没问题。{@code SEG-I7} 的 hash
+   * 正是为这种「前缀变了」准备的。 ⇒ 这里重写全部分段的前缀，并把向量标成过期（改名后要重新向量化才一致）。
+   */
+  @Transactional
+  public DocumentView rename(UUID documentId, String name, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    requireNotEmbedding(document, "改名");
+    try {
+      document.rename(name);
+    } catch (IllegalArgumentException e) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, e.getMessage());
+    }
+    document.setUpdatedBy(currentUserId);
+    documents.save(document);
+    reprefixSegments(document, currentUserId);
+    return DocumentView.from(documents.findById(documentId).orElse(document));
+  }
+
+  /**
+   * 启用/停用（契约 {@code setDocumentEnabled}）。
+   *
+   * <p>★ 只动聚合根的 {@code enabled} 位，不碰分段与向量：停用是「不参与检索」，不是删除 —— 重新启用后无需重新向量化。
+   */
+  @Transactional
+  public DocumentView setEnabled(UUID documentId, boolean enabled, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    if (enabled) {
+      document.enable();
+    } else {
+      document.disable();
+    }
+    document.setUpdatedBy(currentUserId);
+    return DocumentView.from(documents.save(document));
+  }
+
+  /**
+   * 删除（契约 {@code deleteDocument}）—— 文档<strong>软删</strong>，分段与向量<strong>真删</strong>。
+   *
+   * <p>★ 为什么连接连删：软删只落聚合根（{@code 02 §5.1}），而分段没有软删列。把分段与向量留着的话，
+   * 这篇文档的内容<strong>仍然能被检索到</strong>（引用里出现一篇"已删除"的文档）—— 列表里看不见、检索却答得出来， 是最难排查的一种。
+   *
+   * <p>★ 向量化中不许删：在途任务正按段落写向量与进度，把行删掉之后它会写一堆孤儿数据。与其让用户面对一个 "删了但状态还在变"的文档，不如明确拒绝并说清等待。
+   */
+  @Transactional
+  public void delete(UUID documentId, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    requireNotEmbedding(document, "删除");
+    segments.deleteByDocumentId(documentId);
+    segmentEmbeddings.deleteByDocumentId(documentId);
+    document.markDeleted(Instant.now(), currentUserId);
+    documents.save(document);
+  }
+
+  /** 拒绝在「向量化中」做会与在途任务打架的操作（改名 / 删除）。 */
+  private static void requireNotEmbedding(Document document, String action) {
+    if (document.status() == DocumentStatus.EMBEDDING) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "文档正在向量化中，不能" + action, "等它跑完（进度会自己往前走）再操作；若卡住不动，可等它落到「向量化失败」后重试");
+    }
+  }
+
+  /**
+   * 按文档当前的 文种/部门/名 重写全部分段的 {@code searchText} 与 {@code contentHash}。
+   *
+   * <p>★ 与 {@code SegmentService#update} 共用 {@link SearchText} 的拼装 —— 前缀形态只有一处真源，各拼一遍迟早漂移。
+   * 正文原样保留，只换前缀。
+   *
+   * @throws BusinessException 新名称让某个分段的检索文本超出向量上限（宁可拒绝改名，也不写一条注定超预算的检索文本）
+   */
+  private void reprefixSegments(Document document, UUID currentUserId) {
+    List<Segment> all = segments.findByDocumentId(document.id());
+    if (all.isEmpty()) {
+      return;
+    }
+    int maxChars = maxCharsResolver.resolve(document.kbId(), segmentationProperties.maxChars());
+    for (Segment segment : all) {
+      String prefix =
+          SearchText.prefix(
+              document.docType(), document.department(), document.name(), segment.titlePath());
+      String searchText;
+      try {
+        searchText = SegmentContent.ofSearchText(prefix, segment.content(), maxChars).text();
+      } catch (BusinessException e) {
+        throw new BusinessException(
+            ErrorCode.BAD_REQUEST,
+            "改名被拒绝：新名称会让第 " + (segment.ordinal() + 1) + " 段的检索文本超出上限（" + e.getMessage() + "）",
+            "把名称改短一些再试 —— 前缀会挤占向量预算（12 §4.2）");
+      }
+      String contentHash =
+          SearchText.contentHash(
+              document.docType(),
+              document.department(),
+              document.name(),
+              segment.titlePath(),
+              segment.content());
+      // ★ 语义是「只换前缀」：正文原样传回；updateContent 会把 embeddingStatus 置回待向量化（前缀变了向量就旧了）
+      segment.updateContent(segment.content(), searchText, contentHash, currentUserId);
+    }
+    segments.saveAll(all);
+    document.markVectorsStale();
+    documents.save(document);
+  }
+
+  // ────────────────────────── 库级重新向量化（契约 reembedKnowledgeBase） ──────────────────────────
+
+  /**
+   * 整库重新向量化（契约 {@code reembedKnowledgeBase}）—— 例如换了向量模型之后。回执只给 {@code queued} 数。
+   *
+   * <p>★ 只对<strong>有向量可作废</strong>的文档排队（{@code SUCCEEDED} / {@code PENDING_EMBEDDING} / {@code
+   * EMBEDDING_FAILED} 且分段非空）。把未解析、分段失败、零分段的文档算进 {@code queued}， 会让用户对着一个永远不动的大数字等 —— 那个数字还与 {@code
+   * ingestion-progress} 对不上。
+   *
+   * <p>★ 正在向量化中的文档<strong>跳过</strong>而不是报错：这是整库的批量动作，一篇在途文档不该让整库失败； 它本来就在跑，跑完就是最新的。
+   *
+   * <p>★ 刻意<strong>不加 {@code @Transactional}</strong>（与 {@link #reembed} 同一条判断）：
+   * 向量化任务在后台线程里读文档状态，把它包进一个长事务，后台任务就可能读到<strong>还没提交的旧状态</strong> 而被状态机守卫拒掉 ——
+   * 症状是"点了整库重算，回执说排队了，但一篇都没动"。
+   */
+  public ReembedKbView reembedKnowledgeBase(UUID kbId, UUID currentUserId) {
+    KnowledgeBaseView base = knowledgeBases.get(kbId);
+    if (base.embeddingModelId() == null || base.embeddingModelId().isBlank()) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "知识库未绑定向量模型，无法重新向量化", "请在知识库设置中绑定一个 EMBEDDING 类型的模型");
+    }
+    int queued = 0;
+    for (Document document : documents.findAllByKbId(kbId)) {
+      if (document.status() == DocumentStatus.EMBEDDING
+          || document.status() == DocumentStatus.PENDING_PARSE
+          || document.status() == DocumentStatus.SEGMENTING
+          || document.status() == DocumentStatus.SEGMENT_FAILED) {
+        continue;
+      }
+      List<Segment> all = segments.findByDocumentId(document.id());
+      if (all.isEmpty()) {
+        continue;
+      }
+      // ★ 分段也要退回待向量化：向量化器只处理未完成的分段，不退回的话"重算"会一段都不做
+      all.forEach(Segment::markPendingEmbedding);
+      segments.saveAll(all);
+      document.markVectorsStale();
+      documents.save(document);
+      runner.startAsync(document.id());
+      queued++;
+    }
+    return new ReembedKbView(queued);
   }
 
   /** 按 id 取文档并做可见性判定（不可见与不存在同一个 404 —— 不泄漏存在性）。 */

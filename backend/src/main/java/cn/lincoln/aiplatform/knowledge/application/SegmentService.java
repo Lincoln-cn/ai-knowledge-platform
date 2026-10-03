@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.knowledge.application;
 
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
+import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
 import cn.lincoln.aiplatform.knowledge.domain.PlannedSegment;
 import cn.lincoln.aiplatform.knowledge.domain.SearchText;
 import cn.lincoln.aiplatform.knowledge.domain.Segment;
@@ -53,6 +54,7 @@ public class SegmentService {
   private final AccessScopePort accessScope;
   private final SegmentationProperties properties;
   private final MaxCharsResolver maxCharsResolver;
+  private final EmbeddingRunner runner;
   private final Segmenter segmenter = new Segmenter();
 
   public SegmentService(
@@ -62,7 +64,8 @@ public class SegmentService {
       KnowledgeBaseService knowledgeBases,
       AccessScopePort accessScope,
       SegmentationProperties properties,
-      MaxCharsResolver maxCharsResolver) {
+      MaxCharsResolver maxCharsResolver,
+      EmbeddingRunner runner) {
     this.segments = segments;
     this.segmentEmbeddings = segmentEmbeddings;
     this.documents = documents;
@@ -70,6 +73,7 @@ public class SegmentService {
     this.accessScope = accessScope;
     this.properties = properties;
     this.maxCharsResolver = maxCharsResolver;
+    this.runner = runner;
   }
 
   // ────────────────────────── 切分预览 ──────────────────────────
@@ -280,6 +284,57 @@ public class SegmentService {
     document.recordSegmentSuccess(
         remaining.size(), remaining.stream().mapToInt(Segment::charCount).sum());
     documents.save(document);
+  }
+
+  // ────────────────────────── 启停与逐段重向量 ──────────────────────────
+
+  /**
+   * 启用/停用分段（契约 {@code setSegmentEnabled}）。
+   *
+   * <p>★ 与文档级启停<strong>互不替代</strong>：文档停用是整篇不参与检索，分段停用是这一段不参与检索。 只改 {@code enabled} 位，正文与向量都留着 ——
+   * 重新启用后无需重新向量化。
+   */
+  @Transactional
+  public SegmentView setEnabled(UUID id, boolean enabled, UUID currentUserId) {
+    Segment segment = requireVisibleSegment(id);
+    segment.setEnabled(enabled, currentUserId);
+    return SegmentView.from(segments.save(segment));
+  }
+
+  /**
+   * 单段重新向量化（契约 {@code reembedSegment}）—— 编辑后该段已回到「待向量化」，这里把它推进去。
+   *
+   * <p>★ 它复用<strong>文档级</strong>执行器，不另起一条单段路径：向量化器只处理 {@code embedding_status <> EMBEDDED}
+   * 的分段（续跑口径，{@code 03 §3.5}），所以「把这一段退回待向量化 + 起一轮文档级任务」的实际效果就是 <strong>只重算这一段</strong>（其余段已是 {@code
+   * EMBEDDED}，会被跳过）。另写一条单段执行路径会让 「哪些段要重算」多出一个判断点，迟早与续跑口径漂移。
+   *
+   * <p>★ 文档正在向量化中 ⇒ 明确拒绝：在途那一轮已经取好了分段清单，此刻的改动它看不到 —— 用户会得到一个「点了但没反应」的按钮。
+   */
+  @Transactional
+  public SegmentView reembed(UUID id, UUID currentUserId) {
+    Segment segment = requireVisibleSegment(id);
+    Document document = requireVisibleDocument(segment.documentId());
+    if (document.status() == DocumentStatus.EMBEDDING) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "该文档正在向量化中，不能单独重算某一段", "等这一轮跑完再点（进度会自己往前走）");
+    }
+    segment.markPendingEmbedding();
+    segments.save(segment);
+    // ★ 向量旧了 ⇒ 文档回「待向量化」，否则 startAsync 的状态机守卫会拒绝（它只允许从待向量化开始）
+    document.markVectorsStale();
+    documents.save(document);
+    runner.startAsync(document.id());
+    return SegmentView.from(segments.findById(id).orElse(segment));
+  }
+
+  /** 按 id 取分段 + 可见性判定（不可见与不存在同一个 404 —— 不泄漏存在性）。 */
+  private Segment requireVisibleSegment(UUID id) {
+    Segment segment =
+        segments
+            .findById(id)
+            .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "分段不存在"));
+    requireVisibleDocument(segment.documentId());
+    return segment;
   }
 
   // ────────────────────────── 内部 ──────────────────────────

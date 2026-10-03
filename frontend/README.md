@@ -32,16 +32,29 @@ python check_template_tags.py      # SFC 模板配平（裸跑扫 src/ 全部 .v
 python check_design.py             # 设计系统合规（14 个维度，见下）
 python verify_refs.py              # mock 跨模块引用一致性
 
-# 需要 dev server 在 5280 上跑
+# 需要 dev server 在 5280 上跑（走 mock）
 python smoke_test.py               # 基础设施回归：登录/守卫/路由/模型管理
 python verify_features.py          # 功能点：各模块的设计要点真的做了吗
 python verify_permissions.py       # 访问控制：四角色 × 各路由的门禁矩阵
 python check_theme.py              # 设计令牌与字体分工是否真的生效
 python check_canvas.py             # 编排画布几何（节点数/重叠/控件位置/被切）
 python check_nodeconfig.py         # 节点与配置分离（点卡片开抽屉，逐节点）
+
+# ★ 真栈闸门：dev server 要以 VITE_USE_MOCK=false 起，且后端 8080 + PG 15432 + 桩 11434 在跑
+python check_knowledge_parse.py    # 解析链（Markdown 结构 / 失败原因可读）
+python check_knowledge_form.py     # 建库向导 + 建档表单 + 生成预览
+python check_segmentation_e2e.py   # 分段 / 向量化 / ★ 刷新页面不重置
+python check_document_actions.py   # ★ 界面按钮真的生效（改名/启停/删除/分段启停/重向量）
+python check_flow_walkthrough.py   # ★ 逐页走查 12 页，分三档记账
 ```
 
 **这些都是独立脚本，退出码即结论**，可以直接当 CI 步骤。
+
+> ★ **真栈闸门与 mock 闸门回答的不是一回事**：mock 闸门验"界面按契约渲染"，真栈闸门验"这条链在真后端上
+> 真的走通了"。契约的两种实现（mock / 真后端）**长期有口径差**（mock 更宽松），所以一条流程能否交付，
+> 只能看真栈那一道 —— 这也是新建 `check_document_actions.py` 与 `check_flow_walkthrough.py` 的原因：
+> 前者管"**页面上的按钮点了有没有用**"，后者管"**逐页看下来哪一页是坏的**"，
+> 而这两类既有的闸门都不覆盖。
 
 ---
 

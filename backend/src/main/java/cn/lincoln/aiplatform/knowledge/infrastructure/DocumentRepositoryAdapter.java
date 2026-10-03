@@ -52,6 +52,11 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
   }
 
   @Override
+  public List<Document> findAllByKbId(UUID kbId) {
+    return jpa.findAll(filter(kbId), sort());
+  }
+
+  @Override
   public Map<DocumentStatus, Long> countByStatus(UUID kbId) {
     // ★ 分组计数在库里做（见 JpaDocumentRepository 的注释）：取回来再数会在分页上限处静默算错
     Map<DocumentStatus, Long> counts = new EnumMap<>(DocumentStatus.class);
