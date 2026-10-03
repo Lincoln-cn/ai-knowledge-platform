@@ -84,6 +84,46 @@ app:
     #   ② 否则用这里的默认 1200 —— ★ 与前端 mock 的 MODEL_LIMIT = 1200 一致，避免 mock/真栈漂移。
     max-chars: ${SEGMENT_MAX_CHARS:1200}
 
+  ocr:
+    # ══════════════════════════════════════════════════════════════════════════
+    #  扫描件 OCR（第 9 周 0.3.1 · 12 §11）
+    #
+    #  ★★ 这一组配置存在的理由：OCR 引擎是【系统级资产】，不像 jar 那样跟着构建走。
+    #     装没装、语言包拷没拷，决定了"扫描件能不能入库" —— 而漏装不会报错，
+    #     只表现为"扫描件解析出空"，落进那句「可能是扫描件」的通用文案。
+    #     ⇒ 所以路径显式配、结论显式报（启动日志 WARN + /actuator/health 的 components.ocr）。
+    #
+    #  ★ 离线部署（内网/单客户私有化，ROADMAP §九）：下面的 ENV 就是交付时要核对的东西。
+    #     镜像里必须有 ① tesseract 可执行文件 ② 每个语言对应的 <lang>.traineddata。
+    #     详细清单（含文件名与校验）见 deploy/README.md 的「离线交付清单 · OCR」段。
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # 总开关。★ 默认开：装好了就直接能用；没装也不会出错，只是 health 里显示 DEGRADED + 可读原因。
+    enabled: ${OCR_ENABLED:true}
+
+    # tesseract 可执行文件所在目录或完整路径。
+    # ★ 留空 = 走 PATH（开发机通常如此）。★ 生产/离线交付请显式给 ——
+    #   留空意味着"环境里恰好有"，而这正是本项目最不想要的偶然后果。
+    tesseract-path: ${OCR_TESSERACT_PATH:}
+
+    # 语言包目录。★ 12 §11.2 的坑 ①：「tessdata 路径必须显式给」。
+    #   留空 = 依次尝试 TESSDATA_PREFIX 环境变量；两处都没有时唯一能确认的结论是"引擎在、语言包无法核对"。
+    #   例：Linux 镜像 /usr/share/tesseract-ocr/5/tessdata；Windows + scoop 见 %TESSDATA_PREFIX%。
+    tessdata-path: ${OCR_TESSDATA_PATH:}
+
+    # Tesseract 语言参数。★ 每个语言都要有 <lang>.traineddata；缺中文包时中文会退化成方块/乱码，且不报错。
+    languages: ${OCR_LANGUAGES:chi_sim+eng}
+
+    # 光栅化 DPI。12 §11.3/§11.4 定的下限是 300 —— 调低会明显掉识别率，别为了省时间动它。
+    dpi: ${OCR_DPI:300}
+
+    # 单页 OCR 超时（秒）。★ 必须有上限：一页 A4 CPU 约 1–5 秒（12 §11.1），
+    #   但没有上限时一张异常大的图会把后台任务挂死，而界面上只看到"一直在跑"。
+    timeout-seconds: ${OCR_TIMEOUT_SECONDS:120}
+
+    # 图像预处理（deskew 等）。12 §11.4 要求 deskew 必开（扫描件常有倾斜）。
+    preprocess: ${OCR_PREPROCESS:true}
+
 server:
   port: ${SERVER_PORT:8080}
 

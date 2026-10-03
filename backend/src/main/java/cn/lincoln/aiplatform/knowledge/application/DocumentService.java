@@ -453,7 +453,9 @@ public class DocumentService {
         if (parsed.success()) {
           document.recordParseSuccess(parsed.markdown());
         } else {
-          document.recordParseFailure(parsed.failReason(), "修复文件后重新上传，或改用其它格式。", parsed.markdown());
+          // ★ 下一步建议**由解析器给**：同一个"解析不出内容"，扫描件缺 OCR 引擎要的是"装引擎"，
+          //   真空文档要的是"换文件" —— 硬编码一句通用建议等于把两种情况揉成一句谁也用不上的话
+          document.recordParseFailure(parsed.failReason(), parsed.failHint(), parsed.markdown());
         }
       }
       // ★ 先存文档（segments 的外键引用它），再分块落库

@@ -1,0 +1,186 @@
+# 部署与离线交付
+
+> ★ 这一份讲**交付**（内网 / 单客户私有化，`ROADMAP §九`）。开发期形态在根目录的
+> [`docker-compose.yml`](../docker-compose.yml)：它**只起 PG**，应用在本地跑 ——
+> 两者关注点不同，混在一起会让"改代码不重建镜像"这条开发便利消失（`ROADMAP §4.6`）。
+
+---
+
+## 一、为什么这份文档里要专门写 OCR
+
+**因为 OCR 引擎是系统级资产，不像 jar 那样跟着构建走。**
+
+`tesseract` 与它的语言包（`chi_sim.traineddata` 这类文件）**不在 Maven 依赖里、不在 jar 里** ——
+它们是操作系统包。这带来两个只在交付时才暴露的坑：
+
+| 坑 | 症状 | 为什么难发现 |
+|---|---|---|
+| 忘了装引擎 | 扫描件全部"解析结果为空" | 界面只说「可能是扫描件」，**看不出是引擎没装**；用户会去反复重新导出那个本来就好的文件 |
+| ★ 装了引擎、忘了拷语言包 | 中文退化成方块/乱码 | **日志里一句错都没有**；英文还能认，于是看起来"OCR 是好的" |
+
+⇒ 第 9 周（0.3.1）为此做了一件基础设施性质的事：**把"这台机器能不能 OCR"变成一条显式事实** ——
+启动日志一行 + `/actuator/health` 的 `components.ocr`。本文档的第三、四节就是**照着它做交付自检**。
+
+---
+
+## 二、应用镜像
+
+[`Dockerfile`](./Dockerfile) 就是交付形态。它把 OCR 引擎与语言包**烤进镜像层**，
+于是交付后运行时不依赖互联网、也不需要再装任何东西（`12 §11.2` 的"零新服务、零新库"落在这里）。
+
+```bash
+# 1) 先出 jar（在仓库根执行）
+backend\mvn-jdk25.cmd -B -f backend/pom.xml package -DskipTests
+
+# 2) 构建镜像（★ 构建上下文是仓库根）
+docker build -f deploy/Dockerfile -t ai-knowledge-platform:0.3.1 .
+
+# 3) 交付给内网：导出 → 拷贝 → 导入（离线这一步不需要任何网络）
+docker save ai-knowledge-platform:0.3.1 -o ai-knowledge-platform-0.3.1.tar
+#   内网机器上：
+docker load -i ai-knowledge-platform-0.3.1.tar
+```
+
+### ★★ 一个必须知道的构建坑：`.dockerignore` 不是"优化"，是"让构建能用"
+
+本仓库根目录下有一个 **25 GB** 的 `_archive/`（旧系统资料，`.gitignore` 已忽略、不进版本库，
+但**本机在**）。没有 [`.dockerignore`](../.dockerignore) 时，`docker build .` 会把这 25 GB
+全部推给 Docker 守护进程 —— 表现是**构建卡住不动、长时间没有任何输出**，
+很容易被误判成"网络慢"或"apt 卡住"（实测：>25 分钟无输出）。
+
+裁剪后上下文从 25 GB 降到约 **490 MB**。
+
+---
+
+## 三、离线交付清单 · OCR
+
+镜像里必须有下面两样。<u>下面每一项都是本机实测过的值</u>，不是照文档抄的。
+
+### 3.1 引擎与语言包（镜像路线，推荐）
+
+| 项 | 值 | 核实方式 |
+|---|---|---|
+| 基础镜像 | `eclipse-temurin:25-jre` | 实测 = Ubuntu 26.04.1 LTS + OpenJDK 25.0.4.1 |
+| apt 包（三个都必需） | `tesseract-ocr` · `tesseract-ocr-chi-sim` · `tesseract-ocr-eng` | 实测可装，tesseract **5.5.0** |
+| tessdata 目录 | `/usr/share/tesseract-ocr/5/tessdata/` | 实测存在，含 `chi_sim` / `eng` / `osd` |
+| 环境变量 | `TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata` | Dockerfile 里已设 |
+
+> ⚠️ **`tesseract-ocr` 官方包只带 `eng`** —— 中文包必须显式列 `tesseract-ocr-chi-sim`。
+> 漏了它不会报错，只会让中文全成方块。
+
+### 3.2 如果内网连 apt 源都没有（纯离线投放语言包）
+
+把两个 `.traineddata` 文件拷进 `TESSDATA_PREFIX` 指向的目录即可，不需要重装引擎。
+本机实测的**文件名与校验**（`tessdata_fast`，`12 §11.2` 定的档位）：
+
+| 文件 | 大小 | SHA-256 |
+|---|---|---|
+| `chi_sim.traineddata` | 2411 KB | `a5fcb6f0db1e1d6d8522f39db4e848f05984669172e584e8d76b6b3141e1f730` |
+| `eng.traineddata` | 4017 KB | `7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2` |
+
+来源：`https://github.com/tesseract-ocr/tessdata_fast`（Apache-2.0）。
+★ `best` 档更准但 +27 MB，`fine-tune` 更大；**MVP 用 `fast`**（`12 §11.2`）。
+
+投放后**一定要**按第四节自检 —— 只拷文件不看 health，等于把上面那个"静默的坑"留在现场。
+
+---
+
+## 四、★ 交付自检（三条，缺一不可）
+
+### ① 镜像里引擎与语言包都在
+
+```bash
+docker run --rm --entrypoint tesseract ai-knowledge-platform:0.3.1 --list-langs
+# 期望：列出 chi_sim、eng（只有 eng ⇒ 漏装了中文包）
+```
+
+### ② 应用自己认同这件事（★ 最关键的一条）
+
+```bash
+curl -s http://<host>:8080/actuator/health | jq '.components.ocr'
+```
+
+期望（**已在本机镜像里实测到**）：
+
+```json
+{
+  "status": "UP",
+  "details": {
+    "available": true,
+    "languages": ["chi_sim", "eng"],
+    "tesseractPath": "(PATH)",
+    "tessdataPath": "/usr/share/tesseract-ocr/5/tessdata",
+    "dpi": 300
+  }
+}
+```
+
+**验收判据是 `components.ocr.details.available == true`，不是"health 整体是不是 UP"。**
+理由：没装 OCR 不影响登录、文本型文档与检索，所以它**不会**把整体 health 拉成 DOWN；
+它自己会是 `DEGRADED` 并在 `reason` / `hint` 里说清缺什么、下一步做什么。
+
+实测的反向路径（把 `TESSDATA_PREFIX` 指到一个空目录）：
+
+```
+WARN  OCR 引擎：不可用：找到了 tesseract，但缺语言包：chi_sim.traineddata、eng.traineddata（目录 …）
+health: { "status": "DEGRADED", "details": { "available": false, "reason": "…", "hint": "…" } }
+```
+
+> 部署验收还要看：`tessdataPath` 是不是你镜像里的那个目录、`languages` 里 `chi_sim` 在不在。
+> 这两项是"看起来装了、其实没生效"最常出现的地方。
+
+### ③ 端到端：传一份扫描件
+
+用真栈闸门跑（见[根 README](../README.md) 的验证段）：
+
+```bash
+python frontend/check_ocr_e2e.py
+```
+
+它上传 `scanned.pdf`（3 页全无文本层）并断言：「已识别 3/3 页 → 入库成功」，
+以及**文本型文档不受影响**。
+
+---
+
+## 五、OCR 的配置项（交付时可能要改的）
+
+全部走环境变量覆盖（`application.yml` 的 `app.ocr.*`）：
+
+| 环境变量 | 默认 | 什么时候改 |
+|---|---|---|
+| `OCR_ENABLED` | `true` | 明确不需要扫描件时关掉（关掉后扫描件的失败原因会说清是配置关的） |
+| `OCR_TESSERACT_PATH` | 空（走 PATH） | ★ **生产建议显式给**：留空意味着"环境里恰好有"，而这正是本项目最不想要的偶然后果 |
+| `OCR_TESSDATA_PATH` | 空（走 `TESSDATA_PREFIX`） | 语言包不在默认位置时给；★ `12 §11.2` 的坑 ① 要求这一步必须显式 |
+| `OCR_LANGUAGES` | `chi_sim+eng` | 不需要中文时改 `eng`（更快更小） |
+| `OCR_DPI` | `300` | **别调低** —— `12 §11.3/§11.4` 定的下限就是 300，调低明显掉识别率 |
+| `OCR_TIMEOUT_SECONDS` | `120` | 单页超时；必须有上限，否则一张异常大的图会把后台任务挂死 |
+| `OCR_PREPROCESS` | `true` | 图像预处理（deskew）；`12 §11.4` 要求必开 |
+
+---
+
+## 六、开发机（Windows）怎么装
+
+与镜像路线**等价**的本地安装（本机实测过）：
+
+```powershell
+scoop install tesseract                 # 5.5.0，shim 会进 PATH
+# 语言包按需下两个 .traineddata（tesseract-languages 会装全部语言，用不着）
+# 放进 scoop 的 persist 目录：~\scoop\persist\tesseract\tessdata\
+```
+
+scoop 会自动把 `TESSDATA_PREFIX` 指到上面那个目录 —— 所以开发机上不配 `app.ocr.tessdata-path`
+也能用；但**交付时请显式配**（见第五节）。
+
+---
+
+## 七、诚实记账：哪些已验、哪些还没
+
+| 项 | 状态 |
+|---|---|
+| 基础镜像 + 三个 apt 包 + tessdata 路径 | ✅ 实测（`debian:bookworm-slim` 与 `eclipse-temurin:25-jre` 都验过） |
+| 镜像构建成功（`.dockerignore` 裁剪后 490 MB 上下文） | ✅ 实测 |
+| 镜像内 OCR 可用（`--list-langs` = chi_sim/eng） | ✅ 实测 |
+| 应用在镜像内启动并对 OCR 报"可用"（启动日志 + health） | ✅ 实测（连的是宿主 PG） |
+| 误配（`TESSDATA_PREFIX` 指向空目录）被探测并报 `DEGRADED` | ✅ 实测 |
+| **镜像内跑完整 OCR 入库链**（上传 `scanned.pdf` → 分块 → 向量化） | ⏳ **未验** —— 需要把 PG 与桩模型服务一起拉进同一网络，随真栈闸门 `check_ocr_e2e.py` 落地时补 |
+| 内网 `docker save/load` 全流程 | ⏳ 未验（机制标准，但没有内网机器可验） |

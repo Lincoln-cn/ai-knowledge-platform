@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
 import cn.lincoln.aiplatform.knowledge.infrastructure.NoiseStripper;
+import cn.lincoln.aiplatform.knowledge.infrastructure.OcrEngine;
+import cn.lincoln.aiplatform.knowledge.infrastructure.OcrProperties;
 import cn.lincoln.aiplatform.knowledge.infrastructure.StripResult;
 import cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -37,8 +39,17 @@ import org.junit.jupiter.api.Test;
  */
 class ParseMetricsTest {
 
-  private final TikaMarkdownParser parser = new TikaMarkdownParser();
+  private final TikaMarkdownParser parser = new TikaMarkdownParser(ocrOff());
   private final NoiseStripper stripper = new NoiseStripper();
+
+  /**
+   * ★ 单测用<strong>关掉 OCR</strong>的引擎：这些用例量的是"结构丢失率 / 误杀率"，而 OCR 是<strong>系统级依赖</strong> （装了
+   * tesseract 才跑）。让它随开发机有没有装 tesseract 而变，等于拿"环境恰好有"当测试前提 —— 那会让同一份读数在两台机器上不一样。OCR 自己的验收在 {@code
+   * OcrParserTest} 与真栈闸门。
+   */
+  private static OcrEngine ocrOff() {
+    return new OcrEngine(new OcrProperties(false, null, null, "chi_sim+eng", 300, 120, true));
+  }
 
   private static final Pattern MD_HEADING = Pattern.compile("(?m)^#{1,6}\\s+.*");
   private static final Pattern MD_LIST = Pattern.compile("(?m)^\\s*([-*+]|\\d+[.)])\\s+.*");

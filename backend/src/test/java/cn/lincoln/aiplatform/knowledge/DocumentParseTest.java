@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
 import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
+import cn.lincoln.aiplatform.knowledge.infrastructure.OcrEngine;
+import cn.lincoln.aiplatform.knowledge.infrastructure.OcrProperties;
 import cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import java.io.IOException;
@@ -34,7 +36,16 @@ import org.junit.jupiter.api.Test;
  */
 class DocumentParseTest {
 
-  private final TikaMarkdownParser parser = new TikaMarkdownParser();
+  private final TikaMarkdownParser parser = new TikaMarkdownParser(ocrOff());
+
+  /**
+   * ★ 单测用<strong>关掉 OCR</strong>的引擎：这些用例验的是"文本型文档的解析"，而 OCR 是<strong>系统级依赖</strong> （装了 tesseract
+   * 才跑）。让它随开发机有没有装 tesseract 而变，等于拿"环境恰好有"当测试前提 —— 那是本项目最不想要的一类前提。OCR 自己的验收在 {@code OcrParserTest}
+   * 与真栈闸门 {@code check_ocr_e2e.py}。
+   */
+  private static OcrEngine ocrOff() {
+    return new OcrEngine(new OcrProperties(false, null, null, "chi_sim+eng", 300, 120, true));
+  }
 
   private static byte[] fixture(String name) {
     try (InputStream in = DocumentParseTest.class.getResourceAsStream("/fixtures/" + name)) {

@@ -10,6 +10,8 @@ import org.apache.tika.metadata.Metadata;
 import org.apache.tika.metadata.TikaCoreProperties;
 import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
+import org.apache.tika.parser.ocr.TesseractOCRConfig;
+import org.apache.tika.parser.ocr.TesseractOCRParser;
 import org.apache.tika.parser.pdf.PDFParserConfig;
 import org.apache.tika.sax.ToMarkdownContentHandler;
 import org.xml.sax.SAXException;
@@ -27,6 +29,17 @@ import org.xml.sax.SAXException;
  * <p>★ 失败口径（{@code DOC-I2} / {@code 12 §2.1}）： {@link ParseResult#failReason()}
  * 必须<strong>可读</strong> （「PDF 加密，无法解析」这种），不是堆栈或异常类名； {@link ParseResult#markdown()} 保留 handler
  * 已缓冲的片段，不整篇丢。
+ *
+ * <h3>★ OCR（第 9 周 · 0.3.1）：引擎不可用时给<strong>分档</strong>的原因</h3>
+ *
+ * <p>「扫描件抽不出文本」有两种完全不同的成因，{@code 12 §11} 与不 §11 的下一步建议不一样：
+ *
+ * <ul>
+ *   <li><strong>引擎可用</strong> ⇒ 那就是真的没内容（空文档 / 损坏 / 整页是图但也没字）
+ *   <li>★ <strong>引擎不可用</strong> ⇒ 得说清是"这台机器没装 OCR"，并指路装什么 —— 否则用户会以为文件坏了，反复重新导出、重新上传
+ * </ul>
+ *
+ * <p>⇒ 这里注入 {@link OcrEngine} 问一次可用性，并把结论带进失败文案。
  */
 @org.springframework.stereotype.Component
 public class TikaMarkdownParser {
@@ -34,6 +47,21 @@ public class TikaMarkdownParser {
   /** 扩展名白名单（{@code 09 §10.2 #2}：改扩展名绕过 ⇒ MIME 嗅探不匹配即拒）。 与批 1 解析范围对齐：DOCX / PDF / TXT / MD。 */
   private static final Set<String> ALLOWED_EXTENSIONS =
       Set.of("docx", "doc", "pdf", "txt", "md", "markdown");
+
+  /**
+   * 逐页判定阈值：每页字符数 &lt; 10 ⇒ 该页走 OCR（{@code 12 §11.3}）。
+   *
+   * <p>★ 格式口径按<b>实测</b>修正：设计册抄的是 Tika 4.0 的 <strong>JSON</strong> 块 （{@code
+   * {"totalCharsPerPage":10,...}}），而 3.3.1 的 {@code setOcrStrategyAuto(String)} 要的是 <strong>{@code
+   * "num[%], num"}</strong> 短格式 —— 照抄设计册会直接抛 {@code Error parsing OCRStrategyAuto}。
+   */
+  private static final String OCR_STRATEGY_AUTO = "10, 10";
+
+  private final OcrEngine ocr;
+
+  public TikaMarkdownParser(OcrEngine ocr) {
+    this.ocr = ocr;
+  }
 
   /**
    * 把文件字节解析成 Markdown。
@@ -65,21 +93,24 @@ public class TikaMarkdownParser {
       metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, filename);
     }
 
+    boolean ocrAvailable = ocr.available();
     try (ByteArrayInputStream in = new ByteArrayInputStream(content)) {
       // ★ AutoDetectParser 靠 SPI 装配 parser 模块；编码探测在 text 模块内完成（12 §一）
       ParseContext context = new ParseContext();
-      // ★ 不要吞掉中间 IOException：默认会 catch 掉内容流解码错误 ⇒「页面丢了」静默发生。
-      //   关掉后中途失败会带着 handler 里已缓冲的片段抛出（12 §2.1 的 catch 场景）。
-      PDFParserConfig pdfConfig = new PDFParserConfig();
-      pdfConfig.setCatchIntermediateIOExceptions(false);
-      context.set(PDFParserConfig.class, pdfConfig);
+      context.set(PDFParserConfig.class, pdfConfig(ocrAvailable));
+      if (ocrAvailable) {
+        context.set(TesseractOCRConfig.class, tesseractConfig());
+        context.set(TesseractOCRParser.class, ocr.newParser());
+      }
       new AutoDetectParser().parse(in, handler, metadata, context);
       // ★ 0 字符 ≠ 成功。输入非空却抽出 0 字符（PDFBox 吞掉损坏、扫描件无文本层）时
       //   若仍算成功，界面会显示「已解析」而内容是空的 —— 这是最坏的失败形态（静默）。
-      //   与第 9 周的 OCR 链正好衔接：扫描件要走 OCR 才有文本。
+      //   ★ 第 9 周起这里要分档：引擎在不在，下一步做的事完全不同。
       String extracted = markdown.toString();
       if (extracted.isBlank()) {
-        return ParseResult.failed(describeEmptyResult(filename, content.length), "");
+        return ocrAvailable
+            ? ParseResult.failed(describeEmptyResult(filename, content.length), "")
+            : ocrUnavailableResult(filename, content.length, ocr.status());
       }
       return ParseResult.ok(extracted);
     } catch (EncryptedDocumentException e) {
@@ -90,6 +121,41 @@ public class TikaMarkdownParser {
       // ★ 兜底：任何异常都不许把堆栈当原因抛给用户（DOC-I2）
       return ParseResult.failed(describeFailure(e, filename), markdown.toString());
     }
+  }
+
+  // ────────────────────────── OCR 配置 ──────────────────────────
+
+  /**
+   * PDF 解析配置。
+   *
+   * <p>★ OCR 不可用时显式置 {@code NO_OCR}：Tika 默认是 {@code NO_OCR}，但**别依赖默认值** —— 一旦哪天默认改成
+   * AUTO，一台没装引擎的机器会在每页上都尝试一次 spawn 并失败， 症状是"解析变慢且原因不明"。
+   */
+  private PDFParserConfig pdfConfig(boolean ocrAvailable) {
+    PDFParserConfig pdfConfig = new PDFParserConfig();
+    // ★ 不要吞掉中间 IOException：默认会 catch 掉内容流解码错误 ⇒「页面丢了」静默发生。
+    //   关掉后中途失败会带着 handler 里已缓冲的片段抛出（12 §2.1 的 catch 场景）。
+    pdfConfig.setCatchIntermediateIOExceptions(false);
+    if (ocrAvailable) {
+      pdfConfig.setOcrStrategy(PDFParserConfig.OCR_STRATEGY.AUTO);
+      pdfConfig.setOcrStrategyAuto(OCR_STRATEGY_AUTO);
+      pdfConfig.setOcrDPI(ocr.properties().dpi());
+      pdfConfig.setOcrRenderingStrategy(PDFParserConfig.OCR_RENDERING_STRATEGY.ALL);
+    } else {
+      pdfConfig.setOcrStrategy(PDFParserConfig.OCR_STRATEGY.NO_OCR);
+    }
+    return pdfConfig;
+  }
+
+  private TesseractOCRConfig tesseractConfig() {
+    TesseractOCRConfig tess = new TesseractOCRConfig();
+    tess.setLanguage(ocr.properties().languages());
+    // ★ HOCR 而不是 TXT：只有 hOCR 带 bbox / x_wconf（低置信度标 needsReview 与页眉页脚去重都靠它，12 §11.4）
+    tess.setOutputType(TesseractOCRConfig.OUTPUT_TYPE.HOCR);
+    tess.setDensity(ocr.properties().dpi());
+    tess.setEnableImagePreprocessing(ocr.properties().preprocess());
+    tess.setTimeoutSeconds(ocr.properties().timeoutSeconds());
+    return tess;
   }
 
   // ────────────────────────── 内部 ──────────────────────────
@@ -110,10 +176,26 @@ public class TikaMarkdownParser {
     return "文档已加密，无法解析。";
   }
 
-  /** 抽出 0 字符的可读原因。★ 这不是「解析异常」，而是「解析出了空气」—— 文案要指路（扫描件走 OCR / 文件损坏）， 不能只说「解析失败」。 */
+  /**
+   * 抽出 0 字符的可读原因（<strong>OCR 可用</strong>时）。★ 这不是「解析异常」，而是「解析出了空气」—— 文案要指路（文件损坏 / 真空文档）， 不能只说「解析失败」。
+   */
   private static String describeEmptyResult(String filename, int byteLength) {
-    return "解析结果为空：可能是扫描件/图片型文档（无文本层，需走 OCR）、空文档或文件损坏（文件 %s，%d 字节）"
+    return "解析结果为空：可能是空文档或文件损坏（文件 %s，%d 字节）"
         .formatted(filename == null ? "?" : filename, byteLength);
+  }
+
+  /**
+   * 抽出 0 字符、<strong>而本环境没有可用的 OCR 引擎</strong>时的可读原因 + 下一步。
+   *
+   * <p>★ 这一档必须与上一条分开：它们的下一步完全不同 —— 「装 OCR 引擎」vs「换一份文件」。写在一条里，用户会去反复重新导出那个本来就好的扫描件。
+   */
+  private static ParseResult ocrUnavailableResult(
+      String filename, int byteLength, OcrEngine.Status status) {
+    String reason =
+        "解析结果为空：这份文件很可能没有文本层（扫描件 / 图像型 PDF），"
+            + "而本环境没有可用的 OCR 引擎 —— %s（文件 %s，%d 字节）"
+                .formatted(status.reason(), filename == null ? "?" : filename, byteLength);
+    return ParseResult.failed(reason, status.hint(), "");
   }
 
   /** 把异常翻成可读原因。★ 纪律：不把异常类名 / 堆栈放进 failReason —— 用户改不了也看不懂（{@code 08 §4.1}）。 */
