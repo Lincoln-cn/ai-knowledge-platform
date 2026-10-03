@@ -176,6 +176,19 @@
       <groupId>org.apache.tika</groupId>
       <artifactId>tika-parser-text-module</artifactId>
     </dependency>
+    <!-- ★ 第 9 周 0.3.1 · OCR 链（12 §11.2 选型）：CLI Tesseract 经 commons-exec spawn 子进程，
+         不是 JNI —— native 崩溃不会拖垮 JVM（tess4j 那条路被这条件排除）。
+         ★ 版本口径已核（不是照 12 §11.2 抄）：文档写的是"Tika 4.0 自带三条 OCR 路线"，
+           但本项目钉的是 3.3.1（4.0 只有 alpha）—— 实测 3.3.1 **已经有整套 OCR 能力**：
+           · PDFParserConfig 的 OCR_STRATEGY / OCRStrategyAuto / ocrDPI / 渲染策略（逐页判定）
+           · TesseractOCRConfig 的 language / HOCR / density / 预处理(deskew) / timeout
+           · TesseractOCRParser 的 tesseractPath / tessdataPath / hasTesseract()
+           ⇒ 不必等 4.0，也不引任何新库；deskew 由本模块自带的 ImageDeskew 提供（不引 OpenCV）。
+         ★ 它**不**拖 tika-parsers-standard-package（那个 4.0 起是 POM 聚合包，会拖 CAD/音视频/邮件）。 -->
+    <dependency>
+      <groupId>org.apache.tika</groupId>
+      <artifactId>tika-parser-ocr-module</artifactId>
+    </dependency>
 
     <!-- ─── PostgreSQL 驱动 ─── -->
     <dependency>
