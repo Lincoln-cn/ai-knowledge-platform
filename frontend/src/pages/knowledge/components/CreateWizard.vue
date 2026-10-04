@@ -206,6 +206,16 @@
           预览展示第一个文档（{{ files[0]?.name }}）；其余 {{ files.length - 1 }} 个按相同参数切分
         </div>
 
+        <!--
+          ★ 噪声剥离的行数（T249.2，12 §2.4）：页眉/页脚/页码/目录会被剔掉再分块。
+            必须显示 —— 不显示的话「为什么这份文档少了一页内容」没人能解释（删掉的东西要看得见）。
+            只在 >0 时出现：文本型文档通常是 0，不该挂一条恒为 0 的噪声。
+        -->
+        <div v-if="preview && (preview.removedNoiseLines ?? 0) > 0" class="micro muted noise-note">
+          已剔除 <b class="num">{{ preview.removedNoiseLines }}</b> 行页眉 / 页脚 / 页码 / 目录
+          —— 它们在每个分段里重复出现，会稀释召回
+        </div>
+
         <div v-if="previewError" class="notice err preview-error">
           <div><b>生成预览失败：</b>{{ previewError }}</div>
           <el-button size="small" style="margin-top: var(--space-xs)" @click="generatePreview">重试</el-button>
@@ -870,6 +880,13 @@ defineExpose({ open })
   display: flex;
   flex-direction: column;
   min-height: 360px;
+}
+
+/* 「已剔除 N 行页眉/页脚/页码/目录」—— 与预览头分开一点，避免看成标题的一部分 */
+.noise-note {
+  margin-top: var(--space-2xs);
+  padding-left: var(--space-xs);
+  border-left: 2px solid var(--color-rule);
 }
 
 .preview-head {

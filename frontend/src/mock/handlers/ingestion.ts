@@ -447,7 +447,11 @@ const buildPreview = (
     segmentCount: result.length,
     charCount: text.length,
     modelLimit: MODEL_LIMIT,
-    segments: result
+    segments: result,
+    // ★ T249.2（12 §2.4）：噪声剥离的行数。mock 里给一个稳定的非 0 值，
+    //   让「已剔除 N 行页眉 / 页脚 / 页码 / 目录」这条渲染路径在 mock 下也能被验到
+    //   （真栈上它是后端算的：跨页重复行 ≥3 次且 <60 字、独立页码、连续目录行）。
+    removedNoiseLines: 3
   }
 }
 

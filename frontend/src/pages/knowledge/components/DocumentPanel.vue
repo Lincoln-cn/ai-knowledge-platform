@@ -51,12 +51,25 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="状态" width="140">
+        <el-table-column label="状态" width="190">
           <template #default="{ row }">
             <span class="status" :class="statusClass(row.status as DocumentStatus)">
               <el-icon v-if="isRunning(row.status as DocumentStatus)" class="is-loading"><Loading /></el-icon>
               <i v-else class="dot" :class="statusDot(row.status as DocumentStatus)" />
               {{ labelOf(DOCUMENT_STATUS_LABELS, row.status) }}
+            </span>
+            <!--
+              ★ 「已识别 N/M 页」（T249.3，12 §11.8）：扫描件的 OCR 实测每页约 3.6 秒，
+                没有这个数用户面对的就是几分钟空白。进度是**库里的事实**（后端逐页回写），
+                所以刷新页面不重置 —— 与向量化进度同一条纪律。
+              ★ 只在"真的涉及 OCR 且在解析中"时显示：M=0（非 PDF / 纯文本 PDF）时不显示，
+                否则每条文本型文档都会挂一条恒为 0/0 的噪声。
+            -->
+            <span
+              v-if="row.status === 'SEGMENTING' && (row.ocrTotalPages ?? 0) > 0"
+              class="ocr-progress micro num"
+            >
+              已识别 {{ row.ocrDonePages ?? 0 }}/{{ row.ocrTotalPages }} 页
             </span>
           </template>
         </el-table-column>
@@ -518,6 +531,13 @@ tr:hover .rename-btn {
   gap: var(--space-2xs);
   margin-right: var(--space-xs);
   vertical-align: middle;
+}
+
+/* 「已识别 N/M 页」：跟在状态后面另起一行；等宽数字（进度在跳，避免宽度抖动） */
+.ocr-progress {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-text-3);
 }
 
 .rp-bar {

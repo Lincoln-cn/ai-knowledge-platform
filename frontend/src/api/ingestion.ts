@@ -48,6 +48,15 @@ export interface DocumentItem {
    * 不许把「解析失败」做成整篇丢弃（12 §2.1）。
    */
   parsedContent?: string
+  /**
+   * 需要 OCR 的页数（第 9 周 · 0.3.1）—— 「已识别 N/M 页」里的 **M**。
+   * ★ 由一次关掉 OCR 的快扫得出（约 0.3 秒），所以上传后**立刻**就有值；`0` = 不涉及 OCR
+   *   （非 PDF / 纯文本 PDF）⇒ 界面**不显示**进度行，而不是显示一条恒为 0/0 的噪声。
+   * ★ 扫描件的解析要跑分钟级（实测每页约 3.6 秒）⇒ 没有这个数用户就是面对几分钟空白。
+   */
+  ocrTotalPages?: number
+  /** 已完成 OCR 的页数 —— 「已识别 N/M 页」里的 **N**。逐页回写，刷新页面不重置。 */
+  ocrDonePages?: number
 }
 
 /** 库级进度聚合：阶段 + 计数，用于页面顶部进度条 */
@@ -131,6 +140,12 @@ export interface PreviewSegmentationResult {
    * 超上限的分段根本进不了库（SEG-I1 会拒绝）。
    */
   segments: Array<{ ordinal: number; content: string; charCount: number; oversized: boolean }>
+  /**
+   * 噪声剥离掉的行数（第 9 周 · 0.3.1，`12 §2.4`）：页眉 / 页脚 / 页码 / 目录。
+   * ★ 必须显示出来 —— 不显示的话「为什么这份文档少了一页内容」没人能解释
+   * （删掉的东西要看得见，与「失败样本留存」同一条纪律）。0 表示这份文档没有噪声。
+   */
+  removedNoiseLines?: number
 }
 
 /** #11 暂存上传回执 */

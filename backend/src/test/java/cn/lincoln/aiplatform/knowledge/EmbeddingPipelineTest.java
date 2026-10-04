@@ -295,7 +295,24 @@ class EmbeddingPipelineTest {
             HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
     Matcher m = ID.matcher(res.body());
     assertThat(m.find()).as("上传失败：" + res.body()).isTrue();
-    return m.group(1);
+    String docId = m.group(1);
+    // ★ 第 9 周起解析是**异步**的（扫描件的 OCR 实测每页约 3.6 秒 —— 判据 ⑤ 要求不阻塞其它文档）
+    //   ⇒ "上传完就能读分段"不再成立。测试要和界面一样**等**解析落地。
+    waitParsed(docId, 30);
+    return docId;
+  }
+
+  /** 等解析落地：{@code PENDING_EMBEDDING}（成功）或 {@code SEGMENT_FAILED}（失败）。 */
+  private void waitParsed(String docId, int seconds) throws InterruptedException {
+    for (int i = 0; i < seconds * 2; i++) {
+      String current =
+          jdbc.queryForObject(
+              "select status from kb_document where id = ?::uuid", String.class, docId);
+      if ("PENDING_EMBEDDING".equals(current) || "SEGMENT_FAILED".equals(current)) {
+        return;
+      }
+      Thread.sleep(500);
+    }
   }
 
   private HttpResponse<String> post(String path, String body, String bearer) throws Exception {
