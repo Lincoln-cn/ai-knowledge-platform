@@ -68,6 +68,23 @@ docker load -i ai-knowledge-platform-0.3.1.tar
 > ⚠️ **`tesseract-ocr` 官方包只带 `eng`** —— 中文包必须显式列 `tesseract-ocr-chi-sim`。
 > 漏了它不会报错，只会让中文全成方块。
 
+★ **3.1 与 3.2 是同一份模型**（实测 sha256 逐字一致）：
+
+```
+apt 装的 /usr/share/tesseract-ocr/5/tessdata/chi_sim.traineddata
+  = a5fcb6f0db1e1d6d8522f39db4e848f05984669172e584e8d76b6b3141e1f730
+tessdata_fast 下载的 chi_sim.traineddata
+  = a5fcb6f0db1e1d6d8522f39db4e848f05984669172e584e8d76b6b3141e1f730   ← 同一个字节
+```
+
+Ubuntu 的 `tesseract-ocr-chi-sim` 装的**就是 `tessdata_fast`**（`12 §11.2` 定的档位）
+⇒ **两条路线等价**，离线清单只需记一份；下面的 sha256 对 apt 路线同样成立，
+**可以用来核对"内网那台机器上的语言包是不是这一份"**。
+
+> ★ **不需要关心 tesseract 版本与中文产物形态的关系**：产物形态（TXT）与"要不要重建词间空格"
+> 是 **jar 里 Tika 的配置**决定的（`OcrEngine` 里显式钉住），**与操作系统装的是哪个 tesseract 无关**。
+> OS 侧的 tesseract 版本只影响**识别质量**，不影响"中文会不会被逐字打散"这件事。
+
 ### 3.2 如果内网连 apt 源都没有（纯离线投放语言包）
 
 把两个 `.traineddata` 文件拷进 `TESSDATA_PREFIX` 指向的目录即可，不需要重装引擎。
