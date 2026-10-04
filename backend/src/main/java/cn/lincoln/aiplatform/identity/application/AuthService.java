@@ -259,7 +259,7 @@ public class AuthService {
             .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "用户不存在", "它可能已被删除"));
 
     if (!passwordEncoder.matches(oldPassword, user.passwordHash())) {
-      throw new BusinessException(ErrorCode.UNAUTHORIZED, "原密码不正确", "改密需要先验证原密码");
+      throw new BusinessException(ErrorCode.OLD_PASSWORD_MISMATCH, "原密码不正确", "改密需要先验证原密码");
     }
 
     PasswordPolicy.violationOf(newPassword, user.username())

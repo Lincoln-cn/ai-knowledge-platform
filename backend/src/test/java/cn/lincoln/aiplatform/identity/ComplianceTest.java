@@ -226,8 +226,11 @@ class ComplianceTest {
             "{\"oldPassword\":\"not-my-password\",\"newPassword\":\"Str0ng!Pass\"}",
             token);
 
-    assertThat(res.statusCode()).isEqualTo(401);
-    assertThat(res.body()).contains("原密码");
+    // ★ 400 + 专用码，**不是 401**：401 的语义是"令牌缺失/过期/验签失败"，前端据此静默刷新并重放一次
+    //   （08 §4.0 第 2 行）。把"表单里填错老密码"也报成 401，会让前端白跑一次刷新 + 一次重放，
+    //   排障时也分不清哪个 401 是会话、哪个是字段（issue #15）。
+    assertThat(res.statusCode()).as("不能是 401 —— 那会撞上会话失效的语义").isEqualTo(400);
+    assertThat(res.body()).contains("\"code\":1004").contains("原密码");
   }
 
   /**

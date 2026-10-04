@@ -169,7 +169,12 @@ export const identityRoutes: MockRoute[] = [
       const user = userFromToken(token)
       if (!user) throw new ApiError(ErrorCode.UNAUTHORIZED, '登录已过期，请重新登录')
       const { oldPassword, newPassword } = body as { oldPassword: string; newPassword: string }
-      if (user.password !== oldPassword) throw new ApiError(4001, '原密码不正确')
+      // ★ 用契约里的码，不用本地数字字面量：4001 是 mock 自己的一套"影子编号"，
+      //   而后端在这里返回 OLD_PASSWORD_MISMATCH(1004) —— 两边不一致时，
+      //   按 code 分支的前端代码在 mock 与真栈上会走不同分支（issue #8 / #15）。
+      if (user.password !== oldPassword) {
+        throw new ApiError(ErrorCode.OLD_PASSWORD_MISMATCH, '原密码不正确')
+      }
       // 与后端 PasswordPolicy 同口径 —— 不是「至少 8 位」就完事
       assertPasswordPolicy(newPassword, user.username)
       user.password = newPassword
