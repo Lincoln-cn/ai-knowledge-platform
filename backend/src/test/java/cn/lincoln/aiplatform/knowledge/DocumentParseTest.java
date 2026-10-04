@@ -266,4 +266,44 @@ class DocumentParseTest {
     assertThat(bad.failReason()).as("DOC-I2：*FAILED ⇒ fail_reason 非空").isNotBlank().contains("加密");
     assertThat(bad.failHint()).contains("密码");
   }
+
+  /**
+   * ★★ 失败的解析结果<strong>一定带下一步建议</strong> —— 空 hint 不许漏到界面上。
+   *
+   * <p>第 9 周把 {@code failHint} 从调用方硬编码改成<strong>解析器自己给</strong>（意图见 {@code ParseResult}
+   * 类注释：不同原因要有不同的下一步）， 但除了 OCR 那一条，其余失败路径（内容为空 / 不支持的类型 / 加密 / 解析异常）<strong>全都传了 null</strong> ⇒
+   * 界面上「下一步建议」整行变空白。
+   *
+   * <p>★ 是<strong>真栈闸门</strong>抓到的：上传 {@code empty.docx} 后文档的 {@code failHint} 是 {@code ''} （{@code
+   * check_knowledge_parse.py}）。mock 一直绿 —— 因为 mock 的种子自带 hint，这条链在 mock 里 根本走不到真后端那一段。这是"mock
+   * 比真后端宽松"的又一例，也是 issue #3 要进 CI 的理由。
+   *
+   * <p>所以兜底放在领域工厂里：这样「失败必带下一步」是<strong>结构上无法违反</strong>的。
+   */
+  @Test
+  void 失败一定带下一步建议_解析器没给也有兜底() {
+    // ① 解析器没给（这几条路径用的是 2 参重载 ⇒ hint 为 null）
+    ParseResult emptyContent = parser.parse(new byte[0], "empty.docx");
+    assertThat(emptyContent.success()).isFalse();
+    assertThat(emptyContent.failReason()).isNotBlank();
+    assertThat(emptyContent.failHint()).as("空内容这条路径必须落到兜底上").isNotBlank();
+
+    ParseResult unsupportedType = parser.parse(new byte[] {1, 2, 3}, "a.exe");
+    assertThat(unsupportedType.success()).isFalse();
+    assertThat(unsupportedType.failHint()).as("不支持的类型也必须给下一步").isNotBlank();
+
+    // ② 领域工厂：null 与空白串都当"没给"
+    assertThat(ParseResult.failed("原因", (String) null, "").failHint())
+        .isEqualTo(ParseResult.DEFAULT_FAIL_HINT);
+    assertThat(ParseResult.failed("原因", "   ", "").failHint())
+        .isEqualTo(ParseResult.DEFAULT_FAIL_HINT);
+
+    // ③ 解析器给了具体建议 ⇒ 具体建议优先（兜底不许把它盖掉）
+    assertThat(ParseResult.failed("原因", "去掉 PDF 密码后重新上传。", "").failHint())
+        .isEqualTo("去掉 PDF 密码后重新上传。");
+
+    // ④ 成功路径不受影响
+    assertThat(ParseResult.ok("正文").failHint()).isNull();
+    assertThat(ParseResult.ok("正文").failReason()).isNull();
+  }
 }
