@@ -93,7 +93,7 @@ export function initDefaultShortcut(lf: LogicFlow, graph: GraphModel) {
             elements.edges.forEach((edge: any) => lf.deleteEdge(edge.id))
             return
         }
-        const nodes = elements.nodes.filter((node) => ['start-node', 'base-node'].includes(node.type))
+        const nodes = elements.nodes.filter((node) => ['START_NODE', 'BASE_NODE'].includes(node.type))
         if (nodes.length > 0) {
             MsgError(`${nodes[0].properties?.stepName}节点不允许删除`)
             return

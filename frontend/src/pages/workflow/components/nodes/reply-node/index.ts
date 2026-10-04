@@ -6,7 +6,7 @@ class ReplyNode extends AppNode {
     }
 }
 export default {
-    type: 'reply-node',
+    type: 'REPLY_NODE',
     model: AppNodeModel,
     view: ReplyNode
 }

@@ -72,7 +72,7 @@ class ConditionModel extends AppNodeModel {
     }
 }
 export default {
-    type: 'condition-node',
+    type: 'CONDITION_NODE',
     model: ConditionModel,
     view: ConditioNode
 }

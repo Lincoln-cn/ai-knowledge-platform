@@ -30,7 +30,7 @@ const globalFields = [
 
 const getRefreshFieldList = () => {
     const user_input_fields = props.nodeModel.graphModel.nodes
-        .filter((v: any) => v.type === 'base-node')
+        .filter((v: any) => v.type === 'BASE_NODE')
         .map((v: any) => cloneDeep(v.properties.user_input_field_list ?? []))
         .reduce((x: any, y: any) => [...x, ...y], [])
         .map((i: any) => {
@@ -40,7 +40,7 @@ const getRefreshFieldList = () => {
             return { label: i.label || i.name, value: i.field || i.variable }
         })
     const api_input_fields = props.nodeModel.graphModel.nodes
-        .filter((v: any) => v.type === 'base-node')
+        .filter((v: any) => v.type === 'BASE_NODE')
         .map((v: any) => cloneDeep(v.properties.api_input_field_list ?? []))
         .reduce((x: any, y: any) => [...x, ...y], [])
         .map((i: any) => ({ label: i.name || i.variable, value: i.variable }))
@@ -56,7 +56,7 @@ props.nodeModel.graphModel.eventCenter.on('refreshFieldList', refreshFieldList)
 const refreshFileUploadConfig = () => {
     let fields = cloneDeep(props.nodeModel.properties.config.fields ?? [])
     const form_data = props.nodeModel.graphModel.nodes
-        .filter((v: any) => v.type === 'base-node')
+        .filter((v: any) => v.type === 'BASE_NODE')
         .filter((v: any) => v.properties.node_data?.file_upload_enable)
         .map((v: any) => cloneDeep(v.properties.node_data.file_upload_setting))
         .filter((v: any) => v)

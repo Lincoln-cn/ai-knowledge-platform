@@ -6,7 +6,7 @@ class SearchDatasetNode extends AppNode {
     }
 }
 export default {
-    type: 'search-dataset-node',
+    type: 'SEARCH_DATASET_NODE',
     model: AppNodeModel,
     view: SearchDatasetNode
 }

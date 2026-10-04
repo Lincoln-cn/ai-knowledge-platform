@@ -17,7 +17,7 @@
                                     @click.stop="item.implemented && clickCatalog(item)"
                                 >
                                     <component
-                                        :is="iconComponent(`${item.type}-icon`)"
+                                        :is="nodeIcon(item.type)"
                                         class="item-icon"
                                         :size="32"
                                     />
@@ -51,7 +51,7 @@ import { cloneDeep } from 'lodash-es'
 import { workflowApi } from '@/api'
 import type { NodeTypeMeta } from '@/api/workflow'
 import { nodeDict } from '@/pages/workflow/components/common/data'
-import { iconComponent } from '@/pages/workflow/components/icons/utils'
+import { nodeIcon } from '@/pages/workflow/components/icons/utils'
 import {
     rejectAddIfSingleton,
     isSingletonType,

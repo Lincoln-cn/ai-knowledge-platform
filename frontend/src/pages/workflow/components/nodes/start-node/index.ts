@@ -6,7 +6,7 @@ class StartNode extends AppNode {
     }
 }
 export default {
-    type: 'start-node',
+    type: 'START_NODE',
     model: AppNodeModel,
     view: StartNode
 }

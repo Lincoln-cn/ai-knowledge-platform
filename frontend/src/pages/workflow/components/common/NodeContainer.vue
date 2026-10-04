@@ -31,7 +31,7 @@
                       交给 flex 之后，名字区宽度 = 真实剩余宽度，不可能压到按钮上。
                     -->
                     <div class="flex align-center node-head-main">
-                        <component :is="iconComponent(`${nodeModel.type}-icon`)" class="mr-8" :size="24"
+                        <component :is="nodeIcon(nodeModel.type)" class="mr-8" :size="24"
                             :item="nodeModel?.properties.node_data" />
                         <!--
                           ⚠️ 这里**不再用 `WorkFlowReadWrite` 做双击改名**。
@@ -208,7 +208,7 @@ document.addEventListener(
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import DropdownMenu from '@/pages/workflow/components/common/DropdownMenu.vue'
 import { set } from 'lodash-es'
-import { iconComponent } from '../icons/utils'
+import { nodeIcon } from '../icons/utils'
 import { copyClick } from '@/utils/clipboard'
 import { WorkflowType } from '@/pages/workflow/enums/workflow'
 import { getAppId, collapseAll, collapseTick } from '@/pages/workflow/lib/context'

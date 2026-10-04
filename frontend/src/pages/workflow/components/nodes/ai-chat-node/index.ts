@@ -6,7 +6,7 @@ class ChatNode extends AppNode {
     }
 }
 export default {
-    type: 'ai-chat-node',
+    type: 'AI_CHAT_NODE',
     model: AppNodeModel,
     view: ChatNode
 }

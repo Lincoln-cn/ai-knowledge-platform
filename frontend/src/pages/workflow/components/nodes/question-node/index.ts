@@ -6,7 +6,7 @@ class QuestionNode extends AppNode {
   }
 }
 export default {
-  type: 'question-node',
+  type: 'QUESTION_NODE',
   model: AppNodeModel,
   view: QuestionNode,
 };
