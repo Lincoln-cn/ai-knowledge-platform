@@ -98,6 +98,22 @@ public class MarkdownChunker {
    * @throws IllegalArgumentException 参数非法（禁止静默纠正）
    */
   public List<SegmentChunk> chunk(String markdown, int segmentLength, int overlap) {
+    return chunk(markdown, segmentLength, overlap, ChunkSource.TEXT);
+  }
+
+  /**
+   * 按四层优先级切分，并按来源选规则集（第 9 周 · 0.3.1）。
+   *
+   * <p>★ {@code source = OCR} 时走 {@code 12 §11.5} 定的另一套：L2（法条锚点）为主、 相邻行合并修标题（L1'）、**跳过 L3 句边界直接 L4
+   * 硬切**。理由见 {@link ChunkSource}。
+   *
+   * @param markdown 解析产物 Markdown（{@code Document.parsedContent}）
+   * @param segmentLength 分块目标长度（字符，<strong>含</strong>重叠前缀）
+   * @param overlap 重叠字符数；必须 {@code 0 ≤ overlap < segmentLength}
+   * @param source 规则集来源（文本型 / OCR 型）
+   */
+  public List<SegmentChunk> chunk(
+      String markdown, int segmentLength, int overlap, ChunkSource source) {
     if (segmentLength <= 0) {
       throw new IllegalArgumentException("分块长度必须为正数，当前：" + segmentLength);
     }
@@ -111,10 +127,11 @@ public class MarkdownChunker {
     if (markdown == null || markdown.isBlank()) {
       return List.of();
     }
+    ChunkSource effective = source == null ? ChunkSource.TEXT : source;
     // 有效目标长度：为 overlap 预留 —— 先按 segmentLength - overlap 装箱，再补重叠前缀
     int packLimit = segmentLength - overlap;
     List<SegmentChunk> chunks =
-        assemble(parse(markdown.replace("\r\n", "\n").replace('\r', '\n')), packLimit);
+        assemble(parse(markdown.replace("\r\n", "\n").replace('\r', '\n')), packLimit, effective);
     return applyOverlap(chunks, overlap, segmentLength);
   }
 
@@ -268,7 +285,7 @@ public class MarkdownChunker {
   /** 切分产物（L3/L4 的中间形态）。 */
   private record Split(String text, boolean oversized) {}
 
-  private List<SegmentChunk> assemble(List<Unit> units, int limit) {
+  private List<SegmentChunk> assemble(List<Unit> units, int limit, ChunkSource source) {
     List<Draft> drafts = new ArrayList<>();
     List<Frame> stack = new ArrayList<>();
     StringBuilder buffer = new StringBuilder();
@@ -329,7 +346,7 @@ public class MarkdownChunker {
       if (text.length() <= limit) {
         buffer.append(text);
       } else {
-        seq = emit(drafts, text, base, titlePath, Kind.TEXT, seq, limit);
+        seq = emit(drafts, text, base, titlePath, Kind.TEXT, seq, limit, source);
       }
     }
 
@@ -369,7 +386,7 @@ public class MarkdownChunker {
     return seq + 1;
   }
 
-  /** 把一段超长文本按 L3/L4 切开并落成草稿。 */
+  /** 把一段超长文本按 L3/L4 切开并落成草稿（{@code source} 决定用哪套切分规则，见 {@link ChunkSource}）。 */
   private int emit(
       List<Draft> drafts,
       String text,
@@ -377,9 +394,10 @@ public class MarkdownChunker {
       String titlePath,
       Kind kind,
       int seq,
-      int limit) {
+      int limit,
+      ChunkSource source) {
     int next = seq;
-    for (Split split : splitLong(text, limit)) {
+    for (Split split : splitLong(text, limit, source)) {
       drafts.add(new Draft(split.text(), base, titlePath, kind, split.oversized(), next));
       next++;
     }
@@ -468,8 +486,50 @@ public class MarkdownChunker {
 
   // ────────────────────────── L3 / L4 ──────────────────────────
 
-  /** L3 句边界 → L4 硬切。任何出参都不超过 {@code limit}（分块器契约）。 */
+  /** L3 句边界 → L4 硬切（文本型，句边界是可靠信号）。 */
   private List<Split> splitLong(String text, int limit) {
+    return splitLong(text, limit, ChunkSource.TEXT);
+  }
+
+  /**
+   * L3 句边界 → L4 硬切，**按来源分两套规则**（{@code 12 §11.5}）。
+   *
+   * <p>★★ OCR 型<strong>跳过 L3</strong>：OCR 文本的行尾经常没有标点、还会在词中间断行，
+   * 按"句"装箱会切出大量半句块。所以按<strong>行</strong>装箱、超长行直接硬切 —— 在 OCR 文档上 L4 不再是兜底而是主力（这是 {@code 12 §11.5}
+   * 的实测结论，不是保守选择）。
+   *
+   * <p>★ 文本型保持原样：句边界在文本型文档上可靠得多，用它比硬切强。
+   *
+   * <p>⚠️ {@code 12 §11.5} 还给 OCR 列了「相邻行合并（正则 + 字号）」修被劈开的标题。 这一条**本版没做**，理由是**实测**：夹具（{@code
+   * scanned.pdf}，答案见 {@code fixtures/ocr-ground-truth.json}）走 TXT 路径出来的文本里，标题 （{@code 第一章 总则} /
+   * {@code 1.1 制定目的}）**本来就是完整的一行**，段落也按行分好了 —— 合并规则在这个数据上修不了任何东西，却能把"没写句末标点的一行"和下一行粘起来（正文被改坏的风险）。
+   * 字号启发在 TXT 路径上也不可用（Tesseract 的字号在 HOCR 里，而我们选了 TXT 保中文质量，见 {@code §11.4.1}）。 ⇒
+   * 等**真的遇到**被劈开的标题再接（届时有可复现的样本，也才验得了）。
+   */
+  private List<Split> splitLong(String text, int limit, ChunkSource source) {
+    if (source == ChunkSource.OCR) {
+      List<Split> out = new ArrayList<>();
+      StringBuilder current = new StringBuilder();
+      for (String raw : text.split("\n", -1)) {
+        String line = raw.strip();
+        if (line.isEmpty()) {
+          continue;
+        }
+        if (current.isEmpty()) {
+          current.append(line);
+        } else if (current.length() + 1 + line.length() <= limit) {
+          current.append('\n').append(line);
+        } else {
+          addWithHardCut(out, current.toString(), limit);
+          current.setLength(0);
+          current.append(line);
+        }
+      }
+      if (!current.isEmpty()) {
+        addWithHardCut(out, current.toString(), limit);
+      }
+      return out;
+    }
     List<Split> out = new ArrayList<>();
     StringBuilder current = new StringBuilder();
     for (String sentence : SENTENCE_SPLIT.split(text)) {

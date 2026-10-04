@@ -74,7 +74,7 @@ public class Segmenter {
    * @throws IllegalArgumentException 分段/重叠参数非法，或前缀组成缺失
    * @throws BusinessException 向量预算连前缀都装不下（{@link ErrorCode#SEGMENT_TOO_LONG}）时带可读原因与 hint
    */
-  public List<PlannedSegment> plan(
+  public SegmentPlan plan(
       String markdown,
       int segmentLength,
       int overlap,
@@ -82,6 +82,33 @@ public class Segmenter {
       String docType,
       String department,
       String title) {
+    return plan(
+        markdown, segmentLength, overlap, maxChars, docType, department, title, ChunkSource.TEXT);
+  }
+
+  /**
+   * 产出有序分段计划（预览与入库共用）—— 第 9 周起多两件事。
+   *
+   * <p>★★ <b>先剥噪声再分块</b>（{@code 12 §2.4}）：页眉页脚/页码/目录会在 50 个 chunk 里重复 ⇒ 它们互相"很像" ⇒
+   * 召回被稀释。扫描件上更严重（Tesseract 不产出 {@code ocr_header}，页眉只能我们认）。
+   * 剥离放在<strong>这里</strong>、而不是解析器里，是为了让**预览与入库同源** —— 否则"预览看到的有页眉、入库的没有"就是下一个静默分叉（{@code 12
+   * §3.5}）。
+   *
+   * <p>★ <b>按来源选规则集</b>（{@code 12 §11.5}）：文本型 {@code L1→L2→L3→L4}； OCR 型 {@code L2→L1'→L4}（跳
+   * L3）。判据是文档级的 OCR 事实，不是"环境里开着 OCR"。
+   *
+   * @param source 分块规则集来源（文本型 / OCR 型）
+   * @return 有序计划 + 噪声剥离行数
+   */
+  public SegmentPlan plan(
+      String markdown,
+      int segmentLength,
+      int overlap,
+      int maxChars,
+      String docType,
+      String department,
+      String title,
+      ChunkSource source) {
     if (segmentLength <= 0) {
       throw new IllegalArgumentException("分块长度必须为正数，当前：" + segmentLength);
     }
@@ -101,7 +128,7 @@ public class Segmenter {
       throw new IllegalArgumentException("文种/责任部门/文档名都不能为空 —— 它们构成检索前缀（12 §4.2）");
     }
     if (markdown == null || markdown.isBlank()) {
-      return List.of();
+      return new SegmentPlan(List.of(), 0);
     }
 
     // 预算按最坏前缀（MAX_PREFIX_LENGTH）估，而不是本篇文档的文档级前缀 —— 理由见方法 javadoc
@@ -113,7 +140,14 @@ public class Segmenter {
           "请调大向量模型的上限（换长上下文模型），或缩短文档名/部门标签。");
     }
 
-    List<SegmentChunk> chunks = chunker.chunk(markdown, target, overlap);
+    NoiseStripper.Result stripped = NoiseStripper.strip(markdown);
+    if (stripped.markdown().isBlank()) {
+      // ★ 全是噪声 ⇒ 不产分段，但**剥离行数照记**：否则"文档有内容却切不出段"看起来像 bug
+      return new SegmentPlan(List.of(), stripped.removedLines());
+    }
+
+    ChunkSource effective = source == null ? ChunkSource.TEXT : source;
+    List<SegmentChunk> chunks = chunker.chunk(stripped.markdown(), target, overlap, effective);
     List<PlannedSegment> plan = new ArrayList<>(chunks.size());
     for (SegmentChunk chunk : chunks) {
       String prefix = SearchText.prefix(docType, department, title, chunk.titlePath());
@@ -133,7 +167,7 @@ public class Segmenter {
               chunk.isCode(),
               chunk.oversizedRisk()));
     }
-    return plan;
+    return new SegmentPlan(plan, stripped.removedLines());
   }
 
   private static boolean blank(String value) {

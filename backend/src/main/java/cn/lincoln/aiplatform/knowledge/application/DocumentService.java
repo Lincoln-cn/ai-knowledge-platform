@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.knowledge.application;
 
+import cn.lincoln.aiplatform.knowledge.domain.ChunkSource;
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
@@ -9,6 +10,7 @@ import cn.lincoln.aiplatform.knowledge.domain.SearchText;
 import cn.lincoln.aiplatform.knowledge.domain.Segment;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentContent;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingRepository;
+import cn.lincoln.aiplatform.knowledge.domain.SegmentPlan;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.Segmenter;
 import cn.lincoln.aiplatform.knowledge.infrastructure.SegmentationProperties;
@@ -552,7 +554,8 @@ public class DocumentService {
   private void segmentAndPersist(Document document, UUID currentUserId) {
     try {
       int maxChars = maxCharsResolver.resolve(document.kbId(), segmentationProperties.maxChars());
-      List<PlannedSegment> plan =
+      // ★ 按来源选分块规则集（12 §11.5）：判据是文档级的 OCR 事实，不是"环境里开着 OCR"
+      SegmentPlan planned =
           segmenter.plan(
               document.parsedContent(),
               segmentationProperties.segmentLength(),
@@ -560,7 +563,17 @@ public class DocumentService {
               maxChars,
               document.docType(),
               document.department(),
-              document.name());
+              document.name(),
+              document.ocrDerived() ? ChunkSource.OCR : ChunkSource.TEXT);
+      List<PlannedSegment> plan = planned.segments();
+      if (planned.removedNoiseLines() > 0) {
+        // ★ 剥离掉的噪声要**留痕**：否则"为什么这份文档少了一页内容"没人能解释（12 §2.4）
+        log.info(
+            "噪声剥离：文档 {}（{}）剔除了 {} 行页眉/页脚/页码/目录",
+            document.id(),
+            document.name(),
+            planned.removedNoiseLines());
+      }
 
       // ★ 重入幂等：先删后写 —— 同一文档重复分块不产生重复行
       segments.deleteByDocumentId(document.id());

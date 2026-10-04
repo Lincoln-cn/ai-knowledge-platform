@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.knowledge.application;
 
+import cn.lincoln.aiplatform.knowledge.domain.ChunkSource;
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
@@ -8,6 +9,7 @@ import cn.lincoln.aiplatform.knowledge.domain.SearchText;
 import cn.lincoln.aiplatform.knowledge.domain.Segment;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentContent;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingRepository;
+import cn.lincoln.aiplatform.knowledge.domain.SegmentPlan;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.Segmenter;
 import cn.lincoln.aiplatform.knowledge.infrastructure.SegmentationProperties;
@@ -160,7 +162,9 @@ public class SegmentService {
           "请调小分段长度至 " + maxChars + " 字以内，或切换至长上下文向量模型");
     }
 
-    List<PlannedSegment> plan =
+    // ★ 与入库同源：同一个 Segmenter#plan，同一套规则集（按文档的 OCR 事实选）
+    //   —— 预览与入库分叉是下一个静默故障（12 §3.5），而"走哪套分块规则"最容易被漏掉
+    SegmentPlan planned =
         segmenter.plan(
             document.parsedContent(),
             command.segmentLength(),
@@ -168,14 +172,16 @@ public class SegmentService {
             maxChars,
             document.docType(),
             document.department(),
-            document.name());
+            document.name(),
+            document.ocrDerived() ? ChunkSource.OCR : ChunkSource.TEXT);
 
-    List<PreviewSegment> result = new ArrayList<>(plan.size());
-    for (PlannedSegment p : plan) {
+    List<PreviewSegment> result = new ArrayList<>(planned.segments().size());
+    for (PlannedSegment p : planned.segments()) {
       result.add(new PreviewSegment(p.ordinal(), p.content(), p.charCount(), p.oversizedRisk()));
     }
     long charCount = result.stream().mapToLong(PreviewSegment::charCount).sum();
-    return new PreviewResult(result.size(), charCount, maxChars, result);
+    return new PreviewResult(
+        result.size(), charCount, maxChars, result, planned.removedNoiseLines());
   }
 
   // ────────────────────────── 分段列表 ──────────────────────────
@@ -526,7 +532,8 @@ public class SegmentService {
           new PreviewSegment(item.ordinal(), item.content(), item.content().length(), false));
     }
     long charCount = result.stream().mapToLong(PreviewSegment::charCount).sum();
-    return new PreviewResult(result.size(), charCount, maxChars, result);
+    // ★ 这条路径（用户在预览里改过的切分计划）不经过解析产物 ⇒ 不涉及噪声剥离，记 0
+    return new PreviewResult(result.size(), charCount, maxChars, result, 0);
   }
 
   /**
@@ -567,7 +574,12 @@ public class SegmentService {
 
   /** 预览结果（契约 {@code PreviewSegmentationResult}）。 */
   public record PreviewResult(
-      int segmentCount, long charCount, int modelLimit, List<PreviewSegment> segments) {}
+      int segmentCount,
+      long charCount,
+      int modelLimit,
+      List<PreviewSegment> segments,
+      /** 噪声剥离掉的行数（第 9 周 · 0.3.1，{@code 12 §2.4}）。★ 必须出网： 不显示它，"为什么这份文档少了一页内容"就没人能解释（删掉的东西要看得见）。 */
+      int removedNoiseLines) {}
 
   /** 预览分段条目（契约 {@code PreviewSegmentationResult.segments[]}）。 */
   public record PreviewSegment(int ordinal, String content, int charCount, boolean oversized) {}
