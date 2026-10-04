@@ -49,8 +49,15 @@ public class OcrEngine {
    * <p>★ 格式口径按<b>实测</b>修正：设计册抄的是 Tika 4.0 的 <strong>JSON</strong> 块 （{@code
    * {"totalCharsPerPage":10,...}}），而 3.3.1 的 {@code setOcrStrategyAuto(String)} 要的是 <strong>{@code
    * "num[%], num"}</strong> 短格式 —— 照抄设计册会直接抛 {@code Error parsing OCRStrategyAuto}。
+   *
+   * <p>★★ 它是 <strong>public</strong> 的，因为 {@link OcrFastScanner} 要用同一个数算「需要 OCR 的页数」 （进度分母）：两处各写一个
+   * 10 就会漂移，而分母与 Tika 的判定不一致的表现是**进度条永远到不了 100%**。
    */
-  private static final String OCR_STRATEGY_AUTO = "10, 10";
+  public static final int AUTO_OCR_CHAR_THRESHOLD = 10;
+
+  /** Tika 的 AUTO 策略入参（短格式，见上）。由阈值拼出来，不写第二个字面量。 */
+  private static final String OCR_STRATEGY_AUTO =
+      AUTO_OCR_CHAR_THRESHOLD + ", " + AUTO_OCR_CHAR_THRESHOLD;
 
   private final OcrProperties properties;
   private volatile Status status;

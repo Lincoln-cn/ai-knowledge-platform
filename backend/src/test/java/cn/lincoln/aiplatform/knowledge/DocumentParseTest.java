@@ -204,6 +204,9 @@ class DocumentParseTest {
     ParseResult mid = ParseResult.failed("第 3 页内容流损坏，无法继续解析", "# 第一章 总则\n\n前两段已经解析出来。");
 
     Document doc = newDocument();
+    // ★ 第 9 周起解析分两步：startParse（进在途态）→ recordParseSuccess/Failure。
+    //   测试也按真实流程走，否则测的是"领域允许、流水线不走"的那条路。
+    doc.startParse(0);
     doc.recordParseFailure(mid.failReason(), "尝试修复 PDF 后重传。", mid.markdown());
 
     assertThat(doc.parsedContent())
@@ -252,7 +255,8 @@ class DocumentParseTest {
     // 成功
     Document ok = newDocument();
     ParseResult good = parser.parse(fixture("structured.docx"), "structured.docx");
-    ok.recordParseSuccess(good.markdown());
+    ok.startParse(0);
+    ok.recordParseSuccess(good.markdown(), good.ocrPageCount());
     assertThat(ok.status()).isEqualTo(DocumentStatus.PENDING_EMBEDDING);
     assertThat(ok.failReason()).as("成功路径要清掉上次失败原因").isNull();
     assertThat(ok.charCount()).as("charCount 回填解析后正文长度").isGreaterThan(0);
@@ -261,6 +265,7 @@ class DocumentParseTest {
     // 失败
     Document bad = newDocument();
     ParseResult encrypted = parser.parse(fixture("encrypted.pdf"), "encrypted.pdf");
+    bad.startParse(0);
     bad.recordParseFailure(encrypted.failReason(), "去掉 PDF 密码后重新上传。", encrypted.markdown());
     assertThat(bad.status()).isEqualTo(DocumentStatus.SEGMENT_FAILED);
     assertThat(bad.failReason()).as("DOC-I2：*FAILED ⇒ fail_reason 非空").isNotBlank().contains("加密");

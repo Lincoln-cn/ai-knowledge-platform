@@ -104,16 +104,23 @@ class DocumentStateMachineTest {
   @Test
   void 解析成功后是待向量化() {
     Document doc = newDocument();
-    doc.recordParseSuccess("# 第一章\n\n正文。");
+    doc.startParse(0);
+    assertThat(doc.status()).as("解析是在途态（扫描件的 OCR 要跑分钟级）").isEqualTo(DocumentStatus.SEGMENTING);
+    doc.recordParseSuccess("# 第一章\n\n正文。", 0);
     assertThat(doc.status()).isEqualTo(DocumentStatus.PENDING_EMBEDDING);
     assertThat(doc.parsedContent()).contains("第一章");
   }
 
-  /** ★ 已经成功的文档不能再被当成"解析一次"：{@code SUCCEEDED → SEGMENTING} 非法 ⇒ 必须抛。 */
+  /**
+   * ★ 已经成功的文档不能再被当成"解析一次"：{@code SUCCEEDED → SEGMENTING} 非法 ⇒ 必须抛。
+   *
+   * <p>★ 第 9 周起这道闸在 {@code startParse}（解析的**入口**）上 —— 之前它在 {@code recordParseSuccess}
+   * 的第一步，那是因为解析是同步的、两步在一个方法里。 改成异步流水线后入口就是 startParse，守卫跟着入口走才对（"能不能开始解析"是入口该回答的问题）。
+   */
   @Test
   void 已成功的文档不允许重新走解析() {
     Document doc = embeddingSucceeded();
-    assertThatThrownBy(() -> doc.recordParseSuccess("又解析了一遍"))
+    assertThatThrownBy(() -> doc.startParse(0))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("SUCCEEDED");
   }
@@ -146,7 +153,8 @@ class DocumentStateMachineTest {
   /** 走到「待向量化」且有 10 个分段的文档（进度类断言的共同起点）。 */
   static Document segmented(int segmentCount) {
     Document doc = newDocument();
-    doc.recordParseSuccess("# 第一章 总则\n\n本制度适用于公司各部门。");
+    doc.startParse(0);
+    doc.recordParseSuccess("# 第一章 总则\n\n本制度适用于公司各部门。", 0);
     doc.recordSegmentSuccess(segmentCount, 1000);
     return doc;
   }

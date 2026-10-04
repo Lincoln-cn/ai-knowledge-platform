@@ -99,6 +99,23 @@ public class Document {
   @Column(name = "processed_segments", nullable = false)
   private int processedSegments;
 
+  /**
+   * 需要 OCR 的页数 —— 进度分母（{@code 12 §11.8} 的「已识别 N/M 页」里的 M）。
+   *
+   * <p>★ 由一次**关掉 OCR 的快扫**得出（{@code pdf:charsPerPage} 每页字符数 &lt; 10 的页数）， 与全量解析不是一个量级（实测 0.3 秒 vs
+   * 11 秒）；判据取的是 Tika 自己用的同一份数据。 非 PDF / 纯文本 PDF 恒 0（= 不涉及 OCR）。
+   */
+  @Column(name = "ocr_total_pages", nullable = false)
+  private int ocrTotalPages;
+
+  /** 已完成 OCR 的页数（进度，覆盖写、不回退）。 */
+  @Column(name = "ocr_done_pages", nullable = false)
+  private int ocrDonePages;
+
+  /** 其中真的走了 OCR 的页数（Tika 元数据 {@code pdf:ocrPageCount}）—— 见 {@link #ocrDerived()}。 */
+  @Column(name = "ocr_page_count", nullable = false)
+  private int ocrPageCount;
+
   /** 停用后不参与检索。 */
   @Column(name = "enabled", nullable = false)
   private boolean enabled;
@@ -166,6 +183,9 @@ public class Document {
     this.charCount = 0;
     this.segmentCount = 0;
     this.processedSegments = 0;
+    this.ocrTotalPages = 0;
+    this.ocrDonePages = 0;
+    this.ocrPageCount = 0;
     this.enabled = true;
     this.createdBy = createdBy;
     this.updatedBy = createdBy;
@@ -196,24 +216,69 @@ public class Document {
   }
 
   /**
-   * 解析成功（第 6 周 · 0.2.1）—— 状态走到「待向量化」。
+   * 开始解析 —— {@code PENDING_PARSE → SEGMENTING}（第 9 周 · 0.3.1）。
+   *
+   * <p>★★ 为什么解析要单独一个"开始"：扫描件的解析是**分钟级**的（实测每页约 3.6 秒）， 所以它必须异步 —— 上传接口立刻返回、文档落 {@code SEGMENTING}
+   * 在途态，OCR 在后台跑并逐页回写进度。 于是"解析与分块在同一事务里"这件旧事实不再成立，两个转移要分开走。
+   *
+   * <p>★ 状态机**没改**：{@code SEGMENTING} 的允许来源本来就含 {@code PENDING_PARSE}， 而且 {@link DocumentStatus}
+   * 的注释早就写明「等改成异步流水线时它就是在途态，届时不必改状态机」。
+   *
+   * @param ocrTotalPages 需要 OCR 的页数（快扫得出，做进度分母）；不涉及 OCR 时传 0
+   */
+  public void startParse(int ocrTotalPages) {
+    DocumentStatus.requireLegal(status, DocumentStatus.SEGMENTING, "开始解析");
+    this.status = DocumentStatus.SEGMENTING;
+    this.ocrTotalPages = Math.max(0, ocrTotalPages);
+    this.ocrDonePages = 0;
+    this.ocrPageCount = 0;
+    this.failReason = null;
+    this.failHint = null;
+  }
+
+  /**
+   * 回写 OCR 进度（每页处理完一次）—— <strong>覆盖写</strong>，不是累加。
+   *
+   * <p>★ 与 {@link #reportEmbeddingProgress(int)} 同一条纪律：传进来的是「已完成多少页」这个**事实**； 重投/乱序（比当前值小）是**无害
+   * no-op**，不报错也不回退 —— 否则一次乱序回写就会让进度倒退。
+   *
+   * @param done 已完成的 OCR 页数
+   * @throws IllegalStateException 不在解析中（"没开始就报进度"不许静默生效）
+   */
+  public void reportOcrPageDone(int done) {
+    DocumentStatus.requireInState(status, DocumentStatus.SEGMENTING, "回写 OCR 进度");
+    if (done < 0) {
+      throw new IllegalArgumentException("OCR 进度不能为负：" + done);
+    }
+    if (done < this.ocrDonePages) {
+      return;
+    }
+    this.ocrDonePages = done;
+  }
+
+  /**
+   * 解析成功 —— {@code SEGMENTING（或 PENDING_PARSE） → 待向量化}。
    *
    * <p>★ 成功路径要<strong>清掉上一次的失败原因</strong>， 否则界面会把旧错误挂在已恢复的文档上（与 {@code Model#markLoaded} 同一条纪律）。
    *
+   * <p>★ 允许来源含 {@code PENDING_PARSE}：没有文件字节的"只登记元数据"路径不走 {@link #startParse}。
+   *
    * @param markdown 解析出的 Markdown 正文
+   * @param ocrPageCount 其中走了 OCR 的页数（{@code pdf:ocrPageCount}；非 PDF 传 0）
    */
-  public void recordParseSuccess(String markdown) {
-    // ★ 走状态机：未解析 → 分段中 → 待向量化。
-    //   当前解析与分块是同步的，两个转移落在同一事务里 ⇒ 外部只看得到最终态「待向量化」；
-    //   「分段中」仍然被走过（等改成异步流水线时它就是在途态，届时不必改状态机）。
-    DocumentStatus.requireLegal(status, DocumentStatus.SEGMENTING, "记录解析成功");
-    this.status = DocumentStatus.SEGMENTING;
+  public void recordParseSuccess(String markdown, int ocrPageCount) {
     DocumentStatus.requireLegal(status, DocumentStatus.PENDING_EMBEDDING, "记录解析成功");
     this.status = DocumentStatus.PENDING_EMBEDDING;
     this.parsedContent = markdown == null ? "" : markdown;
     this.charCount = this.parsedContent.length();
     this.failReason = null;
     this.failHint = null;
+    // ★ 最终以 Tika 报的事实为准（快扫只是估算分母）：两者不一致时取大的那个，
+    //   否则进度会出现"已完成 3 / 共 2"这种自相矛盾。真出现差异意味着两处口径漂了，
+    //   由 ParseRunner 打 WARN（不静默）。
+    this.ocrPageCount = Math.max(0, ocrPageCount);
+    this.ocrTotalPages = Math.max(this.ocrTotalPages, this.ocrPageCount);
+    this.ocrDonePages = this.ocrPageCount;
   }
 
   /**
@@ -325,6 +390,11 @@ public class Document {
     this.status = DocumentStatus.SEGMENTING;
     this.failReason = null;
     this.failHint = null;
+    // ★ OCR 进度一起归零：重新解析会产生新的一轮页数口径，旧进度留着就是错的
+    //   （与 startEmbedding 归零 processedSegments 同一条理由）
+    this.ocrTotalPages = 0;
+    this.ocrDonePages = 0;
+    this.ocrPageCount = 0;
   }
 
   /**
@@ -458,6 +528,31 @@ public class Document {
 
   public int processedSegments() {
     return processedSegments;
+  }
+
+  /** 需要 OCR 的页数（进度分母；0 = 不涉及 OCR）。 */
+  public int ocrTotalPages() {
+    return ocrTotalPages;
+  }
+
+  /** 已完成 OCR 的页数（进度）。 */
+  public int ocrDonePages() {
+    return ocrDonePages;
+  }
+
+  /** 其中真的走了 OCR 的页数（最终事实）。 */
+  public int ocrPageCount() {
+    return ocrPageCount;
+  }
+
+  /**
+   * 这份文档是不是 OCR 产物 —— 分块器据此走两套规则（{@code 12 §11.5}）。
+   *
+   * <p>★ 判据取「真的走了 OCR 的页数 &gt; 0」而不是「配置里开着 OCR」：混合型 PDF 里可能一页都没走 OCR，
+   * 那时它就该按文本型规则切（不该因为环境装了引擎就换规则集）。
+   */
+  public boolean ocrDerived() {
+    return ocrPageCount > 0;
   }
 
   public boolean enabled() {
