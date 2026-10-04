@@ -50,6 +50,36 @@ docker load -i ai-knowledge-platform-0.3.1.tar
 
 裁剪后上下文从 25 GB 降到约 **490 MB**。
 
+### ★★ 镜像内实测：完整 OCR 入库链（第 9 周 · 0.3.1 补记）
+
+**为什么单独验这一条**："镜像里装了 tesseract" ≠ "扫描件能入库"。
+后者还要经过 Flyway 迁移、DB、上游桩与**异步流水线** —— 装没装只是第一关。
+
+```powershell
+# 1) 起一个对着宿主 PG 与桩的容器（18080 避开本地 8080）
+docker run -d --name aip-scan-verify -p 18080:8080 `
+  -e DB_URL=jdbc:postgresql://host.docker.internal:15432/aiplatform `
+  -e AI_BASE_URL=http://host.docker.internal:11434/v1 `
+  ai-knowledge-platform:dev --app.security.captcha.enabled=false
+
+# 2) 验（脚本自己建库、上传扫描件、轮询、清理）
+python deploy/verify_image_ocr.py     # → 默认打 http://localhost:18080
+```
+
+**实测结果（9/9）**：
+
+| 项 | 结果 |
+|---|---|
+| 容器启动日志 | `OCR 引擎：可用（语言 chi_sim+eng，tesseract (PATH)）` |
+| 上传接口 | **336 ms** 返回（异步：不等 OCR 跑完） |
+| 扫描件入库 | **16.7 s** 完成 → `PENDING_EMBEDDING` |
+| 契约字段 | `ocrTotalPages = 3`（快扫得出的进度分母） |
+| 分块落库 | `segmentCount = 1`，分段正文是**识别出来的中文** |
+
+★ 注意 `tesseract (PATH)` 那一栏：镜像是**走 PATH** 找引擎（`OCR_TESSERACT_PATH` 留空），
+而语言包目录来自镜像里的 `TESSDATA_PREFIX`。这两个来源都是**显式可见**的 ——
+这正是第一节说的"把能不能 OCR 变成显式事实"的用处。
+
 ---
 
 ## 三、离线交付清单 · OCR
