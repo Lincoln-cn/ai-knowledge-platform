@@ -35,7 +35,9 @@ class SegmenterTest {
   private static final String TITLE = "差旅报销规定";
 
   private List<PlannedSegment> plan(String markdown, int segmentLength, int overlap, int maxChars) {
-    return segmenter.plan(markdown, segmentLength, overlap, maxChars, DOC_TYPE, DEPARTMENT, TITLE);
+    return segmenter
+        .plan(markdown, segmentLength, overlap, maxChars, DOC_TYPE, DEPARTMENT, TITLE)
+        .segments();
   }
 
   // ────────────────────────── 1 · 结构化前缀（12 §4.2 纪律 1） ──────────────────────────
@@ -192,7 +194,8 @@ class SegmenterTest {
         """;
 
     List<PlannedSegment> base = plan(md, 200, 0, 1000);
-    List<PlannedSegment> otherDept = segmenter.plan(md, 200, 0, 1000, DOC_TYPE, "财务部", TITLE);
+    List<PlannedSegment> otherDept =
+        segmenter.plan(md, 200, 0, 1000, DOC_TYPE, "财务部", TITLE).segments();
     List<PlannedSegment> otherPath =
         plan(
             """
