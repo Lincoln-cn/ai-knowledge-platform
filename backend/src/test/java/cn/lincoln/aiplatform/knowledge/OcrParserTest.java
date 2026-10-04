@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assumptions.assumeThat;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.metadata.TikaCoreProperties;
@@ -21,29 +22,38 @@ import org.junit.jupiter.api.Test;
 /**
  * OCR 解析探针（第 9 周 · 0.3.1）—— 把<strong>我们对框架的假设</strong>写成断言。
  *
- * <h3>★ 本类存在的理由</h3>
+ * <h3>★★ 本类最重要的一条：一个被推翻的结论，以及它为什么会错</h3>
  *
- * <p>设计册 {@code 12 §11.2} 的选型照 <strong>Tika 4.0</strong> 写（"4.0 自带三条 OCR 路线"）， 而本项目钉的是
- * <strong>3.3.1</strong>（4.0 只有 alpha）。于是有一串必须逐个钉住的假设： "3.3.1 有没有那套 API" · "CLI 路线通不通" ·
- * "抽出来的中文能不能用"。 ★ 前两个已经验通；第三个<strong>验出了设计册预留的那条退路</strong>（见下面那条金丝雀）。
+ * <p>第一版我选了 {@code OUTPUT_TYPE.HOCR}（为了拿词级 {@code x_wconf}，给"低置信度标 needsReview"用）， 结果中文被逐字打散：<code>
+ * 某 某 集团 内 部 管理 制度</code>。 当时的结论是"**Tika 的事件流在中文上不可用 ⇒ 必须自解析 hOCR**"，并把它写成了金丝雀。
  *
- * <h3>★★ 实测结论：Tika 的事件流在中文上<strong>不可用</strong> ⇒ 自解析 hOCR</h3>
+ * <p>★ 用户追问了一句「**有没有其他解决方案？剥离了标准接口，以后换 PaddleOCR 还得适配，是不是硬编码了**」—— 重做四种组合的实测后，结论被推翻：
  *
- * <p>{@code scanned.pdf} 经 Tika 走得通、也真的抽出了正文，但输出是 「某 某 集团 内 部 管理 制度」——
- * <strong>每个汉字之间都被插了空格</strong>。
+ * <table>
+ *   <tr><th>OUTPUT_TYPE</th><th>preserveInterwordSpacing</th><th>中文产物</th></tr>
+ *   <tr><td><b>TXT（Tika 默认）</b></td><td><b>true（默认）</b></td><td>★ <b>某某集团内部管理制度</b>（正确）</td></tr>
+ *   <tr><td>TXT</td><td>false</td><td>某 某 集团 …（打散）</td></tr>
+ *   <tr><td>HOCR</td><td>true</td><td>某 某 集团 …（打散）</td></tr>
+ *   <tr><td>HOCR</td><td>false</td><td>某 某 集团 …（打散）</td></tr>
+ * </table>
  *
- * <p>根因（已看原始 hOCR 定位，不是猜）：chi_sim 把 <strong>每一个汉字</strong>识别成一个 {@code <span class='ocrx_word'>}（实测
- * 133 个 word 对应 133 个汉字）， 而 Tika 把 hOCR 当 XHTML 事件流发出去时，**词与词之间就成了空白** —— {@code
- * preserveInterwordSpacing=false} 也救不回来（那个开关只作用于 TXT 那条路）。
+ * <p>⇒ ★★ **打散不是 Tika 事件流的固有缺陷，是我自己选 HOCR 造成的。** 标准接口（{@code TesseractOCRParser} + {@code
+ * ToMarkdownContentHandler}）本来就能给出干净中文， **不需要自解析 hOCR** —— 那条"退路"会把流水线耦合到 Tesseract 的格式上（换
+ * PaddleOCR 就得重写）。
  *
- * <p>★ 危害不是"不好看"：分块器的 L1/L2 锚点（「第X章 / 第X条」正则，{@code 12 §11.5} 说它是 OCR
- * 路径的<strong>主锚点</strong>）从此匹配不到，短语级召回也一起失效 —— 又一个「看起来在做、实际没生效」。
+ * <p>而设计册 {@code 12 §11.3} 要的「哪几页走了 OCR」这个可观测面， 标准接口也**已经给了**：PDF 元数据里的 {@code
+ * pdf:ocrPageCount}（逐页判定与统计都是 Tika 内建做的）。 实测三档（页数已知）：{@code structured.pdf}=0 · {@code mixed.pdf}=2
+ * · {@code scanned.pdf}=3。
  *
- * <p>⇒ 按 {@code 12 §11.4} 明确预留的退路走：<strong>自解析 hOCR</strong>。 hOCR 里需要的信号一个不少（实测）：{@code bbox} ·
- * {@code x_wconf} · {@code x_size} · {@code ocr_par} / {@code ocr_line}，而且★ **汉字之间的空隙是用 `bbox`
- * 表达的**—— 这恰好是重建"该不该加空格"的唯一依据（同线且相邻 ⇒ 不加；有明显间距 ⇒ 加）。
+ * <p>★ 留下的唯一遗留问题：词级 {@code x_wconf}（needsReview 用）不在 TXT 路径上。 那属于 **Tesseract
+ * 适配器内部的可选增强**，不是流水线的一部分 —— 见 issue #1 的重新定性。
  *
- * <p>★ 本机没有 tesseract 时<strong>跳过而不是失败</strong>（与 {@code EmbeddingPipelineTest} 同口径）； 真正的端到端证据在真栈闸门
+ * <h3>夹具自带"答案"</h3>
+ *
+ * <p>{@code scanned.pdf} / {@code mixed.pdf} 是把 {@code noisy.pdf} 逐页光栅化造的 （{@code
+ * backend/tools/make_ocr_fixtures.py}），原文已知 ⇒ 质量可以写成断言。
+ *
+ * <p>★ 本机没有 tesseract 时<strong>跳过而不是失败</strong>（与 {@code EmbeddingPipelineTest} 同口径）； 端到端证据在真栈闸门
  * {@code check_ocr_e2e.py}。
  */
 class OcrParserTest {
@@ -51,9 +61,9 @@ class OcrParserTest {
   /**
    * 逐页判定阈值：每页字符数 &lt; 10 ⇒ 该页走 OCR（{@code 12 §11.3}）。
    *
-   * <p>★ 格式口径与设计册不一致，已按<b>实测</b>修正：设计册抄的是 Tika 4.0 的 <strong>JSON</strong> 块（{@code
+   * <p>★ 格式口径按<b>实测</b>修正：设计册抄的是 Tika 4.0 的 <strong>JSON</strong> 块 （{@code
    * {"totalCharsPerPage":10,...}}），而 3.3.1 的 {@code setOcrStrategyAuto(String)} 要的是 <strong>{@code
-   * "num[%], num"}</strong> 这种短格式 —— 照抄设计册会直接抛 {@code Error parsing OCRStrategyAuto}。
+   * "num[%], num"}</strong> 短格式 —— 照抄设计册会直接抛 {@code Error parsing OCRStrategyAuto}。
    */
   private static final String STRATEGY_AUTO = "10, 10";
 
@@ -70,14 +80,97 @@ class OcrParserTest {
     assumeThat(available).as("本机没有 tesseract CLI ⇒ 跳过（真栈闸门 check_ocr_e2e.py 才是端到端证据）").isTrue();
   }
 
-  // ────────────────────────── 1 · 能力清单（框架假设） ──────────────────────────
+  // ────────────────────────── 1 · ★ 核心：标准接口下中文是干净的 ──────────────────────────
+
+  /**
+   * ★★ 结论级断言：默认配置（TXT + 重建词间空格）下，中文**必须是连续的短语**。
+   *
+   * <p>断言用<b>精确短语</b>而不是"非空"或"去空白后包含"—— 后者在被打散的产物上也成立， 那正是第一版把自己误导了的地方。
+   */
+  @Test
+  void 标准接口下中文是连续的短语() {
+    String markdown = parse("scanned.pdf", TesseractOCRConfig.OUTPUT_TYPE.TXT, true);
+
+    assertThat(markdown)
+        .as("章节标题必须连成一个词 —— 它是分块器 L1/L2 的锚点（12 §11.5）")
+        .contains("某某集团内部管理制度")
+        .contains("第一章");
+    assertThat(markdown)
+        .as("★ 不许出现逐字打散的形态（第一版就是栽在这里）")
+        .doesNotContain("某 某")
+        .doesNotContain("第 一 章");
+    assertThat(markdown).as("正文长句也要认出来").contains("住宿标准");
+  }
+
+  /**
+   * ★ 金丝雀（反向断言）：<strong>{@code preserveInterwordSpacing=false} 会把中文打散</strong>。
+   *
+   * <p>这条钉住的是"我们为什么要在生产配置里**显式写** {@code true}"： 「不重建词间空格」听上去才是更自然的选择，任何人顺手改成 {@code false} 都会打穿
+   * L1/L2 锚点， 而产物看起来只是"多了些空格"。
+   *
+   * <p>★ 若这里不再匹配（Tika 换了行为）⇒ <strong>变红</strong>，提醒回来重新评估： 那个显式设置也许可以撤掉。
+   */
+  @Test
+  void 金丝雀_关掉词间空格重建会把中文打散() {
+    String markdown = parse("scanned.pdf", TesseractOCRConfig.OUTPUT_TYPE.TXT, false);
+
+    assertThat(markdown)
+        .as("★ 若不再匹配，说明 Tika 已不再打散 —— 请重新评估生产里那个显式 true 还有没有必要")
+        .contains("某 某")
+        .doesNotContain("某某集团内部管理制度");
+  }
+
+  // ────────────────────────── 2 · 逐页判定与"哪几页走了 OCR" ──────────────────────────
+
+  /**
+   * ★ 逐页判定在起作用：同一份全扫描件，{@code AUTO} 抽得出正文、{@code NO_OCR} 抽不出。
+   *
+   * <p>这条比"抽出来了"更有价值：它排除了"其实是别的东西给了文本"。
+   */
+  @Test
+  void 逐页判定在起作用_关掉OCR就抽不出正文() {
+    String withOcr = parse("scanned.pdf", TesseractOCRConfig.OUTPUT_TYPE.TXT, true);
+    String withoutOcr =
+        parse(
+                "scanned.pdf",
+                TesseractOCRConfig.OUTPUT_TYPE.TXT,
+                true,
+                PDFParserConfig.OCR_STRATEGY.NO_OCR)
+            .markdown();
+
+    assertThat(withOcr).contains("第一章").contains("住宿标准");
+    assertThat(withoutOcr).as("NO_OCR 下必须几乎为空 —— 否则上一条的'抽出了正文'根本不是 OCR 的功劳").doesNotContain("住宿标准");
+  }
+
+  /**
+   * ★★ 「哪几页是扫描件」的可观测面<strong>来自标准元数据</strong> （{@code pdf:ocrPageCount}），不是自己数的 —— 三个页数已知的夹具各给一个读数。
+   *
+   * <p>★ 这条同时是"不必自解析 hOCR"的证据：设计册要的可观测面，标准接口已经给了。
+   */
+  @Test
+  void OCR页数来自标准元数据() {
+    assertThat(ocrPagesOf("structured.pdf")).as("全文本层 ⇒ 一页都不该走 OCR").isZero();
+    assertThat(ocrPagesOf("mixed.pdf")).as("首页有文本层、后两页没有 ⇒ 恰好 2 页").isEqualTo(2);
+    assertThat(ocrPagesOf("scanned.pdf")).as("三页全无文本层 ⇒ 3 页").isEqualTo(3);
+  }
+
+  /** ★ 混合型 PDF 逐页处理：第 1 页的文本来自文本层，第 2–3 页来自 OCR。 */
+  @Test
+  void 混合型PDF逐页处理() {
+    String markdown = parse("mixed.pdf", TesseractOCRConfig.OUTPUT_TYPE.TXT, true);
+
+    assertThat(markdown).as("第 1 页有文本层 ⇒ 它的内容必须在（来自文本层）").contains("某某集团内部管理制度");
+    assertThat(markdown).as("第 2–3 页没有文本层 ⇒ 也要有内容（来自 OCR）").contains("住宿标准");
+  }
+
+  // ────────────────────────── 3 · 环境诊断 ──────────────────────────
 
   /**
    * ★ 假设 ①：CLI Tesseract 可用。
    *
    * <p>★ 这里<strong>刻意不断言</strong> {@code parser.getLangs()}：实测它在 3.3.1 上返回**空集**， 而同一台机器的 {@code
    * tesseract --list-langs} 明明列出 chi_sim / eng —— 它读的是 Tika 自己的 tessdata 位置，不是 CLI
-   * 的位置。拿它当"语言包装没装"的判据只会得到一个**假的红灯**； 真正该问的是"中文认得出来吗"，那由下面的产物断言回答。
+   * 的位置。拿它当"语言包装没装"的判据只会得到一个**假的红灯**。
    */
   @Test
   void cli_tesseract可用() throws Exception {
@@ -105,85 +198,42 @@ class OcrParserTest {
     assertThat(ocr.hasTesseract()).isTrue();
   }
 
-  // ────────────────────────── 2 · ★ 金丝雀：Tika 事件流在中文上的缺陷 ──────────────────────────
-
-  /**
-   * ★★ 金丝雀：<strong>断言 Tika 的事件流在中文上会打散汉字</strong> —— 这就是"自解析 hOCR"的依据。
-   *
-   * <p>它是<strong>反向断言</strong>（断言缺陷存在），写法刻意如此：
-   *
-   * <ul>
-   *   <li>缺陷在 ⇒ 绿，说明"自解析 hOCR"这条退路仍然必要
-   *   <li>缺陷哪天被 Tika 修好（或换了版本）⇒ <strong>变红</strong>，提醒我们回来重新评估： 也许可以直接用事件流，少维护一套 hOCR 解析器
-   * </ul>
-   *
-   * <p>★ 不这么写的话，这条知识只会留在某人的记忆里 —— 而"我们为什么不用框架自带的那个"是最容易被 后人"优化"掉的一类决定。
-   */
-  @Test
-  void 金丝雀_Tika事件流在中文上会打散汉字() throws Exception {
-    String markdown = parseWithTika("scanned.pdf", PDFParserConfig.OCR_STRATEGY.AUTO);
-
-    assertThat(markdown).as("OCR 确实跑了（否则这条金丝雀在空跑）").isNotBlank();
-    assertThat(markdown)
-        .as("★ 若这里不再匹配，说明 Tika 已经不再打散汉字 —— 请重新评估是否还需要自解析 hOCR" + "（12 §11.4 的退路）")
-        .contains("某 某 集团")
-        .doesNotContain("某某集团");
-  }
-
-  // ────────────────────────── 3 · 逐页判定（真正的能力） ──────────────────────────
-
-  /**
-   * ★ 逐页判定在起作用：同一份全扫描件，{@code AUTO} 抽得出正文、{@code NO_OCR} 抽不出。
-   *
-   * <p>★ 这条比"抽出来了"更有价值：它排除了"其实是别的东西给了文本"。 断言用<strong>去空白后</strong>比较 —— 因为 Tika
-   * 事件流那条路的空格缺陷是已知的（见上面金丝雀）， 这里要验的是"有没有内容"，不是"空格对不对"。
-   */
-  @Test
-  void 逐页判定在起作用_关掉OCR就抽不出正文() throws Exception {
-    String withOcr = squeeze(parseWithTika("scanned.pdf", PDFParserConfig.OCR_STRATEGY.AUTO));
-    String withoutOcr = squeeze(parseWithTika("scanned.pdf", PDFParserConfig.OCR_STRATEGY.NO_OCR));
-
-    assertThat(withOcr)
-        .as("AUTO 下要抽出正文 —— 含章节标题（分块器的 L1/L2 锚点）与正文长句")
-        .contains("第一章")
-        .contains("住宿标准");
-    assertThat(withoutOcr).as("NO_OCR 下必须几乎为空 —— 否则上一条的'抽出了正文'根本不是 OCR 的功劳").doesNotContain("住宿标准");
-  }
-
-  /**
-   * ★ 混合型 PDF 逐页处理：{@code mixed.pdf} 第 1 页有文本层、第 2–3 页没有。
-   *
-   * <p>判据要的是逐页而不是"整文档二选一"：第 1 页的文本必须来自文本层 （否则会多跑一次无谓的 OCR，还会把清晰的文本层换成 OCR 的错字）。
-   */
-  @Test
-  void 混合型PDF逐页处理() throws Exception {
-    String withOcr = squeeze(parseWithTika("mixed.pdf", PDFParserConfig.OCR_STRATEGY.AUTO));
-
-    assertThat(withOcr).as("第 1 页有文本层 ⇒ 它的内容必须在（来自文本层）").contains("某某集团内部管理制度");
-    assertThat(withOcr).as("第 2–3 页没有文本层 ⇒ 也要有内容（来自 OCR）").contains("住宿标准");
-  }
-
   // ────────────────────────── 工具 ──────────────────────────
 
-  /** 去掉所有空白后比较 —— 绕开 Tika 事件流的已知空格缺陷，只验"有没有内容"。 */
-  private static String squeeze(String text) {
-    return Pattern.compile("\\s+").matcher(text).replaceAll("");
+  private static String parse(
+      String fixture, TesseractOCRConfig.OUTPUT_TYPE type, boolean preserveSpacing) {
+    return parse(fixture, type, preserveSpacing, PDFParserConfig.OCR_STRATEGY.AUTO).markdown();
   }
 
-  private static String parseWithTika(String fixture, PDFParserConfig.OCR_STRATEGY strategy) {
+  private static int ocrPagesOf(String fixture) {
+    return parse(
+            fixture, TesseractOCRConfig.OUTPUT_TYPE.TXT, true, PDFParserConfig.OCR_STRATEGY.AUTO)
+        .facts()
+        .ocrPageCount();
+  }
+
+  /** 解析产物 + 页数事实（与生产走**同一套配置**，只把产物形态参数化以便做上面的对照实验）。 */
+  private record Parsed(String markdown, Facts facts) {}
+
+  private record Facts(int pageCount, int ocrPageCount) {}
+
+  private static Parsed parse(
+      String fixture,
+      TesseractOCRConfig.OUTPUT_TYPE type,
+      boolean preserveSpacing,
+      PDFParserConfig.OCR_STRATEGY strategy) {
     byte[] bytes = readFixture(fixture);
 
     PDFParserConfig pdf = new PDFParserConfig();
     pdf.setOcrStrategy(strategy);
     pdf.setOcrStrategyAuto(STRATEGY_AUTO);
-    // ★ dpi 与"渲染策略 ALL"都是 12 §11.3 的口径：300dpi 是 OCR 质量的下限
     pdf.setOcrDPI(300);
     pdf.setOcrRenderingStrategy(PDFParserConfig.OCR_RENDERING_STRATEGY.ALL);
 
     TesseractOCRConfig tess = new TesseractOCRConfig();
     tess.setLanguage("chi_sim+eng");
-    // ★ HOCR 而不是 TXT：只有 hOCR 带 bbox / x_wconf（低置信度标 needsReview 与页眉页脚去重都靠它，12 §11.4）
-    tess.setOutputType(TesseractOCRConfig.OUTPUT_TYPE.HOCR);
+    tess.setOutputType(type);
+    tess.setPreserveInterwordSpacing(preserveSpacing);
     tess.setDensity(300);
     tess.setEnableImagePreprocessing(true);
     tess.setTimeoutSeconds(180);
@@ -201,7 +251,21 @@ class OcrParserTest {
     } catch (Exception e) {
       throw new IllegalStateException("解析夹具失败：" + fixture, e);
     }
-    return handler.toString();
+    String[] perPage = metadata.getValues("pdf:charsPerPage");
+    int pageCount =
+        perPage != null && perPage.length > 0
+            ? perPage.length
+            : intOf(metadata.get("xmpTPg:NPages"));
+    return new Parsed(
+        handler.toString(), new Facts(pageCount, intOf(metadata.get("pdf:ocrPageCount"))));
+  }
+
+  private static int intOf(String raw) {
+    try {
+      return raw == null || raw.isBlank() ? 0 : Integer.parseInt(raw.trim());
+    } catch (NumberFormatException e) {
+      return 0;
+    }
   }
 
   private static byte[] readFixture(String fixture) {
@@ -227,5 +291,14 @@ class OcrParserTest {
       }
     }
     return "(不在 PATH 上)";
+  }
+
+  /** 保留一个小工具：把空白抹掉比较（某些断言只需要"有没有内容"）。 */
+  static String squeeze(String text) {
+    return Pattern.compile("\\s+").matcher(text).replaceAll("");
+  }
+
+  static String utf8(byte[] bytes) {
+    return new String(bytes, StandardCharsets.UTF_8);
   }
 }
