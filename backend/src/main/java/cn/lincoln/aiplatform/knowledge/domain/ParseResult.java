@@ -14,12 +14,27 @@ package cn.lincoln.aiplatform.knowledge.domain;
  * @param success 是否完整解析成功
  * @param failReason 失败的可读原因（{@code DOC-I2}）；成功时为 null。必须给人看，不是堆栈
  * @param failHint 失败时的下一步建议；成功或没有更好的建议时为 null
+ * @param pageCount 总页数；未知（非分页格式）时为 0
+ * @param ocrPageCount 其中**走了 OCR 的页数**；未知时为 0。 ★ 这是「这份文件有几页是扫描件」的唯一来源（{@code 12 §11.3} 要求可观测）——
+ *     它来自解析器读到的 PDF 元数据，**不是**我们自己数的：逐页判定与统计都由 Tika 内建完成。
  */
-public record ParseResult(String markdown, boolean success, String failReason, String failHint) {
+public record ParseResult(
+    String markdown,
+    boolean success,
+    String failReason,
+    String failHint,
+    int pageCount,
+    int ocrPageCount) {
 
-  /** 成功。 */
+  /** 成功（页数未知）。 */
   public static ParseResult ok(String markdown) {
-    return new ParseResult(markdown == null ? "" : markdown, true, null, null);
+    return ok(markdown, 0, 0);
+  }
+
+  /** 成功 + 页数事实。 */
+  public static ParseResult ok(String markdown, int pageCount, int ocrPageCount) {
+    return new ParseResult(
+        markdown == null ? "" : markdown, true, null, null, pageCount, ocrPageCount);
   }
 
   /** 失败但保留已缓冲部分（{@code 12 §2.1}），不带下一步建议。 */
@@ -29,7 +44,18 @@ public record ParseResult(String markdown, boolean success, String failReason, S
 
   /** 失败 + 可读原因 + <strong>针对这个原因</strong>的下一步建议。 */
   public static ParseResult failed(String failReason, String failHint, String partialMarkdown) {
+    return failed(failReason, failHint, partialMarkdown, 0, 0);
+  }
+
+  /** 失败 + 页数事实（扫描件解析失败时也要留下"它有几页、其中几页走了 OCR"）。 */
+  public static ParseResult failed(
+      String failReason, String failHint, String partialMarkdown, int pageCount, int ocrPageCount) {
     return new ParseResult(
-        partialMarkdown == null ? "" : partialMarkdown, false, failReason, failHint);
+        partialMarkdown == null ? "" : partialMarkdown,
+        false,
+        failReason,
+        failHint,
+        pageCount,
+        ocrPageCount);
   }
 }

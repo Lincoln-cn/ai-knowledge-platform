@@ -10,10 +10,10 @@ import org.apache.tika.metadata.Metadata;
 import org.apache.tika.metadata.TikaCoreProperties;
 import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
-import org.apache.tika.parser.ocr.TesseractOCRConfig;
-import org.apache.tika.parser.ocr.TesseractOCRParser;
 import org.apache.tika.parser.pdf.PDFParserConfig;
 import org.apache.tika.sax.ToMarkdownContentHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.xml.sax.SAXException;
 
 /**
@@ -44,18 +44,11 @@ import org.xml.sax.SAXException;
 @org.springframework.stereotype.Component
 public class TikaMarkdownParser {
 
+  private static final Logger log = LoggerFactory.getLogger(TikaMarkdownParser.class);
+
   /** 扩展名白名单（{@code 09 §10.2 #2}：改扩展名绕过 ⇒ MIME 嗅探不匹配即拒）。 与批 1 解析范围对齐：DOCX / PDF / TXT / MD。 */
   private static final Set<String> ALLOWED_EXTENSIONS =
       Set.of("docx", "doc", "pdf", "txt", "md", "markdown");
-
-  /**
-   * 逐页判定阈值：每页字符数 &lt; 10 ⇒ 该页走 OCR（{@code 12 §11.3}）。
-   *
-   * <p>★ 格式口径按<b>实测</b>修正：设计册抄的是 Tika 4.0 的 <strong>JSON</strong> 块 （{@code
-   * {"totalCharsPerPage":10,...}}），而 3.3.1 的 {@code setOcrStrategyAuto(String)} 要的是 <strong>{@code
-   * "num[%], num"}</strong> 短格式 —— 照抄设计册会直接抛 {@code Error parsing OCRStrategyAuto}。
-   */
-  private static final String OCR_STRATEGY_AUTO = "10, 10";
 
   private final OcrEngine ocr;
 
@@ -97,22 +90,35 @@ public class TikaMarkdownParser {
     try (ByteArrayInputStream in = new ByteArrayInputStream(content)) {
       // ★ AutoDetectParser 靠 SPI 装配 parser 模块；编码探测在 text 模块内完成（12 §一）
       ParseContext context = new ParseContext();
-      context.set(PDFParserConfig.class, pdfConfig(ocrAvailable));
-      if (ocrAvailable) {
-        context.set(TesseractOCRConfig.class, tesseractConfig());
-        context.set(TesseractOCRParser.class, ocr.newParser());
-      }
+      PDFParserConfig pdfConfig = new PDFParserConfig();
+      // ★ 不要吞掉中间 IOException：默认会 catch 掉内容流解码错误 ⇒「页面丢了」静默发生。
+      //   关掉后中途失败会带着 handler 里已缓冲的片段抛出（12 §2.1 的 catch 场景）。
+      pdfConfig.setCatchIntermediateIOExceptions(false);
+      // ★★ OCR 的全部配置（引擎、产物形态、语言、DPI、逐页判定阈值…）交给 OcrEngine ——
+      //    本类<strong>不出现任何 Tesseract 类型</strong>：引擎知识只有一处。
+      //    判据：`grep -rn "Tesseract" backend/src/main` 只应命中 OcrEngine（javadoc 提及除外）。
+      ocr.configure(pdfConfig, context);
+      context.set(PDFParserConfig.class, pdfConfig);
       new AutoDetectParser().parse(in, handler, metadata, context);
       // ★ 0 字符 ≠ 成功。输入非空却抽出 0 字符（PDFBox 吞掉损坏、扫描件无文本层）时
       //   若仍算成功，界面会显示「已解析」而内容是空的 —— 这是最坏的失败形态（静默）。
       //   ★ 第 9 周起这里要分档：引擎在不在，下一步做的事完全不同。
       String extracted = markdown.toString();
+      int pageCount = pageCountOf(metadata);
+      int ocrPageCount = intOf(metadata.get("pdf:ocrPageCount"));
+      if (ocrPageCount > 0) {
+        // ★ 这一行是「这份文件有几页是扫描件」的可观测面（12 §11.3 要求）。
+        //   现在落在日志里；等 T249.3 把两个字段接进契约与库之后，它会同时出现在界面上
+        //   （「已识别 3/10 页」的进度就靠它）。★ 先让它可见，而不是先加一个没人读的字段。
+        log.info("OCR：{} 共 {} 页，其中 {} 页走了 OCR", filename, pageCount, ocrPageCount);
+      }
       if (extracted.isBlank()) {
         return ocrAvailable
-            ? ParseResult.failed(describeEmptyResult(filename, content.length), "")
-            : ocrUnavailableResult(filename, content.length, ocr.status());
+            ? ParseResult.failed(
+                describeEmptyResult(filename, content.length), null, "", pageCount, ocrPageCount)
+            : ocrUnavailableResult(filename, content.length, ocr.status(), pageCount, ocrPageCount);
       }
-      return ParseResult.ok(extracted);
+      return ParseResult.ok(extracted, pageCount, ocrPageCount);
     } catch (EncryptedDocumentException e) {
       return ParseResult.failed(describeEncrypted(filename), markdown.toString());
     } catch (TikaException | SAXException | RuntimeException e) {
@@ -121,41 +127,6 @@ public class TikaMarkdownParser {
       // ★ 兜底：任何异常都不许把堆栈当原因抛给用户（DOC-I2）
       return ParseResult.failed(describeFailure(e, filename), markdown.toString());
     }
-  }
-
-  // ────────────────────────── OCR 配置 ──────────────────────────
-
-  /**
-   * PDF 解析配置。
-   *
-   * <p>★ OCR 不可用时显式置 {@code NO_OCR}：Tika 默认是 {@code NO_OCR}，但**别依赖默认值** —— 一旦哪天默认改成
-   * AUTO，一台没装引擎的机器会在每页上都尝试一次 spawn 并失败， 症状是"解析变慢且原因不明"。
-   */
-  private PDFParserConfig pdfConfig(boolean ocrAvailable) {
-    PDFParserConfig pdfConfig = new PDFParserConfig();
-    // ★ 不要吞掉中间 IOException：默认会 catch 掉内容流解码错误 ⇒「页面丢了」静默发生。
-    //   关掉后中途失败会带着 handler 里已缓冲的片段抛出（12 §2.1 的 catch 场景）。
-    pdfConfig.setCatchIntermediateIOExceptions(false);
-    if (ocrAvailable) {
-      pdfConfig.setOcrStrategy(PDFParserConfig.OCR_STRATEGY.AUTO);
-      pdfConfig.setOcrStrategyAuto(OCR_STRATEGY_AUTO);
-      pdfConfig.setOcrDPI(ocr.properties().dpi());
-      pdfConfig.setOcrRenderingStrategy(PDFParserConfig.OCR_RENDERING_STRATEGY.ALL);
-    } else {
-      pdfConfig.setOcrStrategy(PDFParserConfig.OCR_STRATEGY.NO_OCR);
-    }
-    return pdfConfig;
-  }
-
-  private TesseractOCRConfig tesseractConfig() {
-    TesseractOCRConfig tess = new TesseractOCRConfig();
-    tess.setLanguage(ocr.properties().languages());
-    // ★ HOCR 而不是 TXT：只有 hOCR 带 bbox / x_wconf（低置信度标 needsReview 与页眉页脚去重都靠它，12 §11.4）
-    tess.setOutputType(TesseractOCRConfig.OUTPUT_TYPE.HOCR);
-    tess.setDensity(ocr.properties().dpi());
-    tess.setEnableImagePreprocessing(ocr.properties().preprocess());
-    tess.setTimeoutSeconds(ocr.properties().timeoutSeconds());
-    return tess;
   }
 
   // ────────────────────────── 内部 ──────────────────────────
@@ -190,12 +161,36 @@ public class TikaMarkdownParser {
    * <p>★ 这一档必须与上一条分开：它们的下一步完全不同 —— 「装 OCR 引擎」vs「换一份文件」。写在一条里，用户会去反复重新导出那个本来就好的扫描件。
    */
   private static ParseResult ocrUnavailableResult(
-      String filename, int byteLength, OcrEngine.Status status) {
+      String filename, int byteLength, OcrEngine.Status status, int pageCount, int ocrPageCount) {
     String reason =
         "解析结果为空：这份文件很可能没有文本层（扫描件 / 图像型 PDF），"
             + "而本环境没有可用的 OCR 引擎 —— %s（文件 %s，%d 字节）"
                 .formatted(status.reason(), filename == null ? "?" : filename, byteLength);
-    return ParseResult.failed(reason, status.hint(), "");
+    return ParseResult.failed(reason, status.hint(), "", pageCount, ocrPageCount);
+  }
+
+  /**
+   * 总页数：优先 `pdf:charsPerPage` 的**取值个数**（那是逐页的），退回 `xmpTPg:NPages`。
+   *
+   * <p>★ 两者都来自 Tika 的元数据 —— 与 OCR 页数一样，**不自己数**。
+   */
+  private static int pageCountOf(Metadata metadata) {
+    String[] perPage = metadata.getValues("pdf:charsPerPage");
+    if (perPage != null && perPage.length > 0) {
+      return perPage.length;
+    }
+    return intOf(metadata.get("xmpTPg:NPages"));
+  }
+
+  private static int intOf(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return 0;
+    }
+    try {
+      return Integer.parseInt(raw.trim());
+    } catch (NumberFormatException e) {
+      return 0;
+    }
   }
 
   /** 把异常翻成可读原因。★ 纪律：不把异常类名 / 堆栈放进 failReason —— 用户改不了也看不懂（{@code 08 §4.1}）。 */

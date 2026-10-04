@@ -6,7 +6,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import org.apache.tika.parser.ParseContext;
+import org.apache.tika.parser.ocr.TesseractOCRConfig;
 import org.apache.tika.parser.ocr.TesseractOCRParser;
+import org.apache.tika.parser.pdf.PDFParserConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -37,6 +40,15 @@ import org.springframework.stereotype.Component;
 public class OcrEngine {
 
   private static final Logger log = LoggerFactory.getLogger(OcrEngine.class);
+
+  /**
+   * 逐页判定阈值：每页字符数 &lt; 10 ⇒ 该页走 OCR（{@code 12 §11.3}）。
+   *
+   * <p>★ 格式口径按<b>实测</b>修正：设计册抄的是 Tika 4.0 的 <strong>JSON</strong> 块 （{@code
+   * {"totalCharsPerPage":10,...}}），而 3.3.1 的 {@code setOcrStrategyAuto(String)} 要的是 <strong>{@code
+   * "num[%], num"}</strong> 短格式 —— 照抄设计册会直接抛 {@code Error parsing OCRStrategyAuto}。
+   */
+  private static final String OCR_STRATEGY_AUTO = "10, 10";
 
   private final OcrProperties properties;
   private volatile Status status;
@@ -86,6 +98,76 @@ public class OcrEngine {
 
   public OcrProperties properties() {
     return properties;
+  }
+
+  /**
+   * 把 OCR 相关的解析配置装进 Tika 的上下文 —— ★★ <strong>这个方法就是"Tesseract 的全部知识"的边界</strong>。
+   *
+   * <h3>★ 为什么值得单独一个方法（用户提的"会不会硬编码"）</h3>
+   *
+   * <p>流水线的其余部分（分块 → 前缀 → 向量化 → 进度）**一行都不认识 OCR 引擎**： 它们只消费 {@code ParseResult}（域类型：正文 + 页数 + OCR
+   * 页数）。 而"引擎怎么配"这件事全部收在这里 —— 产物形态、空格口径、语言、DPI、超时、预处理、逐页判定阈值。
+   *
+   * <p>★ 因此换引擎的成本被限制在<strong>这一个文件</strong>：
+   *
+   * <ul>
+   *   <li>换成 <b>tess4j</b>（JNI，进程内）⇒ 改 {@link #newParser()} 与 {@link #tesseractConfig()} 的实现， 外层不用动
+   *   <li>换成 Tika 的 <b>VLM 路线</b>（{@code openai-vlm-parser} 经 JAiRouter 调视觉模型）⇒ 在这里加一条分支
+   *   <li>换成**根本不是 Tika parser 的引擎**（例如自带 Java 绑定的引擎）⇒ 那时才需要把 "解析"整体提到一个端口后面；★
+   *       但那是**另一种量级的决定**，不该现在为它预先铺抽象
+   * </ul>
+   *
+   * <p>★ 判据（可机械核对）：<code>grep -rn Tesseract backend/src/main</code> 应当**只命中本文件**。
+   * 一旦别处也出现，说明引擎知识开始渗进流水线了。
+   *
+   * <p>⚠️ 一条已裁决的事实：设计册 {@code 12 §11.2} 明确**排除过 PaddleOCR** （无成熟的纯 Java 进程内调用；其"独立 OCR
+   * 容器"形态违反本项目的三进程约束）。 所以"以后换 PaddleOCR"在本项目的约束下不是主路径 —— 但上面这条边界对任何引擎都成立。
+   */
+  public void configure(PDFParserConfig pdf, ParseContext context) {
+    if (!available()) {
+      // ★ 显式置 NO_OCR，不依赖默认值：哪天默认改成 AUTO，一台没装引擎的机器会在每页上
+      //   都尝试一次 spawn 并失败 —— 症状是"解析变慢且原因不明"。
+      pdf.setOcrStrategy(PDFParserConfig.OCR_STRATEGY.NO_OCR);
+      return;
+    }
+    // ★ 逐页判定由 Tika 内建完成（12 §11.3）：每页文本量 < 阈值 ⇒ 该页走 OCR，
+    //   混合型 PDF 自动逐页处理，不需要我们写"整文档二选一"。
+    pdf.setOcrStrategy(PDFParserConfig.OCR_STRATEGY.AUTO);
+    pdf.setOcrStrategyAuto(OCR_STRATEGY_AUTO);
+    pdf.setOcrDPI(properties.dpi());
+    pdf.setOcrRenderingStrategy(PDFParserConfig.OCR_RENDERING_STRATEGY.ALL);
+    context.set(TesseractOCRConfig.class, tesseractConfig());
+    context.set(TesseractOCRParser.class, newParser());
+  }
+
+  /**
+   * Tesseract 的详细配置。
+   *
+   * <p>★★ 产物形态用 <b>TXT</b>（= Tika 的默认值），不用 HOCR。这一行是<strong>实测换来的</strong>， 而且我第一版选错了：为了拿词级 {@code
+   * x_wconf}（低置信度标 needsReview）我选了 HOCR， 结果中文被逐字打散成「某 某 集团 内 部 管理 制度」—— chi_sim 把**每个汉字**识别成一个
+   * {@code ocrx_word}，事件流里它们之间就成了空白。四种组合实测（夹具 {@code scanned.pdf}，原文已知）：
+   *
+   * <table>
+   *   <tr><th>OUTPUT_TYPE</th><th>preserveInterwordSpacing</th><th>中文产物</th></tr>
+   *   <tr><td><b>TXT（默认）</b></td><td><b>true（默认）</b></td><td>★ <b>某某集团内部管理制度</b>（正确）</td></tr>
+   *   <tr><td>TXT</td><td>false</td><td>某 某 集团 …（打散）</td></tr>
+   *   <tr><td>HOCR</td><td>true / false</td><td>某 某 集团 …（打散）</td></tr>
+   * </table>
+   *
+   * <p>⇒ 打散<strong>不是</strong> Tika 事件流的固有缺陷，是选 HOCR 造成的；标准接口本来就能给出干净中文。 {@code x_wconf}
+   * 那个需求退化成"**是否要在本适配器内部再做一次 hOCR 增强**"的可选项， 不再是流水线的一部分。
+   */
+  private TesseractOCRConfig tesseractConfig() {
+    TesseractOCRConfig tess = new TesseractOCRConfig();
+    tess.setLanguage(properties.languages());
+    tess.setOutputType(TesseractOCRConfig.OUTPUT_TYPE.TXT);
+    // ★ 显示写 true（而不是靠默认值）：上表说明 **false 会把中文打散**，而"不重建词间空格"
+    //   听上去才是更自然的选择 —— 一个会被后人顺手改成 false 的默认值，必须钉住并说明理由。
+    tess.setPreserveInterwordSpacing(true);
+    tess.setDensity(properties.dpi());
+    tess.setEnableImagePreprocessing(properties.preprocess());
+    tess.setTimeoutSeconds(properties.timeoutSeconds());
+    return tess;
   }
 
   /**
