@@ -119,10 +119,28 @@ def main() -> int:
                 page.fill("input[autocomplete='username']", username)
                 page.fill("input[autocomplete='current-password']", password)
                 page.click("button:has-text('登录')")
-                page.wait_for_timeout(1600)
+                # ★ 等**真的离开登录页**，而不是固定 1600ms（issue #14）。
+                #   实测偶发红过的就是这一行：负载高时 1600ms 内跳转没完成，
+                #   于是报「仍停在 …/#/login」—— 那不是登录坏了，是等待方式不对。
+                try:
+                    page.wait_for_url(lambda u: "#/login" not in u, timeout=20000)
+                except Exception:  # noqa: BLE001
+                    pass
+                page.wait_for_timeout(400)
 
                 if "#/login" in page.url:
-                    check(False, f"{role_name}：登录", f"仍停在 {page.url}")
+                    # 失败信息带上现场：只报"仍停在 /login"会让人以为是路由问题，
+                    # 而真相可能是"值没进模型 / 验证码空 / 接口被拒"——三者处置完全不同
+                    evidence = {
+                        "user": page.input_value("input[autocomplete='username']"),
+                        "pwd_len": len(page.input_value("input[autocomplete='current-password']")),
+                        "captcha_inputs": page.locator("input[autocomplete='off']").count(),
+                        "toasts": [t.strip() for t in page.locator(".el-message").all_inner_texts()][:3],
+                        "form_errors": [
+                            t.strip() for t in page.locator(".el-form-item__error").all_inner_texts()
+                        ][:3],
+                    }
+                    check(False, f"{role_name}：登录", f"仍停在 {page.url} · 现场 {evidence}")
 
                 for route, _ in MATRIX:
                     try:

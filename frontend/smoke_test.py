@@ -241,11 +241,26 @@ with sync_playwright() as p:
         page.locator("li.el-select-dropdown__item", has_text="向量模型").click()
         page.wait_for_timeout(1200)
         cards = page.locator(".model-card").count()
-        check(cards == 2, "按类型筛选：向量模型 2 个", f"实际 {cards}")
+        # ★ 不写死条数：这里曾经写 `cards == 2`，而夹具后来涨到 4 个向量模型 ⇒
+        #   于是"夹具扩容"与"筛选坏了（筛出 0 条）"两种情况都会让这条红，
+        #   而这两种情况的处置完全不同（一个改断言、一个改产品）。
+        #   改成断言**筛选真的筛了**：有卡 + 每张卡的「类型」都是向量。
+        kinds = [
+            t.replace("\n", " ").strip()
+            for t in page.locator(".model-card .mc-facts .fact", has_text="类型").all_inner_texts()
+        ]
+        all_vector = bool(kinds) and len(kinds) == cards and all("向量" in k for k in kinds)
+        check(
+            cards > 0 and all_vector,
+            "按类型筛选：列表只剩向量模型",
+            f"卡数 {cards}，类型 {kinds[:4]}",
+        )
         page.locator(".filters .el-select").first.click()
         page.wait_for_timeout(400)
         page.locator("li.el-select-dropdown__item", has_text="全部类型").click()
         page.wait_for_timeout(1200)
+        restored = page.locator(".model-card").count()
+        check(restored > cards, "回到「全部类型」后卡片数恢复", f"{cards} → {restored}")
 
     def s12():
         page.fill(".filters input[placeholder*='搜索模型名称']", "qwen3:8b")
