@@ -249,6 +249,45 @@ def main() -> int:
                 check("重新索取" in body or "重新生成" in body,
                       "公开页：无效凭证给出下一步", "")
 
+            # ── 改密页：口令强度口径（issue #7）──
+            #
+            # ★ 这条断言的判据必须是「**提交前**的表单校验」，不能是「提交后被后端拒」——
+            #   后者在只判 `min: 8` 的老代码下也成立，那正是 issue #7 的病：
+            #   「12345678」长度够、当天能过前端，提交后才被后端打回。
+            # ⇒ 所以这里**不提交**，只填值 + blur，然后读表单自己的校验文案。
+            def change_password_policy():
+                goto("/change-password")
+                inputs = page.locator("input[type='password']")
+                check(inputs.count() >= 3, "改密：三个口令输入框都在", f"{inputs.count()} 个")
+
+                def errors() -> str:
+                    page.wait_for_timeout(900)
+                    return " | ".join(page.locator(".el-form-item__error").all_inner_texts())
+
+                # ① 长度够、但只有数字一类 ⇒ 必须被拦
+                inputs.nth(1).fill("12345678")
+                inputs.nth(2).fill("12345678")
+                inputs.nth(2).blur()
+                shown = errors()
+                check("至少 3 类" in shown, "改密：弱口令（只有数字一类）在前端就被拦下",
+                      f"校验文案 = {shown[:100]}")
+
+                # ② 合格口令不得误报（字符类别够、不含账号名）
+                inputs.nth(1).fill("Abc12345!@")
+                inputs.nth(2).fill("Abc12345!@")
+                inputs.nth(2).blur()
+                shown = errors()
+                check("至少 3 类" not in shown, "改密：合格口令不误报", f"校验文案 = {shown[:100]}")
+
+                # ③ ★ 含账号名 ⇒ 必须被拦。这一条同时证明**账号名真的取到了**
+                #    （`session.user.username` 若为 undefined，这条会静默失效）
+                inputs.nth(1).fill("Admin1234!@")
+                inputs.nth(2).fill("Admin1234!@")
+                inputs.nth(2).blur()
+                shown = errors()
+                check("账号名" in shown, "改密：含账号名被拦（证明用户名确实取到了）",
+                      f"校验文案 = {shown[:100]}")
+
             step("知识库列表", kb_list)
             step("知识库四步向导", kb_wizard)
             step("命中测试", kb_hittest)
@@ -262,6 +301,7 @@ def main() -> int:
             step("运营看板", analytics)
             step("账号与权限", admin)
             step("账号与权限·提示词类型", prompt_types_tab)
+            step("改密页·口令强度口径", change_password_policy)
             step("公开页·有效", public_ok)
             step("公开页·过期", public_expired)
             step("公开页·撤销", public_revoked)

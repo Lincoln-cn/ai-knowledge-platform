@@ -65,6 +65,7 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import { identityApi } from '@/api'
 import { ApiError } from '@/api/types'
+import { passwordViolation } from '@/lib/password-policy'
 import { useSessionStore } from '@/stores/session'
 
 const router = useRouter()
@@ -86,7 +87,19 @@ const rules: FormRules = {
   oldPassword: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
   newPassword: [
     { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 8, message: '新密码至少 8 位', trigger: 'blur' }
+    // ★ 用与后端 PasswordPolicy 同一套规则（长度 / 字符类别 / 不含账号名），而不是只判 min: 8 ——
+    //   只判长度时「12345678」能过前端、提交后才被后端拒，让用户多走一次往返（issue #7）。
+    {
+      validator: (_rule, value: string, callback) => {
+        const violation = passwordViolation(value, session.user?.username)
+        if (violation) {
+          callback(new Error(violation))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
   ],
   confirmPassword: [
     { required: true, message: '请再次输入新密码', trigger: 'blur' },
