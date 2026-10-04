@@ -17,7 +17,8 @@ package cn.lincoln.aiplatform.knowledge.domain;
  *     null
  * @param pageCount 总页数；未知（非分页格式）时为 0
  * @param ocrPageCount 其中**走了 OCR 的页数**；未知时为 0。 ★ 这是「这份文件有几页是扫描件」的唯一来源（{@code 12 §11.3} 要求可观测）——
- *     它来自解析器读到的 PDF 元数据，**不是**我们自己数的：逐页判定与统计都由 Tika 内建完成。
+ *     它来自解析器读到的 PDF 元数据，**不是**我们自己数的：逐页判定与统计都由 Tika 内建完成。 ★ 它同时是**分块器选哪套规则**的依据（{@code 12
+ *     §11.5}：&gt;0 ⇒ OCR 型走 L2→L1'→L4）。
  */
 public record ParseResult(
     String markdown,

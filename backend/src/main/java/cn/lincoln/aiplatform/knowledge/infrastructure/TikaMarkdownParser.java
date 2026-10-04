@@ -11,9 +11,12 @@ import org.apache.tika.metadata.TikaCoreProperties;
 import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.parser.pdf.PDFParserConfig;
+import org.apache.tika.sax.ContentHandlerDecorator;
 import org.apache.tika.sax.ToMarkdownContentHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.xml.sax.Attributes;
+import org.xml.sax.ContentHandler;
 import org.xml.sax.SAXException;
 
 /**
@@ -57,6 +60,87 @@ public class TikaMarkdownParser {
   }
 
   /**
+   * 逐页回调（第 9 周 · 0.3.1）—— 每**处理完**一页调一次，用来回写"已识别 N/M 页"。
+   *
+   * <p>★ 这个接口存在的前提是一条**实测事实**：Tika 的 PDF 输出里每页是一个 {@code <div class="page">}，而走了 OCR 的页在里面还有一个
+   * {@code <div class="ocr">}。 三个夹具实测（纯文本 0 / 混合 2 / 扫描件 3），{@code class="ocr"} 的个数与元数据 {@code
+   * pdf:ocrPageCount} **完全一致** ⇒ "第 N 页做完了"是可观测事实，不必自己拆 PDF 逐页跑。
+   *
+   * <p>★ 为什么不用覆写解析器：{@code TesseractOCRParser.parse(...)} 是 public，但 Tika 内部真正逐页调的是 {@code
+   * org.apache.tika.parser.pdf.AbstractPDF2XHTML#doOCROnCurrentPage} ——
+   * <strong>包内方法，覆写不了</strong>（实测覆写两个 public 重载后计数恒为 0）。
+   */
+  @FunctionalInterface
+  public interface PageProgressListener {
+
+    /**
+     * @param pageIndex 第几页（1 起，按处理顺序）
+     * @param ocrPage 这一页是否走了 OCR
+     */
+    void onPageDone(int pageIndex, boolean ocrPage);
+  }
+
+  /**
+   * 数页边界的 SAX 装饰器：把"一页做完了"翻译成回调。
+   *
+   * <p>用 Tika 自带的 {@link ContentHandlerDecorator}（默认全量转发）而不是手写一层委托 —— 手写就得把 SAX
+   * 那一堆方法逐个转发，漏一个就是"某种文档解析出来是空的"。
+   */
+  private static final class PageMarkerHandler extends ContentHandlerDecorator {
+
+    private final PageProgressListener listener;
+    private int depth = 0;
+
+    /** 当前 page div 所在的深度（-1 = 不在 page 里）。 */
+    private int pageDepth = -1;
+
+    private boolean pageUsedOcr = false;
+    private int pageIndex = 0;
+
+    PageMarkerHandler(ContentHandler inner, PageProgressListener listener) {
+      super(inner);
+      this.listener = listener;
+    }
+
+    @Override
+    public void startElement(String uri, String localName, String name, Attributes atts)
+        throws SAXException {
+      depth++;
+      if ("div".equals(localName) || "div".equals(name)) {
+        String classes = atts.getValue("class");
+        if (classes != null && classes.contains("page")) {
+          pageDepth = depth;
+          pageUsedOcr = false;
+        } else if (classes != null && classes.contains("ocr") && pageDepth >= 0) {
+          pageUsedOcr = true;
+        }
+      }
+      super.startElement(uri, localName, name, atts);
+    }
+
+    @Override
+    public void endElement(String uri, String localName, String name) throws SAXException {
+      super.endElement(uri, localName, name);
+      if (depth == pageDepth) {
+        pageIndex++;
+        listener.onPageDone(pageIndex, pageUsedOcr);
+        pageDepth = -1;
+      }
+      depth--;
+    }
+  }
+
+  /**
+   * 把文件字节解析成 Markdown（不带逐页回调）。
+   *
+   * @param content 文件原始字节
+   * @param filename 原始文件名（含扩展名，用于格式白名单与错误文案）
+   */
+  public ParseResult parse(byte[] content, String filename) {
+    return parse(content, filename, null);
+  }
+
+  /**
    * 把文件字节解析成 Markdown。
    *
    * <p>★ 失败时 {@link ParseResult#markdown()} 仍返回已缓冲的部分（{@code 12 §2.1}）， {@link
@@ -64,8 +148,9 @@ public class TikaMarkdownParser {
    *
    * @param content 文件原始字节
    * @param filename 原始文件名（含扩展名，用于格式白名单与错误文案）
+   * @param listener 逐页回调（可为 null）；★ 会被解析线程**同步**调用，实现要短 —— 见 {@link PageProgressListener}
    */
-  public ParseResult parse(byte[] content, String filename) {
+  public ParseResult parse(byte[] content, String filename, PageProgressListener listener) {
     if (content == null || content.length == 0) {
       return ParseResult.failed("文件内容为空，无法解析。", "");
     }
@@ -80,7 +165,9 @@ public class TikaMarkdownParser {
 
     // ★ Word 列表归一：OOXML 只给 p 打 class="list_*"，包成 ul/ol/li 后 Markdown 才有列表语法
     ToMarkdownContentHandler markdown = new ToMarkdownContentHandler();
-    WordListNormalizingHandler handler = new WordListNormalizingHandler(markdown);
+    WordListNormalizingHandler handler =
+        new WordListNormalizingHandler(
+            listener == null ? markdown : new PageMarkerHandler(markdown, listener));
     Metadata metadata = new Metadata();
     if (filename != null && !filename.isBlank()) {
       metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, filename);

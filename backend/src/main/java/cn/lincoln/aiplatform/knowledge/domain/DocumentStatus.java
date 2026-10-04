@@ -17,9 +17,9 @@ import java.util.Set;
  * 「加载失败直接标成功」「跳过分段直接成功」这类<strong>跳步</strong>不会报错，只会让界面把一个其实没加工的文档显示成可用； 靠调用方自觉是不够的。
  *
  * <p>★ 一处自觉的取舍：{@link #SEGMENTING}（分段中）在当前实现里<strong>不可被外部观测</strong>—— 解析与分块是同步的，
- * 两个转移发生在同一事务内，外部只看得到最终态。它仍然保留在矩阵里、也确实被走过（{@code Document#recordParseSuccess}），
- * 因为等解析/分块改成异步流水线时（{@code 03 §3.2} 的形态）它就是在途态，届时不必改状态机。 想确认「这一步真的走过了」的，看 {@code
- * DocumentStateMachineTest} 的轨迹断言。
+ * 两个转移发生在同一事务内，外部只看得到最终态。它仍然保留在矩阵里、也确实被走过 （第 9 周起由 {@code Document#startParse} + {@code
+ * Document#recordParseSuccess} 分开走 —— 解析改成异步流水线之后，{@code SEGMENTING} 就是**真的在途态**：扫描件的 OCR 要跑分钟级，
+ * 期间文档落在这个状态、界面按页显示进度）。 想确认「这一步真的走过了」的，看 {@code DocumentStateMachineTest} 的轨迹断言。
  */
 public enum DocumentStatus {
   /** 待解析（初值）。★ 没有任何状态能转回它 —— 它是真正的起点。 */

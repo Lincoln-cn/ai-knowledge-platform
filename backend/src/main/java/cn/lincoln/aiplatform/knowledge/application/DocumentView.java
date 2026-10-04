@@ -29,7 +29,12 @@ public record DocumentView(
     String docType,
     String department,
     ClassificationLevel classification,
-    String parsedContent) {
+    String parsedContent,
+    // ── 第 9 周（0.3.1）新增的**可选**出网字段：扫描件的逐页进度（12 §11.8）──
+    //   ★ 契约只加可选字段（07 §六 阶段 1）：老前端不认识它们也不受影响。
+    //   ★ 0 = 不涉及 OCR（非 PDF / 纯文本 PDF）⇒ 界面据此不显示进度行，而不是显示一条恒为 0/0 的噪声。
+    Integer ocrTotalPages,
+    Integer ocrDonePages) {
 
   /** 契约 {@code DocumentStatus} 的出网形态 —— 与领域枚举同名，避免多一层映射。 */
   public enum DocumentStatusView {
@@ -60,6 +65,8 @@ public record DocumentView(
         document.docType(),
         document.department(),
         document.classification(),
-        document.parsedContent());
+        document.parsedContent(),
+        document.ocrTotalPages(),
+        document.ocrDonePages());
   }
 }

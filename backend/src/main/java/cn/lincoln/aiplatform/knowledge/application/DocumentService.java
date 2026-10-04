@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.knowledge.application;
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
+import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
 import cn.lincoln.aiplatform.knowledge.domain.PlannedSegment;
 import cn.lincoln.aiplatform.knowledge.domain.SearchText;
 import cn.lincoln.aiplatform.knowledge.domain.Segment;
@@ -21,6 +22,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,6 +59,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class DocumentService {
 
+  private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
+
   private static final int MAX_PAGE_SIZE = 100;
 
   private final DocumentRepository documents;
@@ -65,6 +71,10 @@ public class DocumentService {
   private final MaxCharsResolver maxCharsResolver;
   private final SegmentationProperties segmentationProperties;
   private final EmbeddingRunner runner;
+
+  /** 把"去解析这份字节"交给 {@link ParseRunner} —— 见 {@link DocumentUploaded}（不用直接依赖，避免构造环）。 */
+  private final ApplicationEventPublisher events;
+
   private final Segmenter segmenter = new Segmenter();
 
   public DocumentService(
@@ -75,7 +85,8 @@ public class DocumentService {
       SegmentEmbeddingRepository segmentEmbeddings,
       MaxCharsResolver maxCharsResolver,
       SegmentationProperties segmentationProperties,
-      EmbeddingRunner runner) {
+      EmbeddingRunner runner,
+      ApplicationEventPublisher events) {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
     this.parser = parser;
@@ -84,6 +95,7 @@ public class DocumentService {
     this.maxCharsResolver = maxCharsResolver;
     this.segmentationProperties = segmentationProperties;
     this.runner = runner;
+    this.events = events;
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -446,31 +458,73 @@ public class DocumentService {
               department,
               classification,
               currentUserId);
-      // ★ 带了文件字节就**建档即解析**：成功 ⇒ 待向量化 + parsedContent；
-      //   失败 ⇒ 分段失败 + 可读原因 + 已缓冲部分（12 §2.1）。不给字节 ⇒ 只登记元数据。
-      if (contents != null && i < contents.size() && contents.get(i) != null) {
-        var parsed = parser.parse(contents.get(i), name);
-        if (parsed.success()) {
-          document.recordParseSuccess(parsed.markdown());
-        } else {
-          // ★ 下一步建议**由解析器给**：同一个"解析不出内容"，扫描件缺 OCR 引擎要的是"装引擎"，
-          //   真空文档要的是"换文件" —— 硬编码一句通用建议等于把两种情况揉成一句谁也用不上的话
-          document.recordParseFailure(parsed.failReason(), parsed.failHint(), parsed.markdown());
-        }
-      }
-      // ★ 先存文档（segments 的外键引用它），再分块落库
+      // ★ 建档即解析 —— 但这一步**从同步改成了异步**（第 9 周 · 0.3.1）。
+      //   为什么：扫描件的 OCR 实测每页约 3.6 秒（3 页约 11 秒），同步跑会把上传请求挂住十几秒到几分钟
+      //   —— 网关超时、用户以为卡死，而且进度根本看不见（0/M 与 M/M 同时返回）。
+      //   判据 ⑤ 要的是「OCR 异步、不阻塞其它文档」。
+      //   ⇒ 这里只落行 + 发事件；解析由 ParseRunner 在**本事务提交后**起（见 DocumentUploaded）。
+      //   带字节的文档落在「待解析」，前端按状态显示；不带字节的（只登记元数据）保持待解析不变。
       Document saved = documents.save(document);
-      // ★ 入库即分块（批 2b）：解析成功时立刻分块并落库
-      if (contents != null
-          && i < contents.size()
-          && contents.get(i) != null
-          && document.status() == DocumentStatus.PENDING_EMBEDDING) {
-        segmentAndPersist(saved, currentUserId);
-        saved = documents.save(saved);
-      }
       created.add(DocumentView.from(saved));
+      if (contents != null && i < contents.size() && contents.get(i) != null) {
+        events.publishEvent(new DocumentUploaded(saved.id(), contents.get(i), name, currentUserId));
+      }
     }
     return created;
+  }
+
+  // ────────────────────────── 解析落库（由 ParseRunner 在异步任务里调） ──────────────────────────
+
+  /**
+   * 解析完成后落库（第 9 周 · 0.3.1）—— 解析结果 + 分块，**一个事务**。
+   *
+   * <p>★ 为什么收尾要独立一个事务方法、而解析本身不进来：解析跑分钟级，把它关进事务等于长时间占着连接， 而且逐页进度写在未提交的事务里**别人看不见**（"已识别"会永远停在 0/M）。
+   * 所以边界是 「快扫+解析（无事务，进度各自短事务）」→「收尾（一个短事务）」。
+   *
+   * <p>★ 成功 ⇒ 待向量化 + 已解析正文 + 分块落库；失败 ⇒ 分段失败 + 可读原因 + 已缓冲部分（{@code DOC-I2}）。
+   */
+  @Transactional
+  public void finishParse(UUID documentId, ParseResult parsed, UUID currentUserId) {
+    Document document =
+        documents
+            .findById(documentId)
+            .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "文档不存在"));
+    if (parsed.success()) {
+      document.recordParseSuccess(parsed.markdown(), parsed.ocrPageCount());
+      documents.save(document);
+      // ★ 入库即分块（批 2b）：解析成功时立刻分块并落库
+      segmentAndPersist(document, currentUserId);
+      documents.save(document);
+    } else {
+      // ★ 下一步建议**由解析器给**：同一个"解析不出内容"，扫描件缺 OCR 引擎要的是"装引擎"，
+      //   真空文档要的是"换文件" —— 硬编码一句通用建议等于把两种情况揉成一句谁也用不上的话
+      document.recordParseFailure(parsed.failReason(), parsed.failHint(), parsed.markdown());
+      documents.save(document);
+    }
+  }
+
+  /**
+   * 解析**抛异常**时的收尾（第 9 周 · 0.3.1）—— 不许让文档停在「分段中」等一个永远不会来的结果。
+   *
+   * <p>★ 只在文档仍然处于「分段中」时才写失败：它可能已经被删掉或已经走到了别处， 那时把状态按回去就是**用过期结论覆盖现状**。这种情况只记日志。
+   */
+  @Transactional
+  public void failParse(UUID documentId, RuntimeException cause) {
+    Document document = documents.findById(documentId).orElse(null);
+    if (document == null) {
+      return;
+    }
+    if (document.status() != DocumentStatus.SEGMENTING) {
+      log.warn(
+          "解析任务异常，但文档 {} 当前状态是 {}（不是分段中）⇒ 不覆盖它的状态。原因：{}",
+          documentId,
+          document.status(),
+          cause.toString());
+      return;
+    }
+    String reason = "解析失败：" + String.valueOf(cause.getMessage());
+    document.recordParseFailure(reason, "请确认文件可正常打开；若为扫描件，确认服务端已装好 OCR 引擎与中文语言包", "");
+    documents.save(document);
   }
 
   // ────────────────────────── 入库即分块（批 2b） ──────────────────────────

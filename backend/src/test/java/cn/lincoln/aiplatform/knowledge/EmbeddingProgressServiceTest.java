@@ -158,7 +158,8 @@ class EmbeddingProgressServiceTest {
             "采购部",
             ClassificationLevel.INTERNAL,
             owner);
-    doc.recordParseSuccess("# 第一章\n\n正文。");
+    doc.startParse(0);
+    doc.recordParseSuccess("# 第一章\n\n正文。", 0);
     doc.recordSegmentSuccess(segmentCount, 1000);
     doc.startEmbedding();
     return documents.save(doc);
