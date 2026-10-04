@@ -112,6 +112,10 @@ jobs:
           #   这条拦的是"两边各写一份取值、没人核"——mock 曾自造 4001–4006 与 40404/30xx，
           #   而后端一律返契约里的码，前端当时又不按码分支 ⇒ 完全看不见的分歧。
           python check_error_codes.py
+          # ★ 画布节点类型（issue #20/#21）：注册名必须是契约取值，不是目录名的 kebab 形态。
+          #   #20 就是"注册名 start-node vs 契约 START_NODE" ⇒ 画布整页不可用、活了 9 天。
+          #   真栈那五条闸门全在知识库域，画布只有 mock 在守 ⇒ 这一类必须在静态层钉住。
+          python check_workflow_node_types.py
 
       # ── 第二组：需要 dev server + 浏览器 ──
       # ★ 实测结论（2026-09，本机两遍）：这 19 个 .py 里有 16 个 import playwright，
