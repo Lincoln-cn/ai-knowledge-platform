@@ -104,11 +104,11 @@ export const knowledgeRoutes: MockRoute[] = [
         )
       }
       if (!input.embeddingModelId) {
-        throw new ApiError(3003, '必须指定向量模型 —— 维度与向量表绑定，创建后不可随意更换')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '必须指定向量模型 —— 维度与向量表绑定，创建后不可随意更换')
       }
       const embeddingModel = models.find((m) => m.id === input.embeddingModelId && m.kind === 'EMBEDDING')
       if (!embeddingModel) {
-        throw new ApiError(3004, `向量模型「${input.embeddingModelId}」不存在或不是向量模型`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `向量模型「${input.embeddingModelId}」不存在或不是向量模型`)
       }
 
       const created: KnowledgeBase = {

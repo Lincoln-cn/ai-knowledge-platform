@@ -203,7 +203,7 @@ export const feedbackRoutes: MockRoute[] = [
 
       if (!TRANSITIONS[item.status].includes(input.status)) {
         throw new ApiError(
-          4001,
+          ErrorCode.BAD_REQUEST,
           `不能从「${item.status}」流转到「${input.status}」`,
           item.status === 'RESOLVED' || item.status === 'IGNORED'
             ? '已办结的反馈不能改状态；补记沉淀可直接保存，换状态请先「重新打开」'
@@ -213,7 +213,7 @@ export const feedbackRoutes: MockRoute[] = [
 
       // 已处理必须有结论 —— 否则「处理记录」只是个空壳，闭环名存实亡
       if (input.status === 'RESOLVED' && !input.resolution?.trim()) {
-        throw new ApiError(4002, '流转到「已处理」必须填写处理说明', '写清定位结论与采取的动作，便于回访与复盘')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '流转到「已处理」必须填写处理说明', '写清定位结论与采取的动作，便于回访与复盘')
       }
 
       const prevStatus = item.status
@@ -234,7 +234,7 @@ export const feedbackRoutes: MockRoute[] = [
       if (input.promoteToKbId) {
         const kb = promotableKnowledgeBases.find((k) => k.id === input.promoteToKbId)
         if (!kb) {
-          throw new ApiError(4003, `目标知识库不存在`, '请选择一个可用的知识库作为沉淀目标')
+          throw new ApiError(ErrorCode.BAD_REQUEST, `目标知识库不存在`, '请选择一个可用的知识库作为沉淀目标')
         }
         item.promotedToKbId = kb.id
         item.promotedToKbName = kb.name
@@ -254,7 +254,7 @@ export const feedbackRoutes: MockRoute[] = [
       requireHandle(token)
       const item = findFeedback(path.id)
       if (item.status !== 'RESOLVED' && item.status !== 'IGNORED') {
-        throw new ApiError(4004, `「${item.status}」状态的反馈无需重新打开`, '只有已处理 / 已忽略可以重新打开')
+        throw new ApiError(ErrorCode.BAD_REQUEST, `「${item.status}」状态的反馈无需重新打开`, '只有已处理 / 已忽略可以重新打开')
       }
       // 契约：已处理/已忽略 → 处理中，并清空处理时间
       item.status = 'PROCESSING'

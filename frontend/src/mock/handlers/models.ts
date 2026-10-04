@@ -91,13 +91,13 @@ export const modelRoutes: MockRoute[] = [
     ({ body }) => {
       const input = body as ProbeBaseModelBody
       const base = findBaseModel(input.baseModel)
-      if (!base) throw new ApiError(4003, `基础模型「${input.baseModel}」不在可选目录中`)
+      if (!base) throw new ApiError(ErrorCode.BAD_REQUEST, `基础模型「${input.baseModel}」不在可选目录中`)
 
       const probed = probedCapabilities[input.baseModel]
       // 探测不到时明确告知并让用户手工声明 —— 不静默塞一个默认值
       if (!probed) {
         throw new ApiError(
-          4009,
+          ErrorCode.BAD_REQUEST,
           `无法自动探测「${input.baseModel}」的能力`,
           '该基础模型不在探测支持列表内，请手工声明思考模式与工具调用能力'
         )
@@ -120,7 +120,7 @@ export const modelRoutes: MockRoute[] = [
     ({ body }) => {
       const input = body as UpsertModelBody
       if (models.some((m) => m.name === input.name)) {
-        throw new ApiError(4002, `模型名称「${input.name}」已存在`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `模型名称「${input.name}」已存在`)
       }
 
       // 外部 API 必须带 apiBase —— 与后端 validateSupplier 同口径，前端校验被绕过时也拦得住
@@ -141,13 +141,13 @@ export const modelRoutes: MockRoute[] = [
 
       // 不适用的字段一律拒绝，不静默丢 —— 与后端 create/update 同口径
       if (input.kind === 'CHAT' && input.dimension != null) {
-        throw new ApiError(4001, '对话模型不产出向量，dimension 必须为空')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '对话模型不产出向量，dimension 必须为空')
       }
       if (input.kind === 'EMBEDDING' && (input.thinking || input.tools)) {
-        throw new ApiError(4001, '能力声明只对对话模型有意义：向量模型不接受 thinking / tools')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '能力声明只对对话模型有意义：向量模型不接受 thinking / tools')
       }
       if (input.kind === 'EMBEDDING' && !input.dimension) {
-        throw new ApiError(4004, '向量模型必须显式声明向量维度 —— 维度与向量表绑定，不能靠猜')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '向量模型必须显式声明向量维度 —— 维度与向量表绑定，不能靠猜')
       }
 
       const created: ModelInfo = {
@@ -177,11 +177,11 @@ export const modelRoutes: MockRoute[] = [
       const input = body as Partial<UpsertModelBody>
 
       if (input.name && input.name !== model.name && models.some((m) => m.name === input.name)) {
-        throw new ApiError(4002, `模型名称「${input.name}」已存在`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `模型名称「${input.name}」已存在`)
       }
       // 基础模型不允许改：改它等于换了一个模型，应新建
       if (input.baseModel && input.baseModel !== model.baseModel) {
-        throw new ApiError(4005, '基础模型不可修改；如需更换请新建模型')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '基础模型不可修改；如需更换请新建模型')
       }
       if (model.kind === 'EMBEDDING' && input.dimension && input.dimension !== model.dimension) {
         throw new ApiError(
@@ -191,10 +191,10 @@ export const modelRoutes: MockRoute[] = [
       }
       // 不适用的字段一律拒绝，不静默丢 —— 与后端 create/update 同口径
       if (model.kind === 'CHAT' && input.dimension != null) {
-        throw new ApiError(4001, '对话模型不产出向量，dimension 必须为空')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '对话模型不产出向量，dimension 必须为空')
       }
       if (model.kind === 'EMBEDDING' && (input.thinking || input.tools)) {
-        throw new ApiError(4001, '能力声明只对对话模型有意义：向量模型不接受 thinking / tools')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '能力声明只对对话模型有意义：向量模型不接受 thinking / tools')
       }
 
       if (input.name) model.name = input.name
@@ -213,7 +213,7 @@ export const modelRoutes: MockRoute[] = [
     ({ path }) => {
       const model = findModel(path.id)
       if (model.builtin) {
-        throw new ApiError(4006, `「${model.name}」是内置模型，不可删除`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `「${model.name}」是内置模型，不可删除`)
       }
 
       // 门禁是「被谁引用」，不是「当前加载态」：契约里只有 load 没有 unload，
@@ -229,7 +229,7 @@ export const modelRoutes: MockRoute[] = [
         ]
           .filter(Boolean)
           .join('、')
-        throw new ApiError(4007, `该模型被 ${refs} 引用，无法删除；请先在这些引用处更换模型`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `该模型被 ${refs} 引用，无法删除；请先在这些引用处更换模型`)
       }
 
       models.splice(models.indexOf(model), 1)
@@ -242,7 +242,7 @@ export const modelRoutes: MockRoute[] = [
     '/models/:id/load',
     ({ path }) => {
       const model = findModel(path.id)
-      if (model.status === 'LOADING') throw new ApiError(4008, '该模型正在加载中，请勿重复提交')
+      if (model.status === 'LOADING') throw new ApiError(ErrorCode.BAD_REQUEST, '该模型正在加载中，请勿重复提交')
 
       model.status = 'LOADING'
       // 异步转「已加载」。界面靠刷新/轮询看到变化，与真实后端一致
@@ -264,7 +264,7 @@ export const modelRoutes: MockRoute[] = [
       // 探测不到时明确告知，并让用户在界面上手工声明 —— 不静默给个默认值
       if (!probed) {
         throw new ApiError(
-          4009,
+          ErrorCode.BAD_REQUEST,
           `无法自动探测「${model.baseModel}」的能力`,
           '该基础模型不在探测支持列表内，请在表单中手工声明思考模式与工具调用能力'
         )

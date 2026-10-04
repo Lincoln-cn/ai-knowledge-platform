@@ -1,4 +1,4 @@
-import { ApiError } from '@/api/types'
+import { ApiError, ErrorCode } from '@/api/types'
 import type { HitItem, HitTestRequest, HitTestResult, RetrievalMode, RetrievalParams } from '@/api/retrieval'
 import type { MockRoute } from '../dispatch'
 import { hitCorpus, knowledgeBases, retrievalParams } from '../fixtures/knowledge'
@@ -84,13 +84,13 @@ export const retrievalRoutes: MockRoute[] = [
     ({ body }) => {
       const input = body as HitTestRequest
       if (!input.question?.trim()) {
-        throw new ApiError(4001, '请输入测试问题')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '请输入测试问题')
       }
       if (input.threshold < 0 || input.threshold > 1) {
-        throw new ApiError(4002, '相似度阈值应在 0～1 之间')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '相似度阈值应在 0～1 之间')
       }
       if (!input.topN || input.topN < 1) {
-        throw new ApiError(4003, 'TopN 至少为 1')
+        throw new ApiError(ErrorCode.BAD_REQUEST, 'TopN 至少为 1')
       }
       return runHitTest(input)
     }
@@ -120,10 +120,10 @@ export const retrievalRoutes: MockRoute[] = [
         noRefStrategy: input.noRefStrategy ?? current.noRefStrategy
       }
       if (next.threshold < 0 || next.threshold > 1) {
-        throw new ApiError(4002, '相似度阈值应在 0～1 之间')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '相似度阈值应在 0～1 之间')
       }
       if (next.topN < 1 || next.topN > 20) {
-        throw new ApiError(4003, 'TopN 应在 1～20 之间')
+        throw new ApiError(ErrorCode.BAD_REQUEST, 'TopN 应在 1～20 之间')
       }
       retrievalParams[path.kbId] = next
       return next

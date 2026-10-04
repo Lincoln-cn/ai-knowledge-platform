@@ -275,7 +275,7 @@ export const conversationRoutes: MockRoute[] = [
         targetMessageId?: string
       }
       const question = (req.question ?? '').trim()
-      if (!question) throw new ApiError(4001, '问题不能为空')
+      if (!question) throw new ApiError(ErrorCode.BAD_REQUEST, '问题不能为空')
 
       if (req.conversationId) {
         findConv(req.conversationId, token)
@@ -340,10 +340,10 @@ export const conversationRoutes: MockRoute[] = [
       }
       const scope = req.scope ?? 'CONVERSATION'
       if (scope !== 'APP' && scope !== 'CONVERSATION' && scope !== 'MESSAGE') {
-        throw new ApiError(4004, '分享范围只能是 app / conversation / message')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '分享范围只能是 app / conversation / message')
       }
       if (scope === 'MESSAGE') {
-        if (!req.messageId) throw new ApiError(4005, '消息级分享必须指定 messageId')
+        if (!req.messageId) throw new ApiError(ErrorCode.BAD_REQUEST, '消息级分享必须指定 messageId')
         const msg = messagesOf(conv.id).find((m) => m.id === req.messageId)
         if (!msg) throw new ApiError(ErrorCode.NOT_FOUND, `消息「${req.messageId}」不存在`)
       }
@@ -408,7 +408,7 @@ export const conversationRoutes: MockRoute[] = [
     ({ path, body, token }) => {
       const conv = findConv(path.id, token)
       const { title } = (body ?? {}) as { title?: string }
-      if (!title?.trim()) throw new ApiError(4001, '会话名称不能为空')
+      if (!title?.trim()) throw new ApiError(ErrorCode.BAD_REQUEST, '会话名称不能为空')
       patchConversation(conv.id, { title: title.trim(), updatedAt: new Date().toISOString() })
       return withApp(conv)
     }
@@ -506,11 +506,11 @@ export const conversationRoutes: MockRoute[] = [
       if (!msg) throw new ApiError(ErrorCode.NOT_FOUND, `消息「${path.messageId}」不存在`)
       findConv(msg.conversationId, token)
       if (msg.role !== 'ASSISTANT') {
-        throw new ApiError(4002, '只能对助手回答进行赞踩')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '只能对助手回答进行赞踩')
       }
       const { type } = (body ?? {}) as { type: 'UP' | 'DOWN' | null }
       if (type !== null && type !== 'UP' && type !== 'DOWN') {
-        throw new ApiError(4003, '反馈类型只能是 UP / DOWN / null')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '反馈类型只能是 UP / DOWN / null')
       }
       msg.feedback = type
       return msg
@@ -539,7 +539,7 @@ export const conversationRoutes: MockRoute[] = [
           : null
         if (!ctx) {
           throw new ApiError(
-            40404,
+            ErrorCode.NOT_FOUND,
             '该公开链接对应的应用已不存在',
             '请联系应用管理员重新生成公开链接'
           )
@@ -549,7 +549,7 @@ export const conversationRoutes: MockRoute[] = [
       const ctx = contextFromShare(gate.share!)
       if (!ctx) {
         throw new ApiError(
-          40404,
+          ErrorCode.NOT_FOUND,
           '该公开链接对应的会话已不存在',
           '请向分享者索取新的公开链接'
         )

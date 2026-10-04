@@ -1,5 +1,5 @@
 import type { MockContext, MockRoute } from '../dispatch'
-import { ApiError } from '@/api/types'
+import { ApiError, ErrorCode } from '@/api/types'
 import type {
   DebugWorkflowResult,
   WorkflowGraph,
@@ -160,7 +160,7 @@ export const workflowRoutes: MockRoute[] = [
       const input = body as { graph?: WorkflowGraph } | undefined
       const graph = input?.graph
       if (!graph || !Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) {
-        throw new ApiError(4003, '请求体需包含 graph.nodes 与 graph.edges 数组')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '请求体需包含 graph.nodes 与 graph.edges 数组')
       }
       // 草稿允许不合规：这里不做校验，原样落盘（保存与发布是两回事）
       setWorkflowDraft(appId, graph)
@@ -184,7 +184,7 @@ export const workflowRoutes: MockRoute[] = [
       const appId = ctx.path.appId as string
       const body = ctx.body as { note?: string } | undefined
       const note = (body?.note ?? '').trim()
-      if (!note) throw new ApiError(4003, '发布说明必填')
+      if (!note) throw new ApiError(ErrorCode.BAD_REQUEST, '发布说明必填')
 
       const graph = graphFromBody(ctx, appId)
       const issues = validateGraph(graph, ctxFor())
@@ -250,10 +250,10 @@ export const workflowRoutes: MockRoute[] = [
     ({ path, body }) => {
       const appId = path.appId as string
       const input = ((body as { input?: string } | undefined)?.input ?? '').trim()
-      if (!input) throw new ApiError(4003, '调试输入不能为空')
+      if (!input) throw new ApiError(ErrorCode.BAD_REQUEST, '调试输入不能为空')
 
       const result = debugLinear(getWorkflowDraft(appId))
-      if ('error' in result) throw new ApiError(4004, result.error)
+      if ('error' in result) throw new ApiError(ErrorCode.BAD_REQUEST, result.error)
       // 调试不产生正式会话记录：不写 workflowRecords
       return result
     }

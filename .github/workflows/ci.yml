@@ -101,13 +101,17 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      # ── 第一组：不需要 dev server。这三个是真正的纯静态闸门 ──
+      # ── 第一组：不需要 dev server。这四个是真正的纯静态闸门 ──
       - name: 静态闸门
         working-directory: frontend
         run: |
           python verify_refs.py
           python check_template_tags.py
           python check_design.py
+          # ★ 错误码一致性（issue #8）：契约 ↔ 后端枚举 ↔ mock 三处逐值核对。
+          #   这条拦的是"两边各写一份取值、没人核"——mock 曾自造 4001–4006 与 40404/30xx，
+          #   而后端一律返契约里的码，前端当时又不按码分支 ⇒ 完全看不见的分歧。
+          python check_error_codes.py
 
       # ── 第二组：需要 dev server + 浏览器 ──
       # ★ 实测结论（2026-09，本机两遍）：这 19 个 .py 里有 16 个 import playwright，
