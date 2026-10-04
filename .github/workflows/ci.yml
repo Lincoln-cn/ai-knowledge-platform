@@ -384,7 +384,9 @@ jobs:
       # ★ 逐条记账，不遮蔽（理由见 frontend job 的浏览器闸门那一步）
       # ★ PG* 是给 check_segmentation_e2e.py 的：它读的库必须与后端写的库是同一个 ——
       #   不一致时它会立刻报「库里查不到刚上传的文档」并把连接打出来（以前会表现成"入库没生效"，指错方向）
-      - name: 五条真栈闸门
+      # ★ check_ocr_e2e.py（T249.4）走**界面**验扫描件那条链：上传 ⇒ 界面上「已识别 N/M 页」⇒ 入库成功，
+      #   且文本型文档不出现进度行。它需要 tesseract（本 job 已装）+ 扫描件夹具。
+      - name: 真栈闸门（五条 + OCR 链）
         working-directory: frontend
         env:
           PGHOST: localhost
@@ -395,7 +397,7 @@ jobs:
         run: |
           failed=()
           for g in check_knowledge_parse check_knowledge_form check_segmentation_e2e \
-                   check_document_actions check_flow_walkthrough; do
+                   check_document_actions check_flow_walkthrough check_ocr_e2e; do
             echo "::group::${g}.py"
             if python "${g}.py"; then
               echo "✓ ${g}.py 通过"
@@ -406,10 +408,10 @@ jobs:
             echo "::endgroup::"
           done
           if [ ${#failed[@]} -gt 0 ]; then
-            echo "★ 失败 ${#failed[@]}/5：${failed[*]}"
+            echo "★ 失败 ${#failed[@]}/6：${failed[*]}"
             exit 1
           fi
-          echo "五条真栈闸门全部通过"
+          echo "六条真栈闸门全部通过"
 
       # ★ 真栈红的时候，日志就是唯一的证据 —— 不留就等于让人去猜（本 job 第一次进 CI 时用过它）
       - name: 失败时留真栈日志

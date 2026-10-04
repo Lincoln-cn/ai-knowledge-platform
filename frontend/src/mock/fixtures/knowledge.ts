@@ -270,6 +270,11 @@ export const documents: DocumentItem[] = [
     enabled: true,
     failReason: null,
     failHint: null,
+    // ★ 第 9 周（0.3.1）：这两项让 mock 也走一遍「已识别 N/M 页」那条渲染路径
+    //   （真栈上它们是后端逐页回写的事实，见 kb_document 的 ocr_total_pages / ocr_done_pages）。
+    //   ★ 只在 status=SEGMENTING 且 M>0 时显示 —— 文本型文档 M=0，界面上不出现这一行。
+    ocrTotalPages: 3,
+    ocrDonePages: 1,
     parsedContent: '# 部署指南\n\n1. 准备 JDK 21\n2. 配置数据库\n3. 启动服务\n',
     createdAt: now,
     updatedAt: now
