@@ -24,8 +24,10 @@
       />
       <el-select v-model="query.kind" size="small" placeholder="全部类型" style="width: 130px" @change="onFilterChange">
         <el-option label="全部类型" value="" />
-        <el-option label="对话模型" value="chat" />
-        <el-option label="向量模型" value="embedding" />
+        <!-- ★ 取值必须是契约码（SCREAMING_SNAKE），不是小写形态：mock 与后端都是按
+             `m.kind === 'CHAT' / 'EMBEDDING'` 比的，传 'chat' 会永远筛出 0 条（issue #23）。 -->
+        <el-option label="对话模型" value="CHAT" />
+        <el-option label="向量模型" value="EMBEDDING" />
       </el-select>
       <el-select v-model="query.status" size="small" placeholder="全部状态" style="width: 130px" @change="onFilterChange">
         <el-option label="全部状态" value="" />

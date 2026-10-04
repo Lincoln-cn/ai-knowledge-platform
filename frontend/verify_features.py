@@ -11,6 +11,7 @@ import functools
 import http.server
 import socketserver
 import threading
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -52,17 +53,38 @@ def main() -> int:
                 except Exception as exc:  # noqa: BLE001
                     check(False, label, f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]}")
 
+            def settle(minimum_ms: int = 350) -> None:
+                """等页面**稳定**，而不是等一个固定毫秒数（issue #14）。
+
+                ★ 为什么改：本文件原先 **0 处 `wait_for_selector`、全是固定 `wait_for_timeout`** ⇒
+                  慢一拍就开始断言。而 CI runner 比开发机慢，于是同一份代码时而 43/43、时而 42/43 ——
+                  实测 19 轮里红过 1 轮。**随机红比不红更坏**：报红会有人去改本来没错的东西。
+
+                做法：网络静默 → 没有可见的 loading 遮罩 → 再给一拍让 Vue 渲染落定。
+                ⚠️ 不做成"所有等待都换成它"：有几处是**故意**等一个瞬时常态（例如等流式回复
+                8 秒那条），换成等稳定反而抓不到那个状态 —— 那些留在原处并注明。
+                """
+                try:
+                    page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:  # noqa: BLE001
+                    pass
+                for _ in range(40):
+                    if page.locator(".el-loading-mask:visible").count() == 0:
+                        break
+                    page.wait_for_timeout(100)
+                page.wait_for_timeout(minimum_ms)
+
             # 登录
             page.goto(BASE + "#/login", wait_until="networkidle")
-            page.wait_for_timeout(600)
+            page.wait_for_selector("input[autocomplete='username']", timeout=15000)
             page.fill("input[autocomplete='username']", "admin")
             page.fill("input[autocomplete='current-password']", "admin")
             page.click("button:has-text('登录')")
-            page.wait_for_timeout(1500)
+            settle(800)
 
             def goto(path, wait=1600):
                 page.goto(BASE + "#" + path, wait_until="networkidle")
-                page.wait_for_timeout(wait)
+                settle(wait)
                 return page.inner_text("body")
             # ── 知识库：四步向导 ──
             def kb_list():
@@ -77,7 +99,11 @@ def main() -> int:
                 if not btn.count():
                     btn = page.locator("button", has_text="创建")
                 btn.first.click()
-                page.wait_for_timeout(1500)
+                # 等向导真的开出来（原先固定 1500ms：慢一拍就数到 0 个 .el-step）
+                try:
+                    page.locator(".el-step").first.wait_for(timeout=15000)
+                except Exception:  # noqa: BLE001
+                    pass
                 steps = page.locator(".el-step").count()
                 check(steps == 4, "知识库：创建向导为四步", f"实际 {steps} 个 el-step")
 
@@ -261,8 +287,28 @@ def main() -> int:
                 check(inputs.count() >= 3, "改密：三个口令输入框都在", f"{inputs.count()} 个")
 
                 def errors() -> str:
-                    page.wait_for_timeout(900)
-                    return " | ".join(page.locator(".el-form-item__error").all_inner_texts())
+                    """读表单校验文案，**等它静默 400ms** 再读。
+
+                    ★ 这一处量过（别凭感觉改）。实测（`/change-password`，采样间隔 100ms）：
+                      · 填 `12345678`（弱口令）后：+100ms 出现「…至少 3 类」
+                      · 改填 `Abc12345!@`（合格）后：旧文案**停留到 +300ms 才消失**
+                    两种错法都试过了，记在这里免得后人再踩：
+                      · 固定 `wait_for_timeout(900)` —— 本机够（900 > 300），CI 慢的时候不够
+                      · "连续两次读数一致就算落定" —— 240ms 就判定，而旧文案要到 300ms 才没 ⇒
+                        **每轮都红**（把"还没变"当成了"已落定"）
+                    正确口径：**值连续 400ms 不变**（> 实测的 300ms 转换窗口），最多等 6s。
+                    """
+                    deadline = time.monotonic() + 6.0
+                    last_text: str | None = None
+                    stable_since = 0.0
+                    while time.monotonic() < deadline:
+                        now = " | ".join(page.locator(".el-form-item__error").all_inner_texts())
+                        if now != last_text:
+                            last_text, stable_since = now, time.monotonic()
+                        elif time.monotonic() - stable_since >= 0.4:
+                            return now
+                        page.wait_for_timeout(100)
+                    return last_text or ""
 
                 # ① 长度够、但只有数字一类 ⇒ 必须被拦
                 inputs.nth(1).fill("12345678")
