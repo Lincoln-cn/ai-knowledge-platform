@@ -50,6 +50,21 @@ jobs:
           cat /tmp/stub.log
           exit 1
 
+      # ★ OCR 引擎与语言包必须装，否则 OcrParserTest（5 条）与 OcrEngineTest 里
+      #   依赖真引擎的两条会**整体 assumeThat 跳过** —— CI 显示绿，而扫描件识别
+      #   **没有任何回归在守**（issue #2）。
+      # ★ 三个包都要列：官方 `tesseract-ocr` **只带 eng**，漏了 `tesseract-ocr-chi-sim`
+      #   会让中文退化成方块/乱码 —— 而且不报错、不影响启动，是部署期最不可见的一类漏装。
+      #   （`deploy/README.md` §三 的离线交付清单里，这三行与镜像是同源的。）
+      - name: 装 OCR 引擎与语言包
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
+          echo "已装："
+          tesseract --version | head -1
+          tesseract --list-langs
+
       # 四类闸门一次跑完：单测 / 集成（Testcontainers 真 PG）/ 架构（Modulith verify + 金丝雀）/ 格式化。
       # ★ GitHub 的 ubuntu runner 自带 Docker，Testcontainers 可直接用。
       - name: mvn verify
