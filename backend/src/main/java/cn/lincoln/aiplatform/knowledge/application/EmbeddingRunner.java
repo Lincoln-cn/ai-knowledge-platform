@@ -21,6 +21,8 @@ import java.util.concurrent.Executors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * 向量化执行器（第 8 周 · 0.3.0）—— {@code 03 §3.2} 流水线的「分批 embed + 写向量表 + 每批回写进度」。
@@ -93,7 +95,30 @@ public class EmbeddingRunner {
     document.startEmbedding();
     documents.save(document);
 
-    executor.submit(() -> run(documentId, modelId));
+    // ★★ 必须等调用方的事务**提交之后**才 submit 后台任务。
+    //
+    //   `startAsync` 的两个调用方（`SegmentService.reembed`、`DocumentService.startEmbedding`）都在
+    //   自己的 `@Transactional` 里：它们先改分段/文档状态，再调这里。事务未提交就 submit ⇒ 虚拟线程
+    //   开新连接读到的是**提交前**的旧状态（那一段还是 EMBEDDED、文档还是 SUCCEEDED），于是这一轮
+    //   判定「没有要算的段」；而调用方提交后 `processedSegments` 已被重置为 0 ⇒ `markEmbedded()`
+    //   的守卫报「已完成 0 段、共 4 段」⇒ 一次本该成功的重算变成 `EMBEDDING_FAILED`。
+    //
+    //   实测证据（CI 2026-10-04）：同一文档 a0c8ad68 两次 run 相隔 492ms ——
+    //     03:49:39.261「向量化完成：文档 a0c8ad68 共 4 段」← 前一轮（文档级）
+    //     03:49:39.753「向量化失败：文档 a0c8ad68 —— 不能标记向量化完成：已完成 0 段、共 4 段」
+    //   本机跑不出来（时序更快），所以它是那种「本机绿、CI 红」的竞态。
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.registerSynchronization(
+          new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              executor.submit(() -> run(documentId, modelId));
+            }
+          });
+    } else {
+      // 没有事务在跑（测试与排障直接调）⇒ 立刻起，语义不变
+      executor.submit(() -> run(documentId, modelId));
+    }
   }
 
   /**
@@ -129,6 +154,11 @@ public class EmbeddingRunner {
         // ★ 覆盖写 + 发事实事件（判据 ②④）；进度是"已完成的段数"这个事实，不是增量
         progress.report(documentId, done);
       }
+
+      // ★ 即使一批都没跑（`pending` 为空）也要回写一次：这一轮的**事实**是「已完成的段数 = done」。
+      //   不回写的话 processedSegments 还停在调用方刚重置的 0，下一行的守卫会把
+      //   「没有要算的段」这件**好事**变成一个 EMBEDDING_FAILED（见 startAsync 的注释）。
+      progress.report(documentId, done);
 
       Document fresh = require(documentId);
       fresh.markEmbedded(); // 守卫：processed 必须等于 segmentCount，差一段就抛
