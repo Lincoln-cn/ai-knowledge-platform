@@ -262,10 +262,10 @@ export const assistantRoutes: MockRoute[] = [
       const input = body as UpsertAssistantBody
       // type 创建时必填且此后不可改（SRS 02 / FR-04）
       if (input.type !== 'SIMPLE' && input.type !== 'WORKFLOW') {
-        throw new ApiError(4004, '创建应用必须指定类型', '请选择「简单应用」或「编排应用」。类型创建后不可更改')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '创建应用必须指定类型', '请选择「简单应用」或「编排应用」。类型创建后不可更改')
       }
       if (assistants.some((a) => a.name === input.name)) {
-        throw new ApiError(4002, `应用名称「${input.name}」已存在`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `应用名称「${input.name}」已存在`)
       }
       const model = models.find((m) => m.id === input.modelId)
       const created: Assistant = {
@@ -358,7 +358,7 @@ export const assistantRoutes: MockRoute[] = [
       }
       const config = input.bundle.config
       if (assistants.some((a) => a.name === config.name)) {
-        throw new ApiError(4002, `应用名称「${config.name}」已存在，请先改名再导入`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `应用名称「${config.name}」已存在，请先改名再导入`)
       }
       // 旧包可能没有 type；缺省按简单应用，避免导入后类型不明
       const importedType: AssistantType = config.type === 'WORKFLOW' ? 'WORKFLOW' : 'SIMPLE'
@@ -428,19 +428,19 @@ export const assistantRoutes: MockRoute[] = [
     ({ path, body, token }) => {
       const app = findAssistant(path.id, token, PERM.assistantEdit)
       if (app.builtin) {
-        throw new ApiError(4006, `「${app.name}」是内置应用，对话设定不可编辑`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `「${app.name}」是内置应用，对话设定不可编辑`)
       }
       const input = body as Partial<UpsertAssistantBody>
       // 类型创建后不可更改：改类型等于换了一个应用，应新建
       if (input.type !== undefined && input.type !== app.type) {
         throw new ApiError(
-          4003,
+          ErrorCode.BAD_REQUEST,
           '应用类型创建后不可更改；如需改为编排/简单，请新建应用',
           `当前是「${app.type === 'WORKFLOW' ? '编排' : '简单'}」应用`
         )
       }
       if (input.name && input.name !== app.name && assistants.some((a) => a.name === input.name)) {
-        throw new ApiError(4002, `应用名称「${input.name}」已存在`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `应用名称「${input.name}」已存在`)
       }
 
       // 提示词引用计数先减后加
@@ -491,7 +491,7 @@ export const assistantRoutes: MockRoute[] = [
     ({ path, token }) => {
       const app = findAssistant(path.id, token, PERM.assistantEdit)
       if (app.builtin) {
-        throw new ApiError(4006, `「${app.name}」是内置应用，不可删除`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `「${app.name}」是内置应用，不可删除`)
       }
       for (const pid of app.promptIds) {
         const p = promptConfigs.find((c) => c.id === pid)
@@ -540,11 +540,11 @@ export const assistantRoutes: MockRoute[] = [
     ({ path, body, token }) => {
       const app = findAssistant(path.id, token, PERM.assistantEdit)
       if (app.builtin) {
-        throw new ApiError(4006, `「${app.name}」是内置应用，可见性由平台统一维护`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `「${app.name}」是内置应用，可见性由平台统一维护`)
       }
       const { visibility } = body as { visibility: ResourceVisibility }
       if (visibility !== 'PRIVATE' && visibility !== 'SHARED' && visibility !== 'PUBLIC') {
-        throw new ApiError(4004, '可见性只能是 private / shared / public')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '可见性只能是 private / shared / public')
       }
       app.visibility = visibility
       return withOwnerName(app)
@@ -557,26 +557,26 @@ export const assistantRoutes: MockRoute[] = [
     ({ path, body, token }) => {
       const app = findAssistant(path.id, token, PERM.assistantEdit)
       if (app.builtin) {
-        throw new ApiError(4006, `「${app.name}」是内置应用，可见性由平台统一维护`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `「${app.name}」是内置应用，可见性由平台统一维护`)
       }
       const { grants } = body as { grants: Grant[] }
       if (!Array.isArray(grants)) {
-        throw new ApiError(4004, 'grants 必须是数组')
+        throw new ApiError(ErrorCode.BAD_REQUEST, 'grants 必须是数组')
       }
       // 主体必须真实存在：写错 id 的授权等于静默没共享出去（对方看不到，自己以为共享了）
       for (const g of grants) {
         const kind = g.subject?.kind
         const id = g.subject?.id
         if ((kind !== 'USER' && kind !== 'ROLE') || !id) {
-          throw new ApiError(4004, '共享主体只支持账号（user）与角色（role）')
+          throw new ApiError(ErrorCode.BAD_REQUEST, '共享主体只支持账号（user）与角色（role）')
         }
         const exists =
           kind === 'USER' ? users.some((u) => u.id === id) : roles.some((r) => r.id === id)
         if (!exists) {
-          throw new ApiError(4004, `共享主体不存在：${kind} ${id}`)
+          throw new ApiError(ErrorCode.BAD_REQUEST, `共享主体不存在：${kind} ${id}`)
         }
         if (!Array.isArray(g.actions) || g.actions.length === 0) {
-          throw new ApiError(4004, '每条授权至少要有一个动作')
+          throw new ApiError(ErrorCode.BAD_REQUEST, '每条授权至少要有一个动作')
         }
       }
       app.grants = grants.map((g) => ({ subject: { ...g.subject }, actions: [...g.actions] }))
@@ -613,7 +613,7 @@ export const assistantRoutes: MockRoute[] = [
       const app = findAssistant(path.id, token)
       const { question } = body as { question: string }
       if (!question?.trim()) {
-        throw new ApiError(4004, '调试问题不能为空')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '调试问题不能为空')
       }
       // 调试使用当前草稿配置，不产生正式会话记录
       const withRefs = app.kbIds.length > 0
@@ -669,7 +669,7 @@ export const assistantRoutes: MockRoute[] = [
       if (!item) throw new ApiError(ErrorCode.NOT_FOUND, '访问凭证不存在')
       // 撤销是终态：不可重新启用
       if (item.revokedAt) {
-        throw new ApiError(4005, '该凭证已撤销，无法重新启用', '撤销是终态。请重新生成一个新凭证')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '该凭证已撤销，无法重新启用', '撤销是终态。请重新生成一个新凭证')
       }
       const { enabled } = body as { enabled: boolean }
       item.enabled = enabled
@@ -686,7 +686,7 @@ export const assistantRoutes: MockRoute[] = [
       const item = list.find((c) => c.id === path.id)
       if (!item) throw new ApiError(ErrorCode.NOT_FOUND, '访问凭证不存在')
       if (item.revokedAt) {
-        throw new ApiError(4005, '该凭证已撤销，无需重复撤销')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '该凭证已撤销，无需重复撤销')
       }
       item.revokedAt = new Date().toISOString()
       item.enabled = false

@@ -510,7 +510,7 @@ export const ingestionRoutes: MockRoute[] = [
         }
 
         if (!nameList.length) {
-          throw new ApiError(3021, '没有可导入的暂存文件', '请先选择文件并暂存上传')
+          throw new ApiError(ErrorCode.BAD_REQUEST, '没有可导入的暂存文件', '请先选择文件并暂存上传')
         }
 
         // ★ names 为准：同时给时只按 names 建档（uploadIds 后端/mock 都不消费，保留字段等上传链落地）
@@ -686,7 +686,7 @@ export const ingestionRoutes: MockRoute[] = [
       const doc = findDoc(path.id)
       gateKb(doc.kbId, token, PERM.documentUpload, '文档', doc.id)
       if (doc.status !== 'SEGMENT_FAILED' && doc.status !== 'EMBEDDING_FAILED') {
-        throw new ApiError(3010, `文档当前状态为「${doc.status}」，无需重试`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `文档当前状态为「${doc.status}」，无需重试`)
       }
 
       // 从失败阶段继续：分段失败 → 重新解析；向量化失败 → 从断点继续向量化
@@ -708,13 +708,13 @@ export const ingestionRoutes: MockRoute[] = [
       gateKb(doc.kbId, token, PERM.documentUpload, '文档', doc.id)
       if (doc.status !== 'PENDING_EMBEDDING') {
         throw new ApiError(
-          3011,
+          ErrorCode.BAD_REQUEST,
           `文档当前状态为「${doc.status}」，不能开始向量化`,
           '仅「待向量化」状态的文档可以启动向量化'
         )
       }
       if (doc.segmentCount <= 0) {
-        throw new ApiError(3012, '该文档没有可向量化的分段')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '该文档没有可向量化的分段')
       }
       runEmbedding(doc)
       return doc
@@ -743,7 +743,7 @@ export const ingestionRoutes: MockRoute[] = [
         const parts: string[] = []
         for (const uid of input.uploadIds) {
           const up = stagedUploads.get(uid)
-          if (!up) throw new ApiError(3020, `暂存文件「${uid}」不存在或已过期`, '请重新选择文件后再试')
+          if (!up) throw new ApiError(ErrorCode.BAD_REQUEST, `暂存文件「${uid}」不存在或已过期`, '请重新选择文件后再试')
           parts.push(stagedText(up))
         }
         sourceText = parts.join('\n')
@@ -881,7 +881,7 @@ export const ingestionRoutes: MockRoute[] = [
       // 目标文档与每个源分段都要过判定：迁移会同时改两边
       const target = findDoc(targetDocumentId)
       gateKb(target.kbId, token, PERM.segmentEdit, '文档', target.id)
-      if (!segmentIds?.length) throw new ApiError(3013, '请先选择要迁移的分段')
+      if (!segmentIds?.length) throw new ApiError(ErrorCode.BAD_REQUEST, '请先选择要迁移的分段')
 
       let moved = 0
       for (const id of segmentIds) {
@@ -916,11 +916,11 @@ export const ingestionRoutes: MockRoute[] = [
 
       const files = extractFiles(body)
       if (!files.length) {
-        throw new ApiError(3022, '未读到待上传的文件', '请重新选择文件后再试')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '未读到待上传的文件', '请重新选择文件后再试')
       }
       if (files.length > UPLOAD_POLICY.maxFileCount) {
         throw new ApiError(
-          3023,
+          ErrorCode.BAD_REQUEST,
           `一次最多上传 ${UPLOAD_POLICY.maxFileCount} 个文件`,
           '请分批上传'
         )
@@ -931,14 +931,14 @@ export const ingestionRoutes: MockRoute[] = [
         const ext = f.name.includes('.') ? f.name.slice(f.name.lastIndexOf('.')).toLowerCase() : ''
         if (UPLOAD_POLICY.acceptedExtensions.length && ext && !UPLOAD_POLICY.acceptedExtensions.includes(ext)) {
           throw new ApiError(
-            3024,
+            ErrorCode.BAD_REQUEST,
             `不支持的文件类型「${ext}」`,
             `支持：${UPLOAD_POLICY.acceptedExtensions.join(' / ')}`
           )
         }
         if (f.size > UPLOAD_POLICY.maxFileSizeMB * 1024 * 1024) {
           throw new ApiError(
-            3025,
+            ErrorCode.BAD_REQUEST,
             `文件「${f.name}」超过 ${UPLOAD_POLICY.maxFileSizeMB}MB 上限`,
             '请压缩或拆分后再传'
           )
@@ -970,7 +970,7 @@ export const ingestionRoutes: MockRoute[] = [
       gateKb(kbIdOfSeg(seg.id), token, PERM.segmentEdit, '分段', seg.id)
       // 编辑后是「待向量化」；失败态也允许重跑。已向量化的强制重跑也放行（用户显式动作）
       if (seg.embedding === 'EMBEDDING') {
-        throw new ApiError(3026, '该分段正在向量化中，无需重复提交')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '该分段正在向量化中，无需重复提交')
       }
       runSegmentEmbedding(seg)
       return seg
@@ -985,7 +985,7 @@ export const ingestionRoutes: MockRoute[] = [
       gateKb(doc.kbId, token, PERM.documentUpload, '文档', doc.id)
       const segs = segments.filter((s) => s.documentId === doc.id)
       if (!segs.length) {
-        throw new ApiError(3027, '该文档没有可向量化的分段')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '该文档没有可向量化的分段')
       }
       runDocumentReembed(doc)
       return doc
@@ -1017,7 +1017,7 @@ export const ingestionRoutes: MockRoute[] = [
     '/segments/batch',
     ({ body, token }) => {
       const { ids } = body as { ids?: string[] }
-      if (!ids?.length) throw new ApiError(3028, '请先选择要删除的分段')
+      if (!ids?.length) throw new ApiError(ErrorCode.BAD_REQUEST, '请先选择要删除的分段')
 
       let deleted = 0
       const failed: Array<{ id: string; reason: string }> = []

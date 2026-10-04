@@ -169,7 +169,7 @@ export const identityRoutes: MockRoute[] = [
       const user = userFromToken(token)
       if (!user) throw new ApiError(ErrorCode.UNAUTHORIZED, '登录已过期，请重新登录')
       const { oldPassword, newPassword } = body as { oldPassword: string; newPassword: string }
-      // ★ 用契约里的码，不用本地数字字面量：4001 是 mock 自己的一套"影子编号"，
+      // ★ 用契约里的码，不用本地数字字面量：mock 曾经有一整套 4001–4006 的「影子编号」，
       //   而后端在这里返回 OLD_PASSWORD_MISMATCH(1004) —— 两边不一致时，
       //   按 code 分支的前端代码在 mock 与真栈上会走不同分支（issue #8 / #15）。
       if (user.password !== oldPassword) {
@@ -207,10 +207,10 @@ export const identityRoutes: MockRoute[] = [
     ({ body }) => {
       const input = body as { username: string; displayName: string; roleId: string; password?: string }
       if (users.some((u) => u.username === input.username)) {
-        throw new ApiError(4002, `账号「${input.username}」已存在`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `账号「${input.username}」已存在`)
       }
       const role = roles.find((r) => r.id === input.roleId)
-      if (!role) throw new ApiError(4002, '请选择一个有效的角色')
+      if (!role) throw new ApiError(ErrorCode.BAD_REQUEST, '请选择一个有效的角色')
 
       // 指定口令时才校验强度；未指定走 DEFAULT_INITIAL_PASSWORD（它本身已满足策略）
       if (input.password) assertPasswordPolicy(input.password, input.username)
@@ -243,12 +243,12 @@ export const identityRoutes: MockRoute[] = [
       const input = body as { displayName: string; roleId: string; password?: string }
 
       const role = roles.find((r) => r.id === input.roleId)
-      if (!role) throw new ApiError(4002, '请选择一个有效的角色')
+      if (!role) throw new ApiError(ErrorCode.BAD_REQUEST, '请选择一个有效的角色')
 
       // 危险操作不可自毁：改自己的角色 = 把自己踢出管理位（删自己已挡，改自己也要挡）
       const self = userFromToken(token)
       if (self && user.id === self.id && role.id !== user.roleId) {
-        throw new ApiError(4005, '不能修改自己的角色 —— 请让另一位管理员操作，避免自锁')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '不能修改自己的角色 —— 请让另一位管理员操作，避免自锁')
       }
 
       user.displayName = input.displayName
@@ -269,10 +269,10 @@ export const identityRoutes: MockRoute[] = [
     '/users/:id',
     ({ path, token }) => {
       const self = userFromToken(token)
-      if (self && path.id === self.id) throw new ApiError(4003, '不能删除当前登录的账号')
+      if (self && path.id === self.id) throw new ApiError(ErrorCode.BAD_REQUEST, '不能删除当前登录的账号')
       const index = users.findIndex((u) => u.id === path.id)
       if (index < 0) throw new ApiError(ErrorCode.NOT_FOUND, '用户不存在')
-      if (users[index].username === 'admin') throw new ApiError(4003, '内置管理员账号不可删除')
+      if (users[index].username === 'admin') throw new ApiError(ErrorCode.BAD_REQUEST, '内置管理员账号不可删除')
       users.splice(index, 1)
       return undefined
     }
@@ -286,7 +286,7 @@ export const identityRoutes: MockRoute[] = [
     ({ path, body, token }) => {
       const role = roles.find((r) => r.id === path.id)
       if (!role) throw new ApiError(ErrorCode.NOT_FOUND, '角色不存在')
-      if (role.code === 'ADMIN') throw new ApiError(4004, '管理员角色权限不可裁剪')
+      if (role.code === 'ADMIN') throw new ApiError(ErrorCode.BAD_REQUEST, '管理员角色权限不可裁剪')
 
       const next = (body as { permissions: string[] }).permissions
 
@@ -296,7 +296,7 @@ export const identityRoutes: MockRoute[] = [
       const had = role.permissions.includes('system:manage')
       const keeps = next.includes('system:manage')
       if (selfRole === role.id && had && !keeps) {
-        throw new ApiError(4005, '不能裁掉自己所属角色的「账号与权限」权限 —— 避免自锁')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '不能裁掉自己所属角色的「账号与权限」权限 —— 避免自锁')
       }
 
       role.permissions = next
@@ -310,11 +310,11 @@ export const identityRoutes: MockRoute[] = [
     ({ path, body }) => {
       const role = roles.find((r) => r.id === path.id)
       if (!role) throw new ApiError(ErrorCode.NOT_FOUND, '角色不存在')
-      if (role.code === 'ADMIN') throw new ApiError(4004, '管理员角色的数据范围固定为全平台，不可修改')
+      if (role.code === 'ADMIN') throw new ApiError(ErrorCode.BAD_REQUEST, '管理员角色的数据范围固定为全平台，不可修改')
 
       const { dataScope, dataScopeRule } = body as { dataScope?: string; dataScopeRule?: string }
       if (dataScope !== 'OWN' && dataScope !== 'SHARED' && dataScope !== 'ALL') {
-        throw new ApiError(4006, '数据范围只能是 own / shared / all')
+        throw new ApiError(ErrorCode.BAD_REQUEST, '数据范围只能是 own / shared / all')
       }
       role.dataScope = dataScope
       role.dataScopeRule = dataScopeRule ?? ''

@@ -68,7 +68,7 @@ export const promptRoutes: MockRoute[] = [
       requireAction(token, TYPE_WRITE_ACTION, '维护提示词类型')
       const input = body as UpsertPromptTypeBody
       if (promptTypes.some((t) => t.typeName === input.typeName)) {
-        throw new ApiError(4002, `提示词类型「${input.typeName}」已存在`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `提示词类型「${input.typeName}」已存在`)
       }
       const created: PromptType = {
         id: `pt${Date.now()}`,
@@ -89,7 +89,7 @@ export const promptRoutes: MockRoute[] = [
       const item = findType(path.id)
       const input = body as Partial<UpsertPromptTypeBody>
       if (input.typeName && input.typeName !== item.typeName && promptTypes.some((t) => t.typeName === input.typeName)) {
-        throw new ApiError(4002, `提示词类型「${input.typeName}」已存在`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `提示词类型「${input.typeName}」已存在`)
       }
       if (input.typeName) {
         item.typeName = input.typeName
@@ -111,7 +111,7 @@ export const promptRoutes: MockRoute[] = [
       const used = promptConfigs.filter((c) => c.typeId === item.id).length
       if (used > 0) {
         throw new ApiError(
-          4003,
+          ErrorCode.BAD_REQUEST,
           `类型「${item.typeName}」下还有 ${used} 条提示词`,
           '请先删除或移动这些提示词，再删除类型'
         )
@@ -142,7 +142,7 @@ export const promptRoutes: MockRoute[] = [
       const input = body as UpsertPromptConfigBody
       const type = findType(input.typeId)
       if (promptConfigs.some((c) => c.roleName === input.roleName)) {
-        throw new ApiError(4002, `角色名称「${input.roleName}」已存在`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `角色名称「${input.roleName}」已存在`)
       }
       const created: PromptConfig = {
         id: `pc${Date.now()}`,
@@ -169,7 +169,7 @@ export const promptRoutes: MockRoute[] = [
       const item = findConfig(path.id)
       const input = body as Partial<UpsertPromptConfigBody>
       if (input.roleName && input.roleName !== item.roleName && promptConfigs.some((c) => c.roleName === input.roleName)) {
-        throw new ApiError(4002, `角色名称「${input.roleName}」已存在`)
+        throw new ApiError(ErrorCode.BAD_REQUEST, `角色名称「${input.roleName}」已存在`)
       }
       if (input.roleName) item.roleName = input.roleName
       if (input.callWord !== undefined) item.callWord = input.callWord
@@ -195,7 +195,7 @@ export const promptRoutes: MockRoute[] = [
       const item = findConfig(path.id)
       if (item.usageCount > 0) {
         throw new ApiError(
-          4004,
+          ErrorCode.BAD_REQUEST,
           `「${item.roleName}」正被 ${item.usageCount} 个应用使用`,
           '请先在应用配置中移除引用，再删除该提示词'
         )

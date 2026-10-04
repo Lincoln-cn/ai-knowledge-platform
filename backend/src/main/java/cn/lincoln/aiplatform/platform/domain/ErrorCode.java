@@ -18,9 +18,14 @@ public enum ErrorCode {
   /**
    * 请求参数不合法。
    *
-   * <p>⚠️ 这个码<strong>契约里还没有</strong>（{@code frontend/src/api/types.ts} 的 {@code ErrorCode} 只定义了 8
-   * 个）。它是第 2 周做端点时补的：请求体校验失败总得有个码，而 400 是 401/403/404 那三个"与 HTTP
-   * 对齐"的码的<strong>同族补全</strong>。前端不针对它分支（会走通用错误渲染）， 所以现在加它不破坏任何东西。CHANGELOG 0.1.0 里记了"契约该补上这一项"。
+   * <p>★ 它是 401/403/404 那三个"与 HTTP 对齐"的码的<strong>同族补全</strong>：请求体校验失败总得有个码。
+   * 前端不针对它分支（会走通用错误渲染），所以加它不破坏任何东西。
+   *
+   * <p>⚠️ 曾经这里写着"契约里还没有这个码" —— <strong>那句话已经过时了</strong>：契约
+   * {@code frontend/src/api/types.ts} 的 {@code ErrorCode} 里现在有 {@code BAD_REQUEST: 400}。
+   * 留这段是因为它踩过一次：mock 曾按这句判断自造了一套 4001–4006 的"影子编号"，
+   * 而后端一律返 400 ⇒ 同一份契约两种取值（issue #8）。
+   * ⇒ <strong>契约与后端任一侧新增码，都必须同批核对另一侧</strong>。
    */
   BAD_REQUEST(400, "请求参数不合法"),
 
