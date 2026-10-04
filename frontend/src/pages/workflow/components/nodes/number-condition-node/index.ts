@@ -72,7 +72,7 @@ class NumberConditionModel extends AppNodeModel {
     }
 }
 export default {
-    type: 'number-condition-node',
+    type: 'NUMBER_CONDITION_NODE',
     model: NumberConditionModel,
     view: NumberConditionNode
 }

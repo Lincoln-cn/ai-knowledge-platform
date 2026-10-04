@@ -9,7 +9,7 @@
   >
     <template #default="{ data }">
       <span class="flex align-center" @wheel="wheel">
-        <component :is="iconComponent(`${data.type}-icon`)" class="mr-8" :size="18" />{{
+        <component :is="nodeIcon(data.type)" class="mr-8" :size="18" />{{
           data.label
         }}</span
       >
@@ -19,7 +19,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { iconComponent } from '../icons/utils'
+import { nodeIcon } from '../icons/utils'
 const props = defineProps<{
   nodeModel: any
   modelValue: Array<any>
@@ -65,7 +65,7 @@ function _getIncomingNode(id: String, startId: String, value: Array<any>) {
             type: item.type,
             children: item.properties?.config?.fields || []
           })
-          if (item.properties?.globalFields && item.type === 'start-node') {
+          if (item.properties?.globalFields && item.type === 'START_NODE') {
             firstElement = {
               value: 'global',
               label: '全局变量',

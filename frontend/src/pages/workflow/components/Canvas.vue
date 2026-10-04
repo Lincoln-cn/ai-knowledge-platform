@@ -65,6 +65,10 @@ function ensureLf(): any | null {
 
   instance.setTheme({ bezier: { stroke: '#afafaf', strokeWidth: 1 } })
   initDefaultShortcut(instance, instance.graphModel)
+  // ★ 注册名必须是**契约取值**（`START_NODE`），不是目录名/图标名那套 kebab（`start-node`）。
+  //   画布的节点类型与契约 `WorkflowNodeType` 同名同值 —— `nodeDict` 的键、`WorkflowType` 枚举、
+  //   `node-actions` 的单例表、「添加组件」的 `addNode({type: meta.type})` 全都按取值来。
+  //   规范 14 §三：文件名/目录名不动，取值要改 ⇒ 两套词汇只在 `icons/utils.ts` 相遇一次。
   instance.batchRegister([...Object.keys(nodes).map((key) => nodes[key].default), AppEdge])
   instance.setDefaultEdgeType('app-edge')
 
