@@ -1,11 +1,13 @@
 package cn.lincoln.aiplatform.knowledge.infrastructure;
 
 import jakarta.annotation.PostConstruct;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.parser.ocr.TesseractOCRConfig;
 import org.apache.tika.parser.ocr.TesseractOCRParser;
@@ -52,6 +54,17 @@ public class OcrEngine {
 
   private final OcrProperties properties;
   private volatile Status status;
+
+  /**
+   * 引擎自述的事实（{@code tesseract --list-langs}）：它<b>实际会用</b>的 tessdata 目录与语言清单。
+   *
+   * <p>★ 为什么要问引擎，而不是只看配置：Ubuntu 用 {@code apt} 装的 tesseract <b>不设</b> {@code
+   * TESSDATA_PREFIX}（默认路径编译在可执行文件里）。只看「配置 + 环境变量」的话，那类机器上两处都空 ⇒ 我们**报"可用"却从没核对过语言包** —— 而"缺 {@code
+   * chi_sim.traineddata}"正是这套配置存在的唯一理由。 第一版就是这么漏的，CI（ubuntu + apt 装的 tesseract）把它抓了出来。
+   *
+   * <p>缓存：{@code configure()} 每次解析都会调 {@link #newParser()}，不缓存就等于"每解析一篇 spawn 一个进程"。
+   */
+  private volatile EngineFacts facts;
 
   public OcrEngine(OcrProperties properties) {
     this.properties = properties;
@@ -185,13 +198,135 @@ public class OcrEngine {
     return parser;
   }
 
-  /** 生效的 tessdata 目录：配置优先，其次 {@code TESSDATA_PREFIX} 环境变量（★ 用了哪个来源也说出来）。 */
+  /**
+   * 生效的 tessdata 目录。优先级：配置 → {@code TESSDATA_PREFIX} → <b>引擎自己报的那个</b>。
+   *
+   * <p>第三级是必须的：见 {@link #facts}。前两级都没有时，唯一还知道答案的就是引擎本身。
+   */
   public Optional<String> effectiveTessdataPath() {
     if (notBlank(properties.tessdataPath())) {
       return Optional.of(properties.tessdataPath().trim());
     }
     String fromEnv = System.getenv("TESSDATA_PREFIX");
-    return notBlank(fromEnv) ? Optional.of(fromEnv.trim()) : Optional.empty();
+    if (notBlank(fromEnv)) {
+      return Optional.of(fromEnv.trim());
+    }
+    return engineFacts().tessdataPath();
+  }
+
+  /**
+   * 要 spawn 的可执行文件。
+   *
+   * <p>★ {@code app.ocr.tesseract-path} 按配置注释可以是「目录**或**完整路径」（Tika 的 {@code setTesseractPath}
+   * 两者都收，目录时它自己拼二进制名）。这里要直接 spawn，所以得自己判一次 —— 传目录给 {@code ProcessBuilder} 会得到 {@code CreateProcess
+   * error=5} 这种看不出原因的错误。
+   */
+  private String executable() {
+    if (!notBlank(properties.tesseractPath())) {
+      return "tesseract";
+    }
+    String configured = properties.tesseractPath().trim();
+    Path path = Path.of(configured);
+    if (!Files.isDirectory(path)) {
+      return configured;
+    }
+    String name = isWindows() ? "tesseract.exe" : "tesseract";
+    Path candidate = path.resolve(name);
+    return Files.isRegularFile(candidate)
+        ? candidate.toString()
+        : path.resolve("tesseract").toString();
+  }
+
+  private static boolean isWindows() {
+    return System.getProperty("os.name", "").toLowerCase().contains("win");
+  }
+
+  /** 引擎自述事实（缓存，只 spawn 一次）。可执行文件按配置解析，没配就走 PATH。 */
+  private EngineFacts engineFacts() {
+    EngineFacts local = facts;
+    if (local == null) {
+      synchronized (this) {
+        if (facts == null) {
+          facts = askEngine(executable());
+        }
+        local = facts;
+      }
+    }
+    return local;
+  }
+
+  /**
+   * 问引擎：{@code tesseract --list-langs}。
+   *
+   * <pre>
+   * List of available languages in "/usr/share/tesseract-ocr/5/tessdata/" (2):
+   * chi_sim
+   * eng
+   * </pre>
+   *
+   * <p>★ 这一条命令同时给出两件我们要核对的事：<b>它实际会用哪个 tessdata 目录</b>与<b>它真能加载哪些语言</b>。 比读文件系统更权威 ——
+   * 文件在不在是一回事，引擎认不认（版本不匹配的 {@code .traineddata} 会被拒）是另一回事。
+   *
+   * <p>问不出来时返回空事实（不抛）：真正的判据在 {@link #probe()} 里，那里才知道"空"意味着 "不可核对"还是"这台机器本来就没有引擎"。
+   */
+  private EngineFacts askEngine(String executable) {
+    try {
+      ProcessBuilder builder = new ProcessBuilder(executable, "--list-langs");
+      builder.redirectErrorStream(true);
+      Process process = builder.start();
+      String output;
+      try (var in = process.getInputStream()) {
+        output = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+      }
+      if (!process.waitFor(20, TimeUnit.SECONDS)) {
+        process.destroyForcibly();
+        return EngineFacts.empty();
+      }
+      // 引擎在、进程也退了，但输出为空 ⇒ 什么都确认不了
+      return parseListLangs(output);
+    } catch (Exception e) {
+      // 找不到可执行文件、被沙箱挡住、超时中断 —— 都算"问不出来"
+      log.debug("tesseract --list-langs 失败（{}）：{}", executable, e.toString());
+      return EngineFacts.empty();
+    }
+  }
+
+  /** 解析 {@code --list-langs} 的输出。目录行带引号，其余每行一个语言码。 */
+  static EngineFacts parseListLangs(String output) {
+    Optional<String> directory = Optional.empty();
+    List<String> languages = new ArrayList<>();
+    for (String raw : output.split("\\R")) {
+      String line = raw.trim();
+      if (line.isEmpty()) {
+        continue;
+      }
+      if (line.startsWith("List of available languages in ")) {
+        int open = line.indexOf('"');
+        int close = line.lastIndexOf('"');
+        if (open >= 0 && close > open) {
+          directory = Optional.of(line.substring(open + 1, close));
+        }
+        continue;
+      }
+      // 语言码：字母数字下划线；带 ':' 的是说明行，不是语言
+      if (line.matches("[A-Za-z0-9_]+")) {
+        languages.add(line);
+      }
+    }
+    return new EngineFacts(directory, List.copyOf(languages));
+  }
+
+  /**
+   * 引擎自述的事实。
+   *
+   * @param tessdataPath 引擎实际会用的 tessdata 目录（问不出来时为空）
+   * @param languages 引擎真能加载的语言码（问不出来时为空）
+   */
+  record EngineFacts(Optional<String> tessdataPath, List<String> languages) {
+
+    static EngineFacts empty() {
+      return new EngineFacts(Optional.empty(), List.of());
+    }
   }
 
   @PostConstruct
@@ -230,33 +365,58 @@ public class OcrEngine {
     }
 
     // ── ★ 语言包：离线交付最常漏的一件 ──
-    Optional<String> tessdata = effectiveTessdataPath();
+    //  两条核对路线，**都出自引擎自述的事实**：
+    //    ① 知道 tessdata 目录（配置 / TESSDATA_PREFIX / 引擎自己报的）⇒ 查 <lang>.traineddata 文件在不在
+    //    ② 只知道语言清单 ⇒ 查语言码在不在引擎列出的那种
+    //  两条都走不通 ⇒ 报不可用。★ "无法核对"不等于"可用"：报可用就等于替 chi_sim 打了包票，
+    //  而这个类存在的唯一理由就是不让它被静默漏掉。
     List<String> wanted = properties.languageList();
+    Optional<String> tessdata = effectiveTessdataPath();
+    EngineFacts engineFacts = engineFacts();
+
+    List<String> verified = new ArrayList<>();
     List<String> missing = new ArrayList<>();
     if (tessdata.isPresent()) {
       for (String language : wanted) {
         Path file = Path.of(tessdata.get(), language + ".traineddata");
-        if (!Files.isRegularFile(file)) {
+        if (Files.isRegularFile(file)) {
+          verified.add(language);
+        } else {
           missing.add(language + ".traineddata");
         }
       }
-    }
-    if (!missing.isEmpty()) {
+    } else if (!engineFacts.languages().isEmpty()) {
+      for (String language : wanted) {
+        if (engineFacts.languages().contains(language)) {
+          verified.add(language);
+        } else {
+          missing.add(language + ".traineddata");
+        }
+      }
+    } else {
       return new Status(
           false,
-          "找到了 tesseract，但缺语言包：" + String.join("、", missing) + "（目录 " + tessdata.orElse("?") + "）",
+          "找到了 tesseract，但语言包无法核对（没配 app.ocr.tessdata-path、没设 TESSDATA_PREFIX，"
+              + "`tesseract --list-langs` 也没给出清单）",
+          "显式配置 app.ocr.tessdata-path 指向语言包目录（离线交付清单见 deploy/README.md 的 OCR 段）",
+          List.of(),
+          resolved);
+    }
+    if (!missing.isEmpty()) {
+      String where =
+          tessdata
+              .map(path -> "目录 " + path)
+              .orElseGet(() -> "引擎可用语言：" + String.join("、", engineFacts.languages()));
+      return new Status(
+          false,
+          "找到了 tesseract，但缺语言包：" + String.join("、", missing) + "（" + where + "）",
           "把对应的 <语言>.traineddata 放进该目录（离线交付清单见 deploy/README.md 的 OCR 段）；"
               + "缺中文包时中文会退化成方块/乱码，而且不报错",
           List.of(),
           resolved);
     }
 
-    return new Status(
-        true,
-        "",
-        "",
-        wanted.isEmpty() ? List.of() : wanted,
-        resolved.isEmpty() ? "(PATH)" : resolved);
+    return new Status(true, "", "", verified, resolved.isEmpty() ? "(PATH)" : resolved);
   }
 
   private Status notFound(String configuredPath) {
