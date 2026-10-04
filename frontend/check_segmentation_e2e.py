@@ -20,7 +20,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -33,22 +35,50 @@ from playwright.sync_api import sync_playwright
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5280").rstrip("/")
 API = BASE + "/api/v1"
 DOCX = Path(__file__).resolve().parent.parent / "backend/src/test/resources/fixtures/structured.docx"
-CONTAINER = "aip-postgres"
-DB = "aiplatform"
+
+# ────────────────────────── 直连库的连接 ──────────────────────────
+# ★ 为什么必须可配置：CI 里的 PG 是 job 的 **service 容器**，本机没有叫 aip-postgres 的容器可 exec。
+#
+# ★ 而写死连接还有一个更阴的后果：它可能连到**另一个库**上去 —— 闸门照样跑、照样报数，
+#   只是那些数字与"后端写的那个库"无关。实测踩过：本机同时开着 aip-postgres（15432，存量数据）
+#   与演练用的 aip-ci-pg（15433），而 app 连的是后者 ⇒ 闸门读前者，报 0 段、然后崩在一个空 seg_id 上。
+#   ⇒ 所以下面既支持三种连接方式，也把"读的是哪个库"显式打出来（红的时候要能一眼看出来）。
+CONTAINER = os.environ.get("AIP_PG_CONTAINER", "aip-postgres")
+DB = os.environ.get("PGDATABASE", "aiplatform")
+USER = os.environ.get("PGUSER", "aiplatform")
 
 # 与后端 app.segmentation.* 默认值一致（入库即分块用的就是这两个数）
 SEG_LEN, OVERLAP = 500, 60
 MODEL_LIMIT = 1200
 
 
+def db_how() -> str:
+    """这条闸门读的是哪个库的可读描述（进日志，也进失败信息）。"""
+    override = os.environ.get("AIP_PSQL_CMD", "").strip()
+    if override:
+        return f"AIP_PSQL_CMD={override}"
+    if os.environ.get("PGHOST"):
+        return "psql 直连 {}:{}/{}（user={}）".format(
+            os.environ["PGHOST"], os.environ.get("PGPORT", "5432"), DB, USER
+        )
+    return f"docker exec {CONTAINER} psql -U {USER} -d {DB}"
+
+
 def psql(sql: str) -> str:
-    out = subprocess.run(
-        ["docker", "exec", CONTAINER, "psql", "-U", "aiplatform", "-d", DB, "-tAc", sql],
-        capture_output=True,
-        text=True,
-    )
+    """读库取真相（界面显示的是视图，库里的列才是入库链路的真相）。
+
+    连接优先:：`AIP_PSQL_CMD` 全量覆盖 → `PGHOST` 直连 → `docker exec`（本机默认）。
+    """
+    override = os.environ.get("AIP_PSQL_CMD", "").strip()
+    if override:
+        cmd = shlex.split(override) + ["-tAc", sql]
+    elif os.environ.get("PGHOST"):
+        cmd = ["psql", "-tAc", sql]
+    else:
+        cmd = ["docker", "exec", CONTAINER, "psql", "-U", USER, "-d", DB, "-tAc", sql]
+    out = subprocess.run(cmd, capture_output=True, text=True)
     if out.returncode != 0:
-        raise RuntimeError(f"psql 失败：{out.stderr.strip()}\nSQL: {sql}")
+        raise RuntimeError(f"psql 失败（{db_how()}）：{out.stderr.strip()}\nSQL: {sql}")
     return out.stdout.strip()
 
 
@@ -61,12 +91,21 @@ def wait_status(doc_id: str, expected: str, seconds: int) -> str:
     """轮询**库里**的文档状态直到 expected（或超时返回当前值）。
 
     ★ 前端也是这样轮询的 —— 进度与状态的事实源是库，不是内存。
+
+    ★★ 但**行不存在**要立刻失败，不能等到超时：那是「读的库不是后端写的那个」的唯一可靠信号，
+    而它的表象只是"状态一直是空" —— 超时之后报出来的会是「入库没生效」，指错方向。
     """
     status = ""
     for _ in range(seconds * 2):
         status = psql(f"select status from kb_document where id='{doc_id}'")
         if status == expected or status.endswith("FAILED"):
             return status
+        if status == "" and psql_int(f"select count(*) from kb_document where id='{doc_id}'") == 0:
+            raise RuntimeError(
+                f"库里查不到刚上传的文档 {doc_id} —— 这条闸门读的库不是后端在用的那个。\n"
+                f"  当前连接：{db_how()}\n"
+                f"  （真栈必须让两者指向同一个库；CI 用 PG* 环境变量，本机可用 AIP_PG_CONTAINER 指定容器）"
+            )
         time.sleep(0.5)
     return status
 
@@ -162,6 +201,8 @@ def main() -> int:  # noqa: C901
             page.wait_for_timeout(2500)
             token = page.evaluate("() => localStorage.getItem('access_token') || ''")
             print("== 0. 环境 ==")
+            # ★ 读库那一半连的是哪个库要显式打出来：查错库的表象是"入库没生效"，指错方向
+            print(f"   读库连接：{db_how()}")
             if not check(
                 bool(token) and not token.startswith("mock_"),
                 f"连的是真后端（token 非 mock_）：{token[:18]}…",

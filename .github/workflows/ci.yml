@@ -143,20 +143,35 @@ jobs:
           curl -s http://localhost:5280/login > /dev/null
           sleep 5
 
+      # ★★ 逐条跑完并记账，**不让第一个失败遮蔽其余**（issue #19）。
+      #
+      #   这些闸门是互相独立的信号。用 shell 的 `set -e`（GHA 默认）串起来，等于
+      #   "第一个坏了就再也看不到后面 10 条" —— 实测代价：2026-09-28 起 `check_nodeconfig.py`
+      #   超时，于是 check_node_menu / check_canvas / … 共 9 条**连续一周多从没在 CI 里执行过**，
+      #   工作流里却写着"11 个确定性闸门"。那也是一种"看起来在做、实际没生效"。
+      #
+      #   ★ 判据没有弱化：任一条红，这一步最后照样 exit 1。变的是"红的时候能不能看见全貌"。
       - name: 浏览器闸门（11 个确定性闸门）
         working-directory: frontend
         run: |
-          python check_theme.py
-          python check_nodeconfig.py
-          python check_node_menu.py
-          python check_canvas.py
-          python check_collapse.py
-          python check_history.py
-          python check_palette.py
-          python check_pickers.py
-          python check_assistants.py
-          python check_singleton.py
-          python check_publish.py
+          failed=()
+          for g in check_theme check_nodeconfig check_node_menu check_canvas check_collapse \
+                   check_history check_palette check_pickers check_assistants check_singleton \
+                   check_publish; do
+            echo "::group::${g}.py"
+            if python "${g}.py"; then
+              echo "✓ ${g}.py 通过"
+            else
+              echo "::error::${g}.py 失败"
+              failed+=("${g}.py")
+            fi
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "★ 失败 ${#failed[@]}/11：${failed[*]}"
+            exit 1
+          fi
+          echo "11 个浏览器闸门全部通过"
 
       # ⚠️ 故意不接入 CI 的三个闸门（等它们稳定后接进来）：
       #
@@ -172,3 +187,200 @@ jobs:
       - name: 类型检查 + 构建（mock 模式）
         working-directory: frontend
         run: npm run build:mock
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  #  真栈 · 五条端到端闸门（issue #3）
+  #
+  #  ★ 这个 job 回答的是本项目最关键的那句判据：「真链路能跑吗」。
+  #
+  #  在它之前，那五条闸门只在开发机上手工跑 —— 换台机器、换个人就没人知道这些流程还通不通；
+  #  而 mock 长期比真后端宽松（`docs/已知问题与欠账.md` A3 的假绿灯就是这么来的）。
+  #  实测代价：编排画布整页不可用（#20）在 main 上活了 6 天，因为在 CI 里根本没有一条真栈闸门会去点它。
+  #
+  #  ★ 与 frontend job 分开的理由：失败时一眼能看出「是真栈的问题，还是界面的问题」。
+  #    不设 `needs:` —— 与后端 job 并行跑，任一侧红都各自报出来，互不遮蔽。
+  #
+  #  ★ 这里刻意**不跑 mock 模式**：`VITE_USE_MOCK=false` + `VITE_API_TARGET` 指向真后端。
+  # ══════════════════════════════════════════════════════════════════════════════
+  realstack:
+    name: 真栈 · 五条端到端闸门
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # ★ 与本地 docker-compose.yml / 测试容器同一个镜像：向量列是 pgvector 的 vector 类型，
+        #   换成官方 postgres 镜像会在 Flyway 建表时就挂。
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: aiplatform
+          POSTGRES_PASSWORD: aiplatform
+          POSTGRES_DB: aiplatform
+        ports:
+          - 5432:5432
+        # ★ healthcheck 必须有：只等端口会拿到"容器在起但还没接受连接"，
+        #   后端起不来时表现为 Flyway 连接被拒，看起来像迁移坏了。
+        options: >-
+          --health-cmd "pg_isready -U aiplatform -d aiplatform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # ★ 与 backend job 同样的三个包（理由见那里的注释）：官方 tesseract-ocr 只带 eng。
+      #   真栈 job 尤其需要它 —— 它是唯一会去点「上传扫描件 → 已识别 N/M 页」这条链的地方。
+      - name: 装 OCR 引擎与语言包
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
+          tesseract --list-langs
+
+      - name: 起 OpenAI 桩服务（向量化与模型目录都打它）
+        working-directory: backend
+        run: |
+          python tools/openai_stub.py --port 11434 > /tmp/stub.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:11434/v1/models > /dev/null; then
+              echo "桩服务就绪"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "★ 桩服务起不来 —— 向量化会全线失败。日志："
+          cat /tmp/stub.log
+          exit 1
+
+      - name: 构建后端 jar
+        working-directory: backend
+        run: mvn -B -q -DskipTests package
+
+      # ★ 用 `--app.security.captcha.enabled=false` 起：闸门要能在没有任何人工的情况下跑完
+      #   （验证码是给人看的）。生产不许关，这里关的是**测试实例**。
+      # ★ DB_URL 显式给：application.yml 的默认值是为本地 15432 写的占位值。
+      - name: 起真后端
+        working-directory: backend
+        env:
+          DB_URL: jdbc:postgresql://localhost:5432/aiplatform
+          DB_USER: aiplatform
+          DB_PASSWORD: aiplatform
+        run: |
+          java -jar target/ai-knowledge-platform-0.0.1-SNAPSHOT.jar \
+            --app.security.captcha.enabled=false > /tmp/backend.log 2>&1 &
+          for i in $(seq 1 90); do
+            if grep -q "Started AiPlatformApplication" /tmp/backend.log; then
+              echo "后端就绪（第 ${i} 次探测）"
+              # ★ 顺带把 OCR 那一行打出来：它是"这台机器能不能 OCR"的唯一显式事实
+              grep -E "OCR 引擎|OcrEngine" /tmp/backend.log || echo "（日志里没有 OCR 那一行 —— 留意是不是旧产物）"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "★ 后端起不来 —— 后面五条闸门会全以连接被拒失败，那不是页面有问题。日志："
+          cat /tmp/backend.log
+          exit 1
+
+      # ★ 真栈前端：覆盖 .env.development 里的 VITE_USE_MOCK=true 与错端口 18088。
+      #   这两个默认值是"后端未就绪时走 mock"的遗留，不覆盖就会拿 mock 当"真栈证据"。
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: npm ci
+
+      - name: 起真栈 dev server
+        working-directory: frontend
+        env:
+          VITE_USE_MOCK: 'false'
+          VITE_API_TARGET: http://127.0.0.1:8080
+        run: |
+          npm run dev > /tmp/vite.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5280 > /dev/null; then
+              echo "dev server ready after ${i} tries"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "★ dev server 起不来。日志："
+          cat /tmp/vite.log
+          exit 1
+
+      # ★ 再等一拍：vite 首次访问才编译，curl 通只代表端口在听（理由同 frontend job）
+      - name: 预热首页
+        run: |
+          curl -s http://localhost:5280 > /dev/null
+          curl -s http://localhost:5280/login > /dev/null
+          sleep 5
+
+      # ★ 与 frontend job 一样用 chromium + channel=chrome（runner 镜像自带 Chrome）
+      - name: 装 playwright 浏览器
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      # ★ check_segmentation_e2e.py 要**直接查库**：界面显示的是视图，库里的列才是入库链路的真相
+      #   （search_text 有没有前缀、content_hash、embedding_status、进度列）。
+      #   CI 里的 PG 是 job 的 service 容器，没有叫 aip-postgres 的容器可 `docker exec` ⇒
+      #   用 psql 直连（连接由下面的 PG* 环境变量给，闸门自己会把它打进日志）。
+      - name: 装 psql 客户端
+        run: sudo apt-get install -y --no-install-recommends postgresql-client
+
+      # ★ 逐条记账，不遮蔽（理由见 frontend job 的浏览器闸门那一步）
+      # ★ PG* 是给 check_segmentation_e2e.py 的：它读的库必须与后端写的库是同一个 ——
+      #   不一致时它会立刻报「库里查不到刚上传的文档」并把连接打出来（以前会表现成"入库没生效"，指错方向）
+      - name: 五条真栈闸门
+        working-directory: frontend
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: aiplatform
+          PGPASSWORD: aiplatform
+          PGDATABASE: aiplatform
+        run: |
+          failed=()
+          for g in check_knowledge_parse check_knowledge_form check_segmentation_e2e \
+                   check_document_actions check_flow_walkthrough; do
+            echo "::group::${g}.py"
+            if python "${g}.py"; then
+              echo "✓ ${g}.py 通过"
+            else
+              echo "::error::${g}.py 失败"
+              failed+=("${g}.py")
+            fi
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "★ 失败 ${#failed[@]}/5：${failed[*]}"
+            exit 1
+          fi
+          echo "五条真栈闸门全部通过"
+
+      # ★ 真栈红的时候，日志就是唯一的证据 —— 不留就等于让人去猜（本 job 第一次进 CI 时用过它）
+      - name: 失败时留真栈日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: realstack-logs
+          path: |
+            /tmp/backend.log
+            /tmp/vite.log
+            /tmp/stub.log
+            frontend/screenshots/
+          if-no-files-found: ignore
