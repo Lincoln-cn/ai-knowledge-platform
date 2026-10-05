@@ -22,7 +22,21 @@ services:
     # ★ 必须用 pgvector 镜像而不是官方 postgres：
     #   V1 迁移里的 CREATE EXTENSION vector 靠它。若换成官方镜像，
     #   迁移会失败并直接指出这一点 —— 这正是把扩展安装放在第 1 周的价值。
-    image: pgvector/pgvector:pg16
+    #   ★ 这条约束现在升级成一张**自制镜像**（理由见下）：
+    #     设计册 `09 §10.2 #3` 定的中文全文检索是 `to_tsvector('chinese_zh', …)`，
+    #     而 `chinese_zh` 的 parser 只能是 **zhparser**（用 `simple` 会把**整段中文
+    #     当成一个 token**，症状是"全文检索一条都搜不到"）。实测本 base 镜像里
+    #     `pg_available_extensions` 没有 zhparser，PGDG / Debian 也没有现成包。
+    #   ★ 它**仍然是 pgvector 镜像**：`deploy/pg/Dockerfile` 两段式都拿
+    #     `pgvector/pgvector:pg16` 当 base ⇒ `vector` 是 base 原封不动那一份
+    #     （`deploy/verify_image_pg.py` 里有一条断言专门钉这件事）。
+    image: ai-knowledge-platform-pg:dev
+    # ★ 写 build: 是为了 `docker compose up -d` 开箱即用（首次编译 scws + zhparser，
+    #   约几分钟，之后走缓存）。★ CI 里另有一条**显式** build —— GitHub 的
+    #   **service 容器不能 build**，所以真栈 job 改成"先 build、再用 docker run 起"。
+    build:
+      context: .
+      dockerfile: deploy/pg/Dockerfile
     container_name: aip-postgres
     environment:
       POSTGRES_DB: aiplatform
