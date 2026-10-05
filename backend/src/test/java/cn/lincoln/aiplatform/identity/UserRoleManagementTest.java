@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.identity.application.UserService;
 import cn.lincoln.aiplatform.identity.infrastructure.PermissionCatalog;
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -46,7 +47,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class UserRoleManagementTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   private static final Pattern ROLE_ENTRY =
       Pattern.compile("\\{\"id\":\"([^\"]+)\",\"name\":\"[^\"]*\",\"code\":\"([^\"]+)\"");

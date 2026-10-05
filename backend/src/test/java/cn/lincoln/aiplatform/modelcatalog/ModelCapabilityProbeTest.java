@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.modelcatalog;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -45,7 +46,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class ModelCapabilityProbeTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   /** 与 application.yml 的 spring.ai.openai.base-url 同一个默认值（Ollama 的 OpenAI 兼容端点）。 */
   private static final String BASE_URL =

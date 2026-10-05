@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.knowledge;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.knowledge.infrastructure.OcrEngine;
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -48,7 +49,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class OcrIngestionTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   @Autowired JdbcTemplate jdbc;
   @Autowired OcrEngine ocrEngine;

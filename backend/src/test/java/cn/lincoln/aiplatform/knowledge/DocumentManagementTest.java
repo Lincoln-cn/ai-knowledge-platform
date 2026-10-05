@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.knowledge;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
+import cn.lincoln.aiplatform.support.PostgresImage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.InputStream;
@@ -57,7 +58,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class DocumentManagementTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   private static final String STUB_API_BASE =
       System.getenv().getOrDefault("AI_STUB_ROOT", "http://localhost:11434") + "/v1";

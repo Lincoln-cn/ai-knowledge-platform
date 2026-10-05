@@ -12,6 +12,7 @@ import cn.lincoln.aiplatform.knowledge.domain.ImportType;
 import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBase;
 import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBaseRepository;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -48,7 +49,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class EmbeddingProgressServiceTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   @Autowired EmbeddingProgressService progress;
   @Autowired DocumentRepository documents;
