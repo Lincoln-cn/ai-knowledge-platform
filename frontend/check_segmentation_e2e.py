@@ -67,7 +67,7 @@ def db_how() -> str:
 def psql(sql: str) -> str:
     """读库取真相（界面显示的是视图，库里的列才是入库链路的真相）。
 
-    连接优先:：`AIP_PSQL_CMD` 全量覆盖 → `PGHOST` 直连 → `docker exec`（本机默认）。
+    连接优先：`AIP_PSQL_CMD` 全量覆盖 → `PGHOST` 直连 → `docker exec`（本机默认）。
     """
     override = os.environ.get("AIP_PSQL_CMD", "").strip()
     if override:
@@ -85,6 +85,22 @@ def psql(sql: str) -> str:
 def psql_int(sql: str) -> int:
     value = psql(sql)
     return int(value) if value.strip() else 0
+
+
+def wait_parsed(doc_id: str, seconds: int) -> str:
+    """等**解析落地**：PENDING_EMBEDDING（成功）或 SEGMENT_FAILED（失败）。
+
+    ★ 第 9 周起解析是异步的（T249.3）：上传接口立刻返回、文档落在「分段中」，
+    OCR/分块在后台跑。闸门要与界面一样**等**，否则读到的是在途态
+    （CI 上就是这么红的：`状态=待向量化（实际 SEGMENTING）`、`segment_count=0`）。
+    """
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        current = psql(f"select status from kb_document where id='{doc_id}'")
+        if current in ("PENDING_EMBEDDING", "SEGMENT_FAILED"):
+            return current
+        time.sleep(0.5)
+    return psql(f"select status from kb_document where id='{doc_id}'")
 
 
 def wait_status(doc_id: str, expected: str, seconds: int) -> str:
@@ -262,6 +278,12 @@ def main() -> int:  # noqa: C901
                 str(up)[:220],
             )
             doc_id = docs[0].get("id") if docs else None
+
+            # ★ 第 9 周起解析是**异步**的（扫描件的 OCR 实测每页约 3.6 秒 —— 判据 ⑤ 要求不阻塞其它文档）
+            #   ⇒ "上传完就能读分段/状态"不再成立。闸门要和界面一样**等**解析落地。
+            #   （CI 抓到的就是这个：不等就会读到 SEGMENTING / segment_count=0。）
+            wait_parsed(doc_id, 60)
+            print(f"   解析落地：{wait_status(doc_id, 'PENDING_EMBEDDING', 1)}")
 
             row = psql(
                 f"select id, status, segment_count, char_count from kb_document where id='{doc_id}'"

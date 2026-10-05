@@ -165,6 +165,43 @@ class NoiseStripperTest {
     assertThat(result.removedLines()).as("★ 配置片段里重复的行是内容 —— 围栏内一律不参与剥离").isZero();
   }
 
+  /**
+   * ★★ 保守性护栏：**重复行必须是少数派** —— 否则会把整篇文档剥空。
+   *
+   * <p>这条来自一次**真实事故**（本轮 CI 抓的）：真栈闸门的夹具是 "一行短句重复 20 次"，被"重复行 ≥3 次且 &lt;60 字"规则整篇剔掉 ⇒ 预览 0 段。
+   * 症状极其误导：文档**有内容却切不出段**，看起来像分块器坏了。
+   *
+   * <p>⇒ 判据：重复行占非空行的一半以上时，**一条都不剥**（宁可漏剔，不可误杀 —— {@code 12 §10.2} 风险 2 的"内容静默缺失"比漏剔严重）。
+   */
+  @Test
+  void 重复行占多数时不剥_避免整篇被剥空() {
+    String markdown = "闸门临时文档：用于验证建档三项必填。\n".repeat(20);
+
+    NoiseStripper.Result result = NoiseStripper.strip(markdown);
+
+    assertThat(result.removedLines()).as("★ 20 行里全是同一句 ⇒ 重复行占多数 ⇒ 这是**正文**，不是页眉").isZero();
+    assertThat(result.markdown().strip()).as("整篇内容原样保留").isEqualTo(markdown.strip());
+  }
+
+  /** 对照组：重复行**是少数派**时照常剥（三页扫描件那份用例就是这个形态）。 */
+  @Test
+  void 重复行是少数派时照常剥() {
+    // ★ 正文每一行都**互不相同** —— 否则正文自己也构成"重复行"，把整篇拖成多数派。
+    //   这恰好也是真实文档的样子：页眉重复、正文不重复。
+    StringBuilder builder = new StringBuilder();
+    for (int page = 1; page <= 3; page++) {
+      builder.append("某某集团内部管理制度\n");
+      for (int line = 1; line <= 5; line++) {
+        builder.append("第 ").append(page).append(" 页第 ").append(line).append(" 段正文\n");
+      }
+    }
+    NoiseStripper.Result result = NoiseStripper.strip(builder.toString());
+
+    assertThat(result.removedLines()).as("页眉 3 次、正文 15 行各不相同 ⇒ 少数派 ⇒ 照剥").isEqualTo(3);
+    assertThat(result.markdown()).doesNotContain("某某集团内部管理制度");
+    assertThat(result.markdown()).contains("第 1 页第 1 段正文");
+  }
+
   @Test
   void 空输入原样返回() {
     assertThat(NoiseStripper.strip(null).markdown()).isEmpty();

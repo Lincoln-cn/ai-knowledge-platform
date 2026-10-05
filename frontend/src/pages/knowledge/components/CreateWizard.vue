@@ -221,6 +221,10 @@
           <el-button size="small" style="margin-top: var(--space-xs)" @click="generatePreview">重试</el-button>
         </div>
 
+        <!-- 等解析落地时的进行中说明（T249.3）：扫描件的 OCR 要跑十几秒到一分多钟，
+             ★ 说清"在做什么 + 走到哪"，而不是让用户对着不动的界面猜 -->
+        <div v-else-if="previewWait" class="micro muted preview-wait">{{ previewWait }}</div>
+
         <div v-else-if="!preview" class="preview-empty micro muted">
           点左侧「生成预览」查看切分结果。超长分段会标红并给出建议。
         </div>
@@ -417,6 +421,13 @@ const docMetaRules: FormRules = {
 
 const preview = ref<PreviewSegmentationResult | null>(null)
 const previewError = ref('')
+/** 等解析时的进行中说明（T249.3）——"正在解析 已识别 1/3 页"这类。空 = 不在等。 */
+const previewWait = ref('')
+/**
+ * 等解析落地的上限。★ 给足：扫描件每页约 3.6 秒，一份 20 页的扫描件就要一分多钟。
+ * 超时不是"失败"，而是给出可操作的下一步（去文档列表看进度后重试）。
+ */
+const PREVIEW_PARSE_WAIT_MS = 180_000
 const stageError = ref('')
 const importError = ref('')
 const modelLimit = ref(1200)
@@ -666,6 +677,7 @@ const generatePreview = async () => {
   }
   previewing.value = true
   previewError.value = ''
+  previewWait.value = ''
   try {
     // ★ 真实链路：先把文件建了档（解析 + 分块），再按 **documentId** 预览。
     //   预览与入库走同一个分块器 ⇒ 预览里看到的就是入库后会得到的（第 7 周判据 ④）。
@@ -674,6 +686,21 @@ const generatePreview = async () => {
       previewError.value = '没有建档成功的文档，无法生成预览'
       return
     }
+    // ★★ 解析是**异步**的（T249.3）：扫描件的 OCR 实测每页约 3.6 秒 ⇒ 建档刚返回时文档还在「分段中」，
+    //   此刻取预览会被后端**如实拒绝**（"文档解析尚未完成，无法预览切分"）。
+    //   ⇒ 界面要自己**等解析落地**再把预览取出来。
+    //   不等的表现：用户点一次、被拒一次、再点一次 —— 而正确答案是"它正在解析，请稍候"，
+    //   并且解析完**自动**出预览。扫描件那一次要等十几秒，让用户手点是不合理的。
+    const doc = await waitParsed(docs[0].id, docs[0].kbId)
+    if (!doc) {
+      previewError.value = '文档解析超时（仍在解析中）—— 可在文档列表查看进度后重试'
+      return
+    }
+    if (doc.status === 'SEGMENT_FAILED') {
+      previewError.value = doc.failReason || '文档解析失败，无法生成预览'
+      return
+    }
+    previewWait.value = ''
     preview.value = await ingestionApi.previewSegmentation({
       documentId: docs[0].id,
       segmentLength: segForm.segmentLength,
@@ -688,7 +715,37 @@ const generatePreview = async () => {
     previewError.value = error instanceof ApiError ? error.message : '生成预览失败'
   } finally {
     previewing.value = false
+    previewWait.value = ''
   }
+}
+
+/**
+ * 等文档**解析落地**再取预览（T249.3）。
+ *
+ * <p>★ 为什么界面要自己等：解析改成异步之后，"建档返回"与"能预览"之间有一个可能十几秒的空档
+ * （扫描件每页约 3.6 秒）。返回 null 表示超时 —— 那时给出可操作的下一步，而不是装作没事。
+ */
+const waitParsed = async (documentId: string, kbId: string): Promise<DocumentItem | null> => {
+  const deadline = Date.now() + PREVIEW_PARSE_WAIT_MS
+  while (Date.now() < deadline) {
+    try {
+      const page = await ingestionApi.listDocuments(kbId, { page: 1, size: 50 })
+      const found = page.list.find((d) => d.id === documentId) ?? null
+      if (found && (found.status === 'PENDING_EMBEDDING' || found.status === 'SEGMENT_FAILED')) {
+        return found
+      }
+      const total = found?.ocrTotalPages ?? 0
+      const done = found?.ocrDonePages ?? 0
+      previewWait.value =
+        total > 0
+          ? `正在解析文档：已识别 ${done}/${total} 页（扫描件较慢，请稍候）`
+          : '正在解析文档，请稍候…'
+    } catch {
+      // 轮询失败不致命：下一轮再试（网络抖动不该让用户看到"生成预览失败"）
+    }
+    await new Promise((resolve) => setTimeout(resolve, 700))
+  }
+  return null
 }
 
 const startPreviewEdit = (seg: { ordinal: number; content: string }) => {
@@ -884,6 +941,13 @@ defineExpose({ open })
 
 /* 「已剔除 N 行页眉/页脚/页码/目录」—— 与预览头分开一点，避免看成标题的一部分 */
 .noise-note {
+  margin-top: var(--space-2xs);
+  padding-left: var(--space-xs);
+  border-left: 2px solid var(--color-rule);
+}
+
+/* 等解析落地时的说明：同上，给个左侧竖线让它看起来像"过程说明"而不是正文 */
+.preview-wait {
   margin-top: var(--space-2xs);
   padding-left: var(--space-xs);
   border-left: 2px solid var(--color-rule);
