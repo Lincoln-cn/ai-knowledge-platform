@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.modelcatalog;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -46,7 +47,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class OpenAiStubContractTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   /** 桩服务的根（不含 /v1）—— 它是 base-url 去掉末段后的地址。 */
   private static final String STUB_ROOT =

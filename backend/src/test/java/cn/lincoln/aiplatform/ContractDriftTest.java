@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -66,7 +67,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class ContractDriftTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   @Autowired ApplicationContext applicationContext;
 

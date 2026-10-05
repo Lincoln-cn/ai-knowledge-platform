@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.knowledge;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -46,7 +47,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class SegmentIngestionTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   private static final UUID CREATOR_ROLE_ID =
       UUID.fromString("00000000-0000-0000-0000-000000000004");

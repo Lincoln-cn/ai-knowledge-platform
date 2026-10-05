@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.lincoln.aiplatform.identity.application.CaptchaView;
 import cn.lincoln.aiplatform.identity.domain.UserRepository;
 import cn.lincoln.aiplatform.identity.infrastructure.CaptchaService;
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -40,7 +41,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class ComplianceTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   private static final String ACCOUNT = "chenjun";
   private static final String PASSWORD = "123456";

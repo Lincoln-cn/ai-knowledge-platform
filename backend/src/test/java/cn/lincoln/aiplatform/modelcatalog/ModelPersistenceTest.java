@@ -11,6 +11,7 @@ import cn.lincoln.aiplatform.modelcatalog.domain.Supplier;
 import cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode;
 import cn.lincoln.aiplatform.modelcatalog.domain.ToolsMode;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.ApiKeyCipher;
+import cn.lincoln.aiplatform.support.PostgresImage;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,7 +40,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class ModelPersistenceTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   @Autowired ModelRepository models;
   @Autowired ApiKeyCipher apiKeyCipher;

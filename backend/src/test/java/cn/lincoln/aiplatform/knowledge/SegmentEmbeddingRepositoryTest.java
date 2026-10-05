@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbedding;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingRepository;
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -33,7 +34,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class SegmentEmbeddingRepositoryTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   private static final int DIM = 768;
 

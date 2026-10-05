@@ -13,6 +13,7 @@ import cn.lincoln.aiplatform.modelcatalog.domain.ToolsMode;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -45,7 +46,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class UpstreamEmbeddingAdapterTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   /** 桩服务的 OpenAI 兼容入口（base 末尾要带 /v1：{@code UpstreamGateway} 会拼 /embeddings）。 */
   private static final String STUB_API_BASE =

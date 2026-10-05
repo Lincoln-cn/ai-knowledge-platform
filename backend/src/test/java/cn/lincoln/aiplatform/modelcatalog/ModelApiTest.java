@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.modelcatalog;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.URI;
@@ -54,7 +55,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class ModelApiTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   // ────────────────────────── 桩服务 ──────────────────────────
 

@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.identity.infrastructure;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.identity.domain.Permissions;
+import cn.lincoln.aiplatform.support.PostgresImage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,7 +32,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class PermissionCatalogTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("pgvector/pgvector:pg16");
+  static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   @Autowired PermissionCatalog catalog;
   @Autowired JdbcTemplate jdbc;

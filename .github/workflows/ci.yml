@@ -65,6 +65,31 @@ jobs:
           tesseract --version | head -1
           tesseract --list-langs
 
+      # ★ 自制 PG 镜像（pgvector + zhparser）—— 集成测试（Testcontainers）靠它。
+      #   设计册 `09 §10.2 #3` 的中文全文检索是 `to_tsvector('chinese_zh', …)`，
+      #   而 `chinese_zh` 的 parser 只能是 zhparser；实测 pgvector 官方镜像里没有它、
+      #   PGDG/Debian 也无现成包 ⇒ 只能自己编译（`deploy/pg/Dockerfile`）。
+      #   ★ 带 GHA 层缓存：SCWS + zhparser 的编译只在缓存失效时发生（首次约 3–4 分钟，
+      #     之后是命中缓存）。★ 这里放 buildx + build-push-action 而不是 `docker build`，
+      #     就是为了拿到这份跨运行的缓存。
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 构建 PG 镜像（自制：pgvector + zhparser）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/pg/Dockerfile
+          tags: ai-knowledge-platform-pg:dev
+          load: true
+          cache-from: type=gha,scope=pg-zhparser
+          cache-to: type=gha,scope=pg-zhparser,mode=max
+
+      # ★ 镜像自己的闸门（11 项）在"用镜像之前"跑：pgvector 真功能（建表/HNSW/余弦排序）、
+      #   zhparser 精确分词（`'合同':1 '违约金':2`）、`simple` 对照、已知上限金丝雀、
+      #   以及"交付镜像里没有 gcc/git"。镜像坏了必须在这里红，而不是伪装成"测试坏了"。
+      - name: PG 镜像自检
+        run: python deploy/verify_image_pg.py
+
       # 四类闸门一次跑完：单测 / 集成（Testcontainers 真 PG）/ 架构（Modulith verify + 金丝雀）/ 格式化。
       # ★ GitHub 的 ubuntu runner 自带 Docker，Testcontainers 可直接用。
       - name: mvn verify
@@ -242,30 +267,51 @@ jobs:
   #  ★ 这里刻意**不跑 mock 模式**：`VITE_USE_MOCK=false` + `VITE_API_TARGET` 指向真后端。
   # ══════════════════════════════════════════════════════════════════════════════
   realstack:
-    name: 真栈 · 五条端到端闸门
+    name: 真栈 · 六条端到端闸门
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        # ★ 与本地 docker-compose.yml / 测试容器同一个镜像：向量列是 pgvector 的 vector 类型，
-        #   换成官方 postgres 镜像会在 Flyway 建表时就挂。
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: aiplatform
-          POSTGRES_PASSWORD: aiplatform
-          POSTGRES_DB: aiplatform
-        ports:
-          - 5432:5432
-        # ★ healthcheck 必须有：只等端口会拿到"容器在起但还没接受连接"，
-        #   后端起不来时表现为 Flyway 连接被拒，看起来像迁移坏了。
-        options: >-
-          --health-cmd "pg_isready -U aiplatform -d aiplatform"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-
+    # ★ 这个 job **没有** `services:` 了 —— 原来起的 `postgres` 是官方 pgvector 镜像，
+    #   而现在 PG 必须是自制镜像（pgvector + zhparser），GitHub 的 **service 容器只能拉
+    #   现成镜像、不能 build** ⇒ 改成"先 build、再用 docker run 起"（下面两步）。
+    #   ★ 代价：这几步的**顺序**变成了正确性的一部分（PG 必须先于后端起来）。
     steps:
       - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 构建 PG 镜像（自制：pgvector + zhparser）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/pg/Dockerfile
+          tags: ai-knowledge-platform-pg:dev
+          load: true
+          cache-from: type=gha,scope=pg-zhparser
+          cache-to: type=gha,scope=pg-zhparser,mode=max
+
+      # ★ 等"真的能接受连接"再往下：只等端口会拿到"容器在起但还没接受连接"，
+      #   后端起不来时表现为 Flyway 连接被拒，看起来像迁移坏了 ——
+      #   这条原来是 service 的 healthcheck 在管，换成 docker run 后必须自己写。
+      # ★ 顺带把 `pg_extension` 打出来：它是"这张镜像到底对不对"的唯一显式事实。
+      - name: 起真 PG
+        run: |
+          docker run -d --name aip-pg -p 5432:5432 \
+            -e POSTGRES_USER=aiplatform \
+            -e POSTGRES_PASSWORD=aiplatform \
+            -e POSTGRES_DB=aiplatform \
+            ai-knowledge-platform-pg:dev
+          for i in $(seq 1 60); do
+            if docker exec aip-pg pg_isready -U aiplatform -d aiplatform > /dev/null 2>&1; then
+              echo "PG 就绪（第 ${i} 次探测）"
+              docker exec aip-pg psql -U aiplatform -d aiplatform -tAc \
+                "select extname from pg_extension order by extname"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "★ PG 起不来 —— 后面六条闸门会全以连接被拒失败，那不是页面的问题。日志："
+          docker logs aip-pg
+          exit 1
 
       - name: 安装 JDK 25
         uses: actions/setup-java@v4
@@ -376,8 +422,9 @@ jobs:
 
       # ★ check_segmentation_e2e.py 要**直接查库**：界面显示的是视图，库里的列才是入库链路的真相
       #   （search_text 有没有前缀、content_hash、embedding_status、进度列）。
-      #   CI 里的 PG 是 job 的 service 容器，没有叫 aip-postgres 的容器可 `docker exec` ⇒
-      #   用 psql 直连（连接由下面的 PG* 环境变量给，闸门自己会把它打进日志）。
+      #   ★ CI 里的 PG 现在是 `docker run` 起的容器（名字 `aip-pg`），本机是 `aip-postgres`
+      #     —— 名字不同 ⇒ 闸门**不走 `docker exec`**，用 psql 直连（连接由下面的 PG* 环境变量给，
+      #     闸门自己会把它打进日志）。这样同一份闸门在本机与 CI 都成立。
       - name: 装 psql 客户端
         run: sudo apt-get install -y --no-install-recommends postgresql-client
 
@@ -386,7 +433,7 @@ jobs:
       #   不一致时它会立刻报「库里查不到刚上传的文档」并把连接打出来（以前会表现成"入库没生效"，指错方向）
       # ★ check_ocr_e2e.py（T249.4）走**界面**验扫描件那条链：上传 ⇒ 界面上「已识别 N/M 页」⇒ 入库成功，
       #   且文本型文档不出现进度行。它需要 tesseract（本 job 已装）+ 扫描件夹具。
-      - name: 真栈闸门（五条 + OCR 链）
+      - name: 真栈闸门（六条）
         working-directory: frontend
         env:
           PGHOST: localhost
@@ -414,6 +461,11 @@ jobs:
           echo "六条真栈闸门全部通过"
 
       # ★ 真栈红的时候，日志就是唯一的证据 —— 不留就等于让人去猜（本 job 第一次进 CI 时用过它）
+      # ★ PG 现在是容器而不是 service ⇒ 它的日志不自动出现在 job 输出里，必须自己捞。
+      - name: 失败时留 PG 日志
+        if: failure()
+        run: docker logs aip-pg > /tmp/pg.log 2>&1 || true
+
       - name: 失败时留真栈日志
         if: failure()
         uses: actions/upload-artifact@v4
@@ -423,5 +475,6 @@ jobs:
             /tmp/backend.log
             /tmp/vite.log
             /tmp/stub.log
+            /tmp/pg.log
             frontend/screenshots/
           if-no-files-found: ignore
