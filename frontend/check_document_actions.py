@@ -189,8 +189,9 @@ def answer_dialog(page, button: str, value: str | None = None) -> bool:
 
 def open_kb(page, kb_name: str) -> None:
     page.goto(f"{FRONTEND}/#/knowledge", wait_until="domcontentloaded")
-    page.wait_for_timeout(2500)
-    page.click(f".kb-card:has-text('{kb_name}')")
+    # ★ 等库卡出现（而不是固定 2.5 秒）：CI 是全新库 + 冷后端，首屏更慢。
+    #   Playwright 的 click 自带可见性等待 ⇒ 给足超时即可。
+    page.click(f".kb-card:has-text('{kb_name}')", timeout=30000)
     page.wait_for_timeout(2500)
 
 

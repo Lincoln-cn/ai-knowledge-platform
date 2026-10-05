@@ -357,8 +357,13 @@ def main() -> int:  # noqa: C901
             # ────────────── 5 · 界面：分段管理页看得到分段 ──────────────
             print("== 5. 分段管理页（演示物） ==")
             page.goto(f"{BASE}/#/knowledge", wait_until="networkidle")
-            page.wait_for_timeout(3000)
+            # ★ 等库卡**出现**（不等固定 3 秒）：CI 是全新库 + 冷后端，首屏更慢
             card = page.locator(f".kb-card:has-text('E2E分段库-{ts}')").first
+            try:
+                card.wait_for(state="visible", timeout=30000)
+            except Exception:  # noqa: BLE001
+                pass
+            page.wait_for_timeout(400)
             if card.count() == 0:
                 card = page.locator(".kb-card").first
             card.click()
@@ -434,8 +439,13 @@ def main() -> int:  # noqa: C901
             # ────────────── 8 · 真实进度与「刷新不重置」（第 8 周演示判据） ──────────────
             print("== 8. 开始向量化 → 进度 → ★ 刷新不重置 ==")
             page.goto(f"{BASE}/#/knowledge", wait_until="networkidle")
-            page.wait_for_timeout(3000)
+            # ★ 等库卡**出现**（不等固定 3 秒）：CI 是全新库 + 冷后端，首屏更慢
             card = page.locator(f".kb-card:has-text('E2E分段库-{ts}')").first
+            try:
+                card.wait_for(state="visible", timeout=30000)
+            except Exception:  # noqa: BLE001
+                pass
+            page.wait_for_timeout(400)
             if card.count() == 0:
                 card = page.locator(".kb-card").first
             card.click()

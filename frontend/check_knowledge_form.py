@@ -450,8 +450,14 @@ def main() -> int:
             # ────────────── 3. 文档密级 > 库 ceiling ⇒ 后端原因原文 ──────────────
             print("\n== 3. 文档密级 > 库 ceiling ⇒ 界面显示后端原因（含两个中文密级名） ==")
             page.goto(f"{BASE}/#/knowledge", wait_until="networkidle")
-            page.wait_for_timeout(1500)
+            # ★ 等库卡**出现**，不等固定时长：CI 是全新库 + 冷后端，首屏要拉列表 + 模型 + 上传策略，
+            #   1.5 秒偶尔不够（同类红在 check_knowledge_parse 上实测发生过）
             card = page.locator(f".kb-card:has-text('{kb_name}')").first
+            try:
+                card.wait_for(state="visible", timeout=30000)
+            except Exception:  # noqa: BLE001
+                pass
+            page.wait_for_timeout(400)
             if card.count():
                 card.click()
             else:
