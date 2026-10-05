@@ -104,17 +104,36 @@ public final class NoiseStripper {
     }
 
     // ③ 跨页重复行：同一行出现 ≥3 次且长度 < 60 字 ⇒ 判为页眉页脚，**全部**剔掉
+    //
+    //   ★★ 保守性护栏（实测踩到过，必须留）：**重复行必须是少数派**。
+    //     "跨页重复行"这条规则的隐含前提是"页面里还有别的内容"；而一份
+    //     "一行短句重复 N 次"的文档会被整篇剥空（实测：闸门夹具就是这种文本 ⇒ 预览 0 段、
+    //     整篇文档看起来"有内容却切不出段"）。这类误杀属于 §10.2 风险 2 *内容静默缺失*，
+    //     比漏剔严重得多 —— 所以宁可在这类文档上一条都不剥。
     Map<String, List<Integer>> occurrences = new LinkedHashMap<>();
+    int nonBlank = 0;
     for (int i = 0; i < lines.length; i++) {
+      if (inFence[i] || lines[i].isBlank()) {
+        continue;
+      }
+      nonBlank++;
       String trimmed = lines[i].strip();
-      if (trimmed.isEmpty() || inFence[i] || drop[i] || trimmed.length() >= REPEAT_MAX_LENGTH) {
+      if (drop[i] || trimmed.length() >= REPEAT_MAX_LENGTH) {
         continue;
       }
       occurrences.computeIfAbsent(trimmed, k -> new ArrayList<>()).add(i);
     }
+    int repeatedTotal = 0;
     for (Map.Entry<String, List<Integer>> entry : occurrences.entrySet()) {
       if (entry.getValue().size() >= REPEAT_MIN_OCCURRENCES) {
-        entry.getValue().forEach(index -> drop[index] = true);
+        repeatedTotal += entry.getValue().size();
+      }
+    }
+    if (repeatedTotal * 2 <= nonBlank) {
+      for (Map.Entry<String, List<Integer>> entry : occurrences.entrySet()) {
+        if (entry.getValue().size() >= REPEAT_MIN_OCCURRENCES) {
+          entry.getValue().forEach(index -> drop[index] = true);
+        }
       }
     }
 

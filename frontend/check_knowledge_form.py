@@ -388,7 +388,17 @@ def main() -> int:
             # ★ 「生成预览」是这条链上最容易整段失效的一步：它要先把文件建档（解析 + 分块），
             #   再按 documentId 拿预览。曾因向导走「暂存上传」（真栈未实现）而必然 400。
             click_btn("生成预览", "智能分段", "生成")
-            page.wait_for_timeout(4000)
+            # ★ 等**信号**，不等固定时长（今天这条教训已经吃过三次）：
+            #   「生成预览」现在是"建档 → **等解析落地**（异步，T249.3）→ 取预览"三步，
+            #   固定 4 秒偶尔不够 ⇒ 闸门随机变红，而红的原因与产品无关。
+            #   等到「分段卡出现」或「报错文案出现」为止（最多 60 秒）。
+            for _ in range(120):
+                page.wait_for_timeout(500)
+                _items = page.locator(".preview-item").count()
+                _body = active_step_body() or dlg_text()
+                if _items > 0 or "生成预览失败" in _body:
+                    break
+            page.wait_for_timeout(500)
             body_prev = active_step_body() or dlg_text()
             notif_prev = page.evaluate(
                 "() => [...document.querySelectorAll('.notice, .el-message')].map(e => e.innerText).join('\\n')"
