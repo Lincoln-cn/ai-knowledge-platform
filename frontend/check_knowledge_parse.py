@@ -178,9 +178,16 @@ def main() -> int:
 
             # ────────────── 进入知识库 → 文档面板 ──────────────
             page.goto(f"{BASE}/#/knowledge", wait_until="networkidle")
-            page.wait_for_timeout(2500)
-            # 点第一个可见库卡进详情（mock 与真栈同一入口）
+            # ★ 等**库卡出现**，不等固定 2.5 秒。实测在 CI 上会红：那台机器是**全新库 + 冷后端**
+            #   （本闸门是第一条跑的），首屏要拉列表 + 模型 + 上传策略，2.5 秒偶尔不够 ——
+            #   表象是「知识库列表有可点的库卡 ✗」，而列表其实只是还没渲染出来。
+            #   与噪声规则那两次是同一个教训：**近似判据（固定时长）在真实链路上不成立**。
             card = page.locator(".kb-card").first
+            try:
+                card.wait_for(state="visible", timeout=30000)
+            except Exception:  # noqa: BLE001
+                pass
+            page.wait_for_timeout(600)
             if card.count():
                 card.click()
                 page.wait_for_timeout(1800)
