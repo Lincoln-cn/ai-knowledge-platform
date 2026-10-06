@@ -25,8 +25,9 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * 「靠调用方只写一次」保证不住，所以幂等必须落在<strong>表的主键 + 冲突子句</strong>上： {@code id = segmentId} ⇒ {@code on conflict
  * (id) do update}。 写错成"先查再插"的话，并发下要么两条都写、要么一条报唯一键冲突 —— 幂等要求的是"无论投几次结果一致"。
  *
- * <p>★ 第二条纪律：<strong>维度不匹配必须明确失败</strong>。表名带维度后缀（{@code vector(N)} 是列类型）， 补零或截断能让写入"成功"，但那份向量是假的
- * —— 而且查不出来。
+ * <p>★ 第二条纪律（{@code 0.3.2} 起改了口径）：<strong>维度是表级属性 ⇒ 按维度路由</strong>。 早先的做法是"维度不符就报错" ——
+ * 那是"明确失败"（方向对），但能力不全：换一个不同维度的向量模型 就只能报错（issue #5）。现在按维度落到 {@code vec_embedding_<维度>}，表不存在则按需建。 ★
+ * 而"明确失败"这条纪律**没有丢**，它换了个地方守：**空向量照样拒绝**（无法决定进哪张表）。
  */
 @SpringBootTest
 @Testcontainers
@@ -57,19 +58,40 @@ class SegmentEmbeddingRepositoryTest {
     assertThat(loaded.dimension()).isEqualTo(DIM);
   }
 
-  /** ★ 维度与向量表不一致 ⇒ 明确失败，且消息里带实际维度（不许静默补零/截断）。 */
+  /**
+   * ★ 换一个不同维度的向量模型 ⇒ <strong>不报错，落到新表</strong>（issue #5 的判据）。
+   *
+   * <p>这条替换了原来那句「维度不匹配必须明确失败」—— 它的前提（只有一张 768 的表、别的维度只能报错） 已经不成立了。维度是表级属性，正确的解法是"按维度路由 +
+   * 按需建表"，而不是"换个模型就报错"。
+   *
+   * <p>★ 顺带钉住两件事：① <strong>跨表也要找得到</strong>（调用方不必知道这条向量在哪张表）； ② 空向量仍然明确失败 ——
+   * 无法决定进哪张表，而"猜一张"会让错位的向量查不出来。
+   */
   @Test
-  void 维度不匹配必须明确失败() {
+  void 换维度会落到新表而不是报错() {
     UUID segmentId = UUID.randomUUID();
     UUID docId = UUID.randomUUID();
 
-    assertThatThrownBy(() -> embeddings.upsert(embedding(segmentId, docId, "x", 0.1f, 1024)))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("1024")
-        .hasMessageContaining(String.valueOf(DIM));
+    embeddings.upsert(embedding(segmentId, docId, "1024 维的向量", 0.1f, 1024));
 
-    assertThat(embeddings.findById(segmentId)).as("失败的写入不许留下半条记录").isEmpty();
-    assertThat(embeddings.countByDocumentId(docId)).isZero();
+    assertThat(rowCountIn(1024, segmentId)).as("必须落到 vec_embedding_1024").isEqualTo(1);
+    assertThat(rowCountIn(DIM, segmentId)).as("768 那张表里不该有它").isZero();
+    assertThat(embeddings.findById(segmentId)).as("跨表也要找得到 —— 否则「跨维度可用」只做了一半").isPresent();
+    assertThat(embeddings.countByDocumentId(docId)).as("计数也要跨表").isEqualTo(1);
+
+    assertThatThrownBy(
+            () ->
+                embeddings.upsert(
+                    new SegmentEmbedding(
+                        UUID.randomUUID(),
+                        UUID.randomUUID(),
+                        docId,
+                        UUID.randomUUID(),
+                        "空向量",
+                        new float[0])))
+        .as("空向量无法决定进哪张表 ⇒ 明确失败（不许猜一张）")
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("向量为空");
   }
 
   // ────────────────────────── 2 · 可追溯：模型与维度随行 ──────────────────────────
@@ -162,9 +184,16 @@ class SegmentEmbeddingRepositoryTest {
   }
 
   private long rowCount(UUID segmentId) {
+    return rowCountIn(DIM, segmentId);
+  }
+
+  /** 指定维度表里的行数（换维度那条用例要逐表核对）。 */
+  private long rowCountIn(int dimension, UUID segmentId) {
     Long count =
         jdbc.queryForObject(
-            "select count(*) from vec_embedding_" + DIM + " where id = ?", Long.class, segmentId);
+            "select count(*) from vec_embedding_" + dimension + " where id = ?",
+            Long.class,
+            segmentId);
     return count == null ? 0 : count;
   }
 }

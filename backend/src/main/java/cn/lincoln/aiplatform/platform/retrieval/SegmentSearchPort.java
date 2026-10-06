@@ -1,0 +1,90 @@
+package cn.lincoln.aiplatform.platform.retrieval;
+
+import java.util.Collection;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+
+/**
+ * 分段检索端口（跨模块 SPI）—— 由 {@code knowledge} 实现（它拥有 {@code kb_segment} 与 {@code content_tsv}），{@code
+ * retrieval} 消费。
+ *
+ * <h3>为什么是这四个方法</h3>
+ *
+ * <p>检索要的三件事都在"分段属于谁、能不能被看见"这一侧（{@code 07 §3.3}：可见性判定**只在一处**）：
+ *
+ * <ol>
+ *   <li>{@link #visibleKbIds} —— 先问"我能检索哪些库"，后面所有查询都收敛到这个 id 集合；
+ *   <li>{@link #fullText} —— 全文那一路（{@code content_tsv} + 词命中）；
+ *   <li>{@link #visibleAmong} —— ★ <strong>两路同谓词</strong>：向量路拿回来的候选也要过同一套判定 （{@code 13}
+ *       五道闸门之二：只给一路加条件就是"看着能过滤"的静默漏洞）；
+ *   <li>{@link #load} —— 命中的展示信息（标题/正文/文档名/库名），组装引用用。
+ * </ol>
+ *
+ * <p>★ <strong>不在这个端口里的东西</strong>：向量相似度检索（那是 {@code platform.vector.VectorIndexPort} 的事）、排序融合（那是
+ * {@code retrieval} 的策略）。 端口只提供"事实"，策略留在检索模块 —— 这条分工就是 {@code 01 §3.3} 说的
+ * "向量的存取是基础设施能力、检索的策略是业务能力"。
+ */
+public interface SegmentSearchPort {
+
+  /**
+   * 当前用户可见的知识库 id（★ 可见性判定只在这里做，别处不许再实现一份）。
+   *
+   * @param requested 调用方想检索的库；<strong>空</strong> = 全部可见的
+   * @return 过滤后的 id（保序）；调用方拿到的每一个都确定可见
+   */
+  List<UUID> visibleKbIds(Collection<UUID> requested);
+
+  /**
+   * 这些库用的向量模型 id。
+   *
+   * <p>★ 用途是"把问题向量化"以及"决定查哪张维度表"。返回空表示库不存在或不可见。 多个模型时调用方要自己决定（{@code retrieval} 的做法是明确拒绝，见那边的注释）——
+   * 端口这里只如实返回集合，不替它做产品决定。
+   */
+  Set<UUID> embeddingModelIds(Collection<UUID> kbIds);
+
+  /**
+   * 全文检索那一路。
+   *
+   * <p>★ 只返回<strong>命中的</strong>（{@code content_tsv @@ 查询}）并按词命中质量降序 ——
+   * 它<strong>不</strong>做阈值过滤：阈值的量纲是"相似度"（{@code 10 §5.4} 说它要随向量模型校准）， 拿它去卡无界的 {@code ts_rank}
+   * 会让全文模式永远空。每条路有自己的准入判据，融合交给 RRF。
+   */
+  List<Scored> fullText(TextQuery query);
+
+  /**
+   * ★ 两路同谓词：把候选 id 过一遍<strong>同一条</strong>可见性判定 （库启用 + 文档启用未删 + 分段启用）。
+   *
+   * <p>传进来的 kbIds 是"允许的范围"（{@link #visibleKbIds} 的结果）；不在范围内的候选直接丢弃 —— 双保险，因为向量路的元数据过滤是"优化"，不是判据。
+   */
+  Set<UUID> visibleAmong(Collection<UUID> candidateIds, Collection<UUID> kbIds);
+
+  /** 命中分段的展示信息（引用组装用）。顺序不保证，调用方按 segmentId 索引。 */
+  List<Card> load(Collection<UUID> segmentIds);
+
+  /**
+   * 全文检索的请求。
+   *
+   * @param question 用户问题原文（分词的权威是库里的 {@code chinese_zh} 配置，**不在 Java 侧再分一次**）
+   * @param kbIds 允许的库范围
+   * @param limit 候选上限
+   */
+  record TextQuery(String question, List<UUID> kbIds, int limit) {}
+
+  /**
+   * 一路检索出来的候选。
+   *
+   * @param score 该路自己的分数量纲：向量路是余弦相似度、全文路是"查询词命中覆盖率"。 ★ 两者都落在 0–1，是为了界面上那个阈值滑块在三种模式下都说得通
+   *     （但**过滤与否**由各路自己决定，融合只看 rank）。
+   */
+  record Scored(UUID segmentId, double score) {}
+
+  /**
+   * 命中分段的展示信息。
+   *
+   * @param title 分段标题（{@code 12 §3.4} 推出来的那个）
+   * @param content ★ 是 {@code content} 而不是 {@code search_text} —— 引用展示必须给干净原文 （{@code 12 §4.2} 纪律
+   *     1）
+   */
+  record Card(UUID segmentId, String title, String content, String docName, String kbName) {}
+}

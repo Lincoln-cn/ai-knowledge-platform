@@ -4,6 +4,8 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.Grant;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.Visibility;
+import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -13,6 +15,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -100,6 +103,30 @@ public class KnowledgeBase implements OwnedResource {
   /** 已有向量化内容 ⇒ 向量模型被锁定（KB-I4）。 */
   @Column(name = "has_vectorized_content", nullable = false)
   private boolean hasVectorizedContent;
+
+  // ────────────────────────── 检索参数（第 10 周 · 0.3.2）──────────────────────────
+  // ★ 为什么挂在库上：mock 里那句话就是口径 ——「检索参数是知识库的一部分：读与写都先问同一个判定」
+  //   （`mock/handlers/retrieval.ts`）。挂 KB 顺带让权限与可见性判定复用知识库那一套（07 §3.3）。
+  // ★ 字段初始化必须有：库层这四列是 `not null default`，而 Hibernate 插入时会带上实体里的值 ——
+  //   不初始化就会显式插 NULL、直接撞 NOT NULL 约束（"库里有默认值"救不了它）。
+
+  /** 检索模式（契约 {@code RetrievalMode}）。★ 默认 HYBRID，与 mock 的默认值一字不差。 */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "retrieval_mode", nullable = false, length = 16)
+  private RetrievalMode retrievalMode = RetrievalMode.HYBRID;
+
+  /** 相似度阈值。★ 顺序是"先阈值后 TopN"，反了会把噪声带进上下文（{@code 03 §2.3}）。 */
+  @Column(name = "retrieval_threshold", nullable = false, precision = 3, scale = 2)
+  private BigDecimal retrievalThreshold = new BigDecimal("0.60");
+
+  /** 取前 N 条。范围 1–20（与 mock 的 PUT 校验一致，库层也有 check）。 */
+  @Column(name = "retrieval_top_n", nullable = false)
+  private int retrievalTopN = 5;
+
+  /** 无引用时的策略（契约 {@code NoRefStrategy}）。默认 REFUSE。 */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "retrieval_no_ref_strategy", nullable = false, length = 16)
+  private NoRefStrategy retrievalNoRefStrategy = NoRefStrategy.REFUSE;
 
   @CreationTimestamp
   @Column(name = "created_at", nullable = false, updatable = false)
@@ -237,6 +264,36 @@ public class KnowledgeBase implements OwnedResource {
     this.updatedBy = by;
   }
 
+  /**
+   * 改检索参数（{@code PUT /knowledge-bases/:id/retrieval}）。
+   *
+   * <p>★ 契约是 <strong>Partial</strong>（前端只传改动的字段）⇒ 每个参数只在非空时覆盖。 范围校验在这里做一次、库层的 check
+   * 再做一次：应用层给可读原因，库层保证"任何写入路径都逃不掉"。
+   */
+  public void changeRetrievalParams(
+      RetrievalMode mode, Double threshold, Integer topN, NoRefStrategy noRefStrategy) {
+    if (mode != null) {
+      this.retrievalMode = mode;
+    }
+    if (threshold != null) {
+      if (threshold < 0 || threshold > 1) {
+        throw new IllegalArgumentException("相似度阈值应在 0～1 之间");
+      }
+      // ★ 显式定标到 2 位：列是 numeric(3,2)，而 0.605 这种值让 PG 自己舍入不如我们说了算
+      this.retrievalThreshold =
+          BigDecimal.valueOf(threshold).setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+    if (topN != null) {
+      if (topN < 1 || topN > 20) {
+        throw new IllegalArgumentException("TopN 应在 1～20 之间");
+      }
+      this.retrievalTopN = topN;
+    }
+    if (noRefStrategy != null) {
+      this.retrievalNoRefStrategy = noRefStrategy;
+    }
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {
@@ -293,6 +350,23 @@ public class KnowledgeBase implements OwnedResource {
 
   public boolean hasVectorizedContent() {
     return hasVectorizedContent;
+  }
+
+  public RetrievalMode retrievalMode() {
+    return retrievalMode;
+  }
+
+  /** ★ 返 double 而不是 BigDecimal：契约里 threshold 是 number，多一层类型只会让调用方多一次转换。 */
+  public double retrievalThreshold() {
+    return retrievalThreshold.doubleValue();
+  }
+
+  public int retrievalTopN() {
+    return retrievalTopN;
+  }
+
+  public NoRefStrategy retrievalNoRefStrategy() {
+    return retrievalNoRefStrategy;
   }
 
   public Instant createdAt() {
