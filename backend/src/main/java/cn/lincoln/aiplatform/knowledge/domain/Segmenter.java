@@ -28,6 +28,24 @@ public class Segmenter {
   private final MarkdownChunker chunker = new MarkdownChunker();
 
   /**
+   * 表格改写接缝（0.3.2）：表格分段进 {@code search_text} 的是<strong>行级陈述</strong>，不是原表。
+   *
+   * <p>★ 默认用规则版（{@link RuleBasedTableStatementRewriter}）；接缝的意义在于 <strong>换实现不改调用方</strong> —— LLM
+   * 版是同一接口的第二个实现， 触发条件写在 {@link TableStatementRewriter} 的类注释里。
+   */
+  private final TableStatementRewriter tableRewriter;
+
+  /** 默认构造：规则版改写。★ 现有三处调用方（两个 Service 与测试）走的都是它，零改动。 */
+  public Segmenter() {
+    this(new RuleBasedTableStatementRewriter());
+  }
+
+  /** 注入式构造：给"换一个改写实现"留的口子。 */
+  public Segmenter(TableStatementRewriter tableRewriter) {
+    this.tableRewriter = tableRewriter;
+  }
+
+  /**
    * 有效装箱目标长度（{@code SEG-I5}）—— 唯一计算点，测试直接断言本方法。
    *
    * <p>进向量的是 {@code searchText = 前缀 + 分隔 + 正文}（{@code 12 §4.2}）⇒ 正文装箱目标要扣掉 前缀与分隔符，再与调用方的 {@code
@@ -151,16 +169,20 @@ public class Segmenter {
     List<PlannedSegment> plan = new ArrayList<>(chunks.size());
     for (SegmentChunk chunk : chunks) {
       String prefix = SearchText.prefix(docType, department, title, chunk.titlePath());
+      // ★ 表格分段：进检索文本的是**行级陈述**（判据 ③），而 content 保留原表（引用可溯源）
+      String body = chunk.isTable() ? tableRewriter.rewrite(chunk.content()) : chunk.content();
       // ★ 校验与落库必须是同一个字符串：把 ofSearchText 的产物直接当 searchText 用，
       //   避免「我验的和我要存的是两次独立拼装」这类只在边界上才暴露的漂移（SEG-I1 / SEG-I5）
-      String searchText = SegmentContent.ofSearchText(prefix, chunk.content(), maxChars).text();
+      String searchText = SegmentContent.ofSearchText(prefix, body, maxChars).text();
       plan.add(
           new PlannedSegment(
               chunk.ordinal(),
               chunk.content(),
               searchText,
-              SearchText.contentHash(
-                  docType, department, title, chunk.titlePath(), chunk.content()),
+              // ★ 哈希的"正文"必须用 body（= 进向量的那份），不能用 chunk.content()：
+              //   否则"改了改写规则"（例如哪天换成 LLM 版）不会让 contentHash 变
+              //   ⇒ 存量向量被当成仍然有效 ⇒ 检索拿着旧向量、文本却是新的（静默不一致，SEG-I7）
+              SearchText.contentHash(docType, department, title, chunk.titlePath(), body),
               chunk.title(),
               chunk.titlePath(),
               chunk.isTable(),

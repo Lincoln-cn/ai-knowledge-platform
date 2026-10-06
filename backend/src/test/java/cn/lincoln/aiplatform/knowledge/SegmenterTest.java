@@ -262,7 +262,7 @@ class SegmenterTest {
 
   /** ★ 每段都要带齐入库/预览需要的字段（{@code 12 §3.2} 规则 4 + §4.2）。 */
   @Test
-  void 计划逐段字段齐备() {
+  void planSegmentsCarryAllFields() {
     String md =
         """
         # 住宿标准
@@ -280,7 +280,18 @@ class SegmenterTest {
     for (PlannedSegment seg : plan) {
       String prefix = SearchText.prefix(DOC_TYPE, DEPARTMENT, TITLE, seg.titlePath());
       assertThat(seg.content()).isNotBlank();
-      assertThat(seg.searchText()).isEqualTo(SearchText.of(prefix, seg.content()));
+      if (seg.isTable()) {
+        // ★ 0.3.2 起的分工（判据 ③）：content 保留**原表**（引用可溯源），
+        //   search_text 用**行级陈述**替换表格 —— 于是两列必然不同。
+        assertThat(seg.content()).as("content 仍是原表").contains("| --- |").contains("| 一线 | 500 |");
+        assertThat(seg.searchText())
+            .as("search_text 里是陈述、不是原表")
+            .contains("城市：一线")
+            .doesNotContain("| --- |")
+            .isNotEqualTo(SearchText.of(prefix, seg.content()));
+      } else {
+        assertThat(seg.searchText()).isEqualTo(SearchText.of(prefix, seg.content()));
+      }
       assertThat(seg.contentHash()).hasSize(64);
       assertThat(seg.charCount()).isEqualTo(seg.content().length());
       assertThat(seg.title()).isNotBlank();

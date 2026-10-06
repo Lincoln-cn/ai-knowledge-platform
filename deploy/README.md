@@ -23,7 +23,39 @@
 
 ---
 
-## 二、应用镜像
+## 二、PostgreSQL 镜像（pgvector + zhparser）—— 中文全文检索的前提（第 10 周 · 0.3.2 补记）
+
+**为什么 PG 也要自制镜像**：设计册 `09 §10.2 #3` 定的中文全文检索是 `to_tsvector('chinese_zh', …)`，
+而 `chinese_zh` 的 parser 只能是 **zhparser**。实测（本机真容器）`pgvector/pgvector:pg16` 的
+`pg_available_extensions` 里**没有 zhparser**、PGDG / Debian 也没有现成包 ⇒ 只能自己编译。
+
+```bash
+# 构建（★ 构建上下文是仓库根）
+docker build -f deploy/pg/Dockerfile -t ai-knowledge-platform-pg:dev .
+# 自检（11 项：pgvector 真功能 + zhparser 真分词 + 无编译器残留）
+python deploy/verify_image_pg.py
+```
+
+| 项 | 值（本机实测） |
+|---|---|
+| 基础镜像 | `pgvector/pgvector:pg16` = Debian 12 bookworm + PG **16.15**（Debian 包版） |
+| 加进去的东西 | SCWS 1.2.3（`hightman/scws`）+ zhparser（`amutu/zhparser`），**版本都钉住** |
+| 镜像大小 | **643 MB**（base 621 MB）★ 第一版 1.98 GB —— "先装后卸"跨 RUN **不会**让镜像变小 |
+| 交付后要联网吗 | **不需要**（apt 与源码只在构建期用；运行期只有镜像内的 .so 与词典） |
+
+### ★★ 两个必须知道的点
+
+1. **它仍然是 pgvector 镜像**：两段式都拿 `pgvector/pgvector:pg16` 当 base ⇒ `vector` 原封不动。
+   换成官方 `postgres` 镜像会让 V1 迁移直接失败（`CREATE EXTENSION vector`）。
+2. **存量库不会重跑 initdb**：`deploy/pg/initdb/10-extensions.sql` 只在**首次初始化**时执行。
+   换镜像时若数据目录已存在，必须自己补一次：
+   ```sql
+   create extension if not exists vector;   -- 通常已有
+   create extension if not exists zhparser;
+   ```
+   ★ 漏了这一步的症状是「全文检索一条都搜不到」，而向量路照常 —— 混合模式看不出异常。
+
+## 三、应用镜像
 
 [`Dockerfile`](./Dockerfile) 就是交付形态。它把 OCR 引擎与语言包**烤进镜像层**，
 于是交付后运行时不依赖互联网、也不需要再装任何东西（`12 §11.2` 的"零新服务、零新库"落在这里）。
@@ -82,7 +114,7 @@ python deploy/verify_image_ocr.py     # → 默认打 http://localhost:18080
 
 ---
 
-## 三、离线交付清单 · OCR
+## 四、离线交付清单 · OCR
 
 镜像里必须有下面两样。<u>下面每一项都是本机实测过的值</u>，不是照文档抄的。
 
@@ -132,7 +164,7 @@ Ubuntu 的 `tesseract-ocr-chi-sim` 装的**就是 `tessdata_fast`**（`12 §11.2
 
 ---
 
-## 四、★ 交付自检（三条，缺一不可）
+## 五、★ 交付自检（三条，缺一不可）
 
 ### ① 镜像里引擎与语言包都在
 
@@ -189,7 +221,7 @@ python frontend/check_ocr_e2e.py
 
 ---
 
-## 五、OCR 的配置项（交付时可能要改的）
+## 六、OCR 的配置项（交付时可能要改的）
 
 全部走环境变量覆盖（`application.yml` 的 `app.ocr.*`）：
 
@@ -205,7 +237,7 @@ python frontend/check_ocr_e2e.py
 
 ---
 
-## 六、开发机（Windows）怎么装
+## 七、开发机（Windows）怎么装
 
 与镜像路线**等价**的本地安装（本机实测过）：
 
@@ -220,7 +252,7 @@ scoop 会自动把 `TESSDATA_PREFIX` 指到上面那个目录 —— 所以开�
 
 ---
 
-## 七、诚实记账：哪些已验、哪些还没
+## 八、诚实记账：哪些已验、哪些还没
 
 | 项 | 状态 |
 |---|---|
