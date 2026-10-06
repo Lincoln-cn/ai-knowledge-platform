@@ -113,9 +113,12 @@ class ContractDriftTest {
           // 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）
           "/feedbacks",
           // §3.1「工作台」：4 项指标来自 analytics 域（随 0.4.x 之后）
-          "/analytics",
-          // 第 10–11 周 0.3.2–0.3.3：三模式检索 + RRF + 密级 pre-filter
-          "/retrieval");
+          "/analytics"
+          // ★ /retrieval 已于 0.3.2 落地（POST /retrieval/test 三模式 + RRF；两个参数端点
+          //   挂在 /knowledge-bases/{*}/retrieval 下）⇒ 从清单删除。
+          //   与上面 /documents、/segments 两次一样，删除是被这条"防黑洞"规则逼出来的：
+          //   留着它就成了"曾经欠过、现在早已实现"的噪音。
+          );
 
   /**
    * 已知例外：双向都不比对的<strong>精确路径</strong>，每项必须写清理由。

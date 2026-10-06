@@ -8,6 +8,8 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.time.Instant;
 import java.util.List;
@@ -229,6 +231,78 @@ public class KnowledgeBaseService {
     KnowledgeBase base = requireVisible(id);
     base.markDeleted(Instant.now(), currentUserId);
     bases.save(base);
+  }
+
+  // ────────────────────────── 检索参数（第 10 周 · 0.3.2）──────────────────────────
+
+  /**
+   * 读检索参数（{@code GET /knowledge-bases/:id/retrieval}）。
+   *
+   * <p>★ 新库回的是<strong>默认值</strong>而不是 404（mock 的注释写明了这条：否则设置面板刚建好的库会弹"不存在"）。
+   * 而"回默认值"这件事是<strong>库自己给的</strong> —— 四列 {@code not null default}（{@code V20}），
+   * 不需要应用层兜底；应用层兜底反而会掩盖"列没建上"。
+   */
+  @Transactional(readOnly = true)
+  public RetrievalParamsView retrievalParams(UUID id) {
+    return toRetrievalParamsView(requireVisible(id));
+  }
+
+  /**
+   * 改检索参数（{@code PUT /knowledge-bases/:id/retrieval}，契约是 Partial）。
+   *
+   * <p>★ 与其它写端点同口径：看不见的库返 404（不返 403 —— 403 等于确认 id 存在）。
+   */
+  @Transactional
+  public RetrievalParamsView updateRetrievalParams(
+      UUID id,
+      String mode,
+      Double threshold,
+      Integer topN,
+      String noRefStrategy,
+      UUID currentUserId) {
+    KnowledgeBase base = requireVisible(id);
+    try {
+      base.changeRetrievalParams(
+          parseRetrievalMode(mode), threshold, topN, parseNoRefStrategy(noRefStrategy));
+    } catch (IllegalArgumentException e) {
+      // 领域层抛的是"范围不对"这类可读原因，这里统一翻成 400（与知识库其它字段同口径）
+      throw new BusinessException(ErrorCode.BAD_REQUEST, e.getMessage());
+    }
+    base.setUpdatedBy(currentUserId);
+    return toRetrievalParamsView(bases.save(base));
+  }
+
+  private static RetrievalParamsView toRetrievalParamsView(KnowledgeBase base) {
+    return new RetrievalParamsView(
+        base.retrievalMode(),
+        base.retrievalThreshold(),
+        base.retrievalTopN(),
+        base.retrievalNoRefStrategy());
+  }
+
+  /**
+   * ★ 空值要原样返回 null（= "这次不改这个字段"），不能回落到默认值 —— 否则 Partial 更新会把没传的字段全部重置成默认（用户改一个 TopN 就把模式打回 HYBRID）。
+   */
+  private static RetrievalMode parseRetrievalMode(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return RetrievalMode.parse(raw);
+    } catch (IllegalArgumentException e) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, e.getMessage());
+    }
+  }
+
+  private static NoRefStrategy parseNoRefStrategy(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return NoRefStrategy.parse(raw);
+    } catch (IllegalArgumentException e) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, e.getMessage());
+    }
   }
 
   // ────────────────────────── 内部 ──────────────────────────
