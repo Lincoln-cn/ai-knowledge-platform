@@ -22,7 +22,7 @@ class RrfTest {
   }
 
   @Test
-  void 两路都命中的分段分更高() {
+  void bothPathsHitScoresHigher() {
     UUID both = id("01");
     UUID vectorOnlyTop = id("02");
 
@@ -39,7 +39,7 @@ class RrfTest {
   }
 
   @Test
-  void 同一分段被多路命中只出现一次且分累加() {
+  void sameSegmentAppearsOnceAndScoresAccumulate() {
     UUID same = id("03");
     var fused = Rrf.fuse(List.of(List.of(same), List.of(same), List.of(same)));
 
@@ -50,7 +50,7 @@ class RrfTest {
   }
 
   @Test
-  void 常数k的作用是把一二名的差距压平() {
+  void constantKFlattensTopTwoGap() {
     UUID first = id("04");
     UUID second = id("05");
     var fused = Rrf.fuse(List.of(List.of(first, second)));
@@ -60,7 +60,7 @@ class RrfTest {
   }
 
   @Test
-  void 同分时次序必须稳定不随输入顺序漂() {
+  void tieOrderIsStable() {
     UUID a = id("06");
     UUID b = id("07");
     // 同样的输入、连调两次：结果必须逐字相同（否则闸门会在同分样本上偶发红）
@@ -77,7 +77,7 @@ class RrfTest {
   }
 
   @Test
-  void 空输入与单路都成立() {
+  void emptyAndSinglePathAreAccepted() {
     assertThat(Rrf.fuse(List.of())).isEmpty();
     assertThat(Rrf.fuse(List.of(List.of()))).isEmpty();
     UUID only = id("08");
@@ -87,7 +87,7 @@ class RrfTest {
   }
 
   @Test
-  void k非法时明确拒绝() {
+  void rejectsInvalidK() {
     assertThatThrownBy(() -> Rrf.fuse(0, List.of(List.of(id("09")))))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("k 必须 ≥ 1");

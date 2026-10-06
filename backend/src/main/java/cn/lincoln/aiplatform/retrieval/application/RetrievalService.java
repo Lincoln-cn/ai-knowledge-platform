@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,6 +42,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class RetrievalService {
+
+  private static final Logger log = LoggerFactory.getLogger(RetrievalService.class);
 
   /** 候选过采样倍数（见类注释）。上限 100：命中测试是人点的，不是批处理。 */
   private static final int OVERFETCH = 3;
@@ -152,21 +156,66 @@ public class RetrievalService {
    */
   private List<SegmentSearchPort.Scored> vectorSearch(
       HitTestQuery request, List<UUID> kbIds, int limit) {
-    Set<UUID> modelIds = segmentSearch.embeddingModelIds(kbIds);
-    if (modelIds.isEmpty()) {
+    Map<UUID, UUID> modelByKb = segmentSearch.embeddingModelByKb(kbIds);
+    if (modelByKb.isEmpty()) {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST, "这些知识库没有可用的向量模型，无法做向量检索", "请确认已绑定向量模型并已加载");
     }
-    if (modelIds.size() > 1) {
-      // ★ 明确拒绝，而不是"挑一个用"：不同模型的向量在不同空间里，混着检索会返回
-      //   "看起来命中、其实不相关"的结果 —— 这个错误在结果上完全看不出来。
-      throw new BusinessException(
-          ErrorCode.BAD_REQUEST,
-          "本次检索涉及 " + modelIds.size() + " 个不同的向量模型，无法用同一份问题向量检索",
-          "请把范围限定在同一个知识库，或先统一这些库的向量模型");
+
+    // ★★ 按模型分组：不同模型的向量在**不同空间、也在不同维度表**里 ⇒ 只能各查各的。
+    //   这不是"兼容写法"，而是 **RRF 的又一次复用**（`10 §4.1`：混合模式内部 / 多查询 / 跨轮，
+    //   同一个算法复用三次）。★ 这一点是**真栈闸门教我们的**：命中测试页在"不限定知识库"时
+    //   会一次跨到 5 个模型（开发库实测），早先的写法在那里直接返回 400 —— 页面点不动，
+    //   而那是"演示路径"。
+    Map<UUID, List<UUID>> kbIdsByModel = new LinkedHashMap<>();
+    modelByKb.forEach(
+        (kb, model) -> kbIdsByModel.computeIfAbsent(model, key -> new ArrayList<>()).add(kb));
+
+    List<List<UUID>> rankedPerModel = new ArrayList<>();
+    Map<UUID, Double> similarity = new HashMap<>();
+    BusinessException lastFailure = null;
+    for (Map.Entry<UUID, List<UUID>> group : kbIdsByModel.entrySet()) {
+      try {
+        List<SegmentSearchPort.Scored> hits =
+            searchWithinOneModel(group.getKey(), group.getValue(), request.question(), limit);
+        rankedPerModel.add(ids(hits));
+        for (SegmentSearchPort.Scored hit : hits) {
+          similarity.merge(hit.segmentId(), hit.score(), Math::max);
+        }
+      } catch (BusinessException failure) {
+        // ★ 一条坏引用不该打死整次检索。开发库实测：有库绑的向量模型已被删除 ⇒ 早先的写法
+        //   把 NOT_FOUND 直接抛出去，命中测试页整页点不动 —— 而那是**演示路径**。
+        //   ⇒ 跳过这一组、把原因写进日志（不是静默丢弃），其余照常检。
+        lastFailure = failure;
+        log.warn(
+            "检索跳过 {} 个知识库：它们的向量模型 {} 不可用（{}）",
+            group.getValue().size(),
+            group.getKey(),
+            failure.getMessage());
+      }
     }
-    UUID modelId = modelIds.iterator().next();
-    List<float[]> embedded = embeddingPort.embed(modelId, List.of(request.question()));
+    if (rankedPerModel.isEmpty()) {
+      // ★ 全坏才抛：这时返回空列表等于"让用户猜为什么没有结果"。
+      throw lastFailure;
+    }
+
+    List<UUID> ordered =
+        rankedPerModel.size() == 1
+            ? rankedPerModel.getFirst()
+            : Rrf.fuse(rankedPerModel).stream().map(Rrf.Fused::segmentId).toList();
+    // ★ 展示分取的是"该分段在它自己那个模型下的相似度"（跨模型时量纲并不严格可比）——
+    //   排序**不依赖**它（排序由 RRF 定），所以这点是可以接受的；写在注释里免得后人误解。
+    List<SegmentSearchPort.Scored> result = new ArrayList<>(ordered.size());
+    for (UUID id : ordered) {
+      result.add(new SegmentSearchPort.Scored(id, similarity.getOrDefault(id, 0.0)));
+    }
+    return result;
+  }
+
+  /** 同一个向量模型下的检索：问题 → 向量 → 按维度路由到表 → 相似度。 */
+  private List<SegmentSearchPort.Scored> searchWithinOneModel(
+      UUID modelId, List<UUID> kbIds, String question, int limit) {
+    List<float[]> embedded = embeddingPort.embed(modelId, List.of(question));
     if (embedded == null || embedded.isEmpty() || embedded.getFirst() == null) {
       throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "向量模型没有返回向量", "请稍后重试或检查模型服务状态");
     }
@@ -175,6 +224,8 @@ public class RetrievalService {
       throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "向量模型返回了空向量", "请检查模型服务");
     }
 
+    // ★ 维度从**实际返回的向量长度**取，而不是查模型声明的维度：写入侧用的也是这个长度
+    //   ⇒ 两边取法一致，才不会出现"写进 A 表、检索 B 表"这种静默错位。
     List<VectorIndexPort.Hit> hits =
         vectorIndex.search(new VectorIndexPort.Query(vector.length, vector, kbIds, limit));
     return hits.stream()
