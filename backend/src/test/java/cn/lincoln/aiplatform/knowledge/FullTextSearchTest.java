@@ -76,7 +76,7 @@ class FullTextSearchTest {
   }
 
   @Test
-  void 启动自检必须报可用且分词真的把词切开了() {
+  void startupProbeReportsAvailableAndSegmentsWords() {
     FullTextIndex.Probe probe = fullTextIndex.probe();
 
     assertThat(probe.available())
@@ -87,7 +87,7 @@ class FullTextSearchTest {
   }
 
   @Test
-  void 查询词不必相邻_命中词序不同的分段() {
+  void termsNeedNotBeAdjacent() {
     String kbId = createKb();
     // ★ 词序与查询词相反（「违约金…合同」），中间还夹着别的字 —— 短语查询必然 miss
     String reordered = insertSegment(kbId, "违约金按合同约定计算，具体见第二章");
@@ -103,7 +103,7 @@ class FullTextSearchTest {
   }
 
   @Test
-  void 覆盖率分数等于命中的查询词占比() {
+  void coverageScoreIsMatchedTermRatio() {
     String kbId = createKb();
     String both = insertSegment(kbId, "合同违约金按日计收");
     String partial = insertSegment(kbId, "违约金相关说明");
@@ -135,7 +135,7 @@ class FullTextSearchTest {
   }
 
   @Test
-  void 停用的分段不进全文结果() {
+  void disabledSegmentExcluded() {
     String kbId = createKb();
     String disabled = insertSegment(kbId, "合同违约金按日计收");
     jdbc.update("update kb_segment set enabled = false where id = ?::uuid", disabled);

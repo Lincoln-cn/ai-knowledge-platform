@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.platform.retrieval;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -36,12 +37,15 @@ public interface SegmentSearchPort {
   List<UUID> visibleKbIds(Collection<UUID> requested);
 
   /**
-   * 这些库用的向量模型 id。
+   * 每个库用的向量模型 id（库 id → 模型 id）。
    *
-   * <p>★ 用途是"把问题向量化"以及"决定查哪张维度表"。返回空表示库不存在或不可见。 多个模型时调用方要自己决定（{@code retrieval} 的做法是明确拒绝，见那边的注释）——
-   * 端口这里只如实返回集合，不替它做产品决定。
+   * <p>★ 用途有两件：把问题向量化、以及**决定查哪张维度表**。★ 按库给而不是给一个集合， 是因为「不传 kbIds =
+   * 全部可见」时<strong>极可能跨多个模型</strong>（开发库里实测就有 5 个）——
+   * 那时正确的做法是<strong>按模型分组、各查各的表、再融合</strong>，而不是拒绝、也不是随便挑一个。
+   *
+   * <p>返回空表示这些库都不存在或都不可见。
    */
-  Set<UUID> embeddingModelIds(Collection<UUID> kbIds);
+  Map<UUID, UUID> embeddingModelByKb(Collection<UUID> kbIds);
 
   /**
    * 全文检索那一路。

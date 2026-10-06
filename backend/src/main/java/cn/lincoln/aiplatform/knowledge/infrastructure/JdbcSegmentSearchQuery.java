@@ -7,8 +7,10 @@ import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -108,17 +110,22 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   }
 
   @Override
-  public Set<UUID> embeddingModelIds(Collection<UUID> kbIds) {
+  public Map<UUID, UUID> embeddingModelByKb(Collection<UUID> kbIds) {
     if (kbIds == null || kbIds.isEmpty()) {
-      return Set.of();
+      return Map.of();
     }
-    List<Object> args = new ArrayList<>(kbIds);
-    String sql =
-        "select distinct embedding_model_id from kb_knowledge_base"
+    List<UUID> ids = List.copyOf(kbIds);
+    Map<UUID, UUID> byKb = new LinkedHashMap<>();
+    jdbc.query(
+        "select id, embedding_model_id from kb_knowledge_base"
             + " where deleted_at is null and id in ("
-            + placeholders(kbIds.size())
-            + ")";
-    return new LinkedHashSet<>(jdbc.queryForList(sql, UUID.class, args.toArray()));
+            + placeholders(ids.size())
+            + ")",
+        (rs) -> {
+          byKb.put(rs.getObject("id", UUID.class), rs.getObject("embedding_model_id", UUID.class));
+        },
+        ids.toArray());
+    return byKb;
   }
 
   @Override

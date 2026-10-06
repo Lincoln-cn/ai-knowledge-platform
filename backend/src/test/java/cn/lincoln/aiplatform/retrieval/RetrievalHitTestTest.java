@@ -86,7 +86,7 @@ class RetrievalHitTestTest {
   // ────────────────────────── 判据 ④：RRF 的可观测特征 ──────────────────────────
 
   @Test
-  void 两路都命中的分段必须排在只被一路命中的前面() throws Exception {
+  void rrfPutsTwoPathHitsFirst() throws Exception {
     Fixture f = seed();
     String token = token("admin", "admin");
 
@@ -106,7 +106,7 @@ class RetrievalHitTestTest {
   // ────────────────────────── 三模式都出结果（演示物） ──────────────────────────
 
   @Test
-  void 三种模式都能出结果且全文只命中该命中的() throws Exception {
+  void allThreeModesReturnHitsAndFullTextIsPrecise() throws Exception {
     Fixture f = seed();
     String token = token("admin", "admin");
 
@@ -119,7 +119,7 @@ class RetrievalHitTestTest {
   }
 
   @Test
-  void 全文模式的命中不受相似度阈值影响() throws Exception {
+  void fullTextIgnoresSimilarityThreshold() throws Exception {
     Fixture f = seed();
     String token = token("admin", "admin");
 
@@ -136,7 +136,7 @@ class RetrievalHitTestTest {
   // ────────────────────────── 阈值先于 TopN ──────────────────────────
 
   @Test
-  void 阈值过滤在截断之前_所以结果会少于topN() throws Exception {
+  void thresholdAppliesBeforeTopN() throws Exception {
     Fixture f = seed();
     String token = token("admin", "admin");
 
@@ -152,7 +152,7 @@ class RetrievalHitTestTest {
   // ────────────────────────── 三级启用过滤（两种模式同谓词） ──────────────────────────
 
   @Test
-  void 停用的分段不参与任何一路检索() throws Exception {
+  void disabledSegmentExcludedFromAllPaths() throws Exception {
     Fixture f = seed();
     String token = token("admin", "admin");
     assertThat(segmentIdsOf(hitTest(token, "VECTOR", 0.6, 5, f))).contains(f.segA());
@@ -172,7 +172,7 @@ class RetrievalHitTestTest {
   }
 
   @Test
-  void 停用的知识库检索不出东西() throws Exception {
+  void disabledKnowledgeBaseReturnsNothing() throws Exception {
     Fixture f = seed();
     String token = token("admin", "admin");
     jdbc.update("update kb_knowledge_base set enabled = false where id = ?::uuid", f.kbId());
@@ -181,7 +181,7 @@ class RetrievalHitTestTest {
   }
 
   @Test
-  void 看不见的库不给存在性信号_传一个乱造的id返空() throws Exception {
+  void invisibleKbLeaksNoExistenceSignal() throws Exception {
     seed();
     String token = token("admin", "admin");
     // ★ 不返 404/403：那等于确认「这个 id 存在」。可见性判定在 visibleKbIds 里一次完成。
@@ -191,10 +191,39 @@ class RetrievalHitTestTest {
     assertThat(segmentIdsOf(send("POST", "/api/v1/retrieval/test", body, token).body())).isEmpty();
   }
 
+  // ────────────────────────── 跨向量模型（★ 真栈闸门抓出来的） ──────────────────────────
+
+  /**
+   * ★ 不限定知识库时，会一次跨到<strong>多个向量模型</strong> ⇒ 仍必须能检索（不许 400）。
+   *
+   * <p>这条是**真栈闸门教我们的**：`check_flow_walkthrough.py` 点命中测试页的「测试」时拿到 {@code 400 本次检索涉及 5
+   * 个不同的向量模型}（开发库里确实有 5 个）—— 而那是演示路径。 早先的写法"多模型就明确拒绝"方向是对的（不同模型的向量在不同空间里），但**能力不全**：
+   * 正确做法是**按模型分组、各查各的维度表、再用 RRF 融合**（{@code 10 §4.1}：同一个算法复用三次）。
+   */
+  @Test
+  void crossModelSearchWorksWithoutKbFilter() throws Exception {
+    Fixture f = seed();
+    Fixture g = seed(); // createKb 每次都新建一个向量模型 ⇒ 两个夹具天然跨两个模型
+    String token = token("admin", "admin");
+
+    // ★ 限定在这两个夹具库上：它们**本来就是两个不同的向量模型**，足以验证"按模型分组"；
+    //   而不限定范围时别的库也会参与、会被 topN 截断（那是另一件事，别混进来）。
+    String body =
+        ("{\"question\":\"%s\",\"mode\":\"VECTOR\",\"threshold\":0.6,\"topN\":10,"
+                + "\"kbIds\":[\"%s\",\"%s\"]}")
+            .formatted(QUESTION, f.kbId(), g.kbId());
+    String response = send("POST", "/api/v1/retrieval/test", body, token).body();
+
+    assertThat(response).as("跨模型不该 400（回包：%s）", response).doesNotContain("\"code\":400");
+    assertThat(segmentIdsOf(response))
+        .as("两个库里的夹具分段都该能被检出来（各自走自己模型的那张维度表）")
+        .contains(f.segA(), f.segB(), g.segA(), g.segB());
+  }
+
   // ────────────────────────── 参数校验（口径与 mock 一致） ──────────────────────────
 
   @Test
-  void 参数校验给可读原因且与mock口径一致() throws Exception {
+  void validationMatchesMockContract() throws Exception {
     String token = token("admin", "admin");
 
     assertThat(hitTestRaw(token, "{\"question\":\"  \"}"))
@@ -218,7 +247,7 @@ class RetrievalHitTestTest {
   // ────────────────────────── 检索参数（GET / PUT） ──────────────────────────
 
   @Test
-  void 检索参数默认值与局部更新() throws Exception {
+  void retrievalParamsDefaultsAndPartialUpdate() throws Exception {
     String token = token("admin", "admin");
     String kbId = createKb(token);
 

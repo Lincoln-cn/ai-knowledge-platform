@@ -252,6 +252,21 @@
         <artifactId>spring-boot-maven-plugin</artifactId>
       </plugin>
 
+      <!-- ─── 编码：把"运行期"那一环也钉住 ───
+           `project.build.sourceEncoding` 管的是**编译期**（javac 怎么读 .java）；
+           而 surefire 跑测试时用的是 **JVM 的 file.encoding** —— 测试方法名与断言消息都是中文，
+           乱码不会让测试失败，只会让人读不懂报告（本项目已为"看起来跑过、其实没生效"栽过多次）。
+           ★ JDK 18+ 起 file.encoding 默认 UTF-8（JEP 400），但那是**版本的默认值**、
+             不是本仓库的承诺：换 JDK、或有人加一句 -Dfile.encoding=GBK，报告就会变乱码。
+           ★ 同理见仓库根的 `.editorconfig`（编辑器/脚本那一侧）。 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <argLine>-Dfile.encoding=UTF-8</argLine>
+        </configuration>
+      </plugin>
+
       <!-- ─── 格式化：google-java-format。★ JDK 16+ 需要为 jdk.compiler 打开 exports，
                已写进 .mvn/jvm.config（09 §10.1 E） ─── -->
       <plugin>

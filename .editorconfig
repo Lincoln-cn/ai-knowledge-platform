@@ -1,0 +1,49 @@
+# ════════════════════════════════════════════════════════════════════════════
+#  .editorconfig —— 让"文件编码 / 换行"这类隐形约定变成可执行的东西
+# ════════════════════════════════════════════════════════════════════════════
+#
+#  ★ 为什么这个仓库需要它（不是形式主义，是被两次现场事故逼出来的）：
+#
+#  1. **测试方法名与注释是中文**（46 个测试文件，从 0.3.0 起就是这么写的）。
+#     换来的可读性很实在（`镜像同时带着pgvector与zhparser` 比 `imageHasPgvectorAndZhparser`
+#     更能说明"这条在守什么"），但它把**编码**从一个隐形约定变成了正确性的前提：
+#     任何一个用非 UTF-8 读写源码的工具，都会让标识符变形 ⇒ 编译失败或名字变成乱码。
+#
+#  2. **现场事故两条**：
+#     · PowerShell 5.1 的 `Set-Content -Encoding ASCII` 把中文全变成 `???`（96 处，文件报废）；
+#     · `.cmd` 启动器里写中文注释，而 cmd.exe 按 GBK 读 ⇒ 注释被误解析成命令，
+#       连带把同一文件里的 `set VITE_USE_MOCK=false` 一起吃掉（前端静默跑成 mock）。
+#
+#  ⇒ 判据：**凡是"中文进入文件"的地方，编码就必须显式钉住**，不能靠工具默认值。
+#     JVM 侧已有 `project.build.sourceEncoding=UTF-8`（backend/pom.xml）；这份文件把
+#     "编辑器 / 脚本"这一侧也钉上。
+#
+#  ★ 换行：仓库里既有 .sql / .md 是 LF，也有 Windows 上生成的 .cmd 是 CRLF。
+#    这里统一声明 LF，`.cmd` 例外（cmd.exe 对 LF-only 的批处理会误解析 —— 今天刚踩过）。
+# ════════════════════════════════════════════════════════════════════════════
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{java,ts,vue,js,json,yml,yaml,md,sql,py,sh}]
+indent_style = space
+indent_size = 2
+
+# ★ 批处理文件必须 CRLF：cmd.exe 读 LF-only 的 .cmd/.bat 会在奇怪的位置断行
+[*.{cmd,bat}]
+end_of_line = crlf
+charset = utf-8
+
+[java/**.java]
+indent_size = 2
+
+[*.{docx,xlsx,pptx,pdf,png,jpg,zip,7z}]
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
