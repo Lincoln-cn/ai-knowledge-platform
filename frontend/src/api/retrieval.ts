@@ -15,6 +15,15 @@ export interface RetrievalParams {
   topN: number
   /** 无引用时的策略 */
   noRefStrategy: NoRefStrategy
+
+  /* ↓ 第 12 周查询理解（10-RAG-检索策略设计 §8.1）。全部可选：
+     不传即「后端按平台默认值处理」，老后端收到也不认识、忽略即可 */
+  /** 改写 + 扩展一次产出的查询条数。1 = 只改写；0 = 不做。缺省 3 */
+  queryCount?: number
+  /** 是否允许把多意图问题拆成子问题。缺省 true */
+  decomposeEnabled?: boolean
+  /** 子问题上限。缺省 3 */
+  maxSubQuestions?: number
 }
 
 export interface HitItem {
@@ -33,11 +42,32 @@ export interface HitTestRequest extends RetrievalParams {
   question: string
 }
 
+/**
+ * 一次检索里查询理解层的实际发生情况（10-RAG-检索策略设计 §6.3 / §7.1）。
+ * 数值一律是**实测值**而不是配置值 —— 配置 3 条但解析失败退回 1 条时，
+ * 界面要看到的是 1，否则这块展示就成了「把配置念一遍」。
+ */
+export interface HitTestTrace {
+  /** M：实际拆出的子问题数 */
+  subQuestionCount: number
+  /** N：实际发出去的总查询数 */
+  queryCount: number
+  /** 总检索路数（受总路数预算截断后的值，§6.2 默认 6） */
+  pathCount: number
+  /** 降级档位 0..4；4 = 回退到原始问题单路，是永不低于的底线（§6.3） */
+  degradeLevel: number
+  degradeReason?: string
+  /** 子问题数 / 查询数是否被上限截断过 */
+  truncated: boolean
+}
+
 export interface HitTestResult {
   mode: RetrievalMode
   items: HitItem[]
   /** 本次检索耗时，用于界面展示与调参对比 */
   elapsedMs: number
+  /** 可选：老后端与老 mock 不返回，界面必须照常工作 */
+  trace?: HitTestTrace
 }
 
 /* ────────────────────────── 接口 ────────────────────────── */

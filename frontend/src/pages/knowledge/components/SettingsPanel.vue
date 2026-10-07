@@ -64,9 +64,11 @@
       <el-form label-width="96px" class="form">
         <el-form-item label="检索模式">
           <el-radio-group v-model="retrieval.mode" :disabled="!canManage">
-            <el-radio-button value="向量检索">向量</el-radio-button>
-            <el-radio-button value="全文检索">全文</el-radio-button>
-            <el-radio-button value="混合检索">混合</el-radio-button>
+            <!-- ★ value 必须是**机器码**（契约 RetrievalMode）：它是"选中判定 + 写回表单"双重依据，
+                 写中文标签的后果是"打开时不高亮 + 保存必 400"（#28）。展示文案留在按钮文字里。 -->
+            <el-radio-button value="VECTOR">向量</el-radio-button>
+            <el-radio-button value="FULLTEXT">全文</el-radio-button>
+            <el-radio-button value="HYBRID">混合</el-radio-button>
           </el-radio-group>
           <div class="hint micro">混合模式用 RRF 融合向量与全文结果，召回更稳</div>
         </el-form-item>
@@ -79,8 +81,9 @@
         </el-form-item>
         <el-form-item label="无引用策略">
           <el-radio-group v-model="retrieval.noRefStrategy" :disabled="!canManage">
-            <el-radio-button value="拒答">拒答</el-radio-button>
-            <el-radio-button value="自由回答">自由回答</el-radio-button>
+            <!-- ★ 同上：机器码（契约 NoRefStrategy），不是中文标签 -->
+            <el-radio-button value="REFUSE">拒答</el-radio-button>
+            <el-radio-button value="FREE_ANSWER">自由回答</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="canManage">

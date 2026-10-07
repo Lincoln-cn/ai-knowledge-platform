@@ -112,61 +112,108 @@ def deterministic_vector(text: str, dim: int) -> list[float]:
     return [round(v / norm, 6) for v in raw]
 
 
-def _scan_properties(prompt: str) -> list[tuple[str, str]]:
+def _extract_json_object(text: str, start: int) -> str | None:
+    """从 `start`（一个 `{` 的下标）起，按括号配平取出一整个 JSON 对象原文。
+
+    ★ 为什么不继续用正则：第 12 周的查询理解要的 schema 是**两层嵌套数组** ——
+
+        {"subQuestions":[{"question":"…","queries":["…"]}]}
+
+    而"无嵌套对象"的正则只能命中到最内层，于是 `subQuestions` 会被认成别的形状。
+    括号配平（含字符串内的转义）是唯一能对付任意深度又不误伤 `{` 在字符串里的写法。
     """
-    扫描 `"properties":{...}` 的**第一层**键与各自的 type。
-
-    ★ 为什么要手写括号扫描、而不是一条正则：schema 里的值是**嵌套**的 ——
-
-        "keywords":{"type":"array","items":{"type":"string"}}
-
-    用 `\\{[^{}]*\\}` 这类"只匹配无嵌套对象"的正则，命中的会是最内层的
-    `"items":{"type":"string"}`，于是 `items` 被当成顶层键、`keywords` 反而丢了，
-    生成出 `{"title":"stub","items":"stub"}` 这种**键名全错**的 JSON。
-    （这个 bug 实测踩到过 —— 也正因如此，结构化输出必须有断言，不能"看着像 JSON"就算过。）
-    """
-    match = re.search(r'"properties"\s*:\s*\{', prompt)
-    if not match:
-        return []
-
-    text = prompt
     depth = 0
-    found: list[tuple[str, str]] = []
-
-    for i in range(match.end() - 1, len(text)):
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
         char = text[i]
-        if char == "{":
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
             depth += 1
-            if depth == 2:
-                # ★ 进入某个属性的"值对象" —— 键名写在它**前面**（`"key":{` 或 `,"key":{`），
-                #   所以要回看一小段把它取出来。只检查当前字符是不够的：除第一个键之外，
-                #   后续键名前都带逗号，形状不是 `{"key":{` —— 这正是上一版
-                #   把 `keywords` 漏掉、只认出 `title` 的原因。
-                prefix = text[max(0, i - 160) : i]
-                key_match = re.search(r'"(\w+)"\s*:\s*$', prefix)
-                if key_match:
-                    type_match = re.match(r'\{\s*"type"\s*:\s*"(\w+)"', text[i:])
-                    found.append(
-                        (key_match.group(1), type_match.group(1) if type_match else "string")
-                    )
         elif char == "}":
             depth -= 1
             if depth == 0:
-                break
-    return found
+                return text[start : i + 1]
+    return None
+
+
+def _properties_schema(prompt: str) -> dict:
+    """把提示词里 `"properties":{…}` 那一块真的**解析**成 schema（而不是扫键名）。"""
+    match = re.search(r'"properties"\s*:\s*\{', prompt)
+    if not match:
+        return {}
+    raw = _extract_json_object(prompt, match.end() - 1)
+    if raw is None:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _value_for(schema: dict, path: str) -> object:
+    """按 schema 造一个占位值。`path` 用来让**并列的元素彼此不同**（见下）。"""
+    kind = schema.get("type")
+    if kind == "array":
+        items = schema.get("items") or {}
+        if isinstance(items, dict) and (items.get("type") == "object" or "properties" in items):
+            # ★ 数组里的对象：造 **2 个互不相同**的元素（值里带下标）。
+            #   为什么必须不同：上层的"子问题去重"是按字符串包含关系粗判的 ——
+            #   两个一模一样的元素会被合并成一个，于是"多意图"这件事在夹具里消失，
+            #   测试会变成"永远只看到 1 个子问题"而**没有任何地方报错**。
+            return [
+                _object_payload(items.get("properties") or {}, f"{path}-{index}")
+                for index in (1, 2)
+            ]
+        return ["stub-a", "stub-b"]
+    if kind == "integer":
+        return 1
+    if kind == "number":
+        return 1.0
+    if kind == "boolean":
+        return True
+    return path or "stub"
+
+
+def _object_payload(properties: dict, path: str) -> dict:
+    payload: dict = {}
+    for name, schema in properties.items():
+        if not isinstance(schema, dict):
+            continue
+        payload[name] = _value_for(schema, f"{path}.{name}" if path else name)
+    return payload
 
 
 def json_payload_from_prompt(prompt: str) -> dict:
     """
-    从提示词里的 JSON Schema 反推一个**键名正确**的对象。
+    从提示词里的 JSON Schema 反推一个**键名正确**的对象（含嵌套）。
 
     结构化输出的请求里，Spring AI 的 BeanOutputConverter 会把 schema 摆进提示词。
     这里照抄键名、按 type 给占位值 —— 于是任何 `record Foo(...)` 都能被"成功解析"，
     从而验证**解析链路**（而不是验证模型会不会好好输出）。
+
+    ★ 顶层标量的取值沿用旧约定（`"stub"` / `["stub-a","stub-b"]`）—— 既有测试依赖它们，
+      改掉等于把别人的断言顺手改红。嵌套对象的取值带下标（见 `_value_for`）。
     """
+    properties = _properties_schema(prompt)
+    if not properties:
+        return {"result": "stub"}
     payload: dict = {}
-    for name, kind in _scan_properties(prompt):
-        if kind == "array":
+    for name, schema in properties.items():
+        if not isinstance(schema, dict):
+            continue
+        kind = schema.get("type")
+        if kind == "array" and (schema.get("items") or {}).get("type") != "object":
             payload[name] = ["stub-a", "stub-b"]
         elif kind == "integer":
             payload[name] = 1
@@ -174,6 +221,8 @@ def json_payload_from_prompt(prompt: str) -> dict:
             payload[name] = 1.0
         elif kind == "boolean":
             payload[name] = True
+        elif kind == "array":
+            payload[name] = _value_for(schema, name)
         else:
             payload[name] = "stub"
     return payload or {"result": "stub"}

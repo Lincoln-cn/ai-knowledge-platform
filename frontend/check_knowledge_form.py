@@ -506,7 +506,14 @@ def main() -> int:
             card_count = page.locator(".kb-card").count()
             print(f"   total 文案：{total_text!r} → {total}；卡片数：{card_count}")
             check(total >= 0, f"列表有「共 N 个」文案（实际：{total_text!r}）")
-            check(total == card_count, f"total（{total}）与可见条数（{card_count}）一致")
+            # ★ 判据是"本页卡片数 = min(total, 每页条数)"，不是"total == 卡片数"：
+            #   后者只在**库总数 ≤ 每页条数**时成立 ⇒ 开发库攒到 19 个库（> 12/页）时它就假红。
+            #   闸门自己会造夹具，所以"库里恰好只有一页"这种前提必须写进判据，不能当默认。
+            page_size = 12
+            check(
+                card_count == min(total, page_size),
+                f"本页卡片数（{card_count}）= min(total {total}, 每页 {page_size})",
+            )
 
             page.goto(f"{BASE}/#/knowledge?kb=no-such-kb-{ts}", wait_until="networkidle")
             page.wait_for_timeout(3000)

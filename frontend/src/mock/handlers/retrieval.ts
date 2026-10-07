@@ -1,5 +1,5 @@
 import { ApiError, ErrorCode } from '@/api/types'
-import type { HitItem, HitTestRequest, HitTestResult, RetrievalMode, RetrievalParams } from '@/api/retrieval'
+import type { HitItem, HitTestRequest, HitTestResult, HitTestTrace, RetrievalMode, RetrievalParams } from '@/api/retrieval'
 import type { MockRoute } from '../dispatch'
 import { hitCorpus, knowledgeBases, retrievalParams } from '../fixtures/knowledge'
 import { PERM } from '@/constants/permissions'
@@ -22,6 +22,16 @@ const MODE_PROFILE: Record<RetrievalMode, { scoreBoost: number; cutRatio: number
   HYBRID: { scoreBoost: 0.03, cutRatio: 1.0, elapsed: 56 }
 }
 
+/** 查询理解的默认值。必须与后端同款（10-RAG-检索策略设计 §8.1 / §6.2）：
+    两边不一致时，界面显示 3 而实际按别的值检索，调参会得出错误结论 */
+const QUERY_UNDERSTANDING_DEFAULTS: Required<
+  Pick<RetrievalParams, 'queryCount' | 'decomposeEnabled' | 'maxSubQuestions'>
+> = {
+  queryCount: 3,
+  decomposeEnabled: true,
+  maxSubQuestions: 3
+}
+
 const findParams = (kbId: string): RetrievalParams => {
   const p = retrievalParams[kbId]
   // P1 新库检索参数：回**默认值**而不是 404 —— 否则设置面板刚建好的库会弹「不存在」
@@ -30,11 +40,17 @@ const findParams = (kbId: string): RetrievalParams => {
       mode: 'HYBRID',
       threshold: 0.6,
       topN: 5,
-      noRefStrategy: 'REFUSE'
+      noRefStrategy: 'REFUSE',
+      ...QUERY_UNDERSTANDING_DEFAULTS
     }
     retrievalParams[kbId] = defaults
     return defaults
   }
+  // 老 fixture 没有这三个字段：GET 要回默认值而不是省略（§8.1 要求 —— 前端已经有过
+  // 「回落到硬编码值而被悄悄带偏」的教训），因此在这里补齐并写回，全程只有一种形状
+  p.queryCount ??= QUERY_UNDERSTANDING_DEFAULTS.queryCount
+  p.decomposeEnabled ??= QUERY_UNDERSTANDING_DEFAULTS.decomposeEnabled
+  p.maxSubQuestions ??= QUERY_UNDERSTANDING_DEFAULTS.maxSubQuestions
   return p
 }
 
@@ -44,6 +60,20 @@ const pickCorpus = (question: string) => {
   return (
     hitCorpus.find((c) => c.keywords.some((k) => q.includes(k.toLowerCase()))) ?? hitCorpus[0]
   )
+}
+
+/**
+ * mock 不含模型，因此如实表现为降级 —— D4、原始问题单路，
+ * 与真后端「查询理解完全不可用」落到同一档（§6.3 的底线）。
+ * 这里刻意不回一个好看的数字：mock 说「我拆了 2 个子问题」就是在编造埋点。
+ */
+const STUB_TRACE: HitTestTrace = {
+  subQuestionCount: 1,
+  queryCount: 1,
+  pathCount: 1,
+  degradeLevel: 4,
+  degradeReason: '未配置对话模型',
+  truncated: false
 }
 
 const runHitTest = (body: HitTestRequest): HitTestResult => {
@@ -73,7 +103,8 @@ const runHitTest = (body: HitTestRequest): HitTestResult => {
   return {
     mode: body.mode,
     items,
-    elapsedMs: profile.elapsed + Math.floor(Math.random() * 20)
+    elapsedMs: profile.elapsed + Math.floor(Math.random() * 20),
+    trace: STUB_TRACE
   }
 }
 
@@ -117,7 +148,12 @@ export const retrievalRoutes: MockRoute[] = [
         mode: input.mode ?? current.mode,
         threshold: input.threshold ?? current.threshold,
         topN: input.topN ?? current.topN,
-        noRefStrategy: input.noRefStrategy ?? current.noRefStrategy
+        noRefStrategy: input.noRefStrategy ?? current.noRefStrategy,
+        // 未传的字段回落 current（findParams 已保证这三个字段在 current 上一定有值）——
+        // 写成 undefined 就等于 PUT 一次把默认值抹掉，前端再 GET 到的是空值
+        queryCount: input.queryCount ?? current.queryCount,
+        decomposeEnabled: input.decomposeEnabled ?? current.decomposeEnabled,
+        maxSubQuestions: input.maxSubQuestions ?? current.maxSubQuestions
       }
       if (next.threshold < 0 || next.threshold > 1) {
         throw new ApiError(ErrorCode.BAD_REQUEST, '相似度阈值应在 0～1 之间')
