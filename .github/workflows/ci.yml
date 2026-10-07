@@ -267,7 +267,7 @@ jobs:
   #  ★ 这里刻意**不跑 mock 模式**：`VITE_USE_MOCK=false` + `VITE_API_TARGET` 指向真后端。
   # ══════════════════════════════════════════════════════════════════════════════
   realstack:
-    name: 真栈 · 六条端到端闸门
+    name: 真栈 · 八条端到端闸门
     runs-on: ubuntu-latest
 
     # ★ 这个 job **没有** `services:` 了 —— 原来起的 `postgres` 是官方 pgvector 镜像，
@@ -433,7 +433,11 @@ jobs:
       #   不一致时它会立刻报「库里查不到刚上传的文档」并把连接打出来（以前会表现成"入库没生效"，指错方向）
       # ★ check_ocr_e2e.py（T249.4）走**界面**验扫描件那条链：上传 ⇒ 界面上「已识别 N/M 页」⇒ 入库成功，
       #   且文本型文档不出现进度行。它需要 tesseract（本 job 已装）+ 扫描件夹具。
-      - name: 真栈闸门（六条）
+      # ★ 第 11 周加 check_classification_e2e.py：同一份文档传成 PUBLIC/SECRET 两份，逐账号问一遍
+      #   —— 它验的是「令牌里的 clearance 有没有真的进 SQL」，那条路只有从登录开始走才验得到。
+      # ★ 第 12 周加 check_query_understanding_e2e.py：它自己注册并加载一个对话模型（夹具的一部分），
+      #   然后断言埋点里的 M 子问题 × N 查询。★ 两条都**自己造夹具**，不依赖别的闸门留下的数据。
+      - name: 真栈闸门（八条）
         working-directory: frontend
         env:
           PGHOST: localhost
@@ -444,7 +448,8 @@ jobs:
         run: |
           failed=()
           for g in check_knowledge_parse check_knowledge_form check_segmentation_e2e \
-                   check_document_actions check_flow_walkthrough check_ocr_e2e; do
+                   check_document_actions check_flow_walkthrough check_ocr_e2e \
+                   check_classification_e2e check_query_understanding_e2e; do
             echo "::group::${g}.py"
             if python "${g}.py"; then
               echo "✓ ${g}.py 通过"
@@ -455,7 +460,7 @@ jobs:
             echo "::endgroup::"
           done
           if [ ${#failed[@]} -gt 0 ]; then
-            echo "★ 失败 ${#failed[@]}/6：${failed[*]}"
+            echo "★ 失败 ${#failed[@]}/8：${failed[*]}"
             exit 1
           fi
           echo "六条真栈闸门全部通过"
