@@ -16,6 +16,7 @@ export * as analyticsApi from './analytics'
 export * as streamApi from './stream'
 export * as promptsApi from './prompts'
 export * as workflowApi from './workflow'
+export * as dictionariesApi from './dictionaries'
 
 export type { ApiResult, PageQuery, PageResult } from './types'
 export { ApiError, ErrorCode } from './types'

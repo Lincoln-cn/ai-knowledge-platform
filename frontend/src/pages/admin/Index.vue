@@ -2,15 +2,15 @@
   <div class="page">
     <PageHeader
       title="账号与权限"
-      desc="单后台轻量 RBAC：用户 ↔ 角色 ↔ 权限点 ↔ 提示词类型。权限点是代码常量（资源:操作），不是数据库里配的菜单"
+      desc="单后台轻量 RBAC：用户 ↔ 角色 ↔ 权限点。权限点是代码常量（资源:操作），不是数据库里配的菜单"
     />
 
     <!-- 权限不足时整块不渲染，而不是渲染后报错 -->
     <template v-if="canManage">
       <div class="notice info">
         权限点在代码里定义、启动时同步。新增功能时清单自动多出一项，只需分配给角色 ——
-        不需要有人记得去库里配菜单。提示词类型同理：它是分类法（契约），只在本页维护，
-        应用配置人只引用不新建。多租户、数据权限、字典/参数/菜单管理均不在本版范围。
+        不需要有人记得去库里配菜单。多租户、数据权限不在本版范围；
+        字典类的基础数据（密级/文种/提示词类型/库分类）也已从这里搬去「基础数据」页。
       </div>
 
       <el-tabs v-model="active" class="admin-tabs">
@@ -22,9 +22,6 @@
         </el-tab-pane>
         <el-tab-pane label="权限点清单" name="permissions" lazy>
           <PermissionList />
-        </el-tab-pane>
-        <el-tab-pane label="提示词类型" name="promptTypes" lazy>
-          <PromptTypeManage />
         </el-tab-pane>
       </el-tabs>
     </template>
@@ -45,14 +42,13 @@ import { useSessionStore } from '@/stores/session'
 import UserManage from './components/UserManage.vue'
 import RoleManage from './components/RoleManage.vue'
 import PermissionList from './components/PermissionList.vue'
-import PromptTypeManage from './components/PromptTypeManage.vue'
 
 const session = useSessionStore()
 const route = useRoute()
 const router = useRouter()
 const canManage = computed(() => session.can(PERM.systemManage))
 
-const TABS = ['users', 'roles', 'permissions', 'promptTypes'] as const
+const TABS = ['users', 'roles', 'permissions'] as const
 type TabKey = (typeof TABS)[number]
 
 /** URL query.tab → 合法 Tab；undefined / 非法值 / 非字符串（含数组）一律回落 users */

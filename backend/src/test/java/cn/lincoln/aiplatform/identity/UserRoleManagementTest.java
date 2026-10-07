@@ -154,10 +154,13 @@ class UserRoleManagementTest {
     HttpResponse<String> res = get("/api/v1/permissions", accessToken("admin", "admin"));
 
     assertThat(res.statusCode()).isEqualTo(200);
-    // 16 个权限点，且带分组用的 module
     assertThat(res.body()).contains("\"module\":\"知识\"").contains("system:manage");
     // ★ 数的是权限点项里的 code（带引号的字符串），不能把包络里的 "code":0 也数进去
-    assertThat(countOccurrences(res.body(), "\"code\":\"")).isEqualTo(16);
+    // ★ 判据取自代码目录而不是写死的数字：写死 16 的那一版在新增两个权限点时红了 ——
+    //   而"权限点一共几个"的真源本来就是 Permissions.ALL（这里要守的是"接口与目录一致"，
+    //   不是"权限点永远是 16 个"）
+    assertThat(countOccurrences(res.body(), "\"code\":\""))
+        .isEqualTo(cn.lincoln.aiplatform.identity.domain.Permissions.ALL.size());
   }
 
   /**

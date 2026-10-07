@@ -72,7 +72,12 @@ export const navGroups: NavGroup[] = [
   },
   {
     title: '管理',
-    items: [{ path: '/admin', label: '系统管理', icon: 'Setting' }]
+    items: [
+      // 基础数据（密级/文种/提示词类型/库分类）改一次影响全平台的下拉与既有数据的展示，
+      // 与「账号与权限」同属管理员那一档，所以并排放在「管理」下
+      { path: '/basedata', label: '基础数据', icon: 'Tickets' },
+      { path: '/admin', label: '系统管理', icon: 'Setting' }
+    ]
   }
 ]
 

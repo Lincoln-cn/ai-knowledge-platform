@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="提示词"
-      desc="提示词配置：可复用的角色指令，被应用按引用选用。类别里的类型是分类法（契约），由管理员在「系统管理 → 提示词类型」维护"
+      desc="提示词配置：可复用的角色指令，被应用按引用选用。类别里的类型是分类法（契约），由管理员在「基础数据 → 提示词类型」维护"
     >
       <template #actions>
         <el-button size="small" :icon="Refresh" :loading="loadingTypes || loadingConfigs" @click="reloadAll">
@@ -60,7 +60,7 @@ const loadingConfigs = ref(false)
 
 const formRef = ref<InstanceType<typeof PromptFormDialog>>()
 
-/** 类型是只读引用：本页只把它填进筛选/表单的下拉，读写都由系统管理负责 */
+/** 类型是只读引用：本页只把它填进筛选/表单的下拉，读写都由「基础数据 → 提示词类型」负责 */
 const loadTypes = async () => {
   loadingTypes.value = true
   try {

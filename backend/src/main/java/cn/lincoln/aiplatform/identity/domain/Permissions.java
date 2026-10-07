@@ -60,7 +60,13 @@ public final class Permissions {
   public static final String FEEDBACK_HANDLE = "feedback:handle";
   public static final String SYSTEM_MANAGE = "system:manage";
 
-  /** 全量清单。★ 这是"权限点一共几个"的唯一定义 —— 测试会断言它恰好 16 个。 */
+  /** 基础数据字典（密级 / 文种 / 提示词类型 / 库分类）—— 管理菜单「基础数据」。 */
+  public static final String PLATFORM_DICT_MANAGE = "platform:dict:manage";
+
+  /** 组织机构树 —— 数据权限的载体（07 §十）。 */
+  public static final String IDENTITY_ORG_MANAGE = "identity:org:manage";
+
+  /** 全量清单。★ 这是"权限点一共几个"的唯一定义 —— 测试会断言它恰好 ALL.size() 个（不再写死数字）。 */
   public static final List<String> ALL =
       List.of(
           KNOWLEDGE_VIEW,
@@ -78,7 +84,9 @@ public final class Permissions {
           MODEL_MANAGE,
           DASHBOARD_VIEW,
           FEEDBACK_HANDLE,
-          SYSTEM_MANAGE);
+          SYSTEM_MANAGE,
+          IDENTITY_ORG_MANAGE,
+          PLATFORM_DICT_MANAGE);
 
   private static final List<String> KB_OPERATOR =
       List.of(
