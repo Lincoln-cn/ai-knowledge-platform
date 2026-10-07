@@ -102,13 +102,19 @@ import { dictionariesApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { CreateDictionaryBody, DictionaryItem, DictionaryKind, UpdateDictionaryBody } from '@/api/dictionaries'
 
-const props = defineProps<{
-  kind: DictionaryKind
-  /** 表格与小标题上的名字。由调用方给，避免"分类名"与 tab 名在两处各写一份 */
-  title: string
-  /** 密级那一类传 false：它只允许改展示名与启停（见 Index.vue 的说明） */
-  allowCreate?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    kind: DictionaryKind
+    /** 表格与小标题上的名字。由调用方给，避免"分类名"与 tab 名在两处各写一份 */
+    title: string
+    /** 密级那一类传 false：它只允许改展示名与启停（见 Index.vue 的说明） */
+    allowCreate?: boolean
+  }>(),
+  // ★ `allowCreate` **必须有默认值**：Vue 里只声明成可选 boolean 而不给默认时，缺省是 `undefined`
+  //   ⇒ `v-if="allowCreate"` 为假 ⇒ 四个 tab 谁都看不到「新增」按钮，"字典可维护"整件事就只剩能看不能加。
+  //   ★ 这个 bug 逮到它的不是人眼：走查闸门那条"提示词类型有增/改/停用入口"的断言报了 `新增 0 个`。
+  { allowCreate: true }
+)
 
 const list = ref<DictionaryItem[]>([])
 const loading = ref(false)
