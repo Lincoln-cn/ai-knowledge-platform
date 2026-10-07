@@ -120,12 +120,12 @@ def main() -> int:
             def prompts():
                 body = goto("/assistants/prompts")
                 check("提示词" in body, "提示词：页面渲染", "")
-                # 提示词页只剩「配置」：类型是分类法（契约），维护入口已搬到系统管理。
+                # 提示词页只管「配置」：类型是分类法（契约），维护入口在「基础数据」。
                 # 用元素计数而不是文本 —— desc 里仍会出现「提示词类型」四个字（说明它不在本页）。
                 new_type = page.locator("button", has_text="新建类型").count()
                 type_panel = page.locator(".h4", has_text="提示词类型").count()
                 check("提示词配置" in body and new_type == 0 and type_panel == 0,
-                      "提示词：页面只管配置（类型已归系统管理）",
+                      "提示词：页面只管配置（类型已归基础数据）",
                       f"新建类型按钮 {new_type} 个 / 类型面板 {type_panel} 个")
 
             # ── 问答会话 ──
@@ -222,34 +222,46 @@ def main() -> int:
                 check("用户管理" in body, "账号权限：有用户管理", "")
                 check("角色管理" in body, "账号权限：有角色管理", "")
                 check("权限点" in body, "账号权限：有权限点清单", "")
-                check("提示词类型" in body, "账号权限：有提示词类型 Tab", "")
+                # ★ 第 19 周：字典类基础数据搬去「基础数据」菜单（用户口径：别再往系统管理堆 tab）。
+                #   判据落在**tab 标签**上而不是 body 文本 —— 本页通知里仍会写「密级/文种/提示词类型/库分类
+                #   已搬去基础数据」，`"提示词类型" not in body` 是恒假的（这种"被测词恰好出现在别处"
+                #   与本文件里 public_ok 那条负向断言同源，都是踩过的坑）。
+                tabs = [
+                    t.strip() for t in page.locator(".el-tabs__item").all_inner_texts()
+                ]
+                check(
+                    tabs == ["用户管理", "角色管理", "权限点清单"],
+                    "账号权限：只剩三个 tab（字典类已搬走，不再堆 tab）",
+                    f"实际 tab = {tabs}",
+                )
 
             def prompt_types_tab():
-                # ?tab=promptTypes 是深链，直接落到第 4 个 Tab。
-                # 断言必须**限定在该 Tab 面板内**：其它 Tab 的用户表也在 DOM 里（el-tab-pane 用
-                # v-show 惰性渲染），不限定就会把用户行数当类型行数（4 用户 + 4 类型 = 8）。
-                body = goto("/admin?tab=promptTypes", wait=2000)
-                # 断言「真的切过去了」，不是标签文本在 body 里 —— 四个 Tab 的标签永远都在
-                # DOM 中，`"提示词类型" in body` 是恒真断言。要看激活态：is-active 的 Tab 文本，
-                # 或 #pane-promptTypes 面板存在（lazy 下未激活则不渲染）。
-                active_tab = page.locator(".el-tabs__item.is-active").inner_text().strip()
-                check(active_tab == "提示词类型", "账号权限：深链进提示词类型 Tab",
-                      f"实际激活 Tab =「{active_tab}」")
-                check(page.locator("#pane-promptTypes").count() > 0,
-                      "账号权限：提示词类型面板已渲染", "")
-                scope = "#pane-promptTypes"
-                names = [t.strip() for t in page.locator(f"{scope} tbody tr td:nth-child(2)").all_inner_texts()]
+                # ★ 第 19 周：提示词类型的维护入口从「系统管理」的一个 tab 搬到了「基础数据」的
+                #   第二个 tab。这一页**没有 ?tab= 深链**（它是字典维护页，tab 只是分类；
+                #   深链留给"多业务 tab 的工作台"那种页），所以这里走用户的真实路径：打开页面 → 点 tab。
+                goto("/basedata", wait=1800)
+                page.click(".el-tabs__item:has-text('提示词类型')")
+                page.wait_for_timeout(1500)
+                scope = "#pane-PROMPT_TYPE"
+                check(page.locator(scope).count() > 0, "基础数据：提示词类型面板已渲染", "")
+                # 第 2 列是 code（第 1 列是展示名）—— 与后端种子同口径
+                names = [
+                    t.strip()
+                    for t in page.locator(f"{scope} tbody tr td:nth-child(2)").all_inner_texts()
+                ]
                 want = ["通用", "合同法务", "制度咨询", "写作辅助"]
                 check(sorted(names) == sorted(want),
-                      "账号权限：提示词类型列出 4 个类型", f"实际 {names}")
-                acts = [
-                    page.locator(f"{scope} button", has_text="新建类型").count(),
-                    page.locator(f"{scope} tbody tr button", has_text="编辑").count(),
-                    page.locator(f"{scope} tbody tr button", has_text="删除").count(),
-                ]
-                check(acts[0] > 0 and acts[1] == 4 and acts[2] == 4,
-                      "账号权限：提示词类型有增/改/删入口",
-                      f"新建 {acts[0]} / 编辑 {acts[1]} / 删除 {acts[2]}")
+                      "基础数据：提示词类型列出 4 个类型", f"实际 {names}")
+                created = page.locator(f"{scope} button", has_text="新增").count()
+                edited = page.locator(f"{scope} tbody tr button", has_text="编辑").count()
+                disabled = page.locator(f"{scope} tbody tr button", has_text="停用").count()
+                # ★★ 关键是**删除入口必须为 0**：字典项只能停用不能删除（V24 的纪律 ——
+                #   code 已经写进历史数据，删掉会让历史数据的展示回落成机器码而无人报错）。
+                #   这条负向断言就是那条纪律的哨兵：谁哪天"顺手"加个删除按钮，这里立刻红。
+                removed = page.locator(f"{scope} tbody tr button", has_text="删除").count()
+                check(created > 0 and edited == 4 and disabled == 4 and removed == 0,
+                      "基础数据：提示词类型有增/改/停用入口，且**没有删除**（字典项只停用）",
+                      f"新增 {created} / 编辑 {edited} / 停用 {disabled} / 删除 {removed}")
 
             # ── 免登录公开页（沉浸布局，需顶层路由）──
             def public_ok():
