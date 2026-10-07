@@ -583,7 +583,14 @@ public class DocumentService {
       List<Segment> toSave = new ArrayList<>(plan.size());
       for (PlannedSegment p : plan) {
         toSave.add(
-            new Segment(UUID.randomUUID(), document.id(), document.kbId(), p, currentUserId));
+            new Segment(
+                UUID.randomUUID(),
+                document.id(),
+                document.kbId(),
+                p,
+                currentUserId,
+                // ★ 密级强制继承文档（13 §2.1 ②）：分段不允许有自己独立的密级
+                document.classification()));
       }
       segments.saveAll(toSave);
 

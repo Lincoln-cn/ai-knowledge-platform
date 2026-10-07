@@ -162,51 +162,6 @@ public class JdbcVectorIndex implements VectorIndexPort {
     }
   }
 
-  @Override
-  public List<Hit> search(Query query) {
-    if (query.limit() <= 0) {
-      return List.of();
-    }
-    String table = tableFor(query.dimension());
-    // ★ 读路径**绝不建表**：检索是只读事务（@Transactional(readOnly = true)），
-    //   在里面跑 DDL 会被 PG 直接拒绝（"cannot execute CREATE TABLE in a read-only transaction"）。
-    //   而语义上也更对：表不存在 = 这个维度还没有任何向量 ⇒ **空结果**，不是错误。
-    //   （建表只发生在写入路径 —— 那时确实有向量要落。）
-    if (!tableExists(table)) {
-      return List.of();
-    }
-
-    List<UUID> kbIds = query.kbIds() == null ? List.of() : query.kbIds();
-    StringBuilder sql =
-        new StringBuilder(
-            "select id, embedding <=> cast(? as vector) as distance from " + table + " where true");
-    List<Object> args = new ArrayList<>();
-    args.add(toVectorLiteral(query.vector()));
-    if (!kbIds.isEmpty()) {
-      // ★ 逐值占位符而不是 array 参数：JdbcTemplate 会把数组参数当"多个参数"展开，
-      //   而 `= any(?)` 需要真正的数组 —— 踩过这个坑，故显式拼占位符。
-      sql.append(" and (metadata::jsonb ->> 'kb_id') in (")
-          .append(placeholders(kbIds.size()))
-          .append(")");
-      kbIds.forEach(id -> args.add(id.toString()));
-    }
-    sql.append(" order by distance limit ?");
-    args.add(query.limit());
-
-    return jdbc.query(
-        sql.toString(),
-        (rs, i) -> new Hit(rs.getObject("id", UUID.class), rs.getDouble("distance")),
-        args.toArray());
-  }
-
-  // ────────────────────────── 内部 ──────────────────────────
-
-  /** 表在不在（{@code to_regclass} 会按 search_path 解析，不需要 information_schema 的字符串比较）。 */
-  private boolean tableExists(String table) {
-    Boolean exists = jdbc.queryForObject("select to_regclass(?) is not null", Boolean.class, table);
-    return Boolean.TRUE.equals(exists);
-  }
-
   /**
    * 库里现存的向量表（形如 {@code vec_embedding_<维度>}）。
    *
@@ -225,10 +180,6 @@ public class JdbcVectorIndex implements VectorIndexPort {
       }
     }
     return tables;
-  }
-
-  private static String placeholders(int count) {
-    return String.join(",", java.util.Collections.nCopies(count, "?"));
   }
 
   /**

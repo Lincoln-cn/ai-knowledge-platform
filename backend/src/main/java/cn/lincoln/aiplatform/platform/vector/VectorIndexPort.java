@@ -1,6 +1,5 @@
 package cn.lincoln.aiplatform.platform.vector;
 
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -8,8 +7,13 @@ import java.util.UUID;
  * 向量索引端口（跨模块 SPI）—— ★ 只认识「向量 + 元数据 + 维度」，**不认识知识库**。
  *
  * <p>这条边界是刻意的（{@code 01 §3.3}）：切分语义与知识库归属都是调用方的事， 于是换向量库（今天 pgvector、明天独立向量库）不影响上层。端口里唯一的"业务痕迹"是
- * {@link Query#kbIds()} 与 {@link Entry#kbId()}，而它们是<strong>元数据</strong> （JSON 里的一列），不是可见性判定 ——
- * "这个库该不该被看见"必须先由 {@code knowledge} 判定完 （{@code 07 §3.3}）。
+ * {@link Entry#kbId()}，而它是<strong>元数据</strong>（JSON 里的一列），不是可见性判定 —— "这个库该不该被看见"必须先由 {@code
+ * knowledge} 判定完 （{@code 07 §3.3}）。
+ *
+ * <p>★ <strong>本端口不带相似度检索</strong>（第 11 周挪走的）：密级与启用位这些谓词必须与 {@code embedding <=> ?} 出现在<strong>同一条
+ * SQL</strong> 里才谈得上 pre-filter（{@code 13 §三}），而本端口的模块声明里不认识文档与知识库。 所以"带业务谓词的相似度检索"归 {@code
+ * knowledge}（{@code SegmentSearchPort.vectorSearch}）， 而"表叫什么、表形是什么"仍由这里提供（{@link #tableFor} /
+ * {@link #ensureTable}）。
  *
  * <h3>为什么端口在 {@code platform}、实现在 {@code vectorindex}</h3>
  *
@@ -56,9 +60,6 @@ public interface VectorIndexPort {
 
   void deleteByDocument(UUID documentId);
 
-  /** 相似度检索（余弦距离升序）。★ 该维度的表不存在时返回<strong>空</strong>（不建表、不报错）。 */
-  List<Hit> search(Query query);
-
   /**
    * 一条向量。
    *
@@ -67,17 +68,4 @@ public interface VectorIndexPort {
    */
   record Entry(
       UUID segmentId, UUID kbId, UUID documentId, UUID modelId, String content, float[] vector) {}
-
-  /** 命中的一行：分段 id + 余弦距离（越小越近）。 */
-  record Hit(UUID segmentId, double distance) {}
-
-  /**
-   * 相似度检索的请求。
-   *
-   * @param dimension 目标向量维度（决定查哪张表）
-   * @param vector 查询向量
-   * @param kbIds 限定知识库（空 = 不限）—— ★ 元数据过滤，不是可见性判定
-   * @param limit 取前 N 条
-   */
-  record Query(int dimension, float[] vector, List<UUID> kbIds, int limit) {}
 }

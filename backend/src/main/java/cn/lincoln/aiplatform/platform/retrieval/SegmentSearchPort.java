@@ -17,14 +17,15 @@ import java.util.UUID;
  * <ol>
  *   <li>{@link #visibleKbIds} —— 先问"我能检索哪些库"，后面所有查询都收敛到这个 id 集合；
  *   <li>{@link #fullText} —— 全文那一路（{@code content_tsv} + 词命中）；
+ *   <li>{@link #vectorSearch} —— 向量那一路（★ 密级与三级过滤与 {@code <=>} 同一条 SQL）；
  *   <li>{@link #visibleAmong} —— ★ <strong>两路同谓词</strong>：向量路拿回来的候选也要过同一套判定 （{@code 13}
  *       五道闸门之二：只给一路加条件就是"看着能过滤"的静默漏洞）；
  *   <li>{@link #load} —— 命中的展示信息（标题/正文/文档名/库名），组装引用用。
  * </ol>
  *
- * <p>★ <strong>不在这个端口里的东西</strong>：向量相似度检索（那是 {@code platform.vector.VectorIndexPort} 的事）、排序融合（那是
- * {@code retrieval} 的策略）。 端口只提供"事实"，策略留在检索模块 —— 这条分工就是 {@code 01 §3.3} 说的
- * "向量的存取是基础设施能力、检索的策略是业务能力"。
+ * <p>★ <strong>不在这个端口里的东西</strong>：排序融合（那是 {@code retrieval} 的策略）、 以及"表叫什么、表形是什么"（那是 {@code
+ * platform.vector.VectorIndexPort} 的事，这里只用它拿表名）。 端口提供"带业务谓词的事实"，策略留在检索模块 —— 这条分工就是 {@code 01 §3.3}
+ * 说的 "向量的存取是基础设施能力、检索的策略是业务能力"。
  */
 public interface SegmentSearchPort {
 
@@ -67,6 +68,19 @@ public interface SegmentSearchPort {
   List<Card> load(Collection<UUID> segmentIds);
 
   /**
+   * 向量那一路 —— ★ <strong>密级与三级过滤都在这一条 SQL 里</strong>（{@code 13 §三} 硬要求： pre-filter，不是"查完再筛"）。
+   *
+   * <p>★ 为什么向量检索挂在这个端口上、而不在 {@code vectorindex}： 密级住在 {@code kb_document}、启用位散在三张表里 —— 要让 planner
+   * 把这些谓词 **合并进向量扫描**，它们就必须与 {@code embedding <=> ?} 出现在**同一条 SQL** 里。 而按 {@code vectorindex}
+   * 的模块声明（"向量表读写、HNSW 索引维护、批量写入与进度回写"）， 它<strong>不认识</strong>文档与知识库 —— 所以"带业务谓词的相似度检索"属于拥有这些表的这一侧。
+   * 表名与表形仍然只由 {@code platform.vector.VectorIndexPort} 提供（不重复一份）。
+   *
+   * <p>★ 为什么必须在这一周做完（{@code 13 §五} 的原话）：数据范围与密级的过滤 <strong>与检索查询是同一处</strong> ——
+   * 晚做就要改所有查询，而改的那一次最可能漏掉其中一条路。
+   */
+  List<Scored> vectorSearch(VectorQuery query);
+
+  /**
    * 全文检索的请求。
    *
    * @param question 用户问题原文（分词的权威是库里的 {@code chinese_zh} 配置，**不在 Java 侧再分一次**）
@@ -74,6 +88,16 @@ public interface SegmentSearchPort {
    * @param limit 候选上限
    */
   record TextQuery(String question, List<UUID> kbIds, int limit) {}
+
+  /**
+   * 相似度检索的请求。
+   *
+   * @param dimension 目标向量维度（决定查哪张表）
+   * @param vector 问题向量
+   * @param kbIds 允许的库范围（已由 {@link #visibleKbIds} 过过一遍可见性）
+   * @param limit 候选上限
+   */
+  record VectorQuery(int dimension, float[] vector, List<UUID> kbIds, int limit) {}
 
   /**
    * 一路检索出来的候选。

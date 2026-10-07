@@ -449,7 +449,14 @@ public class SegmentService {
       // 旧向量按「错误归属」存在库里 ⇒ 先删；重算时会按新归属重新写入
       segmentEmbeddings.deleteBySegmentId(segment.id());
       segment.moveTo(
-          targetDocumentId, target.kbId(), nextOrdinal++, searchText, contentHash, currentUserId);
+          targetDocumentId,
+          target.kbId(),
+          nextOrdinal++,
+          searchText,
+          contentHash,
+          currentUserId,
+          // ★ 密级跟着搬（13 §2.1 ②）：搬过去之后它属于目标文档
+          target.classification());
     }
     segments.saveAll(moving);
 
