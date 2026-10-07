@@ -259,11 +259,20 @@ public class KnowledgeBaseService {
       Double threshold,
       Integer topN,
       String noRefStrategy,
+      Integer queryCount,
+      Boolean decomposeEnabled,
+      Integer maxSubQuestions,
       UUID currentUserId) {
     KnowledgeBase base = requireVisible(id);
     try {
       base.changeRetrievalParams(
-          parseRetrievalMode(mode), threshold, topN, parseNoRefStrategy(noRefStrategy));
+          parseRetrievalMode(mode),
+          threshold,
+          topN,
+          parseNoRefStrategy(noRefStrategy),
+          queryCount,
+          decomposeEnabled,
+          maxSubQuestions);
     } catch (IllegalArgumentException e) {
       // 领域层抛的是"范围不对"这类可读原因，这里统一翻成 400（与知识库其它字段同口径）
       throw new BusinessException(ErrorCode.BAD_REQUEST, e.getMessage());
@@ -277,7 +286,10 @@ public class KnowledgeBaseService {
         base.retrievalMode(),
         base.retrievalThreshold(),
         base.retrievalTopN(),
-        base.retrievalNoRefStrategy());
+        base.retrievalNoRefStrategy(),
+        base.retrievalQueryCount(),
+        base.retrievalDecomposeEnabled(),
+        base.retrievalMaxSubQuestions());
   }
 
   /**

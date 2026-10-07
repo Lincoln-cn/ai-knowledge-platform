@@ -128,6 +128,20 @@ public class KnowledgeBase implements OwnedResource {
   @Column(name = "retrieval_no_ref_strategy", nullable = false, length = 16)
   private NoRefStrategy retrievalNoRefStrategy = NoRefStrategy.REFUSE;
 
+  // ── 查询理解（第 12 周 · 0.4.0，契约的三个**可选**字段，10 §8.1）──
+
+  /** 查询理解条数：{@code 0} = 不做，{@code 1} = 只改写，≥2 = 改写 + 扩展。默认 3。 */
+  @Column(name = "retrieval_query_count", nullable = false)
+  private short retrievalQueryCount = 3;
+
+  /** 是否拆子问题。★ 默认 true —— 关掉等于把这一版要交付的能力关在配置里。 */
+  @Column(name = "retrieval_decompose_enabled", nullable = false)
+  private boolean retrievalDecomposeEnabled = true;
+
+  /** 子问题数上限。默认 3、上限 5（{@code 10 §6.2}）。 */
+  @Column(name = "retrieval_max_sub_questions", nullable = false)
+  private short retrievalMaxSubQuestions = 3;
+
   @CreationTimestamp
   @Column(name = "created_at", nullable = false, updatable = false)
   private Instant createdAt;
@@ -271,7 +285,13 @@ public class KnowledgeBase implements OwnedResource {
    * 再做一次：应用层给可读原因，库层保证"任何写入路径都逃不掉"。
    */
   public void changeRetrievalParams(
-      RetrievalMode mode, Double threshold, Integer topN, NoRefStrategy noRefStrategy) {
+      RetrievalMode mode,
+      Double threshold,
+      Integer topN,
+      NoRefStrategy noRefStrategy,
+      Integer queryCount,
+      Boolean decomposeEnabled,
+      Integer maxSubQuestions) {
     if (mode != null) {
       this.retrievalMode = mode;
     }
@@ -291,6 +311,23 @@ public class KnowledgeBase implements OwnedResource {
     }
     if (noRefStrategy != null) {
       this.retrievalNoRefStrategy = noRefStrategy;
+    }
+    if (queryCount != null) {
+      // ★ 0 是合法值（不做查询理解），所以校验是 `0..5` 而不是 `1..5` —— 把它收紧成 1
+      //   会让"关掉这一层"变成一个静默的 400
+      if (queryCount < 0 || queryCount > 5) {
+        throw new IllegalArgumentException("查询理解条数应在 0～5 之间");
+      }
+      this.retrievalQueryCount = queryCount.shortValue();
+    }
+    if (decomposeEnabled != null) {
+      this.retrievalDecomposeEnabled = decomposeEnabled;
+    }
+    if (maxSubQuestions != null) {
+      if (maxSubQuestions < 1 || maxSubQuestions > 5) {
+        throw new IllegalArgumentException("子问题数应在 1～5 之间");
+      }
+      this.retrievalMaxSubQuestions = maxSubQuestions.shortValue();
     }
   }
 
@@ -367,6 +404,19 @@ public class KnowledgeBase implements OwnedResource {
 
   public NoRefStrategy retrievalNoRefStrategy() {
     return retrievalNoRefStrategy;
+  }
+
+  /** 查询理解条数（{@code 0} = 不做）。 */
+  public int retrievalQueryCount() {
+    return retrievalQueryCount;
+  }
+
+  public boolean retrievalDecomposeEnabled() {
+    return retrievalDecomposeEnabled;
+  }
+
+  public int retrievalMaxSubQuestions() {
+    return retrievalMaxSubQuestions;
   }
 
   public Instant createdAt() {

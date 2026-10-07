@@ -115,9 +115,12 @@
 
         <el-form-item label="检索模式" prop="retrievalMode">
           <el-radio-group v-model="form.retrieval.mode">
-            <el-radio-button value="向量检索">向量检索</el-radio-button>
-            <el-radio-button value="全文检索">全文检索</el-radio-button>
-            <el-radio-button value="混合检索">混合检索</el-radio-button>
+            <!-- ★ value 必须是机器码（契约 RetrievalMode）—— 这里原来写的是中文标签，
+                 与命中测试页/设置页同一处错法（#28）：TS 抓不到（radio 的 v-model 宽到 string|number|boolean），
+                 而它一旦进了请求体，"检索模式只支持 VECTOR / FULLTEXT / HYBRID" 那条 400 就来了。 -->
+            <el-radio-button value="VECTOR">向量检索</el-radio-button>
+            <el-radio-button value="FULLTEXT">全文检索</el-radio-button>
+            <el-radio-button value="HYBRID">混合检索</el-radio-button>
           </el-radio-group>
         </el-form-item>
 
@@ -141,8 +144,9 @@
 
         <el-form-item label="无引用策略">
           <el-radio-group v-model="form.retrieval.noRefStrategy">
-            <el-radio-button value="拒答">拒答</el-radio-button>
-            <el-radio-button value="自由回答">自由回答</el-radio-button>
+            <!-- ★ 同上：机器码（契约 NoRefStrategy） -->
+            <el-radio-button value="REFUSE">拒答</el-radio-button>
+            <el-radio-button value="FREE_ANSWER">自由回答</el-radio-button>
           </el-radio-group>
         </el-form-item>
 
@@ -226,7 +230,7 @@ const form = reactive({
   promptIds: [] as string[],
   kbIds: [] as string[],
   retrieval: {
-    mode: '混合检索' as RetrievalMode,
+    mode: 'HYBRID' as RetrievalMode,
     threshold: 0.6,
     topN: 5,
     noRefStrategy: 'REFUSE' as RetrievalParams['noRefStrategy']

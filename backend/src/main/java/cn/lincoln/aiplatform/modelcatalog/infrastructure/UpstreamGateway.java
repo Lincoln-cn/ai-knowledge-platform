@@ -38,6 +38,9 @@ public class UpstreamGateway {
 
   private static final Logger log = LoggerFactory.getLogger(UpstreamGateway.class);
 
+  /** POST 的默认超时。★ 业务侧要更短的（查询理解有预算）就显式传 —— 详见 {@link #chatCompletion}。 */
+  private static final Duration DEFAULT_POST_TIMEOUT = Duration.ofSeconds(30);
+
   /** ★ 连接超时设短（3 秒）：load 的可用性校验不应该让管理员等 30 秒才看到"加载失败"。 请求超时另算（GET 10 秒 / POST 30 秒）。 */
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
@@ -189,6 +192,41 @@ public class UpstreamGateway {
     return vector;
   }
 
+  // ────────────────────────── 对话补全（第 12 周 · 0.4.0） ──────────────────────────
+
+  /**
+   * 发一次对话补全并**取出模型输出的正文**（{@code choices[0].message.content}）。
+   *
+   * <p>★ 与上面那个 {@link #chat} 的区别：那是**能力探针**（提示词写死"1+1"，还要看响应体里有没有 {@code
+   * reasoning_content}），所以它必须拿到<strong>响应体原文</strong>；这里是给业务用的补全调用， 要的是"模型说了什么"。
+   *
+   * <p>★ {@code timeout} 由调用方给：查询理解这一层的时间直接从首字延迟里扣（{@code 10 §6.1}）， 所以"准时放弃"是它的功能，不是它的容错。
+   */
+  public String chatCompletion(
+      String model, String apiBase, String apiKey, String prompt, Duration timeout) {
+    // ★★ 用序列化器拼请求体，**不要**手拼字符串 —— 真栈闸门实测抓到过：
+    //   查询理解的提示词是**多行**的，而 escape() 只处理了反斜杠与引号，换行原样留在 JSON
+    //   字符串里 ⇒ 上游按"请求体不是合法 JSON"直接 400。那是最难查的一类错：
+    //   本地单测全绿，因为夹具里的提示词恰好是单行。
+    //   映射成 Map 再序列化，控制字符的转义交给序列化器。
+    Map<String, Object> payload =
+        Map.of("model", model, "messages", List.of(Map.of("role", "user", "content", prompt)));
+    String body = post(resolve(apiBase, "/chat/completions"), writeJson(payload), apiKey, timeout);
+    try {
+      JsonNode content =
+          json.readTree(body).path("choices").path(0).path("message").path("content");
+      if (!content.isTextual()) {
+        // ★ 明确拒绝而不是返回空串："上游回了 200 但没有正文"与"模型答了个空"是两件事，
+        //   而下游（解析）会把两者都看成"解析失败"—— 分开报才知道该找谁
+        throw new UpstreamUnreachableException(
+            "上游响应里没有 choices[0].message.content。响应片段：" + abbreviate(body));
+      }
+      return content.asText();
+    } catch (IOException e) {
+      throw new UpstreamUnreachableException("上游返回的对话响应不是合法 JSON：" + e.getMessage(), e);
+    }
+  }
+
   // ────────────────────────── 思考三态 ──────────────────────────
 
   /**
@@ -258,10 +296,14 @@ public class UpstreamGateway {
   }
 
   private String post(String url, String payload, String apiKey) {
+    return post(url, payload, apiKey, DEFAULT_POST_TIMEOUT);
+  }
+
+  private String post(String url, String payload, String apiKey, Duration timeout) {
     try {
       HttpRequest request =
           HttpRequest.newBuilder(URI.create(url))
-              .timeout(Duration.ofSeconds(30))
+              .timeout(timeout)
               .header("Content-Type", "application/json")
               .header("Authorization", "Bearer " + effectiveKey(apiKey))
               .POST(HttpRequest.BodyPublishers.ofString(payload))
@@ -319,6 +361,16 @@ public class UpstreamGateway {
 
   private static String escape(String raw) {
     return raw.replace("\\", "\\\\").replace("\"", "\\\"");
+  }
+
+  /** 把一个 Map 序列化成请求体。★ 提示词是多行的，控制字符必须由序列化器转义（见 {@link #chatCompletion}）。 */
+  private String writeJson(Object value) {
+    try {
+      return json.writeValueAsString(value);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      // 到不了：Map / List / String 一定能序列化。留着是免得调用方处理一个虚构的分支
+      throw new UpstreamUnreachableException("构造请求体失败：" + e.getMessage(), e);
+    }
   }
 
   private static String abbreviate(String body) {

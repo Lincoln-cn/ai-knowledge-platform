@@ -27,10 +27,29 @@
         <div class="param">
           <span class="param-label">无引用策略</span>
           <el-radio-group v-model="form.noRefStrategy" size="small">
-            <el-radio-button value="拒答">拒答</el-radio-button>
-            <el-radio-button value="自由回答">自由回答</el-radio-button>
+            <!-- ★ value 用机器码（契约 NoRefStrategy）而不是中文标签，否则"打开时不高亮"（#28）。
+                 命中测试这一侧后端不解析它，所以症状只有不高亮 —— 但同一处写法在设置页会让保存 400。 -->
+            <el-radio-button value="REFUSE">拒答</el-radio-button>
+            <el-radio-button value="FREE_ANSWER">自由回答</el-radio-button>
           </el-radio-group>
         </div>
+        <div class="param">
+          <span class="param-label">查询理解条数</span>
+          <el-input-number v-model="form.queryCount" :min="0" :max="5" size="small" controls-position="right" />
+          <span class="micro muted">0 = 不做，1 = 只改写</span>
+        </div>
+        <div class="param">
+          <span class="param-label">拆分子问题</span>
+          <el-switch v-model="form.decomposeEnabled" size="small" />
+        </div>
+      </div>
+
+      <!-- ★ 第 11 周（0.3.3）起密级隔离已生效 —— 这句话对应 13 §8.4 的界面口径（M3 起改口径）。
+           它不是"顺手加一句提示"：它是一句**可被证伪的声明**，守着它的有两个闸门
+           （后端 RetrievalSecurityTest 的判据①②、真栈 check_classification_e2e.py）。
+           哪天密级过滤退化了，红的是那两个闸门 —— 而不是靠这句话本身提醒谁。 -->
+      <div class="micro muted clearance-hint">
+        结果已按你的密级过滤：高于你的密级的内容不会出现；换一个密级更高的账号登录，同一个库能看到更多。
       </div>
 
       <div class="ask-row">
@@ -56,6 +75,8 @@
         <span class="res-title">{{ labelOf(RETRIEVAL_MODE_LABELS, singleResult.mode) }} · 命中 <b class="num">{{ singleResult.items.length }}</b> 条</span>
         <span class="micro muted">耗时 <b class="num">{{ singleResult.elapsedMs }}</b>ms · 阈值 <b class="num">{{ form.threshold }}</b> · TopN <b class="num">{{ form.topN }}</b></span>
       </div>
+      <!-- trace 是可选的：老后端/老 mock 不返回它，这一行就整个不出现（不显示占位、不显示 0） -->
+      <div v-if="singleResult.trace" class="micro muted trace-line">{{ traceText(singleResult.trace) }}</div>
       <div v-if="!singleResult.items.length" class="notice warn">
         没有命中任何分段。可降低相似度阈值、改用混合检索，或确认知识库已启用且分段已向量化。
       </div>
@@ -115,7 +136,7 @@ import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { retrievalApi } from '@/api'
 import { ApiError } from '@/api/types'
-import type { HitTestResult, RetrievalMode, RetrievalParams } from '@/api/retrieval'
+import type { HitTestResult, HitTestTrace, RetrievalMode, RetrievalParams } from '@/api/retrieval'
 import { RETRIEVAL_MODE_LABELS, labelOf } from '@/constants/labels'
 
 const props = defineProps<{ kbId?: string }>()
@@ -126,11 +147,20 @@ const MODES: Array<{ value: RetrievalMode; label: string; desc: string }> = [
   { value: 'HYBRID', label: '混合检索', desc: 'RRF 融合向量与全文，召回更稳（推荐）' }
 ]
 
-const form = reactive<RetrievalParams>({
+/**
+ * 界面上的表单值。查询理解两项在界面上**一定有值**（3 / 开）：
+ * 契约里的可选只是「不传时由后端按默认值处理」，而 v-model 不接受 boolean | undefined。
+ */
+type RetrievalForm = RetrievalParams &
+  Required<Pick<RetrievalParams, 'queryCount' | 'decomposeEnabled'>>
+
+const form = reactive<RetrievalForm>({
   mode: 'HYBRID',
   threshold: 0.6,
   topN: 5,
-  noRefStrategy: 'REFUSE'
+  noRefStrategy: 'REFUSE',
+  queryCount: 3,
+  decomposeEnabled: true
 })
 
 const question = ref('')
@@ -147,10 +177,18 @@ const loadParams = async () => {
     form.threshold = params.threshold
     form.topN = params.topN
     form.noRefStrategy = params.noRefStrategy
+    // 老后端不返回这两个字段：不能直写，undefined 会把输入框清空成空值
+    if (params.queryCount !== undefined) form.queryCount = params.queryCount
+    if (params.decomposeEnabled !== undefined) form.decomposeEnabled = params.decomposeEnabled
   } catch {
     // 知识库可能刚建好还没有检索参数，用默认值
   }
 }
+
+/** 头部那行 trace 文案：降级原因只在真有原因时追加 */
+const traceText = (trace: HitTestTrace) =>
+  `查询理解 D${trace.degradeLevel} · 子问题 ${trace.subQuestionCount} × 查询 ${trace.queryCount} · 共 ${trace.pathCount} 路` +
+  (trace.degradeReason ? ` · 降级原因：${trace.degradeReason}` : '')
 
 const runSingle = async () => {
   if (!question.value.trim()) {
@@ -186,6 +224,9 @@ const runCompare = async () => {
       threshold: form.threshold,
       topN: form.topN,
       noRefStrategy: form.noRefStrategy,
+      // 对比模式也要带上查询理解参数，否则同一个表单在两个按钮下检的不是同一件事
+      queryCount: form.queryCount,
+      decomposeEnabled: form.decomposeEnabled,
       kbIds: props.kbId ? [props.kbId] : undefined,
       question: question.value.trim()
     })
@@ -323,6 +364,10 @@ onMounted(loadParams)
   font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
   color: var(--color-ink-2);
+}
+
+.trace-line {
+  line-height: var(--leading-tight);
 }
 
 .hit-grid {

@@ -5,10 +5,12 @@ import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.retrieval.domain.QueryUnderstanding;
 import cn.lincoln.aiplatform.retrieval.domain.Rrf;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -19,12 +21,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 命中测试（三模式 + RRF）—— 本周的判据 ④ 就落在这个类里。
+ * 命中测试（三模式 + RRF + 查询理解）—— 第 10 周的判据 ④ 与第 12 周的判据 ①②③ 都落在这个类里。
  *
  * <h3>链路（每一步的顺序都是有理由的，别调）</h3>
  *
  * <pre>
- *  校验 → 可见范围 → 每路取候选 → 阈值过滤 → 融合(RRF) → ★两路同谓词 → TopN → 组装
+ *  校验 → 可见范围 → **查询理解（M 子问题 × N 查询）** → 每条查询检索一次（模式内已融合）
+ *       → 子问题内 RRF → 子问题按顺序拼接 → ★两路同谓词 → 阈值/截断 → 组装 + 轨迹
  * </pre>
  *
  * <ul>
@@ -34,10 +37,38 @@ import org.springframework.transaction.annotation.Transactional;
  *       这条纪律（{@code 13}）要求向量路拿回来的候选也过同一套判定 —— 所以它就落在这里。
  * </ul>
  *
+ * <h3>★ 第 12 周加的第五步：M 个子问题 × N 条查询</h3>
+ *
+ * <p>{@code 10 §3.2.1} 那条"路数怎么算"很容易想错：<strong>不是</strong> {@code 查询数 × 模式数} —— 混合模式内部本身已经是"向量 +
+ * 全文两路 RRF"，再乘模式数会得到 {@code 3 × 3 = 9} 路且语义重复。 正确的形态是：<strong>每条查询先各自融合成一路</strong>，多条查询之间再做一次 RRF
+ * （RRF 天然可递推，不新增算法）。
+ *
+ * <p>★ <strong>子问题之间不做全局 RRF</strong>（{@code 10 §3.3.3} 明确禁止）： 子问题本来就不该互相竞争排名，把 M×N 路丢进一个大 RRF
+ * 会让"问了两件事、只答了一件"。 本周按<strong>子问题顺序拼接</strong>（顺序 = 子问题顺序 → 子问题内排名）， 而"每个子问题保底占几条"的配额合并属于第 13
+ * 周（0.4.1 的 {@code RrfQuotaJoiner}）。
+ *
  * <h3>★ 阈值的语义（一条刻意的边界）</h3>
  *
  * <p>阈值是<strong>相似度</strong>下限（{@code 10 §5.4}：它要随向量模型校准）⇒ 只作用于向量路。 全文路的 {@code ts_rank} 是无界的，拿 0–1
  * 的阈值去卡它，全文模式会永远为空 —— 而它恰恰是专有名词/编号类问题的唯一出路（{@code 03 §2.1}）。每条路有自己的准入判据， 融合只看名次（RRF 的全部意义）。
+ *
+ * <h3>★ 顺序执行而不是并行（与 {@code 10 §3.2.2} 的一处偏离，如实记）</h3>
+ *
+ * <p>设计册写的是"N 条查询并行（虚拟线程 + CompletableFuture）"。本周<strong>顺序</strong>跑，理由： 整个 {@code hitTest}
+ * 在一个<strong>只读事务</strong>里，共用一条 JDBC 连接 —— 而连接不是线程安全的。 要并行就得给每条查询各自的事务与连接，那是另一件事（也是它在真栈上唯一能验证的方式）。
+ * 代价由两个上限兜住：总路数 ≤ {@value #MAX_PATHS}、以及检索阶段的<strong>时间预算</strong> （{@code 10 §6.2} 第 6
+ * 项：预算耗尽就按已完成的查询继续，绝不无限等）。并行化登记为后续。
+ *
+ * <h3>★★ 一条被真栈闸门逼出来的兜底：改写不许把结果改没</h3>
+ *
+ * <p>落地的当天，既有那条"全站页面走查"闸门**红了**：命中测试页在 FULLTEXT / HYBRID 下**一条都不出**。 查下来不是闸门的问题 ——
+ * 是这一层的真实失败模式：<strong>查询理解产出的查询一条都没命中，而用户 原本那个问题明明能召回</strong>（那次是桩模型按 schema
+ * 造了占位查询；换成真模型时，"改写把编号改掉" 或"扩展成了语义旁支"是同样形状的问题）。设计册 §1.3 的判据 3 是"任何一层失败，降级到下一档继续答"，
+ * 而"这层把结果从有变成没有"正是该降级的情形。
+ *
+ * <p>⇒ 现在：多查询一条都没命中时，<strong>退回原始问题再跑一次</strong>。 ★ 两个刻意的限制：只在 {@code N > 1}
+ * 时兜（单查询就是原始问题，没有"退回"可言）； 以及**只有它真的救回了结果才记成 D4** —— 语料里本来就没有时退回同样为空， 那不算"这层降级了"（否则每问一个语料里没有的问题都会往
+ * {@code degradeRate} 上记一笔）。
  */
 @Service
 public class RetrievalService {
@@ -49,12 +80,33 @@ public class RetrievalService {
 
   private static final int CANDIDATE_LIMIT_CAP = 100;
 
+  /**
+   * 总检索路数上限（{@code 10 §6.2} 第 4 项：默认 6）。
+   *
+   * <p>截断规则也是那一条定的：<strong>按子问题顺序截断，每个子问题至少保住 1 条查询</strong> ——
+   * 不然"路数超了"会把后面的子问题整段砍掉，而那正是"问了两件事只答一件"的成因。
+   */
+  private static final int MAX_PATHS = 6;
+
+  /**
+   * 检索阶段的时间预算（{@code 10 §6.2} 第 6 项：默认 5000ms）。
+   *
+   * <p>★ 设计册说这是"唯一能兜住所有层的上限"：调用次数可以预估，单次调用多久预估不了。
+   * 所以每一层在开始前检查余量，耗尽就<strong>用已经拿到的结果继续</strong>（不是失败）。
+   */
+  private static final long RETRIEVAL_BUDGET_MS = 5_000;
+
   private final SegmentSearchPort segmentSearch;
   private final EmbeddingPort embeddingPort;
+  private final QueryUnderstandingService queryUnderstanding;
 
-  public RetrievalService(SegmentSearchPort segmentSearch, EmbeddingPort embeddingPort) {
+  public RetrievalService(
+      SegmentSearchPort segmentSearch,
+      EmbeddingPort embeddingPort,
+      QueryUnderstandingService queryUnderstanding) {
     this.segmentSearch = segmentSearch;
     this.embeddingPort = embeddingPort;
+    this.queryUnderstanding = queryUnderstanding;
   }
 
   @Transactional(readOnly = true)
@@ -68,34 +120,130 @@ public class RetrievalService {
     if (kbIds.isEmpty()) {
       // ★ 这里是"没有可检索的库"，不是"没命中" —— 但对外都返空列表：
       //   区别只该出现在日志/埋点里，不该变成"这个库存在但你看不见"这种信息泄露。
-      return new HitTestView(mode, List.of(), elapsedMs(startedAt));
+      return new HitTestView(
+          mode,
+          List.of(),
+          elapsedMs(startedAt),
+          new HitTestView.Trace(1, 1, 0, 0, "没有可检索的知识库", false, 0));
     }
 
+    // ② 查询理解：★ 它自带兜底（不可用 ⇒ 原始问题单路），所以这里不需要 try/catch
+    QueryUnderstandingService.Outcome understood =
+        queryUnderstanding.understand(
+            request.question(),
+            request.queryCountOrDefault(),
+            request.decomposeEnabledOrDefault(),
+            request.maxSubQuestionsOrDefault(),
+            RETRIEVAL_BUDGET_MS);
+
     int candidateLimit = Math.min(request.topNOrDefault() * OVERFETCH, CANDIDATE_LIMIT_CAP);
+    Map<UUID, Double> vectorScores = new HashMap<>();
+    Map<UUID, Double> textScores = new HashMap<>();
 
-    // ② 每路取候选
-    List<SegmentSearchPort.Scored> vectorHits =
-        mode == RetrievalMode.FULLTEXT ? List.of() : vectorSearch(request, kbIds, candidateLimit);
-    List<SegmentSearchPort.Scored> fullTextHits =
-        mode == RetrievalMode.VECTOR
-            ? List.of()
-            : segmentSearch.fullText(
-                new SegmentSearchPort.TextQuery(request.question(), kbIds, candidateLimit));
+    // ③ 每个子问题：它的 N 条查询各检索一次 → 子问题内 RRF
+    List<List<UUID>> perSubQuestion = new ArrayList<>();
+    int paths = 0;
+    int pathsAttempted = 0;
+    boolean budgetExhausted = false;
+    boolean pathFailed = false;
+    int degradeLevel = understood.degradeLevel();
+    String degradeReason = understood.degradeReason();
 
-    // ③ 阈值过滤（只作用于向量相似度，见类注释）
-    double threshold = request.thresholdOrDefault();
-    vectorHits = vectorHits.stream().filter(hit -> hit.score() >= threshold).toList();
+    List<List<String>> plan = planPaths(understood.understanding());
+    for (List<String> queries : plan) {
+      List<List<UUID>> perQuery = new ArrayList<>();
+      for (String query : queries) {
+        // ★ 每一路开始前检查余量（10 §6.2 第 6 项）—— 耗尽就用已拿到的结果继续，不是失败
+        if (elapsedMs(startedAt) > RETRIEVAL_BUDGET_MS) {
+          budgetExhausted = true;
+          log.warn("检索预算 {}ms 已耗尽（已跑 {} 路），按已完成的查询继续", RETRIEVAL_BUDGET_MS, paths);
+          break;
+        }
+        pathsAttempted++;
+        try {
+          perQuery.add(
+              retrieveOneQuery(
+                  query,
+                  mode,
+                  kbIds,
+                  candidateLimit,
+                  request.thresholdOrDefault(),
+                  vectorScores,
+                  textScores));
+          paths++;
+        } catch (BusinessException failure) {
+          // ★ 部分成功是常态（{@code 10 §3.2.3}）：一条路坏掉不该让整次检索失败 ——
+          //   否则多查询会变成一个"降低可用性"的特性，与初衷相反
+          pathFailed = true;
+          log.warn("查询「{}」检索失败，丢弃这一路：{}", query, failure.getMessage());
+        }
+      }
+      if (perQuery.isEmpty()) {
+        continue;
+      }
+      perSubQuestion.add(
+          perQuery.size() == 1
+              ? perQuery.getFirst()
+              : Rrf.fuse(perQuery).stream().map(Rrf.Fused::segmentId).toList());
+    }
 
-    // ④ 融合
-    List<UUID> ordered = order(mode, vectorHits, fullTextHits);
+    if (perSubQuestion.isEmpty()) {
+      // ④ 全部路都失败 ⇒ 降级：用原始问题再跑一次单路（{@code 10 §3.2.3} 的最后一行）
+      log.warn("查询理解的每条路都失败了，降级为原始问题单路重试");
+      List<UUID> retry =
+          retrieveOneQuery(
+              request.question(),
+              mode,
+              kbIds,
+              candidateLimit,
+              request.thresholdOrDefault(),
+              vectorScores,
+              textScores);
+      perSubQuestion.add(retry);
+      paths = 1;
+      degradeLevel = 4;
+      degradeReason = "所有查询都失败，已退回原始问题单路";
+    } else if (budgetExhausted && degradeLevel < 1) {
+      degradeLevel = 1;
+      degradeReason = join("检索预算耗尽，按已完成的查询继续", degradeReason);
+    } else if (pathFailed && degradeLevel == 0) {
+      degradeReason = join("有查询失败已丢弃该路", degradeReason);
+    }
 
-    // ⑤ ★ 两路同谓词 + 截断
+    // ⑤ ★ 两路同谓词 + 截断（子问题之间按顺序拼接，不做全局 RRF —— 理由见类注释）
+    List<UUID> ordered = concatDistinct(perSubQuestion);
     Set<UUID> visible = segmentSearch.visibleAmong(ordered, kbIds);
-    List<UUID> finalIds =
-        ordered.stream().filter(visible::contains).limit(request.topNOrDefault()).toList();
+    List<UUID> kept = ordered.stream().filter(visible::contains).toList();
+
+    // ⑤b ★★ "改写把结果改没了"要兜住 —— 这一条是**真栈闸门逼出来的**（见类注释末尾）。
+    //   ★ 只在"多查询一条都没命中"时兜（N > 1），而且**只把降级记为 D4 当它真的救回了结果**：
+    //     语料里本来就没有时，退回原始问题同样为空 —— 那不算"这层降级了"，
+    //     否则每问一个语料里没有的问题都会把 degradeRate 记一笔。
+    if (kept.isEmpty() && understood.understanding().totalQueries() > 1) {
+      List<UUID> fromOriginal =
+          retrieveOneQuery(
+              request.question(),
+              mode,
+              kbIds,
+              candidateLimit,
+              request.thresholdOrDefault(),
+              vectorScores,
+              textScores);
+      Set<UUID> visibleOriginal = segmentSearch.visibleAmong(fromOriginal, kbIds);
+      List<UUID> fallback = fromOriginal.stream().filter(visibleOriginal::contains).toList();
+      if (!fallback.isEmpty()) {
+        log.warn("改写/扩展后的 {} 条查询一条都没命中，退回原始问题并召回了 {} 条", paths, fallback.size());
+        kept = fallback;
+        ordered = fromOriginal;
+        degradeLevel = 4;
+        degradeReason = join("改写后的查询全部没命中，已退回原始问题单路", degradeReason);
+      }
+    }
+    List<UUID> finalIds = kept.stream().limit(request.topNOrDefault()).toList();
 
     // ⑥ 组装：分数取"证据最好的那一路"，展示信息一次批量取（避免 N+1）
-    Map<UUID, Double> scores = bestScores(vectorHits, fullTextHits);
+    Map<UUID, Double> scores = new HashMap<>(textScores);
+    vectorScores.forEach((id, score) -> scores.merge(id, score, Math::max));
     Map<UUID, SegmentSearchPort.Card> cards = new LinkedHashMap<>();
     for (SegmentSearchPort.Card card : segmentSearch.load(finalIds)) {
       cards.put(card.segmentId(), card);
@@ -120,7 +268,18 @@ public class RetrievalService {
               scores.getOrDefault(id, 0.0),
               card.content()));
     }
-    return new HitTestView(mode, items, elapsedMs(startedAt));
+    return new HitTestView(
+        mode,
+        items,
+        elapsedMs(startedAt),
+        new HitTestView.Trace(
+            understood.understanding().subQuestionCount(),
+            attemptedPathsOr(pathsAttempted, paths),
+            paths,
+            degradeLevel,
+            degradeReason,
+            understood.truncated(),
+            understood.elapsedMs()));
   }
 
   // ────────────────────────── 内部 ──────────────────────────
@@ -141,6 +300,87 @@ public class RetrievalService {
     if (topN > HitTestQuery.MAX_TOP_N) {
       throw new BusinessException(ErrorCode.BAD_REQUEST, "TopN 应在 1～20 之间");
     }
+    // ★ 越界一律 400 而不是静默夹到边界：界面上滑块到不了的值，只可能来自直接调接口 ——
+    //   "收下但按别的值跑"会让调参的人以为参数生效了
+    int queryCount = request.queryCountOrDefault();
+    if (queryCount < 0 || queryCount > HitTestQuery.MAX_QUERY_COUNT) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "查询理解条数应在 0～5 之间");
+    }
+    int maxSubQuestions = request.maxSubQuestionsOrDefault();
+    if (maxSubQuestions < 1 || maxSubQuestions > HitTestQuery.MAX_SUB_QUESTIONS_CAP) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "子问题数应在 1～5 之间");
+    }
+  }
+
+  /**
+   * 把"子问题 × 查询"摊平成"每次检索要发的一组查询"，并按总路数上限截断。
+   *
+   * <p>★ 截断规则（{@code 10 §6.2} 第 4 项）：<strong>按子问题顺序截断，且每个子问题至少保住 1 条查询</strong> —— 只按"总共 6
+   * 条"砍的话，末尾的子问题会被整段丢掉。
+   */
+  private static List<List<String>> planPaths(QueryUnderstanding understanding) {
+    List<List<String>> plan = new ArrayList<>();
+    int used = 0;
+    for (QueryUnderstanding.SubQuestion sub : understanding.subQuestions()) {
+      if (used >= MAX_PATHS) {
+        break;
+      }
+      int room = Math.min(sub.queries().size(), MAX_PATHS - used);
+      List<String> queries = sub.queries().subList(0, Math.max(1, room));
+      plan.add(queries);
+      used += queries.size();
+    }
+    if (plan.isEmpty()) {
+      // 理论上到不了（解析阶段保证至少一个子问题、一条查询），但空计划会让下面返空结果而"看起来像没命中"
+      plan.add(List.of(understanding.subQuestions().getFirst().question()));
+    }
+    return plan;
+  }
+
+  /**
+   * 一条查询的一次检索（模式内已经融合好）—— 返回该查询的候选次序。
+   *
+   * <p>★ 每一条查询都<strong>各自</strong>过一遍模式语义：混合模式是"这条查询的向量路 + 全文路先 RRF"，
+   * 而不是"所有查询的向量路放一起、所有查询的全文路放一起"（后者会把不同查询的名次混起来算）。
+   */
+  private List<UUID> retrieveOneQuery(
+      String query,
+      RetrievalMode mode,
+      List<UUID> kbIds,
+      int candidateLimit,
+      double threshold,
+      Map<UUID, Double> vectorScores,
+      Map<UUID, Double> textScores) {
+    List<UUID> vectorIds = List.of();
+    if (mode != RetrievalMode.FULLTEXT) {
+      List<SegmentSearchPort.Scored> hits = vectorSearch(query, kbIds, candidateLimit);
+      for (SegmentSearchPort.Scored hit : hits) {
+        vectorScores.merge(hit.segmentId(), hit.score(), Math::max);
+      }
+      // ★ 阈值只作用于向量路，且要在融合之前（见类注释：阈值是相似度，不是名次）
+      vectorIds =
+          hits.stream()
+              .filter(hit -> hit.score() >= threshold)
+              .map(SegmentSearchPort.Scored::segmentId)
+              .toList();
+    }
+
+    List<UUID> textIds = List.of();
+    if (mode != RetrievalMode.VECTOR) {
+      List<SegmentSearchPort.Scored> hits =
+          segmentSearch.fullText(new SegmentSearchPort.TextQuery(query, kbIds, candidateLimit));
+      for (SegmentSearchPort.Scored hit : hits) {
+        textScores.merge(hit.segmentId(), hit.score(), Math::max);
+      }
+      textIds = hits.stream().map(SegmentSearchPort.Scored::segmentId).toList();
+    }
+
+    return switch (mode) {
+      case VECTOR -> vectorIds;
+      case FULLTEXT -> textIds;
+      case HYBRID ->
+          Rrf.fuse(List.of(vectorIds, textIds)).stream().map(Rrf.Fused::segmentId).toList();
+    };
   }
 
   /**
@@ -151,7 +391,7 @@ public class RetrievalService {
    * 表"这种静默错位。
    */
   private List<SegmentSearchPort.Scored> vectorSearch(
-      HitTestQuery request, List<UUID> kbIds, int limit) {
+      String question, List<UUID> kbIds, int limit) {
     Map<UUID, UUID> modelByKb = segmentSearch.embeddingModelByKb(kbIds);
     if (modelByKb.isEmpty()) {
       throw new BusinessException(
@@ -173,7 +413,7 @@ public class RetrievalService {
     for (Map.Entry<UUID, List<UUID>> group : kbIdsByModel.entrySet()) {
       try {
         List<SegmentSearchPort.Scored> hits =
-            searchWithinOneModel(group.getKey(), group.getValue(), request.question(), limit);
+            searchWithinOneModel(group.getKey(), group.getValue(), question, limit);
         rankedPerModel.add(ids(hits));
         for (SegmentSearchPort.Scored hit : hits) {
           similarity.merge(hit.segmentId(), hit.score(), Math::max);
@@ -228,36 +468,25 @@ public class RetrievalService {
         new SegmentSearchPort.VectorQuery(vector.length, vector, kbIds, limit));
   }
 
-  /** 单路直接用它的次序；混合模式用 RRF 融合两路的名次（{@code 03 §2.2}）。 */
-  private List<UUID> order(
-      RetrievalMode mode,
-      List<SegmentSearchPort.Scored> vectorHits,
-      List<SegmentSearchPort.Scored> fullTextHits) {
-    return switch (mode) {
-      case VECTOR -> ids(vectorHits);
-      case FULLTEXT -> ids(fullTextHits);
-      case HYBRID ->
-          Rrf.fuse(List.of(ids(vectorHits), ids(fullTextHits))).stream()
-              .map(Rrf.Fused::segmentId)
-              .toList();
-    };
-  }
-
+  /** 单路直接用它的次序 —— 保留给"没有查询理解"的路径（模式内的融合在 {@link #retrieveOneQuery} 里做）。 */
   private static List<UUID> ids(List<SegmentSearchPort.Scored> scored) {
     return scored.stream().map(SegmentSearchPort.Scored::segmentId).toList();
   }
 
-  /** 每条命中的展示分 = 两路里最高的那个分（混合模式也一样：RRF 分只用于定次序）。 */
-  private static Map<UUID, Double> bestScores(
-      List<SegmentSearchPort.Scored> vectorHits, List<SegmentSearchPort.Scored> fullTextHits) {
-    Map<UUID, Double> best = new HashMap<>();
-    for (SegmentSearchPort.Scored hit : vectorHits) {
-      best.merge(hit.segmentId(), hit.score(), Math::max);
-    }
-    for (SegmentSearchPort.Scored hit : fullTextHits) {
-      best.merge(hit.segmentId(), hit.score(), Math::max);
-    }
-    return best;
+  /** 子问题之间按顺序拼接 + 去重（★ 不做全局 RRF，理由见类注释）。 */
+  private static List<UUID> concatDistinct(List<List<UUID>> perSubQuestion) {
+    Set<UUID> seen = new LinkedHashSet<>();
+    perSubQuestion.forEach(seen::addAll);
+    return List.copyOf(seen);
+  }
+
+  private static String join(String head, String tail) {
+    return tail == null || tail.isBlank() ? head : head + "；" + tail;
+  }
+
+  /** 轨迹里的 N 是"实际发出去几条查询"：全部失败时退化成 1（原始问题那一条）。 */
+  private static int attemptedPathsOr(int attempted, int succeeded) {
+    return succeeded > 0 ? attempted : 1;
   }
 
   private static long elapsedMs(long startedAtNanos) {

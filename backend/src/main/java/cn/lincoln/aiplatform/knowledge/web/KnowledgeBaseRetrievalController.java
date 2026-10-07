@@ -62,10 +62,24 @@ public class KnowledgeBaseRetrievalController {
             body.threshold(),
             body.topN(),
             body.noRefStrategy(),
+            body.queryCount(),
+            body.decomposeEnabled(),
+            body.maxSubQuestions(),
             UUID.fromString(jwt.getSubject())));
   }
 
-  /** 请求体（Partial：四个字段都可空）。 */
+  /**
+   * 请求体（Partial：字段都可空）。
+   *
+   * <p>★ 查询理解那三个（第 12 周 · 0.4.0）也是可空的同一种语义：<strong>null = 这次不改这个字段</strong>。 这里最容易写错的写法是"用 {@code
+   * record} 的默认值兜底" —— 那会让"只改 TopN"顺手把查询理解也重置， 而用户看不出发生了什么（同 {@code 08 §4.6} 对 Partial 的注释）。
+   */
   public record UpdateRetrievalParamsBody(
-      String mode, Double threshold, Integer topN, String noRefStrategy) {}
+      String mode,
+      Double threshold,
+      Integer topN,
+      String noRefStrategy,
+      Integer queryCount,
+      Boolean decomposeEnabled,
+      Integer maxSubQuestions) {}
 }
