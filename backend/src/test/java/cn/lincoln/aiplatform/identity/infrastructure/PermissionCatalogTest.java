@@ -59,12 +59,11 @@ class PermissionCatalogTest {
   }
 
   @Test
-  void 目录里的十六个权限点都进了库() {
+  void 目录里的每个权限点都进了库() {
     catalog.sync();
 
     assertThat(jdbc.queryForObject("select count(*) from iam_permission", Integer.class))
-        .isEqualTo(Permissions.ALL.size())
-        .isEqualTo(16);
+        .isEqualTo(Permissions.ALL.size());
   }
 
   @Test

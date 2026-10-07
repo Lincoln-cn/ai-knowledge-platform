@@ -84,7 +84,9 @@ public class PermissionCatalog {
           new Item(Permissions.MODEL_MANAGE, "模型管理", "模型"),
           new Item(Permissions.DASHBOARD_VIEW, "查看运营看板", "运营"),
           new Item(Permissions.FEEDBACK_HANDLE, "处理反馈", "运营"),
-          new Item(Permissions.SYSTEM_MANAGE, "账号与权限", "系统"));
+          new Item(Permissions.SYSTEM_MANAGE, "账号与权限", "系统"),
+          new Item(Permissions.IDENTITY_ORG_MANAGE, "组织机构", "系统"),
+          new Item(Permissions.PLATFORM_DICT_MANAGE, "基础数据", "系统"));
 
   private final JdbcTemplate jdbc;
   private final RoleRepository roles;

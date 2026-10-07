@@ -124,7 +124,9 @@ pages/**  ──只用──▶  src/api/**（冻结的契约：类型 + 函数�
 | **workflow** | `api/workflow.ts` | **编排契约**：17 种节点目录、存/校验/发布/版本、调试 |
 | **stream** | `api/stream.ts` + `stream-types.ts` | **全平台唯一一套流式契约** |
 
-`src/mock/handlers/` 11 个处理器全部就位 —— 界面现在跑的就是它们。
+`src/mock/handlers/` 13 个处理器全部就位 —— 界面现在跑的就是它们。
+（★ 这个数字以前写的是 11，实际早就不是了 —— 写死的计数会腐烂；改的时候请顺手数一遍
+`ls src/mock/handlers/*.ts | wc -l`。）
 
 ### 流式契约（唯一的）
 

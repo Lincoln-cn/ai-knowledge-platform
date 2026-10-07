@@ -19,7 +19,9 @@ export const permissions: PermissionItem[] = [
   { code: PERM.modelManage, label: '模型管理', module: '模型' },
   { code: PERM.dashboardView, label: '查看运营看板', module: '运营' },
   { code: PERM.feedbackHandle, label: '处理反馈', module: '运营' },
-  { code: PERM.systemManage, label: '账号与权限', module: '系统' }
+  { code: PERM.systemManage, label: '账号与权限', module: '系统' },
+  { code: PERM.orgManage, label: '组织机构', module: '系统' },
+  { code: PERM.dictManage, label: '基础数据', module: '系统' }
 ]
 
 const all = permissions.map((p) => p.code)

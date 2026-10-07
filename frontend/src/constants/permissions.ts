@@ -26,7 +26,11 @@ export const PERM = {
   dashboardView: 'dashboard:view',
   feedbackHandle: 'feedback:handle',
 
-  systemManage: 'system:manage'
+  systemManage: 'system:manage',
+
+  // 管理菜单下的两块基础数据（07 §十 / 08 §十）
+  orgManage: 'identity:org:manage',
+  dictManage: 'platform:dict:manage'
 } as const
 
 export type PermissionCode = (typeof PERM)[keyof typeof PERM]
