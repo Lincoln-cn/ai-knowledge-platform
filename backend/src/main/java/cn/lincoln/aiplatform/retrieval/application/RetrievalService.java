@@ -5,7 +5,6 @@ import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
-import cn.lincoln.aiplatform.platform.vector.VectorIndexPort;
 import cn.lincoln.aiplatform.retrieval.domain.Rrf;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -51,13 +50,10 @@ public class RetrievalService {
   private static final int CANDIDATE_LIMIT_CAP = 100;
 
   private final SegmentSearchPort segmentSearch;
-  private final VectorIndexPort vectorIndex;
   private final EmbeddingPort embeddingPort;
 
-  public RetrievalService(
-      SegmentSearchPort segmentSearch, VectorIndexPort vectorIndex, EmbeddingPort embeddingPort) {
+  public RetrievalService(SegmentSearchPort segmentSearch, EmbeddingPort embeddingPort) {
     this.segmentSearch = segmentSearch;
-    this.vectorIndex = vectorIndex;
     this.embeddingPort = embeddingPort;
   }
 
@@ -226,12 +222,10 @@ public class RetrievalService {
 
     // ★ 维度从**实际返回的向量长度**取，而不是查模型声明的维度：写入侧用的也是这个长度
     //   ⇒ 两边取法一致，才不会出现"写进 A 表、检索 B 表"这种静默错位。
-    List<VectorIndexPort.Hit> hits =
-        vectorIndex.search(new VectorIndexPort.Query(vector.length, vector, kbIds, limit));
-    return hits.stream()
-        // 余弦距离 → 相似度：同一个向量是 0（→1），正交是 1（→0）。界面上那个阈值就是它。
-        .map(hit -> new SegmentSearchPort.Scored(hit.segmentId(), 1.0 - hit.distance()))
-        .toList();
+    // ★ 检索本身交给 knowledge（`SegmentSearchPort.vectorSearch`）：密级与三级过滤必须与
+    //   `<=>` 在同一条 SQL 里（pre-filter，13 §三），而只有那一侧认识这些谓词。
+    return segmentSearch.vectorSearch(
+        new SegmentSearchPort.VectorQuery(vector.length, vector, kbIds, limit));
   }
 
   /** 单路直接用它的次序；混合模式用 RRF 融合两路的名次（{@code 03 §2.2}）。 */

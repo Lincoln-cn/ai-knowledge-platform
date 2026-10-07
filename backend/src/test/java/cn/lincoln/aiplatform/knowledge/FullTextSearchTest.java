@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
 import cn.lincoln.aiplatform.knowledge.infrastructure.FullTextIndex;
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.support.PostgresImage;
+import cn.lincoln.aiplatform.support.SecurityContexts;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -93,8 +95,11 @@ class FullTextSearchTest {
     String reordered = insertSegment(kbId, "违约金按合同约定计算，具体见第二章");
 
     List<SegmentSearchPort.Scored> hits =
-        segmentSearch.fullText(
-            new SegmentSearchPort.TextQuery("合同违约金", List.of(UUID.fromString(kbId)), 10));
+        SecurityContexts.asClearance(
+            ClassificationLevel.CONFIDENTIAL,
+            () ->
+                segmentSearch.fullText(
+                    new SegmentSearchPort.TextQuery("合同违约金", List.of(UUID.fromString(kbId)), 10)));
 
     assertThat(hits)
         .as("词序不同也能命中 ⇒ 用的是 OR 词元查询，不是 <-> 短语查询（后者会让中文检索几乎永远为空）")
@@ -110,8 +115,11 @@ class FullTextSearchTest {
     String none = insertSegment(kbId, "住宿标准一线城市");
 
     List<SegmentSearchPort.Scored> hits =
-        segmentSearch.fullText(
-            new SegmentSearchPort.TextQuery("合同违约金", List.of(UUID.fromString(kbId)), 10));
+        SecurityContexts.asClearance(
+            ClassificationLevel.CONFIDENTIAL,
+            () ->
+                segmentSearch.fullText(
+                    new SegmentSearchPort.TextQuery("合同违约金", List.of(UUID.fromString(kbId)), 10)));
 
     double bothScore =
         hits.stream()
@@ -141,8 +149,12 @@ class FullTextSearchTest {
     jdbc.update("update kb_segment set enabled = false where id = ?::uuid", disabled);
 
     assertThat(
-            segmentSearch.fullText(
-                new SegmentSearchPort.TextQuery("合同违约金", List.of(UUID.fromString(kbId)), 10)))
+            SecurityContexts.asClearance(
+                ClassificationLevel.CONFIDENTIAL,
+                () ->
+                    segmentSearch.fullText(
+                        new SegmentSearchPort.TextQuery(
+                            "合同违约金", List.of(UUID.fromString(kbId)), 10))))
         .extracting(SegmentSearchPort.Scored::segmentId)
         .doesNotContain(UUID.fromString(disabled));
   }
@@ -164,9 +176,11 @@ class FullTextSearchTest {
     jdbc.update(
         "insert into kb_segment (id, document_id, kb_id, ordinal, title, title_path, content,"
             + " search_text, content_hash, char_count, is_table, is_code, oversized_risk, enabled,"
-            + " embedding_status, created_at, updated_at)"
+            + " embedding_status, created_at, updated_at, classification)"
             + " values (?::uuid, ?::uuid, ?::uuid, 0, '夹具', '第一章', ?, ?, ?, ?, false, false,"
-            + " false, true, 'EMBEDDED', now(), now())",
+            // 密级从文档继承（V22 的列是 not null）：夹具也用同一条规则，别自己另造一份
+            + " false, true, 'EMBEDDED', now(), now(),"
+            + " (select classification from kb_document where id = ?::uuid))",
         id,
         docId,
         kbId,
@@ -174,7 +188,8 @@ class FullTextSearchTest {
         searchText,
         UUID.randomUUID().toString().replace("-", "")
             + UUID.randomUUID().toString().replace("-", "").substring(0, 32),
-        searchText.length());
+        searchText.length(),
+        docId);
     return id;
   }
 

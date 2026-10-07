@@ -3,8 +3,10 @@ package cn.lincoln.aiplatform.knowledge.infrastructure;
 import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBase;
 import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBaseRepository;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.platform.vector.VectorIndexPort;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -19,7 +21,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * {@link SegmentSearchPort} 的实现（{@code knowledge} 侧）—— 全文那一路 + 可见性判定 + 命中详情。
+ * {@link SegmentSearchPort} 的实现（{@code knowledge} 侧）—— 全文与向量两路 + 安全谓词 + 命中详情。
  *
  * <h3>★ 查询串怎么拼（这一段有一条实测拦下来的坑）</h3>
  *
@@ -39,6 +41,12 @@ import org.springframework.stereotype.Component;
  *
  * <p>所以流程是两步：① 先问库要真词元（{@code tsvector_to_array(to_tsvector('chinese_zh', ?))}）； ② 用这些词元拼
  * <strong>OR</strong> 查询。用 OR 而不是 AND 也是刻意的 —— AND 语义下"住宿标准是多少"里那个「是」会让一份含「住宿标准」的合同一条都不命中。
+ *
+ * <h3>★ 安全谓词只有一份（第 11 周 · 0.3.3）</h3>
+ *
+ * <p>可见性与密级合成 {@link #SECURITY_PREDICATE}，<strong>三条查询（全文 / 向量 / 候选复判）用的都是它</strong>。
+ * 这不是代码复用上的讲究，而是 {@code 13 §三} 闸门②的硬要求：<em>"只给一路加过滤条件"</em> 是本项目最贵的病，
+ * 而合成的常量让"漏一路"从"忘了补一行"变成"得先把这两行拆开"。
  *
  * <h3>★ 阈值不在这条路上</h3>
  *
@@ -61,13 +69,35 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   private static final int VISIBLE_KB_LIMIT = 500;
 
   /**
-   * 可见性判定 —— ★ <strong>两路同谓词的那一份</strong>（{@code 13} 五道闸门之二）。
+   * 可见性判定 —— 三级启用位（库 / 文档 / 分段）各自"启用且未软删"。
    *
-   * <p>库启用 + 未软删 · 文档启用 + 未软删 · 分段启用。全文路直接用它， 向量路的候选也要过 {@link #visibleAmong} ——
-   * 只给一路加条件就是"看着能过滤"的静默漏洞。
+   * <p>★ 它单独存在只是为了可读；<strong>任何查询都不许只用它</strong> —— 必须用 {@link #SECURITY_PREDICATE}。 只带它、不带密级条件，就是
+   * {@code 13 §三} 点名的那个静默漏洞。
    */
   private static final String VISIBLE_PREDICATE =
       " s.enabled and d.enabled and d.deleted_at is null and k.enabled and k.deleted_at is null";
+
+  /**
+   * 密级谓词（第 11 周 · 0.3.3）—— 「**不高于我的 clearance**」。
+   *
+   * <p>★ 比的是 {@code s.classification_rank}（{@code V22} 在 {@code kb_segment} 上的生成列）， 不是密级字符串 ——
+   * 字符串比较会把 {@code 'CONFIDENTIAL' &lt; 'INTERNAL'} 判成真（字典序！）， 那是一次**静默的越权**。
+   *
+   * <p>★ 为什么是分段那一列而不是文档那一列（{@code 13 §6.4}）：过滤必须能在 {@code kb_segment} 上 直接生效 —— {@code content_tsv}
+   * 与 {@code kb_id} 都在它上面，两条检索路都在它上面过滤。 谓词只长在文档表上时，"两路同谓词"就退化成"两处 join 写法必须一致"，而那种一致没人能保证。
+   */
+  private static final String CLASSIFICATION_PREDICATE = " and s.classification_rank <= ?";
+
+  /**
+   * ★★ <strong>安全谓词 = 可见性 + 密级，三条查询用的都是这一份</strong>（{@code 13 §三} 闸门②：pre-filter，两路同谓词）。
+   *
+   * <p>把两者<strong>合成一个常量</strong>是刻意的结构性选择：只给一路加过滤条件（本项目最贵的病） 在这里变成"得先把这两行拆开"，而不是"忘了在另一处补一行"。
+   * 三条查询（全文 / 向量 / 候选复判）全部引用它 —— 数量对不上就是评审时一眼能看出的东西。
+   *
+   * <p>★ 绑定值的位置约定：{@code ?} 出现在 {@link #JOINS} <strong>之后</strong>， 所以每条 SQL 的参数顺序都是「其余参数 → 密级 →
+   * kbId 列表 → limit」。
+   */
+  private static final String SECURITY_PREDICATE = VISIBLE_PREDICATE + CLASSIFICATION_PREDICATE;
 
   private static final String JOINS =
       " from kb_segment s"
@@ -77,12 +107,32 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   private final JdbcTemplate jdbc;
   private final KnowledgeBaseRepository bases;
   private final AccessScopePort accessScope;
+  private final VectorIndexPort vectorIndex;
 
   public JdbcSegmentSearchQuery(
-      JdbcTemplate jdbc, KnowledgeBaseRepository bases, AccessScopePort accessScope) {
+      JdbcTemplate jdbc,
+      KnowledgeBaseRepository bases,
+      AccessScopePort accessScope,
+      VectorIndexPort vectorIndex) {
     this.jdbc = jdbc;
     this.bases = bases;
     this.accessScope = accessScope;
+    this.vectorIndex = vectorIndex;
+  }
+
+  /**
+   * 当前用户的密级上限，转成与 {@code classification_rank} 同口径的整数（枚举 ordinal）。
+   *
+   * <p>★ 没有密级上限（未认证：{@link ScopeFilter#nobody()} 的 {@code maxClassification == null}） 返回
+   * <strong>-1</strong>：所有密级的 rank 都 ≥ 0，于是谓词恒假 ⇒ <strong>一条都不会返回</strong>。 这就是 fail-closed
+   * ——"取不到身份"必须表现为"什么都看不见"，而不是"什么都看得见"。
+   *
+   * <p>★ 这里<strong>不抛异常</strong>：未认证的检索请求本来就该得到空结果（{@code 07 §3.3} 硬规矩 1： 不给"存在性"信号）。抛 500
+   * 反而把这个分支变成一次会被上报的异常，那是另一类噪声。
+   */
+  private int clearanceRank() {
+    ClassificationLevel clearance = accessScope.currentScope().maxClassification();
+    return clearance == null ? -1 : clearance.ordinal();
   }
 
   @Override
@@ -149,6 +199,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     args.add(tsquery);
     args.add(String.join("\n", lexemes));
     args.add(lexemes.size());
+    args.add(clearanceRank()); // ★ 密级谓词的绑定值（与 SECURITY_PREDICATE 里的 ? 位置对应）
     args.addAll(query.kbIds());
     args.add(Math.max(1, query.limit()));
 
@@ -163,7 +214,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
             + " cross join q"
             + " where s.content_tsv @@ q.tq"
             + " and"
-            + VISIBLE_PREDICATE
+            + SECURITY_PREDICATE
             + " and s.kb_id in ("
             + placeholders(query.kbIds().size())
             + ")"
@@ -184,6 +235,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     }
     List<UUID> candidates = List.copyOf(candidateIds);
     List<Object> args = new ArrayList<>(candidates);
+    args.add(clearanceRank()); // ★ 密级谓词的绑定值（与 SECURITY_PREDICATE 里的 ? 位置对应）
     args.addAll(kbIds);
     String sql =
         "select s.id"
@@ -192,11 +244,94 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
             + placeholders(candidates.size())
             + ")"
             + " and"
-            + VISIBLE_PREDICATE
+            + SECURITY_PREDICATE
             + " and s.kb_id in ("
             + placeholders(kbIds.size())
             + ")";
     return new LinkedHashSet<>(jdbc.queryForList(sql, UUID.class, args.toArray()));
+  }
+
+  /**
+   * 向量那一路 —— ★ 密级与三级过滤**都在这一条 SQL 里**（pre-filter，不是查完再筛）。
+   *
+   * <p>★ 这一路挂在这个端口上、而不在 {@code vectorindex}：密级住在 {@code kb_segment}、启用位散在三张表里 —— 要让 planner 把这些谓词
+   * <strong>合并进向量扫描</strong>，它们就必须与 {@code embedding <=> ?} 出现在 <strong>同一条 SQL</strong> 里。而按
+   * {@code vectorindex} 的模块声明（"向量表读写、HNSW 索引维护、批量写入与进度回写"）， 它<strong>不认识</strong>文档与知识库 ——
+   * 所以"带业务谓词的相似度检索"属于拥有这些表的这一侧。 表名与表形仍然只由 {@link VectorIndexPort} 提供（不重复一份）。
+   *
+   * <p>★ 为什么表名要问 {@link VectorIndexPort} 而不是写死：维度是列类型（换模型换表，issue #5）。
+   *
+   * <p>★★ {@code set local hnsw.iterative_scan = strict_order}：HNSW 是**近似**索引， 默认扫到 {@code
+   * ef_search} 条就停 —— 高选择性过滤（"绝大部分内容是机密的"）下会出现 **过滤后为空**，而库里明明有能看的内容。`strict_order` 让它在需要时继续多扫，
+   * 且仍按真正的距离顺序返回（{@code 13 §5} 的第二道）。
+   */
+  @Override
+  public List<Scored> vectorSearch(VectorQuery query) {
+    if (query == null
+        || query.limit() <= 0
+        || query.vector() == null
+        || query.vector().length == 0
+        || query.kbIds() == null
+        || query.kbIds().isEmpty()) {
+      return List.of();
+    }
+    String table = vectorIndex.tableFor(query.dimension());
+    if (!tableExists(table)) {
+      // 这个维度还没有任何向量 ⇒ **空结果**，不是错误（也不建表：读路径不跑 DDL）
+      return List.of();
+    }
+    // ★ 打开迭代扫描：高选择性过滤下自动多扫几轮（PG 16 + pgvector 0.8+）
+    jdbc.execute("set local hnsw.iterative_scan = strict_order");
+
+    List<Object> args = new ArrayList<>();
+    args.add(toVectorLiteral(query.vector()));
+    args.add(clearanceRank()); // ★ 密级谓词的绑定值（与 SECURITY_PREDICATE 里的 ? 位置对应）
+    args.addAll(query.kbIds());
+    args.add(Math.max(1, query.limit()));
+
+    // ★ 向量表写在最前 + order by distance limit：这是"top-N 按距离"的规范形状，
+    //   也是让 planner 走 HNSW 索引扫描（而不是全表 join 后排序）的前提。
+    String sql =
+        "select s.id as segment_id, (v.embedding <=> cast(? as vector)) as distance"
+            + " from "
+            + table
+            + " v"
+            + " join kb_segment s on s.id = v.id"
+            + " join kb_document d on d.id = s.document_id"
+            + " join kb_knowledge_base k on k.id = s.kb_id"
+            + " where"
+            + SECURITY_PREDICATE
+            + " and s.kb_id in ("
+            + placeholders(query.kbIds().size())
+            + ")"
+            + " order by distance"
+            + " limit ?";
+
+    return jdbc.query(
+        sql,
+        (rs, i) ->
+            // 余弦距离 → 相似度：同一个向量是 0（→1），正交是 1（→0）。界面上那个阈值就是它。
+            new Scored(rs.getObject("segment_id", UUID.class), 1.0 - rs.getDouble("distance")),
+        args.toArray());
+  }
+
+  /** 表在不在（{@code to_regclass} 按 search_path 解析；不存在就别发查询，否则 PG 直接报错）。 */
+  private boolean tableExists(String table) {
+    Boolean exists = jdbc.queryForObject("select to_regclass(?) is not null", Boolean.class, table);
+    return Boolean.TRUE.equals(exists);
+  }
+
+  /** pgvector 的文本字形：{@code [0.1,0.2,…]}（与写入侧同一种字形，同一个库同一个类型）。 */
+  private static String toVectorLiteral(float[] vector) {
+    StringBuilder sb = new StringBuilder(vector.length * 8 + 2);
+    sb.append('[');
+    for (int i = 0; i < vector.length; i++) {
+      if (i > 0) {
+        sb.append(',');
+      }
+      sb.append(Float.toString(vector[i]));
+    }
+    return sb.append(']').toString();
   }
 
   @Override
@@ -212,7 +347,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
             + " where s.id in ("
             + placeholders(ids.size())
             + ")";
-    // ★ 这里**不加**可见性条件：调用方刚刚用 visibleAmong 判过，这只是一次"取展示信息"。
+    // ★ 这里**不加**安全谓词：调用方刚刚用 visibleAmong 判过，这只是一次"取展示信息"。
     //   重复判一次不算错，但会让"看不见的分段"与"已被删的分段"给出同样的症状，反而难查。
     return jdbc.query(
         sql,

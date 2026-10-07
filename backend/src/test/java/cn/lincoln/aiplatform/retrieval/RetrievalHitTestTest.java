@@ -392,9 +392,11 @@ class RetrievalHitTestTest {
     jdbc.update(
         "insert into kb_segment (id, document_id, kb_id, ordinal, title, title_path, content,"
             + " search_text, content_hash, char_count, is_table, is_code, oversized_risk, enabled,"
-            + " embedding_status, created_at, updated_at)"
+            + " embedding_status, created_at, updated_at, classification)"
             + " values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, false, false, false, true,"
-            + " 'EMBEDDED', now(), now())",
+            // 密级从文档继承（V22 的列是 not null）：夹具也用同一条规则，别自己另造一份
+            + " 'EMBEDDED', now(), now(),"
+            + " (select classification from kb_document where id = ?::uuid))",
         id,
         docId,
         kbId,
@@ -406,7 +408,8 @@ class RetrievalHitTestTest {
         // content_hash 是 sha256 十六进制 64 字符（SEG-I7）；这里只要求非空且长度合规
         UUID.randomUUID().toString().replace("-", "")
             + UUID.randomUUID().toString().replace("-", "").substring(0, 32),
-        searchText.length());
+        searchText.length(),
+        docId);
     return id;
   }
 

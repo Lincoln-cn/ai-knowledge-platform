@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.knowledge.domain;
 
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -98,6 +99,22 @@ public class Segment {
   @Column(name = "embedding_status", nullable = false, length = 32)
   private SegmentEmbeddingStatus embeddingStatus;
 
+  /**
+   * 分段密级 —— ★ <strong>强制继承所属文档</strong>（{@code 13 §2.1} ②），不允许单独下调。
+   *
+   * <p>★ 为什么冗余一份而不是每次 join 文档：{@code content_tsv} 与 {@code kb_id} 都在这张表上， 两条检索路（向量 / 全文）的密级过滤必须
+   * <strong>直接在这张表上生效</strong> —— 谓词只长在文档表上时，"两路同谓词"就退化成 "两处 join 写法必须一致"，而那迟早会漂（{@code 13 §6.4}）。
+   *
+   * <p>★ 为什么允许单独下调是危险的：那样"文档密级"就形同虚设 —— 有人把机密文档的所有分段标成公开即可绕过。 所以它<strong>只能</strong>由文档密级赋值，没有
+   * {@code setClassification} 这样的行为。
+   *
+   * <p>★ {@code nullable = false} 且<b>没有默认值</b>：漏传是<strong>插入时的一次报错</strong>， 而不是"静默落一个
+   * PUBLIC"——后者是一条不会报警的越权。
+   */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "classification", nullable = false, length = 16)
+  private ClassificationLevel classification;
+
   @CreationTimestamp
   @Column(name = "created_at", nullable = false, updatable = false)
   private Instant createdAt;
@@ -119,11 +136,25 @@ public class Segment {
    *
    * <p>★ {@code searchText} 必须是 {@link Segmenter#plan} 的产物 —— 不许调用方自己再拼一遍前缀 （判据 ④：预览与入库同源）。
    *
+   * <p>★ <strong>没有"不带密级"的重载</strong>：那必然要挑一个默认值，而两个候选都是错的 —— 默认成 {@code PUBLIC} 是一次
+   * <strong>静默越权</strong>，默认成最高档会让内容凭空消失。所以密级是必填参数，缺了就在编译期过不去。
+   *
    * @param planned 分段计划条目（含前缀拼接与哈希）
+   * @param classification ★ <strong>所属文档的密级</strong>（{@code 13 §2.1} ②：强制继承，不允许单独下调）
    */
-  public Segment(UUID id, UUID documentId, UUID kbId, PlannedSegment planned, UUID createdBy) {
+  public Segment(
+      UUID id,
+      UUID documentId,
+      UUID kbId,
+      PlannedSegment planned,
+      UUID createdBy,
+      ClassificationLevel classification) {
     if (id == null || documentId == null || kbId == null) {
       throw new IllegalArgumentException("分段 id / 文档 id / 知识库 id 不能为空");
+    }
+    if (classification == null) {
+      // ★ 缺失即拒绝：默认成 PUBLIC 是一次静默越权，默认成最高档会让内容凭空消失 —— 都不该发生
+      throw new IllegalArgumentException("分段密级不能为空（13 §2.1：强制继承所属文档的密级）");
     }
     if (planned == null) {
       throw new IllegalArgumentException("分段计划不能为空");
@@ -134,6 +165,7 @@ public class Segment {
     this.id = id;
     this.documentId = documentId;
     this.kbId = kbId;
+    this.classification = classification;
     this.ordinal = planned.ordinal();
     this.title = clampTitle(planned.title());
     this.titlePath = planned.titlePath();
@@ -267,6 +299,9 @@ public class Segment {
    *
    * <p>★ {@code searchText} 与 {@code contentHash} 必须按<strong>目标文档</strong>的 文种/部门/名 重算 （{@code 12
    * §4.2}）：搬过去之后这一段属于另一篇文档，检索文本里写着的却还是原来那篇的名字 —— 与「改名不重写前缀」是同一个坑，只是这次连 {@code kbId} 都可能变。
+   *
+   * <p>★ <strong>密级也要一起搬</strong>：搬过去之后它属于目标文档，留着源文档的密级就是一次 静默越权
+   * ——把一段机密内容搬进公开文档、而它仍带着"机密"是保守的（看不见）；反过来才是漏洞， 而两者只差一个漏写的参数。
    */
   public void moveTo(
       UUID documentId,
@@ -274,15 +309,20 @@ public class Segment {
       int ordinal,
       String searchText,
       String contentHash,
-      UUID updatedBy) {
+      UUID updatedBy,
+      ClassificationLevel classification) {
     if (documentId == null || kbId == null) {
       throw new IllegalArgumentException("目标文档与目标知识库不能为空");
+    }
+    if (classification == null) {
+      throw new IllegalArgumentException("分段密级不能为空（搬移后它继承目标文档的密级）");
     }
     renumber(ordinal, updatedBy);
     this.documentId = documentId;
     this.kbId = kbId;
     this.searchText = searchText;
     this.contentHash = contentHash;
+    this.classification = classification;
     // ★ 换了文档、换了前缀 ⇒ 向量旧了，必须重新排队（不回退的话向量化器会跳过它，而状态显示"已完成"）
     this.embeddingStatus = SegmentEmbeddingStatus.PENDING_EMBEDDING;
   }
@@ -349,6 +389,11 @@ public class Segment {
 
   public SegmentEmbeddingStatus embeddingStatus() {
     return embeddingStatus;
+  }
+
+  /** ★ 分段密级（继承所属文档，{@code 13 §2.1} ②）。检索的两条路都用它做密级谓词。 */
+  public ClassificationLevel classification() {
+    return classification;
   }
 
   public Instant createdAt() {
