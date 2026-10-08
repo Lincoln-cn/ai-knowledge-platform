@@ -593,7 +593,9 @@ const onKbChanged = async () => {
 
 const wizardRef = ref<InstanceType<typeof CreateWizard>>()
 
-const openCreate = () => wizardRef.value?.open()
+// ★ 把当前筛选的分类带进向导：用户已经用筛选表达过"我要建这一类"，再问一次是白问一遍。
+//   （空列表的「创建第一个知识库」就是这个意思 —— 那个按钮只在"当前筛选下没有库"时出现。）
+const openCreate = () => wizardRef.value?.open(query.category || '')
 
 const onCreated = async (kb: KnowledgeBase) => {
   ElMessage.success(`知识库「${kb.name}」已创建`)

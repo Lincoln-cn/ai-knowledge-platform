@@ -6,6 +6,7 @@ import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBaseRepository;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import cn.lincoln.aiplatform.platform.dictionary.DictionaryKind;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
@@ -46,9 +47,19 @@ public class KnowledgeBaseService {
   private final KnowledgeBaseRepository bases;
   private final AccessScopePort accessScope;
 
-  public KnowledgeBaseService(KnowledgeBaseRepository bases, AccessScopePort accessScope) {
+  /**
+   * ★ 库分类的**唯一真源**（第 19 周统一点）：以前这里硬编码一份 {@code DEFAULT_CATEGORIES}、 而建库下拉从字典取 ⇒
+   * 两个来源迟早漂（开发库实测：筛选里能看到「合同」、建库时却选不到）。
+   */
+  private final cn.lincoln.aiplatform.platform.dictionary.DictionaryService dictionaries;
+
+  public KnowledgeBaseService(
+      KnowledgeBaseRepository bases,
+      AccessScopePort accessScope,
+      cn.lincoln.aiplatform.platform.dictionary.DictionaryService dictionaries) {
     this.bases = bases;
     this.accessScope = accessScope;
+    this.dictionaries = dictionaries;
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -87,7 +98,7 @@ public class KnowledgeBaseService {
     return toView(requireVisible(id));
   }
 
-  /** 分类清单（含每个分类下当前用户可见的库数）。 */
+  /** 分类清单（含每个分类下当前用户可见的库数）。★ 选项来自**字典**，计数来自库。 */
   @Transactional(readOnly = true)
   public List<KnowledgeCategoryView> categories() {
     ScopeFilter scope = accessScope.currentScope();
@@ -97,14 +108,19 @@ public class KnowledgeBaseService {
       byName.put((String) row[0], (Long) row[1]);
     }
     List<KnowledgeCategoryView> result = new java.util.ArrayList<>();
-    // 兜底字典在前（界面需要稳定的筛选项，哪怕某类下暂时 0 个库）
-    for (String name : DEFAULT_CATEGORIES) {
-      result.add(new KnowledgeCategoryView(name, name, byName.getOrDefault(name, 0L)));
+    java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+    // ① 先按字典的清单（= 建库下拉的那一份）出选项，计数从库里的分组来（该分类暂无库就显示 0）
+    for (var item : dictionaries.items(DictionaryKind.KB_CATEGORY, false)) {
+      result.add(
+          new KnowledgeCategoryView(
+              item.code(), item.label(), byName.getOrDefault(item.code(), 0L)));
+      seen.add(item.code());
     }
-    // 库里出现的其它分类追加在后，避免"建了新分类却在筛选器里找不到"
+    // ② 再补上"库里有、字典里没有"的取值 —— ★ 必须补，否则那些库在筛选器里**消失**（静默藏数据）。
+    //    它们的出现本身是个信号：说明有取值没进字典（历史数据，或有人绕过了建库接口）。
     byName.forEach(
         (name, count) -> {
-          if (!DEFAULT_CATEGORIES.contains(name)) {
+          if (!seen.contains(name)) {
             result.add(new KnowledgeCategoryView(name, name, count));
           }
         });
@@ -342,6 +358,8 @@ public class KnowledgeBaseService {
     // ★ embeddingModelName 暂回空串：向量模型的显示名属于 modelcatalog，
     //   而它的 domain 类型是模块内部 API（Modulith 会拦）。等模型引用/展示
     //   随文档段一起落地时，走 application 层的公开 API 填这个字段。
-    return KnowledgeBaseView.from(base, "");
+    // ★ 计数**实时从库算**（#35）：实体上那四个冗余列从来没被写过 ⇒ 卡片永远显示 0 且不报错。
+    //   一条小聚合 SQL（都走索引）换"不可能漂"，这笔账在本项目是划算的（同"进度读数来自库"）。
+    return KnowledgeBaseView.from(base, "", bases.countsFor(base.id()));
   }
 }

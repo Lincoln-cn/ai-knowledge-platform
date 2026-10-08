@@ -22,6 +22,7 @@ import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -52,10 +53,14 @@ public class KnowledgeBaseRepositoryAdapter implements KnowledgeBaseRepository {
   private final JpaKnowledgeBaseRepository jpa;
   private final EntityManager entityManager;
 
+  /** 实时计数走 JDBC（{@code #35}）：一条聚合 SQL 比把四张表的关系映射进实体便宜得多。 */
+  private final JdbcTemplate jdbc;
+
   public KnowledgeBaseRepositoryAdapter(
-      JpaKnowledgeBaseRepository jpa, EntityManager entityManager) {
+      JpaKnowledgeBaseRepository jpa, EntityManager entityManager, JdbcTemplate jdbc) {
     this.jpa = jpa;
     this.entityManager = entityManager;
+    this.jdbc = jdbc;
   }
 
   @Override
@@ -123,6 +128,37 @@ public class KnowledgeBaseRepositoryAdapter implements KnowledgeBaseRepository {
   }
 
   // ────────────────────────── 内部 ──────────────────────────
+
+  @Override
+  public Counts countsFor(UUID kbId) {
+    // ★ 一条 SQL 出四个值（而不是四条）：它们读的是同一批行，分四次只是让漂移的机会变多。
+    // ★ 只算未软删文档 —— 文档软删后它的分段不该再算进卡片（与列表页看到的东西一致）。
+    return jdbc.queryForObject(
+        """
+        select
+          (select count(*) from kb_document d
+            where d.kb_id = ? and d.deleted_at is null) as documents,
+          (select count(*) from kb_segment s
+             join kb_document d on d.id = s.document_id
+            where s.kb_id = ? and d.deleted_at is null) as segments,
+          (select coalesce(sum(s.char_count), 0) from kb_segment s
+             join kb_document d on d.id = s.document_id
+            where s.kb_id = ? and d.deleted_at is null) as chars,
+          (select exists(select 1 from kb_segment s
+             join kb_document d on d.id = s.document_id
+            where s.kb_id = ? and d.deleted_at is null and s.embedding_status = 'EMBEDDED')) as vectorized
+        """,
+        (rs, i) ->
+            new Counts(
+                rs.getInt("documents"),
+                rs.getInt("segments"),
+                rs.getLong("chars"),
+                rs.getBoolean("vectorized")),
+        kbId,
+        kbId,
+        kbId,
+        kbId);
+  }
 
   private static Sort sort() {
     return Sort.by(Sort.Direction.DESC, "createdAt");
