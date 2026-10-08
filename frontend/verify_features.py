@@ -263,6 +263,73 @@ def main() -> int:
                       "基础数据：提示词类型有增/改/停用入口，且**没有删除**（字典项只停用）",
                       f"新增 {created} / 编辑 {edited} / 停用 {disabled} / 删除 {removed}")
 
+            # ── 组织机构（第 19 周 T302；用户口径「组织机构管理单独放出来」）──
+            def org_tree():
+                goto("/org", wait=1800)
+                check(page.locator(".org-page").count() > 0, "组织机构：页面已渲染", "")
+                # ★ 这个菜单是**分组折叠**的（`_shell` 里 `v-if="openGroup === group.title"`：点了分组标题
+                #   才渲染出 `a.menu-item`）⇒ 断言必须走真实路径：先展开「管理」，再看那一项在不在。
+                #   ⚠️ 第一版直接 `a:has-text('组织机构')` 拿到 **0 个**，那不是"菜单没这项"，
+                #      而是它还没被展开 —— 探针的错，不是产品的错（本项目反复踩的"读数先怀疑探针"）。
+                page.get_by_role("button", name="管理", exact=True).first.click()
+                page.wait_for_timeout(500)
+                items = [t.strip() for t in page.locator("a.menu-item").all_inner_texts()]
+                check(any("组织机构" in t for t in items),
+                      "组织机构：左侧「管理」分组里有独立入口（不塞进系统管理）",
+                      f"分组内条目 = {items}")
+                nodes = [t.strip() for t in page.locator(".org-page .el-tree-node").all_inner_texts()]
+                flat = " ".join(nodes)
+                # ★ 断言的是 V25 种子里的**具体部门**（不是"有若干节点"）：夹具与后端种子同值，
+                #   谁把种子改瘦了、或树渲染断了，这里立刻红。
+                check("总部" in flat and "技术部" in flat,
+                      "组织机构：树里出现种子部门（总部/技术部）", f"节点数 {len(nodes)}")
+                check(page.locator("button", has_text="新增根部门").count() > 0,
+                      "组织机构：有新增入口", "")
+
+                # 选中一个部门 ⇒ 右侧出现可编辑的详情，且写明"code 是身份、不可改"。
+                # ⚠️ 必须点 `.el-tree-node__content`（那一行）而不是 `.el-tree-node`：
+                #    后者的外层节点**包含自己的整棵子树**，`:has-text('技术部')` 会命中父节点「总部」，
+                #    点它的中心等于点在整棵树的中部 ⇒ 实际选中的是别的部门（本轮实测落到了「法务部」），
+                #    于是下面"候选里不该有技术部"那条会**假红**。
+                page.locator(".org-page .el-tree-node__content", has_text="技术部").first.click()
+                page.wait_for_timeout(600)
+                detail = page.locator(".org-page .detail-panel").inner_text()
+                check("TECH" in detail and "不可改" in detail,
+                      "组织机构：选中技术部，详情写明 code 是身份且不可改",
+                      f"详情片段 = {detail[:60]!r}")
+                # ★ 负向断言：**code 必须没有输入框** —— 它是共享主体与审计里的标识，
+                #   可改就等于"把既有共享悄悄指到别处"（后端与 mock 都是刻意不给改的）。
+                code_inputs = page.locator(".org-page .detail-panel input[value='TECH']").count()
+                check(code_inputs == 0, "组织机构：code 不可编辑（没有它的输入框）",
+                      f"值为 TECH 的输入框 {code_inputs} 个")
+
+                # ★ 移动部门的目标选择必须是**树**（用户 2026-10-08：扁平列表在层级多时不好操作），
+                #   且候选里**不能有它自己**（自己与自己的子树注定被拒 —— 提前摘掉而不是让用户点了吃错误）。
+                #   判据取弹层里的结构：有 `.el-tree` 才是树；扁平下拉只会有 `.el-select-dropdown__item`。
+                #   （⚠️ 不要去匹配 `.el-tree-select` 这个类名 —— Element Plus 并不把它渲染在 DOM 上，
+                #     第一版就是这么假红的。判据要落在**结构差异**上，不落在组件库的类名上。）
+                page.locator(".org-page button", has_text="移动").first.click()
+                page.wait_for_timeout(700)
+                page.locator(".el-dialog .el-select__wrapper").first.click()
+                page.wait_for_timeout(900)
+                dropdown = page.locator(".el-select-dropdown:visible").first
+                tree_cnt = dropdown.locator(".el-tree").count()
+                # ★ 判据必须是"**层级被渲染出来了**"：Element Plus 的 TreeSelect 内部同样用
+                #   `.el-select-dropdown__item` 包树节点 ⇒ `扁平项 == 0` 是错的判据（第一版就这么假红，
+                #   读数 `树 1 / 扁平项 8`）。真正的结构差异是**嵌套**：树里有带子级的节点
+                #   （`.el-tree-node__children`），扁平列表永远为 0。
+                nested_cnt = dropdown.locator(".el-tree-node__children").count()
+                check(tree_cnt > 0 and nested_cnt > 0,
+                      "组织机构：移动目标是树选择（渲染出层级，不是扁平列表）",
+                      f"树 {tree_cnt} / 带子级的节点 {nested_cnt}")
+                cand = dropdown.locator(".el-tree").inner_text()
+                check("总部" in cand and "行政部" in cand,
+                      "组织机构：移动候选里能看到层级", f"候选片段 = {cand[:50]!r}")
+                check("技术部" not in cand,
+                      "组织机构：移动候选排除了「自己和自己的子树」", f"候选片段 = {cand[:50]!r}")
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(300)
+
             # ── 免登录公开页（沉浸布局，需顶层路由）──
             def public_ok():
                 body = goto("/public/pub_ok_demo")
@@ -360,6 +427,7 @@ def main() -> int:
             step("账号与权限", admin)
             step("账号与权限·提示词类型", prompt_types_tab)
             step("改密页·口令强度口径", change_password_policy)
+            step("组织机构", org_tree)
             step("公开页·有效", public_ok)
             step("公开页·过期", public_expired)
             step("公开页·撤销", public_revoked)

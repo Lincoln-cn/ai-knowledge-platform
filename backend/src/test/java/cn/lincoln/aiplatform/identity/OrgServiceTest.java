@@ -169,6 +169,32 @@ class OrgServiceTest {
   }
 
   @Test
+  void duplicateSiblingNameIsRejectedButCrossParentNameIsAllowed() {
+    Org root = repository.findByCode("ROOT").orElseThrow();
+    // ★ 用户 2026-10-08 指出的那条：展示名重名 = 让"按名字比较"的地方把两个部门混成一个
+    //   （一个部门看到另一个部门的文档，且不报错）。同级必须挡。
+    assertThatThrownBy(() -> orgs.create(root.id(), "FIN999", "财务部", 99, ACTOR))
+        .isInstanceOf(BusinessException.class)
+        .hasMessageContaining("同级已有叫");
+
+    // ★ 但跨父重名是**允许**的：两个分公司各自有个「行政部」是合理的组织形态。
+    Org branch = orgs.create(root.id(), "BRANCH_SOUTH", "华南分公司", 20, ACTOR);
+    Org southAdmin = orgs.create(branch.id(), "ADMIN_S", "行政部", 1, ACTOR);
+    assertThat(southAdmin.path()).isEqualTo("/ROOT/BRANCH_SOUTH/ADMIN_S/");
+    // ★ 两条都叫「行政部」，但身份不同（不同 path）—— 这正是"展示名不是身份"的证明：
+    //   凡按名字比较的地方都会把这两条混成一个，所以判定必须走 code / path。
+    assertThat(southAdmin.name()).isEqualTo("行政部");
+    assertThat(southAdmin.path()).isNotEqualTo(repository.findByCode("ADMIN").orElseThrow().path());
+    branchRepositoryCleanup(branch.id());
+  }
+
+  /** 用例收尾：本类的容器/库被多个用例共用，建出来的分支要拆掉，免得影响别的用例对"树里有什么"的断言。 */
+  private void branchRepositoryCleanup(UUID branchId) {
+    orgs.delete(repository.findByCode("ADMIN_S").orElseThrow().id());
+    orgs.delete(branchId);
+  }
+
+  @Test
   void disablingKeepsTheNodeInTheTree() {
     // ★ 同样挂在 ROOT 下（理由见上一个用例的注释）
     Org root = repository.findByCode("ROOT").orElseThrow();

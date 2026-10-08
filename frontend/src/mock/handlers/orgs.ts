@@ -103,6 +103,16 @@ export const orgRoutes: MockRoute[] = [
       if (orgs.some((o) => o.code === input.code)) {
         throw new ApiError(ErrorCode.BAD_REQUEST, `部门编码「${input.code}」已存在`)
       }
+      // ★★ 同级展示名唯一（与后端 `OrgService.create` 同口径）：重名会让"按名字比较"的地方
+      //   把两个部门混成一个 ⇒ 一个部门看到另一个部门的文档，且不报错。跨级重名允许。
+      const name = (input.name ?? input.code).trim()
+      if (orgs.some((o) => o.parentId === (input.parentId ?? null) && o.name === name)) {
+        throw new ApiError(
+          ErrorCode.BAD_REQUEST,
+          `同级已有叫「${name}」的部门`,
+          '展示名在同级必须唯一；跨级重名是允许的（两个分公司各有一个「行政部」是合理的）'
+        )
+      }
       const parent = input.parentId ? findById(input.parentId) : undefined
       if (input.parentId && !parent) {
         throw new ApiError(ErrorCode.NOT_FOUND, '上级部门不存在', '请刷新后重试')

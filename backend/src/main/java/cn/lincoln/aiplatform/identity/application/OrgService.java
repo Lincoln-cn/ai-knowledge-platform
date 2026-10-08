@@ -83,6 +83,16 @@ public class OrgService {
           "部门编码「" + trimmedCode + "」已存在",
           "编码是共享主体与审计里的标识，必须唯一且稳定 —— 要改展示名请编辑那一项");
     }
+    // ★★ 兄弟之间展示名唯一（用户 2026-10-08 指出重名会造成部门间"看到别人文档"的静默越权）：
+    //   展示名会出现在召回前缀（今天）与人读的位置（界面/引用/提示词渲染），重名会让**按名字比较**
+    //   的地方把两个部门混成一个。跨父重名允许 —— 两个分公司各自有个「行政部」是合理的。
+    String trimmedName = name == null ? "" : name.trim();
+    if (!trimmedName.isEmpty() && orgs.existsSiblingName(parentId, trimmedName)) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "同级已有叫「" + trimmedName + "」的部门",
+          "展示名在**同级**必须唯一（重名会让按名字比较的地方把两个部门混成一个，" + "表现为一个部门看到另一个部门的文档且不报错）；跨级重名是允许的");
+    }
     String parentPath = "/";
     if (parentId != null) {
       Org parent =
