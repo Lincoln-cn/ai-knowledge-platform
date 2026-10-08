@@ -30,18 +30,16 @@
       </template>
     </el-upload>
 
+    <!-- 下拉为空时先给原因：加载失败与"这一类没配"都长成一个空下拉，只有文案能把它们分开 -->
+    <div v-if="dictHint" class="notice warn dict-hint">{{ dictHint }}</div>
+
     <!-- ★ 建档必填三项（12 §5.1）：文种 / 责任部门 / 密级 —— 决定召回前缀与安全过滤，不能有默认值 -->
     <el-form ref="metaFormRef" :model="meta" :rules="metaRules" label-width="96px" class="meta-form">
       <el-form-item label="文种" prop="docType">
-        <el-select
-          v-model="meta.docType"
-          filterable
-          allow-create
-          default-first-option
-          style="width: 220px"
-          placeholder="选择或输入文种"
-        >
-          <el-option v-for="t in DOC_TYPE_SUGGESTIONS" :key="t" :label="t" :value="t" />
+        <!-- ★ 文种是字典给定的清单，不再允许现场新增：它会进召回前缀与过滤，各写各的
+             （「报销规定」/「报销办法」）就没法收敛；要新文种由管理员在「基础数据」里加 -->
+        <el-select v-model="meta.docType" filterable default-first-option style="width: 220px" placeholder="选择文种">
+          <el-option v-for="d in docTypes" :key="d.code" :label="d.label" :value="d.code" />
         </el-select>
       </el-form-item>
       <el-form-item label="责任部门" prop="department">
@@ -57,13 +55,9 @@
         </el-select>
       </el-form-item>
       <el-form-item label="密级" prop="classification">
+        <!-- ★ value 是 code、显示是 label（08 §十）：管理员改展示名，建档的人马上看到，而落库的机器码不变 -->
         <el-select v-model="meta.classification" style="width: 220px" placeholder="选择密级">
-          <el-option
-            v-for="c in CLASSIFICATION_LEVEL_VALUES"
-            :key="c"
-            :label="labelOf(CLASSIFICATION_LEVEL_LABELS, c)"
-            :value="c"
-          />
+          <el-option v-for="c in classifications" :key="c.code" :label="c.label" :value="c.code" />
         </el-select>
       </el-form-item>
     </el-form>
@@ -96,16 +90,19 @@ import { ingestionApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { UploadPolicy, UploadReceipt, DocumentItem } from '@/api/ingestion'
 import type { ClassificationLevel } from '@/api/types'
-import {
-  CLASSIFICATION_LEVEL_LABELS,
-  CLASSIFICATION_LEVEL_VALUES,
-  DEPARTMENT_SUGGESTIONS,
-  DOC_TYPE_SUGGESTIONS,
-  labelOf
-} from '@/constants/labels'
+import { DEPARTMENT_SUGGESTIONS } from '@/constants/labels'
+import { useDictionary } from '@/composables/useDictionary'
 
 const props = defineProps<{ kbId: string }>()
 const emit = defineEmits<{ uploaded: [] }>()
+
+/** 文种与密级取自基础数据字典（08 §十）—— 不再用前端常量 */
+const { items: docTypes, hint: docTypeHint, load: loadDocTypes } = useDictionary('DOC_TYPE', '文种')
+const { items: classifications, hint: classificationHint, load: loadClassifications } =
+  useDictionary('CLASSIFICATION', '密级')
+
+/** 两个下拉同源（同一个接口、同一次打开），提示合成一条 —— 分成两行只是噪声 */
+const dictHint = computed(() => [docTypeHint.value, classificationHint.value].filter(Boolean).join('；'))
 
 const visible = ref(false)
 const uploading = ref(false)
@@ -138,6 +135,8 @@ const open = async () => {
   rejected.value = []
   submitError.value = ''
   submitHint.value = ''
+  // ★ 每打开一次重读一次字典：管理员刚在「基础数据」里加过 / 停用过一项，建档的人要马上看到（判据 1、2）
+  await Promise.all([loadDocTypes(), loadClassifications()])
   try {
     policy.value = await ingestionApi.getUploadPolicy(props.kbId)
   } catch {
@@ -287,6 +286,10 @@ defineExpose({ open })
   font-style: normal;
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.dict-hint {
+  margin-top: var(--space-md);
 }
 
 .meta-form {

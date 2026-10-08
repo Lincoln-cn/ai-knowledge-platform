@@ -2,13 +2,14 @@
   <div class="settings-panel">
     <div class="panel form-panel">
       <h3 class="sec-title">基本信息</h3>
+      <div v-if="categoryHint" class="notice warn">{{ categoryHint }}</div>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="96px" class="form">
         <el-form-item label="名称" prop="name">
           <el-input v-model="form.name" maxlength="30" show-word-limit :disabled="!canManage" />
         </el-form-item>
         <el-form-item label="分类" prop="category">
           <el-select v-model="form.category" style="width: 220px" :disabled="!canManage">
-            <el-option v-for="c in categories" :key="c.id" :label="c.name" :value="c.name" />
+            <el-option v-for="c in categoryOptions" :key="c.code" :label="c.label" :value="c.code" />
           </el-select>
         </el-form-item>
         <el-form-item label="图标">
@@ -111,9 +112,10 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { knowledgeApi, modelsApi, retrievalApi } from '@/api'
 import { ApiError } from '@/api/types'
-import type { KnowledgeBase, KnowledgeCategory } from '@/api/knowledge'
+import type { KnowledgeBase } from '@/api/knowledge'
 import type { ModelInfo } from '@/api/models'
 import type { RetrievalParams } from '@/api/retrieval'
+import { useDictionary } from '@/composables/useDictionary'
 import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 
@@ -128,7 +130,6 @@ const ICONS = ['📘', '📗', '📙', '📕', '📒', '📂', '💼', '🏛']
 const formRef = ref<FormInstance>()
 const saving = ref(false)
 const savingRetrieval = ref(false)
-const categories = ref<KnowledgeCategory[]>([])
 const embeddingModels = ref<ModelInfo[]>([])
 
 const form = reactive({
@@ -137,6 +138,20 @@ const form = reactive({
   icon: '📘',
   description: '',
   embeddingModelId: ''
+})
+
+/** 库分类取自基础数据字典（08 §十）—— 不再是"已有库的分类投影"（那是列表页筛选要的） */
+const { items: categories, hint: categoryHint, load: loadCategories } = useDictionary('KB_CATEGORY', '库分类')
+
+/**
+ * 下拉选项 = 字典里的启用项 + **这个库当前的分类**（若字典里查不到）。
+ *
+ * ★ 后一半不能省：分类可能已被停用（读接口不带停用项），而它是这个库**已经在用**的值 ——
+ *   少了它，设置页会变成一个没选中项的空下拉，看起来像"这个库没有分类"（既有数据必须照旧可读）。
+ */
+const categoryOptions = computed<Array<{ code: string; label: string }>>(() => {
+  if (!form.category || categories.value.some((c) => c.code === form.category)) return categories.value
+  return [...categories.value, { code: form.category, label: form.category }]
 })
 
 const retrieval = reactive<RetrievalParams>({
@@ -281,7 +296,7 @@ watch(() => props.kb.id, loadForm)
 
 onMounted(async () => {
   loadForm()
-  categories.value = await knowledgeApi.listKnowledgeCategories()
+  await loadCategories()
   const models = await modelsApi.listModels({ kind: 'EMBEDDING', size: 50 })
   embeddingModels.value = models.list
   await loadRetrieval()

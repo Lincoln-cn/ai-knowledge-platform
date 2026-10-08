@@ -16,13 +16,16 @@
 
     <!-- ── 第一步：基本信息 ── -->
     <div v-show="step === 0" class="step-body">
+      <!-- 分类 / 密级上限取自基础数据字典：空下拉的原因（失败 / 没配）必须写出来 -->
+      <div v-if="catalogHint" class="notice warn">{{ catalogHint }}</div>
       <el-form ref="baseFormRef" :model="baseForm" :rules="baseRules" label-width="96px" class="base-form">
         <el-form-item label="名称" prop="name">
           <el-input v-model="baseForm.name" maxlength="30" show-word-limit placeholder="例如：合同管理制度" />
         </el-form-item>
         <el-form-item label="分类" prop="category">
+          <!-- ★ value 用 code、显示用 label（08 §十）：管理员改展示名不影响已建库的取值 -->
           <el-select v-model="baseForm.category" style="width: 220px" placeholder="选择分类">
-            <el-option v-for="c in categories" :key="c.id" :label="c.name" :value="c.name" />
+            <el-option v-for="c in categories" :key="c.code" :label="c.label" :value="c.code" />
           </el-select>
         </el-form-item>
         <el-form-item label="图标">
@@ -48,13 +51,9 @@
           <div class="hint micro">创建后不可更改（BR-03-01）</div>
         </el-form-item>
         <el-form-item label="密级上限" prop="maxClassification">
+          <!-- ★ 与建档的「密级」同一个字典：两边各写一份文案，迟早出现"上限叫机密、文档密级叫绝密" -->
           <el-select v-model="baseForm.maxClassification" style="width: 220px" placeholder="选择密级上限">
-            <el-option
-              v-for="c in CLASSIFICATION_LEVEL_VALUES"
-              :key="c"
-              :label="labelOf(CLASSIFICATION_LEVEL_LABELS, c)"
-              :value="c"
-            />
+            <el-option v-for="c in classifications" :key="c.code" :label="c.label" :value="c.code" />
           </el-select>
           <div class="hint micro">这个库允许装入的最高密级（13 §6）—— 文档密级超过它会被拒绝入库</div>
         </el-form-item>
@@ -148,20 +147,20 @@
         </div>
 
         <!-- ★ 建档必填三项（12 §5.1）：文种 / 责任部门 / 密级 —— 批级，一次导入同一套标签
-             ★ 文种与部门是**选择**（可现场新增）而不是纯手填：手填最容易出现同义不同写
-               （「采购部」/「采购部门」/「采购」），而它们会进召回前缀、要参与过滤 ⇒ 值必须收敛。
-               ⚠️ 部门的数据源应当是「部门管理」（组织机构模块）；文种字典应当由后端下发 —— 两条都记在欠账里。 -->
+             ★ 文种与密级取自**基础数据字典**（08 §十）：值必须收敛（它们会进召回前缀、要参与过滤），
+               所以这两个下拉只能选，不能现场新增 —— 要新值由管理员在「基础数据」里加。
+             ⚠️ 部门的数据源应当是「组织机构树」（07 §十），不是字典项 —— 那一条还没做，仍用常量。 -->
+        <div v-if="docMetaHint" class="notice warn">{{ docMetaHint }}</div>
         <el-form ref="docMetaFormRef" :model="docMeta" :rules="docMetaRules" label-width="92px" class="doc-meta-form">
           <el-form-item label="文种" prop="docType">
             <el-select
               v-model="docMeta.docType"
               filterable
-              allow-create
               default-first-option
               style="width: 100%"
-              placeholder="选择或输入文种"
+              placeholder="选择文种"
             >
-              <el-option v-for="t in DOC_TYPE_SUGGESTIONS" :key="t" :label="t" :value="t" />
+              <el-option v-for="d in docTypes" :key="d.code" :label="d.label" :value="d.code" />
             </el-select>
           </el-form-item>
           <el-form-item label="责任部门" prop="department">
@@ -178,12 +177,7 @@
           </el-form-item>
           <el-form-item label="密级" prop="classification">
             <el-select v-model="docMeta.classification" style="width: 100%" placeholder="选择密级">
-              <el-option
-                v-for="c in CLASSIFICATION_LEVEL_VALUES"
-                :key="c"
-                :label="labelOf(CLASSIFICATION_LEVEL_LABELS, c)"
-                :value="c"
-              />
+              <el-option v-for="c in classifications" :key="c.code" :label="c.label" :value="c.code" />
             </el-select>
           </el-form-item>
         </el-form>
@@ -324,7 +318,7 @@ import { Loading, UploadFilled } from '@element-plus/icons-vue'
 import { ingestionApi, knowledgeApi, modelsApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { ClassificationLevel } from '@/api/types'
-import type { ImportType, KnowledgeBase, KnowledgeCategory } from '@/api/knowledge'
+import type { ImportType, KnowledgeBase } from '@/api/knowledge'
 import type { ModelInfo } from '@/api/models'
 import type {
   DocumentItem,
@@ -332,14 +326,8 @@ import type {
   PreviewSegmentationResult,
   UploadPolicy
 } from '@/api/ingestion'
-import {
-  CLASSIFICATION_LEVEL_LABELS,
-  CLASSIFICATION_LEVEL_VALUES,
-  DEPARTMENT_SUGGESTIONS,
-  DOC_TYPE_SUGGESTIONS,
-  DOCUMENT_STATUS_LABELS,
-  labelOf
-} from '@/constants/labels'
+import { DEPARTMENT_SUGGESTIONS, DOCUMENT_STATUS_LABELS, labelOf } from '@/constants/labels'
+import { useDictionary } from '@/composables/useDictionary'
 
 const emit = defineEmits<{ created: [kb: KnowledgeBase] }>()
 
@@ -372,8 +360,22 @@ const previewing = ref(false)
 const uploadTab = ref('local')
 
 const baseFormRef = ref<FormInstance>()
-const categories = ref<KnowledgeCategory[]>([])
 const embeddingModels = ref<ModelInfo[]>([])
+
+/**
+ * 库分类 / 密级 / 文种都取自基础数据字典（08 §十）。
+ *
+ * ★ 为什么不是 `knowledgeApi.listKnowledgeCategories()`：那个接口回的是"**已有库**的分类 + 计数"
+ *   （现有数据的投影，知识库列表页的筛选要的就是它），拿它填新建下拉 ⇒ 永远建不出第一个新分类的库。
+ */
+const { items: categories, hint: categoryHint, load: loadCategories } = useDictionary('KB_CATEGORY', '库分类')
+const { items: classifications, hint: classificationHint, load: loadClassifications } =
+  useDictionary('CLASSIFICATION', '密级')
+const { items: docTypes, hint: docTypeHint, load: loadDocTypes } = useDictionary('DOC_TYPE', '文种')
+
+/** 提示要出现在它的字段那一步：分类 / 密级上限在第一步，文种 / 密级在第三步 */
+const catalogHint = computed(() => [categoryHint.value, classificationHint.value].filter(Boolean).join('；'))
+const docMetaHint = computed(() => [docTypeHint.value, classificationHint.value].filter(Boolean).join('；'))
 
 const baseForm = reactive({
   name: '',
@@ -466,7 +468,8 @@ const acceptAttr = computed(() =>
 const open = async () => {
   visible.value = true
   step.value = 0
-  categories.value = await knowledgeApi.listKnowledgeCategories()
+  // ★ 每次打开都重读字典：管理员刚在「基础数据」里加过 / 停用过一项，建档的人要马上看到（判据 1、2）
+  await Promise.all([loadCategories(), loadClassifications(), loadDocTypes()])
   const models = await modelsApi.listModels({ kind: 'EMBEDDING', size: 50 })
   embeddingModels.value = models.list.filter((m) => m.status === 'LOADED' || m.status === 'NOT_LOADED')
   try {
