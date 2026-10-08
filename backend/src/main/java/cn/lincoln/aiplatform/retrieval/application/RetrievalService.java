@@ -7,10 +7,10 @@ import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.retrieval.domain.QueryUnderstanding;
 import cn.lincoln.aiplatform.retrieval.domain.Rrf;
+import cn.lincoln.aiplatform.retrieval.domain.RrfQuotaJoiner;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -210,8 +210,19 @@ public class RetrievalService {
       degradeReason = join("有查询失败已丢弃该路", degradeReason);
     }
 
-    // ⑤ ★ 两路同谓词 + 截断（子问题之间按顺序拼接，不做全局 RRF —— 理由见类注释）
-    List<UUID> ordered = concatDistinct(perSubQuestion);
+    // ⑤ ★★ 子问题之间按**保底配额**合并（第 13 周 · 0.4.1，10 §3.3.3）——
+    //   不是顺序拼接，也不是全局 RRF：前者会让"前一个子问题占满 TopN"，
+    //   后者（本节开头明确否掉）会让 A 把 B 的名额全挤掉。判据是"问两个问题 ⇒ 两个都被回答"。
+    List<RrfQuotaJoiner.Unit> units = new ArrayList<>(perSubQuestion.size());
+    for (int index = 0; index < perSubQuestion.size(); index++) {
+      units.add(new RrfQuotaJoiner.Unit(index, perSubQuestion.get(index)));
+    }
+    RrfQuotaJoiner.Result merged = RrfQuotaJoiner.join(units, request.topNOrDefault());
+    if (!merged.quotas().isEmpty()) {
+      // §7.1 的合并层埋点：每个子问题分到几条、丢了几条 —— 没有它，"这个子问题为什么答得少"没人答得上
+      log.info("子问题配额合并：{}（补足 {} 条）", RrfQuotaJoiner.describe(merged), merged.fillInCount());
+    }
+    List<UUID> ordered = merged.selected();
     Set<UUID> visible = segmentSearch.visibleAmong(ordered, kbIds);
     List<UUID> kept = ordered.stream().filter(visible::contains).toList();
 
@@ -471,13 +482,6 @@ public class RetrievalService {
   /** 单路直接用它的次序 —— 保留给"没有查询理解"的路径（模式内的融合在 {@link #retrieveOneQuery} 里做）。 */
   private static List<UUID> ids(List<SegmentSearchPort.Scored> scored) {
     return scored.stream().map(SegmentSearchPort.Scored::segmentId).toList();
-  }
-
-  /** 子问题之间按顺序拼接 + 去重（★ 不做全局 RRF，理由见类注释）。 */
-  private static List<UUID> concatDistinct(List<List<UUID>> perSubQuestion) {
-    Set<UUID> seen = new LinkedHashSet<>();
-    perSubQuestion.forEach(seen::addAll);
-    return List.copyOf(seen);
   }
 
   private static String join(String head, String tail) {
