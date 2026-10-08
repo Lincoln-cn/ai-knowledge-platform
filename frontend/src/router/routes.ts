@@ -76,6 +76,9 @@ export const navGroups: NavGroup[] = [
       // 基础数据（密级/文种/提示词类型/库分类）改一次影响全平台的下拉与既有数据的展示，
       // 与「账号与权限」同属管理员那一档，所以并排放在「管理」下
       { path: '/basedata', label: '基础数据', icon: 'Tickets' },
+      // ★ 组织机构独立成一个菜单项（用户口径）：它是**数据权限的载体**（共享给部门、按部门筛文档），
+      //   与"账号/角色/权限点"不是一件事，也不该再往系统管理里堆 tab
+      { path: '/org', label: '组织机构', icon: 'OfficeBuilding' },
       { path: '/admin', label: '系统管理', icon: 'Setting' }
     ]
   }
