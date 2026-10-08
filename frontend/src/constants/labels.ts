@@ -6,15 +6,14 @@
  *  - 中文**只**出现在本文件的 label 映射里，不进契约、不进 JSON、不进库。
  *  - 不引 i18n 框架；要多语种时再说。
  *
+ * ★ 例外：**可维护的清单**（密级 / 文种 / 库分类 / 提示词类型）的文案不在这里，而在基础数据字典
+ *   （`08 §十`）—— 那是管理员随时能改的数据，写成常量就等于"改一次要发版"。本文件只放
+ *   **契约枚举**的文案：取值由前后端两侧写死，改它本来就要一起发版。
+ *
  * 用法：展示处查 `*_LABELS[code]`，筛选/下拉用 `*_VALUES` 常用取值数组。
  */
 
-import type {
-  ClassificationLevel,
-  DataScope,
-  ResourceVisibility,
-  SubjectKind
-} from '@/api/types'
+import type { DataScope, ResourceVisibility, SubjectKind } from '@/api/types'
 import type { User } from '@/api/identity'
 import type {
   ModelCapabilitySource,
@@ -65,23 +64,6 @@ export const RESOURCE_VISIBILITY_LABELS: Record<ResourceVisibility, string> = {
   PUBLIC: '公开'
 }
 export const RESOURCE_VISIBILITY_VALUES: ResourceVisibility[] = ['PRIVATE', 'SHARED', 'PUBLIC']
-
-/**
- * 密级（企业四级）。★ 声明顺序即密级高低（ordinal 递增 = 越敏感），改名时不要调整顺序。
- * 这四级是工程惯例，不是法定密级。
- */
-export const CLASSIFICATION_LEVEL_LABELS: Record<ClassificationLevel, string> = {
-  PUBLIC: '公开',
-  INTERNAL: '内部',
-  SECRET: '秘密',
-  CONFIDENTIAL: '机密'
-}
-export const CLASSIFICATION_LEVEL_VALUES: ClassificationLevel[] = [
-  'PUBLIC',
-  'INTERNAL',
-  'SECRET',
-  'CONFIDENTIAL'
-]
 
 export const SUBJECT_KIND_LABELS: Record<SubjectKind, string> = {
   USER: '用户',
@@ -217,27 +199,9 @@ export const STREAM_TERMINATION_PATH_VALUES: StreamTerminationPath[] = [
 /* ────────────────────────── 知识 / 应用 ────────────────────────── */
 
 /**
- * 文种建议值 —— ★ 只是**建议**，不是约束：后端只要求非空且 ≤32 字，所以选择器允许现场新增。
- *
- * ⚠️ 欠账：文种字典应当**由后端下发**（像 `upload-policy` 那样），否则前后端各存一份迟早漂移。
- *    当前形态是「前端常量 + 允许自定义」，保证"能选也能填"。
- */
-export const DOC_TYPE_SUGGESTIONS = [
-  '制度',
-  '合同',
-  '报销规定',
-  '管理办法',
-  '操作规程',
-  '通知公告',
-  '工作报告',
-  '培训手册'
-]
-
-/**
- * 责任部门建议值。
- *
- * ⚠️ 欠账：真正的形态是**部门管理**（组织机构模块 —— 部门列表由管理员维护、文档归属可校验），
- *    规划见 `ROADMAP` 的「部门内传阅 + 组织机构管理」。当前是常量 + 允许自定义。
+ * 责任部门建议值。★ 保留常量而不是搬进字典：部门不是"一张可维护的清单"，而是**组织机构树的节点**
+ *   （`07 §十`）—— 它要参与数据权限（「我的部门 + 下级」）、要能作为共享主体，
+ *   做成字典项只是把同一个欠账换个地方存。组织树落地前，这里仍给建议值 + 允许自定义。
  */
 export const DEPARTMENT_SUGGESTIONS = [
   '采购部',
