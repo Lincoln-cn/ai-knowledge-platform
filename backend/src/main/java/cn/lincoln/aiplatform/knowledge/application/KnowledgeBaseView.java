@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.knowledge.application;
 
 import cn.lincoln.aiplatform.knowledge.domain.ImportType;
 import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBase;
+import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBaseRepository;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.Grant;
 import cn.lincoln.aiplatform.platform.access.Visibility;
@@ -38,7 +39,14 @@ public record KnowledgeBaseView(
     List<Grant> grants,
     ClassificationLevel maxClassification) {
 
-  public static KnowledgeBaseView from(KnowledgeBase base, String embeddingModelName) {
+  /**
+   * 组装视图。
+   *
+   * <p>★ 计数**不从实体读**（{@code #35}）：实体上那四个冗余列从来没被写过，卡片因此永远显示 0， 而那不会报错。{@code counts}
+   * 是读的时候从库里算出来的实时值（{@code KnowledgeBaseRepository#countsFor}）。
+   */
+  public static KnowledgeBaseView from(
+      KnowledgeBase base, String embeddingModelName, KnowledgeBaseRepository.Counts counts) {
     return new KnowledgeBaseView(
         base.id().toString(),
         base.name(),
@@ -48,13 +56,12 @@ public record KnowledgeBaseView(
         base.importType(),
         base.embeddingModelId().toString(),
         embeddingModelName == null ? "" : embeddingModelName,
-        // ★ 已有向量化内容 ⇒ 向量模型被锁定（KB-I4）。用「已有文档/分段」作代理 ——
-        //   向量化内容一定从文档来，反过来不必成立（文档还在加工中）
-        base.hasVectorizedContent() || base.documentCount() > 0 || base.segmentCount() > 0,
+        // ★ 已有向量化内容（或已有文档/分段）⇒ 向量模型被锁定（KB-I4）
+        counts.hasVectorizedContent() || counts.documentCount() > 0 || counts.segmentCount() > 0,
         base.enabled(),
-        base.documentCount(),
-        base.segmentCount(),
-        base.charCount(),
+        counts.documentCount(),
+        counts.segmentCount(),
+        counts.charCount(),
         base.createdAt(),
         base.ownerId().toString(),
         base.visibility(),

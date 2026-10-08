@@ -32,6 +32,26 @@ public interface KnowledgeBaseRepository {
    * @param mine 只看自己名下的；false 表示按 {@code scope} 给全部可见的
    * @param keyword 名称/描述模糊匹配；null 或空白表示不筛
    */
+  /**
+   * 一个知识库的**实时计数**（{@code #35}）。
+   *
+   * <p>★ 为什么不读 {@code kb_knowledge_base} 上那四个冗余列：**它们从来没被写过** —— 列表页的卡片因此永远显示
+   * 0，而没有任何地方报错。修法是"读数来自库"（本项目对进度、检索已经是这个口径）： 一条聚合 SQL 出四个值，读的时候算，**不可能漂**。
+   *
+   * <p>★ 口径：只算**未软删**文档，以及这些文档名下的分段（文档软删后，它的分段不该再算进卡片）。
+   *
+   * @param documentCount 未软删文档数
+   * @param segmentCount 这些文档名下的分段数
+   * @param charCount 这些分段的字数之和
+   * @param hasVectorizedContent 是否存在已向量化的分段（决定"向量模型是否锁定"）
+   */
+  Counts countsFor(UUID kbId);
+
+  /** 实时计数（见 {@link #countsFor}）。 */
+  record Counts(
+      int documentCount, int segmentCount, long charCount, boolean hasVectorizedContent) {}
+
+  /** 按可见范围分页列出知识库。★ 范围谓词在查询里（{@code 08 §4.4.3} 纪律 1），不是取回来再筛。 */
   List<KnowledgeBase> search(
       ScopeFilter scope,
       String category,

@@ -465,7 +465,21 @@ const acceptAttr = computed(() =>
     : '.pdf,.docx,.doc,.md,.txt'
 )
 
-const open = async () => {
+/**
+ * ★ 待用的预设分类：{@code reset()} 是另一个函数，拿不到 {@code open} 的参数 ——
+ * 而"带当前筛选的分类进来"这件事必须跨过那一次复位，所以用这个模块级的待用值传。
+ */
+const pendingCategory = ref('')
+
+/**
+ * 打开向导。
+ *
+ * @param presetCategory 列表页当前筛的那个分类 —— ★ 用户已经用筛选表达过"我要建这一类"，
+ *   再让他选一次是白问一遍；空列表里的「创建第一个知识库」尤其明显（那个按钮
+ *   本来就是从"当前筛选下没有库"的空态点出来的）。
+ */
+const open = async (presetCategory?: string) => {
+  pendingCategory.value = presetCategory ?? ''
   visible.value = true
   step.value = 0
   // ★ 每次打开都重读字典：管理员刚在「基础数据」里加过 / 停用过一项，建档的人要马上看到（判据 1、2）
@@ -486,7 +500,8 @@ const open = async () => {
 const reset = () => {
   step.value = 0
   baseForm.name = ''
-  baseForm.category = ''
+  // ★ 带当前筛的分类进来（见 pendingCategory 的注释）：用户已经用筛选表达过"我要建这一类"
+  baseForm.category = pendingCategory.value
   baseForm.icon = '📘'
   baseForm.description = ''
   baseForm.importType = 'LOCAL'
