@@ -53,6 +53,13 @@ public class OrgRepositoryAdapter implements OrgRepository {
   }
 
   @Override
+  public boolean existsSiblingName(UUID parentId, String name) {
+    return parentId == null
+        ? jpa.existsByParentIdIsNullAndName(name)
+        : jpa.existsByParentIdAndName(parentId, name);
+  }
+
+  @Override
   public Org save(Org org) {
     return jpa.save(org);
   }

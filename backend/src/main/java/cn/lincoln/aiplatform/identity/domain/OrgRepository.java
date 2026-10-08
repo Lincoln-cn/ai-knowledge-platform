@@ -16,6 +16,14 @@ public interface OrgRepository {
 
   boolean existsByCode(String code);
 
+  /**
+   * 同一父节点下是否已有这个展示名。
+   *
+   * <p>★ 为什么要挡（而不是"让界面自己注意"）：重名会让**所有按名字比较**的地方把两个部门混成一个 ——
+   * 重名部门下的文档因此在检索里互相可见，**且不报错**。跨父重名是允许的（两个分公司各有「行政部」）。
+   */
+  boolean existsSiblingName(UUID parentId, String name);
+
   Org save(Org org);
 
   /** 删一个节点。★ 调用方（{@code OrgService.delete}）必须先过"没有下级、没有用户"的守卫。 */

@@ -18,6 +18,14 @@ public interface JpaOrgRepository extends JpaRepository<Org, UUID> {
 
   boolean existsByCode(String code);
 
+  /**
+   * 兄弟重名检查。分两个方法是因为"父为 null"在派生查询里要用 `IsNull` 显式表达 —— ★ 与迁移里那两条 partial unique index
+   * 同口径（`unique(parent_id, name)` 对 NULL 不判等， 根节点会被整段漏过）。
+   */
+  boolean existsByParentIdAndName(UUID parentId, String name);
+
+  boolean existsByParentIdIsNullAndName(String name);
+
   /** 子树 = 路径前缀匹配（★ 前缀自带结尾的 `/`，见 {@code Org#path} 的注释）。 */
   List<Org> findByPathStartingWithOrderByPathAsc(String prefix);
 

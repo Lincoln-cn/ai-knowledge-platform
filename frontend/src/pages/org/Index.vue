@@ -44,10 +44,13 @@
             <code class="micro muted">{{ selected.code }}</code>
           </div>
 
-          <!-- ★ 这句话必须留在界面上：改 name 不是"改个名而已"，它进了文档的召回前缀与内容哈希 -->
+          <!-- ★ 身份与表达必须分开（用户 2026-10-08 订正）：可变的东西不许参与身份判定。
+               初稿这里写的是"改名要重新向量化"，那是把可变展示名当成了身份的一部分 —— 方向错了。 -->
           <div class="notice">
-            改「展示名」会让该部门下文档的**召回前缀**变化，需要重新向量化；
-            <code>code</code> 不可改（它是共享主体与审计里的标识）。
+            展示名只用于显示，<code>code</code> 才是身份且<strong>不可改</strong>（共享主体与审计里用它）。
+            展示名可改，但<strong>同级不能重名</strong> —— 重名会让"按名字比较"的地方把两个部门混成一个，
+            表现为一个部门看到另一个部门的文档，且不报错。权限判定一律走 <code>code</code> 与 <code>path</code>，
+            与展示名无关。已入库的分段里仍留着旧名字（那是入库时的快照），新入库的用新名字。
           </div>
 
           <el-form label-width="88px" class="detail-form">
@@ -100,9 +103,22 @@
     <!-- 移动 -->
     <el-dialog v-model="moveVisible" title="移动部门" width="480px">
       <div class="micro muted">目标上级（不选 = 移到根）</div>
-      <el-select v-model="moveTarget" clearable placeholder="移到根" style="width: 100%">
-        <el-option v-for="o in moveOptions" :key="o.id" :label="`${o.name}（${o.code}）`" :value="o.id" />
-      </el-select>
+      <!-- ★ 用**树选择**而不是扁平下拉（用户 2026-10-08）：目标本身就按分支组织，层级一多，
+           扁平列表既看不出"这个部门在哪个分支下"，也要肉眼扫全表才敢点。
+           ★ 候选里**已经排除**"自己和自己的子树"（见 moveTree）—— 那些目标注定被后端拒，
+             提前摘掉比让用户点了再吃一个错误好。 -->
+      <el-tree-select
+        v-model="moveTarget"
+        :data="moveTree"
+        node-key="id"
+        :props="{ label: 'label', children: 'children' }"
+        check-strictly
+        :render-after-expand="false"
+        default-expand-all
+        clearable
+        placeholder="移到根（成为顶级部门）"
+        style="width: 100%"
+      />
       <template #footer>
         <el-button @click="moveVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="submitMove">移动</el-button>
@@ -194,6 +210,44 @@ const moveOptions = computed(() => {
   const me = selected.value
   if (!me) return flat.value
   return flat.value.filter((o) => !o.path.startsWith(me.path))
+})
+
+/**
+ * 移动目标树的节点形态。
+ *
+ * <p>★ 为什么要树（用户 2026-10-08）：候选本身就是按分支组织的，扁平列表在层级多时
+ *   既看不出"这个部门在哪个分支下"，也要肉眼扫全表才敢点。
+ */
+interface MoveNode {
+  id: string
+  parentId: string | null
+  label: string
+  children: MoveNode[]
+}
+
+const moveTree = computed<MoveNode[]>(() => {
+  const nodes = new Map<string, MoveNode>(
+    moveOptions.value.map((o) => [
+      o.id,
+      {
+        id: o.id,
+        parentId: o.parentId,
+        label: `${o.name}（${o.code}）`,
+        children: [] as MoveNode[]
+      } satisfies MoveNode
+    ])
+  )
+  const roots: MoveNode[] = []
+  // ★ moveOptions 剪掉的是"自己和自己的子树"，它们全是 me 的后代 ⇒ 剩下的集合里不会出现孤儿。
+  //   仍按"父不在集合里就当根"处理：将来若把集合改成别的形状，节点只会换个位置，不会静默消失。
+  for (const o of moveOptions.value) {
+    const node = nodes.get(o.id)
+    if (!node) continue
+    const parent = o.parentId ? nodes.get(o.parentId) : undefined
+    if (parent) parent.children.push(node)
+    else roots.push(node)
+  }
+  return roots
 })
 
 const openCreate = (parentId: string | null) => {
