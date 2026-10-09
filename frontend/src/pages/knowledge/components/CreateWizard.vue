@@ -466,12 +466,6 @@ const acceptAttr = computed(() =>
 )
 
 /**
- * ★ 待用的预设分类：{@code reset()} 是另一个函数，拿不到 {@code open} 的参数 ——
- * 而"带当前筛选的分类进来"这件事必须跨过那一次复位，所以用这个模块级的待用值传。
- */
-const pendingCategory = ref('')
-
-/**
  * 打开向导。
  *
  * @param presetCategory 列表页当前筛的那个分类 —— ★ 用户已经用筛选表达过"我要建这一类"，
@@ -479,7 +473,10 @@ const pendingCategory = ref('')
  *   本来就是从"当前筛选下没有库"的空态点出来的）。
  */
 const open = async (presetCategory?: string) => {
-  pendingCategory.value = presetCategory ?? ''
+  // ★ 当场把值写进表单（Issue #46）。**不要**只存进一个"待用变量"等 `reset()` 落值 ——
+  //   `reset()` 只挂在 `@closed`（关窗之后），于是：第一次打开必为空（reset 从没跑过），
+  //   第二次打开回填的是**上一次**传进来的分类（晚一拍）。用户会因此建错分类，而界面看起来"已填好"。
+  baseForm.category = presetCategory ?? ''
   visible.value = true
   step.value = 0
   // ★ 每次打开都重读字典：管理员刚在「基础数据」里加过 / 停用过一项，建档的人要马上看到（判据 1、2）
@@ -500,8 +497,8 @@ const open = async (presetCategory?: string) => {
 const reset = () => {
   step.value = 0
   baseForm.name = ''
-  // ★ 带当前筛的分类进来（见 pendingCategory 的注释）：用户已经用筛选表达过"我要建这一类"
-  baseForm.category = pendingCategory.value
+  // ★ 分类**不在这里设**：它由 `open(presetCategory)` 当场写入。
+  //   挂在这里就是那个"晚一拍"的 bug（`reset()` 只在 `@closed` 跑）—— 见 Issue #46。
   baseForm.icon = '📘'
   baseForm.description = ''
   baseForm.importType = 'LOCAL'

@@ -106,6 +106,61 @@ def main() -> int:
                     pass
                 steps = page.locator(".el-step").count()
                 check(steps == 4, "知识库：创建向导为四步", f"实际 {steps} 个 el-step")
+                # ★ 关窗再往下走：本文件走 hash 路由（`goto` 是 `#/path`），同行导航**不重载页面**
+                #   ⇒ 不关的话这层遮罩会盖住后面每一步的点击（本轮实测：下一步 Locator.click 超时 30s）。
+                if page.locator(".el-dialog").count():
+                    page.keyboard.press("Escape")
+                    try:
+                        page.locator(".el-dialog").first.wait_for(state="hidden", timeout=5000)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            def kb_category_prefill():
+                # ★ Issue #46：点分类筛选 → 再点「创建知识库」/空态「创建第一个知识库」，
+                #   向导第 1 步必须回填**当前筛选的分类**。走用户的真实路径（点 tab，而不是往 URL 里塞中文）。
+                #   价值全在"它曾经为假过"：旧实现把参数存进一个待用变量、等 `reset()`（只挂 `@closed`）
+                #   落值 ⇒ 第一次打开必为空、第二次打开回填的是**上一次**的值（晚一拍）。
+                #   ⚠️ 它当初能溜过去，是因为只用 `vue-tsc` 判过"改好了"，而**没有这条断言**。
+                def close_wizard():
+                    # ★ 必须关窗：本文件走 hash 路由（`goto` 是 `#/path`），同行导航**不重载页面** ⇒
+                    #   向导的遮罩会一直盖着，后面每一步的点击都被它吃掉（实测：Locator.click 超时 30s）。
+                    if page.locator(".el-dialog").count():
+                        page.keyboard.press("Escape")
+                        try:
+                            page.locator(".el-dialog").first.wait_for(state="hidden", timeout=5000)
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                def wizard_category():
+                    empty = page.locator("button", has_text="创建第一个知识库")
+                    target = empty if empty.count() else page.locator("button", has_text="创建知识库")
+                    target.first.click()
+                    try:
+                        page.locator(".el-dialog .el-step").first.wait_for(timeout=15000)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return page.locator(
+                        ".el-dialog .el-form-item:has-text('分类') .el-select"
+                    ).first.inner_text()
+
+                close_wizard()
+                goto("/knowledge", wait=1800)
+                page.locator("button.cat", has_text="制度规范").first.click()
+                settle(700)
+                shown = wizard_category()
+                check("制度规范" in shown,
+                      "知识库：打开向导回填当前筛选的分类（Issue #46）",
+                      f"分类控件显示 = {shown!r}")
+                close_wizard()
+
+                # ★ 反向：换一个分类再打开 ⇒ 必须是**新的**那个（专守"晚一拍"那个方向）
+                page.locator("button.cat", has_text="产品资料").first.click()
+                settle(700)
+                shown2 = wizard_category()
+                check("产品资料" in shown2 and "制度规范" not in shown2,
+                      "知识库：换筛选后再打开，回填的是新分类（不是上一次的）",
+                      f"分类控件显示 = {shown2!r}")
+                close_wizard()
 
             def kb_hittest():
                 body = goto("/knowledge/hittest")
@@ -415,6 +470,7 @@ def main() -> int:
 
             step("知识库列表", kb_list)
             step("知识库四步向导", kb_wizard)
+            step("知识库分类回填", kb_category_prefill)
             step("命中测试", kb_hittest)
             step("应用管理", assistants)
             step("提示词只管配置", prompts)
