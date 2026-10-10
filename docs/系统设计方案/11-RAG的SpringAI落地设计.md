@@ -148,7 +148,7 @@ the tool-call loop"**。
 |---|---|---|
 | **`SemanticCacheAdvisor`** | `10 §10.3` 把"检索缓存"列为 V1，触发条件是"出现重复提问热点" | ★ **V1 时的首选实现，零自研**。现在只登记 |
 | **`StructuredOutputValidationAdvisor`** | `03 机制五` 的"四层防御"里，**校验与自纠那一层**（`09 §5.2` 已定用官方 `validateSchema()`） | ★ **实现结构化输出时先看它**，不要又写一层 |
-| **`SafeGuardAdvisor`** | 输入/输出的安全拦截 | 我们的拒答逻辑走 `10 §5` 的判定 + `ContextualQueryAugmenter`，**暂不用它**；但要知道它在 |
+| **`SafeGuardAdvisor`** | 输入/输出的安全拦截 | ★ **已拍板（用户 2026-10-09）：以「扩展」它为主线**（原"暂不用它"的口径**作废**）。它非 final、`adviseCall`/`adviseStream` 可重写；开箱只有 `sensitiveWords`/`failureResponse`/`order` 三项（只做关键词匹配）⇒ **继承它，把密级/检索域/引用封闭性/审计挂进那两个 `advise*`**；落地详见 `13 §十二` |
 
 > **这条小节的方法论价值**：`09 §10.1` 的做法是"先问官方替掉了什么"。
 > **本册把它推进到 advisor 粒度** —— 看"All Known Implementing Classes"这一行，比读教程更快找到官方已有的能力。
