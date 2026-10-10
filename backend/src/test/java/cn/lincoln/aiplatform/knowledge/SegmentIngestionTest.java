@@ -71,7 +71,7 @@ class SegmentIngestionTest {
     String admin = accessToken("admin", "admin");
     String kbId = createKb(admin, "一致性库", "INTERNAL");
     String docId =
-        uploadDocument(admin, kbId, "一致性测试.txt", sampleMarkdown(), "制度", "采购部", "INTERNAL");
+        uploadDocument(admin, kbId, "一致性测试.txt", sampleMarkdown(), "制度", "PURCHASING", "INTERNAL");
 
     // 预览：segmentLength=500 / overlap=60（与入库默认值一致）
     HttpResponse<String> previewRes =
@@ -102,7 +102,10 @@ class SegmentIngestionTest {
   // ────────────────────────── 2 · search_text 带前缀、content 不含前缀 ──────────────────────────
 
   /**
-   * ★ {@code search_text} 必须以「文种·部门·文档名｜」开头，且 {@code content} 里不含前缀（{@code 12 §4.2} 纪律 1）。
+   * ★ {@code search_text} 必须以「文种·部门code·文档名｜」开头，且 {@code content} 里不含前缀（{@code 12 §4.2} 纪律 1）。
+   *
+   * <p>★ 部门那段自 {@code T300} 起是稳定 <strong>{@code code}</strong>（{@code FINANCE}）而不是展示名（财务部）：
+   * 展示名可改可重名 ⇒ 一次纯展示性改名会让该部门下所有向量的前缀与哈希失效（issue #37 / {@code 07 §11.2}）。
    *
    * <p>混成一列的后果：引用展示会把前缀当成正文显示，用户以为文档里真有这句话。
    */
@@ -111,20 +114,20 @@ class SegmentIngestionTest {
     String admin = accessToken("admin", "admin");
     String kbId = createKb(admin, "前缀库", "INTERNAL");
     String docId =
-        uploadDocument(admin, kbId, "前缀测试.doc", sampleMarkdown(), "报销规定", "财务部", "INTERNAL");
+        uploadDocument(admin, kbId, "前缀测试.doc", sampleMarkdown(), "报销规定", "FINANCE", "INTERNAL");
 
     List<DbSeg> dbSegs = loadDbSegments(docId);
     assertThat(dbSegs).isNotEmpty();
 
-    String expectedPrefix = "报销规定·财务部·前缀测试.doc｜";
+    String expectedPrefix = "报销规定·FINANCE·前缀测试.doc｜";
     for (DbSeg seg : dbSegs) {
       assertThat(seg.searchText)
-          .as("search_text 必须以「文种·部门·文档名｜」开头（12 §4.2）")
+          .as("search_text 必须以「文种·部门code·文档名｜」开头（12 §4.2 / 07 §11.2）")
           .startsWith(expectedPrefix);
       assertThat(seg.content)
           .as("content 是原文，前缀绝不进这一列（12 §4.2 纪律 1）")
           .doesNotContain(expectedPrefix)
-          .doesNotContain("报销规定·财务部·");
+          .doesNotContain("报销规定·FINANCE·");
     }
   }
 
@@ -136,7 +139,7 @@ class SegmentIngestionTest {
     String admin = accessToken("admin", "admin");
     String kbId = createKb(admin, "建档分块库", "INTERNAL");
     String docId =
-        uploadDocument(admin, kbId, "建档分块.txt", sampleMarkdown(), "制度", "人事部", "INTERNAL");
+        uploadDocument(admin, kbId, "建档分块.txt", sampleMarkdown(), "制度", "HR", "INTERNAL");
 
     // 文档状态 = PENDING_EMBEDDING（不是 SUCCEEDED —— 向量化还没做）
     String status =
@@ -178,7 +181,8 @@ class SegmentIngestionTest {
   void 重复分块不产生重复行_幂等() throws Exception {
     String admin = accessToken("admin", "admin");
     String kbId = createKb(admin, "幂等库", "INTERNAL");
-    String docId = uploadDocument(admin, kbId, "幂等.txt", sampleMarkdown(), "制度", "采购部", "INTERNAL");
+    String docId =
+        uploadDocument(admin, kbId, "幂等.txt", sampleMarkdown(), "制度", "PURCHASING", "INTERNAL");
 
     int before =
         jdbc.queryForObject(
@@ -210,7 +214,8 @@ class SegmentIngestionTest {
   void 分段长度超过模型上限返回400() throws Exception {
     String admin = accessToken("admin", "admin");
     String kbId = createKb(admin, "上限库", "INTERNAL");
-    String docId = uploadDocument(admin, kbId, "上限.txt", sampleMarkdown(), "制度", "采购部", "INTERNAL");
+    String docId =
+        uploadDocument(admin, kbId, "上限.txt", sampleMarkdown(), "制度", "PURCHASING", "INTERNAL");
 
     HttpResponse<String> res =
         post(
@@ -249,7 +254,8 @@ class SegmentIngestionTest {
   void 编辑分段粘超长内容返回400() throws Exception {
     String admin = accessToken("admin", "admin");
     String kbId = createKb(admin, "超长库", "INTERNAL");
-    String docId = uploadDocument(admin, kbId, "超长.txt", sampleMarkdown(), "制度", "采购部", "INTERNAL");
+    String docId =
+        uploadDocument(admin, kbId, "超长.txt", sampleMarkdown(), "制度", "PURCHASING", "INTERNAL");
 
     List<DbSeg> dbSegs = loadDbSegments(docId);
     assertThat(dbSegs).isNotEmpty();
@@ -271,7 +277,7 @@ class SegmentIngestionTest {
     String admin = accessToken("admin", "admin");
     String kbId = createKb(admin, "失败库", "INTERNAL");
     // 上传一个空文件 —— 解析失败
-    String docId = uploadDocument(admin, kbId, "空文件.txt", "", "制度", "采购部", "INTERNAL");
+    String docId = uploadDocument(admin, kbId, "空文件.txt", "", "制度", "PURCHASING", "INTERNAL");
 
     String status =
         jdbc.queryForObject(
@@ -299,7 +305,8 @@ class SegmentIngestionTest {
     String admin = accessToken("admin", "admin");
     String creator = createCreatorUser("seg_404_user");
     String kbId = createKb(admin, "越权库", "INTERNAL");
-    String docId = uploadDocument(admin, kbId, "越权.txt", sampleMarkdown(), "制度", "采购部", "INTERNAL");
+    String docId =
+        uploadDocument(admin, kbId, "越权.txt", sampleMarkdown(), "制度", "PURCHASING", "INTERNAL");
 
     // creator（own 范围）预览 admin 的文档 ⇒ 404
     HttpResponse<String> res =
@@ -372,7 +379,8 @@ class SegmentIngestionTest {
   void 单条取分段_不存在与不可见都是404() throws Exception {
     String admin = accessToken("admin", "admin");
     String kbId = createKb(admin, "单条库", "INTERNAL");
-    String docId = uploadDocument(admin, kbId, "单条.txt", sampleMarkdown(), "制度", "采购部", "INTERNAL");
+    String docId =
+        uploadDocument(admin, kbId, "单条.txt", sampleMarkdown(), "制度", "PURCHASING", "INTERNAL");
     List<DbSeg> segs = loadDbSegments(docId);
     assertThat(segs).isNotEmpty();
 
@@ -400,7 +408,8 @@ class SegmentIngestionTest {
   void 删除分段后文档进度列必须跟着变() throws Exception {
     String admin = accessToken("admin", "admin");
     String kbId = createKb(admin, "删除库", "INTERNAL");
-    String docId = uploadDocument(admin, kbId, "删除.txt", sampleMarkdown(), "制度", "采购部", "INTERNAL");
+    String docId =
+        uploadDocument(admin, kbId, "删除.txt", sampleMarkdown(), "制度", "PURCHASING", "INTERNAL");
     List<DbSeg> before = loadDbSegments(docId);
     assertThat(before).as("夹具前提：必须切出多段，否则删了等于清空").hasSizeGreaterThan(1);
     int expected = before.size() - 1;
@@ -439,7 +448,8 @@ class SegmentIngestionTest {
 
     // 300 字、无句号、无换行 ⇒ 分块器只能把整段截取成标题（上限 256）
     String longParagraph = "长".repeat(300);
-    String docId = uploadDocument(admin, kbId, "长首段.md", longParagraph, "制度", "采购部", "INTERNAL");
+    String docId =
+        uploadDocument(admin, kbId, "长首段.md", longParagraph, "制度", "PURCHASING", "INTERNAL");
 
     HttpResponse<String> docs =
         get("/api/v1/knowledge-bases/" + kbId + "/documents?page=1&size=10", admin);
@@ -519,14 +529,14 @@ class SegmentIngestionTest {
     return jsonField(res.body(), "id");
   }
 
-  /** multipart 上传文档（建档即解析 + 分块）。 */
+  /** multipart 上传文档（建档即解析 + 分块）。{@code orgCode} 是种子部门的稳定 {@code code}（见 {@code V25}）。 */
   private String uploadDocument(
       String token,
       String kbId,
       String filename,
       String content,
       String docType,
-      String department,
+      String orgCode,
       String classification)
       throws Exception {
     String boundary = "----SegmentTest" + UUID.randomUUID();
@@ -549,8 +559,8 @@ class SegmentIngestionTest {
             + "--"
             + boundary
             + "\r\n"
-            + "Content-Disposition: form-data; name=\"department\"\r\n\r\n"
-            + department
+            + "Content-Disposition: form-data; name=\"orgId\"\r\n\r\n"
+            + orgIdByCode(orgCode)
             + "\r\n"
             + "--"
             + boundary
@@ -592,6 +602,16 @@ class SegmentIngestionTest {
       }
       Thread.sleep(500);
     }
+  }
+
+  /**
+   * 种子里那个部门的 id（{@code V25} 的 {@code code} 是稳定标识，所以按 code 取）。
+   *
+   * <p>★ 建档的 {@code orgId} 要的是部门 <strong>id</strong>：{@code T300} / issue #37 起责任部门是组织树外键， 不再接受自由文本
+   * {@code department}。
+   */
+  private String orgIdByCode(String code) {
+    return jdbc.queryForObject("select id::text from iam_org where code = ?", String.class, code);
   }
 
   private String createCreatorUser(String username) throws Exception {

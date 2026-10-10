@@ -75,7 +75,7 @@ class DocumentRegistrationTest {
     HttpResponse<String> noDocType =
         post(
             "/api/v1/knowledge-bases/" + kbId + "/documents",
-            registerBody(List.of("缺文种.pdf"), null, "采购部", "INTERNAL"),
+            registerBody(List.of("缺文种.pdf"), null, orgIdByCode("PURCHASING"), "INTERNAL"),
             admin);
     assertThat(noDocType.statusCode()).isEqualTo(400);
     assertThat(noDocType.body()).as("错误文案要说清是「文种」缺失，而不是笼统的参数不合法").contains("文种");
@@ -93,7 +93,7 @@ class DocumentRegistrationTest {
     HttpResponse<String> noClassification =
         post(
             "/api/v1/knowledge-bases/" + kbId + "/documents",
-            registerBody(List.of("缺密级.pdf"), "制度", "采购部", null),
+            registerBody(List.of("缺密级.pdf"), "制度", orgIdByCode("PURCHASING"), null),
             admin);
     assertThat(noClassification.statusCode()).isEqualTo(400);
     assertThat(noClassification.body()).as("错误文案要说清是「密级」缺失").contains("密级");
@@ -115,7 +115,7 @@ class DocumentRegistrationTest {
     HttpResponse<String> tooHigh =
         post(
             "/api/v1/knowledge-bases/" + kbId + "/documents",
-            registerBody(List.of("超密级.docx"), "合同", "法务部", "CONFIDENTIAL"),
+            registerBody(List.of("超密级.docx"), "合同", orgIdByCode("LEGAL"), "CONFIDENTIAL"),
             admin);
     assertThat(tooHigh.statusCode()).isEqualTo(400);
     assertThat(tooHigh.body())
@@ -128,7 +128,7 @@ class DocumentRegistrationTest {
     HttpResponse<String> equal =
         post(
             "/api/v1/knowledge-bases/" + kbId + "/documents",
-            registerBody(List.of("同密级.docx"), "合同", "法务部", "SECRET"),
+            registerBody(List.of("同密级.docx"), "合同", orgIdByCode("LEGAL"), "SECRET"),
             admin);
     assertThat(equal.statusCode()).as("等于 ceiling 必须放行").isEqualTo(200);
 
@@ -136,7 +136,7 @@ class DocumentRegistrationTest {
     HttpResponse<String> lower =
         post(
             "/api/v1/knowledge-bases/" + kbId + "/documents",
-            registerBody(List.of("低密级.docx"), "制度", "人事部", "INTERNAL"),
+            registerBody(List.of("低密级.docx"), "制度", orgIdByCode("HR"), "INTERNAL"),
             admin);
     assertThat(lower.statusCode()).as("低于 ceiling 必须放行").isEqualTo(200);
   }
@@ -157,7 +157,7 @@ class DocumentRegistrationTest {
     HttpResponse<String> created =
         post(
             "/api/v1/knowledge-bases/" + kbId + "/documents",
-            registerBody(List.of("待解析.md"), "制度", "采购部", "INTERNAL"),
+            registerBody(List.of("待解析.md"), "制度", orgIdByCode("PURCHASING"), "INTERNAL"),
             admin);
     assertThat(created.statusCode()).isEqualTo(200);
     assertThat(created.body())
@@ -205,7 +205,7 @@ class DocumentRegistrationTest {
     HttpResponse<String> write =
         post(
             "/api/v1/knowledge-bases/" + foreignKb + "/documents",
-            registerBody(List.of("越权.docx"), "制度", "采购部", "INTERNAL"),
+            registerBody(List.of("越权.docx"), "制度", orgIdByCode("PURCHASING"), "INTERNAL"),
             creator);
     assertThat(write.statusCode()).as("写也必须 404，不是 403").isEqualTo(404);
     assertThat(write.body()).contains("\"code\":404");
@@ -232,14 +232,15 @@ class DocumentRegistrationTest {
       HttpResponse<String> res =
           post(
               "/api/v1/knowledge-bases/" + kbA + "/documents",
-              registerBody(List.of("甲库文档" + i + ".md"), "制度", "采购部", "INTERNAL"),
+              registerBody(
+                  List.of("甲库文档" + i + ".md"), "制度", orgIdByCode("PURCHASING"), "INTERNAL"),
               admin);
       assertThat(res.statusCode()).isEqualTo(200);
     }
     for (int i = 1; i <= 2; i++) {
       post(
           "/api/v1/knowledge-bases/" + kbB + "/documents",
-          registerBody(List.of("乙库文档" + i + ".md"), "合同", "法务部", "INTERNAL"),
+          registerBody(List.of("乙库文档" + i + ".md"), "合同", orgIdByCode("LEGAL"), "INTERNAL"),
           admin);
     }
 
@@ -276,8 +277,9 @@ class DocumentRegistrationTest {
         post(
             "/api/v1/knowledge-bases/" + kbId + "/documents",
             """
-            {"uploadIds":["up_1"],"docType":"制度","department":"采购部","classification":"INTERNAL"}\
-            """,
+            {"uploadIds":["up_1"],"docType":"制度","orgId":"%s","classification":"INTERNAL"}\
+            """
+                .formatted(orgIdByCode("PURCHASING")),
             admin);
     assertThat(stagedOnly.statusCode()).as("只传 uploadIds 不传 names 不能静默忽略").isEqualTo(400);
     assertThat(stagedOnly.body())
@@ -290,8 +292,9 @@ class DocumentRegistrationTest {
         post(
             "/api/v1/knowledge-bases/" + kbId + "/documents",
             """
-            {"segmentationPlan":[{"ordinal":1,"content":"x"}],"docType":"制度","department":"采购部","classification":"INTERNAL"}\
-            """,
+            {"segmentationPlan":[{"ordinal":1,"content":"x"}],"docType":"制度","orgId":"%s","classification":"INTERNAL"}\
+            """
+                .formatted(orgIdByCode("PURCHASING")),
             admin);
     assertThat(planOnly.statusCode()).isEqualTo(400);
     assertThat(planOnly.body()).contains("暂存").contains("names");
@@ -300,7 +303,7 @@ class DocumentRegistrationTest {
     HttpResponse<String> namesOnly =
         post(
             "/api/v1/knowledge-bases/" + kbId + "/documents",
-            registerBody(List.of("轻量建档.md"), "制度", "采购部", "INTERNAL"),
+            registerBody(List.of("轻量建档.md"), "制度", orgIdByCode("PURCHASING"), "INTERNAL"),
             admin);
     assertThat(namesOnly.statusCode()).as("names 形态必须放行").isEqualTo(200);
 
@@ -309,8 +312,9 @@ class DocumentRegistrationTest {
         post(
             "/api/v1/knowledge-bases/" + kbId + "/documents",
             """
-            {"names":["以names为准.md"],"uploadIds":["up_x"],"docType":"制度","department":"采购部","classification":"INTERNAL"}\
-            """,
+            {"names":["以names为准.md"],"uploadIds":["up_x"],"docType":"制度","orgId":"%s","classification":"INTERNAL"}\
+            """
+                .formatted(orgIdByCode("PURCHASING")),
             admin);
     assertThat(both.statusCode()).as("同时给时以 names 为准，不因 uploadIds 被拒").isEqualTo(200);
     assertThat(both.body()).contains("以names为准.md");
@@ -319,8 +323,8 @@ class DocumentRegistrationTest {
   // ────────────────────────── 工具 ──────────────────────────
 
   /** 建档请求体：批次级三项标签 + 文件名清单（最小建档形态，见 {@code DocumentService} 类注释）。 */
-  private static String registerBody(
-      List<String> names, String docType, String department, String classification) {
+  private String registerBody(
+      List<String> names, String docType, String orgId, String classification) {
     StringBuilder namesJson = new StringBuilder("[");
     for (int i = 0; i < names.size(); i++) {
       if (i > 0) {
@@ -330,12 +334,22 @@ class DocumentRegistrationTest {
     }
     namesJson.append(']');
     String dt = docType == null ? "null" : "\"" + docType + "\"";
-    String dept = department == null ? "null" : "\"" + department + "\"";
+    String org = orgId == null ? "null" : "\"" + orgId + "\"";
     String cl = classification == null ? "null" : "\"" + classification + "\"";
     return """
-    {"names":%s,"docType":%s,"department":%s,"classification":%s}\
+    {"names":%s,"docType":%s,"orgId":%s,"classification":%s}\
     """
-        .formatted(namesJson, dt, dept, cl);
+        .formatted(namesJson, dt, org, cl);
+  }
+
+  /**
+   * 种子里那个部门的 id（{@code V25} 的 {@code code} 是稳定标识，所以按 code 取）。
+   *
+   * <p>★ {@code T300} / issue #37 起责任部门是<strong>组织树外键</strong>：建档要传的是 {@code orgId}（部门
+   * <strong>id</strong>），不是可变的展示名 —— 名字既可改又可重名，做不了数据权限，按名字比较的地方还会静默越权。
+   */
+  private String orgIdByCode(String code) {
+    return jdbc.queryForObject("select id::text from iam_org where code = ?", String.class, code);
   }
 
   private String createKb(String adminToken, String name, String maxClassification)

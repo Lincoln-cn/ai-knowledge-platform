@@ -56,6 +56,7 @@ public class SegmentService {
   private final DocumentRepository documents;
   private final KnowledgeBaseService knowledgeBases;
   private final AccessScopePort accessScope;
+  private final OrgCodeResolver orgCodes;
   private final SegmentationProperties properties;
   private final MaxCharsResolver maxCharsResolver;
   private final EmbeddingRunner runner;
@@ -67,6 +68,7 @@ public class SegmentService {
       DocumentRepository documents,
       KnowledgeBaseService knowledgeBases,
       AccessScopePort accessScope,
+      OrgCodeResolver orgCodes,
       SegmentationProperties properties,
       MaxCharsResolver maxCharsResolver,
       EmbeddingRunner runner) {
@@ -75,6 +77,7 @@ public class SegmentService {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
     this.accessScope = accessScope;
+    this.orgCodes = orgCodes;
     this.properties = properties;
     this.maxCharsResolver = maxCharsResolver;
     this.runner = runner;
@@ -164,6 +167,8 @@ public class SegmentService {
 
     // ★ 与入库同源：同一个 Segmenter#plan，同一套规则集（按文档的 OCR 事实选）
     //   —— 预览与入库分叉是下一个静默故障（12 §3.5），而"走哪套分块规则"最容易被漏掉
+    // ★ 责任部门取**稳定 code**（07 §11.2）：预览与入库必须用同一段材料，否则两边算出的
+    //   content_hash 会不同（预览看着对、入库写下去的是另一个）
     SegmentPlan planned =
         segmenter.plan(
             document.parsedContent(),
@@ -171,7 +176,7 @@ public class SegmentService {
             command.overlap(),
             maxChars,
             document.docType(),
-            document.department(),
+            orgCodes.codeOf(document),
             document.name(),
             document.ocrDerived() ? ChunkSource.OCR : ChunkSource.TEXT);
 
@@ -216,7 +221,7 @@ public class SegmentService {
    * 编辑分段（契约 {@code PUT /segments/:id}）。
    *
    * <p>★ 改 {@code content} ⇒ 重跑 SEG-I1（超长 400）、重算 {@code searchText} 与 {@code contentHash}
-   * （前缀仍用该文档的文种/部门/名），并把 {@code embeddingStatus} 置回 {@code PENDING_EMBEDDING} （内容改了向量就旧了）。
+   * （前缀仍用该文档的文种/责任部门 code/名），并把 {@code embeddingStatus} 置回 {@code PENDING_EMBEDDING} （内容改了向量就旧了）。
    *
    * <p>★ 越权/不可见 ⇒ 404（不泄漏存在性）。
    */
@@ -232,19 +237,16 @@ public class SegmentService {
     if (content != null) {
       // ★ 重跑 SEG-I1（12 §3.5：用户可能粘进超长内容）
       int maxChars = maxCharsResolver.resolve(document.kbId(), properties.maxChars());
+      // ★ 前缀里的部门段是**稳定 code**（07 §11.2）：一份文档查一次，不是每段查一次
+      String orgCode = orgCodes.codeOf(document);
       String prefix =
-          SearchText.prefix(
-              document.docType(), document.department(), document.name(), segment.titlePath());
+          SearchText.prefix(document.docType(), orgCode, document.name(), segment.titlePath());
       // 校验与落库必须是同一个字符串：直接用被校验过的那个 ——
       // 「我验的」与「我存的」若各自拼一遍，它们的差异只会在别的边界上暴露
       String searchText = SegmentContent.ofSearchText(prefix, content, maxChars).text();
       String contentHash =
           SearchText.contentHash(
-              document.docType(),
-              document.department(),
-              document.name(),
-              segment.titlePath(),
-              content);
+              document.docType(), orgCode, document.name(), segment.titlePath(), content);
       segment.updateContent(content, searchText, contentHash, currentUserId);
     }
     if (title != null) {
@@ -425,11 +427,12 @@ public class SegmentService {
     int nextOrdinal =
         targetSegments.isEmpty() ? 0 : targetSegments.get(targetSegments.size() - 1).ordinal() + 1;
     int maxChars = maxCharsResolver.resolve(target.kbId(), properties.maxChars());
+    // ★ 目标文档的责任部门 code 只取一次（前缀是每段都要拼的，但部门是文档级的）
+    String targetOrgCode = orgCodes.codeOf(target);
 
     for (Segment segment : moving) {
       String prefix =
-          SearchText.prefix(
-              target.docType(), target.department(), target.name(), segment.titlePath());
+          SearchText.prefix(target.docType(), targetOrgCode, target.name(), segment.titlePath());
       String searchText;
       try {
         searchText = SegmentContent.ofSearchText(prefix, segment.content(), maxChars).text();
@@ -437,12 +440,12 @@ public class SegmentService {
         throw new BusinessException(
             ErrorCode.BAD_REQUEST,
             "迁移被拒绝：第 " + (segment.ordinal() + 1) + " 段在目标文档的前缀下超出上限（" + e.getMessage() + "）",
-            "目标文档的 文种/部门/名 会成为它的新前缀 ⇒ 前缀更长；请改选别的目标文档，或先缩短目标文档的名称");
+            "目标文档的 文种/责任部门/名 会成为它的新前缀 ⇒ 前缀更长；请改选别的目标文档，或先缩短目标文档的名称");
       }
       String contentHash =
           SearchText.contentHash(
               target.docType(),
-              target.department(),
+              targetOrgCode,
               target.name(),
               segment.titlePath(),
               segment.content());
@@ -511,14 +514,14 @@ public class SegmentService {
     List<PreviewSegment> result = new ArrayList<>();
     // 前缀需要文档元数据；plan 路径可能没有 documentId
     String docType = "";
-    String department = "";
+    String orgCode = "";
     String title = "";
     int maxChars = properties.maxChars();
     boolean hasDocument = command.documentId() != null;
     if (hasDocument) {
       Document document = requireVisibleDocument(command.documentId());
       docType = document.docType();
-      department = document.department();
+      orgCode = orgCodes.codeOf(document);
       title = document.name();
       maxChars = maxCharsResolver.resolve(document.kbId(), properties.maxChars());
     }
@@ -531,8 +534,7 @@ public class SegmentService {
       //   无文档上下文时按**最坏前缀长度**校验，而不是拿空前缀放宽 —— 否则「这里通过、入库因前缀更长而失败」
       String prefix =
           hasDocument
-              ? SearchText.prefix(
-                  docType, department, title, item.title() == null ? "" : item.title())
+              ? SearchText.prefix(docType, orgCode, title, item.title() == null ? "" : item.title())
               : worstCasePrefix();
       SegmentContent.ofSearchText(prefix, item.content(), maxChars);
       result.add(
@@ -550,7 +552,8 @@ public class SegmentService {
    * Segmenter.plan} 的预算口径是同一个原则。
    */
   private static String worstCasePrefix() {
-    return SearchText.prefix("文种", "责任部门", "文档名", "章节".repeat(SearchText.MAX_PREFIX_LENGTH));
+    String lengthOnly = "部门码";
+    return SearchText.prefix("文种", lengthOnly, "文档名", "章节".repeat(SearchText.MAX_PREFIX_LENGTH));
   }
 
   /** 按 id 取文档，并做可见性判定。★ 不可见与不存在同一个 NOT_FOUND。 */

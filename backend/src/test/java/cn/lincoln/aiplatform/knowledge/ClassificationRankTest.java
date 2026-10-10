@@ -138,9 +138,12 @@ class ClassificationRankTest {
   private String insertDocument(String kbId, String classification) {
     String id = UUID.randomUUID().toString();
     jdbc.update(
-        "insert into kb_document (id, kb_id, name, source, doc_type, department, classification,"
+        // ★ 责任部门已改成 org_id（UUID 外键，V27）。用 ROOT 的**确定性** id（V25 种子写死）：
+        //   org_id 是外键 ⇒ 不能塞随机 UUID。见 Issue #48。
+        "insert into kb_document (id, kb_id, name, source, doc_type, org_id, classification,"
             + " status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?::uuid, ?::uuid, ?, 'local', '制度', '采购部', ?, 'PENDING_EMBEDDING',"
+            + " values (?::uuid, ?::uuid, ?, 'local', '制度',"
+            + " '00000000-0000-4000-8000-000000000001'::uuid, ?, 'PENDING_EMBEDDING',"
             + " 0, 0, true, now(), now())",
         id,
         kbId,

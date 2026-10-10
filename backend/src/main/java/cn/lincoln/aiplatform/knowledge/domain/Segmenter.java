@@ -86,7 +86,7 @@ public class Segmenter {
    * @param overlap 重叠字符数（{@code 12 §3.3}；0 表示不重叠）
    * @param maxChars 向量模型字符上限（随模型变化的领域配置，调用方传入）
    * @param docType 文种（前缀 L1）
-   * @param department 责任部门（前缀 L1）
+   * @param orgCode 责任部门的稳定 {@code code}（前缀 L1）—— ★ 不是部门名、也不是 path，理由见 {@link SearchText#prefix}
    * @param title 文档名（前缀 L1）
    * @return 有序计划；空 markdown 返回空列表
    * @throws IllegalArgumentException 分段/重叠参数非法，或前缀组成缺失
@@ -98,10 +98,10 @@ public class Segmenter {
       int overlap,
       int maxChars,
       String docType,
-      String department,
+      String orgCode,
       String title) {
     return plan(
-        markdown, segmentLength, overlap, maxChars, docType, department, title, ChunkSource.TEXT);
+        markdown, segmentLength, overlap, maxChars, docType, orgCode, title, ChunkSource.TEXT);
   }
 
   /**
@@ -124,7 +124,7 @@ public class Segmenter {
       int overlap,
       int maxChars,
       String docType,
-      String department,
+      String orgCode,
       String title,
       ChunkSource source) {
     if (segmentLength <= 0) {
@@ -142,8 +142,8 @@ public class Segmenter {
     }
     // 前缀三项构成 L1 文档级标识（12 §4.2）。缺任一项会让前缀变成「null·null·null｜」——
     // 那是往库里写静默数据垃圾，必须在入口拒绝（建档路径本就保证非空）
-    if (blank(docType) || blank(department) || blank(title)) {
-      throw new IllegalArgumentException("文种/责任部门/文档名都不能为空 —— 它们构成检索前缀（12 §4.2）");
+    if (blank(docType) || blank(orgCode) || blank(title)) {
+      throw new IllegalArgumentException("文种/责任部门（org code）/文档名都不能为空 —— 它们构成检索前缀（12 §4.2）");
     }
     if (markdown == null || markdown.isBlank()) {
       return new SegmentPlan(List.of(), 0);
@@ -168,7 +168,7 @@ public class Segmenter {
     List<SegmentChunk> chunks = chunker.chunk(stripped.markdown(), target, overlap, effective);
     List<PlannedSegment> plan = new ArrayList<>(chunks.size());
     for (SegmentChunk chunk : chunks) {
-      String prefix = SearchText.prefix(docType, department, title, chunk.titlePath());
+      String prefix = SearchText.prefix(docType, orgCode, title, chunk.titlePath());
       // ★ 表格分段：进检索文本的是**行级陈述**（判据 ③），而 content 保留原表（引用可溯源）
       String body = chunk.isTable() ? tableRewriter.rewrite(chunk.content()) : chunk.content();
       // ★ 校验与落库必须是同一个字符串：把 ofSearchText 的产物直接当 searchText 用，
@@ -182,7 +182,7 @@ public class Segmenter {
               // ★ 哈希的"正文"必须用 body（= 进向量的那份），不能用 chunk.content()：
               //   否则"改了改写规则"（例如哪天换成 LLM 版）不会让 contentHash 变
               //   ⇒ 存量向量被当成仍然有效 ⇒ 检索拿着旧向量、文本却是新的（静默不一致，SEG-I7）
-              SearchText.contentHash(docType, department, title, chunk.titlePath(), body),
+              SearchText.contentHash(docType, orgCode, title, chunk.titlePath(), body),
               chunk.title(),
               chunk.titlePath(),
               chunk.isTable(),
