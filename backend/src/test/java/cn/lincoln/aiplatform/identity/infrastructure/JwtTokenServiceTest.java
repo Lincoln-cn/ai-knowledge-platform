@@ -161,6 +161,36 @@ class JwtTokenServiceTest {
     assertThatThrownBy(() -> decoder.decode(token)).isInstanceOf(JwtException.class);
   }
 
+  /**
+   * ★ 所属部门随令牌下发（{@code 07 §十一} 消费位③ → {@code ScopeFilter} 的授权基）。
+   *
+   * <p>为什么值得一条断言：这个声明**丢了不会有任何症状** —— 登录正常、鉴权正常、页面正常， 只有"共享给部门（含下级）"静默失效（{@code AccessScopeAdapter}
+   * 读不到就取空集，fail-closed）。 那正是 Issue #38 的形状：判定写好了，材料没人给。
+   */
+  @Test
+  void orgIdClaimIsIssuedWhenUserBelongsToADepartment() {
+    UUID orgId = UUID.fromString("00000000-0000-4000-8000-000000000002");
+    User user = user();
+    user.assignOrg(orgId);
+
+    Jwt jwt =
+        decoder.decode(
+            service.issueAccessToken(user, new Role(UUID.randomUUID(), "普通用户", "USER"), List.of()));
+
+    assertThat(jwt.getClaimAsString("orgId")).isEqualTo(orgId.toString());
+  }
+
+  /** 没有部门归属（{@code iam_user.org_id} 为空）⇒ **不发这个声明**，判定侧据此取空集（fail-closed）。 */
+  @Test
+  void orgIdClaimIsAbsentWhenUserHasNoDepartment() {
+    Jwt jwt =
+        decoder.decode(
+            service.issueAccessToken(
+                user(), new Role(UUID.randomUUID(), "普通用户", "USER"), List.of()));
+
+    assertThat(jwt.getClaimAsString("orgId")).as("未归类 ⇒ 不发声明，而不是发一个空串/占位值").isNull();
+  }
+
   private static User user() {
     return new User(
         UUID.fromString("10000000-0000-0000-0000-000000000001"),

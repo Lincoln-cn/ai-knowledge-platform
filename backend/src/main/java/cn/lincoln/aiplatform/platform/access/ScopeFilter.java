@@ -18,9 +18,12 @@ import java.util.UUID;
  * @param myRoles 当前用户的角色代码（共享判定要按角色比对）
  * @param maxClassification 密级上限（clearance）：能看到"不高于它"的资源
  * @param clLabels 可涉的密级标签；★ 空集表示**不按标签限制**（而不是"什么标签都看不到"）
- * @param myOrgIds ★ <strong>我所属部门 + 其全部下级</strong>的 id 集合（{@code 07 §十一} 的第三个消费位：用户身份）。
- *     <p>为什么是"集合"而不是"我一个部门 id"：共享给某部门时口径是<strong>含下级</strong>（用户口径）， 而含下级这件事**在构造范围时**就展开好（一次
- *     {@code path} 前缀查询），而不是在 {@link #canSee} 里查 —— {@code canSee} 是对**每条资源**调用的，在那里查库就是 N+1。
+ * @param myOrgIds ★ <strong>我的部门及其全部上级</strong>的 id 集合（祖先链，含我自己；{@code 07 §十一} 的第三个消费位：用户身份）。
+ *     <p>★ <strong>方向必须写清楚，因为取反了也能跑</strong>：判定写的是 {@code myOrgIds.contains(共享目标)}，而共享给「技术部」
+ *     的含义是「技术部及下级都看得见」（用户口径）⇒ "我在技术部的下级里" ⟺ "技术部在我的祖先链上"。 取成子树（"我的部门 +
+ *     下级"）得到的是<strong>镜像语义</strong>： "共享给我的下级部门 ⇒ 我看得见" —— 那不是任何一条产品承诺，还会让上级自动看见下级的共享。
+ *     <p>为什么是"集合"而不是"我一个部门 id"：见上一条。为什么不在这里（{@link #canSee}）查 —— {@code canSee}
+ *     是对**每条资源**调用的，在那里查库就是 N+1；展开发生在**构造范围那一刻**，一次前缀查询。
  *     <p>★ 空集 = **看不见任何部门共享**（fail-closed）。这个方向是刻意的：漏配只会"少看见"， 不会"多看见"。
  */
 public record ScopeFilter(
@@ -130,9 +133,10 @@ public record ScopeFilter(
       case USER -> me != null && me.toString().equals(subject.id());
       case ROLE -> myRoles != null && myRoles.contains(subject.id());
       // ★ 部门（`07 §十一` 消费位③ → ①`kb_knowledge_base_grant.subject_id`）：
-      //   比的是"我所属部门**及其全部下级**"这个集合 —— 它是**在构造范围时展开好的**（见 record 的 javadoc），
-      //   ★ 含下级这一条是用户口径，谁把它改成"只比我自己那一个"就会让"共享给上级部门的库，
-      //     下级部门的人看不见" —— `ScopeFilterTest` 里那条金丝雀就是守它的。
+      //   比的是"我所属部门**及其全部上级**"这个集合（祖先链）—— 它是**在构造范围时展开好的**（见 record 的 javadoc）。
+      //   ★ 为什么是祖先而不是子树：共享给「技术部」= 「技术部及下级看得见」⇒ "我在它下级里" ⟺ "它在我的祖先链上"。
+      //   ★ 谁把它改成"只比我自己那一个"（精确匹配），就会让"共享给上级部门的库，下级部门的人看不见" ——
+      //     `ScopeFilterTest` 里那条金丝雀就是守它的。
       case ORG -> myOrgIds != null && myOrgIds.contains(subject.id());
       // ★ 这两个是枚举里的**预留值**（契约早就留了位，至今零消费方）：显式 false 而不是 default ——
       //   于是将来谁给 SubjectKind 加第 6 个值，**编译器会强迫他在这里做决定**，
