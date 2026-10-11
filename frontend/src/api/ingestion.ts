@@ -38,8 +38,13 @@ export interface DocumentItem {
    * 冻结契约只加可选字段，故此处 `?`。
    */
   docType?: string
-  /** 责任部门。★ 建档必填三项之一 */
-  department?: string
+  /**
+   * 责任部门。★ 建档必填三项之一。
+   *
+   * <p>★ 传的是**组织机构的 id（`org_id`）**，不是展示名 —— 展示名可变、可重名，而它要进召回前缀
+   * （`07 §十一`）。传 name 会被后端 400 拒（要的是 UUID）。
+   */
+  orgId?: string
   /** 密级。★ 建档必填三项之一，且必须 ≤ 所属库的 `maxClassification`（ceiling，13 §6） */
   classification?: ClassificationLevel
   /**
@@ -181,7 +186,8 @@ export interface ImportDocumentsBody {
    * ★ 逐篇覆盖是后续（等单篇编辑端点落地），本批不做。
    */
   docType?: string
-  department?: string
+  /** ★ 责任部门 = 组织机构的 id（见上文 uploadDocuments 的说明）。 */
+  orgId?: string
   classification?: ClassificationLevel
 }
 
@@ -223,7 +229,7 @@ export const listDocuments = (kbId: string, query: DocumentQuery = {}) =>
 export const uploadDocuments = (
   kbId: string,
   files: File[],
-  meta?: { docType: string; department: string; classification: ClassificationLevel }
+  meta?: { docType: string; orgId: string; classification: ClassificationLevel }
 ) => {
   const form = new FormData()
   files.forEach((file) => form.append('files', file))
@@ -231,7 +237,7 @@ export const uploadDocuments = (
   //   解析出的 Markdown 进 parsedContent；缺任一仍会被后端 400 拒（前端先拦一道）。
   if (meta) {
     form.append('docType', meta.docType)
-    form.append('department', meta.department)
+    form.append('orgId', meta.orgId)
     form.append('classification', meta.classification)
   }
   return request<DocumentItem[]>({
