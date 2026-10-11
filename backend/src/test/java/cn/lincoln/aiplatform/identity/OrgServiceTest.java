@@ -150,6 +150,10 @@ class OrgServiceTest {
     Org root = repository.findByCode("ROOT").orElseThrow();
     Org target = orgs.create(root.id(), "EMPTY_PROBE", "有人的组", 9, ACTOR);
     UUID user = jdbc.queryForObject("select id from iam_user limit 1", UUID.class);
+    // ★ 记下原值、结束还原**原值**（不是还原成 null）：V28 起演示账号本身有部门归属，
+    //   把它的归属清成 null 会污染共用容器里后续用例看到的世界（夹具互相污染本项目踩过多次）。
+    UUID previousOrg =
+        jdbc.queryForObject("select org_id from iam_user where id = ?", UUID.class, user);
     jdbc.update("update iam_user set org_id = ? where id = ?", target.id(), user);
 
     try {
@@ -157,7 +161,7 @@ class OrgServiceTest {
           .isInstanceOf(BusinessException.class)
           .hasMessageContaining("用户");
     } finally {
-      jdbc.update("update iam_user set org_id = null where id = ?", user);
+      jdbc.update("update iam_user set org_id = ? where id = ?", previousOrg, user);
     }
   }
 

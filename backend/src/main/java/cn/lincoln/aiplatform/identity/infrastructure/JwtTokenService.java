@@ -44,7 +44,7 @@ public class JwtTokenService {
   public String issueAccessToken(User user, Role role, Collection<String> authorities) {
     Instant now = Instant.now();
 
-    JwtClaimsSet claims =
+    JwtClaimsSet.Builder claims =
         JwtClaimsSet.builder()
             .issuer(properties.issuer())
             .subject(user.id().toString())
@@ -62,10 +62,19 @@ public class JwtTokenService {
             //   AccessScopeAdapter 因此可以零查询地构造 ScopeFilter。
             .claim("scope", role.dataScope().name())
             .claim("clearance", role.maxClassification().name())
-            .claim("clLabels", role.labels())
-            .build();
+            .claim("clLabels", role.labels());
 
-    return encoder.encode(JwtEncoderParameters.from(claims)).getTokenValue();
+    // ★ 所属部门（`07 §十一` 消费位③）：只放**我这一个**部门 id，**不**放展开后的子树。
+    //   为什么不在签发时展开成"我的部门及下级"那个集合：
+    //     ① 子树可能很大（一个分公司下面上百个部门）⇒ 令牌体积与"部门树的形状"耦合；
+    //     ② 展开结果会被冻结到令牌过期 ⇒ 上级部门新增一个下级、或我被调岗，最长 accessTtl 才生效。
+    //   代价是判定侧每请求一次前缀查询（AccessScopeAdapter 里按请求缓存，不是每次 canSee 都查）。
+    //   没有部门时**不发这个声明** —— 判定侧读不到 ⇒ 空集 ⇒ 看不见任何部门共享（fail-closed）。
+    if (user.orgId() != null) {
+      claims.claim("orgId", user.orgId().toString());
+    }
+
+    return encoder.encode(JwtEncoderParameters.from(claims.build())).getTokenValue();
   }
 
   /** 访问令牌的有效期（秒）—— 登录响应要把它回给前端，避免前端另配一份常量。 */

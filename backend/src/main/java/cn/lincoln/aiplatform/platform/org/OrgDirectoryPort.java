@@ -27,9 +27,8 @@ import java.util.UUID;
  *   <li>{@code path}：物化路径，<strong>移动部门会变</strong> ⇒ 同样不许进前缀（否则一次移动会让 整棵子树下所有文档的向量失效）。
  * </ul>
  *
- * <p>★ 本端口<strong>不含</strong>"可见性判定"：归属 ≠ 可见性（{@code 07 §11.1}）。 {@link #selfAndDescendants(UUID)}
- * 是给"含下级"的共享判定（{@code T301} 的 {@code ScopeFilter}）准备的 ——
- * 这一轮<strong>刻意不接进检索谓词</strong>，避免在没有真实消费方时先长出一条没人验证的判定分支。
+ * <p>★ 本端口<strong>不含</strong>"可见性判定"：归属 ≠ 可见性（{@code 07 §11.1}）。 {@link #ancestorsAndSelf(UUID)}
+ * 是给"含下级"的共享判定（{@code T301} 的 {@code ScopeFilter}）准备的。
  */
 public interface OrgDirectoryPort {
 
@@ -55,10 +54,17 @@ public interface OrgDirectoryPort {
   List<OrgBrief> findByIds(Collection<UUID> ids);
 
   /**
-   * 这个部门<strong>及它的全部下级</strong>的 id（按物化路径前缀取，{@code 07 §10.2}）。
+   * 这个部门<strong>及其全部上级</strong>的 id（物化路径的祖先链，含自己）。
    *
-   * <p>★ 语义是"含下级"：共享给「技术部」意味着「技术部及下级都看得见」（用户口径）。 ★ <strong>只属于共享与身份两个消费位</strong>（{@code 07 §11.1}
-   * 的 ②③）—— 文档归属（①）是"精确一个部门"，对归属问"含下级"没有意义。
+   * <p>★★ <strong>为什么是"祖先"而不是"下级"</strong>：共享判定的形状是 {@code 我的集合.contains(共享目标)}，
+   * 而共享给「技术部」的含义是「技术部及下级都看得见」（用户口径，{@code 07 §10.5} 判据 1）。
+   * "我在技术部的下级里"换一个说法就是"<strong>技术部在我的祖先链上</strong>" ⇒ 集合取的必须是祖先链。
+   *
+   * <p>★ 取错方向（用子树）得到的是<strong>镜像语义</strong>： "共享给我的下级部门 ⇒ 我看得见" ——
+   * 那不是任何一条产品承诺，而且会让上级自动看见下级的共享。两者都"能跑"， 症状却完全相反，所以这里把方向写死在方法名里。
+   *
+   * <p>★ 正确性依赖物化路径的<strong>结尾斜杠</strong>（{@code 07 §10.2}），但两个方向依赖的<strong>不是同一件事</strong>：
+   * 取子树靠"<em>查询时给的前缀</em>带斜杠"，取祖先链靠"<em>库里的 path</em> 都带斜杠"。 两者失效的样子都是"看到不属于自己的部门"，且查询不报错。
    */
-  List<UUID> selfAndDescendants(UUID orgId);
+  List<UUID> ancestorsAndSelf(UUID orgId);
 }

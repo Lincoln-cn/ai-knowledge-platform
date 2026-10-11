@@ -45,6 +45,21 @@ public class User {
   @Column(name = "role_id", nullable = false)
   private UUID roleId;
 
+  /**
+   * 所属部门（{@code iam_user.org_id}，{@code 07 §10.4}）。
+   *
+   * <p>★ 可空：还没来得及归类的账号（迁移 V25 建列时就这么定的）。<strong>不要</strong>给它一个"默认部门" —— 默认值要么
+   * 让所有人意外落进某个部门，要么让"没归类"这件事从数据上消失。可空 + 判定侧空集 fail-closed（看不见任何部门共享）是正确的一对。
+   *
+   * <p>★ 它是 {@code 07 §十一} 的<strong>第三个消费位</strong>：决定"我的部门及下级"这个授权基（{@link
+   * cn.lincoln.aiplatform.platform.access.ScopeFilter} 的 {@code myOrgIds}）。
+   * 与"文档归属"（归属=精确一个部门）和"知识库共享"（共享=含下级） 是三种不同语义，别混。
+   *
+   * <p>★ <strong>一人一部门</strong>（MVP）：真要一人多部门应加 {@code iam_user_org} 表，不是把这一列改成数组。
+   */
+  @Column(name = "org_id")
+  private UUID orgId;
+
   @Enumerated(EnumType.STRING)
   @Column(name = "status", nullable = false, length = 16)
   private UserStatus status;
@@ -170,8 +185,30 @@ public class User {
     this.roleId = roleId;
   }
 
+  /**
+   * 把这个人归到某个部门（{@code 07 §10.4}）；传 {@code null} 表示"取消归类"。
+   *
+   * <p>★ 归属是"身份"消费位（③）：它决定这个人的**可见范围**（"我的部门及上级"）。 所以它是一次显式动作、有单独的入口 —— 与 {@link #updateProfile}
+   * 合成一个方法，会让"只改显示名"的调用顺手把部门也写掉（或者漏写而看不出）。
+   *
+   * <p>★ 改归属<strong>不需要重新向量化</strong>：文档的召回前缀与 {@code content_hash} 用的是部门的 {@code code}
+   * （不可变），而可见性是每次判定实时算的（{@code 07 §11.2}）。
+   */
+  public void assignOrg(UUID orgId) {
+    this.orgId = orgId;
+  }
+
   public UUID id() {
     return id;
+  }
+
+  /**
+   * 所属部门；未归类时 {@code null}。
+   *
+   * <p>★ 判定侧把 {@code null} 当作"看不见任何部门共享"（fail-closed）， 所以这里**不兜底**成任何部门 —— 兜底会让"漏配"表现成"多看见"。
+   */
+  public UUID orgId() {
+    return orgId;
   }
 
   public String username() {
