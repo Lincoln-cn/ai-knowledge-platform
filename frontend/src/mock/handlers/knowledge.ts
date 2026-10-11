@@ -1,10 +1,13 @@
 import { ApiError, ErrorCode } from '@/api/types'
 import type { CreateKnowledgeBaseBody, KnowledgeBase } from '@/api/knowledge'
+import type { Grant } from '@/api/types'
 import { PERM } from '@/constants/permissions'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
 import { knowledgeBases, knowledgeCategories } from '../fixtures/knowledge'
+import { roles, users } from '../fixtures/identity'
 import { models } from '../fixtures/models'
+import { findShareableOrg } from './orgs'
 import { currentSubjects, requireVisible, selfId, visiblePredicate } from '../policy'
 
 /**
@@ -181,6 +184,54 @@ export const knowledgeRoutes: MockRoute[] = [
       const kb = findKb(path.id, token, PERM.knowledgeManage)
       const { enabled } = body as { enabled: boolean }
       kb.enabled = Boolean(enabled)
+      return kb
+    }
+  ],
+
+  [
+    'PUT',
+    '/knowledge-bases/:id/grants',
+    ({ path, body, token }) => {
+      const kb = findKb(path.id, token, PERM.knowledgeManage)
+      const { grants } = body as { grants: Grant[] }
+      if (!Array.isArray(grants)) {
+        throw new ApiError(ErrorCode.BAD_REQUEST, 'grants 必须是数组')
+      }
+      // 主体必须真实存在：写错 id 的授权等于静默没共享出去（对方看不到，自己以为共享了）
+      for (const g of grants) {
+        const kind = g.subject?.kind
+        const id = g.subject?.id
+        if (!id || (kind !== 'USER' && kind !== 'ROLE' && kind !== 'ORG')) {
+          throw new ApiError(ErrorCode.BAD_REQUEST, '共享主体只支持账号（USER）/ 角色（ROLE）/ 部门（ORG）')
+        }
+        // ★ 三种 kind 的取值口径**不一致**（与后端 GrantSubjectPort 同）：USER/ORG 是 uuid、ROLE 是 code
+        const exists =
+          kind === 'USER'
+            ? users.some((u) => u.id === id)
+            : kind === 'ROLE'
+              ? roles.some((r) => r.code === id)
+              : findShareableOrg(id) !== undefined
+        if (!exists) {
+          const label = kind === 'USER' ? '账号' : kind === 'ROLE' ? '角色' : '部门'
+          throw new ApiError(
+            ErrorCode.BAD_REQUEST,
+            `共享主体不存在：${label} ${id}`,
+            '重新选择一个主体再保存。★ 写错 id 的授权不会报错，但对方永远看不到这个库；已停用的部门也不能接受新的共享'
+          )
+        }
+        if (!Array.isArray(g.actions) || g.actions.length === 0) {
+          throw new ApiError(ErrorCode.BAD_REQUEST, '每条共享授权至少要有一个动作')
+        }
+      }
+      // ★ 覆盖式（不是增量），且可见性跟着授权走：空清单 = 收回全部共享 ⇒ 回到 private
+      //   （★ 机器码是 SCREAMING_SNAKE —— 这里写小写会被 `ResourceVisibility` 的类型拦下，实测过一次）
+      kb.grants = grants.map((g) => ({
+        subject: { ...g.subject },
+        actions: [...g.actions],
+        expiresAt: g.expiresAt ?? null,
+        canDelegate: g.canDelegate ?? false
+      }))
+      kb.visibility = kb.grants.length ? 'SHARED' : 'PRIVATE'
       return kb
     }
   ],

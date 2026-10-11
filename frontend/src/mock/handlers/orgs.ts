@@ -84,6 +84,15 @@ function requireManage(token: string): void {
   )
 }
 
+/**
+ * 按 id 找一个部门 —— 给**共享授权**的写入口做主体校验用（`07 §8.2`）。
+ *
+ * ★ 与后端的 `GrantSubjectPort` 同口径：停用（`enabled = false`）的部门**不接受新的共享**
+ * （`07 §10.5` 判据 3："停用不产生新共享，既有共享不变成不可见"），所以这里对停用的返回 undefined。
+ */
+export const findShareableOrg = (id: string): Org | undefined =>
+  orgs.find((o) => o.id === id && o.enabled)
+
 export const orgRoutes: MockRoute[] = [
   ['GET', '/orgs/tree', () => toTree()],
   ['GET', '/orgs', () => ordered()],

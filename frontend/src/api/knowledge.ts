@@ -93,6 +93,21 @@ export const setKnowledgeBaseEnabled = (id: string, enabled: boolean) =>
     body: { enabled }
   })
 
+/**
+ * 覆盖式写入共享授权（`07 §8.1`；与助手的 `setAssistantGrants` 同形状，前端可复用同一套对话框逻辑）。
+ *
+ * - 主体形状见 `Grant`：`USER` / `ORG` 的 `id` 是 uuid，`ROLE` 的 `id` 是角色 **code**（`kind` 与 `id` 一起比）
+ * - ★ 传**空数组 = 收回全部共享**（库回到 `private`），后端据此把可见性从 `shared` 收回
+ * - ★ 共享给**部门**（`kind: 'ORG'`）的含义是"该部门**及下级**都看得见"——含下级由判定侧（`ScopeFilter`）负责，写入口不必知道
+ */
+export const setKnowledgeBaseGrants = (id: string, grants: Grant[]) =>
+  request<KnowledgeBase>({
+    method: 'PUT',
+    url: '/knowledge-bases/:id/grants',
+    path: { id },
+    body: { grants }
+  })
+
 /** 删除会连同文档与分段一并移除。这是不可逆操作，前端必须先二次确认 */
 export const deleteKnowledgeBase = (id: string) =>
   request<void>({ method: 'DELETE', url: '/knowledge-bases/:id', path: { id } })

@@ -233,6 +233,36 @@ public class KnowledgeBase implements OwnedResource {
     return grantRows.stream().map(KnowledgeBaseGrant::toGrant).toList();
   }
 
+  /**
+   * 覆盖式写入共享授权（{@code 07 §8.1} / 契约 {@code PUT /knowledge-bases/:id/grants}）。
+   *
+   * <p>★ <strong>覆盖式而不是增量</strong>：增量的语义在"两个人同时改"时不可解释 ——
+   * 谁加了谁删了、最终谁赢，都只能靠调用方对齐约定。而共享对话框干的本来就是"这份清单长这样"。
+   *
+   * <p>★ 可见性跟着授权走：<strong>有授权 = {@code SHARED}，清单空 = 收回全部共享回到 {@code PRIVATE}</strong>。 不留"SHARED
+   * 但一条授权都没有"的中间态 —— 那种库对谁都不共享，界面上却显示着"已共享"。
+   *
+   * <p>★ 主体是否存在<strong>不在这里校验</strong>：那要查账号/角色/部门目录（{@code GrantSubjectPort}），
+   * 属于应用层；领域对象只负责把"清单长这样"这件事落成状态。
+   */
+  public void replaceGrants(List<Grant> grants) {
+    grantRows.clear();
+    if (grants != null) {
+      for (Grant grant : grants) {
+        grantRows.add(
+            new KnowledgeBaseGrant(
+                UUID.randomUUID(),
+                this,
+                grant.subject().kind(),
+                grant.subject().id(),
+                grant.actions().toArray(String[]::new),
+                grant.expiresAt(),
+                grant.canDelegate()));
+      }
+    }
+    this.visibility = grantRows.isEmpty() ? Visibility.PRIVATE : Visibility.SHARED;
+  }
+
   // ────────────────────────── 行为 ──────────────────────────
 
   public void rename(String newName) {

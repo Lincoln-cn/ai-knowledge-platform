@@ -5,7 +5,10 @@ import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBase;
 import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBaseRepository;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.platform.access.Grant;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import cn.lincoln.aiplatform.platform.access.Subject;
+import cn.lincoln.aiplatform.platform.access.SubjectKind;
 import cn.lincoln.aiplatform.platform.dictionary.DictionaryKind;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -48,6 +51,12 @@ public class KnowledgeBaseService {
   private final AccessScopePort accessScope;
 
   /**
+   * ★ 共享主体的存在性校验口（{@code 07 §8.2}）：写错一个 id 的授权 = <strong>静默没共享出去</strong>，
+   * 所以写入口必须能问"这个账号/角色/部门真的存在吗"。口径（含"软删账号不算存在""停用部门不接受新共享"） 收在实现里一处，见 {@code GrantSubjectAdapter}。
+   */
+  private final cn.lincoln.aiplatform.platform.access.GrantSubjectPort grantSubjects;
+
+  /**
    * ★ 库分类的**唯一真源**（第 19 周统一点）：以前这里硬编码一份 {@code DEFAULT_CATEGORIES}、 而建库下拉从字典取 ⇒
    * 两个来源迟早漂（开发库实测：筛选里能看到「合同」、建库时却选不到）。
    */
@@ -56,9 +65,11 @@ public class KnowledgeBaseService {
   public KnowledgeBaseService(
       KnowledgeBaseRepository bases,
       AccessScopePort accessScope,
+      cn.lincoln.aiplatform.platform.access.GrantSubjectPort grantSubjects,
       cn.lincoln.aiplatform.platform.dictionary.DictionaryService dictionaries) {
     this.bases = bases;
     this.accessScope = accessScope;
+    this.grantSubjects = grantSubjects;
     this.dictionaries = dictionaries;
   }
 
@@ -247,6 +258,62 @@ public class KnowledgeBaseService {
     KnowledgeBase base = requireVisible(id);
     base.markDeleted(Instant.now(), currentUserId);
     bases.save(base);
+  }
+
+  // ────────────────────────── 共享授权（T302）──────────────────────────
+
+  /**
+   * 覆盖式写入共享授权（{@code PUT /knowledge-bases/:id/grants}）。
+   *
+   * <p>★ 两道校验都必须在这里、而且必须给<strong>可读原因</strong>：
+   *
+   * <ol>
+   *   <li><strong>主体必须真实存在</strong>（{@code GrantSubjectPort}）：写错一个 id 的授权 = 静默没共享出去 ——
+   *       对方看不到，写的人以为共享了，症状与"没共享过"一模一样。
+   *   <li><strong>每条授权至少要有一个动作</strong>：动作回答"能拿它做什么"，空动作的授权谁也不满足， 只会让界面显示"已共享"。
+   * </ol>
+   *
+   * <p>★ 看不见的库返 404（与其它写端点同口径）：403 等于确认这个 id 存在。
+   */
+  @Transactional
+  public KnowledgeBaseView replaceGrants(UUID id, List<Grant> grants, UUID currentUserId) {
+    KnowledgeBase base = requireVisible(id);
+    List<Grant> incoming = grants == null ? List.of() : List.copyOf(grants);
+    for (Grant grant : incoming) {
+      requireShareableSubject(grant);
+      if (grant.actions() == null || grant.actions().isEmpty()) {
+        throw new BusinessException(
+            ErrorCode.BAD_REQUEST, "每条共享授权至少要有一个动作", "给这个主体选一个动作（例如「可以查看」）再保存");
+      }
+    }
+    base.replaceGrants(incoming);
+    base.setUpdatedBy(currentUserId);
+    return toView(bases.save(base));
+  }
+
+  /** 主体不存在（或已软删 / 部门已停用）⇒ 400 + 可读原因。★ 错误消息里用中文类别名，不把机器码甩给用户。 */
+  private void requireShareableSubject(Grant grant) {
+    Subject subject = grant.subject();
+    if (subject != null && grantSubjects.exists(subject.kind(), subject.id())) {
+      return;
+    }
+    String what = subject == null ? "（未指定主体）" : kindLabel(subject.kind()) + " " + subject.id();
+    throw new BusinessException(
+        ErrorCode.BAD_REQUEST,
+        "共享主体不存在：" + what,
+        "重新选择一个主体再保存。★ 写错 id 的授权不会报错，但对方永远看不到这个库；已停用的部门也不能接受新的共享");
+  }
+
+  private static String kindLabel(SubjectKind kind) {
+    if (kind == null) {
+      return "主体";
+    }
+    return switch (kind) {
+      case USER -> "账号";
+      case ROLE -> "角色";
+      case ORG -> "部门";
+      case GROUP, LINK -> "主体";
+    };
   }
 
   // ────────────────────────── 检索参数（第 10 周 · 0.3.2）──────────────────────────
