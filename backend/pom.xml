@@ -264,6 +264,12 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
           <argLine>-Dfile.encoding=UTF-8</argLine>
+          <!-- ★ `-Dtest=X` 指定的类**一条都没跑到**时必须失败，而不是 BUILD SUCCESS（Issue #50）。
+               ★ 为什么它重要：`-Dtest=A,B`（多个类的写法）在过去静默不跑任何用例却报成功 ——
+                 那次是"判据本身失效"：命令看起来跑了，读数却来自别的类（或什么都没跑）。
+                 这条路一次都没有人守过，因为它**不报错**。
+               ★ 只作用于"显式指定了 -Dtest"的调用（CI 的全量 `mvn -B verify` 不受影响）。 -->
+          <failIfNoSpecifiedTests>true</failIfNoSpecifiedTests>
         </configuration>
       </plugin>
 
