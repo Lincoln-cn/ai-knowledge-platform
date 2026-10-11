@@ -5,12 +5,18 @@ import cn.lincoln.aiplatform.knowledge.application.KnowledgeBaseView;
 import cn.lincoln.aiplatform.knowledge.application.KnowledgeCategoryView;
 import cn.lincoln.aiplatform.knowledge.domain.ImportType;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.platform.access.Grant;
+import cn.lincoln.aiplatform.platform.access.Subject;
+import cn.lincoln.aiplatform.platform.access.SubjectKind;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import jakarta.validation.constraints.NotBlank;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -148,6 +154,57 @@ public class KnowledgeBaseController {
     return ApiResponse.ok();
   }
 
+  /**
+   * 覆盖式写入共享授权（契约 {@code setKnowledgeBaseGrants} / {@code 07 §8.1}）。
+   *
+   * <p>★ <strong>共享给部门</strong>走的就是这条：{@code subject.kind = ORG}、{@code subject.id} = 部门 id。
+   * 判定侧"含下级"由 {@code ScopeFilter} 的祖先链负责（{@code 07 §11.3}），写入口不必知道这件事。
+   *
+   * <p>★ 空数组 = 收回全部共享（库回到 {@code private}）—— 与助手的 {@code PUT /assistants/:id/grants} 同形状，
+   * 前端可以用同一套对话框逻辑。
+   */
+  @PutMapping("/{id}/grants")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<KnowledgeBaseView> replaceGrants(
+      @PathVariable UUID id, @RequestBody GrantsBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        knowledgeBaseService.replaceGrants(id, toGrants(body), UUID.fromString(jwt.getSubject())));
+  }
+
+  /** 把契约形状（{@code { grants: [{ subject, actions, expiresAt, canDelegate }] }}）翻成平台值对象。 */
+  private static List<Grant> toGrants(GrantsBody body) {
+    if (body == null || body.grants() == null) {
+      return List.of();
+    }
+    List<Grant> grants = new ArrayList<>();
+    for (GrantBody raw : body.grants()) {
+      if (raw == null || raw.subject() == null) {
+        throw new BusinessException(
+            ErrorCode.BAD_REQUEST, "每条共享授权都要有主体", "选择共享给谁（账号 / 角色 / 部门）再保存");
+      }
+      grants.add(
+          new Grant(
+              new Subject(parseSubjectKind(raw.subject().kind()), raw.subject().id()),
+              raw.actions() == null ? Set.of() : Set.copyOf(raw.actions()),
+              raw.expiresAt(),
+              Boolean.TRUE.equals(raw.canDelegate())));
+    }
+    return grants;
+  }
+
+  /**
+   * 契约里的 {@code kind} 是字符串，必须是枚举里的机器码。
+   *
+   * <p>★ 不合法 ⇒ <strong>400 + 可读原因</strong>（列出合法取值）：静默忽略等于"共享没生效而界面显示成功"。
+   */
+  private static SubjectKind parseSubjectKind(String raw) {
+    try {
+      return SubjectKind.valueOf(raw);
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "共享主体种类只支持 USER / ROLE / ORG，收到：" + raw);
+    }
+  }
+
   // ────────────────────────── 请求体 ──────────────────────────
 
   /**
@@ -183,6 +240,16 @@ public class KnowledgeBaseController {
 
   /** 启用位请求体（契约 {@code setKnowledgeBaseEnabled} 的 body）。 */
   record EnabledBody(boolean enabled) {}
+
+  /** 共享授权请求体（契约 {@code setKnowledgeBaseGrants}）：{@code { grants: [...] }}，**覆盖式**。 */
+  record GrantsBody(List<GrantBody> grants) {}
+
+  /** 一条授权（契约 {@code Grant}）。{@code expiresAt} / {@code canDelegate} 是形状口子，缺省即"永久、不可转授"。 */
+  record GrantBody(
+      SubjectBody subject, List<String> actions, Instant expiresAt, Boolean canDelegate) {}
+
+  /** 共享主体（契约 {@code Subject}）：{@code kind} 是机器码，{@code id} 对 USER/ORG 是 uuid、对 ROLE 是角色 code。 */
+  record SubjectBody(String kind, String id) {}
 
   /**
    * 把契约里的字符串 id 转成 UUID。
