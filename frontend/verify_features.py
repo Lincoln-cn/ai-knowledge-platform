@@ -468,6 +468,58 @@ def main() -> int:
                 check("账号名" in shown, "改密：含账号名被拦（证明用户名确实取到了）",
                       f"校验文案 = {shown[:100]}")
 
+            # ── 上传弹窗：责任部门的组织树（**第一次打开**就要有数据）──
+            #
+            # ★ 定义与注册都放在本文件**末尾**：`main` 的 Issue #46 那批改动插在
+            #   `kb_category_prefill` 前后，与它同处一个"间隙"的插入在 PR 三方合并时**必冲突**。
+            def kb_upload_dialog_org_tree():
+                """★ 守的是「数据读取只挂在 `@closed` 的 `reset()` 上」这个坑。
+
+                `UploadDialog` 原先只在 `reset()` 里读组织树，而 `reset()` 挂 `@closed`
+                （关窗之后才跑）⇒ **第一次打开必然是一棵空树**，而「责任部门」是必填
+                ⇒ 从知识库详情页上传文档，第一次根本选不出部门、提交不上去（真栈闸门实测红）。
+                ⚠️ 它当初能溜过去：mock 侧没有任何断言会走到这个弹窗，而真栈那边只报一句
+                「能选中…失败」—— 与 `#46` 是同一个坑（那次也是 `reset()` 挂在 `@closed` 上）。
+                ★ 反证（把 `loadOrgTree()` 挪回 `reset()` 再构建一次）：
+                  `FAIL 上传弹窗：第一次打开时「责任部门」就有部门可选  下拉内容 = '无数据'`，
+                  54/55 —— **只有这一条红**；改回 ⇒ 55/55。
+                ★ 判据落在**具体部门名**上、不落在结构上：空树照样渲染出 `.el-tree`
+                  （读数 `无数据`）⇒ 只断言"有树"的判据会**恒绿**。
+                """
+                goto("/knowledge", wait=1800)
+                page.locator(".kb-card").first.click()
+                settle(1800)
+                page.locator("button", has_text="上传文档").first.click()
+                settle(1200)
+                dlg = page.locator(".el-dialog").filter(visible=True).first
+                item = (
+                    dlg.locator(".el-form-item")
+                    .filter(has=page.locator(".el-form-item__label:text-is('责任部门')"))
+                    .first
+                )
+                item.locator(".el-select__wrapper").first.click()
+                settle(700)
+                dropdown = page.locator(".el-select-dropdown").filter(visible=True).first
+                text = dropdown.inner_text()
+                # ★ 断言的是 V25 种子里的**具体部门**（不是"有若干项"）：夹具与后端种子同值，
+                #   谁把种子的读取挪回 `@closed`，这里立刻红。
+                check("采购部" in text and "法务部" in text,
+                      "上传弹窗：第一次打开时「责任部门」就有部门可选",
+                      f"下拉内容 = {text[:60]!r}")
+                check(dropdown.locator(".el-tree").count() > 0,
+                      "上传弹窗：「责任部门」是树选择（不是扁平列表）", "")
+                page.keyboard.press("Escape")
+                settle(500)
+                # ★ 必须关窗：本文件走 hash 路由（`goto` 是 `#/path`），同行导航**不重载页面**
+                #   ⇒ 这层遮罩会盖住后面每一步的点击（实测：Locator.click 超时 30s）。
+                if page.locator(".el-dialog").count():
+                    page.keyboard.press("Escape")
+                    try:
+                        page.locator(".el-dialog").first.wait_for(state="hidden", timeout=5000)
+                    except Exception:  # noqa: BLE001
+                        pass
+                goto("/knowledge", wait=1500)
+
             step("知识库列表", kb_list)
             step("知识库四步向导", kb_wizard)
             step("知识库分类回填", kb_category_prefill)
@@ -488,6 +540,9 @@ def main() -> int:
             step("公开页·过期", public_expired)
             step("公开页·撤销", public_revoked)
             step("公开页·无效", public_bogus)
+            # ★ 放在最后：与 `main` 的 #46 那批（插在「知识库分类回填」之后）不同处一个间隙，
+            #   否则 PR 与 main 三方合并必冲突（本轮实测过）。
+            step("上传弹窗·责任部门组织树", kb_upload_dialog_org_tree)
 
             browser.close()
     finally:

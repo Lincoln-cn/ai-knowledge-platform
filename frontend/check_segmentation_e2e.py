@@ -268,7 +268,12 @@ def main() -> int:  # noqa: C901
             st_up, up = api_multipart(
                 f"/knowledge-bases/{kb_id}/documents",
                 token,
-                {"docType": "制度", "department": "采购部", "classification": "INTERNAL"},
+                {
+                    "docType": "制度",
+                    # ★ 责任部门改成 org_id（UUID）：种子里只有 ROOT 是确定性 id
+                    "orgId": "00000000-0000-4000-8000-000000000001",
+                    "classification": "INTERNAL",
+                },
                 DOCX,
             )
             docs = up.get("data") or []
@@ -321,7 +326,11 @@ def main() -> int:  # noqa: C901
             check(len(db_rows) == seg_cnt, f"库里分段行数与 segment_count 一致（{len(db_rows)} / {seg_cnt}）")
             check([r[0] for r in db_rows] == list(range(len(db_rows))), "ordinal 从 0 起且连续")
 
-            prefix_head = "制度·采购部·"
+            # ★ 前缀里的部门段现在是 org 的**稳定 code**，不是展示名（`07 §十一` / Issue #37）。
+            #   夹具用 ROOT 的确定性 id 建档 ⇒ code = "ROOT"（不是「总部」，更不是「采购部」）。
+            #   为什么必须是 code：展示名可变、可重名，而前缀要进向量与 content_hash ——
+            #   改名不该让整个部门的向量失效（见 `DocumentOrgShapeTest` 的哨兵）。
+            prefix_head = "制度·ROOT·"
             first = db_rows[0] if db_rows else ("", 0, False, "", "", "")
             check(
                 first[4].startswith(prefix_head) and "｜" in first[4],

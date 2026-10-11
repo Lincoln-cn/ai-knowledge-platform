@@ -42,17 +42,20 @@
           <el-option v-for="d in docTypes" :key="d.code" :label="d.label" :value="d.code" />
         </el-select>
       </el-form-item>
-      <el-form-item label="责任部门" prop="department">
-        <el-select
-          v-model="meta.department"
-          filterable
-          allow-create
-          default-first-option
+      <!-- ★ 责任部门改成**组织树选择**（T300 / #37）：存 `org_id`，不是自由字符串。
+           理由同 CreateWizard：展示名可变、可重名，而它要进召回前缀（`07 §十一`）。 -->
+      <el-form-item label="责任部门" prop="orgId">
+        <el-tree-select
+          v-model="meta.orgId"
+          :data="orgTree"
+          node-key="id"
+          :props="{ label: 'name', children: 'children' }"
+          check-strictly
+          :render-after-expand="false"
+          default-expand-all
           style="width: 220px"
-          placeholder="选择或输入部门"
-        >
-          <el-option v-for="d in DEPARTMENT_SUGGESTIONS" :key="d" :label="d" :value="d" />
-        </el-select>
+          placeholder="从组织树选责任部门"
+        />
       </el-form-item>
       <el-form-item label="密级" prop="classification">
         <!-- ★ value 是 code、显示是 label（08 §十）：管理员改展示名，建档的人马上看到，而落库的机器码不变 -->
@@ -90,7 +93,8 @@ import { ingestionApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { UploadPolicy, UploadReceipt, DocumentItem } from '@/api/ingestion'
 import type { ClassificationLevel } from '@/api/types'
-import { DEPARTMENT_SUGGESTIONS } from '@/constants/labels'
+import { orgsApi } from '@/api'
+import type { OrgNodeView } from '@/api/orgs'
 import { useDictionary } from '@/composables/useDictionary'
 
 const props = defineProps<{ kbId: string }>()
@@ -116,13 +120,23 @@ const submitHint = ref('')
 /** 建档必填三项（12 §5.1） */
 const meta = reactive({
   docType: '',
-  department: '',
+  orgId: '',
   classification: '' as ClassificationLevel | ''
 })
 const metaFormRef = ref<FormInstance>()
+
+/**
+ * ★ 责任部门的选择题 = **组织树**（`T300` / #37）：存 org 的 id，不是展示名。
+ * 读失败**不吞**（不 catch 成空数组）：空树 = "建档时选不到任何部门"，而界面只像"还没加载"。
+ */
+const orgTree = ref<OrgNodeView[]>([])
+
+const loadOrgTree = async () => {
+  orgTree.value = await orgsApi.orgTree()
+}
 const metaRules: FormRules = {
   docType: [{ required: true, message: '请选择文种', trigger: 'blur' }],
-  department: [{ required: true, message: '请填写责任部门', trigger: 'blur' }],
+  orgId: [{ required: true, message: '请从组织树选责任部门', trigger: 'change' }],
   classification: [{ required: true, message: '请选择密级', trigger: 'change' }]
 }
 
@@ -136,7 +150,10 @@ const open = async () => {
   submitError.value = ''
   submitHint.value = ''
   // ★ 每打开一次重读一次字典：管理员刚在「基础数据」里加过 / 停用过一项，建档的人要马上看到（判据 1、2）
-  await Promise.all([loadDocTypes(), loadClassifications()])
+  // ★ 组织树也在**这里**读，不能只挂在 `@closed` 的 `reset()` 上：`reset()` 只在关窗之后跑
+  //   ⇒ 第一次打开必然是一棵空树，而「责任部门」是必填 ⇒ 第一次上传根本选不出部门、提交不上去
+  //   （Issue #46 是同一个坑的另一次踩中：`reset()` 挂 `@closed` ⇒ 第一次打开为空）。
+  await Promise.all([loadDocTypes(), loadClassifications(), loadOrgTree()])
   try {
     policy.value = await ingestionApi.getUploadPolicy(props.kbId)
   } catch {
@@ -191,8 +208,10 @@ const reset = () => {
   rejected.value = []
   policy.value = null
   meta.docType = ''
-  meta.department = ''
+  meta.orgId = ''
   meta.classification = ''
+  // ★ 组织树**不在这里读**：本函数挂在 `@closed` 上 ⇒ 在这里读等于"第一次打开没数据"。
+  //   数据读取一律在 `open()` 里（与字典同一处）。
   submitError.value = ''
   submitHint.value = ''
   metaFormRef.value?.clearValidate()
@@ -218,7 +237,7 @@ const submit = async () => {
     //   （旧的 stageUploads / importDocuments 形态只登记元数据、不带字节，解析无从发生。）
     const raw = (await ingestionApi.uploadDocuments(props.kbId, files.value, {
       docType: meta.docType.trim(),
-      department: meta.department.trim(),
+      orgId: meta.orgId,
       // ★ metaValid 已保证三项必填（表单 rules），此处分类必非空串 —— 类型上仍是 '' | Level
       classification: meta.classification as ClassificationLevel
     })) as unknown as UploadReceipt | DocumentItem[]

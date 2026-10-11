@@ -18,8 +18,13 @@ import org.hibernate.type.SqlTypes;
  * 文档（聚合根）—— 第 5 周 · 0.2.0 批 2：建档元数据。
  *
  * <p>★ <b>建档必填三项</b>（{@code DOC-I6} / {@code 12 §5.1}）： {@link #docType}（文种）· {@link
- * #department}（责任部门）· {@link #classification}（密级）。 这三项分别决定「召回前缀」与「安全过滤」，<strong>不能有默认值</strong> ——
+ * #orgId}（责任部门，组织树外键）· {@link #classification}（密级）。 这三项分别决定「召回前缀」与「安全过滤」，<strong>不能有默认值</strong> ——
  * 密级默认「未知」要么全放行（泄密）要么全拦（不可用）。
+ *
+ * <p>★ <b>责任部门是外键，不是名字</b>（{@code 07 §11.2}，issue #37）： 它从"自由字符串"换成了 {@code
+ * org_id}，因为名字<strong>可变、可重名</strong> —— 可变的东西不许当身份（改名会让该部门下所有文档的
+ * 前缀与哈希失效），重名则会让按名字比较的地方<strong>静默越权</strong>（两个「技术部」混成一个，A 部门 看到 B 部门的文档且不报错）。进召回前缀与 {@code
+ * content_hash} 的是该部门的<strong>稳定 {@code code}</strong>，人读的名字在生成链路渲染时由 {@code org_id} 查出来。
  *
  * <p>★ <b>ceiling 校验</strong>（{@code 13 §6}）： 文档密级必须不高于所属库的 {@code maxClassification}。
  * 判定在建档用例层做（要给出可读原因）， 这里只负责把值存住。
@@ -53,9 +58,20 @@ public class Document {
   @Column(name = "doc_type", nullable = false, length = 32)
   private String docType;
 
-  /** 责任部门。★ 建档必填。 */
-  @Column(name = "department", nullable = false, length = 64)
-  private String department;
+  /** 责任部门（组织树外键，{@code 07 §11.2}）。★ 建档必填 —— 可空只是为存量数据让路，见 {@link #departmentLegacy}。 */
+  @Column(name = "org_id")
+  private UUID orgId;
+
+  /**
+   * V27 之前的自由字符串原值（存档列，只读）。
+   *
+   * <p>★ 为什么留着它：回填按 {@code name} 匹配，<strong>匹配不上的不许猜、不许静默丢</strong> —— 原值留在这里、{@code org_id}
+   * 置空，由巡检列出（{@code 07 §11.2}）。
+   *
+   * <p>★ {@code updatable = false}：它是**历史事实**，任何时候都不该被写回一个"更正确的值" —— 那等于篡改回填的证据（也让"哪些没匹配上"变得无法复核）。
+   */
+  @Column(name = "department_legacy", length = 64, updatable = false)
+  private String departmentLegacy;
 
   /** 文档密级。★ 建档必填；入库时必须 ≤ 库的 ceiling。 */
   @Enumerated(EnumType.STRING)
@@ -145,6 +161,7 @@ public class Document {
    * <p>★ 三项必填在这里再校验一遍（应用层已经拦过）： 领域不变量不能只靠调用方自觉 —— 库层的 NOT NULL 是最后一道闸，这里是给人看的那道。
    *
    * @param source 来源；null 时取 {@code local}（本地上传建档）
+   * @param orgId 责任部门（组织树里的一个部门）★ 必填；null ⇒ 拒绝，文案指路"从组织树选"
    */
   public Document(
       UUID id,
@@ -152,7 +169,7 @@ public class Document {
       String name,
       String source,
       String docType,
-      String department,
+      UUID orgId,
       ClassificationLevel classification,
       UUID createdBy) {
     if (id == null || kbId == null) {
@@ -165,8 +182,8 @@ public class Document {
     if (docType == null || docType.isBlank()) {
       throw new IllegalArgumentException("文种必填");
     }
-    if (department == null || department.isBlank()) {
-      throw new IllegalArgumentException("责任部门必填");
+    if (orgId == null) {
+      throw new IllegalArgumentException("请从组织树选责任部门（它不再接受自由文本）");
     }
     if (classification == null) {
       throw new IllegalArgumentException("密级必填");
@@ -176,7 +193,7 @@ public class Document {
     this.name = name.trim();
     this.source = source == null || source.isBlank() ? "local" : source.trim();
     this.docType = docType.trim();
-    this.department = department.trim();
+    this.orgId = orgId;
     this.classification = classification;
     // ★ 初值 = 未解析那一态，不是「成功」
     this.status = DocumentStatus.PENDING_PARSE;
@@ -493,8 +510,13 @@ public class Document {
     return docType;
   }
 
-  public String department() {
-    return department;
+  public UUID orgId() {
+    return orgId;
+  }
+
+  /** 责任部门的原自由字符串（V27 之前的存档值；新文档恒为 null）。★ 只读 —— 它是回填的证据。 */
+  public String departmentLegacy() {
+    return departmentLegacy;
   }
 
   public ClassificationLevel classification() {

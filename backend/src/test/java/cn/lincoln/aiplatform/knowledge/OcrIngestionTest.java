@@ -175,6 +175,16 @@ class OcrIngestionTest {
 
   // ────────────────────────── 夹具与助手 ──────────────────────────
 
+  /**
+   * 种子里那个部门的 id（{@code V25} 的 {@code code} 是稳定标识，所以按 code 取）。
+   *
+   * <p>★ 建档的 {@code orgId} 要的是部门 <strong>id</strong>：{@code T300} / issue #37 起责任部门是组织树外键， 不再接受自由文本
+   * {@code department}。
+   */
+  private String orgIdByCode(String code) {
+    return jdbc.queryForObject("select id::text from iam_org where code = ?", String.class, code);
+  }
+
   private int value(String docId, String column) {
     Integer v =
         jdbc.queryForObject(
@@ -234,7 +244,9 @@ class OcrIngestionTest {
     String boundary = "----OcrTest" + UUID.randomUUID();
     java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
     for (String[] field :
-        new String[][] {{"docType", "制度"}, {"department", "采购部"}, {"classification", "INTERNAL"}}) {
+        new String[][] {
+          {"docType", "制度"}, {"orgId", orgIdByCode("PURCHASING")}, {"classification", "INTERNAL"}
+        }) {
       buf.write(
           ("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n")
               .formatted(boundary, field[0], field[1])

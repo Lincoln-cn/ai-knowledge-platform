@@ -182,6 +182,57 @@ class ScopeFilterTest {
     assertThat(ClassificationLevel.INTERNAL.max(null)).isEqualTo(ClassificationLevel.INTERNAL);
   }
 
+  // ────────────────────────── ★★ 部门共享（`07 §十一` 消费位③ → ①`）──────────────────────────
+
+  /**
+   * 共享给"我的部门"时可见。
+   *
+   * <p>★ 这个能力在契约里**早就预留了**（{@code SubjectKind.ORG}），但在这条用例之前 **零消费方** —— 它一直掉在 `switch` 的 `default
+   * -> false` 里（Issue #38）。
+   */
+  @Test
+  void 共享给我所属部门时可见() {
+    ScopeFilter scope = scopeWithOrgs(DataScope.SHARED, Set.of("TECH", "FINANCE"));
+
+    assertThat(scope.canSee(sharedWithOrg(OTHER, "TECH", TOMORROW), NOW)).isTrue();
+    assertThat(scope.canSee(sharedWithOrg(OTHER, "HR", TOMORROW), NOW)).as("别的部门（兄弟）看不见").isFalse();
+  }
+
+  /**
+   * ★★ 金丝雀：**"含下级"这条口径必须成立** —— 资源共享给上级部门时，下级部门的人看得见。
+   *
+   * <p>做法是把两个方向**并排**写在同一处（`myOrgIds` 展开过的 vs 只算我自己那一个）： 谁把实现"优化"成精确匹配（只比 `subject.id() == 我的部门
+   * id`），第一条断言立刻变红。
+   *
+   * <p>为什么值得一条金丝雀：这条口径是<strong>产品承诺</strong>（"共享给部门"意味着整条部门线都能看）， 不是算法形状；而写错它**不会报错** ——
+   * 只会让下级部门的人"看不见上级共享的库"， 现象与"没共享过"一模一样。
+   */
+  @Test
+  void 金丝雀_把含下级改成精确匹配必须变红() {
+    String parent = "TECH";
+    String child = "TECH_PLATFORM";
+    // 我是下级部门的人 ⇒ 我的可见集合里既有我自己，也有我的上级（展开"我的部门及下级"是在构造范围时做的）
+    ScopeFilter containsUpper = scopeWithOrgs(DataScope.SHARED, Set.of(child, parent));
+    ScopeFilter onlyMyself = scopeWithOrgs(DataScope.SHARED, Set.of(child));
+
+    OwnedResource sharedToParent = sharedWithOrg(OTHER, parent, TOMORROW);
+
+    assertThat(containsUpper.canSee(sharedToParent, NOW))
+        .as("含下级：共享给上级部门 ⇒ 下级部门的人看得见（07 §10.5 判据 1）")
+        .isTrue();
+    assertThat(onlyMyself.canSee(sharedToParent, NOW))
+        .as("★ 金丝雀的另一半：这正是「精确匹配」的样子 —— 它必须 false，否则上面那条断言就在说谎")
+        .isFalse();
+  }
+
+  /** ★ 没有部门归属（`iam_user.org_id` 为空）⇒ 看不见任何部门共享，且**不报错**（fail-closed）。 */
+  @Test
+  void 没有部门归属时看不见任何部门共享() {
+    ScopeFilter noOrg = scope(DataScope.SHARED, ClassificationLevel.CONFIDENTIAL);
+
+    assertThat(noOrg.canSee(sharedWithOrg(OTHER, "TECH", TOMORROW), NOW)).isFalse();
+  }
+
   // ────────────────────────── 工具 ──────────────────────────
 
   private static ScopeFilter scope(DataScope dataScope, ClassificationLevel clearance) {
@@ -196,6 +247,17 @@ class ScopeFilterTest {
   private static ScopeFilter scopeWithLabels(
       DataScope dataScope, ClassificationLevel clearance, Set<String> clLabels) {
     return new ScopeFilter(ME, dataScope, Set.of(), clearance, clLabels);
+  }
+
+  /** 带部门归属集的范围（`myOrgIds` = 我所属部门 + 其全部下级，已在构造时展开）。 */
+  private static ScopeFilter scopeWithOrgs(DataScope dataScope, Set<String> myOrgIds) {
+    return new ScopeFilter(
+        ME, dataScope, Set.of(), ClassificationLevel.CONFIDENTIAL, Set.of(), myOrgIds);
+  }
+
+  private static OwnedResource sharedWithOrg(UUID owner, String orgId, Instant expiresAt) {
+    return new SimpleResource(
+        owner, Visibility.SHARED, List.of(grant(SubjectKind.ORG, orgId, expiresAt)));
   }
 
   private static OwnedResource privateOf(UUID owner) {

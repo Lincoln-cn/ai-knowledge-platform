@@ -106,7 +106,7 @@ class DocumentManagementTest {
     assertThat(nameOf(docId)).isEqualTo("改名后的合同");
     assertThat(searchTexts(docId))
         .as("每段的结构化前缀都要换成新文档名 —— 只改聚合根会让检索按新名字召回不到")
-        .allSatisfy(text -> assertThat(text).startsWith("制度·采购部·改名后的合同｜"));
+        .allSatisfy(text -> assertThat(text).startsWith("制度·PURCHASING·改名后的合同｜"));
     assertThat(contentHashes(docId))
         .as("前缀组成变了 ⇒ contentHash 必须变（SEG-I7：它是「向量旧了」的判定依据）")
         .doesNotContainAnyElementsOf(hashesBefore);
@@ -339,7 +339,7 @@ class DocumentManagementTest {
     assertThat(documentIdOf(moved)).as("这一段现在属于目标文档").isEqualTo(target);
     assertThat(searchTextOf(moved))
         .as("前缀必须按**目标文档**重算 —— 否则检索文本里写的是原来那篇的名字")
-        .startsWith("制度·采购部·目标文档甲｜");
+        .startsWith("制度·PURCHASING·目标文档甲｜");
     assertThat(embeddingStatusOf(moved)).as("换了文档与前缀 ⇒ 向量旧了，必须重新排队").isEqualTo("PENDING_EMBEDDING");
     assertThat(vectorRowsOf(moved)).as("旧向量的归属是错的 ⇒ 必须删掉，不能只标「待向量化」").isZero();
 
@@ -479,7 +479,9 @@ class DocumentManagementTest {
     String boundary = "----docmgmtboundary";
     var buf = new java.io.ByteArrayOutputStream();
     for (String[] field :
-        new String[][] {{"docType", "制度"}, {"department", "采购部"}, {"classification", "INTERNAL"}}) {
+        new String[][] {
+          {"docType", "制度"}, {"orgId", orgIdByCode("PURCHASING")}, {"classification", "INTERNAL"}
+        }) {
       buf.write(
           ("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n")
               .formatted(boundary, field[0], field[1])
@@ -590,6 +592,15 @@ class DocumentManagementTest {
         "select coalesce(fail_reason, '(无)') from kb_document where id = ?::uuid",
         String.class,
         docId);
+  }
+
+  /**
+   * 种子里那个部门的 id（{@code V25} 的 {@code code} 是稳定标识，所以按 code 取）。
+   *
+   * <p>★ 建档要的是 <strong>id</strong>，不是名字 —— 名字可变、可重名（{@code 07 §11.2}）。
+   */
+  private String orgIdByCode(String code) {
+    return jdbc.queryForObject("select id::text from iam_org where code = ?", String.class, code);
   }
 
   private String status(String docId) {

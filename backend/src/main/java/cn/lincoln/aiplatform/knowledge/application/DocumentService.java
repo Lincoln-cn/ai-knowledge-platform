@@ -17,6 +17,7 @@ import cn.lincoln.aiplatform.knowledge.infrastructure.SegmentationProperties;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.org.OrgDirectoryPort;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -74,6 +75,12 @@ public class DocumentService {
   private final SegmentationProperties segmentationProperties;
   private final EmbeddingRunner runner;
 
+  /** 责任部门的存在性校验 + 前缀里那段材料的取数（{@code 07 §11.2}）。 */
+  private final OrgDirectoryPort orgDirectory;
+
+  /** {@code org_id → code}（前缀/哈希的第二个参数），含存量数据的占位口径。 */
+  private final OrgCodeResolver orgCodes;
+
   /** 把"去解析这份字节"交给 {@link ParseRunner} —— 见 {@link DocumentUploaded}（不用直接依赖，避免构造环）。 */
   private final ApplicationEventPublisher events;
 
@@ -88,6 +95,8 @@ public class DocumentService {
       MaxCharsResolver maxCharsResolver,
       SegmentationProperties segmentationProperties,
       EmbeddingRunner runner,
+      OrgDirectoryPort orgDirectory,
+      OrgCodeResolver orgCodes,
       ApplicationEventPublisher events) {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
@@ -97,6 +106,8 @@ public class DocumentService {
     this.maxCharsResolver = maxCharsResolver;
     this.segmentationProperties = segmentationProperties;
     this.runner = runner;
+    this.orgDirectory = orgDirectory;
+    this.orgCodes = orgCodes;
     this.events = events;
   }
 
@@ -304,10 +315,11 @@ public class DocumentService {
       return;
     }
     int maxChars = maxCharsResolver.resolve(document.kbId(), segmentationProperties.maxChars());
+    // ★ 责任部门的 code 只查一次（每段都拼前缀，但部门是文档级的）：N+1 查询在 200 段时就是 200 次往返
+    String orgCode = orgCodes.codeOf(document);
     for (Segment segment : all) {
       String prefix =
-          SearchText.prefix(
-              document.docType(), document.department(), document.name(), segment.titlePath());
+          SearchText.prefix(document.docType(), orgCode, document.name(), segment.titlePath());
       String searchText;
       try {
         searchText = SegmentContent.ofSearchText(prefix, segment.content(), maxChars).text();
@@ -319,11 +331,7 @@ public class DocumentService {
       }
       String contentHash =
           SearchText.contentHash(
-              document.docType(),
-              document.department(),
-              document.name(),
-              segment.titlePath(),
-              segment.content());
+              document.docType(), orgCode, document.name(), segment.titlePath(), segment.content());
       // ★ 语义是「只换前缀」：正文原样传回；updateContent 会把 embeddingStatus 置回待向量化（前缀变了向量就旧了）
       segment.updateContent(segment.content(), searchText, contentHash, currentUserId);
     }
@@ -395,12 +403,16 @@ public class DocumentService {
    *
    * <p>★ 三项必填 + ceiling 校验见类注释。 任一缺失 ⇒ 400 并指出是哪一项；密级超 ceiling ⇒ 400 并给出可读原因。
    *
+   * <p>★ 责任部门是<strong>组织树外键</strong>（{@code 07 §11.2}，issue #37）：入参是 {@code orgId}， 不再接受自由文本 ——
+   * 自由文本既进不了数据权限，又会因为<strong>可变、可重名</strong>而在按名字比较的 地方静默越权。★ 这里额外做一次**存在性校验**：不校验就等于让 {@code
+   * org_id} 指向一个从未存在过的 uuid，而外键报错会变成一次 500（"我崩了"），真正的原因却是"你传错了"。
+   *
    * <p>★ 库不可见 ⇒ <strong>404</strong>（写也一样）—— 与 {@link #list} 同一判定。
    *
    * @param names 文件名清单（一批文档的显示名）；空清单 ⇒ 400
    * @param contents 与 {@code names} 等长的文件字节（multipart 上传时给）；null 或不给 ⇒ 只登记元数据，不解析
    * @param docType 文种（批次级）★ 必填
-   * @param department 责任部门（批次级）★ 必填
+   * @param orgId 责任部门（组织树里的一个部门）★ 必填 —— 它决定召回前缀里那段稳定 code
    * @param classification 密级（批次级）★ 必填
    */
   @Transactional
@@ -409,7 +421,7 @@ public class DocumentService {
       List<String> names,
       List<byte[]> contents,
       String docType,
-      String department,
+      UUID orgId,
       ClassificationLevel classification,
       UUID currentUserId) {
 
@@ -421,9 +433,17 @@ public class DocumentService {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST, "文种必填", "选择这份文档的文种（合同/制度/报销规定…）—— 它决定召回前缀，不能有默认值（12 §5.1）");
     }
-    if (department == null || department.isBlank()) {
+    if (orgId == null) {
       throw new BusinessException(
-          ErrorCode.BAD_REQUEST, "责任部门必填", "填写这份文档的责任部门 —— 它决定召回前缀，不能有默认值（12 §5.1）");
+          ErrorCode.BAD_REQUEST,
+          "责任部门必填",
+          "请从组织树选责任部门 —— 它决定召回前缀里那段稳定标识（org code），不能有默认值，也不再接受自由文本（07 §11.2）");
+    }
+    if (orgDirectory.findById(orgId).isEmpty()) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "责任部门不存在：" + orgId,
+          "请从组织树重新选择负责这份文档的部门 —— 它可能已被删除，或你传的是一个不属于任何部门的 id");
     }
     if (classification == null) {
       throw new BusinessException(
@@ -457,7 +477,7 @@ public class DocumentService {
               name,
               "local",
               docType,
-              department,
+              orgId,
               classification,
               currentUserId);
       // ★ 建档即解析 —— 但这一步**从同步改成了异步**（第 9 周 · 0.3.1）。
@@ -555,6 +575,7 @@ public class DocumentService {
     try {
       int maxChars = maxCharsResolver.resolve(document.kbId(), segmentationProperties.maxChars());
       // ★ 按来源选分块规则集（12 §11.5）：判据是文档级的 OCR 事实，不是"环境里开着 OCR"
+      // ★ 责任部门取**稳定 code**（07 §11.2）：放 name 会让一次改名把该部门下所有向量判废
       SegmentPlan planned =
           segmenter.plan(
               document.parsedContent(),
@@ -562,7 +583,7 @@ public class DocumentService {
               segmentationProperties.overlap(),
               maxChars,
               document.docType(),
-              document.department(),
+              orgCodes.codeOf(document),
               document.name(),
               document.ocrDerived() ? ChunkSource.OCR : ChunkSource.TEXT);
       List<PlannedSegment> plan = planned.segments();

@@ -42,7 +42,7 @@ const CLASS_LABEL: Record<string, string> = {
  */
 function assertDocMeta(body: {
   docType?: string
-  department?: string
+  orgId?: string
   classification?: string
 }): void {
   if (!body.docType?.trim()) {
@@ -52,7 +52,7 @@ function assertDocMeta(body: {
       '选择这份文档的文种（合同/制度/报销规定…）—— 它决定召回前缀，不能有默认值（12 §5.1）'
     )
   }
-  if (!body.department?.trim()) {
+  if (!body.orgId?.trim()) {
     throw new ApiError(
       400,
       '责任部门必填',
@@ -520,7 +520,7 @@ export const ingestionRoutes: MockRoute[] = [
         // ★ names 为准：同时给时只按 names 建档（uploadIds 后端/mock 都不消费，保留字段等上传链落地）
         const meta = {
           docType: String(importBody.docType ?? ''),
-          department: String(importBody.department ?? ''),
+          orgId: String(importBody.orgId ?? ''),
           classification: importBody.classification
         }
 
@@ -541,7 +541,7 @@ export const ingestionRoutes: MockRoute[] = [
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             docType: meta.docType,
-            department: meta.department,
+            orgId: meta.orgId,
             classification: meta.classification
           }
           documents.unshift(doc)

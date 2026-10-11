@@ -101,6 +101,10 @@ public class DocumentController {
    *
    * <p>★ 三项必填（文种/责任部门/密级）缺失 ⇒ 400 并指出是哪一项； 密级高于库 ceiling ⇒ 400 + 可读原因（{@code 13 §6}）。
    *
+   * <p>★ 责任部门自 {@code T300} 起是 <strong>组织树里的一个部门 id</strong>（{@code 07 §11.2}，issue #37）， 不再是自由文本
+   * {@code department}：自由文本既进不了数据权限，又会因为可变/可重名而在按名字比较的 地方静默越权。★ 缺 {@code orgId} ⇒ <strong>可读的
+   * 400</strong>（由用例层给"责任部门必填"）， 不是 500 —— 传错参数不能报成"服务器崩了"。
+   *
    * <p>★ 契约两套形状并存时<strong>禁止静默忽略</strong>：只传 {@code uploadIds} / {@code segmentationPlan}（暂存导入形态）
    * 而不传 {@code names}（轻量建档形态）⇒ 400 且指路 —— 「收下但不用」会让调用方以为暂存导入已生效。 同时给时以 {@code names} 为准。
    *
@@ -126,7 +130,7 @@ public class DocumentController {
             body.names(),
             null,
             body.docType(),
-            body.department(),
+            body.orgId(),
             body.classification(),
             UUID.fromString(jwt.getSubject())));
   }
@@ -148,13 +152,17 @@ public class DocumentController {
    * @param uploadIds 暂存上传产物 id —— <b>后端尚未消费</b>，只为「出现时能显式拒」而收下，不许静默丢弃
    * @param segmentationPlan 切分计划 —— 同上，<b>后端尚未消费</b>
    * @param docType 文种 ★ <b>必填</b>
-   * @param department 责任部门 ★ <b>必填</b>
+   * @param orgId 责任部门（组织树里的部门 id）★ <b>必填</b> —— 它决定召回前缀里那段稳定 code
    * @param classification 密级 ★ <b>必填</b> —— 且必须 ≤ 库的 ceiling
    */
   /**
    * ★ 带文件字节的建档（契约的 {@code uploadDocuments}）：multipart 上传 ⇒ <strong>建档即解析</strong>。
    *
    * <p>与 JSON 形态（{@link #register}）共用同一套校验与同一套解析 —— 只是多了字节，于是能真的把 DOCX/PDF 解析成 Markdown（第 6 周演示判据）。
+   *
+   * <p>★ 表单字段 {@code orgId} 标成「非必填」是刻意的：缺它时上面的用例层会给出<strong>可读的 400</strong> （「责任部门必填」），而 Spring
+   * 的「缺必填参数」会落进兜底 handler 变成 500「服务器崩了」—— 把"你传错了"报成"我崩了"会把排查引到错误的方向（{@code GlobalExceptionHandler}
+   * 的注释里记着同一条教训）。
    */
   @PostMapping(
       value = "/{kbId}/documents",
@@ -165,7 +173,8 @@ public class DocumentController {
       @org.springframework.web.bind.annotation.RequestParam("files")
           List<org.springframework.web.multipart.MultipartFile> files,
       @org.springframework.web.bind.annotation.RequestParam("docType") String docType,
-      @org.springframework.web.bind.annotation.RequestParam("department") String department,
+      @org.springframework.web.bind.annotation.RequestParam(value = "orgId", required = false)
+          String orgId,
       @org.springframework.web.bind.annotation.RequestParam("classification")
           ClassificationLevel classification,
       @AuthenticationPrincipal Jwt jwt)
@@ -182,9 +191,27 @@ public class DocumentController {
             names,
             contents,
             docType,
-            department,
+            parseOrgId(orgId),
             classification,
             UUID.fromString(jwt.getSubject())));
+  }
+
+  /**
+   * 表单里的责任部门 id。
+   *
+   * <p>★ 空/缺失 ⇒ 返回 null，交给用例层给"责任部门必填"的可读 400（而不是在控制器里另写一套必填文案 —— 两处文案就是两处真相）。★ 非法 uuid ⇒ 400
+   * 且说清是哪个字段：这是"调用方能自己修"的一类。
+   */
+  private static UUID parseOrgId(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return UUID.fromString(raw.trim());
+    } catch (IllegalArgumentException e) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "责任部门不是合法的部门 id：" + raw, "请从组织树选一个部门，并把它的 id 传进 orgId 字段");
+    }
   }
 
   record RegisterDocumentsBody(
@@ -192,7 +219,7 @@ public class DocumentController {
       List<String> uploadIds,
       List<Map<String, Object>> segmentationPlan,
       String docType,
-      String department,
+      UUID orgId,
       ClassificationLevel classification) {
 
     /** 暂存导入形态是否「出现」（字段传了就算，空数组也算 —— 出现即不许静默吞）。 */

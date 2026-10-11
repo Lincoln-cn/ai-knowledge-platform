@@ -31,18 +31,24 @@ class SegmenterTest {
   private final Segmenter segmenter = new Segmenter();
 
   private static final String DOC_TYPE = "制度";
-  private static final String DEPARTMENT = "采购部";
+
+  /**
+   * ★ 前缀里的部门段自 {@code T300} 起是**稳定 org code**（不是展示名，{@code 07 §11.2}）： 所以这里的夹具值也跟着写成 code ——
+   * 若有人再把它换回名字，先看这条注释。
+   */
+  private static final String ORG_CODE = "PURCHASING";
+
   private static final String TITLE = "差旅报销规定";
 
   private List<PlannedSegment> plan(String markdown, int segmentLength, int overlap, int maxChars) {
     return segmenter
-        .plan(markdown, segmentLength, overlap, maxChars, DOC_TYPE, DEPARTMENT, TITLE)
+        .plan(markdown, segmentLength, overlap, maxChars, DOC_TYPE, ORG_CODE, TITLE)
         .segments();
   }
 
   // ────────────────────────── 1 · 结构化前缀（12 §4.2 纪律 1） ──────────────────────────
 
-  /** ★ 纪律 1：前缀绝不进 {@code content}（引用抽屉展示原文）。 search_text 形态钉死为 「文种·部门·文档名｜章节路径」+ 分隔 + 正文。 */
+  /** ★ 纪律 1：前缀绝不进 {@code content}（引用抽屉展示原文）。 search_text 形态钉死为 「文种·部门code·文档名｜章节路径」+ 分隔 + 正文。 */
   @Test
   void searchText是前缀加正文_且前缀绝不进content() {
     String md =
@@ -56,7 +62,8 @@ class SegmenterTest {
 
     assertThat(plan).hasSize(1);
     PlannedSegment seg = plan.get(0);
-    String expectedPrefix = "制度·采购部·差旅报销规定｜第三章 差旅费";
+    // ★ 部门段是 org code（不是"采购部"这个展示名）—— 07 §11.2：名字可变/可重名，不许进命中材料
+    String expectedPrefix = "制度·PURCHASING·差旅报销规定｜第三章 差旅费";
 
     assertThat(seg.searchText())
         .as("search_text = 前缀 + 分隔 + 正文（12 §4.2）")
@@ -64,7 +71,7 @@ class SegmenterTest {
     assertThat(seg.searchText()).startsWith(expectedPrefix);
     assertThat(seg.content())
         .as("纪律 1：前缀绝不进 content —— 否则引用里出现一堆元信息")
-        .doesNotContain("制度·采购部")
+        .doesNotContain("制度·PURCHASING")
         .isEqualTo("# 第三章 差旅费\n一线城市住宿标准为每人每天 500 元。");
     assertThat(seg.titlePath()).isEqualTo("第三章 差旅费");
     assertThat(seg.title()).isEqualTo("第三章 差旅费");
@@ -133,9 +140,9 @@ class SegmenterTest {
     int maxChars = 1200;
     int worstContent = maxChars - SearchText.MAX_PREFIX_LENGTH - SearchText.SEPARATOR.length();
 
-    assertThat(SearchText.prefix(DOC_TYPE, DEPARTMENT, TITLE, longHeading).length())
+    assertThat(SearchText.prefix(DOC_TYPE, ORG_CODE, TITLE, longHeading).length())
         .as("夹具前提：真实前缀必须显著长于文档级前缀，否则这条用例抓不到问题")
-        .isGreaterThan(SearchText.prefix(DOC_TYPE, DEPARTMENT, TITLE, "").length() + 20);
+        .isGreaterThan(SearchText.prefix(DOC_TYPE, ORG_CODE, TITLE, "").length() + 20);
 
     // 分段长度 = 向量上限：预算最紧的一档
     List<PlannedSegment> plan = plan(md, maxChars, 0, maxChars);
@@ -180,7 +187,7 @@ class SegmenterTest {
   // ────────────────────────── 4 · SEG-I7：前缀组成变更 ⇒ hash 必变 ──────────────────────────
 
   /**
-   * ★ {@code SEG-I7}（{@code 12 §4.2} 纪律 3）：文种/部门/标题/章节路径任一项变更 ⇒ contentHash 必须变。
+   * ★ {@code SEG-I7}（{@code 12 §4.2} 纪律 3）：文种/部门 code/标题/章节路径任一项变更 ⇒ contentHash 必须变。
    *
    * <p>否则「改了部门标签但向量没更新」会变成静默不一致 —— contentHash 是重新向量化的触发依据。
    */
@@ -195,7 +202,7 @@ class SegmenterTest {
 
     List<PlannedSegment> base = plan(md, 200, 0, 1000);
     List<PlannedSegment> otherDept =
-        segmenter.plan(md, 200, 0, 1000, DOC_TYPE, "财务部", TITLE).segments();
+        segmenter.plan(md, 200, 0, 1000, DOC_TYPE, "FINANCE", TITLE).segments();
     List<PlannedSegment> otherPath =
         plan(
             """
@@ -278,7 +285,7 @@ class SegmenterTest {
 
     assertThat(plan).hasSizeGreaterThanOrEqualTo(2);
     for (PlannedSegment seg : plan) {
-      String prefix = SearchText.prefix(DOC_TYPE, DEPARTMENT, TITLE, seg.titlePath());
+      String prefix = SearchText.prefix(DOC_TYPE, ORG_CODE, TITLE, seg.titlePath());
       assertThat(seg.content()).isNotBlank();
       if (seg.isTable()) {
         // ★ 0.3.2 起的分工（判据 ③）：content 保留**原表**（引用可溯源），

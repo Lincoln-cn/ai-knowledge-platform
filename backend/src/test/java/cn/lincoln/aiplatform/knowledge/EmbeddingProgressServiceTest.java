@@ -51,6 +51,15 @@ class EmbeddingProgressServiceTest {
   @Container @ServiceConnection
   static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
+  /**
+   * 组织树的根节点 id（{@code V25__identity_organization.sql} 的种子里是<strong>字面量</strong>，所以确定）。
+   *
+   * <p>★ 为什么不能随手 {@code UUID.randomUUID()}：领域构造器只做"非空"校验、不查组织树，但 {@code kb_document.org_id}
+   * 是<strong>外键 → {@code iam_org}</strong>（{@code V27}）—— 随机 uuid 会以一次 23503
+   * 违约炸在插入处，看起来像"进度服务坏了"，实际只是夹具给了个不存在的部门。
+   */
+  private static final UUID ROOT_ORG_ID = UUID.fromString("00000000-0000-4000-8000-000000000001");
+
   @Autowired EmbeddingProgressService progress;
   @Autowired DocumentRepository documents;
   @Autowired KnowledgeBaseRepository knowledgeBases;
@@ -156,7 +165,9 @@ class EmbeddingProgressServiceTest {
             "进度夹具.docx",
             "local",
             "制度",
-            "采购部",
+            // ★ 责任部门改成 org_id（UUID，组织树外键）—— 见 `07 §十一` / Issue #37。
+            //   领域构造器直调、不校验存在性，但库里的外键会 —— 必须给一个真的部门 id。
+            ROOT_ORG_ID,
             ClassificationLevel.INTERNAL,
             owner);
     doc.startParse(0);

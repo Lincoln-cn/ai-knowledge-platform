@@ -63,7 +63,10 @@ class DocumentParseTest {
         "解析测试.docx",
         "local",
         "制度",
-        "采购部",
+        // ★ 责任部门现在是 org_id（UUID）而不是自由字符串（`07 §十一` / Issue #37）。
+        //   这里是**领域构造器**直调（不走 DocumentService）⇒ 不存在性校验，随便一个 UUID 即可，
+        //   本类要验的是解析链，与 org 无关。
+        UUID.randomUUID(),
         ClassificationLevel.INTERNAL,
         UUID.randomUUID());
   }

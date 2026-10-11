@@ -145,7 +145,8 @@ class DocumentStateMachineTest {
         "差旅报销规定.docx",
         "local",
         "制度",
-        "采购部",
+        // ★ 责任部门改成 org_id（UUID）—— 见 `07 §十一` / Issue #37。领域构造器直调，不校验存在性。
+        UUID.randomUUID(),
         ClassificationLevel.INTERNAL,
         UUID.randomUUID());
   }

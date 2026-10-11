@@ -163,17 +163,21 @@
               <el-option v-for="d in docTypes" :key="d.code" :label="d.label" :value="d.code" />
             </el-select>
           </el-form-item>
-          <el-form-item label="责任部门" prop="department">
-            <el-select
-              v-model="docMeta.department"
-              filterable
-              allow-create
-              default-first-option
+          <!-- ★ 责任部门改成**组织树选择**（T300 / #37）：存 `org_id`，不再是自由字符串。
+               为什么不能自由输入：展示名可变、可重名，而它要进召回前缀（`07 §十一`）——
+               重名会让"按名字比较"的地方把两个部门混成一个（一个部门看到另一个部门的文档，且不报错）。 -->
+          <el-form-item label="责任部门" prop="orgId">
+            <el-tree-select
+              v-model="docMeta.orgId"
+              :data="orgTree"
+              node-key="id"
+              :props="{ label: 'name', children: 'children' }"
+              check-strictly
+              :render-after-expand="false"
+              default-expand-all
               style="width: 100%"
-              placeholder="选择或输入部门"
-            >
-              <el-option v-for="d in DEPARTMENT_SUGGESTIONS" :key="d" :label="d" :value="d" />
-            </el-select>
+              placeholder="从组织树选责任部门"
+            />
           </el-form-item>
           <el-form-item label="密级" prop="classification">
             <el-select v-model="docMeta.classification" style="width: 100%" placeholder="选择密级">
@@ -315,10 +319,11 @@ import {
   type UploadFiles
 } from 'element-plus'
 import { Loading, UploadFilled } from '@element-plus/icons-vue'
-import { ingestionApi, knowledgeApi, modelsApi } from '@/api'
+import { ingestionApi, knowledgeApi, modelsApi, orgsApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { ClassificationLevel } from '@/api/types'
 import type { ImportType, KnowledgeBase } from '@/api/knowledge'
+import type { OrgNodeView } from '@/api/orgs'
 import type { ModelInfo } from '@/api/models'
 import type {
   DocumentItem,
@@ -326,7 +331,7 @@ import type {
   PreviewSegmentationResult,
   UploadPolicy
 } from '@/api/ingestion'
-import { DEPARTMENT_SUGGESTIONS, DOCUMENT_STATUS_LABELS, labelOf } from '@/constants/labels'
+import { DOCUMENT_STATUS_LABELS, labelOf } from '@/constants/labels'
 import { useDictionary } from '@/composables/useDictionary'
 
 const emit = defineEmits<{ created: [kb: KnowledgeBase] }>()
@@ -402,6 +407,18 @@ const fileList = ref<UploadFiles>([])
 const uploadPolicy = ref<UploadPolicy | null>(null)
 const fileRejects = ref<Array<{ name: string; reason: string }>>([])
 
+/**
+ * ★ 责任部门的选择题 = **组织树**（`T300` / #37）：存 org 的 id，不是展示名。
+ *
+ * <p>读失败时**让异常照常抛出**（不吞）：静默给一棵空树等于"建档时选不到任何部门"，
+ * 而界面看起来只是"还没加载" —— 那是本项目头号病（看起来在做、实际没生效）的形状。
+ */
+const orgTree = ref<OrgNodeView[]>([])
+
+const loadOrgTree = async () => {
+  orgTree.value = await orgsApi.orgTree()
+}
+
 const segForm = reactive({
   strategy: 'AUTO' as 'AUTO' | 'CUSTOM',
   segmentLength: 500,
@@ -411,13 +428,13 @@ const segForm = reactive({
 /** 建档必填三项（12 §5.1）—— 批级，一次导入同一套标签 */
 const docMeta = reactive({
   docType: '',
-  department: '',
+  orgId: '',
   classification: '' as ClassificationLevel | ''
 })
 const docMetaFormRef = ref<FormInstance>()
 const docMetaRules: FormRules = {
   docType: [{ required: true, message: '请选择文种', trigger: 'blur' }],
-  department: [{ required: true, message: '请填写责任部门', trigger: 'blur' }],
+  orgId: [{ required: true, message: '请从组织树选责任部门', trigger: 'change' }],
   classification: [{ required: true, message: '请选择密级', trigger: 'change' }]
 }
 
@@ -480,7 +497,7 @@ const open = async (presetCategory?: string) => {
   visible.value = true
   step.value = 0
   // ★ 每次打开都重读字典：管理员刚在「基础数据」里加过 / 停用过一项，建档的人要马上看到（判据 1、2）
-  await Promise.all([loadCategories(), loadClassifications(), loadDocTypes()])
+  await Promise.all([loadCategories(), loadClassifications(), loadDocTypes(), loadOrgTree()])
   const models = await modelsApi.listModels({ kind: 'EMBEDDING', size: 50 })
   embeddingModels.value = models.list.filter((m) => m.status === 'LOADED' || m.status === 'NOT_LOADED')
   try {
@@ -511,7 +528,7 @@ const reset = () => {
   segForm.segmentLength = 500
   segForm.overlap = 60
   docMeta.docType = ''
-  docMeta.department = ''
+  docMeta.orgId = ''
   docMeta.classification = ''
   preview.value = null
   previewError.value = ''
@@ -651,7 +668,7 @@ const ingestFiles = async (): Promise<DocumentItem[]> => {
   const kb = await ensureKb()
   const accepted = await ingestionApi.uploadDocuments(kb.id, files.value, {
     docType: docMeta.docType.trim(),
-    department: docMeta.department.trim(),
+    orgId: docMeta.orgId,
     classification: docMeta.classification as ClassificationLevel
   })
   ingestedDocs.value = accepted

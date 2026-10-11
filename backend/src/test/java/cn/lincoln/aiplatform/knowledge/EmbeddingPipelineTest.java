@@ -264,7 +264,14 @@ class EmbeddingPipelineTest {
     String boundary = "----pipe0boundary";
     var buf = new java.io.ByteArrayOutputStream();
     for (String[] field :
-        new String[][] {{"docType", "制度"}, {"department", "采购部"}, {"classification", "INTERNAL"}}) {
+        new String[][] {
+          {"docType", "制度"},
+          // ★ 责任部门已改成 org_id（UUID 外键，V27）—— 仍在传 department 会让建档 400，而本类的
+          //   7 条用例**全部**挂在同一个前置上（CI 实测 `Tests run: 7, Failures: 7`）。
+          //   这里用 ROOT 的**确定性** id（V25 种子写死）：org_id 是外键，不能塞随机值。
+          {"orgId", "00000000-0000-4000-8000-000000000001"},
+          {"classification", "INTERNAL"}
+        }) {
       buf.write(
           ("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n")
               .formatted(boundary, field[0], field[1])
