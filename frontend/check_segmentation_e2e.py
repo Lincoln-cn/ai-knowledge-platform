@@ -268,7 +268,12 @@ def main() -> int:  # noqa: C901
             st_up, up = api_multipart(
                 f"/knowledge-bases/{kb_id}/documents",
                 token,
-                {"docType": "制度", "department": "采购部", "classification": "INTERNAL"},
+                {
+                    "docType": "制度",
+                    # ★ 责任部门改成 org_id（UUID）：种子里只有 ROOT 是确定性 id
+                    "orgId": "00000000-0000-4000-8000-000000000001",
+                    "classification": "INTERNAL",
+                },
                 DOCX,
             )
             docs = up.get("data") or []

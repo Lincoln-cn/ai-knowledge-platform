@@ -67,7 +67,12 @@ def api(method: str, path: str, token: str, body: dict | None = None) -> tuple[i
 def upload(path: str, token: str, file: Path) -> tuple[int, dict]:
     boundary = "----queryunderstanding0boundary"
     buf = b""
-    for key, value in (("docType", "制度"), ("department", "采购部"), ("classification", "INTERNAL")):
+    for key, value in (
+        ("docType", "制度"),
+        # ★ 责任部门改成 org_id（UUID）：种子里只有 ROOT 是确定性 id
+        ("orgId", "00000000-0000-4000-8000-000000000001"),
+        ("classification", "INTERNAL"),
+    ):
         buf += (
             f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{value}\r\n'
         ).encode("utf-8")

@@ -162,7 +162,12 @@ def main() -> int:
                 fixture_kb_id = (kb.get("data") or {}).get("id")
                 print(f"   夹具：真栈建库 id={fixture_kb_id}")
                 if fixture_kb_id:
-                    meta = {"docType": "制度", "department": "采购部", "classification": "INTERNAL"}
+                    # ★ 责任部门改成 org_id（UUID）：种子里只有 ROOT 是确定性 id
+                    meta = {
+                        "docType": "制度",
+                        "orgId": "00000000-0000-4000-8000-000000000001",
+                        "classification": "INTERNAL",
+                    }
                     # ① 结构化文档（标题/列表/表格都有）⇒ 验「解析结果按结构渲染」
                     ok_doc = api_multipart(
                         f"/knowledge-bases/{fixture_kb_id}/documents", token, meta, FIXTURES / "structured.docx"

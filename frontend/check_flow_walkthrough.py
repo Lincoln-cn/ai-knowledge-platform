@@ -77,7 +77,8 @@ def api_upload(path: str, token: str, file: Path) -> tuple[int, dict]:
     buf = b""
     for key, value in (
         ("docType", "制度"),
-        ("department", "采购部"),
+        # ★ 责任部门改成 org_id（UUID）：V25 种子里只有 ROOT 是**确定性** id（其余部门是 gen_random_uuid()）
+        ("orgId", "00000000-0000-4000-8000-000000000001"),
         ("classification", "INTERNAL"),
     ):
         buf += (
