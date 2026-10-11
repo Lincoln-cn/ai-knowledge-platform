@@ -58,6 +58,11 @@ class QueryUnderstandingServiceTest {
           public String complete(UUID modelId, String prompt, Duration timeout) {
             throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "上游不可达", "请确认模型服务可用");
           }
+
+          @Override
+          public <T> T completeAs(UUID modelId, String prompt, Class<T> type, Duration timeout) {
+            throw new UnsupportedOperationException("查询理解走原文出口，不用结构化出口");
+          }
         };
 
     QueryUnderstandingService.Outcome outcome =
@@ -199,6 +204,11 @@ class QueryUnderstandingServiceTest {
       }
       // 用完一条就重复最后一条（重试时通常拿到的是同一种坏输出）
       return responses.size() == 1 ? responses.getFirst() : responses.removeFirst();
+    }
+
+    @Override
+    public <T> T completeAs(UUID modelId, String prompt, Class<T> type, Duration timeout) {
+      throw new UnsupportedOperationException("查询理解走原文出口（按换行分隔），不用结构化出口");
     }
   }
 }

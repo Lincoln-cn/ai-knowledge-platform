@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Component;
 
 /**
@@ -28,6 +29,12 @@ import org.springframework.stereotype.Component;
  *
  * <p>★ 排除 {@code LOAD_FAILED} 与未加载的：把没加载的模型挑出来，只会在上游拿到一个 404， 而那时的错误信息是"模型不存在"——
  * 与真正的原因（管理员没点加载）差得很远。
+ *
+ * <h3>★ 两个出口：原文 与 结构化</h3>
+ *
+ * <p>{@link #complete} 返回原文（调用方按简单分隔自己读，如查询理解的多条查询）；{@link #completeAs} 用官方 {@link
+ * BeanOutputConverter} 生成格式说明并解析（如多跳判定）。<strong>容错解析不写在这里</strong> ——
+ * 官方转换器已经在做围栏/前后废话的处理，自研一份只会多一处要维护的猜测；这里只把"转换失败"统一成一次可读的调用失败。
  */
 @Component
 public class ChatModelAdapter implements ChatPort {
@@ -52,6 +59,31 @@ public class ChatModelAdapter implements ChatPort {
 
   @Override
   public String complete(UUID modelId, String prompt, Duration timeout) {
+    return chat(requireChatModel(modelId), prompt, timeout);
+  }
+
+  @Override
+  public <T> T completeAs(UUID modelId, String prompt, Class<T> type, Duration timeout) {
+    Model model = requireChatModel(modelId);
+    // ★ 格式说明（"只输出 JSON" + schema）由官方转换器生成，我们不手写这一段
+    BeanOutputConverter<T> converter = new BeanOutputConverter<>(type);
+    String raw = chat(model, prompt + FORMAT_SEPARATOR + converter.getFormat(), timeout);
+
+    T value;
+    try {
+      value = converter.convert(raw);
+    } catch (RuntimeException e) {
+      // 官方转换器抛的是运行时异常（转换失败）；统一成"这一次调用失败"，让调用方按同一路径降级
+      throw parseFailure(type, e.getMessage());
+    }
+    if (value == null) {
+      throw parseFailure(type, "转换器产出了空对象");
+    }
+    return value;
+  }
+
+  /** 取模型并校验类型 —— 两个出口共用（`complete` 与 `completeAs` 对"模型合不合法"的判断必须是同一套）。 */
+  private Model requireChatModel(UUID modelId) {
     Model model =
         models
             .findById(modelId)
@@ -62,19 +94,32 @@ public class ChatModelAdapter implements ChatPort {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST,
           "「" + model.name() + "」不是对话模型（kind=" + model.kind() + "）",
-          "查询理解需要 CHAT 类型且已加载的模型");
+          "本调用需要 CHAT 类型且已加载的模型");
     }
+    return model;
+  }
 
+  private String chat(Model model, String prompt, Duration timeout) {
     try {
       return gateway.chatCompletion(
           model.baseModel(), model.apiBase(), decryptKey(model), prompt, timeout);
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.UPSTREAM_UNAVAILABLE,
-          "查询理解调用模型失败：" + e.getMessage(),
+          "调用对话模型失败：" + e.getMessage(),
           "请确认对话模型服务可用（地址与密钥）；检索会退回原始问题继续，不会因此失败");
     }
   }
+
+  private static BusinessException parseFailure(Class<?> type, String detail) {
+    return new BusinessException(
+        ErrorCode.UPSTREAM_UNAVAILABLE,
+        "模型输出不符合 " + type.getSimpleName() + " 的结构：" + detail,
+        "上游模型没有按 schema 返回；本次调用按失败处理，调用方会用已有结果继续");
+  }
+
+  /** 提示词与格式说明之间空一行（格式说明是多行文本，贴在一起容易被模型当成同一段指令）。 */
+  private static final String FORMAT_SEPARATOR = "\n\n";
 
   /** 扫多少个已加载的对话模型就够 —— 现在只取第一个，给一个上限免得把整张表拉进内存。 */
   private static final int MAX_CANDIDATES_SCAN = 10;
