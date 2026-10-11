@@ -162,6 +162,55 @@ def main() -> int:
                       f"分类控件显示 = {shown2!r}")
                 close_wizard()
 
+            # ── 上传弹窗：责任部门的组织树（**第一次打开**就要有数据）──
+            def kb_upload_dialog_org_tree():
+                """★ 守的是「数据读取只挂在 `@closed` 的 `reset()` 上」这个坑。
+
+                `UploadDialog` 原先只在 `reset()` 里读组织树，而 `reset()` 挂 `@closed`
+                （关窗之后才跑）⇒ **第一次打开必然是一棵空树**，而「责任部门」是必填
+                ⇒ 从知识库详情页上传文档，第一次根本选不出部门、提交不上去（真栈闸门实测红）。
+                ⚠️ 它当初能溜过去：mock 侧没有任何断言会走到这个弹窗，而真栈那边只报一句
+                「能选中…失败」—— 与 `#46` 是同一个坑（那次也是 `reset()` 挂在 `@closed` 上）。
+                ★ 反证（把 `loadOrgTree()` 挪回 `reset()` 再构建一次）：
+                  `FAIL 上传弹窗：第一次打开时「责任部门」就有部门可选  下拉内容 = '无数据'`，
+                  54/55 —— **只有这一条红**；改回 ⇒ 55/55。
+                ★ 判据落在**具体部门名**上、不落在结构上：空树照样渲染出 `.el-tree`
+                  （读数 `无数据`）⇒ 只断言"有树"的判据会**恒绿**。
+                """
+                goto("/knowledge", wait=1800)
+                page.locator(".kb-card").first.click()
+                settle(1800)
+                page.locator("button", has_text="上传文档").first.click()
+                settle(1200)
+                dlg = page.locator(".el-dialog").filter(visible=True).first
+                item = (
+                    dlg.locator(".el-form-item")
+                    .filter(has=page.locator(".el-form-item__label:text-is('责任部门')"))
+                    .first
+                )
+                item.locator(".el-select__wrapper").first.click()
+                settle(700)
+                dropdown = page.locator(".el-select-dropdown").filter(visible=True).first
+                text = dropdown.inner_text()
+                # ★ 断言的是 V25 种子里的**具体部门**（不是"有若干项"）：夹具与后端种子同值，
+                #   谁把种子的读取挪回 `@closed`，这里立刻红。
+                check("采购部" in text and "法务部" in text,
+                      "上传弹窗：第一次打开时「责任部门」就有部门可选",
+                      f"下拉内容 = {text[:60]!r}")
+                check(dropdown.locator(".el-tree").count() > 0,
+                      "上传弹窗：「责任部门」是树选择（不是扁平列表）", "")
+                page.keyboard.press("Escape")
+                settle(500)
+                # ★ 必须关窗：本文件走 hash 路由（`goto` 是 `#/path`），同行导航**不重载页面**
+                #   ⇒ 这层遮罩会盖住后面每一步的点击（实测：Locator.click 超时 30s）。
+                if page.locator(".el-dialog").count():
+                    page.keyboard.press("Escape")
+                    try:
+                        page.locator(".el-dialog").first.wait_for(state="hidden", timeout=5000)
+                    except Exception:  # noqa: BLE001
+                        pass
+                goto("/knowledge", wait=1500)
+
             def kb_hittest():
                 body = goto("/knowledge/hittest")
                 check("命中" in body, "命中测试：页面渲染", "")
@@ -471,6 +520,7 @@ def main() -> int:
             step("知识库列表", kb_list)
             step("知识库四步向导", kb_wizard)
             step("知识库分类回填", kb_category_prefill)
+            step("上传弹窗·责任部门组织树", kb_upload_dialog_org_tree)
             step("命中测试", kb_hittest)
             step("应用管理", assistants)
             step("提示词只管配置", prompts)

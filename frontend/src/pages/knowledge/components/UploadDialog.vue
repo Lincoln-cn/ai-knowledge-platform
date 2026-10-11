@@ -150,7 +150,10 @@ const open = async () => {
   submitError.value = ''
   submitHint.value = ''
   // ★ 每打开一次重读一次字典：管理员刚在「基础数据」里加过 / 停用过一项，建档的人要马上看到（判据 1、2）
-  await Promise.all([loadDocTypes(), loadClassifications()])
+  // ★ 组织树也在**这里**读，不能只挂在 `@closed` 的 `reset()` 上：`reset()` 只在关窗之后跑
+  //   ⇒ 第一次打开必然是一棵空树，而「责任部门」是必填 ⇒ 第一次上传根本选不出部门、提交不上去
+  //   （Issue #46 是同一个坑的另一次踩中：`reset()` 挂 `@closed` ⇒ 第一次打开为空）。
+  await Promise.all([loadDocTypes(), loadClassifications(), loadOrgTree()])
   try {
     policy.value = await ingestionApi.getUploadPolicy(props.kbId)
   } catch {
@@ -207,8 +210,8 @@ const reset = () => {
   meta.docType = ''
   meta.orgId = ''
   meta.classification = ''
-  // ★ 每次打开都重读组织树：管理员刚加的部门，建档的人要马上能选到。
-  loadOrgTree()
+  // ★ 组织树**不在这里读**：本函数挂在 `@closed` 上 ⇒ 在这里读等于"第一次打开没数据"。
+  //   数据读取一律在 `open()` 里（与字典同一处）。
   submitError.value = ''
   submitHint.value = ''
   metaFormRef.value?.clearValidate()
