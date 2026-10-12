@@ -40,6 +40,13 @@ export interface HitTestRequest extends RetrievalParams {
   /** 限定检索的知识库；不传则用应用绑定的全部 */
   kbIds?: string[]
   question: string
+
+  /* ↓ 第 14 周多跳（10-RAG-检索策略设计 §3.4 / §6.2 第 5 项）。★ 只挂在命中测试这一侧：
+     它不落库、不是知识库检索参数（后端那两列还没有，见 KnowledgeBase.RetrievalParamsView） */
+  /** 是否开启多跳迭代；缺省 false —— 每轮多花一次模型调用，默认把这个成本留给想付的人 */
+  multiHopEnabled?: boolean
+  /** 多跳轮数上限（含首轮），1～3；缺省 2（= 首轮 + 最多再检一轮） */
+  maxHops?: number
 }
 
 /**
@@ -59,6 +66,17 @@ export interface HitTestTrace {
   degradeReason?: string
   /** 子问题数 / 查询数是否被上限截断过 */
   truncated: boolean
+
+  /* ↓ 第 14 周多跳（§3.4 / §7.1）。★ 全部可选：老后端不返回这一层，
+     界面要按「没有它」处理，而不是把缺失读成 0（0 会被读成「多跳一轮都没跑」） */
+  /** 是否触发了多跳判定（规则判定：最高分 < threshold 或 命中数 < 3） */
+  hopTriggered?: boolean
+  /** 实际跑掉的轮数（含首轮）：至少 1 */
+  hopRounds?: number
+  /** 为什么停下 —— 机器可判的前缀 + 人读的说明（例：SUFFICIENT：模型判定：已有命中足够回答） */
+  hopStopReason?: string
+  /** 最后一轮带来的新分段数：0 说明那一轮白跑（§7.1 要的「多跳的边际收益」） */
+  hopNewSegments?: number
 }
 
 export interface HitTestResult {

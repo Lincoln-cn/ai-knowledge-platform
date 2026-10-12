@@ -7,6 +7,62 @@
 
 ---
 
+## 0.4.2 · 第 14 周 · 多跳检索（"答案跨两段"与降级阶梯）
+
+### 这一版能做什么
+
+**答案不在同一段里 ⇒ 再检一轮**（而不是"一次召回不中就答不出来"）：
+
+```
+触发   规则判定，不额外调模型：首轮最高分 < 阈值 或 命中数 < 3（10 §3.4.2）
+       ★ 默认关 —— 多跳每轮多花一次模型调用，把这个成本留给想付的人
+判定   只把「标题 + 前 100 字」喂给模型，问两件事：够不够（sufficient）、不够就问什么（nextQuery）
+停止   四条 + 三种"没开始 / 没想法"，每条都带**机器可判的前缀**（10 §3.4.4 / §7.1）：
+       SUFFICIENT · MAX_HOPS · BUDGET · REPEATED（Jaccard > 0.6，防原地打转）
+       NOT_ENABLED · NOT_TRIGGERED · JUDGE_FAILED · NO_QUERY · NO_NEW_HITS
+底线   ★ 判定坏了也照常用已有结果回答（JUDGE_FAILED ⇒ D1）—— 一次问答都不许失败（10 §3.4.6）
+```
+
+### ★ 判据 ②（可观测）的真栈读数
+
+`HitTestTrace` 新增 `hopTriggered / hopRounds / hopStopReason / hopNewSegments`，命中测试页把它显示成
+「多跳 N 轮 · 停止：<原因>」。**真栈实测**（`frontend/check_multihop_e2e.py` **11/11**，CI 九条真栈闸门之一）
+—— 一个"答案跨两段"的难例：线索段给编号（`A-102`），答案段给上限（`百分之五`），**两段的词面不通**：
+
+| 组 | 命中 | trace |
+|---|---|---|
+| 关多跳 | **1 条**（只有线索段） | `hopRounds=1` · `NOT_ENABLED：未开启多跳` |
+| 开多跳 | **2 条**（线索段 **+ 答案段**） | `hopTriggered=true` · `hopRounds=2` · `MAX_HOPS：达到 maxHops 上限` · `hopNewSegments=1` |
+
+⇒ 「关 1 条、开 2 条」：多跳真的把答案那一段补了回来。
+
+★ 这份闸门还带一条**夹具前提**断言（线索段与答案段的 segmentId 不相交）——它是被 CI 逼出来的：
+第一版夹具标题写成含问题词的「A-102 号设备采购合同」，而分段的索引文本带着**章节路径**
+⇒ 每一段都含那个标题 ⇒ 答案段第 1 轮就被命中，"难例"这个前提悄悄没了。
+**标题是"每段都有"的文本，所以它不能含问题里的词。**
+
+### ★ 判据 ①（四个停止条件）的读数与金丝雀
+
+`MultiHopTest` **12/12**（每个停止条件一条断言，断的是 trace 里的**轮次与原因**，不是日志文本）·
+`JaccardTest` **5/5**。金丝雀实测过能红：把 `Jaccard.repeats` 短路成 `false` ⇒ **12 跑 1 红**
+（`stopsWhenNextRoundRepeatsTheSameSegments`）—— 而症状（"多跳在反复问同一件事、每轮都烧一次模型调用"）
+在别的断言里**看不出来**。
+
+### ★ 顺带清掉的一处自研（同一条口径：官方有 ⇒ 别又写一层）
+
+多跳判定原来是**自研 JSON 解析**（剥 ```json 围栏、容忍 `next_query` 字段别名、从废话里抠 JSON）。
+按 `11 §2.7` 换成官方 `BeanOutputConverter`（新出口 `ChatPort.completeAs`，端口里不出现 Spring AI 类型）。
+官方转换器的行为由**读数**钉住（`StructuredOutputConverterTest` **6/6**）：围栏能读（所以剥离代码是多余的）·
+缺字段得 `null`（"字段缺失 ≠ false"靠包装类型）· ★ **前后有废话的 JSON 不认** —— 让掉的一条容错，写在案上。
+`StructuredOutputValidationAdvisor`（校验 + 自纠）**要等 M1 的 advisor 链**，已回写 `11 §5.2`/`§5.3`。
+
+### 契约 / mock / 页面三份一致
+
+契约只加**可选**字段（`multiHopEnabled` / `maxHops`，老后端不受影响）；mock 如实表现为
+"多跳触发但判定不可用（`JUDGE_FAILED`）"—— mock 不含模型，**刻意不编造**"第 2 轮命中了新分段"。
+
+---
+
 ## 0.4.1 · 第 13 周 · M4-b 配额合并（"多问题收口整理"的落点）
 
 ### 这一版能做什么

@@ -277,7 +277,7 @@ jobs:
   #  ★ 这里刻意**不跑 mock 模式**：`VITE_USE_MOCK=false` + `VITE_API_TARGET` 指向真后端。
   # ══════════════════════════════════════════════════════════════════════════════
   realstack:
-    name: 真栈 · 八条端到端闸门
+    name: 真栈 · 端到端闸门
     runs-on: ubuntu-latest
 
     # ★ 这个 job **没有** `services:` 了 —— 原来起的 `postgres` 是官方 pgvector 镜像，
@@ -447,7 +447,12 @@ jobs:
       #   —— 它验的是「令牌里的 clearance 有没有真的进 SQL」，那条路只有从登录开始走才验得到。
       # ★ 第 12 周加 check_query_understanding_e2e.py：它自己注册并加载一个对话模型（夹具的一部分），
       #   然后断言埋点里的 M 子问题 × N 查询。★ 两条都**自己造夹具**，不依赖别的闸门留下的数据。
-      - name: 真栈闸门（八条）
+      # ★ 第 14 周加 check_multihop_e2e.py：难例（答案跨两段）跑**对照**——关多跳够不着答案、开多跳捞得回来。
+      #   它还要桩支持 `entity_override`（让判定回"不够 + 下一轮查什么"），否则桩按 schema 给的占位值
+      #   恒为 sufficient=true ⇒ 多跳永远停在第 1 轮，闸门会绿在一个什么都没验的状态上。
+      #   ★ 计数不再写死在名字里：它已经在三处漂过（步骤名写"八条"、脚本里写"六条"），
+      #     所以下面由数组长度算出来。
+      - name: 真栈闸门（逐条记账）
         working-directory: frontend
         env:
           PGHOST: localhost
@@ -456,10 +461,12 @@ jobs:
           PGPASSWORD: aiplatform
           PGDATABASE: aiplatform
         run: |
+          gates=(check_knowledge_parse check_knowledge_form check_segmentation_e2e \
+                 check_document_actions check_flow_walkthrough check_ocr_e2e \
+                 check_classification_e2e check_query_understanding_e2e \
+                 check_multihop_e2e)
           failed=()
-          for g in check_knowledge_parse check_knowledge_form check_segmentation_e2e \
-                   check_document_actions check_flow_walkthrough check_ocr_e2e \
-                   check_classification_e2e check_query_understanding_e2e; do
+          for g in "${gates[@]}"; do
             echo "::group::${g}.py"
             if python "${g}.py"; then
               echo "✓ ${g}.py 通过"
@@ -470,10 +477,10 @@ jobs:
             echo "::endgroup::"
           done
           if [ ${#failed[@]} -gt 0 ]; then
-            echo "★ 失败 ${#failed[@]}/8：${failed[*]}"
+            echo "★ 失败 ${#failed[@]}/${#gates[@]}：${failed[*]}"
             exit 1
           fi
-          echo "六条真栈闸门全部通过"
+          echo "全部 ${#gates[@]} 条真栈闸门通过"
 
       # ★ 真栈红的时候，日志就是唯一的证据 —— 不留就等于让人去猜（本 job 第一次进 CI 时用过它）
       # ★ PG 现在是容器而不是 service ⇒ 它的日志不自动出现在 job 输出里，必须自己捞。
