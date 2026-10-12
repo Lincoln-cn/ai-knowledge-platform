@@ -97,6 +97,10 @@ class ContractDriftTest {
           // ★ /segments 也于 0.3.1 全部落地（PATCH /{*}/enabled 启停、POST /{*}/embedding 逐段重向量、
           //   DELETE /batch 批量删、POST /batch-move 跨文档搬移）⇒ 一并从清单删除。
           // 第 15 周 0.4.3：应用配置 + 发布校验（§3.1 记 M4）；含 import/export/credentials/api-keys
+          // ★ 0.4.3 已落地其中 6 个：POST /assistants · GET/PUT /{id} · GET /{id}/publish-check ·
+          //   PATCH /{id}/published · GET /{id}/export。
+          // ★ 前缀仍留在清单里：剩下的（列表与市场筛选 / 收藏 / 标签 / 凭证 / API Key / 共享写 / 导入）
+          //   确实还没实现，按"前缀登记"允许缺失 —— 而"曾经欠过、现在早已实现"的噪音要靠人在这行更新。
           "/assistants",
           // §3.1 M4：提示词管理页（pages/assistants/prompts/）—— 前端已存在，后端随 assistant 域
           "/prompt-types",

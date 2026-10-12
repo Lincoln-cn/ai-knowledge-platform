@@ -298,6 +298,15 @@ public class Assistant implements OwnedResource {
     this.updatedBy = updatedBy;
   }
 
+  /**
+   * 记下创建请求的幂等键（★ 只在创建时写一次，没有改的口子）。
+   *
+   * <p>为什么单独一个方法而不是进构造器：它是"这次创建请求的标识"，不是应用的属性 —— 构造器已经收 9 个参数了， 再加一个会让调用点更难读；而它确实只在创建路径上出现一次。
+   */
+  public void recordClientRequestId(String clientRequestId) {
+    this.clientRequestId = clientRequestId;
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {
