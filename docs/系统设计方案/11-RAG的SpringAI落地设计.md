@@ -431,6 +431,7 @@ public class RrfQuotaDocumentJoiner implements DocumentJoiner {
 **R4 `DocumentSuppressor`**：同 `documentId` 在最终 TopN 内最多 `ceil(topN/2)` 条（`10 §4.5 (i)`）；RRF 分相同则词面重合多的优先；★ **同文档相邻 `ordinal` 只保留 RRF 分更高的那个** —— 分块的重叠窗口会让相邻块**同时命中**（`12 §3.3`），不去重的话上下文里会出现两段几乎一样的内容。
 **R5 `ContextBudgetAllocator`**：总预算 → 按意图单元均分 → 单元内填充 → 剩余回流 → 仍超窗才退 `03 §2.4` 的裁剪；★ **输出"哪些文档进了上下文"与"哪些只保留在引用里"两个集合**（R3/R4 之后的编号依赖它）。
 **R6 `MultiHopEvaluator`**：输入 = 问题 + **已命中分段的标题与前 100 字**（不是全文，省 token）；输出 `{sufficient, nextQuery}`；★ 停止条件四条（`10 §3.4.4`），其中 **Jaccard 重合度 > 0.6** 用 `segmentId` 集合算（纯计算，可单测）。
+★ **落地（第 14 周）**：判定**不自研 JSON 解析** —— 走 `ChatPort.completeAs`（适配器里用官方 `BeanOutputConverter`：`getFormat()` 生成格式说明与 schema、`convert(...)` 解析响应，见 §2.7 的口径）；领域侧只留三条**转换器管不了**的判定规则：字段缺失 ≠ `false`（包装类型 `Boolean`）、超长截断、空白归零。⚠️ `StructuredOutputValidationAdvisor`（校验与自纠）**要到 M1 才挂得上** —— 它是 `CallAdvisor`，没有 advisor 链就没有挂点。
 **R7 `RetrievalBudgetGuard`**：★ **统一计时器**，每层开始前检查余量；降级时**必须记录 `degradeLevel` + 原因**（`10 §6.3`：否则"这周质量莫名下降"无从解释）。
 **R8 `RetrievalAugmentationAdapter`**：实现 `[P1]`；编排 R1→多查询并行(R2)→R3→R4→R5；★ 全程受 R7 约束；返回 `List<RetrievedDocument>`。
 
@@ -457,6 +458,7 @@ public class RrfQuotaDocumentJoiner implements DocumentJoiner {
 | 3 | 调 `stream().chatClientResponse()`（**要 `ChatClientResponse` 而不是只有文本**，因为引用在它的 context 里） | ★ 这是 §4.3 的前提 |
 | 4 | 组装 `M2`（把 Flux 与取消令牌交出去） | — |
 | 5 | ★ **非流式路径**（V1.1 文档生成、结构化输出）同样走这条链，但取引用走 `ChatResponse.metadata`（官方范式在 `call()` 下是有效的） | 两条路径都覆盖 |
+| 6 | ★ **结构化输出归这里收口**：非流式结构化（如多跳判定）已在第 14 周先用官方 `BeanOutputConverter` 落地（`ChatPort.completeAs`）；等本组件把 advisor 链装上，**`StructuredOutputValidationAdvisor`（校验 + 自纠）一并注册**（它在 `spring-ai-client-chat:2.0.1` 里已在依赖树，缺的只是挂点） | ★ 与 §2.7 同一口径：官方已有 ⇒ 不要又写一层 |
 
 **M2 `SpringAiChatStream`**
 

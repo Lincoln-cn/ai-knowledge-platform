@@ -40,14 +40,35 @@ public interface ChatPort {
   /**
    * 发一次对话补全，返回模型输出的<strong>原文</strong>。
    *
-   * <p>★ 为什么返回原文而不是解析好的对象：解析、校验与降级都住在<strong>领域侧</strong> （{@code
-   * QueryUnderstanding.parse}），因为它们要能脱离模型与网络被表驱动地测。 把解析放适配器里，等于让"模型输出不合法"变成一次依赖上游的测试。
+   * <p>★ 为什么这一路返回原文而不是解析好的对象：它的调用点用的是<strong>简单分隔</strong>输出（查询理解按换行给多条查询， {@code 11 §2.2.1} 照抄官方
+   * {@code MultiQueryExpander} 的做法），分隔与校验住在<strong>领域侧</strong>（{@code
+   * QueryUnderstanding.parse}），因为它们要能脱离模型与网络被表驱动地测。 要读"几个固定字段"的调用走 {@link #completeAs}，别在这里自己剥围栏。
    *
    * @param modelId 由 {@link #pickChatModel()} 给出的模型 id
-   * @param prompt 完整提示词（含结构化输出的格式要求）
+   * @param prompt 完整提示词（这一路不承诺 JSON —— 调用方按简单分隔读输出）
    * @param timeout 这次调用的时间预算（超过即放弃 ⇒ 调用方降级）
    * @throws cn.lincoln.aiplatform.platform.domain.BusinessException 模型不存在 / 不是对话模型 /
    *     上游不可达或超时（都带可读原因与下一步）
    */
   String complete(UUID modelId, String prompt, Duration timeout);
+
+  /**
+   * 发一次对话补全，并把输出解析成 {@code type} 的实例 —— ★ <strong>格式说明与解析都交给官方转换器</strong> （适配器里用 {@code
+   * org.springframework.ai.converter.BeanOutputConverter}：{@code getFormat()} 生成 "只输出 JSON"的指令与
+   * schema，{@code convert(...)} 解析响应）。
+   *
+   * <p>★ 为什么要这个出口：{@code 11 §2.7} 的口径是"实现结构化输出时先看官方，不要又写一层"。自研解析必须处理 围栏、字段别名、前后废话 ——
+   * 那些正是官方转换器已经在做的事，自己再写一遍只多一份要维护的容错， 而且"看起来在读 JSON、实际读的是我们猜的那几个形状"。
+   * <strong>领域侧只留"什么算可用"这类判定规则</strong>（例如多跳判定：{@code sufficient} 字段缺失 不等于 {@code false}）。
+   *
+   * <p>★ 解析失败按一次失败抛出，不返回 null：调用方据此降级（多跳的承诺是"判定坏了也照常用已有结果回答"）， 而"静默给一个默认值"会让多跳永远不触发、且没有任何地方报错。
+   *
+   * @param modelId 由 {@link #pickChatModel()} 给出的模型 id
+   * @param prompt 提示词（<strong>不要自己写"请返回 json"</strong> —— 格式说明由转换器追加）
+   * @param type 期望的产出类型（转换器按它生成 schema）
+   * @param timeout 这次调用的时间预算（超过即放弃 ⇒ 调用方降级）
+   * @throws cn.lincoln.aiplatform.platform.domain.BusinessException 模型不存在 / 不是对话模型 / 上游不可达或超时 /
+   *     <strong>输出不符合 schema</strong>
+   */
+  <T> T completeAs(UUID modelId, String prompt, Class<T> type, Duration timeout);
 }

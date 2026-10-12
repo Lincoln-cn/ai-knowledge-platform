@@ -5,12 +5,16 @@ import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.retrieval.domain.HopDecision;
+import cn.lincoln.aiplatform.retrieval.domain.HopStop;
+import cn.lincoln.aiplatform.retrieval.domain.Jaccard;
 import cn.lincoln.aiplatform.retrieval.domain.QueryUnderstanding;
 import cn.lincoln.aiplatform.retrieval.domain.Rrf;
 import cn.lincoln.aiplatform.retrieval.domain.RrfQuotaJoiner;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -96,17 +100,35 @@ public class RetrievalService {
    */
   private static final long RETRIEVAL_BUDGET_MS = 5_000;
 
+  /**
+   * 多跳的触发下限（{@code 10 §3.4.2}：命中数 &lt; 3 就认为"首轮不够"）。
+   *
+   * <p>★ 触发是<strong>规则判定</strong>，不额外调模型 —— 多跳已经要多花一次判定调用， 再让模型来判断"要不要多跳"就是拿两次调用换一次机会。
+   */
+  private static final int HOP_MIN_HITS = 3;
+
+  /**
+   * 时间预算的"该降级了"水位（{@code 10 §6.3}：D1 = 时间预算用掉 <strong>60%</strong> / 多跳判定失败）。
+   *
+   * <p>★ 为什么是"用掉 60% 就不再开新一轮"而不是"等花光"：多跳一轮要**再一次模型调用 + 再一次检索**， 等花光再停等于必然超预算 —— 那时首字延迟已经被吃掉，而 B4
+   * 是硬指标。
+   */
+  private static final double HOP_BUDGET_RATIO = 0.6;
+
   private final SegmentSearchPort segmentSearch;
   private final EmbeddingPort embeddingPort;
   private final QueryUnderstandingService queryUnderstanding;
+  private final MultiHopService multiHop;
 
   public RetrievalService(
       SegmentSearchPort segmentSearch,
       EmbeddingPort embeddingPort,
-      QueryUnderstandingService queryUnderstanding) {
+      QueryUnderstandingService queryUnderstanding,
+      MultiHopService multiHop) {
     this.segmentSearch = segmentSearch;
     this.embeddingPort = embeddingPort;
     this.queryUnderstanding = queryUnderstanding;
+    this.multiHop = multiHop;
   }
 
   @Transactional(readOnly = true)
@@ -124,7 +146,8 @@ public class RetrievalService {
           mode,
           List.of(),
           elapsedMs(startedAt),
-          new HitTestView.Trace(1, 1, 0, 0, "没有可检索的知识库", false, 0));
+          new HitTestView.Trace(
+              1, 1, 0, 0, "没有可检索的知识库", false, 0, false, 1, HopStop.NOT_TRIGGERED.describe(), 0));
     }
 
     // ② 查询理解：★ 它自带兜底（不可用 ⇒ 原始问题单路），所以这里不需要 try/catch
@@ -210,12 +233,44 @@ public class RetrievalService {
       degradeReason = join("有查询失败已丢弃该路", degradeReason);
     }
 
+    // ④b ★★ 多跳（第 14 周 · 0.4.2，10 §3.4）：默认关；触发是规则判定，迭代**全部发生在生成前**
+    //   —— 这是 §8.3 那条"SSE 契约一个字都不用改"的前提，不许打破。
+    HopRun hop =
+        request.multiHopEnabledOrDefault()
+            ? runMultiHop(
+                request,
+                mode,
+                kbIds,
+                candidateLimit,
+                startedAt,
+                perSubQuestion,
+                vectorScores,
+                textScores)
+            : new HopRun(false, 1, HopStop.NOT_ENABLED, List.of(), 0, null);
+    if (hop.degradeReason() != null && degradeLevel < 1) {
+      // §6.3：D1 = 去掉多跳（时间预算用掉 60% / 多跳判定失败）
+      degradeLevel = 1;
+      degradeReason = join(hop.degradeReason(), degradeReason);
+    }
+    log.info(
+        "多跳：触发={} 轮次={} 停止原因={} 第 2 轮新增分段={}",
+        hop.triggered(),
+        hop.rounds(),
+        hop.stopReason().describe(),
+        hop.newSegments());
+
     // ⑤ ★★ 子问题之间按**保底配额**合并（第 13 周 · 0.4.1，10 §3.3.3）——
     //   不是顺序拼接，也不是全局 RRF：前者会让"前一个子问题占满 TopN"，
     //   后者（本节开头明确否掉）会让 A 把 B 的名额全挤掉。判据是"问两个问题 ⇒ 两个都被回答"。
     List<RrfQuotaJoiner.Unit> units = new ArrayList<>(perSubQuestion.size());
     for (int index = 0; index < perSubQuestion.size(); index++) {
       units.add(new RrfQuotaJoiner.Unit(index, perSubQuestion.get(index)));
+    }
+    if (!hop.ranking().isEmpty()) {
+      // ★ 第 2 轮的排名作为**一个额外单元**进配额合并（10 §3.4.5 的"各轮累积、一并参与合并"）。
+      //   放在配额单元里而不是"拼到某一路后面"，是因为保底配额正好保护了它：
+      //   多跳找到的那条**不会被第 1 轮的 TopN 挤掉** —— 否则这一次迭代就白跑了。
+      units.add(new RrfQuotaJoiner.Unit(units.size(), hop.ranking()));
     }
     RrfQuotaJoiner.Result merged = RrfQuotaJoiner.join(units, request.topNOrDefault());
     if (!merged.quotas().isEmpty()) {
@@ -290,7 +345,11 @@ public class RetrievalService {
             degradeLevel,
             degradeReason,
             understood.truncated(),
-            understood.elapsedMs()));
+            understood.elapsedMs(),
+            hop.triggered(),
+            hop.rounds(),
+            hop.stopReason().describe(),
+            hop.newSegments()));
   }
 
   // ────────────────────────── 内部 ──────────────────────────
@@ -321,7 +380,140 @@ public class RetrievalService {
     if (maxSubQuestions < 1 || maxSubQuestions > HitTestQuery.MAX_SUB_QUESTIONS_CAP) {
       throw new BusinessException(ErrorCode.BAD_REQUEST, "子问题数应在 1～5 之间");
     }
+    int maxHops = request.maxHopsOrDefault();
+    if (maxHops < 1 || maxHops > HitTestQuery.MAX_HOPS_CAP) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "多跳轮数应在 1～3 之间");
+    }
   }
+
+  /**
+   * 多跳的那一轮（{@code 10 §3.4}）。
+   *
+   * <h3>★ 它必须"要么答得更好，要么什么都没发生"</h3>
+   *
+   * <p>{@code §3.4.6} 列了三种失败（下一轮检索失败 / 判定调用失败 / 下一轮 0 命中），处理全都是 <strong>用已有结果继续</strong> ——
+   * 一次都没让检索失败。这里逐条对上，并且每条都留下 {@link HopStop}（{@code §7.1} 要的是"多跳的边际收益"，没这个数就没人能判断它值不值）。
+   *
+   * <p>★ 触发条件（{@code §3.4.2}）：首轮<strong>最高分 &lt; 阈值</strong> **或** 命中数 &lt; {@value #HOP_MIN_HITS}。
+   * 规则判定，不额外调模型。
+   *
+   * @return 触发与否、轮次、停止原因、第 2 轮的排名（送进配额合并）、新增分段数、以及"该记 D1 吗"
+   */
+  private HopRun runMultiHop(
+      HitTestQuery request,
+      RetrievalMode mode,
+      List<UUID> kbIds,
+      int candidateLimit,
+      long startedAt,
+      List<List<UUID>> perSubQuestion,
+      Map<UUID, Double> vectorScores,
+      Map<UUID, Double> textScores) {
+    LinkedHashSet<UUID> existing = new LinkedHashSet<>();
+    perSubQuestion.forEach(existing::addAll);
+    double bestScore =
+        existing.stream()
+            .mapToDouble(
+                id ->
+                    Math.max(vectorScores.getOrDefault(id, 0.0), textScores.getOrDefault(id, 0.0)))
+            .max()
+            .orElse(0.0);
+    boolean triggered = bestScore < request.thresholdOrDefault() || existing.size() < HOP_MIN_HITS;
+    if (!triggered) {
+      return new HopRun(false, 1, HopStop.NOT_TRIGGERED, List.of(), 0, null);
+    }
+
+    LinkedHashSet<UUID> accumulated = new LinkedHashSet<>(existing);
+    List<UUID> lastRanking = List.of();
+    int rounds = 1;
+    int newSegments = 0;
+    while (rounds < request.maxHopsOrDefault()) {
+      long used = elapsedMs(startedAt);
+      if (used * 1.0 / RETRIEVAL_BUDGET_MS >= HOP_BUDGET_RATIO) {
+        // §6.3 的 D1 触发点之一：预算用掉 60% ⇒ 去掉多跳（不是"等花光再停"）
+        return new HopRun(
+            true,
+            rounds,
+            HopStop.BUDGET,
+            lastRanking,
+            newSegments,
+            "检索阶段已用掉 %.0f%% 的时间预算（≥%.0f%%）⇒ 去掉多跳（D1）"
+                .formatted(used * 100.0 / RETRIEVAL_BUDGET_MS, HOP_BUDGET_RATIO * 100));
+      }
+
+      List<SegmentSearchPort.Card> cards = segmentSearch.load(List.copyOf(accumulated));
+      MultiHopService.Outcome outcome =
+          multiHop.decide(request.question(), cards, RETRIEVAL_BUDGET_MS - used);
+      if (!outcome.usable()) {
+        // §3.4.6：判定失败 ⇒ 停止迭代、用已有结果生成（同时是 §6.3 的 D1 触发点之二）
+        return new HopRun(
+            true, rounds, HopStop.JUDGE_FAILED, lastRanking, newSegments, "多跳判定失败，已停止迭代（D1）");
+      }
+      HopDecision decision = outcome.decision();
+      if (decision.sufficient()) {
+        return new HopRun(true, rounds, HopStop.SUFFICIENT, lastRanking, newSegments, null);
+      }
+      if (!decision.hasNextQuery()) {
+        return new HopRun(true, rounds, HopStop.NO_QUERY, lastRanking, newSegments, null);
+      }
+
+      List<UUID> next;
+      try {
+        // ★ 第 2 轮按"单条查询"发起（§3.4.5 的落地修订：粒度是查询，不是子问题）
+        next =
+            retrieveOneQuery(
+                decision.nextQuery(),
+                mode,
+                kbIds,
+                candidateLimit,
+                request.thresholdOrDefault(),
+                vectorScores,
+                textScores);
+      } catch (BusinessException failure) {
+        // §3.4.6 第一行：下一轮检索失败 ⇒ 用已有结果继续
+        log.warn("多跳第 {} 轮检索失败，用已有结果继续：{}", rounds + 1, failure.getMessage());
+        return new HopRun(true, rounds, HopStop.NO_NEW_HITS, lastRanking, newSegments, null);
+      }
+      if (next.isEmpty()) {
+        // §3.4.6 第三行：0 命中 ⇒ 停止（这条正是 analytics 里"多跳未改善"的那笔数据）
+        return new HopRun(true, rounds, HopStop.NO_NEW_HITS, lastRanking, newSegments, null);
+      }
+
+      rounds++;
+      lastRanking = next;
+      int before = accumulated.size();
+      accumulated.addAll(next);
+      newSegments = accumulated.size() - before;
+      log.info("多跳第 {} 轮：新增 {} 条分段（查询「{}」）", rounds, newSegments, decision.nextQuery());
+
+      if (Jaccard.repeats(existing, new LinkedHashSet<>(next))) {
+        // §3.4.4 条件 4：高度重合 ⇒ 停。★ 这一轮的结果**仍然累积**（"停止迭代"不等于"丢弃这一轮"）
+        return new HopRun(true, rounds, HopStop.REPEATED, lastRanking, newSegments, null);
+      }
+      if (rounds >= request.maxHopsOrDefault()) {
+        return new HopRun(true, rounds, HopStop.MAX_HOPS, lastRanking, newSegments, null);
+      }
+      existing = accumulated; // 下一轮的重合度与"到目前为止的全部结果"比
+    }
+    return new HopRun(true, rounds, HopStop.MAX_HOPS, lastRanking, newSegments, null);
+  }
+
+  /**
+   * 多跳那一轮的结果。
+   *
+   * @param triggered 是否触发（触发条件不成立时它是 false，而"没触发"本身也要进埋点）
+   * @param rounds 实际轮次（含首轮；没触发时是 1）
+   * @param stopReason 为什么停下（{@link HopStop}）
+   * @param ranking 最后一轮的排名（送进配额合并的那个单元）
+   * @param newSegments 最后一轮带来的新分段数（§7.1："第 2 轮是否带来新分段"）
+   * @param degradeReason 非空表示该记一次 D1（预算 60% / 判定失败）
+   */
+  private record HopRun(
+      boolean triggered,
+      int rounds,
+      HopStop stopReason,
+      List<UUID> ranking,
+      int newSegments,
+      String degradeReason) {}
 
   /**
    * 把"子问题 × 查询"摊平成"每次检索要发的一组查询"，并按总路数上限截断。

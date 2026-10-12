@@ -1,0 +1,194 @@
+package cn.lincoln.aiplatform.modelcatalog;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import cn.lincoln.aiplatform.modelcatalog.domain.Model;
+import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
+import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
+import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
+import cn.lincoln.aiplatform.modelcatalog.domain.Supplier;
+import cn.lincoln.aiplatform.modelcatalog.infrastructure.ChatModelAdapter;
+import cn.lincoln.aiplatform.modelcatalog.infrastructure.UpstreamGateway;
+import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+
+/**
+ * 适配器的<strong>结构化出口</strong>（{@code ChatPort.completeAs}）：格式说明由官方转换器追加、响应由它解析 （{@code 11
+ * §2.7}：实现结构化输出时先看官方，不要又写一层）。
+ *
+ * <h3>为什么这个类必须存在</h3>
+ *
+ * <p>{@code StructuredOutputConverterTest} 钉的是<strong>转换器自己</strong>的行为，而"生产代码真的用了它" 是另一件事 ——
+ * 把适配器里"追加格式说明"那一句删掉，转换器那个类照样全绿（它压根不经过适配器）。 所以这里用假网关把<strong>真实的请求体</strong>留下来看：
+ *
+ * <ul>
+ *   <li>★ 请求体里必须出现<strong>官方生成的 schema 字段名</strong>：提示词里已经不写 JSON 契约了， 它是模型知道形状的唯一来源（删掉追加那句，模型只能靠猜
+ *       —— 而且没有任何地方报错）
+ *   <li>围栏响应能被读出来（这条容错我们删掉了自研版本，依据在 {@code StructuredOutputConverterTest}）
+ *   <li>坏响应 ⇒ {@link BusinessException}（不是 null、不是默认值 —— 调用方据此降级）
+ * </ul>
+ */
+class ChatModelAdapterTest {
+
+  private static final String PROMPT = "判断这些线索够不够回答问题";
+
+  /** 与多跳判定同形的两个字段（这里只关心适配器怎么把它喂给模型、怎么读回来）。 */
+  record Sample(Boolean sufficient, String nextQuery) {}
+
+  private final RecordingGateway gateway = new RecordingGateway();
+
+  @Test
+  void appendsOfficialFormatToThePrompt() {
+    Model model = chatModel(UUID.randomUUID());
+    gateway.response = "{\"sufficient\": true, \"nextQuery\": null}";
+
+    adapter(model).completeAs(model.id(), PROMPT, Sample.class, Duration.ofSeconds(5));
+
+    assertThat(gateway.prompt).startsWith(PROMPT);
+    assertThat(gateway.prompt)
+        .as("★ 官方 schema 必须进请求体，否则模型不知道要输出哪两个字段")
+        .contains("sufficient")
+        .contains("nextQuery");
+  }
+
+  @Test
+  void readsValuesFromTheModelOutput() {
+    Model model = chatModel(UUID.randomUUID());
+    gateway.response = "```json\n{\"sufficient\": false, \"nextQuery\": \"再查一次\"}\n```";
+
+    Sample sample =
+        adapter(model).completeAs(model.id(), PROMPT, Sample.class, Duration.ofSeconds(5));
+
+    assertThat(sample.sufficient()).isFalse();
+    assertThat(sample.nextQuery()).isEqualTo("再查一次");
+  }
+
+  /** 输出不符合 schema ⇒ 一次可读的调用失败（多跳据此降级，绝不静默给默认值）。 */
+  @Test
+  void turnsUnparsableResponseIntoBusinessFailure() {
+    Model model = chatModel(UUID.randomUUID());
+    gateway.response = "我不太确定该不该再查一次";
+
+    ChatModelAdapter adapter = adapter(model);
+
+    assertThatThrownBy(
+            () -> adapter.completeAs(model.id(), PROMPT, Sample.class, Duration.ofSeconds(5)))
+        .isInstanceOf(BusinessException.class)
+        .hasMessageContaining("Sample");
+  }
+
+  /** 类型不对要明确拒绝：拿向量模型走对话出口，回的不是正文，解析只会给出一个看不懂的失败。 */
+  @Test
+  void rejectsNonChatModel() {
+    Model model = embeddingModel(UUID.randomUUID());
+
+    ChatModelAdapter adapter = adapter(model);
+
+    assertThatThrownBy(
+            () -> adapter.completeAs(model.id(), PROMPT, Sample.class, Duration.ofSeconds(5)))
+        .isInstanceOf(BusinessException.class)
+        .hasMessageContaining("不是对话模型");
+  }
+
+  // ────────────────────────── 夹具 ──────────────────────────
+
+  /**
+   * 建适配器。
+   *
+   * <p>第 2 个参数（{@code ApiKeyCipher}）传 {@code null}：夹具模型没有存 key， {@code decryptKey} 在 {@code
+   * apiKeyCipher == null} 时直接返回 null，压根不会用到它。
+   */
+  private ChatModelAdapter adapter(Model model) {
+    return new ChatModelAdapter(new FakeModels(model), null, gateway);
+  }
+
+  private static Model chatModel(UUID id) {
+    return loaded(id, ModelKind.CHAT, null, 8_192);
+  }
+
+  private static Model embeddingModel(UUID id) {
+    return loaded(id, ModelKind.EMBEDDING, 1_024, null);
+  }
+
+  private static Model loaded(UUID id, ModelKind kind, Integer dimension, Integer contextWindow) {
+    Model model =
+        new Model(
+            id,
+            "夹具模型",
+            kind,
+            Supplier.LOCAL_INFERENCE,
+            "qwen2.5:1.5b",
+            "http://localhost:11434/v1",
+            null,
+            null,
+            contextWindow,
+            dimension,
+            null,
+            null,
+            false,
+            null,
+            null);
+    model.startLoad();
+    model.markLoaded();
+    return model;
+  }
+
+  /** 假网关：把请求体留下来，回一个预置响应（★ 不真的发 HTTP）。 */
+  private static final class RecordingGateway extends UpstreamGateway {
+
+    String prompt;
+    String response = "{\"sufficient\": true, \"nextQuery\": null}";
+
+    RecordingGateway() {
+      super("http://localhost:9/v1", "test-key");
+    }
+
+    @Override
+    public String chatCompletion(
+        String model, String apiBase, String apiKey, String prompt, Duration timeout) {
+      this.prompt = prompt;
+      return response;
+    }
+  }
+
+  /** 只回答"这个 id 的模型"的假仓储。 */
+  private static final class FakeModels implements ModelRepository {
+
+    private final Model model;
+
+    FakeModels(Model model) {
+      this.model = model;
+    }
+
+    @Override
+    public Optional<Model> findById(UUID id) {
+      return model.id().equals(id) ? Optional.of(model) : Optional.empty();
+    }
+
+    @Override
+    public Model save(Model model) {
+      throw new UnsupportedOperationException("本测试不落库");
+    }
+
+    @Override
+    public void delete(Model model) {
+      throw new UnsupportedOperationException("本测试不落库");
+    }
+
+    @Override
+    public List<Model> search(
+        String keyword, ModelKind kind, ModelStatus status, int offset, int limit) {
+      return model.kind() == kind && model.status() == status ? List.of(model) : List.of();
+    }
+
+    @Override
+    public long countSearch(String keyword, ModelKind kind, ModelStatus status) {
+      return 0;
+    }
+  }
+}

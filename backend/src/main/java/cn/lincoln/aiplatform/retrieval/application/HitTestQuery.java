@@ -23,6 +23,8 @@ import java.util.UUID;
  * @param queryCount 查询理解每条查询数（{@code 0} = 不做，{@code 1} = 只改写）；缺省 {@value #DEFAULT_QUERY_COUNT}
  * @param decomposeEnabled 是否允许拆子问题；缺省 true
  * @param maxSubQuestions 子问题数上限；缺省 {@value #DEFAULT_MAX_SUB_QUESTIONS}
+ * @param multiHopEnabled 是否开启多跳（{@code 10 §3.4.2}）；缺省 <strong>false</strong>
+ * @param maxHops 多跳轮数上限（含首轮）；缺省 {@value #DEFAULT_MAX_HOPS}，硬顶 {@value #MAX_HOPS_CAP}
  */
 public record HitTestQuery(
     String mode,
@@ -33,7 +35,9 @@ public record HitTestQuery(
     String question,
     Integer queryCount,
     Boolean decomposeEnabled,
-    Integer maxSubQuestions) {
+    Integer maxSubQuestions,
+    Boolean multiHopEnabled,
+    Integer maxHops) {
 
   /** TopN 上限与 mock 的 PUT 校验一致（1–20）。 */
   public static final int MAX_TOP_N = 20;
@@ -47,6 +51,11 @@ public record HitTestQuery(
   public static final int DEFAULT_MAX_SUB_QUESTIONS = 3;
 
   public static final int MAX_SUB_QUESTIONS_CAP = 5;
+
+  /** 多跳的默认值与硬顶（{@code 10 §6.2} 第 5 项 / {@code §3.4.2}：默认 2＜含首轮＞，上限 3）。 */
+  public static final int DEFAULT_MAX_HOPS = 2;
+
+  public static final int MAX_HOPS_CAP = 3;
 
   public RetrievalMode modeOrDefault() {
     return RetrievalMode.parse(mode);
@@ -72,5 +81,17 @@ public record HitTestQuery(
 
   public int maxSubQuestionsOrDefault() {
     return maxSubQuestions == null ? DEFAULT_MAX_SUB_QUESTIONS : maxSubQuestions;
+  }
+
+  /**
+   * ★ 缺省 <strong>false</strong>：多跳必然增加延迟与 token（多一次判定调用 + 多一轮检索）， 而 MVP 的 B4 是"首字延迟 ≤ 10s"（CPU 推理）⇒
+   * 默认把这个成本留给想付的人（{@code 10 §3.4.2} 的原话）。
+   */
+  public boolean multiHopEnabledOrDefault() {
+    return multiHopEnabled != null && multiHopEnabled;
+  }
+
+  public int maxHopsOrDefault() {
+    return maxHops == null ? DEFAULT_MAX_HOPS : maxHops;
   }
 }

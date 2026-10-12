@@ -36,7 +36,11 @@ public record HitTestView(RetrievalMode mode, List<Item> items, long elapsedMs, 
       int degradeLevel,
       String degradeReason,
       boolean truncated,
-      long elapsedMs) {}
+      long elapsedMs,
+      boolean hopTriggered,
+      int hopRounds,
+      String hopStopReason,
+      int hopNewSegments) {}
 
   /**
    * 一条命中。
