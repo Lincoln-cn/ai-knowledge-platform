@@ -7,6 +7,62 @@
 
 ---
 
+## 0.4.3 · 第 15 周 · 应用配置 + 发布校验（"配好了才让发"）
+
+### 这一版能做什么
+
+**配一个简单应用 ⇒ 发布 ⇒ 导出成包**（编排应用本批发布不了，理由见文末）：
+
+```
+配置   应用类型（SIMPLE / WORKFLOW）★ 创建时选定、之后不可改；
+       PUT 是部分更新（没传的字段保持原值，不是清空）
+校验   发布前逐项检查，每项都给"为什么 + 怎么改"（02 §273-277 的 AS-I2~I5）：
+       model     对话模型已加载        ← 它是本周的核心：绑一个"加载中"的模型
+       knowledge 知识库均可用             过去要到用户提问时才报错（02 §279）
+       rolePrompt 角色设定已填写
+       retrieval 检索参数合法
+       prologue  开场白已填写
+发布   校验不过 ⇒ code 6001（PUBLISH_CHECK_FAILED，契约里早有这个码），且**状态一个字节都不变**
+导出   assistant-bundle@1：配置体 + **依赖清单**（每项带"在不在"与"缺了会怎样"）
+```
+
+### ★ 判据读数
+
+`AssistantPublishCheckTest` **15/15**（本机）：
+
+| 覆盖 | 用例 |
+|---|---|
+| 每一项**都能不过** | 模型没加载 / 模型被删（原因与"没加载"分得开）/ 知识库不可用 / 角色设定空 / 开场白空 / 存量检索参数越界 |
+| 发布门禁 | 校验不过 ⇒ 6001 + 状态不变；通过 ⇒ 发布成功；**取消发布不校验**（下线不该被拦住） |
+| 判据② | 更新时把 `type` 改成 `WORKFLOW` ⇒ 类型不变（且在接口层证明，不是靠"实体没有 setter"） |
+| 判据③ | 导出包的 format / 依赖清单 / 未满足项带 degrade |
+| 纪律 | 看不见的应用 ⇒ **404** 而不是 403（403 等于告诉对方"这个 id 存在"） |
+
+### ★ 金丝雀（都实测过能红，已还原）
+
+| 破坏 | 读数 |
+|---|---|
+| 短路 AS-I2（"没加载"不再拦） | **2 红**：`blocksWhenBoundModelIsNotLoaded` + `publishIsRejectedWith6001…` |
+| 把 `type` 的可改口子打开（`applyConfig` 里赋值） | **11/15 红**，含 `typeCannotBeChangedByUpdate` |
+| 只改 `complete()` 里 type 的来源 | ★ **仍然全绿** —— 这条本身是个发现：`type` 的不可改是**结构性**的（`applyConfig` 压根没有这个参数），所以金丝雀必须打开那个口子才测得准 |
+
+### ★ 复用清单（"别自研"落到哪几处）
+
+- **AS-I3 零新增代码**：直接用 `SegmentSearchPort.visibleKbIds` —— 它已经含"启用 + 未删 + 可见"三条判据（`JdbcSegmentSearchQuery:139`），新写一份就是同一件事的第二处实现
+- **AS-I2 新增平台端口 `ModelStatusPort`**（实现放 `modelcatalog`）：`ChatPort.pickChatModel()` 回答的是"给我一个能用的"，答不了"我绑定的那个现在能用吗"
+- 可见性用 `AccessScopePort.canSee`（判定只有一处实现，`07 §3.3`）；归属用 `OwnedResource`（`as_assistant` 是第二个落地）
+- 持久化：Flyway 迁移 + Spring Data（`JpaAssistantRepository` + 适配器，框架类型不进领域层）；join 表交给 Hibernate 的 `@ElementCollection`，不手写 SQL
+- 长度约束用 Bean Validation（`@Size`）⇒ 失败由 `GlobalExceptionHandler` 统一转成 `{code,message,hint}` 包络
+
+### ⚠️ 本批明确**不做**的（都在响应里如实体现，不糊一个假值）
+
+- **列表与市场筛选**（来源分段 / 排序 / 标签 / 关键词）：契约那 20 个端点里仍有一半没落，`/assistants` 前缀继续登记在 `ContractDriftTest` 的 `UNIMPLEMENTED_PREFIXES`
+- **编排应用发布不了**：`workflow` 模块只有一个 `package-info`（编排执行引擎属 V1.0）⇒ 校验里 `node-models` / `workflow` 两项**如实失败**，而不是跳过去。导出包里 `config.workflow` 也**不下发**（回一个空图会让导入方以为"这条流程本来就是空的"）
+- **提示词模板**：`prompt-configs` 那一域尚未建表 ⇒ 导出包里它的依赖项标 `satisfied=false`
+- **共享 / 凭证 / API Key / 导入**：各归第 16 周、T302 后半与导入导出那一批
+
+---
+
 ## 0.4.2 · 第 14 周 · 多跳检索（"答案跨两段"与降级阶梯）
 
 ### 这一版能做什么
