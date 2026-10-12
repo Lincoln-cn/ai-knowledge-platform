@@ -42,6 +42,20 @@
           <span class="param-label">拆分子问题</span>
           <el-switch v-model="form.decomposeEnabled" size="small" />
         </div>
+        <div class="param">
+          <span class="param-label">多跳迭代</span>
+          <el-switch v-model="form.multiHopEnabled" size="small" />
+          <!-- 轮数只在开了之后出现：它只在开了之后有意义，常驻会让"这个数在影响什么"变模糊 -->
+          <el-input-number
+            v-if="form.multiHopEnabled"
+            v-model="form.maxHops"
+            :min="1"
+            :max="3"
+            size="small"
+            controls-position="right"
+          />
+          <span class="micro muted">命中不足时再检一轮（答案跨两段）</span>
+        </div>
       </div>
 
       <!-- ★ 第 11 周（0.3.3）起密级隔离已生效 —— 这句话对应 13 §8.4 的界面口径（M3 起改口径）。
@@ -152,7 +166,12 @@ const MODES: Array<{ value: RetrievalMode; label: string; desc: string }> = [
  * 契约里的可选只是「不传时由后端按默认值处理」，而 v-model 不接受 boolean | undefined。
  */
 type RetrievalForm = RetrievalParams &
-  Required<Pick<RetrievalParams, 'queryCount' | 'decomposeEnabled'>>
+  Required<Pick<RetrievalParams, 'queryCount' | 'decomposeEnabled'>> & {
+    /* 多跳两项：契约上是 HitTestRequest 的**可选**字段（不传 = 后端默认：关 / 2），
+       而界面上一定有值 —— v-model 不接受 boolean | undefined（与上面两项同一个理由） */
+    multiHopEnabled: boolean
+    maxHops: number
+  }
 
 const form = reactive<RetrievalForm>({
   mode: 'HYBRID',
@@ -160,7 +179,9 @@ const form = reactive<RetrievalForm>({
   topN: 5,
   noRefStrategy: 'REFUSE',
   queryCount: 3,
-  decomposeEnabled: true
+  decomposeEnabled: true,
+  multiHopEnabled: false,
+  maxHops: 2
 })
 
 const question = ref('')
@@ -188,7 +209,14 @@ const loadParams = async () => {
 /** 头部那行 trace 文案：降级原因只在真有原因时追加 */
 const traceText = (trace: HitTestTrace) =>
   `查询理解 D${trace.degradeLevel} · 子问题 ${trace.subQuestionCount} × 查询 ${trace.queryCount} · 共 ${trace.pathCount} 路` +
-  (trace.degradeReason ? ` · 降级原因：${trace.degradeReason}` : '')
+  (trace.degradeReason ? ` · 降级原因：${trace.degradeReason}` : '') +
+  // ★ 第 14 周：多跳那一层。「轮次 + 停止原因」正是 ROADMAP 第 14 周演示要看的两个数（10 §7.1 的埋点口径）。
+  //   老后端不返回这些字段 ⇒ hopRounds 是 undefined ⇒ 整段不出现
+  //   （不显示占位、也不显示 0 —— 0 会被读成"跑过但没带来新东西"，与"没这一层"是两件事）
+  (trace.hopRounds === undefined
+    ? ''
+    : ` · 多跳 ${trace.hopRounds} 轮 · 停止：${trace.hopStopReason ?? '（未给出原因）'}` +
+      (trace.hopNewSegments ? ` · 新增 ${trace.hopNewSegments} 段` : ''))
 
 const runSingle = async () => {
   if (!question.value.trim()) {
@@ -227,6 +255,9 @@ const runCompare = async () => {
       // 对比模式也要带上查询理解参数，否则同一个表单在两个按钮下检的不是同一件事
       queryCount: form.queryCount,
       decomposeEnabled: form.decomposeEnabled,
+      // 多跳同理：它改的是"检第几轮"，不带就等于两个按钮跑的不是同一件事
+      multiHopEnabled: form.multiHopEnabled,
+      maxHops: form.maxHops,
       kbIds: props.kbId ? [props.kbId] : undefined,
       question: question.value.trim()
     })

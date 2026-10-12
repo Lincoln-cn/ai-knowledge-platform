@@ -14,6 +14,9 @@ OpenAI 兼容的测试桩服务 —— 开发期替代真模型服务（后端 T
      "Spring AI 到底有没有把 reasoning_effort 发出来"这类问题，答案在**请求体**里，
      而真 Ollama 不会告诉你它收到了什么。`GET /__stub/requests` 就是为此存在的。
   ③ 一个**故障注入器**（延迟 / 错误率），用来跑"失败路径先于成功路径"（ROADMAP §4.7.2 纪律 5）。
+  ④ 一个**结构化输出的脚本开关**（`entity_override`）：让"要读几个固定字段"的调用按指定的值回 ——
+     多跳判定的难例演示（第 2 轮才拿到答案）靠它，注入类闸门也靠它。
+     ★ 它只覆盖**值**，键名仍由 schema 决定 —— 否则就成了"桩在骗过解析器"而不是"模型给了这个值"。
 
 它**不是**：
   ✗ **不是三份技术结论的证据来源**。本桩的"思考三态""结构化输出稳定性"都是**我写的设定**，
@@ -37,6 +40,11 @@ OpenAI 兼容的测试桩服务 —— 开发期替代真模型服务（后端 T
     # 清空记录 / 改行为
     curl -X POST http://localhost:11434/__stub/reset
     curl -X POST -d '{"delay_ms":200}' http://localhost:11434/__stub/config
+
+    # ★ 让结构化输出按指定的值回（多跳判定的难例演示、注入类闸门靠它）
+    curl -X POST -d '{"entity_override":{"sufficient":false,"nextQuery":"违约金 上限"}}' \
+         http://localhost:11434/__stub/config
+    curl -X POST -d '{"entity_override":null}' http://localhost:11434/__stub/config   # 取消覆盖
 
   ★ 端口默认取 11434，是为了让 `application.yml` 的
     `spring.ai.openai.base-url: http://localhost:11434/v1` **一行都不用改** ——
@@ -87,7 +95,9 @@ EMBED_MODEL = "stub-embed"
 
 _LOCK = threading.Lock()
 _REQUESTS: list[dict] = []
-_CONFIG = {"delay_ms": 0, "fail_rate": 0.0}
+#: `entity_override` 是"把结构化输出的某些**值**改成我指定的"（键名仍由 schema 决定）。
+#: 默认 None = 完全按 schema 造占位值（既有测试依赖那些值，别改默认）。
+_CONFIG = {"delay_ms": 0, "fail_rate": 0.0, "entity_override": None}
 _EMBED_DIM = 768
 
 #: 假的 token 计数用：让 usage 字段看起来合理（M1 的用量统计要读它）
@@ -431,6 +441,9 @@ class StubHandler(BaseHTTPRequestHandler):
         if path == "/__stub/reset":
             with _LOCK:
                 _REQUESTS.clear()
+                # ★ 连 entity_override 一起清：它改的是"模型给出了什么值"，
+                #   残留会让**后面的**闸门断言到假的模型行为（delay/fail_rate 只影响时序与成败，性质不同）
+                _CONFIG["entity_override"] = None
             self._send_json(200, {"ok": True, "cleared": True})
             return
         if path == "/__stub/config":
@@ -438,6 +451,18 @@ class StubHandler(BaseHTTPRequestHandler):
                 for key in ("delay_ms", "fail_rate"):
                     if key in body:
                         _CONFIG[key] = body[key]
+                if "entity_override" in body:
+                    override = body["entity_override"]
+                    # ★ 只收对象或 null：写成字符串时"看起来配好了、实际什么都没覆盖"，
+                    #   而那正是本项目最怕的静默失败 ⇒ 明确 400，别让它悄悄不生效
+                    if override is not None and not isinstance(override, dict):
+                        self._send_error_json(
+                            400,
+                            'entity_override 必须是对象（如 {"sufficient": false}）或 null',
+                            "invalid_request_error",
+                        )
+                        return
+                    _CONFIG["entity_override"] = override
             self._send_json(200, {"ok": True, "config": dict(_CONFIG)})
             return
 
@@ -498,7 +523,14 @@ class StubHandler(BaseHTTPRequestHandler):
         effort = body.get("reasoning_effort")
 
         if wants_json(prompt) or (body.get("response_format") or {}).get("type"):
-            content = json.dumps(json_payload_from_prompt(prompt), ensure_ascii=False)
+            payload = json_payload_from_prompt(prompt)
+            # ★ 脚本化覆盖（只改值）：难例演示需要"判定说不够、并给出下一轮查询"，
+            #   而按 schema 造的占位值恒为 sufficient=true + nextQuery="stub" ⇒ 多跳永远停在第 1 轮
+            with _LOCK:
+                override = _CONFIG["entity_override"]
+            if override:
+                payload.update(override)
+            content = json.dumps(payload, ensure_ascii=False)
         else:
             content = f"（桩）关于「{prompt[:30]}」，这是占位回答。"
         return content, reasoning_for(model, effort)

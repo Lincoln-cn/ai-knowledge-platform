@@ -32,6 +32,12 @@ const QUERY_UNDERSTANDING_DEFAULTS: Required<
   maxSubQuestions: 3
 }
 
+/** 多跳轮数的硬顶（10-RAG §6.2 第 5 项 / §3.4.2）—— 与后端的越界校验逐字一致 */
+const MAX_HOPS_CAP = 3
+
+/** 多跳的触发条件之一：命中数 < 3（与后端 `RetrievalService.HOP_MIN_HITS` 逐字一致） */
+const HOP_MIN_HITS = 3
+
 const findParams = (kbId: string): RetrievalParams => {
   const p = retrievalParams[kbId]
   // P1 新库检索参数：回**默认值**而不是 404 —— 否则设置面板刚建好的库会弹「不存在」
@@ -76,6 +82,45 @@ const STUB_TRACE: HitTestTrace = {
   truncated: false
 }
 
+/**
+ * 多跳那一层的埋点（★ 与后端 {@code RetrievalService.runMultiHop} 同口径）。
+ *
+ * mock 不含模型 ⇒ 一旦多跳真的触发，判定必然走"拿不到模型"那条路（`JUDGE_FAILED`）——
+ * 与真后端「没配置对话模型」落到同一档，这里如实表现，也顺便让界面能看见"开了但判定不可用"。
+ *
+ * ★ 刻意**不编造**"第 2 轮命中了新分段"：那需要模型给出一条有意义的下一轮查询，mock 造不出来就是造不出来。
+ * 真栈那一路由 `check_multihop_e2e.py` 用桩的脚本化回复造出来。
+ */
+const multiHopTrace = (
+  body: HitTestRequest,
+  scored: Array<{ score: number }>
+): Partial<HitTestTrace> => {
+  if (!body.multiHopEnabled) {
+    return {
+      hopTriggered: false,
+      hopRounds: 1,
+      hopStopReason: 'NOT_ENABLED：未开启多跳',
+      hopNewSegments: 0
+    }
+  }
+  // 触发是**规则**判定（最高分 < 阈值 或 命中数 < 3），不额外调模型 —— 与后端同一个表达式
+  const best = scored.length ? Math.max(...scored.map((item) => item.score)) : 0
+  if (!(best < body.threshold || scored.length < HOP_MIN_HITS)) {
+    return {
+      hopTriggered: false,
+      hopRounds: 1,
+      hopStopReason: 'NOT_TRIGGERED：首轮命中已足够，未触发多跳',
+      hopNewSegments: 0
+    }
+  }
+  return {
+    hopTriggered: true,
+    hopRounds: 1,
+    hopStopReason: 'JUDGE_FAILED：多跳判定不可用，改用已有结果',
+    hopNewSegments: 0
+  }
+}
+
 const runHitTest = (body: HitTestRequest): HitTestResult => {
   const profile = MODE_PROFILE[body.mode] ?? MODE_PROFILE['HYBRID']
   const corpus = pickCorpus(body.question)
@@ -104,7 +149,7 @@ const runHitTest = (body: HitTestRequest): HitTestResult => {
     mode: body.mode,
     items,
     elapsedMs: profile.elapsed + Math.floor(Math.random() * 20),
-    trace: STUB_TRACE
+    trace: { ...STUB_TRACE, ...multiHopTrace(body, scored) }
   }
 }
 
@@ -122,6 +167,10 @@ export const retrievalRoutes: MockRoute[] = [
       }
       if (!input.topN || input.topN < 1) {
         throw new ApiError(ErrorCode.BAD_REQUEST, 'TopN 至少为 1')
+      }
+      // 越界不许"收下但按别的值跑"（与其它参数同口径；文案与后端 validate 逐字一致）
+      if (input.maxHops !== undefined && (input.maxHops < 1 || input.maxHops > MAX_HOPS_CAP)) {
+        throw new ApiError(ErrorCode.BAD_REQUEST, '多跳轮数应在 1～3 之间')
       }
       return runHitTest(input)
     }
