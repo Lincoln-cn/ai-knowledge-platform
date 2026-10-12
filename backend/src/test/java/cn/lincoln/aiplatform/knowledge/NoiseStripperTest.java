@@ -3,12 +3,12 @@ package cn.lincoln.aiplatform.knowledge;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.knowledge.domain.NoiseStripper;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * 噪声剥离（第 9 周 · 0.3.1，{@code 12 §2.4}）—— ★ 拿**答案已知**的扫描件夹具来验。
@@ -45,7 +45,8 @@ class NoiseStripperTest {
       JsonNode root = mapper.readTree(in);
       JsonNode pages = root.get("scanned.pdf");
       List<String> all = new ArrayList<>();
-      pages.fieldNames().forEachRemaining(field -> all.add(pages.get(field).asText()));
+      // ★ Jackson 3 里 fieldNames()（迭代器）改成了 propertyNames()（Collection）
+      pages.propertyNames().forEach(field -> all.add(pages.get(field).asText()));
       return String.join("\n", all);
     }
   }

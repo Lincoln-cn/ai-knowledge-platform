@@ -8,8 +8,6 @@ import cn.lincoln.aiplatform.knowledge.infrastructure.OcrEngine;
 import cn.lincoln.aiplatform.knowledge.infrastructure.OcrProperties;
 import cn.lincoln.aiplatform.knowledge.infrastructure.StripResult;
 import cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -20,6 +18,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * 解析实测数字表（第 6 周 · 0.2.1 批 2）—— 结构丢失率 + 噪声剥离误杀率。
