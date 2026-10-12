@@ -19,6 +19,10 @@
   2. 答案段的词（附件三 / 违约金 / 上限）**不是**问题里的词（问题问"处罚标准"）⇒ 第 1 轮够不着它；
   3. 只有 3 段 ⇒ 第 1 轮命中数必然 < 3 ⇒ **触发条件是确定的**（不靠分数抖动）。
 
+★ 检索模式用 FULLTEXT 而不是 HYBRID：桩向量是按 hash 造的、与语义无关，
+  HYBRID 会引入一次**随机**的"这条分段恰好分数高" ⇒ 闸门会随机红（本项目对随机红比不红更警惕）。
+  而这一条验的是**多跳**、不是向量召回；全文路的分数是"查询词命中覆盖率"，完全确定。
+
 ★ 桩的 `entity_override` 是这份闸门的前提：按 schema 造的占位值是 `sufficient=true`，
   多跳永远停在第 1 轮 —— 那样闸门会绿在一个"什么都没验"的状态上（这里最危险的失败模式）。
   它让判定回「不够 + 下一轮查附件三」，于是第 2 轮真的会发出去。
@@ -160,7 +164,10 @@ def login(username: str, password: str) -> str:
 def hit_test(token: str, kb_id: str, **params) -> dict:
     body = {
         "question": QUESTION,
-        "mode": "HYBRID",
+        # ★ 用 FULLTEXT 而不是 HYBRID：桩向量是按 hash 造的、与语义无关，
+        #   HYBRID 会引入一次**随机**的"这条分段恰好分数高" ⇒ 闸门会随机红。
+        #   而这一条验的是**多跳**，不是向量召回 —— 全文路的分数是"查询词命中覆盖率"，完全确定。
+        "mode": "FULLTEXT",
         "threshold": 0.6,
         "topN": 5,
         "noRefStrategy": "REFUSE",
@@ -331,7 +338,7 @@ def main() -> int:
             admin,
             {
                 "question": QUESTION,
-                "mode": "HYBRID",
+                "mode": "FULLTEXT",
                 "threshold": 0.6,
                 "topN": 5,
                 "kbIds": [kb_id],
