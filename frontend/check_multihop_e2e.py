@@ -14,10 +14,16 @@
   这一对是这份闸门唯一无法伪造的东西：`hopRounds=2` 可以由别的原因产生，
   但"关的时候没有、开的时候有"只能由多跳造成。
 
-★ 夹具（`fixtures/multihop.md`）的三段是**刻意**这么写的：
+★ 夹具（`fixtures/multihop.md`）是**刻意**这么写的：
   1. 线索段含 `A-102`，答案段**不含**（否则第 1 轮就命中了，多跳无从体现）；
   2. 答案段的词（附件三 / 违约金 / 上限）**不是**问题里的词（问题问"处罚标准"）⇒ 第 1 轮够不着它；
-  3. 只有 3 段 ⇒ 第 1 轮命中数必然 < 3 ⇒ **触发条件是确定的**（不靠分数抖动）。
+  3. 有 3 段 ⇒ 第 1 轮命中数必然 < 3 ⇒ **触发条件是确定的**（不靠分数抖动）；
+  4. ★ **文档标题必须是中性的（"附件汇编"）** —— 第一版写成「A-102 号设备采购合同」，CI 立刻抓到：
+     分段的索引文本里带着**章节路径**（`SearchText.prefix` 拼的是 标题｜章节路径）⇒ 每一段都含
+     `A-102 号设备采购合同` ⇒ 答案段被第 1 轮直接命中，"难例"这个前提就没了。
+     **标题是"每一段都有"的文本，所以它不能含问题里的词。**
+  5. ⇒ 前提不靠"我以为"：运行时用两个单词查询分别证明线索段与答案段**是两段**（见下），
+     同段就直接红 —— 否则本闸门会绿在一个虚假的前提上。
 
 ★ 检索模式用 FULLTEXT 而不是 HYBRID：桩向量是按 hash 造的、与语义无关，
   HYBRID 会引入一次**随机**的"这条分段恰好分数高" ⇒ 闸门会随机红（本项目对随机红比不红更警惕）。
@@ -51,7 +57,11 @@ STUB_CONFIG = "http://localhost:11434/__stub/config"
 STUB_RESET = "http://localhost:11434/__stub/reset"
 
 # ★ 问"处罚标准"，而答案段里写的是"违约金上限" —— 词面不通，只有靠第 2 轮才够得着
-QUESTION = "A-102 号设备采购合同的处罚标准是多少"
+QUESTION = "A-102 号设备的处罚标准是多少"
+
+# 夹具前提用的两个单词查询（各自只应命中一段；它们命中同一段 ⇒ "答案跨两段"不成立）
+CLUE_ONLY = "A-102"
+ANSWER_ONLY = "百分之五"
 
 # 第 2 轮要查什么：由桩脚本化给出（这正是"模型给出下一轮查询"那一步）
 NEXT_QUERY = "附件三 违约金 上限"
@@ -171,6 +181,11 @@ def hit_test(token: str, kb_id: str, **params) -> dict:
         "threshold": 0.6,
         "topN": 5,
         "noRefStrategy": "REFUSE",
+        # ★ 关掉查询理解（queryCount=0）：第 1 轮就检**原始问题本身**。
+        #   两个理由：① 确定性 —— 否则第 1 轮发的是桩按 schema 造的占位查询（stub-1…），
+        #   它是"一条都不命中 ⇒ 退到 D4 兜底"的间接路径；② 更贴近演示 ——
+        #   真实情形是"第 1 轮命中线索段、第 2 轮命中答案段"，两段都在结果里。
+        "queryCount": 0,
         "kbIds": [kb_id],
     }
     body.update(params)
@@ -282,6 +297,20 @@ def main() -> int:
             print(f"  [NG] 等向量化成功失败（实际 {embedded}）")
             return 1
         print(f"  · 夹具就绪：kbId={kb_id} docId={doc_id}（难例语料已解析 + 已向量化）")
+
+        # ── 夹具前提：线索与答案必须**在不同的分段里** —— 否则"答案跨两段"这句话不成立，
+        #    而本闸门会绿在一个虚假的前提上（第一版夹具就是这样：标题进了每段的索引文本） ──
+        clue_ids = {
+            item["segmentId"] for item in (hit_test(admin, kb_id, question=CLUE_ONLY).get("items") or [])
+        }
+        answer_ids = {
+            item["segmentId"] for item in (hit_test(admin, kb_id, question=ANSWER_ONLY).get("items") or [])
+        }
+        check(
+            bool(clue_ids) and bool(answer_ids) and not (clue_ids & answer_ids),
+            f"★ 夹具前提：线索段与答案段确实是**两段**（线索 {len(clue_ids)} 段 / 答案 {len(answer_ids)} 段 / "
+            f"交集 {len(clue_ids & answer_ids)}）—— 交集非空就说明难例无从体现",
+        )
 
         # ── 对照组的"关"：多跳关着 ⇒ 答案段够不着（第 1 轮只命中给线索的那一段） ──
         off = hit_test(admin, kb_id, multiHopEnabled=False)
