@@ -4,12 +4,14 @@ import cn.lincoln.aiplatform.assistant.domain.Assistant;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
+import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ModelStatusPort;
 import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -75,6 +77,16 @@ public class AssistantService {
   private static final int MAX_SUB_QUESTIONS_MAX = 5;
   private static final int NAME_MAX = 30;
 
+  /** 分页口径：契约默认 20 条一页，单页硬顶 100（与知识库同一条纪律：不许无界分页）。 */
+  private static final int DEFAULT_PAGE_SIZE = 20;
+
+  private static final int MAX_PAGE_SIZE = 100;
+
+  /** 契约 {@code AssistantQuery} 的枚举词汇（收了就按它判，不收就等于"看起来在筛、实际没筛"）。 */
+  private static final Set<String> ORIGINS = Set.of("OFFICIAL", "SHARED", "MINE");
+
+  private static final Set<String> SORTS = Set.of("POPULAR", "LATEST", "NAME");
+
   private final AssistantRepository assistants;
   private final AccessScopePort accessScope;
   private final ModelStatusPort modelStatus;
@@ -136,6 +148,63 @@ public class AssistantService {
   @Transactional(readOnly = true)
   public AssistantView get(UUID id) {
     return view(requireVisible(id));
+  }
+
+  /**
+   * 列表（契约 {@code listAssistants} / {@code AssistantQuery}）。
+   *
+   * <p>★ 范围与筛选<strong>拼进查询</strong>（仓储那侧共用一份谓词），{@code total} 与页内条数同口径。
+   *
+   * <p>⚠️ {@code favorite=true} <strong>显式拒绝</strong>：收藏的存储还没有（它在市场那一批）。
+   * 静默忽略会让"筛了没效果"看起来像"确实没有收藏过的应用"—— 那是本项目最怕的那类静默失败。
+   */
+  @Transactional(readOnly = true)
+  public PageResult<AssistantView> list(
+      String type,
+      Boolean published,
+      Boolean mine,
+      String origin,
+      Boolean favorite,
+      String tag,
+      String keyword,
+      String sort,
+      Integer page,
+      Integer size) {
+    if (favorite != null && favorite) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "收藏筛选尚未实现", "收藏的存储与写入口在市场那一批；当前请去掉 favorite 参数");
+    }
+    int safeSize = size == null ? DEFAULT_PAGE_SIZE : Math.min(Math.max(1, size), MAX_PAGE_SIZE);
+    int safePage = page == null ? 1 : Math.max(1, page);
+    AssistantRepository.Filter filter =
+        new AssistantRepository.Filter(
+            parseTypeOrNull(type),
+            published,
+            mine != null && mine,
+            requireIn("来源分段", origin, ORIGINS),
+            blankToNull(tag),
+            blankToNull(keyword),
+            requireIn("排序", sort, SORTS));
+
+    ScopeFilter scope = accessScope.currentScope();
+    List<Assistant> found = assistants.search(scope, filter, (safePage - 1) * safeSize, safeSize);
+    long total = assistants.countSearch(scope, filter);
+    return PageResult.of(found.stream().map(this::view).toList(), total, safePage, safeSize);
+  }
+
+  /**
+   * 删除（软删，{@code 02 §5.1}）。
+   *
+   * <p>★ 内置应用不可删：它是平台的示范应用（{@code builtin}），删掉之后"应用市场"会缺一块。
+   */
+  @Transactional
+  public void delete(UUID id, UUID actorId) {
+    Assistant assistant = requireVisible(id);
+    if (assistant.builtin()) {
+      throw new BusinessException(ErrorCode.FORBIDDEN, "内置应用不可删除", "内置应用是平台的示范应用；要移除请找管理员");
+    }
+    assistant.markDeleted(actorId);
+    assistants.save(assistant);
   }
 
   /**
@@ -520,6 +589,36 @@ public class AssistantService {
 
   private static String blankToNull(String value) {
     return value == null || value.isBlank() ? null : value.trim();
+  }
+
+  /** 列表筛选用：类型拼错 ⇒ 可读 400（而不是交给 Jackson/枚举抛一句开发者的话）。 */
+  private static AssistantType parseTypeOrNull(String raw) {
+    String value = blankToNull(raw);
+    if (value == null) {
+      return null;
+    }
+    try {
+      return AssistantType.valueOf(value.toUpperCase(java.util.Locale.ROOT));
+    } catch (IllegalArgumentException e) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "应用类型只支持 SIMPLE / WORKFLOW，收到：" + raw, "请检查查询参数");
+    }
+  }
+
+  /** 枚举型查询参数的统一校验：不在词汇表里 ⇒ 可读 400（★ 不许"收下但不筛"）。 */
+  private static String requireIn(String field, String value, Set<String> allowed) {
+    String trimmed = blankToNull(value);
+    if (trimmed == null) {
+      return null;
+    }
+    String upper = trimmed.toUpperCase(java.util.Locale.ROOT);
+    if (!allowed.contains(upper)) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          field + "只支持 " + String.join(" / ", allowed) + "，收到：" + value,
+          "请检查查询参数");
+    }
+    return upper;
   }
 
   /**

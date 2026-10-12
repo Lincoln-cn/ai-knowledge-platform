@@ -1,5 +1,7 @@
 package cn.lincoln.aiplatform.assistant.domain;
 
+import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -23,4 +25,33 @@ public interface AssistantRepository {
    * <p>★ 与知识库同一条口径（{@code V12}）：幂等是"同一个调用方的重试"，不是"全平台一个命名空间"。
    */
   Optional<Assistant> findByClientRequestIdAndOwnerId(String clientRequestId, UUID ownerId);
+
+  /**
+   * 列表：范围 + 筛选。
+   *
+   * <p>★ 范围（{@code ScopeFilter}）必须<strong>拼进查询</strong>而不是查完再筛 —— 否则 {@code total} 与页内条数是两个口径
+   * （用户看到"共 100 条"却只翻得出 3 条，{@code 08 §4.4.3} 纪律 1）。
+   */
+  List<Assistant> search(ScopeFilter scope, Filter filter, int offset, int limit);
+
+  /** 与 {@link #search} <strong>共用同一份谓词</strong>的计数（两处各拼一遍必然漂移）。 */
+  long countSearch(ScopeFilter scope, Filter filter);
+
+  /**
+   * 列表筛选条件（契约 {@code AssistantQuery}）。
+   *
+   * <p>★ 为什么收成一个 record 而不是七个位置参数：里面有两个 {@code Boolean}（{@code published} / {@code mine}）
+   * 和一个排序键，按位置传参时把两个布尔写反<strong>编译器不会报错</strong>。
+   *
+   * @param origin {@code OFFICIAL}（内置）/ {@code SHARED}（他人共享）/ {@code MINE}（我建的）；null = 不过滤
+   * @param sort {@code POPULAR} / {@code LATEST} / {@code NAME}；null = {@code LATEST}
+   */
+  record Filter(
+      AssistantType type,
+      Boolean published,
+      boolean mine,
+      String origin,
+      String tag,
+      String keyword,
+      String sort) {}
 }

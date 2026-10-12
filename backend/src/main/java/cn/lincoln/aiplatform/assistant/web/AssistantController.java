@@ -8,6 +8,7 @@ import cn.lincoln.aiplatform.assistant.domain.AssistantType;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
+import cn.lincoln.aiplatform.platform.web.PageResult;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
 import java.util.List;
@@ -15,6 +16,7 @@ import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -59,6 +61,29 @@ public class AssistantController {
 
   public AssistantController(AssistantService assistants) {
     this.assistants = assistants;
+  }
+
+  /**
+   * 列表（契约 {@code listAssistants}）。★ 范围与筛选拼进查询，{@code total} 与页内条数同口径。
+   *
+   * <p>★ 枚举型参数（{@code type} / {@code origin} / {@code sort}）拼错 ⇒ 可读 400：收了却不筛，
+   * 症状是"筛了没效果"，而它看起来像"确实没有符合条件的"。{@code favorite=true} 同理显式拒绝（收藏还没落）。
+   */
+  @GetMapping
+  @PreAuthorize("hasAuthority('assistant:view')")
+  public ApiResponse<PageResult<AssistantView>> list(
+      @RequestParam(required = false) String type,
+      @RequestParam(required = false) Boolean published,
+      @RequestParam(required = false) Boolean mine,
+      @RequestParam(required = false) String origin,
+      @RequestParam(required = false) Boolean favorite,
+      @RequestParam(required = false) String tag,
+      @RequestParam(required = false) String keyword,
+      @RequestParam(required = false) String sort,
+      @RequestParam(required = false) Integer page,
+      @RequestParam(required = false) Integer size) {
+    return ApiResponse.ok(
+        assistants.list(type, published, mine, origin, favorite, tag, keyword, sort, page, size));
   }
 
   /** 取一个应用（含检索参数与绑定）。 */
@@ -117,6 +142,14 @@ public class AssistantController {
   public ApiResponse<AssistantBundleView> export(
       @PathVariable UUID id, @RequestParam(defaultValue = "false") boolean includeDocuments) {
     return ApiResponse.ok(assistants.export(id, includeDocuments));
+  }
+
+  /** 删除（软删）。★ 内置应用不可删（它是平台示范应用）。 */
+  @DeleteMapping("/{id}")
+  @PreAuthorize("hasAuthority('assistant:edit')")
+  public ApiResponse<Void> delete(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    assistants.delete(id, UUID.fromString(jwt.getSubject()));
+    return ApiResponse.ok();
   }
 
   // ────────────────────────── 请求体 ──────────────────────────

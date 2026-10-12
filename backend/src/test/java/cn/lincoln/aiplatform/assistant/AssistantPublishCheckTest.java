@@ -11,8 +11,7 @@ import cn.lincoln.aiplatform.assistant.application.PublishCheckResult;
 import cn.lincoln.aiplatform.assistant.domain.Assistant;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
-import cn.lincoln.aiplatform.platform.access.AccessScopePort;
-import cn.lincoln.aiplatform.platform.access.OwnedResource;
+import cn.lincoln.aiplatform.identity.FakeAccessScope;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -53,7 +52,7 @@ class AssistantPublishCheckTest {
   private final FakeAssistants assistants = new FakeAssistants();
   private final FakeModels models = new FakeModels();
   private final FakeSegments segments = new FakeSegments();
-  private final FakeScope scope = new FakeScope();
+  private final FakeAccessScope scope = new FakeAccessScope();
 
   private final AssistantService service =
       new AssistantService(assistants, scope, models, segments);
@@ -355,11 +354,54 @@ class AssistantPublishCheckTest {
   @Test
   void invisibleAssistantIsNotFound() {
     Assistant app = publishable();
-    scope.visible = false;
+    scope.setVisible(false);
 
     assertThatThrownBy(() -> service.get(app.id()))
         .isInstanceOf(BusinessException.class)
         .satisfies(e -> assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.NOT_FOUND));
+  }
+
+  // ────────────────────────── 列表与删除 ──────────────────────────
+
+  @Test
+  void listNormalizesPagingAndReturnsTotal() {
+    publishable();
+    publishable();
+
+    var page = service.list(null, null, null, null, null, null, null, null, null, 500);
+
+    assertThat(page.total()).isEqualTo(2);
+    assertThat(page.list()).hasSize(2);
+    assertThat(page.size()).as("单页硬顶 100（不许无界分页）").isEqualTo(100);
+    assertThat(page.page()).isEqualTo(1);
+  }
+
+  /** ★ {@code favorite=true} 显式拒绝：静默忽略会让"筛了没效果"看起来像"确实没有收藏过的"。 */
+  @Test
+  void favoriteFilterIsRejectedInsteadOfSilentlyIgnored() {
+    assertThatThrownBy(
+            () -> service.list(null, null, null, null, true, null, null, null, null, null))
+        .isInstanceOf(BusinessException.class)
+        .hasMessageContaining("收藏筛选尚未实现");
+  }
+
+  /** 枚举型查询参数拼错 ⇒ 可读 400（不许"收下但不筛"）。 */
+  @Test
+  void unknownSortIsRejected() {
+    assertThatThrownBy(
+            () -> service.list(null, null, null, null, null, null, null, "随便排", null, null))
+        .isInstanceOf(BusinessException.class)
+        .hasMessageContaining("排序只支持");
+  }
+
+  @Test
+  void deleteIsSoftAndThenInvisible() {
+    Assistant app = publishable();
+
+    service.delete(app.id(), OWNER);
+
+    assertThat(assistants.findById(app.id())).as("软删：查不到了").isEmpty();
+    assertThatThrownBy(() -> service.get(app.id())).isInstanceOf(BusinessException.class);
   }
 
   // ────────────────────────── 夹具 ──────────────────────────
@@ -376,7 +418,9 @@ class AssistantPublishCheckTest {
 
     @Override
     public Optional<Assistant> findById(UUID id) {
-      return Optional.ofNullable(store.get(id));
+      // ★ 必须与真实适配器同口径：软删过的查不到 —— 假实现少了这一句，
+      //   测试就会绿在"软删之后还能取到"这个假行为上（本次就是它抓出来的）
+      return Optional.ofNullable(store.get(id)).filter(a -> !a.isDeleted());
     }
 
     @Override
@@ -384,6 +428,34 @@ class AssistantPublishCheckTest {
       return store.values().stream()
           .filter(a -> key.equals(a.clientRequestId()) && ownerId.equals(a.ownerId()))
           .findFirst();
+    }
+
+    /**
+     * 列表的假实现：只按"类型 / 已发布 / 只看我的"筛，其余条件本测试用不到。
+     *
+     * <p>★ 它<strong>验不了</strong>范围谓词与 SQL（那要真库）—— 那是真栈闸门的活。这里验的是服务层： 分页归一、范围从 {@code
+     * currentScope()} 来、以及"显式拒绝还没实现的筛选"。
+     */
+    @Override
+    public List<Assistant> search(ScopeFilter scope, Filter filter, int offset, int limit) {
+      return store.values().stream()
+          .filter(a -> !a.isDeleted())
+          .filter(a -> filter.type() == null || a.type() == filter.type())
+          .filter(a -> filter.published() == null || a.published() == filter.published())
+          .filter(a -> !filter.mine() || OWNER.equals(a.ownerId()))
+          .skip(offset)
+          .limit(limit)
+          .toList();
+    }
+
+    @Override
+    public long countSearch(ScopeFilter scope, Filter filter) {
+      return store.values().stream()
+          .filter(a -> !a.isDeleted())
+          .filter(a -> filter.type() == null || a.type() == filter.type())
+          .filter(a -> filter.published() == null || a.published() == filter.published())
+          .filter(a -> !filter.mine() || OWNER.equals(a.ownerId()))
+          .count();
     }
   }
 
@@ -434,21 +506,6 @@ class AssistantPublishCheckTest {
     @Override
     public List<Card> load(Collection<UUID> segmentIds) {
       return new ArrayList<>();
-    }
-  }
-
-  private static final class FakeScope implements AccessScopePort {
-
-    private boolean visible = true;
-
-    @Override
-    public ScopeFilter currentScope() {
-      return ScopeFilter.nobody();
-    }
-
-    @Override
-    public boolean canSee(OwnedResource resource) {
-      return visible;
     }
   }
 }
