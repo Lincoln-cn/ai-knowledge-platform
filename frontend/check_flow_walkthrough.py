@@ -215,13 +215,16 @@ MUST_WORK: list[tuple[str, str, str]] = [
     ("/basedata", "基础数据", "字典"),
     # 改密页在加载时不发请求（表单要用户填），但它的接口 PUT /users/me/password 已实现 ⇒ 归入"必须能用"
     ("/change-password", "修改密码", "密码"),
+    # ★ 第 15 周 0.4.3：应用管理页的加载链路（GET /assistants 列表）已落地 ⇒ 从 KNOWN_PENDING 移过来。
+    #   是**闸门自己**要求移的："已不再报失败 => 请把它从 KNOWN_PENDING 移走" —— 那条断言防的正是
+    #   "曾经欠过、现在早已实现，而清单还挂着它"的黑洞（同族：ContractDriftTest 的未实现前缀）。
+    ("/assistants", "应用管理", "应用"),
 ]
 
 # ── 已知后端未落地：**加载时就会报失败**（各自有周次计划，只记录不判失败）──
 KNOWN_PENDING: list[tuple[str, str, str]] = [
     ("/", "工作台", "工作台"),
     ("/conversation", "对话", "对话"),
-    ("/assistants", "应用管理", "应用"),
     ("/assistants/prompts", "提示词", "提示词"),
     ("/market", "应用市场", "应用"),
     ("/analytics", "运营看板", "看板"),
