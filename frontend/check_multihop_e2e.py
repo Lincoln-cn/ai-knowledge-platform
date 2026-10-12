@@ -14,16 +14,23 @@
   这一对是这份闸门唯一无法伪造的东西：`hopRounds=2` 可以由别的原因产生，
   但"关的时候没有、开的时候有"只能由多跳造成。
 
-★ 夹具（`fixtures/multihop.md`）是**刻意**这么写的：
-  1. 线索段含 `A-102`，答案段**不含**（否则第 1 轮就命中了，多跳无从体现）；
+★ 夹具（`fixtures/multihop-clue.md` + `multihop-answer.md`）是**刻意**这么写的：
+  1. 线索段含 `A-102`（问题问的就是它），答案段**不含** —— 否则第 1 轮就命中了，多跳无从体现；
   2. 答案段的词（附件三 / 违约金 / 上限）**不是**问题里的词（问题问"处罚标准"）⇒ 第 1 轮够不着它；
-  3. 有 3 段 ⇒ 第 1 轮命中数必然 < 3 ⇒ **触发条件是确定的**（不靠分数抖动）；
-  4. ★ **文档标题必须是中性的（"附件汇编"）** —— 第一版写成「A-102 号设备采购合同」，CI 立刻抓到：
-     分段的索引文本里带着**章节路径**（`SearchText.prefix` 拼的是 标题｜章节路径）⇒ 每一段都含
-     `A-102 号设备采购合同` ⇒ 答案段被第 1 轮直接命中，"难例"这个前提就没了。
-     **标题是"每一段都有"的文本，所以它不能含问题里的词。**
-  5. ⇒ 前提不靠"我以为"：运行时用两个单词查询分别证明线索段与答案段**是两段**（见下），
+  3. 两段 ⇒ 第 1 轮命中数必然 < 3 ⇒ **触发条件是确定的**（不靠分数抖动）；
+  4. ★ **必须是两篇文档**，不是一篇里的两节 —— CI 实测逼出来的：
+     一篇里的三个小节被切分器**打包成了一段**（`MarkdownChunker` 按 `segmentLength` 装箱，
+     短章节会合进同一个块）⇒ 线索与答案同段，"答案跨两段"这个前提直接不成立，
+     而症状是"关多跳也能命中答案"（第一次 CI 读数就是这样）。
+     `ROADMAP` 说的是"跨两段"，这里落成"跨两篇文档的两段"—— 段数不变，前提由结构保证而不是靠长度碰运气。
+  5. ★ **文档标题必须中性**（"第一条 处罚条款" / "附件三"）：CI 第二次实测抓到，
+     第一版标题写成「A-102 号设备采购合同」，而分段的索引文本带着**章节路径**
+     （`SearchText.prefix` 拼的是 标题｜章节路径）⇒ **每一段都含** `A-102 号设备采购合同`
+     ⇒ 答案段被第 1 轮直接命中。**标题是"每段都有"的文本，所以它不能含问题里的词。**
+  6. ⇒ 前提不靠"我以为"：运行时用两个单词查询分别证明线索段与答案段**是两段**（见下），
      同段就直接红 —— 否则本闸门会绿在一个虚假的前提上。
+     ⚠️ 探针要用**成词**的短语（`违约金上限`）：单词 `百分之五` 经 zhparser 与库里的分词对不上，
+     会返回 0 命中 —— 那是**探针**的问题、不是夹具的问题（CI 第一次读数"线索 1 段 / 答案 0 段"就是这么误报的）。
 
 ★ 检索模式用 FULLTEXT 而不是 HYBRID：桩向量是按 hash 造的、与语义无关，
   HYBRID 会引入一次**随机**的"这条分段恰好分数高" ⇒ 闸门会随机红（本项目对随机红比不红更警惕）。
@@ -50,7 +57,10 @@ from pathlib import Path
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5280").rstrip("/")
 API = BASE + "/api/v1"
 
-FIXTURE = Path(__file__).resolve().parent.parent / "backend/src/test/resources/fixtures/multihop.md"
+FIXTURES = [
+    Path(__file__).resolve().parent.parent / "backend/src/test/resources/fixtures/multihop-clue.md",
+    Path(__file__).resolve().parent.parent / "backend/src/test/resources/fixtures/multihop-answer.md",
+]
 
 STUB_API_BASE = "http://localhost:11434/v1"
 STUB_CONFIG = "http://localhost:11434/__stub/config"
@@ -59,9 +69,9 @@ STUB_RESET = "http://localhost:11434/__stub/reset"
 # ★ 问"处罚标准"，而答案段里写的是"违约金上限" —— 词面不通，只有靠第 2 轮才够得着
 QUESTION = "A-102 号设备的处罚标准是多少"
 
-# 夹具前提用的两个单词查询（各自只应命中一段；它们命中同一段 ⇒ "答案跨两段"不成立）
+# 夹具前提用的两个探针（各自只应命中一段；命中同一段 ⇒ "答案跨两段"不成立）
 CLUE_ONLY = "A-102"
-ANSWER_ONLY = "百分之五"
+ANSWER_ONLY = "违约金上限"
 
 # 第 2 轮要查什么：由桩脚本化给出（这正是"模型给出下一轮查询"那一步）
 NEXT_QUERY = "附件三 违约金 上限"
@@ -278,25 +288,28 @@ def main() -> int:
             print(f"  [NG] 建知识库失败：status={status} body={str(kb)[:200]}")
             return 1
 
-        if not FIXTURE.exists():
-            print(f"  [NG] 夹具文件不存在：{FIXTURE}")
-            return 1
-        status, uploaded = upload(f"/knowledge-bases/{kb_id}/documents", admin, FIXTURE)
-        data = uploaded.get("data")
-        doc_id = (data[0].get("id") if isinstance(data, list) and data else None) or (data or {}).get("id")
-        if status != 200 or not doc_id:
-            print(f"  [NG] 上传失败：status={status} body={str(uploaded)[:200]}")
-            return 1
-        parsed = wait_doc_status(admin, kb_id, doc_id, {"PENDING_EMBEDDING", "SEGMENT_FAILED"}, 90)
-        if parsed != "PENDING_EMBEDDING":
-            print(f"  [NG] 等解析落地失败（实际 {parsed}）")
-            return 1
-        api("POST", f"/documents/{doc_id}/embedding", admin, {})
-        embedded = wait_doc_status(admin, kb_id, doc_id, {"SUCCEEDED", "EMBEDDING_FAILED"}, 120)
-        if embedded != "SUCCEEDED":
-            print(f"  [NG] 等向量化成功失败（实际 {embedded}）")
-            return 1
-        print(f"  · 夹具就绪：kbId={kb_id} docId={doc_id}（难例语料已解析 + 已向量化）")
+        doc_ids: list[str] = []
+        for fixture in FIXTURES:
+            if not fixture.exists():
+                print(f"  [NG] 夹具文件不存在：{fixture}")
+                return 1
+            status, uploaded = upload(f"/knowledge-bases/{kb_id}/documents", admin, fixture)
+            data = uploaded.get("data")
+            doc_id = (data[0].get("id") if isinstance(data, list) and data else None) or (data or {}).get("id")
+            if status != 200 or not doc_id:
+                print(f"  [NG] 上传失败（{fixture.name}）：status={status} body={str(uploaded)[:200]}")
+                return 1
+            parsed = wait_doc_status(admin, kb_id, doc_id, {"PENDING_EMBEDDING", "SEGMENT_FAILED"}, 90)
+            if parsed != "PENDING_EMBEDDING":
+                print(f"  [NG] 等解析落地失败（{fixture.name}，实际 {parsed}）")
+                return 1
+            api("POST", f"/documents/{doc_id}/embedding", admin, {})
+            embedded = wait_doc_status(admin, kb_id, doc_id, {"SUCCEEDED", "EMBEDDING_FAILED"}, 120)
+            if embedded != "SUCCEEDED":
+                print(f"  [NG] 等向量化成功失败（{fixture.name}，实际 {embedded}）")
+                return 1
+            doc_ids.append(doc_id)
+        print(f"  · 夹具就绪：kbId={kb_id} docIds={doc_ids}（难例两段已解析 + 已向量化）")
 
         # ── 夹具前提：线索与答案必须**在不同的分段里** —— 否则"答案跨两段"这句话不成立，
         #    而本闸门会绿在一个虚假的前提上（第一版夹具就是这样：标题进了每段的索引文本） ──
