@@ -1,11 +1,11 @@
 package cn.lincoln.aiplatform.retrieval.domain;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * 把模型的原始输出解析成 {@link QueryUnderstanding}（{@code 10 §3.1.2} / {@code §3.3.2}）。

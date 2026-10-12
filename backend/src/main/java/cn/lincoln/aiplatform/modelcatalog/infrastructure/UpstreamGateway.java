@@ -1,7 +1,5 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -15,6 +13,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * 上游网关客户端 —— 对 OpenAI 兼容端点做目录拉取 / 可用性校验 / 能力探测。
@@ -88,7 +89,7 @@ public class UpstreamGateway {
                   firstText(item, "tools")));
         }
       }
-    } catch (IOException e) {
+    } catch (JacksonException e) {
       throw new UpstreamUnreachableException("上游返回的模型清单不是合法 JSON：" + e.getMessage(), e);
     }
     return result;
@@ -117,7 +118,7 @@ public class UpstreamGateway {
             "上游返回的 embeddings 响应里没有向量数组 —— 无法测定维度。响应片段：" + abbreviate(body));
       }
       return embedding.size();
-    } catch (IOException e) {
+    } catch (JacksonException e) {
       throw new UpstreamUnreachableException("上游返回的 embeddings 响应不是合法 JSON：" + e.getMessage(), e);
     }
   }
@@ -143,7 +144,9 @@ public class UpstreamGateway {
     //   手拼的转义（只处理 \\ 与 "）在遇到换行/制表符时会发出**非法 JSON**，
     //   而分段的 search_text 里正好含换行（前缀与正文的分隔符）—— 真事故：
     //   非法请求被上游按 400 拒（或被桩服务当成空请求）⇒ 表现为"怎么只回了 1 条向量"。
-    String payload = json.valueToTree(Map.of("model", model, "input", texts)).toString();
+    // ★ 用 writeValueAsString 而不是 valueToTree(…).toString()：后者的输出格式由 JsonNode 决定，
+    //   而这里要的是**确定的合法 JSON**（Jackson 3 下没有再对 toString() 的格式作承诺）
+    String payload = json.writeValueAsString(Map.of("model", model, "input", texts));
 
     String body = post(resolve(apiBase, "/embeddings"), payload, apiKey);
     try {
@@ -176,7 +179,7 @@ public class UpstreamGateway {
         }
       }
       return List.of(ordered);
-    } catch (IOException e) {
+    } catch (JacksonException e) {
       throw new UpstreamUnreachableException("上游返回的 embeddings 响应不是合法 JSON：" + e.getMessage(), e);
     }
   }
@@ -222,7 +225,7 @@ public class UpstreamGateway {
             "上游响应里没有 choices[0].message.content。响应片段：" + abbreviate(body));
       }
       return content.asText();
-    } catch (IOException e) {
+    } catch (JacksonException e) {
       throw new UpstreamUnreachableException("上游返回的对话响应不是合法 JSON：" + e.getMessage(), e);
     }
   }
@@ -367,7 +370,10 @@ public class UpstreamGateway {
   private String writeJson(Object value) {
     try {
       return json.writeValueAsString(value);
-    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+    } catch (JacksonException e) {
+      // ★ Jackson 3 起异常是**非受检**的（`JacksonException extends RuntimeException`），
+      //   但这个 catch 仍然要留：它是"构造请求体失败"这条读数的唯一出口，
+      //   去掉就变成"序列化异常直接冒到调用方"，而调用方按的是 {@link UpstreamUnreachableException} 那条语义。
       // 到不了：Map / List / String 一定能序列化。留着是免得调用方处理一个虚构的分支
       throw new UpstreamUnreachableException("构造请求体失败：" + e.getMessage(), e);
     }
