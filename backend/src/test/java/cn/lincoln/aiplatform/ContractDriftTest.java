@@ -76,8 +76,8 @@ class ContractDriftTest {
    *
    * <p>★ 按域名前缀列（不是逐条 URL）：同一个域下的几十条端点会一起落地，逐条登记会把清单变成第二份契约。
    *
-   * <p>★ 理由写在这里，而不是散落在失败信息里：前端已经跑在后端前面（{@code ROADMAP §3.1}）—— 契约约 115 个端点，
-   * 后端目前实现了身份域与模型域（modelcatalog 的 REST 已在 0.1.3 落地）。
+   * <p>★ 理由写在这里，而不是散落在失败信息里：前端已经跑在后端前面（{@code ROADMAP §3.1}）—— ★ 契约 **128** 个
+   * 「方法 + 路径」端点（2026-10-13 实测；此前这里写"约 115"**是过期数字**）， 后端目前已落 70 个。
    * 不能要求后端立刻把它们都实现，但<strong>每一项都要能回答"计划落在哪一周"</strong>（见 {@code docs/ROADMAP.md §4.7.3}）。
    * 清单一旦失去可审阅性，它就变成永久黑洞 —— 那正是这条规则要防的。
    */
@@ -97,10 +97,14 @@ class ContractDriftTest {
           // ★ /segments 也于 0.3.1 全部落地（PATCH /{*}/enabled 启停、POST /{*}/embedding 逐段重向量、
           //   DELETE /batch 批量删、POST /batch-move 跨文档搬移）⇒ 一并从清单删除。
           // 第 15 周 0.4.3：应用配置 + 发布校验（§3.1 记 M4）；含 import/export/credentials/api-keys
-          // ★ 0.4.3 已落地其中 6 个：POST /assistants · GET/PUT /{id} · GET /{id}/publish-check ·
-          //   PATCH /{id}/published · GET /{id}/export。
-          // ★ 前缀仍留在清单里：剩下的（列表与市场筛选 / 收藏 / 标签 / 凭证 / API Key / 共享写 / 导入）
+          // ★ 0.4.3 已落地其中 7 个：GET /assistants（列表）· POST /assistants · GET/PUT /{id} ·
+          //   GET /{id}/publish-check · PATCH /{id}/published · GET /{id}/export。★ DELETE /{id} 也在。
+          // ★ 第 16 周 0.4.4 再落 4 个（公开凭证）：GET/POST /{appId}/credentials ·
+          //   PATCH /{appId}/credentials/{id}/enabled · POST /{appId}/credentials/{id}/revoke。
+          // ★ 前缀仍留在清单里：剩下的（市场筛选 / 收藏 / 标签 / API Key / 共享写 / 导入）
           //   确实还没实现，按"前缀登记"允许缺失 —— 而"曾经欠过、现在早已实现"的噪音要靠人在这行更新。
+          //   ★ 2026-10-13 逐条核过一遍：这条注释此前把"列表与市场筛选"整体算作欠账，而 `GET /assistants`
+          //     那时**已经落地**（`AssistantController` 的 `@GetMapping`）—— 一行注释的滞后果然会长成噪音。
           "/assistants",
           // §3.1 M4：提示词管理页（pages/assistants/prompts/）—— 前端已存在，后端随 assistant 域
           "/prompt-types",
