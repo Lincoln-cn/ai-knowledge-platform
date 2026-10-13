@@ -1,5 +1,8 @@
 package cn.lincoln.aiplatform.platform.access;
 
+import java.util.UUID;
+import java.util.function.Supplier;
+
 /**
  * 数据范围与密级的<strong>判定端口</strong>（{@code 08 §4.4.2}）。
  *
@@ -26,4 +29,38 @@ public interface AccessScopePort {
 
   /** 单条资源是否可见。★ 看不见的资源要返回 <strong>404</strong> 而不是 403（纪律 2）。 */
   boolean canSee(OwnedResource resource);
+
+  /**
+   * 以<strong>委派范围</strong>执行一段取数逻辑，返回它的结果（第 16 周 · 0.4.4 新增）。
+   *
+   * <h3>它解决的是什么</h3>
+   *
+   * <p>免登录面（公开凭证）没有当前用户，却必须<strong>用链接自己的冻结密级重新过滤一遍</strong> （{@code 13 §5.2} 第 ② 级）。而密级谓词在 SQL
+   * 里读的是 {@code ScopeFilter}（{@code JdbcSegmentSearchQuery.classificationRank()}）——
+   * 于是"以另一个范围跑一次查询"必须有一个 <strong>类型化</strong>的入口。★ 没有它，调用方只能自己往 {@code SecurityContext} 里塞一个 手工构造的
+   * JWT —— 那是同一段构造逻辑的<strong>第二处实现</strong>（而它会在下次改声明名时不跟着改）。
+   *
+   * <h3>★ 只许<strong>收窄</strong>，绝不放大</h3>
+   *
+   * <p>实现必须把委派范围与当前请求者的范围<strong>求交</strong>，且方向是收窄：
+   *
+   * <ul>
+   *   <li>密级取两者中<strong>更低</strong>的那个（{@link ClassificationLevel#narrower}）—— 一条冻结了 {@code SECRET}
+   *       的链接被一个 {@code INTERNAL} 的人解析时，生效的必须是 {@code INTERNAL}；
+   *   <li>数据范围、角色、标签、部门链<strong>照抄当前请求者</strong>。
+   * </ul>
+   *
+   * <p>★ 这条纪律的理由与 {@code fail-closed} 同源：把一个范围"合并"成更宽的那种写法，
+   * 症状是<strong>看不见的放大</strong>（链接能看到的比它能创建的人还多），而且不报错。
+   *
+   * @param delegated 链接希望行使的范围（通常由 {@code PublicTokenResolver} 给出）
+   * @param requesterId ★ 发起解析的<strong>已登录用户</strong>；未登录传 {@code null}。
+   *     实现必须校验它与当前请求身份是<strong>同一个人</strong> —— 否则这里就成了"以任意人身份取数"的后门
+   * @param body 要执行的取数逻辑
+   */
+  default <T> T asScope(ScopeFilter delegated, UUID requesterId, Supplier<T> body) {
+    // ★ 默认实现是"明确拒绝"而不是"直接执行 body"：后者会让一个没写这个方法的实现
+    //   静默地把委派**当成没发生**（取数用的是请求者自己的范围）—— 那是一条不会报错的越权。
+    throw new UnsupportedOperationException("这个 AccessScopePort 实现不支持委派范围（asScope）");
+  }
 }

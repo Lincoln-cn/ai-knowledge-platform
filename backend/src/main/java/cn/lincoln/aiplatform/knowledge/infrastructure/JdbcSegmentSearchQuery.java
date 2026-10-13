@@ -228,6 +228,46 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
         args.toArray());
   }
 
+  /**
+   * 以<strong>显式的密级上限</strong>列出可见的分段（第 16 周 · 0.4.4）。
+   *
+   * <p>★★ 它的全部意义是"<strong>换一个上限、谓词一个字不改</strong>"：用的仍然是 {@link #SECURITY_PREDICATE}（可见性 +
+   * 密级），只把绑定值换成入参。
+   *
+   * <p>★ 为什么不能让调用方自己拼一条：那就是同一段安全谓词的<strong>第二处实现</strong>， 而"只给一路加过滤条件"正是 {@code 13 §三}
+   * 闸门②点名的、本项目最贵的病。
+   *
+   * <p>★ {@code ceiling == null} ⇒ 直接返回空（fail-closed）：与 {@link #clearanceRank()} 在"取不到身份"时返回 {@code
+   * -1} 是同一条口径 —— 没有上限就是什么都看不见， 不是什么都看得见。
+   */
+  @Override
+  public List<Scored> visibleSegments(
+      Collection<UUID> kbIds, ClassificationLevel ceiling, int limit) {
+    if (kbIds == null || kbIds.isEmpty() || ceiling == null || limit <= 0) {
+      return List.of();
+    }
+    List<UUID> ids = List.copyOf(kbIds);
+    List<Object> args = new ArrayList<>();
+    // ★ 绑定值的位置约定与另外两条路逐字一致：其余参数 → 密级 → kbId 列表 → limit
+    args.add(ceiling.ordinal());
+    args.addAll(ids);
+    args.add(limit);
+    // ★ 排序必须确定：没有它，同一个问题两次访问可以返回不同的子集，而"可见集合收窄"那条判据
+    //   会在 limit 截断处偶发红 —— 那种红会被误当成"密级过滤坏了"
+    String sql =
+        "select s.id"
+            + JOINS
+            + " where"
+            + SECURITY_PREDICATE
+            + " and s.kb_id in ("
+            + placeholders(ids.size())
+            + ")"
+            + " order by s.id"
+            + " limit ?";
+    return jdbc.query(
+        sql, (rs, i) -> new Scored(rs.getObject("id", UUID.class), 1.0), args.toArray());
+  }
+
   @Override
   public Set<UUID> visibleAmong(Collection<UUID> candidateIds, Collection<UUID> kbIds) {
     if (candidateIds == null || candidateIds.isEmpty() || kbIds == null || kbIds.isEmpty()) {

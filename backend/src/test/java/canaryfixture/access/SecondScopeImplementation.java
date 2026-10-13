@@ -4,6 +4,8 @@ import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import java.util.Set;
+import java.util.UUID;
+import java.util.function.Supplier;
 import org.springframework.stereotype.Component;
 
 /**
@@ -26,6 +28,17 @@ public class SecondScopeImplementation implements AccessScopePort {
   @Override
   public boolean canSee(OwnedResource resource) {
     return false;
+  }
+
+  /**
+   * ⚠️ 金丝雀样本的委派实现：**故意什么都不做**。
+   *
+   * <p>★ 不要在这里补成"真的委派"——它是一份**坏样本**，它的价值就在于"这是一处不该存在的判定实现"。 补上 {@code asScope} 只是为了让这个类在 {@code
+   * AccessScopePort} 长出第 4 个方法之后仍然可编译 （否则那条金丝雀会因为编译失败而**看起来红了**，而它红的理由与被测的东西无关）。
+   */
+  @Override
+  public <T> T asScope(ScopeFilter delegated, UUID requesterId, Supplier<T> body) {
+    return body.get();
   }
 
   /** 只是为了让这个类"看起来像真的会在用"，避免被当成死代码删掉。 */

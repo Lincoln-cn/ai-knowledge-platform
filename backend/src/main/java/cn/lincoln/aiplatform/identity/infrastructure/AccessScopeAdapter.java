@@ -5,11 +5,14 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.org.OrgDirectoryPort;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +62,19 @@ public class AccessScopeAdapter implements AccessScopePort {
   /** 请求作用域缓存的值：{@code orgId} 回答"这条链是谁的"。 */
   private record OrgChain(UUID orgId, Set<String> ids) {}
 
+  /**
+   * ★ 当前生效的<strong>委派范围</strong>（{@link #asScope} 装上的那一份）。
+   *
+   * <p>★ 用 {@code ThreadLocal} 而不是"往 {@code SecurityContext} 里塞一个合成 JWT"：合成出来的令牌
+   * 是一份**可以自己造**的凭据，而这里要回答的问题只有一个 —— "当前生效的范围是哪一份"。 存 {@link ScopeFilter}
+   * 同时让"密级是冻结值、其余分量照抄请求者"这件事<strong>逐字</strong>成立 （不必把 {@code myOrgIds} 那种已展开的集合塞回单个 {@code orgId}
+   * 再展开一遍）。
+   *
+   * <p>★ 必须成对清除（{@code try/finally}）：它是 {@code ThreadLocal}，而请求线程是池化的 —— 漏清就把一条链接的冻结密级带给下一个请求（与
+   * {@code MY_ORG_IDS_ATTRIBUTE} 那条注释同一个理由）。
+   */
+  private static final ThreadLocal<ScopeFilter> DELEGATED = new ThreadLocal<>();
+
   private final OrgDirectoryPort orgDirectory;
 
   public AccessScopeAdapter(OrgDirectoryPort orgDirectory) {
@@ -67,6 +83,12 @@ public class AccessScopeAdapter implements AccessScopePort {
 
   @Override
   public ScopeFilter currentScope() {
+    // ★ 委派期间读委派那一份：否则 asScope 里再问一次 currentScope() 会立刻丢掉冻结密级
+    //   （症状是"冻结值只在最外层那个查询生效"，而内层照旧用请求者自己的密级）
+    ScopeFilter delegated = DELEGATED.get();
+    if (delegated != null) {
+      return delegated;
+    }
     Jwt jwt = currentJwt();
     if (jwt == null) {
       return ScopeFilter.nobody();
@@ -77,6 +99,61 @@ public class AccessScopeAdapter implements AccessScopePort {
   @Override
   public boolean canSee(OwnedResource resource) {
     return currentScope().canSee(resource, Instant.now());
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>★★ 本实现的三条纪律（每一条都对应一种"静默放大"）：
+   *
+   * <ol>
+   *   <li><strong>发起人必须是当前请求者</strong>：{@code requesterId} 与 JWT 的 {@code sub} 不同 ⇒ 拒。 少了这一句，{@link
+   *       AccessScopePort#asScope} 就是"以任意人身份取数"的后门 —— 而它<strong>不会报任何错</strong>（取数照常成功）。
+   *   <li><strong>密级取更低</strong>：{@code narrower(委派值, 当前请求者值)}。取反了也能跑， 症状是"用别人给的链接能看到比自己更高密级的内容"。
+   *   <li><strong>其余分量照抄请求者</strong>：数据范围 / 角色 / 标签 / 部门链一律用当前范围 ——
+   *       委派只允许在<strong>密级</strong>这一维上更窄。这一条是"别把委派做成第二个范围构造器"的落实。
+   * </ol>
+   *
+   * <p>★ 它<strong>不</strong>自己去拼一份共享的 {@code ScopeFilter}：密级之外的分量（数据范围 / 角色 / 标签 /
+   * 部门链）一律照抄当前请求者，而"当前请求者是谁"只有一条解析路径（{@code fromJwt}）。
+   *
+   * <p>★ 委派期间 {@code currentScope()} 直接返回这一份（见 {@link #DELEGATED}）。
+   *
+   * <p>⚠️ 本批（0.4.4）没有 HTTP 公开端点，所以调用点只有服务层；第 17 周接公开面时，
+   * <strong>撤销必须与解析在同一入口</strong>（否则"同一个请求周期内撤销即失效"这条判据做不到）。
+   */
+  @Override
+  public <T> T asScope(ScopeFilter delegated, UUID requesterId, Supplier<T> body) {
+    Jwt current = currentJwt();
+    UUID currentUserId = current == null ? null : parseUuid(current.getSubject());
+    if (requesterId == null || !requesterId.equals(currentUserId)) {
+      throw new BusinessException(
+          ErrorCode.FORBIDDEN, "无法以别人的身份解析公开令牌", "委派范围只能由发起解析的那个登录用户行使；请重新登录后再试");
+    }
+    ScopeFilter currentScope = fromJwt(current);
+    ScopeFilter effective =
+        new ScopeFilter(
+            delegated.me(),
+            currentScope.scope(),
+            currentScope.myRoles(),
+            ClassificationLevel.narrower(
+                delegated.maxClassification(), currentScope.maxClassification()),
+            currentScope.clLabels(),
+            currentScope.myOrgIds());
+
+    ScopeFilter previous = DELEGATED.get();
+    // ★ 记住"上一份范围"而不是上一份令牌：能自己给自己签发的令牌是伪造面。
+    //   而这里需要回答的问题只有一个 —— "当前生效的范围是哪一份"。
+    DELEGATED.set(effective);
+    try {
+      return body.get();
+    } finally {
+      if (previous == null) {
+        DELEGATED.remove();
+      } else {
+        DELEGATED.set(previous);
+      }
+    }
   }
 
   // ────────────────────────── 内部 ──────────────────────────

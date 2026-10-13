@@ -30,13 +30,28 @@ public final class SecurityContexts {
   /**
    * 以给定的密级上限执行一段取数逻辑（模拟一个已认证请求）。
    *
+   * <p>★ 主体是<strong>随机 UUID</strong>：调用方只关心"密级这一维"，不关心"我是谁"。 需要<strong>确定的那个主体</strong>时用 {@link
+   * #asUser(UUID, ClassificationLevel, Supplier)} —— 例如"归属人自己解析自己的公开凭证"（{@code
+   * AccessScopePort.asScope} 会校验主体与发起人是同一个人）。
+   *
    * @param clearance 这个"测试用户"的密级上限
    * @param body 要执行的取数逻辑
    */
   public static <T> T asClearance(ClassificationLevel clearance, Supplier<T> body) {
+    return asUser(UUID.randomUUID(), clearance, body);
+  }
+
+  /**
+   * 以一个<strong>确定的主体</strong>执行一段取数逻辑（第 16 周 · 0.4.4 新增）。
+   *
+   * <p>★ 为什么必须能指定主体：{@code AccessScopePort.asScope} 的第一条纪律是
+   * "发起人必须是当前请求者"（否则它就是"以任意人身份取数"的后门）。于是"归属人解析自己的公开凭证" 这类测试必须让令牌里的 {@code sub}
+   * <strong>就是那个归属人</strong> —— 用随机 sub 会让它 红在"无法以别人的身份解析公开令牌"上，而那个红与本类要验的东西无关。
+   */
+  public static <T> T asUser(UUID userId, ClassificationLevel clearance, Supplier<T> body) {
     SecurityContext previous = SecurityContextHolder.getContext();
     try {
-      SecurityContextHolder.setContext(contextFor(clearance));
+      SecurityContextHolder.setContext(contextFor(userId, clearance));
       return body.get();
     } finally {
       // ★ 必须还原：SecurityContext 是 ThreadLocal，而 surefire 会复用线程跑后续用例
@@ -44,11 +59,11 @@ public final class SecurityContexts {
     }
   }
 
-  private static SecurityContext contextFor(ClassificationLevel clearance) {
+  private static SecurityContext contextFor(UUID userId, ClassificationLevel clearance) {
     Jwt jwt =
         Jwt.withTokenValue("test-token")
             .header("alg", "none")
-            .subject(UUID.randomUUID().toString())
+            .subject(userId.toString())
             .claim("role", "ADMIN")
             // dataScope=ALL：本辅助只管"密级"这一维，数据范围不该顺手被放宽（要验范围的测试自己造令牌）
             .claim("scope", "ALL")

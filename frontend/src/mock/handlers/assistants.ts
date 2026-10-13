@@ -19,7 +19,7 @@ import { apiKeys, assistants, credentials, sampleBundleDeps, workflowDrafts } fr
 import { models } from '../fixtures/models'
 import { cannedAnswer } from '../fixtures/canned'
 import { promptConfigs } from '../fixtures/prompts'
-import { roles, users } from '../fixtures/identity'
+import { clearanceFromToken, roles, users } from '../fixtures/identity'
 import { PERM } from '@/constants/permissions'
 import { currentSubjects, requireVisible, selfId, visiblePredicate } from '../policy'
 
@@ -649,6 +649,9 @@ export const assistantRoutes: MockRoute[] = [
         token: randToken('pk_live'),
         enabled: true,
         expiresAt: expiresAt ?? null,
+        // ★ 冻结 = 创建者此刻的 clearance（13 §5.2 ①）。**由后端取，不接受前端传** ——
+        //   否则调用方能把凭证的密级上限抬到超过自己，等于自建一条越权通道。
+        maxClassification: clearanceFromToken(token ?? ''),
         accessCount: 0,
         lastAccessAt: null,
         revokedAt: null,
