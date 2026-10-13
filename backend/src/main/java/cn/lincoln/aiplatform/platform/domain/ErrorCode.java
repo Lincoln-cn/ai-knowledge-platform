@@ -80,7 +80,37 @@ public enum ErrorCode {
   SEGMENT_TOO_LONG(3002, "分段超长"),
 
   /** 应用发布前校验不通过（assistant · 不变量 {@code AS-I2~I5}）。 */
-  PUBLISH_CHECK_FAILED(6001, "应用发布前校验不通过");
+  PUBLISH_CHECK_FAILED(6001, "应用发布前校验不通过"),
+
+  /**
+   * ★★ 公开面四态（免登录的访问凭证 / 分享链接）—— 一个数字一族，<strong>不可合并</strong>。
+   *
+   * <p>这四态<strong>不是同一个错误的四种措辞</strong>：它们指向不同的<strong>下一步动作</strong>，
+   * 合并成一句"链接无效"会让人按错的假设去等（已停用可以恢复、已撤销不能）。 四态的界面文案在 {@code frontend/src/utils/public-gate.ts}（唯一出口）。
+   *
+   * <p>★ 这一段是 <strong>2026-10-13（第 16 周末）</strong>补的：那之前这组码<strong>只活在 mock 与前端</strong> ——
+   * 契约与后端枚举两侧都没有它， 而第 16 周交付的前端 F3 已经按它分四态了（{@code 13 §8.3} 留下的两格之一，见 {@code ROADMAP §11.2} 第 17
+   * 周）。 ★ 顺序照 {@code ErrorCode} 的类注释：<strong>先改契约、再改这里</strong>（契约 {@code
+   * frontend/src/api/types.ts} 的 {@code ErrorCode} 是唯一真源），由 {@code frontend/check_error_codes.py}
+   * 每轮比对两侧。
+   *
+   * <p>★ 与 {@code GlobalExceptionHandler.httpStatusOf} 的关系：它们的码值（{@code 40001–59999}）与 HTTP
+   * 状态<strong>不重合</strong> （{@code HttpStatus.resolve} 在 {@code 5xx} 之上返回 {@code null}）⇒ 会落进 {@code
+   * GlobalExceptionHandler} 的 {@code default} 分支，**HTTP 仍是 404 / 400，业务码只在包络里**。这不是缺陷，是这组码的用法：
+   * <strong>判据取包络的 {@code code}，不取 HTTP 状态</strong>（前端 {@code lib/http.ts} 在无包络时才回落 HTTP 状态）。
+   *
+   * <p>★ 为什么没有 {@code 40405}（内容升密 ⇒ 原链接立即失效）：按 {@code 13 §5.3} 的 <strong>(a)</strong> 口径，
+   * 升密后<strong>凭证仍然有效、链接仍打得开</strong>，只是那份内容被同一个谓词滤掉 ⇒ <strong>不需要第五个码</strong>。 那一档若将来真要做（(b)
+   * 自动撤销凭证），届时<strong>先改契约再加这里</strong>。
+   */
+  /** 公开面：认不出这个 token（链接本身不对，重试无意义）。 */
+  PUBLIC_TOKEN_UNKNOWN(40401, "访问凭证无效"),
+  /** 公开面：已撤销（★ 终态，不能重新启用）。 */
+  PUBLIC_TOKEN_REVOKED(40402, "访问凭证已被撤销"),
+  /** 公开面：已过期（有效期创建时定下、之后不能改）。 */
+  PUBLIC_TOKEN_EXPIRED(40403, "访问凭证已过期"),
+  /** 公开面：已停用（★ 可恢复：重新启用即可）。 */
+  PUBLIC_TOKEN_DISABLED(40404, "访问凭证已被停用");
 
   private final int code;
   private final String defaultMessage;
