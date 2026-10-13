@@ -73,8 +73,21 @@ class AccessCredentialFilteringTest {
       jdbc.update(
           "delete from ai_model where id = (select model_id from as_assistant where id = ?)",
           lastAppId);
+      // ★ as_access_credential 与 as_assistant_kb 都是 on delete cascade ⇒ 删应用即连带清掉，不必单独删
       jdbc.update("delete from as_assistant where id = ?", lastAppId);
     }
+    // ★★ 删除顺序必须"从下往上"：kb_segment 引用 kb_document、kb_document 引用 kb_knowledge_base。
+    //   直接删库会在真栈上炸 DataIntegrityViolation（`kb_document_kb_id_fkey`）——
+    //   ★ 这正是 CI 抓出来的：本机 Docker 未运行 ⇒ 这一类真栈测试在本机根本没跑起来，
+    //     "写好的测试"与"跑过的测试"是两件事（本项目对这条极敏感）。
+    jdbc.update(
+        "delete from kb_segment where kb_id in"
+            + " (select id from kb_knowledge_base where owner_id = ?)",
+        OWNER);
+    jdbc.update(
+        "delete from kb_document where kb_id in"
+            + " (select id from kb_knowledge_base where owner_id = ?)",
+        OWNER);
     jdbc.update("delete from kb_knowledge_base where owner_id = ?", OWNER);
     lastAppId = null;
   }
