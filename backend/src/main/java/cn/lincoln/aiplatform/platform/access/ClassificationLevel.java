@@ -35,4 +35,32 @@ public enum ClassificationLevel {
     }
     return this.ordinal() >= other.ordinal() ? this : other;
   }
+
+  /**
+   * 取两者中更**不敏感**的那个（第 16 周 · 0.4.4 新增）。
+   *
+   * <p>★ 语义上它是 {@link #max} 的对偶，用在一处很具体的地方：<strong>委派范围</strong> （一条链接的冻结密级 ×
+   * 解析它的人当前持有的密级）必须取<strong>更低的那个</strong> —— 否则"用一条别人给的链接"就能看到比自己更高密级的内容。
+   *
+   * <p>★ 方向必须写清楚，因为取反了<strong>也能跑</strong>：写成 {@code max} 的症状是"权限只增不减"， 而这正是本项目最怕的静默失效。{@code null}
+   * 表示"没有上限"：
+   *
+   * <ul>
+   *   <li>一方为 null ⇒ 返回另一方（自己没有上限时，上限由对方给）
+   *   <li>两个都是 null ⇒ 返回 null ⇒ 调用方必须把它当成"什么都看不见" （{@code ScopeFilter.canSeeClassification} 对 null
+   *       上限返回 false，方向是 fail-closed）
+   * </ul>
+   *
+   * <p>★ 写成静态方法（而不是 {@code a.narrower(b)}）：它<strong>接受 null</strong> 是语义的一部分， 而"在 null
+   * 上调用实例方法"只会得到一个 NPE，读代码的人也不会预期这里能传 null。
+   */
+  public static ClassificationLevel narrower(ClassificationLevel left, ClassificationLevel right) {
+    if (left == null) {
+      return right;
+    }
+    if (right == null) {
+      return left;
+    }
+    return left.ordinal() <= right.ordinal() ? left : right;
+  }
 }

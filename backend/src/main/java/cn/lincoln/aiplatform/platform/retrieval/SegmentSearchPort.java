@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.platform.retrieval;
 
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -63,6 +64,30 @@ public interface SegmentSearchPort {
    * <p>传进来的 kbIds 是"允许的范围"（{@link #visibleKbIds} 的结果）；不在范围内的候选直接丢弃 —— 双保险，因为向量路的元数据过滤是"优化"，不是判据。
    */
   Set<UUID> visibleAmong(Collection<UUID> candidateIds, Collection<UUID> kbIds);
+
+  /**
+   * 以<strong>显式的密级上限</strong>列出可见的分段（第 16 周 · 0.4.4 新增）。
+   *
+   * <h3>它为什么必须存在</h3>
+   *
+   * <p>免登录面（公开凭证）要"用链接自己的<strong>冻结密级</strong>重新过滤一遍" （{@code 13 §5.2} 第 ② 级）。而另外两个入口（{@link
+   * #fullText} / {@link #vectorSearch}）的密级上限 都取自<strong>当前范围</strong> —— 那是"谁在问"决定的正确答案，但公开面需要的是一条
+   * <strong>被链接冻结</strong>的值。没有这个方法，调用方只能自己拼一条 SQL —— 那就是同一段安全谓词的 <strong>第二处实现</strong>，而 {@code
+   * 13 §三} 闸门②要防的正是它。
+   *
+   * <p>★ 实现必须用与另外两条路<strong>同一份</strong>安全谓词（可见性 + 密级），只把密级上限换成入参 —— 本方法的全部意义就是"换一个上限、谓词一个字不改"。
+   *
+   * @param kbIds 允许的库范围（已由 {@link #visibleKbIds} 过过一遍可见性）
+   * @param ceiling ★ 密级上限。它与资源的 {@code classification_rank} 比的是"不高于它"； 不传（{@code null}）⇒
+   *     <strong>什么都不返回</strong>（fail-closed，与"取不到身份"同一条口径）
+   * @param limit 候选上限
+   */
+  default List<Scored> visibleSegments(
+      Collection<UUID> kbIds, ClassificationLevel ceiling, int limit) {
+    // ★ 默认实现是"明确拒绝"：这一条路带着**显式的密级上限**，而一个没写它的实现若静默返回
+    //   全部候选，就等于"密级过滤没生效" —— 那是一条不会报错的越权。
+    throw new UnsupportedOperationException("这个 SegmentSearchPort 实现不支持显式密级上限的列举");
+  }
 
   /** 命中分段的展示信息（引用组装用）。顺序不保证，调用方按 segmentId 索引。 */
   List<Card> load(Collection<UUID> segmentIds);
