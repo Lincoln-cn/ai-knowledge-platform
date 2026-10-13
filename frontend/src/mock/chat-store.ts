@@ -20,6 +20,7 @@ import type {
   MessageStatus
 } from '@/api/conversations'
 import type { SourceRef } from '@/api/stream-types'
+import type { ClassificationLevel } from '@/api/types'
 import { ApiError, ErrorCode } from '@/api/types'
 import {
   appBriefs,
@@ -42,6 +43,8 @@ export interface ShareRecord {
   conversationId: string
   scope: ShareScope
   messageId?: string
+  /** ★ 创建时冻结的 clearance（`13 §5.2` ①）。访客每次访问都用它**重新过滤**，不是复用创建时的结果 */
+  maxClassification: ClassificationLevel
   expiresAt: string | null
   revokedAt: string | null
   createdAt: string
@@ -503,13 +506,19 @@ function newShareToken(): string {
 }
 
 export function toShareView(rec: ShareRecord): ConversationShare {
-  return { token: rec.token, url: buildShareUrl(rec.token), expiresAt: rec.expiresAt }
+  return {
+    token: rec.token,
+    url: buildShareUrl(rec.token),
+    maxClassification: rec.maxClassification,
+    expiresAt: rec.expiresAt
+  }
 }
 
 export function createShare(params: {
   conversationId: string
   scope: ShareScope
   messageId?: string
+  maxClassification: ClassificationLevel
   expiresAt?: string | null
 }): ShareRecord {
   const rec: ShareRecord = {
@@ -517,6 +526,7 @@ export function createShare(params: {
     conversationId: params.conversationId,
     scope: params.scope,
     messageId: params.messageId,
+    maxClassification: params.maxClassification,
     expiresAt: params.expiresAt ?? null,
     revokedAt: null,
     createdAt: new Date().toISOString()
