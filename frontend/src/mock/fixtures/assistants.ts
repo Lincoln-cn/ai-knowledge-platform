@@ -256,7 +256,15 @@ export const workflowDrafts: Record<string, WorkflowGraph> = {
   }
 }
 
-/** 免登录访问凭证。撤销是终态，撤销后不可重新启用，只能重新生成。★ `maxClassification` = 创建时冻结的 clearance（`13 §5.2`） */
+/**
+ * 免登录访问凭证。撤销是终态，撤销后不可重新启用，只能重新生成。
+ * ★ `maxClassification` = 创建时冻结的 clearance（`13 §5.2`）。
+ *
+ * ★ 四态在 as1 上**各有一条**，界面不许把它们显示成同一句话（`utils/credential-state.ts`）：
+ *   `cr1` 启用 · `cr2` 已停用 · `cr3` 已撤销（终态）· `cr4` 已过期。
+ *   `cr4` 刻意做成"**既停用又已过期**"：判定顺序是不可逆优先（停用 > 过期），
+ *   因为"还能不能启用回来"才是管理员第一个要回答的问题。
+ */
 export const credentials: Record<string, AccessCredential[]> = {
   as1: [
     {
@@ -291,17 +299,39 @@ export const credentials: Record<string, AccessCredential[]> = {
       lastAccessAt: '2026-01-20T18:40:00Z',
       revokedAt: '2026-01-22T11:00:00Z',
       createdAt: '2025-12-01T09:00:00Z'
+    },
+    {
+      id: 'cr4',
+      token: 'pk_live_expired0001',
+      enabled: false,
+      expiresAt: '2026-01-31T00:00:00Z',
+      maxClassification: 'INTERNAL',
+      accessCount: 5,
+      lastAccessAt: '2026-01-05T11:00:00Z',
+      revokedAt: null,
+      createdAt: '2025-12-20T09:00:00Z'
     }
   ],
   as2: [
     {
-      id: 'cr4',
+      id: 'cr5',
       token: 'pk_live_aa11bb22cc33',
       enabled: true,
       expiresAt: null,
       maxClassification: 'PUBLIC',
       accessCount: 40,
       lastAccessAt: '2026-02-13T08:05:00Z',
+      revokedAt: null,
+      createdAt: '2026-02-01T09:00:00Z'
+    },
+    {
+      id: 'cr6',
+      token: 'pk_live_expired0002',
+      enabled: true,
+      expiresAt: '2026-02-28T00:00:00Z',
+      maxClassification: 'PUBLIC',
+      accessCount: 7,
+      lastAccessAt: '2026-02-20T08:05:00Z',
       revokedAt: null,
       createdAt: '2026-02-01T09:00:00Z'
     }

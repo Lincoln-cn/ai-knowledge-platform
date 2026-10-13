@@ -31,6 +31,28 @@
         </el-button>
       </div>
 
+      <!--
+        ★ 刚生成的这条：**冻结的密级上限当场可见 + 一键复制**。
+          分享回执里 `maxClassification` 是必填（`13 §5.2` ①），此前这里只复制了 url ——
+          用户看不到"这条链接能读到什么级别"，那正是分享最需要被告知的一件事。
+      -->
+      <div v-if="justCreated" class="fresh panel">
+        <div class="fresh-hd">
+          <span class="h4">刚生成的链接</span>
+          <ClassificationBadge :level="justCreated.maxClassification" :labels="classificationLabels" />
+        </div>
+        <div class="share-url">
+          <code class="ellipsis">{{ justCreated.url }}</code>
+        </div>
+        <div class="micro muted">{{ freezeNote(labelOf(justCreated.maxClassification)) }}</div>
+        <div class="fresh-ops">
+          <el-button size="small" type="primary" @click="copyUrl(justCreated.url)">复制链接</el-button>
+          <span class="micro muted">
+            有效期：{{ justCreated.expiresAt ? formatTime(justCreated.expiresAt) + ' 失效' : '长期有效' }}
+          </span>
+        </div>
+      </div>
+
       <div v-if="messagePreview" class="preview">
         <div class="micro muted">将同时复制这段内容</div>
         <div class="preview-text micro">{{ messagePreview }}</div>
@@ -50,9 +72,17 @@
       <ul v-else class="share-list">
         <li v-for="s in shares" :key="s.token" class="share-item">
           <div class="share-main">
-            <div class="share-scope micro muted">
-              {{ s.revokedAt ? '已撤销' : isExpired(s) ? '已失效' : '有效' }}
-              · {{ s.expiresAt ? formatTime(s.expiresAt) + ' 失效' : '长期有效' }}
+            <div class="share-row1">
+              <ClassificationBadge
+                :level="s.maxClassification"
+                :labels="classificationLabels"
+                variant="inline"
+                compact
+              />
+              <span class="share-scope micro muted">
+                {{ s.revokedAt ? '已撤销' : isExpired(s) ? '已过期' : '有效' }}
+                · {{ s.expiresAt ? formatTime(s.expiresAt) + ' 失效' : '长期有效' }}
+              </span>
             </div>
             <div class="share-url">
               <code class="ellipsis">{{ s.url }}</code>
@@ -85,6 +115,12 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import { conversationsApi } from '@/api'
 import type { ConversationShare } from '@/api/conversations'
+import type { ClassificationLevel } from '@/api/types'
+import ClassificationBadge from '@/components/ClassificationBadge.vue'
+import { useDictionary } from '@/composables/useDictionary'
+import { copyText } from '@/utils/clipboard'
+import { classificationLabelMap } from '@/utils/classification'
+import { freezeNote } from '@/utils/credential-state'
 import { errText } from '../composables/useChatSession'
 
 /** 契约只有 token/url/expiresAt；撤销态是本地收尾（撤销成功后立刻置位） */
@@ -104,8 +140,15 @@ const creating = ref(false)
 const loading = ref(false)
 const loadError = ref<{ reason: string; hint?: string } | null>(null)
 const shares = ref<ShareRow[]>([])
+/** 刚生成的那条：回执里带**冻结的密级上限**，要当场可见（`13 §5.2` ①） */
+const justCreated = ref<ConversationShare | null>(null)
 const expiresMode = ref<'never' | 'date'>('never')
 const expiresAt = ref<Date | null>(null)
+
+/** 密级展示名以基础数据字典为真源；读不到时由 `classificationLabelMap` 兜那四档 */
+const { items: classificationItems, load: loadClassifications } = useDictionary('CLASSIFICATION', '密级')
+const classificationLabels = computed(() => classificationLabelMap(classificationItems.value))
+const labelOf = (level: ClassificationLevel) => classificationLabels.value[level] ?? level
 
 const messagePreview = computed(() => props.messageText || '')
 
@@ -118,9 +161,11 @@ const isExpired = (s: ShareRow) =>
 const open = () => {
   visible.value = true
   loadError.value = null
+  justCreated.value = null
   expiresMode.value = 'never'
   expiresAt.value = null
   shares.value = []
+  void loadClassifications()
   if (props.conversationId) load()
 }
 
@@ -142,6 +187,7 @@ const create = async () => {
   const conversationId = props.conversationId
   if (!conversationId) return
   if (expiresMode.value === 'date' && !expiresAt.value) {
+    // 静默当成"长期有效"会生成一条永不过期的链接 —— 与用户点的那一档不符，必须拦
     ElMessage.warning('请选择失效时间，或改回「长期有效」')
     return
   }
@@ -156,7 +202,8 @@ const create = async () => {
           : null
     })
     shares.value = [{ ...created, revokedAt: null }, ...shares.value]
-    ElMessage.success('链接已生成')
+    justCreated.value = created
+    ElMessage.success(`链接已生成 · 密级上限「${labelOf(created.maxClassification)}」`)
     await copyUrl(created.url)
   } catch (error) {
     const { reason, hint } = errText(error, '生成分享链接失败')
@@ -168,12 +215,9 @@ const create = async () => {
 
 const copyUrl = async (url: string) => {
   const payload = [url, messagePreview.value].filter(Boolean).join('\n\n')
-  try {
-    await navigator.clipboard.writeText(payload)
-    ElMessage.success('已复制到剪贴板')
-  } catch {
-    ElMessage.warning('复制失败，请手动选中复制')
-  }
+  const ok = await copyText(payload)
+  if (ok) ElMessage.success('已复制到剪贴板')
+  else ElMessage.warning('复制失败，请手动选中链接复制')
 }
 
 const revoke = async (s: ShareRow) => {
@@ -277,6 +321,37 @@ defineExpose({ open })
   display: flex;
   flex-direction: column;
   gap: var(--space-3xs);
+}
+
+/* 密级徽标与状态同一行：先说"能读到什么级别"，再说"现在能不能用" */
+.share-row1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+
+/* 刚生成的那条：与下方历史列表分开（它是回执，不是列表项） */
+.fresh {
+  margin-top: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.fresh-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.fresh-ops {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-2xs);
 }
 
 .share-url code {

@@ -1,4 +1,5 @@
 import { ApiError, ErrorCode } from '@/api/types'
+import type { ClassificationLevel } from '@/api/types'
 import type { ChatMessage, ShareScope } from '@/api/conversations'
 import { PERM } from '@/constants/permissions'
 import type { MockRoute } from '../dispatch'
@@ -80,6 +81,23 @@ const withApp = (conv: StoredConversation) => {
 
 /* ── 免登录 token 解析：应用凭证 与 会话/消息分享 共用同一套校验词 ── */
 
+/**
+ * ★ **四态分开报**（本文件的判据，不是文案偏好）：
+ *
+ * | 业务码 | 态 | 能不能救 |
+ * |---|---|---|
+ * | `40401` | 认不出这个 token | 不能（链接本身不对） |
+ * | `40402` | 已撤销 | ★ 不能（终态） |
+ * | `40403` | 已过期 | 不能（有效期不可改） |
+ * | `40404` | 已停用 | **能**（重新启用即可） |
+ * | `40405` | 内容升密 ⇒ 原链接立即失效（`13 §5.3`） | 不能，只能重新生成 |
+ *
+ * 合并成一句"链接无效"的后果是**让人按错的假设去等**：已停用可以恢复，已撤销不能。
+ * 界面侧按同一组码还原四态（`utils/public-gate.ts`）。
+ *
+ * ★ 判定顺序 = **不可逆优先**：一条"既被停用又已过期"的凭证，先要回答的是
+ *   "还能不能启用回来"，说"已过期"会把人引到一个永远不会到来的时间点。
+ */
 interface PublicGateOk {
   ok: true
   /** 应用凭证分支 */
@@ -89,25 +107,62 @@ interface PublicGateOk {
 }
 type PublicGate = PublicGateOk | { ok: false; code: number; message: string; hint?: string }
 
+/** 失败分支的类型别名：`rejectCredential` 的返回类型 */
+type GateFailure = Extract<PublicGate, { ok: false }>
+
+/**
+ * 三种夹具（公开凭证 / 应用凭证 / 会话分享）共用**同一条**判定与文案。
+ *
+ * ★ 写一份而不是三份：三份里漏改一处的症状是"同样的链接在某些入口报另一句话"，
+ *   而四态文案正是本轮交付物 —— 抄三遍等于给自己留两个漂移点。
+ * ★ 顺序 = 不可逆优先：撤销（终态）→ 停用（可再启用）→ 过期（不可改）→ 升密（内容变了）。
+ * ★ `enabled` 可选：会话/消息分享（`ConversationShare`）**没有停用这一档**
+ *   （契约里只有撤销与过期），所以它是"只有凭证才有的字段"，不拿 `true` 去假装。
+ */
+function rejectCredential(
+  cred: { enabled?: boolean; expiresAt: string | null; revokedAt: string | null },
+  lockedByCeiling = false
+): GateFailure | null {
+  if (cred.revokedAt) {
+    return {
+      ok: false,
+      code: 40402,
+      message: '访问凭证已被撤销',
+      hint: '撤销是终态，原链接不能恢复。请向分享者索取一条新链接'
+    }
+  }
+  if (cred.enabled === false) {
+    return {
+      ok: false,
+      code: 40404,
+      message: '访问凭证已被停用',
+      hint: '凭证还在，链接暂停访问。请联系应用管理员重新启用，或索取一条新链接'
+    }
+  }
+  if (cred.expiresAt && new Date(cred.expiresAt).getTime() < Date.now()) {
+    return {
+      ok: false,
+      code: 40403,
+      message: '访问凭证已过期',
+      hint: '有效期在生成时定下、之后不能改，原链接不会自动恢复。请向分享者索取一条新链接'
+    }
+  }
+  if (lockedByCeiling) {
+    return {
+      ok: false,
+      code: 40405,
+      message: '被分享内容已升密，原链接失效',
+      hint: '内容密级超出了这条链接冻结的密级上限（13 §5.2）。请向分享者索取一条新链接'
+    }
+  }
+  return null
+}
+
 function gatePublicToken(token: string): PublicGate {
   const cred = publicCredentials.find((c) => c.token === token)
   if (cred) {
-    if (!cred.enabled || cred.revokedAt) {
-      return {
-        ok: false,
-        code: 40402,
-        message: '访问凭证已被撤销',
-        hint: '该公开链接已停止访问，请联系应用管理员重新生成链接'
-      }
-    }
-    if (cred.expiresAt && new Date(cred.expiresAt).getTime() < Date.now()) {
-      return {
-        ok: false,
-        code: 40403,
-        message: '访问凭证已过期',
-        hint: '请向分享者索取新的公开链接'
-      }
-    }
+    const rejected = rejectCredential(cred, Boolean(cred.lockedByCeiling))
+    if (rejected) return rejected
     return { ok: true, cred: { token: cred.token, appId: cred.appId } }
   }
 
@@ -120,43 +175,15 @@ function gatePublicToken(token: string): PublicGate {
   for (const [appId, list] of Object.entries(assistantCredentials)) {
     const ac = list.find((c) => c.token === token)
     if (!ac) continue
-    if (!ac.enabled || ac.revokedAt) {
-      return {
-        ok: false,
-        code: 40402,
-        message: '访问凭证已被撤销',
-        hint: '该公开链接已停止访问，请联系应用管理员重新生成链接'
-      }
-    }
-    if (ac.expiresAt && new Date(ac.expiresAt).getTime() < Date.now()) {
-      return {
-        ok: false,
-        code: 40403,
-        message: '访问凭证已过期',
-        hint: '请向分享者索取新的公开链接'
-      }
-    }
+    const rejected = rejectCredential(ac)
+    if (rejected) return rejected
     return { ok: true, cred: { token: ac.token, appId } }
   }
 
   const share = findShareByToken(token)
   if (share) {
-    if (share.revokedAt) {
-      return {
-        ok: false,
-        code: 40402,
-        message: '访问凭证已被撤销',
-        hint: '该公开链接已停止访问，请向分享者索取新的公开链接'
-      }
-    }
-    if (share.expiresAt && new Date(share.expiresAt).getTime() < Date.now()) {
-      return {
-        ok: false,
-        code: 40403,
-        message: '访问凭证已过期',
-        hint: '请向分享者索取新的公开链接'
-      }
-    }
+    const rejected = rejectCredential(share)
+    if (rejected) return rejected
     return {
       ok: true,
       share: {
@@ -172,7 +199,7 @@ function gatePublicToken(token: string): PublicGate {
     ok: false,
     code: 40401,
     message: '访问凭证无效',
-    hint: '链接可能不完整，请向分享者重新索取公开链接'
+    hint: '链接可能被截断或不完整（复制、转帖时常见）。请向分享者重新索取一条完整链接'
   }
 }
 
@@ -180,6 +207,21 @@ function gateOrThrow(token: string): PublicGateOk {
   const gate = gatePublicToken(token)
   if (!gate.ok) throw new ApiError(gate.code, gate.message, gate.hint)
   return gate
+}
+
+/**
+ * 这条 token 冻结的密级上限（`13 §5.2` ①）。
+ * 两套凭证夹具都认（与 `gatePublicToken` 同一覆盖面）；认不出返回 `undefined` ——
+ * 页面按"没有这个值"处理（不显示徽标），**不许**回落成应用当前的密级。
+ */
+function credentialCeiling(token: string): ClassificationLevel | undefined {
+  const shared = publicCredentials.find((c) => c.token === token)
+  if (shared) return shared.maxClassification
+  for (const list of Object.values(assistantCredentials)) {
+    const found = list.find((c) => c.token === token)
+    if (found) return found.maxClassification
+  }
+  return undefined
 }
 
 /**
@@ -530,6 +572,12 @@ export const conversationRoutes: MockRoute[] = [
       if (gate.cred) {
         // 两套凭证夹具（publicCredentials / assistants.credentials）都已在 gate 里归一成 appId
         const app = appBriefs[gate.cred.appId]
+        /**
+         * ★ `maxClassification` = **这条链接创建时冻结的密级上限**（`13 §5.2` ①）。
+         *
+         * 契约 `PublicContext.maxClassification` 已补（可选，注释写明"后端必须返回"），
+         * 所以这里按**必给**返回；页面拿不到时整块不渲染（兜底，不是允许不返回）。
+         */
         const ctx = app
           ? {
               appId: app.id,
@@ -537,7 +585,8 @@ export const conversationRoutes: MockRoute[] = [
               icon: app.icon,
               description: app.description,
               prologue: app.prologue,
-              quickQuestions: app.quickQuestions
+              quickQuestions: app.quickQuestions,
+              maxClassification: credentialCeiling(gate.cred.token)
             }
           : null
         if (!ctx) {

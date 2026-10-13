@@ -437,7 +437,10 @@ const togglePublish = async (a: Assistant) => {
     // 取消是正常路径，不是错误：用 then/两个回调区分「确认」与「取消」，
     // 不让取消落成 unhandled rejection（本模块 P1）
     const confirmed = await ElMessageBox.confirm(
-      `下架后公开链接将失效。确认下架「${a.name}」？`,
+      // ★ 不写"公开链接将失效"：下架改的是 published，与凭证的 enabled/revokedAt 是两件事，
+      //   现行的 mock 与后端都不会因下架去动凭证。写一句吓人的、又不发生的话，
+      //   下次真失效时用户反而不信了。
+      `下架后应用不再出现在广场与新建会话里（已发出的公开链接不受影响，要停用请到「概览 → 访问凭证」）。确认下架「${a.name}」？`,
       '确认下架',
       { type: 'warning', confirmButtonText: '下架' }
     ).then(

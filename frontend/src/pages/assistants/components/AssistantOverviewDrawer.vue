@@ -84,8 +84,10 @@ import * as echarts from 'echarts'
 import dayjs from 'dayjs'
 import { analyticsApi, assistantsApi } from '@/api'
 import type { AccessCredential, Assistant } from '@/api/assistants'
+import { ApiError } from '@/api/types'
 import type { TrendPoint } from '@/api/analytics'
 import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/components/InstrumentCard.vue'
+import { credentialState, type CredentialStateKind } from '@/utils/credential-state'
 import CredentialsPanel from './CredentialsPanel.vue'
 import ApiKeysPanel from './ApiKeysPanel.vue'
 import BundlePanel from './BundlePanel.vue'
@@ -180,20 +182,25 @@ const reset = () => {
 /** 凭证列表。`null` = 还没读到（含读取失败），此时面板显示「—」而不是画成 0 */
 const creds = ref<AccessCredential[] | null>(null)
 const credsFailed = ref(false)
+/** ★ 读失败必须留下**可读原因**：只画一个「—」等于把"接口挂了"说成"没有凭证" */
+const credsFailReason = ref('')
 
 const loadCredentials = async () => {
   const id = props.assistant?.id
   if (!id) {
     creds.value = null
     credsFailed.value = false
+    credsFailReason.value = ''
     return
   }
   try {
     creds.value = await assistantsApi.listCredentials(id)
     credsFailed.value = false
-  } catch {
+    credsFailReason.value = ''
+  } catch (error) {
     creds.value = null
     credsFailed.value = true
+    credsFailReason.value = error instanceof ApiError ? error.message : '请稍后重试'
   }
 }
 
@@ -232,19 +239,24 @@ const publishRows = computed<InstrumentRow[]>(() => {
   ]
 
   if (credsFailed.value) {
-    rows.push({ label: '凭证', value: '—', hint: '凭证列表读取失败' })
+    rows.push({ label: '凭证', value: '—', hint: `凭证列表读取失败：${credsFailReason.value}` })
     return rows
   }
 
   const list = creds.value
   if (!list) return rows
 
+  /*
+   * ★ 口径与凭证面板一致：四态**分开数**（`utils/credential-state.ts`）。
+   *   此前这里数的是 `enabled && !revokedAt`，把「已过期」也算进了"启用" ——
+   *   一条早就过期的凭证被读成"还在用"，是最容易被当成好消息的错读数。
+   */
+  const byState = list.map((c) => credentialState(c))
+  const count = (kind: CredentialStateKind) => byState.filter((s) => s.kind === kind).length
   rows.push({
     label: '凭证',
     value: list.length,
-    hint: `启用 ${list.filter((c) => c.enabled && !c.revokedAt).length} · 已撤销 ${
-      list.filter((c) => c.revokedAt).length
-    }`
+    hint: `启用 ${count('ACTIVE')} · 已停用 ${count('DISABLED')} · 已过期 ${count('EXPIRED')} · 已撤销 ${count('REVOKED')}`
   })
 
   // 访问回执：有凭证才谈得上"访问"，一条都没有时不画 0
