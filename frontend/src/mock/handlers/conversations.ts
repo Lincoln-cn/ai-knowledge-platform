@@ -1,7 +1,7 @@
 import { ApiError, ErrorCode } from '@/api/types'
 import type { ClassificationLevel } from '@/api/types'
 import { PUBLIC_GATE_CODES } from '@/utils/public-gate'
-import type { ChatMessage, ShareScope } from '@/api/conversations'
+import type { ChatMessage, PublicContext, ShareScope } from '@/api/conversations'
 import { PERM } from '@/constants/permissions'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
@@ -106,9 +106,25 @@ const withApp = (conv: StoredConversation) => {
 interface PublicGateOk {
   ok: true
   /** 应用凭证分支 */
-  cred?: { token: string; appId: string }
+  cred?: {
+    token: string
+    appId: string
+    /**
+     * ★ 这条链接**创建时冻结**的密级上限（`13 §5.2` ①）。
+     * 与"认得这个 token"是**同一次查找**的两半 ⇒ 在这里一起带出去，不再二次查表
+     * （二次查表会多出一个"查不到"的分支，而那是查表顺序的产物、不是状态）。
+     */
+    ceiling: ClassificationLevel
+  }
   /** 分享分支 */
-  share?: { token: string; conversationId: string; scope: ShareScope; messageId?: string }
+  share?: {
+    token: string
+    conversationId: string
+    scope: ShareScope
+    messageId?: string
+    /** ★ 同上：分享记录自己那份冻结值（`ShareRecord.maxClassification`） */
+    maxClassification: ClassificationLevel
+  }
 }
 type PublicGate = PublicGateOk | { ok: false; code: number; message: string; hint?: string }
 
@@ -168,7 +184,10 @@ function gatePublicToken(token: string): PublicGate {
   if (cred) {
     const rejected = rejectCredential(cred, Boolean(cred.lockedByCeiling))
     if (rejected) return rejected
-    return { ok: true, cred: { token: cred.token, appId: cred.appId } }
+    return {
+      ok: true,
+      cred: { token: cred.token, appId: cred.appId, ceiling: cred.maxClassification }
+    }
   }
 
   /*
@@ -182,7 +201,7 @@ function gatePublicToken(token: string): PublicGate {
     if (!ac) continue
     const rejected = rejectCredential(ac)
     if (rejected) return rejected
-    return { ok: true, cred: { token: ac.token, appId } }
+    return { ok: true, cred: { token: ac.token, appId, ceiling: ac.maxClassification } }
   }
 
   const share = findShareByToken(token)
@@ -195,7 +214,8 @@ function gatePublicToken(token: string): PublicGate {
         token: share.token,
         conversationId: share.conversationId,
         scope: share.scope,
-        messageId: share.messageId
+        messageId: share.messageId,
+        maxClassification: share.maxClassification
       }
     }
   }
@@ -215,26 +235,18 @@ function gateOrThrow(token: string): PublicGateOk {
 }
 
 /**
- * 这条 token 冻结的密级上限（`13 §5.2` ①）。
- * 两套凭证夹具都认（与 `gatePublicToken` 同一覆盖面）；认不出返回 `undefined` ——
- * 页面按"没有这个值"处理（不显示徽标），**不许**回落成应用当前的密级。
- */
-function credentialCeiling(token: string): ClassificationLevel | undefined {
-  const shared = publicCredentials.find((c) => c.token === token)
-  if (shared) return shared.maxClassification
-  for (const list of Object.values(assistantCredentials)) {
-    const found = list.find((c) => c.token === token)
-    if (found) return found.maxClassification
-  }
-  return undefined
-}
-
-/**
  * 分享分支的公开上下文：从会话反查应用摘要。
  * 无应用（通用问答）时按会话标题合成一个最小上下文，让公开页仍能开门，
  * 而不是因为 `appId` 为空就报「应用已不存在」。
+ *
+ * ★ `maxClassification` 必须**照着分享记录**给（`ShareRecord.maxClassification`，创建时冻结）——
+ * 它现在是 `PublicContext` 的**必填**字段（契约 2026-10-14 改）：不给它类型就不通过，
+ * 而给"应用当前的密级"或某个默认值都是**另一条口径**（`13 §5.2` ①：冻结的值才算数）。
  */
-function contextFromShare(share: { conversationId: string }) {
+function contextFromShare(share: {
+  conversationId: string
+  maxClassification: ClassificationLevel
+}): PublicContext | null {
   const conv = findConversation(share.conversationId)
   if (!conv) return null
   const app = conv.appId ? appBriefs[conv.appId] : undefined
@@ -245,7 +257,8 @@ function contextFromShare(share: { conversationId: string }) {
       icon: app.icon,
       description: app.description,
       prologue: app.prologue,
-      quickQuestions: app.quickQuestions
+      quickQuestions: app.quickQuestions,
+      maxClassification: share.maxClassification
     }
   }
   return {
@@ -254,7 +267,8 @@ function contextFromShare(share: { conversationId: string }) {
     icon: conv.appName?.slice(0, 1) || '通',
     description: conv.title || '共享的对话',
     prologue: '这是共享的对话记录，可直接阅读下方内容。',
-    quickQuestions: []
+    quickQuestions: [],
+    maxClassification: share.maxClassification
   }
 }
 
@@ -575,15 +589,16 @@ export const conversationRoutes: MockRoute[] = [
     ({ path }) => {
       const gate = gateOrThrow(path.token)
       if (gate.cred) {
-        // 两套凭证夹具（publicCredentials / assistants.credentials）都已在 gate 里归一成 appId
+        // 两套凭证夹具（publicCredentials / assistants.credentials）都已在 gate 里归一成 appId + 冻结值
         const app = appBriefs[gate.cred.appId]
         /**
          * ★ `maxClassification` = **这条链接创建时冻结的密级上限**（`13 §5.2` ①）。
          *
-         * 契约 `PublicContext.maxClassification` 已补（可选，注释写明"后端必须返回"），
-         * 所以这里按**必给**返回；页面拿不到时整块不渲染（兜底，不是允许不返回）。
+         * ★★ 2026-10-14：契约里它已从**可选改成必填**（第 17 周判据），所以这里不是"尽量给"——
+         * 值直接从 gate 带出来（与"认得这个 token"同一次查找），页面侧不再是"拿不到就整块不渲染"的兜底语义。
+         * 另外它的类型是 `PublicContext` 而**不是**内联对象字面量：少了这个值 `npm run typecheck` 就红。
          */
-        const ctx = app
+        const ctx: PublicContext | null = app
           ? {
               appId: app.id,
               appName: app.name,
@@ -591,7 +606,7 @@ export const conversationRoutes: MockRoute[] = [
               description: app.description,
               prologue: app.prologue,
               quickQuestions: app.quickQuestions,
-              maxClassification: credentialCeiling(gate.cred.token)
+              maxClassification: gate.cred.ceiling
             }
           : null
         if (!ctx) {

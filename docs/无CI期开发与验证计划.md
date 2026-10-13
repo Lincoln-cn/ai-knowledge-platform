@@ -85,3 +85,22 @@ tools\run-frontend-gates.cmd     ← 跑 11 道浏览器闸门 + verify_features
 3. ★ **不许改任何已应用的迁移**（Flyway checksum 一破，后端起不来）；
 4. ★ **不许用破坏性 git 操作**（`reset --hard` / 强推）—— 本批已因此丢过 9 个文件，纪律见 `#49`；
 5. ★ **不许"本机跑不了就不跑"** —— 跑不了的就**写下来**："这一格本轮没有读数 + 谁在哪一批补"。
+
+---
+
+## 七、分支与合并纪律（2026-10-13 夜**两次**踩到，写下来免得第三次）
+
+★★ **只要前面的 PR 是 `squash` 合并，就不要再叠层。**
+
+| 现象 | 读数 |
+|---|---|
+| 叠层的 PR 被 `gh pr merge` 合进了**它的 base 分支**（不是 `main`） | `#99` 的 base 写成 F3 分支 ⇒ 收尾内容进了 F3 分支，`main` 一直没拿到 |
+| 基于它开的下一个 PR 与 `main` **冲突** | `mergeable=CONFLICTING`（squash 造成的历史分叉：同一批文件在两个不相关的谱系上各改了一次） |
+| `gh pr update-branch` 救不了 | ★ **它只把 base 并进 head：不改 base，也不消解 squash 的分叉** |
+
+★ **正确做法**（今晚用过两次，均**无冲突**）：**从 `origin/main` 开新分支 + `cherry-pick`** 那一个提交。
+★ 判据（可核对）：`gh pr merge` 若只回一句 `gh pr checkout … && git fetch origin main && git merge origin/main`，**那就是分叉了**，别再试第二次。
+★ 今晚的代价：白跑两轮（`#99`/`#100` → `#101`；`#105` → `#106`）。
+
+★ 同族纪律（`#49`）：**破坏性 git 操作会吃掉子代理的未提交改动** —— `reset --hard` 已经因此丢过 9 个文件；
+要"干净基线"用 `git switch -c <new> origin/main`（切分支不动未提交改动），**绝不用 `reset --hard`**。

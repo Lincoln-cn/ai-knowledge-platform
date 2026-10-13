@@ -52,7 +52,16 @@ import org.junit.jupiter.api.Test;
  * <h3>四种失败原因必须分得开</h3>
  *
  * <p>{@link #fourFailureReasonsAreDistinguishable()}：不存在 / 已撤销 / 已过期 / 越权 —— 各断言 <strong>码 +
- * 文案关键字</strong>。全返同一个码会让排障时只能猜，而"已过期"与"已撤销"的处置完全不同 （前者等或重新生成，后者只能重新生成）。
+ * 文案关键字</strong>；四态里的"已停用"在 {@link #disabledCredentialIsRejectedButRecoverable()} 里断言。
+ * 全返同一个码会让排障时只能猜，而"已过期"与"已撤销"的处置完全不同 （前者等或重新生成，后者只能重新生成）。
+ *
+ * <p>★★ <strong>2026-10-14（第 17 周开工）为什么改这组断言</strong>：这四种"公开令牌失效"此前一律抛 {@code FORBIDDEN} / {@code
+ * NOT_FOUND}（码位不够时的临时口径，见 {@code AccessCredentialService} 类注释的订正段）。 而契约与后端枚举两侧已同批补上 {@code
+ * PUBLIC_TOKEN_UNKNOWN / REVOKED / EXPIRED / DISABLED}（{@code 40401}–{@code 40404}，{@code #41} 的
+ * (a) 口径）， 前端 {@code utils/public-gate.ts} 正是<strong>按这四个码</strong>分四态文案 ⇒ 后端不分开 emit
+ * 的后果是四态<strong>全部静默退化</strong>成 "打不开这条链接"。所以下面三条旧断言（{@code NOT_FOUND} / {@code FORBIDDEN}）被改成各自的码
+ * —— 这是"改码"的读数，不是措辞调整。 ★ 唯一<strong>不许</strong>跟着改的是"越权"那一格：它是"对方是合法登录用户、却不该碰这条凭证"，与令牌失效无关（{@code
+ * 403} 照旧）。
  *
  * <h3>为什么用假实现（本仓风格：不引 Mockito）</h3>
  *
@@ -197,37 +206,74 @@ class AccessCredentialTest {
    *
    * <p>不区分的代价是排障时只能猜：前三种对调用方的下一步动作完全不同（换链接 / 重新生成 / 等或重新生成）， 而"越权"是唯一一种<strong>对方不该知道这个 token
    * 是否存在</strong>的情形。
+   *
+   * <p>★★ 第 17 周改码：前两格从 {@code NOT_FOUND} / {@code FORBIDDEN} 改成各自的公开面码（{@code 40401} / {@code
+   * 40402} / {@code 40403}）—— <strong>理由与"为什么越权那一格不动"</strong>写在类注释里。★ 本方法是金丝雀的落点： 把任一条改回 {@code
+   * FORBIDDEN} ⇒ 这一条必红。
    */
   @Test
   void fourFailureReasonsAreDistinguishable() {
     Assistant app = app();
     AccessCredentialView created = service.create(app.id(), null, OWNER);
 
-    // ① 不存在（404：连"这个 token 存在过"都不该确认）
+    // ① 不存在 / 认不出（40401：连"这个 token 存在过"都不该确认）
     assertThatThrownBy(() -> service.preview(app.id(), "pk_live_根本没有这个token", OWNER))
         .isInstanceOf(BusinessException.class)
-        .satisfies(e -> assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.NOT_FOUND))
+        .satisfies(
+            e ->
+                assertThat(((BusinessException) e).code())
+                    .isEqualTo(ErrorCode.PUBLIC_TOKEN_UNKNOWN))
         .hasMessageContaining("不存在");
 
-    // ② 已撤销（终态）
+    // ② 已撤销（40402：终态）
     AccessCredentialView second = service.create(app.id(), null, OWNER);
     service.revoke(app.id(), second.id(), OWNER);
     assertThatThrownBy(() -> service.preview(app.id(), second.token(), OWNER))
         .isInstanceOf(BusinessException.class)
+        .satisfies(
+            e ->
+                assertThat(((BusinessException) e).code())
+                    .isEqualTo(ErrorCode.PUBLIC_TOKEN_REVOKED))
         .hasMessageContaining("已撤销");
 
-    // ③ 已过期（把有效期放到过去）
+    // ③ 已过期（40403：把有效期放到过去）
     AccessCredentialView third = service.create(app.id(), Instant.now().minusSeconds(60), OWNER);
     assertThatThrownBy(() -> service.preview(app.id(), third.token(), OWNER))
         .isInstanceOf(BusinessException.class)
+        .satisfies(
+            e ->
+                assertThat(((BusinessException) e).code())
+                    .isEqualTo(ErrorCode.PUBLIC_TOKEN_EXPIRED))
         .hasMessageContaining("已过期");
 
     // ④ 越权：不是归属人 ⇒ 看不见这个凭证（★ 与"不存在"分开：这里对方是合法登录用户，
     //    而拒绝发生在"委派范围只能由发起解析的那个人行使"这一步 —— 与真实现同一句话）
+    //    ★ 这一格**故意仍是 403**：令牌是好的，是"人不该碰"（不是四态里的任何一态）
     assertThatThrownBy(() -> service.preview(app.id(), created.token(), OTHER))
         .isInstanceOf(BusinessException.class)
         .satisfies(e -> assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.FORBIDDEN))
         .hasMessageContaining("无法以别人的身份");
+  }
+
+  /**
+   * ★ 认不出的第二种形状：token 是真的，但它属于<strong>另一个应用</strong>。
+   *
+   * <p>它必须与"目标没了"（{@code 404}）分开：前者是"这条链接对**这个应用**认不出"（重抄一遍没有用，要重新索取），
+   * 后者是"链接是对的、它指向的应用已经不存在了"（同一条链接永远打不开）。 前端按码分这两段文案，所以这里也断言码。
+   */
+  @Test
+  void credentialOfAnotherAppIsReportedAsUnknown() {
+    Assistant first = app();
+    Assistant second = app();
+    AccessCredentialView created = service.create(first.id(), null, OWNER);
+
+    assertThatThrownBy(() -> service.preview(second.id(), created.token(), OWNER))
+        .isInstanceOf(BusinessException.class)
+        .satisfies(
+            e ->
+                assertThat(((BusinessException) e).code())
+                    .isEqualTo(ErrorCode.PUBLIC_TOKEN_UNKNOWN))
+        .hasMessageContaining("不存在");
   }
 
   /** 停用（enabled=false）也要拒绝 —— 它与"已撤销"是两件事：停用可再启用、凭证保留。 */
@@ -239,6 +285,10 @@ class AccessCredentialTest {
     service.setEnabled(app.id(), created.id(), false, OWNER);
     assertThatThrownBy(() -> service.preview(app.id(), created.token(), OWNER))
         .isInstanceOf(BusinessException.class)
+        .satisfies(
+            e ->
+                assertThat(((BusinessException) e).code())
+                    .isEqualTo(ErrorCode.PUBLIC_TOKEN_DISABLED))
         .hasMessageContaining("已停用");
 
     service.setEnabled(app.id(), created.id(), true, OWNER);

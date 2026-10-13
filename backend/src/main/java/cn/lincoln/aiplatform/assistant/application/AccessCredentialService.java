@@ -45,20 +45,25 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <table>
  *   <tr><th>原因</th><th>码</th><th>文案关键字</th><th>为什么这样分</th></tr>
- *   <tr><td>不存在</td><td>{@code 404}</td><td>不存在</td>
+ *   <tr><td>不存在（认不出）</td><td>{@code 40401}</td><td>不存在</td>
  *       <td>与"看不见的资源返 404"同一条纪律：不确认这个 token 存在过</td></tr>
- *   <tr><td>已撤销</td><td>{@code 403}</td><td>已撤销</td>
+ *   <tr><td>已撤销</td><td>{@code 40402}</td><td>已撤销</td>
  *       <td>终态，只能重新生成</td></tr>
- *   <tr><td>已过期</td><td>{@code 403}</td><td>已过期</td>
+ *   <tr><td>已过期</td><td>{@code 40403}</td><td>已过期</td>
  *       <td>时间到了，处置与"撤销"不同（可以重新生成一条同样用途的）</td></tr>
- *   <tr><td>已停用</td><td>{@code 403}</td><td>已停用</td>
+ *   <tr><td>已停用</td><td>{@code 40404}</td><td>已停用</td>
  *       <td>可恢复：管理员再打开即可 —— 与撤销混淆会让人白白重建一条链接</td></tr>
+ *   <tr><td>目标不在了（应用被删）</td><td>{@code 404}</td><td>不存在</td>
+ *       <td>★ 这一格<strong>不</strong>是四态之一：凭证是好的，链接必然打不开</td></tr>
  *   <tr><td>越权</td><td>{@code 403}</td><td>无权限 / 无法以别人的身份</td>
  *       <td>唯一一种"对方是合法登录用户、却不该碰这条凭证"的情形</td></tr>
  * </table>
  *
- * <p>★ 全返同一个码会让排障只能猜。而码只能取契约里已有的那几个（本轮不许新增错误码）， 于是"哪一种状态"由<strong>文案</strong>承载（{@code 08
- * §4.1}：码管分支、文案管解释）。
+ * <p>★ 全返同一个码会让排障只能猜。<strong>★ 2026-10-14（第 17 周开工）订正</strong>：四态各自有码了（{@code #41} 的 emit 那一半 ——
+ * 契约与后端 {@link ErrorCode} 两侧同批补齐）。这一列此前是"不存在 {@code 404} / 其余 {@code 403}"，
+ * 那是<strong>码位不够时的临时口径</strong>，代价是"哪一种状态"只能由文案承载，而前端 {@code utils/public-gate.ts}
+ * 是按<strong>码</strong>分四态文案的 ⇒ 四态会一起落进兜底分支（不报错的静默退化）。现在：<strong>码管分支、文案管解释</strong>（{@code 08
+ * §4.1}）。
  *
  * <h3>★ 权限收窄只发生在一处</h3>
  *
@@ -185,13 +190,19 @@ public class AccessCredentialService {
    *
    * <p>★ 过滤本身<strong>只有一处实现</strong>：密级谓词在 SQL 里（{@code s.classification_rank <= ?}）， 而它的取值来自
    * {@link ScopeFilter} —— 这里通过 {@link AccessScopePort#asScope} 把冻结范围装上， 于是"用哪个密级过滤"只有一条路径，没有第二份判定。
+   *
+   * @throws BusinessException <strong>公开面四态</strong>（{@code 40401}–{@code 40404}，由 {@link
+   *     PublicCredentialResolver#resolveForAccess} 一处发出；本条链路上另加"token 不属于这个应用"）· 越权 {@code
+   *     403}（{@code asScope} 的委派正当性判定）
    */
   @Transactional
   public List<SegmentSearchPort.Scored> preview(UUID appId, String rawToken, UUID requesterId) {
     ResolvedCredential resolved = resolver.resolveForAccess(rawToken, requesterId);
     if (!resolved.assistantId().equals(appId)) {
-      // ★ 链接指向的是另一个应用 ⇒ 当作"不存在"：说清"这条链接属于别的应用"等于泄露一次归属关系
-      throw new BusinessException(ErrorCode.NOT_FOUND, "访问凭证不存在", "它可能属于别的应用，或者已被删除");
+      // ★ 链接指向的是另一个应用 ⇒ 当作"认不出这个 token"（公开面四态的第 ① 态）：说清"这条链接属于别的应用"
+      //   等于泄露一次归属关系。★ 码取 40401 而不是 404：这一格问的是"这个 token 对**这个应用**认不认"，
+      //   与"链接是对的、目标没了"（404，见 PublicCredentialResolver.targetMissing）是两件事。
+      throw new BusinessException(ErrorCode.PUBLIC_TOKEN_UNKNOWN, "访问凭证不存在", "它可能属于别的应用，或者已被删除");
     }
     Assistant app = requireVisibleApp(appId);
     if (app.kbIds().isEmpty()) {
