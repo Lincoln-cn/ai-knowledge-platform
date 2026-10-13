@@ -162,6 +162,44 @@ class AccessCredentialFilteringTest {
         });
   }
 
+  // ────────────────────────── 回归：登录调用者不得借链接放大（2026-10-13 夜发现）──────────────────────────
+
+  /**
+   * ★★ 回归：**登录调用者不得读到高于自己密级的内容**（借别人的链接也不行）。
+   *
+   * <p>病根（当晚由 `#92` 的实现批次实测发现）：`preview` 曾把<strong>凭证的冻结值</strong>直接当 SQL 上限传进 {@code
+   * visibleSegments}，于是 `asScope` 装上的"取更低"（{@code narrower(冻结值, 调用者)}）<strong>没有被消费</strong> ——
+   * "凭证冻结 INTERNAL + 调用者 PUBLIC"会连 INTERNAL 那一条一起返回，而且<strong>不报错</strong> （本项目的头号病：不报错的越权）。
+   *
+   * <p>★ 修法不是"再算一次更小值"，而是**取生效范围自己的那一份**（`currentScope().maxClassification()`）——
+   * 于是"收窄"仍然只有一处实现（`narrow`），不存在第二套合并规则。
+   *
+   * <p>★ 这条断言与"匿名访客能按冻结值拿到内容"（判据①）方向相反、必须同时绿。
+   */
+  @Test
+  void loggedInCallerCannotPreviewAboveHisOwnClearance() {
+    Fixture f = seed();
+    UUID caller = UUID.fromString("00000000-0000-4000-8000-0000000000f9");
+
+    String token =
+        SecurityContexts.asUser(
+                OWNER, ClassificationLevel.INTERNAL, () -> service.create(f.appId(), null, OWNER))
+            .token();
+
+    Set<UUID> seen =
+        SecurityContexts.asUser(
+            caller,
+            ClassificationLevel.PUBLIC,
+            () ->
+                service.preview(f.appId(), token, caller).stream()
+                    .map(SegmentSearchPort.Scored::segmentId)
+                    .collect(Collectors.toCollection(java.util.LinkedHashSet::new)));
+
+    assertThat(seen)
+        .as("★ 调用者只有 PUBLIC ⇒ 冻结 INTERNAL 的链接也不得把 INTERNAL 那一条给他（借链接不得放大）")
+        .containsExactly(f.publicSegment());
+  }
+
   // ────────────────────────── 判据 ①：撤销即失效（真栈）──────────────────────────
 
   /**

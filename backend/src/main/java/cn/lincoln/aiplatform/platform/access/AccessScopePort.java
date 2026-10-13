@@ -82,15 +82,21 @@ public interface AccessScopePort {
    *       <strong>绝不照抄请求者</strong>。匿名面上"照抄请求者"没有定义：照抄的结果要么是 {@link
    *       ScopeFilter#nobody()}（什么都看不见），要么迫使调用方自己拼一份范围（= 第二处构造）。
    *   <li><strong>正当性怎么证明由调用方负责</strong>，且两面的证明方式不同：公开面 = {@code PublicTokenResolver} 解析成功；登录面 =
-   *       {@code asScope} 的 {@code requesterId} 校验。 本入口<strong>不做</strong>令牌校验、<strong>不读</strong>
-   *       {@code SecurityContext}。
+   *       {@code asScope} 的 {@code requesterId} 校验。 本入口<strong>不做</strong>令牌校验，也<strong>不</strong>把
+   *       {@code SecurityContext} 当作正当性来源 —— 匿名是<strong>完全支持</strong>的一条路，不是"降级"。 ★ 第 17
+   *       周实现时补了一条（见下一段）：有登录调用者时它会<strong>读一次</strong>当前认证上下文，但<strong>只用于收窄</strong>。
    *   <li><strong>密级取冻结值</strong>，且与主体的 clearance 求<strong>更窄</strong> （{@link
    *       ClassificationLevel#narrower}，与 {@code asScope} 同源）。
    * </ol>
    *
-   * <p>★ <strong>调用方必须收窄到"更窄的那一份"</strong>：一条链接被<strong>登录用户</strong>打开时， 生效范围必须是「归属人范围 ∩ 冻结密级 ∩
-   * <strong>调用者自身范围</strong>」——否则登录用户可以借别人的链接 拿到超出自己 clearance 的内容，而它<strong>不会报错</strong>（本项目头号病
-   * {@code silent-failure}）。
+   * <p>★ <strong>登录调用者由实现收窄到"更窄的那一份"</strong>：一条链接被<strong>登录用户</strong>打开时， 生效范围是「归属人范围 ∩ 冻结密级 ∩
+   * <strong>调用者自身范围</strong>」里更窄的那一份 —— 否则登录用户可以借别人的链接拿到超出自己 clearance
+   * 的内容，而它<strong>不会报错</strong>（本项目头号病 {@code silent-failure}）。
+   *
+   * <p>★★ <strong>这一条由实现保证，而不是留给调用方记得做</strong>（{@code 08 §4.4.4} 纪律 3 的原始措辞是 "调用方必须先算"）：收窄与 {@code
+   * asScope} 用的是<strong>同一个</strong>私有实现 —— 调用方忘了算、 或者图省事对所有人都调 {@code
+   * asSubject}，结果都<strong>不会</strong>放大。 代价是它读一次 {@code SecurityContext}（只用于收窄、 从不用于正当性），取舍写在实现类
+   * {@code asSubject} 的注释里。
    *
    * <p>★ 两个入口<strong>共用同一个"构造范围"的实现</strong>（{@code 08 §4.4.4}）： 所以"可见性判定只有一处"（{@code 07
    * §3.3}）这条纪律不变，变的只是"谁有资格调它"。
