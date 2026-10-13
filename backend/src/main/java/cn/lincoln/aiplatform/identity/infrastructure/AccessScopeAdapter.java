@@ -5,6 +5,8 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import cn.lincoln.aiplatform.platform.access.SubjectIdentityPort;
+import cn.lincoln.aiplatform.platform.access.SubjectIdentityPort.SubjectIdentity;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.org.OrgDirectoryPort;
@@ -43,9 +45,12 @@ import org.springframework.web.context.request.RequestContextHolder;
  *
  * <p>★ <strong>两个委派入口（{@code 08 §4.4.4}）</strong>：{@link #asScope} 面向<strong>登录面</strong> （正当性 =
  * "发起人就是当前登录用户"），{@link #asSubject} 面向<strong>公开面</strong> （正当性 = 调用方已经用 {@code
- * PublicTokenResolver} 证明令牌有效，本类不复核）。 两者<strong>共用同一个"构造范围"实现</strong> ——
- * 所以"判定只有一处"这条纪律不变，变的只是"谁有资格调它"。 ★ 第 17 周实现 {@code asSubject} 时， <strong>载入主体身份</strong>（角色 / 数据范围
- * / 部门链）是新增的那一半， 它<strong>不许</strong>退化成"照抄当前请求者"。
+ * PublicTokenResolver} 证明令牌有效，本类不复核）。 两者<strong>共用同一个"构造范围"实现</strong>（{@link
+ * #buildScope}）与<strong>同一个"收窄 + 装上"实现</strong>（{@link #narrow} / {@link #withScope}）——
+ * 所以"判定只有一处"这条纪律不变，变的只是"谁有资格调它"、以及"身份从哪里来"（登录面读令牌、公开面按 {@code subjectId} 读库）。
+ *
+ * <p>★ {@link #asSubject} 已于第 17 周落地（{@code #92}）：<strong>载入主体身份</strong>（角色 / 数据范围 / 密级 / 部门） 走
+ * {@link SubjectIdentityPort}，而它<strong>不许</strong>退化成"照抄当前请求者" —— 匿名面上没有"请求者"可抄。
  */
 @Component
 public class AccessScopeAdapter implements AccessScopePort {
@@ -82,9 +87,11 @@ public class AccessScopeAdapter implements AccessScopePort {
   private static final ThreadLocal<ScopeFilter> DELEGATED = new ThreadLocal<>();
 
   private final OrgDirectoryPort orgDirectory;
+  private final SubjectIdentityPort subjectIdentities;
 
-  public AccessScopeAdapter(OrgDirectoryPort orgDirectory) {
+  public AccessScopeAdapter(OrgDirectoryPort orgDirectory, SubjectIdentityPort subjectIdentities) {
     this.orgDirectory = orgDirectory;
+    this.subjectIdentities = subjectIdentities;
   }
 
   @Override
@@ -121,7 +128,7 @@ public class AccessScopeAdapter implements AccessScopePort {
    * </ol>
    *
    * <p>★ 它<strong>不</strong>自己去拼一份共享的 {@code ScopeFilter}：密级之外的分量（数据范围 / 角色 / 标签 /
-   * 部门链）一律照抄当前请求者，而"当前请求者是谁"只有一条解析路径（{@code fromJwt}）。
+   * 部门链）一律照抄当前请求者，而"当前请求者是谁"只有一条解析路径（{@link #fromJwt}）； "把两者合成一份"也只有一条路径（{@link #narrow}）。
    *
    * <p>★ 委派期间 {@code currentScope()} 直接返回这一份（见 {@link #DELEGATED}）。
    *
@@ -136,30 +143,8 @@ public class AccessScopeAdapter implements AccessScopePort {
       throw new BusinessException(
           ErrorCode.FORBIDDEN, "无法以别人的身份解析公开令牌", "委派范围只能由发起解析的那个登录用户行使；请重新登录后再试");
     }
-    ScopeFilter currentScope = fromJwt(current);
-    ScopeFilter effective =
-        new ScopeFilter(
-            delegated.me(),
-            currentScope.scope(),
-            currentScope.myRoles(),
-            ClassificationLevel.narrower(
-                delegated.maxClassification(), currentScope.maxClassification()),
-            currentScope.clLabels(),
-            currentScope.myOrgIds());
-
-    ScopeFilter previous = DELEGATED.get();
-    // ★ 记住"上一份范围"而不是上一份令牌：能自己给自己签发的令牌是伪造面。
-    //   而这里需要回答的问题只有一个 —— "当前生效的范围是哪一份"。
-    DELEGATED.set(effective);
-    try {
-      return body.get();
-    } finally {
-      if (previous == null) {
-        DELEGATED.remove();
-      } else {
-        DELEGATED.set(previous);
-      }
-    }
+    // ★ 收窄与"装上"都只有一处实现（narrow / withScope），与 asSubject 共用 —— 见它们的注释
+    return withScope(narrow(delegated, fromJwt(current)), body);
   }
 
   /**
@@ -179,9 +164,10 @@ public class AccessScopeAdapter implements AccessScopePort {
    * 照抄的结果是 {@link ScopeFilter#nobody()}（免责地什么都看不见，而这与"令牌有效却查不到"不可区分）。 <strong>密级仍取冻结值</strong>，方向仍是
    * {@link ClassificationLevel#narrower}（与 {@code asScope} 同源：只许收窄）。
    *
-   * <p>★ <strong>与 {@code asScope} 共用同一个"构造范围"的实现</strong>（{@code 08 §4.4.4}）：
-   * 落成一条<strong>私有</strong>方法（例如 {@code buildScope(身份四元组, 密级)}），两个入口都调它 —— 这样"构造范围"在物理上只有一份，
-   * 将来范围多加一个分量时也只会有一个改动点（否则又是一个"两处判定"）。
+   * <p>★ <strong>与 {@code asScope} 共用同一个"构造范围"的实现</strong>（{@code 08 §4.4.4} 纪律 4）：那就是私有方法 {@link
+   * #buildScope}（身份材料 + 生效密级 ⇒ 一份 {@code ScopeFilter}）。两个入口的身份<strong>来源</strong>不同 （登录面读令牌 {@link
+   * #fromJwt}、公开面按 {@code subjectId} 读库 {@link SubjectIdentityPort}）， 但"材料 ⇒
+   * 范围"这一步<strong>物理上只有一份</strong> —— 将来范围多加一个分量时只会有一个改动点。
    *
    * <p>⚠️ <strong>两件"本方法必须<em>不</em>做"的事</strong>（做了都会造出静默放大）：
    *
@@ -189,17 +175,40 @@ public class AccessScopeAdapter implements AccessScopePort {
    *   <li><strong>不校验令牌</strong>：令牌有效性（存在 / 未撤销 / 未过期 / 未停用）是 {@code PublicTokenResolver} 的职责；
    *       在这里再判一次会造成"两处都判、口径不同"。撤销 / 过期时<strong>本方法照常构造范围</strong>，可见内容为 <strong>空</strong> ——
    *       这是有意的 fail-closed：错误由解析入口报，见 {@code 13 §5.2} 第 ② 级。
-   *   <li><strong>不回落到"照抄调用者"</strong>：主体载入不出来（不存在 / 已删）时返回 {@link ScopeFilter#nobody()}，
+   *   <li><strong>不回落到"照抄调用者"</strong>：主体载入不出来（不存在 / 已删 / 角色缺失）时返回 {@link ScopeFilter#nobody()}，
    *       <strong>绝不</strong>退回当前请求者的范围。★ 金丝雀：把这一句改成"照抄当前请求者" ⇒ 匿名面（不带 {@code Authorization}
    *       头）上"用有效凭证检索"那条判据必须<strong>变红</strong>（{@code 08 §4.4.4} 判据 ③）。
    * </ol>
    *
-   * <p>★ 同时要求<strong>调用方</strong>收窄：一条链接被<strong>登录用户</strong>打开时，生效范围必须是「归属人范围 ∩ 冻结密级 ∩
-   * <strong>调用者自身范围</strong>」里更窄的那一份（{@code 08 §4.4.4} 判据 ②），否则登录用户能借链接拿到超出自己 clearance 的内容。
+   * <p>★★ <strong>登录调用者由本方法自己收窄</strong>（{@code 08 §4.4.4} 判据 ② / 纪律 3）：有认证上下文时， 生效范围再经 {@link
+   * #narrow} 压到<strong>不大于调用者自身那一份</strong> —— 收窄用的<strong>就是</strong> {@code asScope}
+   * 那一条（同一个私有方法，"其余分量照抄调用者 + 密级取更低"），所以没有第二套合并规则。
+   *
+   * <p>★ 这一条比"要求调用方先算"更强：调用方忘了算、或者图省事对所有人都调 {@code asSubject}， 结果都<strong>不会</strong>放大 ——
+   * 而"忘了算"这件事的症状正是本项目头号病（不报错的越权）。 ★ 代价与口径偏差写在交付报告里（本条与 {@code 08 §4.4.4} 纪律 5 的字面"不读 {@code
+   * SecurityContext}" 不一致：这里<strong>读</strong>它，但只用于<strong>收窄</strong>，从不用于<strong>正当性</strong> ——
+   * 匿名时读不到就是匿名）。
    */
   @Override
   public <T> T asSubject(UUID subjectId, ClassificationLevel frozenClearance, Supplier<T> body) {
-    throw new UnsupportedOperationException("asSubject 是第 17 周（0.4.5）的活：本批只定口径（08 §4.4.4 · #92）");
+    SubjectIdentity subject = subjectIdentities.load(subjectId).orElse(null);
+    if (subject == null) {
+      // ★ 判据③ 守的就是这一句：载入不出来 ⇒ nobody()，绝不退回"当前请求者那一份"
+      log.warn("公开面的主体 {} 载入不出身份 ⇒ 本次委派什么都看不见（fail-closed）", subjectId);
+      return withScope(ScopeFilter.nobody(), body);
+    }
+    // ★ 密级仍取冻结值，且与主体自己的 clearance 求更窄（08 §4.4.4 纪律 2）：一条冻结 INTERNAL 的链接
+    //   被一个 SECRET 的归属人打开，生效的仍是 INTERNAL
+    ScopeFilter linkScope =
+        buildScope(subject, ClassificationLevel.narrower(frozenClearance, subject.clearance()));
+
+    ScopeFilter caller = currentCallerScope();
+    if (caller == null) {
+      // ★ 判据①：匿名访客 —— 生效的就是主体那一份（没有"请求者"可抄，这正是 #92 的病根）
+      return withScope(linkScope, body);
+    }
+    // ★ 判据②：登录用户拿同一条链接不放大
+    return withScope(narrow(linkScope, caller), body);
   }
 
   // ────────────────────────── 内部 ──────────────────────────
@@ -212,23 +221,135 @@ public class AccessScopeAdapter implements AccessScopePort {
     return authentication.getPrincipal() instanceof Jwt jwt ? jwt : null;
   }
 
-  private ScopeFilter fromJwt(Jwt jwt) {
-    UUID me = parseUuid(jwt.getSubject());
-    if (me == null) {
-      // 令牌没有 sub（理论上不该发生）⇒ 当作未认证，而不是"无限制"
+  /**
+   * ★★ <strong>唯一的"构造范围"实现</strong>（{@code 08 §4.4.4} 纪律 4）：身份材料 + 生效密级 ⇒ 一份 {@link ScopeFilter}。
+   *
+   * <p>两个入口的身份来源不同（登录面 {@link #identityOf} 读令牌、公开面 {@link SubjectIdentityPort} 读库）， 但"材料 ⇒
+   * 范围"这一步只有这一份 —— 所以"可见性判定只有一处"（{@code 07 §3.3}）在<strong>构造侧</strong>也成立。
+   * 谁想给范围加一个分量（例如将来的"部门档"），改动点只有这里一行；抄成两份的话，第二份不会跟着改， 而症状是"某个入口能看见不该看见的东西"（{@code
+   * AccessScopeUniquenessTest} 守不住这一点 —— 它只看"实现有几个类"）。
+   *
+   * <p>★ 部门链的<strong>展开</strong>也收在这里（{@link #myOrgIds}）：两条来源给的都是"我一个部门 id"，
+   * 展开成"我的部门及全部上级"这件事只发生一次。
+   */
+  private ScopeFilter buildScope(SubjectIdentity identity, ClassificationLevel clearance) {
+    return new ScopeFilter(
+        identity.userId(),
+        identity.dataScope(),
+        identity.roleCodes(),
+        clearance,
+        identity.clLabels(),
+        myOrgIds(identity.orgId()));
+  }
+
+  /**
+   * ★★ <strong>唯一的"收窄"实现</strong>：把 {@code requested}（链接 / 委派希望行使的范围）压到不大于 {@code
+   * caller}（当前登录者）那一份。
+   *
+   * <p>三条纪律（每一条都对应一种"静默放大"）：
+   *
+   * <ol>
+   *   <li><strong>{@code me} 取 {@code requested}</strong>：取数行使的是"链接那一份"的身份（公开面 = 归属人）；
+   *   <li><strong>密级取更低</strong>：{@link
+   *       ClassificationLevel#narrower}。取反了也能跑，症状是"用别人给的链接能看到比自己更高密级的内容"；
+   *   <li><strong>其余分量照抄调用者</strong>：数据范围 / 角色 / 标签 / 部门链一律用调用者自己的 ——
+   *       委派只允许在<strong>密级</strong>这一维上更窄。这一条是"别把委派做成第二个范围构造器"的落实。
+   * </ol>
+   *
+   * <p>★ 它被 {@link #asScope}（无条件）与 {@link #asSubject}（有登录调用者时）共用 —— 两处若各写一遍， 迟早有一处忘了取更低。
+   *
+   * <p>★ <strong>读不出调用者身份</strong>（{@code me == null}，理论上只有"有认证上下文却没有 sub"这一种）⇒ 返回 {@link
+   * ScopeFilter#nobody()}：这是 fail-closed，而<strong>不是</strong>"当作匿名、把链接那一份给出去" ——
+   * 后者会让一个半截令牌反而拿到归属人的范围。
+   */
+  private static ScopeFilter narrow(ScopeFilter requested, ScopeFilter caller) {
+    if (caller == null || caller.me() == null) {
       return ScopeFilter.nobody();
     }
-
-    String roleCode = jwt.getClaimAsString("role");
-    Set<String> myRoles = roleCode == null ? Set.of() : Set.of(roleCode);
-
     return new ScopeFilter(
+        requested.me(),
+        caller.scope(),
+        caller.myRoles(),
+        ClassificationLevel.narrower(requested.maxClassification(), caller.maxClassification()),
+        caller.clLabels(),
+        caller.myOrgIds());
+  }
+
+  /**
+   * 把一份范围装上（{@link #DELEGATED}），执行取数逻辑后<strong>成对还原</strong>。
+   *
+   * <p>★ 记住"上一份范围"而不是上一份令牌：能自己给自己签发的令牌是伪造面。 而这里需要回答的问题只有一个 —— "当前生效的范围是哪一份"。
+   *
+   * <p>★ 必须成对清除（{@code try/finally}）：它是 {@code ThreadLocal}，而请求线程是池化的 —— 漏清就把一条链接的冻结密级带给下一个请求（与
+   * {@link #MY_ORG_IDS_ATTRIBUTE} 那条注释同一个理由）。
+   */
+  private static <T> T withScope(ScopeFilter scope, Supplier<T> body) {
+    ScopeFilter previous = DELEGATED.get();
+    DELEGATED.set(scope);
+    try {
+      return body.get();
+    } finally {
+      if (previous == null) {
+        DELEGATED.remove();
+      } else {
+        DELEGATED.set(previous);
+      }
+    }
+  }
+
+  /**
+   * 当前调用者自己的范围；<strong>匿名</strong>时返回 {@code null}（"没有调用者这一维"）。
+   *
+   * <p>★★ 这一条是 {@code asSubject} 与 {@code 08 §4.4.4} 纪律 5 的<strong>唯一</strong>偏差，理由写在这里：
+   * 登录用户拿别人的链接时，生效范围必须是「归属人范围 ∩ 冻结密级 ∩ 调用者自身范围」里更窄的那一份（判据 ②）。 把它留给"调用方自己算"意味着：调用方忘了算、或图省事对所有人都调
+   * {@code asSubject}，就会<strong>静默</strong>放大 ——
+   * 而"不报错的越权"正是本项目头号病。所以这里读一次认证上下文，但<strong>只用于收窄</strong>：
+   *
+   * <ul>
+   *   <li>不用于<strong>正当性</strong>：匿名（{@code null}）是<strong>完全支持</strong>的一条路，不是"降级"；
+   *   <li>不用于<strong>校验令牌</strong>：令牌有效性仍是 {@code PublicTokenResolver} 的事。
+   * </ul>
+   *
+   * <p>★ 在委派期间调用它拿到的是<strong>真实的当前请求者</strong>（读令牌，不读 {@link #DELEGATED}）—— 那正是这条收窄要压的对象。
+   */
+  private ScopeFilter currentCallerScope() {
+    Jwt jwt = currentJwt();
+    if (jwt == null) {
+      return null;
+    }
+    SubjectIdentity identity = identityOf(jwt);
+    // ★ 有认证上下文却读不出身份（sub 缺失 / 不是 UUID）⇒ nobody()，**不**当作匿名放过去
+    return identity == null ? ScopeFilter.nobody() : buildScope(identity, identity.clearance());
+  }
+
+  private ScopeFilter fromJwt(Jwt jwt) {
+    SubjectIdentity identity = identityOf(jwt);
+    // 令牌没有 sub（理论上不该发生）⇒ 当作未认证，而不是"无限制"
+    return identity == null ? ScopeFilter.nobody() : buildScope(identity, identity.clearance());
+  }
+
+  /**
+   * 令牌声明 ⇒ 身份材料（与 {@link SubjectIdentityPort} 返回的是<strong>同一个</strong> record）。
+   *
+   * <p>★ 两条身份来源在形状上必须是同一件事，否则"共用同一个构造器"（{@link #buildScope}）立刻退化成两个重载。
+   * 差别只在<strong>值从哪来</strong>：这里从令牌（零查询），公开面从库（一次查询）。
+   *
+   * <p>★ 读不出 {@code sub} ⇒ {@code null}（调用方按"未认证"处理）；其余声明读不出时按<strong>最窄档</strong>兜底 （见 {@link
+   * #parseDataScope} / {@link #parseClearance}）—— 方向是刻意的：兜底只会"少看见"。
+   */
+  private static SubjectIdentity identityOf(Jwt jwt) {
+    UUID me = parseUuid(jwt.getSubject());
+    if (me == null) {
+      return null;
+    }
+    String roleCode = jwt.getClaimAsString("role");
+    return new SubjectIdentity(
         me,
         parseDataScope(jwt.getClaimAsString("scope")),
-        myRoles,
+        roleCode == null ? Set.of() : Set.of(roleCode),
         parseClearance(jwt.getClaimAsString("clearance")),
         parseLabels(jwt.getClaimAsStringList("clLabels")),
-        myOrgIds(jwt));
+        parseUuid(jwt.getClaimAsString("orgId")));
   }
 
   /**
@@ -245,10 +366,12 @@ public class AccessScopeAdapter implements AccessScopePort {
    * <p>★ <strong>一处展开、一次请求</strong>：这里做的那一次前缀查询是按请求缓存的。 绝不要把它挪进 {@code canSee(resource)} ——
    * 那是逐资源调用的（N+1），而"每请求一次"正是本方法存在的理由。
    *
-   * <p>★ 解析不出部门（没这个声明 / 不是合法 UUID）⇒ 返回<strong>空集</strong>， 不是"不限"。方向是刻意的：漏配只会"少看见"，不会"多看见"。
+   * <p>★ 解析不出部门（没有部门归属 / 不是合法 UUID）⇒ 返回<strong>空集</strong>， 不是"不限"。方向是刻意的：漏配只会"少看见"，不会"多看见"。
+   *
+   * <p>★ 参数从 {@code Jwt} 改成 {@code UUID}（第 17 周）：<strong>两条身份来源都要走这一步</strong> （令牌里的 {@code orgId}
+   * 声明 / {@code iam_user.org_id}），而"展开成祖先链"只允许有一处实现。
    */
-  private Set<String> myOrgIds(Jwt jwt) {
-    UUID myOrg = parseUuid(jwt.getClaimAsString("orgId"));
+  private Set<String> myOrgIds(UUID myOrg) {
     if (myOrg == null) {
       return Set.of();
     }
