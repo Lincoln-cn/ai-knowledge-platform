@@ -256,7 +256,7 @@ export const workflowDrafts: Record<string, WorkflowGraph> = {
   }
 }
 
-/** 免登录访问凭证。撤销是终态，撤销后不可重新启用，只能重新生成 */
+/** 免登录访问凭证。撤销是终态，撤销后不可重新启用，只能重新生成。★ `maxClassification` = 创建时冻结的 clearance（`13 §5.2`） */
 export const credentials: Record<string, AccessCredential[]> = {
   as1: [
     {
@@ -264,6 +264,7 @@ export const credentials: Record<string, AccessCredential[]> = {
       token: 'pk_live_a1b2c3d4e5f6',
       enabled: true,
       expiresAt: '2026-12-31T00:00:00Z',
+      maxClassification: 'SECRET',
       accessCount: 156,
       lastAccessAt: '2026-02-12T15:30:00Z',
       revokedAt: null,
@@ -274,6 +275,7 @@ export const credentials: Record<string, AccessCredential[]> = {
       token: 'pk_live_f6e5d4c3b2a1',
       enabled: false,
       expiresAt: null,
+      maxClassification: 'INTERNAL',
       accessCount: 12,
       lastAccessAt: '2026-01-28T09:12:00Z',
       revokedAt: null,
@@ -284,6 +286,7 @@ export const credentials: Record<string, AccessCredential[]> = {
       token: 'pk_live_deadbeef0000',
       enabled: false,
       expiresAt: null,
+      maxClassification: 'PUBLIC',
       accessCount: 88,
       lastAccessAt: '2026-01-20T18:40:00Z',
       revokedAt: '2026-01-22T11:00:00Z',
@@ -296,6 +299,7 @@ export const credentials: Record<string, AccessCredential[]> = {
       token: 'pk_live_aa11bb22cc33',
       enabled: true,
       expiresAt: null,
+      maxClassification: 'PUBLIC',
       accessCount: 40,
       lastAccessAt: '2026-02-13T08:05:00Z',
       revokedAt: null,

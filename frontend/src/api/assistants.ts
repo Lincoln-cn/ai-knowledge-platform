@@ -1,6 +1,6 @@
 import { request } from '@/lib/http'
 import type { RetrievalParams } from './retrieval'
-import type { Grant, PageQuery, PageResult, ResourceVisibility } from './types'
+import type { ClassificationLevel, Grant, PageQuery, PageResult, ResourceVisibility } from './types'
 import type { WorkflowGraph } from './workflow'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
@@ -146,6 +146,19 @@ export interface AccessCredential {
   enabled: boolean
   /** 有效期；null 表示长期有效 */
   expiresAt: string | null
+  /**
+   * ★ **创建时冻结**的密级上限 = 创建者当时的 clearance（`13 §5.2` ①）。
+   *
+   * 它不是"应用现在有多密"，而是**这条凭证被允许看到的最敏感内容**。两条后果：
+   * ① 访客每次访问都用它**重新过滤**（不是复用创建时命中的那些结果 —— `13 §5.2` ②）；
+   * ② 应用内容**升密后原链接立即失效**（`13 §5.3`）。
+   *
+   * ★ **必填**（后端一定返回）：它是"受限查询凭证"这个认知的载体。若把它做成可选，
+   * 就等于允许"没有冻结值的链接"存在 —— 而那种链接只能靠"创建时命中过"放行，
+   * 正是 `13 §5.2` 的「⚠️ 不得」。★ 也**后加不可追溯**（`13:291`）：已发出的链接
+   * 没有这份记录，事后补不回来。
+   */
+  maxClassification: ClassificationLevel
   accessCount: number
   lastAccessAt: string | null
   revokedAt: string | null

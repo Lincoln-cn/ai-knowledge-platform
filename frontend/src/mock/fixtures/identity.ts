@@ -1,5 +1,6 @@
 import { PERM } from '@/constants/permissions'
 import type { PermissionItem, Role, User } from '@/api/identity'
+import type { ClassificationLevel } from '@/api/types'
 
 /** 权限点全量清单。新增功能时这里多一项，角色勾选界面自动可见 */
 export const permissions: PermissionItem[] = [
@@ -28,13 +29,24 @@ const all = permissions.map((p) => p.code)
 
 export const roles: Role[] = [
   // 数据范围（07 §3.2）：ADMIN / KB_OPERATOR / APP_CONFIG 是全平台口径，USER 是「共享档」
-  { id: 'r1', name: '管理员', code: 'ADMIN', memberCount: 1, permissions: all, dataScope: 'ALL' },
+  // ★ clearance（`Role.maxClassification`，13 §六）：与 dataScope **正交** —— 前者管"能看多密"，
+  //   后者管"能看谁建的"。有了它，分享冻结（13 §5.2）才有值可取：冻结值 = 分享者当时的 clearance。
+  {
+    id: 'r1',
+    name: '管理员',
+    code: 'ADMIN',
+    memberCount: 1,
+    permissions: all,
+    dataScope: 'ALL',
+    maxClassification: 'CONFIDENTIAL'
+  },
   {
     id: 'r2',
     name: '知识运营',
     code: 'KB_OPERATOR',
     memberCount: 3,
     dataScope: 'ALL',
+    maxClassification: 'SECRET',
     permissions: [
       PERM.knowledgeView,
       PERM.knowledgeCreate,
@@ -55,6 +67,7 @@ export const roles: Role[] = [
     code: 'APP_CONFIG',
     memberCount: 2,
     dataScope: 'ALL',
+    maxClassification: 'INTERNAL',
     permissions: [
       PERM.knowledgeView,
       PERM.hitTest,
@@ -73,6 +86,7 @@ export const roles: Role[] = [
     memberCount: 68,
     // 只看得见「被共享给自己的」+ 公开的（07 §4.2 知识库/应用两行）
     dataScope: 'SHARED',
+    maxClassification: 'INTERNAL',
     permissions: [
       PERM.knowledgeView,
       PERM.assistantView,
@@ -143,3 +157,16 @@ export const users: Array<User & { password: string; mustChangePassword: boolean
  */
 export const userFromToken = (token: string) =>
   token ? users.find((u) => u.id === token.replace(/^mock_access_/, '')) : undefined
+
+/**
+ * 当前登录用户的密级上限（clearance）。**分享创建时冻结的就是这个值**（`13 §5.2` ①）。
+ *
+ * 为什么放在夹具层：真后端由 `Role.maxClassification` 随令牌下发，mock 侧必须**同源**推导，
+ * 否则"分享冻结"在 mock 与真栈下会给出两个不同的值（`#41`/`#57` 那一族的分歧都是从这儿长出来的）。
+ * 找不到用户/角色时给 **`INTERNAL`**（不是 `CONFIDENTIAL`）：缺省必须**收窄**，放开容易收回难。
+ */
+export const clearanceFromToken = (token: string): ClassificationLevel => {
+  const user = userFromToken(token)
+  const role = roles.find((r) => r.id === user?.roleId)
+  return role?.maxClassification ?? 'INTERNAL'
+}

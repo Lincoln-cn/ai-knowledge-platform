@@ -1,6 +1,6 @@
 import { request } from '@/lib/http'
 import type { SourceRef } from './stream-types'
-import type { Grant, PageQuery, PageResult, ResourceVisibility } from './types'
+import type { ClassificationLevel, Grant, PageQuery, PageResult, ResourceVisibility } from './types'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
@@ -79,6 +79,14 @@ export interface PublicContext {
 export interface ConversationShare {
   token: string
   url: string
+  /**
+   * ★ **创建时冻结**的密级上限 = 分享者当时的 clearance（`13 §5.2` ① / `13:291`）。
+   *
+   * 与 `AccessCredential.maxClassification` **同一条口径、同一个理由**：分享链接不是"内容快照"，
+   * 而是"一个受限的查询凭证" —— 每次打开都要**用这个冻结值重新过滤**，
+   * 且被分享内容**升密后立即撤销**（`13 §5.3`）。★ **必填**，且**后加不可追溯**。
+   */
+  maxClassification: ClassificationLevel
   expiresAt: string | null
 }
 

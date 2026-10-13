@@ -9,6 +9,7 @@ import {
 } from '../fixtures/conversations'
 import { assistants, credentials as assistantCredentials } from '../fixtures/assistants'
 import { cannedAnswer } from '../fixtures/canned'
+import { clearanceFromToken } from '../fixtures/identity'
 import { documents, knowledgeBases, segments } from '../fixtures/knowledge'
 import {
   addConversation,
@@ -351,6 +352,8 @@ export const conversationRoutes: MockRoute[] = [
         conversationId: conv.id,
         scope,
         messageId: req.messageId,
+        // ★ 冻结 = 分享者此刻的 clearance（13 §5.2 ①）；**后端取，不接受前端传**
+        maxClassification: clearanceFromToken(token ?? ''),
         expiresAt: req.expiresAt ?? null
       })
       return toShareView(rec)
