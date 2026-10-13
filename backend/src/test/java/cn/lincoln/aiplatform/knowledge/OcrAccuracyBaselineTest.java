@@ -143,9 +143,12 @@ class OcrAccuracyBaselineTest {
    * ★★ 主读数：逐页字符准确率 + 微平均 + 最差页，并把基线表打印出来（可进文档）。
    *
    * <p>★ 必须<strong>逐页</strong>给，不能只给一个全局平均 —— 「平均 0.93」会掩盖「有一页 0.4」。
+   *
+   * <p>★ 方法名用 ASCII、上面的中文才是"为什么"：本项目定过 —— 标识符一旦被非 UTF-8 的工具读写就会变形，
+   * 而人工维护的入口本来就是 javadoc（`TestNamingConventionTest` 会拦住中文标识符）。
    */
   @Test
-  void 逐页读数与基线对照表() throws Exception {
+  void perPageAccuracyMatchesBaselineTable() throws Exception {
     List<PageReading> readings = readings();
 
     List<String> rows = new ArrayList<>();
@@ -220,9 +223,11 @@ class OcrAccuracyBaselineTest {
    * ★ 逐字例子：把"差在什么地方"钉成断言 —— 这些形态<strong>就是 L2/L3 要处理的清单</strong>，本批只记录。
    *
    * <p>★ 判据用「包含」而不是"整句相等"：OCR 产物里同一行还会叠着空白差异（见下一条）， 用整句相等会让这条断言因为<strong>不相关的原因</strong>变红。
+   *
+   * <p>★ 方法名 ASCII（同上一条）：这些逐字差异<strong>就是 L2/L3 要处理的清单</strong>，中文说明留在本 javadoc。
    */
   @Test
-  void 逐字差异例子必须仍然可复现() throws Exception {
+  void characterDifferenceExamplesRemainReproducible() throws Exception {
     List<PageReading> readings = readings();
     String page1 = readings.get(0).actual();
     String page2 = readings.get(1).actual();
