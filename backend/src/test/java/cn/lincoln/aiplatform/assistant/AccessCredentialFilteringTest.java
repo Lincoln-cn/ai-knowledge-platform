@@ -7,6 +7,7 @@ import cn.lincoln.aiplatform.assistant.application.AccessCredentialService;
 import cn.lincoln.aiplatform.assistant.application.AccessCredentialView;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import cn.lincoln.aiplatform.support.SecurityContexts;
@@ -206,6 +207,9 @@ class AccessCredentialFilteringTest {
    * ★ 撤销之后<strong>同一个请求周期内</strong>再访问即被拒，且被拒原因是"已撤销"（不是别的）。
    *
    * <p>先访问一次（把解析结果放进缓存 —— 不先访问一次，这条断言证明不了"缓存被清了"），再撤销， 再访问一次 ⇒ 必须红在"已撤销"。
+   *
+   * <p>★★ 第 17 周（{@code #41} 的 emit 那一半）：这一态从 {@code FORBIDDEN} 改成 {@code PUBLIC_TOKEN_REVOKED}
+   * （{@code 40402}）—— 真栈上<strong>码</strong>也要跟着走同一条包络，所以这里补断言码，而不只是断言文案。
    */
   @Test
   void revokeInvalidatesTheTokenImmediatelyInTheRealStack() {
@@ -223,6 +227,10 @@ class AccessCredentialFilteringTest {
           assertThatThrownBy(() -> visible(f.appId(), credential.token()))
               .as("★ 撤销之后同一个请求周期内再访问即被拒（判据①）")
               .isInstanceOf(BusinessException.class)
+              .satisfies(
+                  e ->
+                      assertThat(((BusinessException) e).code())
+                          .isEqualTo(ErrorCode.PUBLIC_TOKEN_REVOKED))
               .hasMessageContaining("已撤销");
           return null;
         });

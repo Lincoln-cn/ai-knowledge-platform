@@ -574,6 +574,10 @@ export const publicMessages: Record<string, ChatMessage[]> = {
  * **查不到就返回 `null`，不抛也不猜** —— 这里是纯数据层，抛 `ApiError` 是 handler 的活；
  * 而返回 `null` 能让 handler 给外部访客一句可读原因，而不是把
  * `Cannot read properties of undefined (reading 'id')` 当页面错误渲染出去。
+ *
+ * ★ `maxClassification` = **凭证创建时冻结的密级上限**（`13 §5.2` ①）：契约 2026-10-14 把它改成**必填**
+ * （`PublicContext.maxClassification`），所以它必须从 `cred` 上照抄下来 —— **不许**回落成应用当前的密级，
+ * 也不许给一个默认档（那会让访客读到一个与这条链接无关的上限）。
  */
 export function toPublicContext(cred: PublicCredential): PublicContext | null {
   const app = appBriefs[cred.appId]
@@ -584,6 +588,7 @@ export function toPublicContext(cred: PublicCredential): PublicContext | null {
     icon: app.icon,
     description: app.description,
     prologue: app.prologue,
-    quickQuestions: app.quickQuestions
+    quickQuestions: app.quickQuestions,
+    maxClassification: cred.maxClassification
   }
 }

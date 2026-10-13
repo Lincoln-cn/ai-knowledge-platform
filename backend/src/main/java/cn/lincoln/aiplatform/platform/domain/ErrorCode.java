@@ -99,6 +99,12 @@ public enum ErrorCode {
    * GlobalExceptionHandler} 的 {@code default} 分支，**HTTP 仍是 404 / 400，业务码只在包络里**。这不是缺陷，是这组码的用法：
    * <strong>判据取包络的 {@code code}，不取 HTTP 状态</strong>（前端 {@code lib/http.ts} 在无包络时才回落 HTTP 状态）。
    *
+   * <p>★★ <strong>emit 已落（2026-10-14 · 第 17 周开工）</strong>：公开令牌路径上的四种失效<strong>分别</strong>抛这四个码，
+   * 发出点只有一处 = {@code assistant.application.PublicCredentialResolver#requireUsable}（另有"token
+   * 不属于这个应用" 与它同码）。★ 那之前这四处一律抛 {@code FORBIDDEN} / {@code NOT_FOUND} ⇒ 前端 {@code
+   * utils/public-gate.ts} 的四态文案会<strong>全部落进兜底分支</strong>（不报错的静默退化）。 读数 = {@code
+   * AccessCredentialTest.fourFailureReasonsAreDistinguishable}（四种失效逐态断言码 + 文案关键字）。
+   *
    * <p>★ 为什么没有 {@code 40405}（内容升密 ⇒ 原链接立即失效）：按 {@code 13 §5.3} 的 <strong>(a)</strong> 口径，
    * 升密后<strong>凭证仍然有效、链接仍打得开</strong>，只是那份内容被同一个谓词滤掉 ⇒ <strong>不需要第五个码</strong>。 那一档若将来真要做（(b)
    * 自动撤销凭证），届时<strong>先改契约再加这里</strong>。

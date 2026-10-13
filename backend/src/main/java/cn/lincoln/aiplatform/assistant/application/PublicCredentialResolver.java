@@ -19,6 +19,13 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 应用级公开令牌的解析实现（端口在 {@code platform}、实现在提供方模块 {@code assistant} —— {@code 08 §4.2.3}）。
  *
+ * <h3>★ 公开面四态码的 emit 落点（第 17 周 · {@code #41} 的 emit 那一半）</h3>
+ *
+ * <p>四种失效原因<strong>各抛各的码</strong>，全部由 {@link #requireUsable} 一处发出：认不出 → {@code 40401} · 已撤销 →
+ * {@code 40402} · 已过期 → {@code 40403} · 已停用 → {@code 40404}（契约 {@code frontend/src/api/types.ts}
+ * 与后端 {@link ErrorCode} 两侧同批补齐）。★ 前端 {@code utils/public-gate.ts} 正是按这四个码分四态文案，所以"都抛 {@code
+ * FORBIDDEN}"不是"少一句提示"，而是<strong>四态静默退化</strong>。
+ *
  * <h3>★ 它同时是"按 token 的解析缓存 + 撤销时的失效钩子"</h3>
  *
  * <p>公开面是<strong>免登录</strong>的：每打开一次链接都要按 token 查一次凭证、再查一次它指向的应用。 那两次查询对同一个 token
@@ -57,8 +64,9 @@ public class PublicCredentialResolver implements PublicTokenResolver {
   /**
    * {@inheritDoc}
    *
-   * <p>★ 只回答<strong>状态</strong>问题（不存在 / 已撤销 / 已过期 / 已停用）； "解析它的人够不够格"<strong>不在这里</strong>判 —— 那是
-   * {@code AccessScopePort.asScope} 的事（密级取更低、其余分量照抄请求者）。 把权限收窄散成两处，就是"同一判定有两个实现"的开始。
+   * <p>★ 只回答<strong>状态</strong>问题（不存在 / 已撤销 / 已过期 / 已停用，四态各带各的码，见 {@link #requireUsable}）；
+   * "解析它的人够不够格"<strong>不在这里</strong>判 —— 那是 {@code AccessScopePort.asScope} 的事（密级取更低、其余分量照抄请求者）。
+   * 把权限收窄散成两处，就是"同一判定有两个实现"的开始。
    *
    * <p>★ 不认识的令牌（不是 {@code pk_live_} 前缀）返回 {@link Optional#empty()}，交给别的实现 —— 那正是 {@code 08 §4.2.3}
    * 要的"一个入口、多个实现"。
@@ -80,7 +88,8 @@ public class PublicCredentialResolver implements PublicTokenResolver {
   /**
    * 解析并记一次访问（服务层与公开面共用这一条路径）。
    *
-   * @throws BusinessException 不存在 / 已撤销 / 已过期 / 已停用 —— 四种状态各带各的文案
+   * @throws BusinessException 不存在（{@code 40401}）/ 已撤销（{@code 40402}）/ 已过期（{@code 40403}）/
+   *     已停用（{@code 40404}）—— 四种状态各带各的<strong>码</strong>与文案
    */
   @Transactional
   public ResolvedCredential resolveForAccess(String rawToken, UUID requesterId) {
@@ -96,13 +105,13 @@ public class PublicCredentialResolver implements PublicTokenResolver {
     }
 
     AccessCredential credential =
-        credentials
-            .findByToken(rawToken)
-            .orElseThrow(() -> notFound("确认链接是否完整；已删除的凭证不会因为旧链接还在而恢复"));
+        credentials.findByToken(rawToken).orElseThrow(PublicCredentialResolver::unknownToken);
     requireUsable(credential, rawToken);
 
     Assistant app =
-        assistants.findById(credential.assistantId()).orElseThrow(() -> notFound("它指向的应用已被删除"));
+        assistants
+            .findById(credential.assistantId())
+            .orElseThrow(() -> targetMissing("它指向的应用已被删除"));
 
     ResolvedCredential resolved =
         new ResolvedCredential(
@@ -133,27 +142,37 @@ public class PublicCredentialResolver implements PublicTokenResolver {
   /**
    * 状态复判（<strong>缓存命中时也走它</strong>）。
    *
-   * <p>四种状态各带各的文案与码，理由见 {@code AccessCredentialService} 的类注释。
+   * <p>四种状态各带各的<strong>码</strong>与文案：认不出 → {@link ErrorCode#PUBLIC_TOKEN_UNKNOWN}（{@code 40401}）·
+   * 已撤销 → {@link ErrorCode#PUBLIC_TOKEN_REVOKED}（{@code 40402}）· 已过期 → {@link
+   * ErrorCode#PUBLIC_TOKEN_EXPIRED}（{@code 40403}）· 已停用 → {@link
+   * ErrorCode#PUBLIC_TOKEN_DISABLED}（{@code 40404}）。
+   *
+   * <p>★★ <strong>为什么必须是四个码、而不是一路 {@code FORBIDDEN} / {@code NOT_FOUND}</strong>（第 17 周 · {@code
+   * #41} 的 emit 那一半）：前端 {@code utils/public-gate.ts} 按这四个码分四态文案，而它的兜底分支只照抄 后端原话 ——
+   * 四态合并成一个通用码的后果不是报错，是<strong>四态全部静默退化成一段"打不开这条链接"</strong> （界面版的 {@code silent-failure}）。★
+   * 文案仍由各自那一句承载（{@code 08 §4.1}：<strong>码管分支、文案管解释</strong>）， 所以这里只换码、不动措辞。
    */
   private void requireUsable(AccessCredential credential, String rawToken) {
     if (credential == null) {
-      throw notFound("确认链接是否完整；已删除的凭证不会因为旧链接还在而恢复");
+      throw unknownToken();
     }
     if (credential.revokedAt() != null) {
       // ★ 已经撤销了，缓存里那一项就是错的 ⇒ 顺手清掉（防御性：正常路径上 revoke 已经清了）
       forget(rawToken);
-      throw new BusinessException(ErrorCode.FORBIDDEN, "访问凭证已撤销", "撤销是终态，不能重新启用；请在凭证管理里重新生成一条");
+      throw new BusinessException(
+          ErrorCode.PUBLIC_TOKEN_REVOKED, "访问凭证已撤销", "撤销是终态，不能重新启用；请在凭证管理里重新生成一条");
     }
     if (credential.expiresAt() != null && !credential.expiresAt().isAfter(Instant.now())) {
       forget(rawToken);
       throw new BusinessException(
-          ErrorCode.FORBIDDEN,
+          ErrorCode.PUBLIC_TOKEN_EXPIRED,
           "访问凭证已过期（有效期至 " + credential.expiresAt() + "）",
           "请分享者重新生成一条，或把有效期设为长期有效");
     }
     if (!credential.enabled()) {
       forget(rawToken);
-      throw new BusinessException(ErrorCode.FORBIDDEN, "访问凭证已停用", "停用是可恢复的：请分享者在凭证管理里重新启用它");
+      throw new BusinessException(
+          ErrorCode.PUBLIC_TOKEN_DISABLED, "访问凭证已停用", "停用是可恢复的：请分享者在凭证管理里重新启用它");
     }
   }
 
@@ -163,7 +182,24 @@ public class PublicCredentialResolver implements PublicTokenResolver {
     credentials.save(credential);
   }
 
-  private static BusinessException notFound(String hint) {
+  /**
+   * ★ "认不出这个 token"（公开面四态的第 ① 态）。
+   *
+   * <p>它<strong>不是</strong> {@link ErrorCode#NOT_FOUND}：后者在公开面上表示"链接是对的，但它指向的应用已经没了" （见 {@link
+   * #targetMissing}）—— 两者对访客的下一步动作不同（重新索取链接 vs 该目标永久打不开）， 而前端正是按码分这两条文案的。
+   */
+  private static BusinessException unknownToken() {
+    return new BusinessException(
+        ErrorCode.PUBLIC_TOKEN_UNKNOWN, "访问凭证不存在", "确认链接是否完整；已删除的凭证不会因为旧链接还在而恢复");
+  }
+
+  /**
+   * 凭证是好的，但它指向的<strong>目标</strong>（应用）不在了 —— 公开面上<strong>保留</strong> {@code 404}。
+   *
+   * <p>★ 这一格必须与四态码分开：契约的公开面类型里它是"目标缺失"，前端 {@code public-gate.ts} 按 {@code 404} 映射到"链接已作废"那一段；把它塞进
+   * {@code 40401} 会让访客以为"链接本身抄错了"（而重抄一遍没有用）。
+   */
+  private static BusinessException targetMissing(String hint) {
     return new BusinessException(ErrorCode.NOT_FOUND, "访问凭证不存在", hint);
   }
 }

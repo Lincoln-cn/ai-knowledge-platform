@@ -45,9 +45,9 @@
           </div>
           <!--
             ★ 冻结密级上限：让访客知道"这条链接能读到什么级别"（`13 §8.4` 的界面口径）。
-            `PublicContext.maxClassification` 在契约里是**可选**字段（注释写明"后端必须返回"）——
-            所以这里按可选读：拿得到就显示，拿不到就整块不渲染。
-            ★ 不用应用当前的密级冒充，更不把它当字符串直接渲染（那就是"状态码当文案"）。
+            ★★ 2026-10-14：`PublicContext.maxClassification` 在契约里已从**可选改成必填**（第 17 周判据 1）——
+            所以 `ceiling` 为空的唯一可能是"后端给了个不是四档之一的字符串"（见 `readCeiling`），
+            **不再**是"后端可以不返回"。★ 仍不用应用当前的密级冒充，更不把它当字符串直接渲染。
           -->
           <div v-if="ceiling" class="ceiling">
             <ClassificationBadge :level="ceiling" :labels="CLASSIFICATION_LABELS" />
@@ -191,8 +191,8 @@ const VALID_LEVELS: ClassificationLevel[] = ['PUBLIC', 'INTERNAL', 'SECRET', 'CO
 const ceiling = ref<ClassificationLevel | null>(null)
 
 /**
- * 读 `PublicContext.maxClassification`（契约里是可选字段）。
- * ★ 仍**逐值校验**再显示：后端理论上必须给四档之一，但万一给了别的字符串，
+ * 读 `PublicContext.maxClassification`（契约里**已必填**，2026-10-14）。
+ * ★ 仍**逐值校验**再显示：类型只在编译期存在，而后端理论上必须给四档之一 —— 万一给了别的字符串，
  *   直接渲染出去就是把机器码当文案（本项目栽过）。不认识 ⇒ 整块不渲染。
  */
 const readCeiling = (raw: PublicContext): ClassificationLevel | null => {

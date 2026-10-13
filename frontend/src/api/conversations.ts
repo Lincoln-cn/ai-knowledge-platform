@@ -71,16 +71,16 @@ export interface PublicContext {
   prologue: string
   quickQuestions: string[]
   /**
-   * ★ 这条链接**能读到什么级别**（= 凭证创建时冻结的密级上限，`13 §5.2` ①）。
+   * ★ **公开面必须返回它**（= 凭证创建时冻结的密级上限，`13 §5.2` ①）。
    *
    * 为什么公开页需要它：访客应当知道"这条链接读得到多密的内容"，否则他会以为"打不开 = 这里没有"。
    * ★ 与 `AccessCredential.maxClassification` **同源同义** —— 只是换了一个消费面（免登录面）。
    *
-   * ★ **公开面必须返回它**（第 17 周 `/public/**` 落地时它就是判据的一部分，见 `ROADMAP §11.2` 第 17 周）。
-   * 这里标成**可选**只为一件事：契约冻结期"只加可选字段"，且今天的 mock 夹具里还有不返回它的分支 ——
-   * ★ **但"前端可选读"不等于"后端可以不返回"**：页面拿不到就整块不渲染（这是兜底，不是允许）。
+   * ★★ 2026-10-14（第 17 周开工，`ROADMAP §11.2` 判据 1）**从可选改成必填**：此前标成可选只为一件事 ——
+   * 契约冻结期"只加可选字段"，于是"后端必须返回"这条约束**只写在注释里**，而注释不会被类型检查。
+   * 现在由**类型系统**承担它：谁构造 `PublicContext` 谁就必须给出这个值（mock 的 handlers / fixtures 已同批跟上）。
    */
-  maxClassification?: ClassificationLevel
+  maxClassification: ClassificationLevel
 }
 
 /**
