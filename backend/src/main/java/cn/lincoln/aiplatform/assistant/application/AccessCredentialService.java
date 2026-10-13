@@ -217,7 +217,14 @@ public class AccessCredentialService {
             return List.of();
           }
           // ★★ 每次访问重跑一遍（不是复用创建时的结果）：判据 ③ 就落在这两行上
-          return segmentSearch.visibleSegments(kbIds, resolved.frozenClearance(), PREVIEW_LIMIT);
+          // ★★ 上限必须取**生效范围自己的那一份**，不是凭证的冻结值：
+          //   `asScope` 已经把这个范围压到 `narrower(冻结值, 调用者)`，而 `visibleSegments` 只认入参
+          //   ceiling、自己不读 `currentScope()` ⇒ 传冻结值等于**绕过那次收窄**，症状是
+          //   "登录调用者借别人的链接读到高于自己密级的内容，而且不报错"（本项目头号病）。
+          //   ★ 取 `currentScope()` 同时让"收窄"仍然只有一处实现（`AccessScopeAdapter.narrow`），
+          //   不在这里再算一遍更小值 —— 那就是第二套合并规则。
+          ClassificationLevel ceiling = accessScope.currentScope().maxClassification();
+          return segmentSearch.visibleSegments(kbIds, ceiling, PREVIEW_LIMIT);
         });
   }
 

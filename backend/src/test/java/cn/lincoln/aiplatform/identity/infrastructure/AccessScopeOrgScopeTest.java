@@ -6,6 +6,7 @@ import cn.lincoln.aiplatform.platform.access.Grant;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.access.Subject;
+import cn.lincoln.aiplatform.platform.access.SubjectIdentityPort;
 import cn.lincoln.aiplatform.platform.access.SubjectKind;
 import cn.lincoln.aiplatform.platform.access.Visibility;
 import cn.lincoln.aiplatform.platform.org.OrgDirectoryPort;
@@ -57,10 +58,16 @@ class AccessScopeOrgScopeTest {
   private StubOrgDirectory directory;
   private AccessScopeAdapter adapter;
 
+  /**
+   * ★ 本类只验 {@code currentScope()} 与部门链方向（{@code asSubject} 由 {@code PublicSubjectDelegationTest}
+   * 在真栈上验）， 所以身份端口给一个"谁都不认识"的桩 —— 它如果被调到，说明本类测的东西已经跑到另一条路上去了。
+   */
+  private static final SubjectIdentityPort NO_SUBJECT_IDENTITIES = subjectId -> Optional.empty();
+
   @BeforeEach
   void setUp() {
     directory = new StubOrgDirectory(true);
-    adapter = new AccessScopeAdapter(directory);
+    adapter = new AccessScopeAdapter(directory, NO_SUBJECT_IDENTITIES);
     newRequest();
   }
 
@@ -155,7 +162,8 @@ class AccessScopeOrgScopeTest {
         .isTrue();
 
     newRequest();
-    AccessScopeAdapter exactMatchOnly = new AccessScopeAdapter(new StubOrgDirectory(false));
+    AccessScopeAdapter exactMatchOnly =
+        new AccessScopeAdapter(new StubOrgDirectory(false), NO_SUBJECT_IDENTITIES);
 
     assertThat(exactMatchOnly.currentScope().canSee(sharedWithOrg(TECH), NOW))
         .as("★ 金丝雀的另一半：这正是「精确匹配」的样子 —— 它必须 false，否则上面那条断言在说谎")
