@@ -957,3 +957,27 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 2. **一个位置**（字段名 / 接口点 / 埋点维度 —— 名字与类型即可，**不建表、不实现**）；
 3. ★ **一条能红的断言**（钉住"当前没做这件事"，**防止口径被读成"已经做了"**）。
    —— 参照 `#79` 判据 ③：**读数本身要能红**，否则它不可信。
+
+#### 11.9.4 ★ 口径组六条的落点与断言（2026-10-13 交付，第 16 周并行轨）
+
+★ **三样对齐表**（每一行都是"一节口径 + 一个位置 + 一条能红的断言"）：
+
+| Issue | 一节口径落哪册哪节 | 一个位置（名字 + 类型） | 一条能红的断言（包：`cn.lincoln.aiplatform.caliber`） |
+|---|---|---|---|
+| `#81` 连接器 / ACL 同步（权限的**权威源**） | `07 §十二`（12.1–12.8） | `kb_document.source_doc_id varchar(256)` · `source_revision varchar(64)` · `source_acl_ref varchar(512)` · `source_synced_at timestamptz` | `SourceAclAuthorityAbsenceTest.assertSourceAclSyncIsNotImplemented` |
+| `#82` AD / LDAP / SCIM（组织的**权威源**） | `07 §十三`（13.1–13.8） | `iam_org.external_id varchar(256)` · `iam_org.directory_source varchar(32)` · `iam_user.external_id` · `iam_user.directory_source` | `DirectorySyncAuthorityAbsenceTest`（两个用例） |
+| `#84` 间接提示注入 | `13 §12.11`（新小节；边界写进 §12.9 第 4b 条） | 审计字段 `detail.indirect_injection_hits string[]`（§12.4 第 12 行已有，本条补"今天恒空"） | `PromptAssemblyInjectionTest.assertRetrievedSegmentContentReachesTheModelVerbatim` |
+| `#85` PII **出站** | `13 §12.12`（新小节；边界写进 §12.9 第 4c 条） | 预处理点 = **检索结果拼进提示词之前**（服务层）；全出口兜底点在 `UpstreamGateway` 之前 | `OutboundPiiPassthroughTest.assertOutboundBodyIsSentWithoutPiiRedaction` |
+| `#86` 文档版本与更新传播 | `12 §9.3`（新小节，含"重新上传的两种后果"） | `kb_document.revision integer` · `kb_document.supersedes_id uuid`（落位以 `02 §5.2` 为准） | `DocumentVersionAbsenceTest`（两个用例） |
+| `#88` 对照实验 / 灰度 | `10 §7.6`（新小节）+ `10 §10.3` V1 清单补一行 | 埋点维度 `configVersion string`（+ `promptVersion` / `retrievalParamsVersion`），取值 = **配置快照的指纹** | `ConfigurationVersionAbsenceTest`（两个用例） |
+
+★ **六条断言全部"不需要库、不需要 Spring、不需要桩模型"**（本机 Docker 没在运行时也必须跑出同一份结论）——
+这条约束由 `CaliberAssertionsMustNotNeedInfrastructureTest` **自己守住**（ArchUnit 禁 `org.testcontainers..`
+与 `org.springframework.boot.test..`），不靠约定。
+
+★ **口径组自身的三条纪律**（写下来，防止变成新的黑洞）：
+① 每条的**触发条件**都写在该册那一节里（不写在别处）；
+② 每条的**"冲突时谁赢"**逐条列（本项目硬要求，缺它返工）；
+③ 断言红的时候，**正确动作是回去补口径并更新基线，不是把断言删掉**（`TestNamingConventionTest` 的
+`GRANDFATHERED` 清单是同一条纪律的另一个例子：**清单必须随清理收缩**）。
+
