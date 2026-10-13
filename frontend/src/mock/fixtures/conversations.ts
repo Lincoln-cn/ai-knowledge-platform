@@ -1,5 +1,6 @@
 import type { ChatMessage, Conversation, PublicContext } from '@/api/conversations'
 import type { SourceRef } from '@/api/stream-types'
+import type { ClassificationLevel } from '@/api/types'
 
 /**
  * 会话与消息数据。
@@ -9,7 +10,7 @@ import type { SourceRef } from '@/api/stream-types'
  *  - 已生成 / 已停止 / 失败（含可读原因与下一步）
  *  - 赞 / 踩 / 未评 —— 互斥且可撤销，刷新后仍在
  *  - 推荐问题、多轮上下文
- *  - 免登录凭证三态：有效 / 过期 / 已撤销
+ *  - ★ 免登录凭证**四态**：有效 / 过期 / 已撤销 / 已停用，外加「内容升密 ⇒ 立即失效」
  *  - 会话全部 `private` 且归属分散在 u1–u4（07 §4.2「会话：只有自己的」）：
  *    chenjun 只看得见自己的 c2 / c5，其余四个（c1 c3 c4 c6）是别人的
  */
@@ -452,20 +453,37 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
   ]
 }
 
-/* ── 免登录凭证三态 ── */
+/* ── 免登录凭证四态（+ 升密失效） ── */
 
 export interface PublicCredential {
   token: string
   appId: string
+  /** ★ 创建时冻结的密级上限（`13 §5.2` ①）。公开页的「这条链接能读到什么级别」靠它 */
+  maxClassification: ClassificationLevel
   enabled: boolean
   expiresAt: string | null
   revokedAt: string | null
+  /**
+   * ★ 被分享内容**升密后原链接立即失效**（`13 §5.3`）—— 后端真实做法是给它置 `revokedAt`，
+   * 这里单独留一个标记，是为了让公开页的「升密失效」那一支在界面上**看得见**
+   * （真实回调要到第 17 周的公开面才存在，本轮只做界面与提示）。
+   */
+  lockedByCeiling?: boolean
 }
 
+/**
+ * 四态各一条 + 升密一条，token 名字即状态（复制到地址栏就能复现该态）：
+ *  - `pub_ok_demo`           有效
+ *  - `pub_expired_demo`      已过期
+ *  - `pub_revoked_demo`      已撤销（终态）
+ *  - `pub_disabled_demo`     已停用（可再启用）
+ *  - `pub_ceiling_demo`      升密失效
+ */
 export const publicCredentials: PublicCredential[] = [
   {
     token: 'pub_ok_demo',
     appId: 'as1',
+    maxClassification: 'SECRET',
     enabled: true,
     expiresAt: iso(-30 * day),
     revokedAt: null
@@ -473,6 +491,7 @@ export const publicCredentials: PublicCredential[] = [
   {
     token: 'pub_expired_demo',
     appId: 'as1',
+    maxClassification: 'SECRET',
     enabled: true,
     expiresAt: iso(day),
     revokedAt: null
@@ -480,9 +499,27 @@ export const publicCredentials: PublicCredential[] = [
   {
     token: 'pub_revoked_demo',
     appId: 'as1',
+    maxClassification: 'SECRET',
     enabled: true,
     expiresAt: null,
     revokedAt: iso(day)
+  },
+  {
+    token: 'pub_disabled_demo',
+    appId: 'as1',
+    maxClassification: 'INTERNAL',
+    enabled: false,
+    expiresAt: null,
+    revokedAt: null
+  },
+  {
+    token: 'pub_ceiling_demo',
+    appId: 'as1',
+    maxClassification: 'PUBLIC',
+    enabled: true,
+    expiresAt: null,
+    revokedAt: null,
+    lockedByCeiling: true
   }
 ]
 

@@ -1,13 +1,25 @@
 <template>
   <div class="public-page">
-    <!-- 凭证校验失败：可读原因 + 下一步，不静默 -->
+    <!--
+      凭证失效 / 无权限：★ **四态分开呈现**（状态标签 + 为什么 + 怎么办），
+      绝不合并成一句"链接无效" —— 已停用可以恢复、已撤销不能，合并会让人按错的假设去等。
+      文案真源 = `utils/public-gate.ts`（按后端业务码分四态）；
+      应用侧凭证表格的四态文案在 `utils/credential-state.ts` —— 两处**说法同源**：
+      已撤销 ⇒ "终态，只能重新生成"、已停用 ⇒ "可再启用"，但措辞各自面向的人不同
+      （这里面向访问者，那里面向管理员）。
+    -->
     <div v-if="gateError" class="gate">
       <div class="card panel">
         <el-icon class="gate-icon"><Link /></el-icon>
+        <div class="gate-status">{{ gateError.status }}</div>
         <h2 class="gate-title">{{ gateError.reason }}</h2>
-        <p v-if="gateError.hint" class="micro muted">{{ gateError.hint }}</p>
-        <div class="notice info micro">
-          若你是访问者，请向分享者索取新的公开链接；若你是管理员，可到「应用管理 → 访问凭证」重新生成。
+        <p class="gate-hint">{{ gateError.hint }}</p>
+        <div class="notice info">
+          <b>怎么办：</b>{{ gateError.action }}
+        </div>
+        <div class="micro muted gate-extra">
+          免登录链接不是"内容快照"，而是一张受限的访问凭证：每次打开都按它冻结的密级上限重新过滤一遍。
+          因此它随时可能被停用、撤销或过期，也可能因内容升密而立即失效 —— 这都不是故障。
         </div>
       </div>
     </div>
@@ -31,12 +43,35 @@
             <div class="name">{{ context.appName }}</div>
             <div v-if="context.description" class="desc micro muted">{{ context.description }}</div>
           </div>
+          <!--
+            ★ 冻结密级上限：让访客知道"这条链接能读到什么级别"（`13 §8.4` 的界面口径）。
+            `PublicContext.maxClassification` 在契约里是**可选**字段（注释写明"后端必须返回"）——
+            所以这里按可选读：拿得到就显示，拿不到就整块不渲染。
+            ★ 不用应用当前的密级冒充，更不把它当字符串直接渲染（那就是"状态码当文案"）。
+          -->
+          <div v-if="ceiling" class="ceiling">
+            <ClassificationBadge :level="ceiling" :labels="CLASSIFICATION_LABELS" />
+            <span class="micro muted">你看不到高于这个级别的内容</span>
+          </div>
         </div>
       </header>
 
       <div class="body rise">
         <section class="center panel">
+          <!--
+            ★ 凭证没问题但消息读失败：**不能**退化成"打开失败"整页，
+              否则一个可分页重试的故障会被读成"链接坏了"。这里就地给原因 + 重试。
+          -->
+          <div v-if="chat.loadError.value" class="history-fail">
+            <div class="notice err">
+              <div><b>对话记录加载失败：</b>{{ chat.loadError.value.reason }}</div>
+              <div v-if="chat.loadError.value.hint" class="micro">{{ chat.loadError.value.hint }}</div>
+              <el-button size="small" class="mt" @click="reload">重试</el-button>
+            </div>
+          </div>
+
           <MessageList
+            v-else
             ref="msgListRef"
             :messages="chat.messages.value"
             :loading="chat.loadingHistory.value"
@@ -124,12 +159,16 @@ import { ElMessage } from 'element-plus'
 import { Link, Loading } from '@element-plus/icons-vue'
 import { conversationsApi } from '@/api'
 import type { ChatMessage, PublicContext } from '@/api/conversations'
+import type { ClassificationLevel } from '@/api/types'
+import ClassificationBadge from '@/components/ClassificationBadge.vue'
+import { CLASSIFICATION_LABELS } from '@/utils/classification'
+import { publicGateError, type PublicGateError } from '@/utils/public-gate'
+import { copyText } from '@/utils/clipboard'
 import TopBar from '../components/TopBar.vue'
 import MessageList from '../components/MessageList.vue'
 import Composer from '../components/Composer.vue'
 import RefPanel from '../components/RefPanel.vue'
 import {
-  errText,
   toRefEx,
   useChatSession,
   type AttachmentDraft,
@@ -141,11 +180,27 @@ const router = useRouter()
 
 const token = computed(() => String(route.params.token || ''))
 const context = ref<PublicContext | null>(null)
-const gateError = ref<{ reason: string; hint?: string } | null>(null)
+const gateError = ref<PublicGateError | null>(null)
 
 const chat = useChatSession({
   credentialToken: token.value || undefined
 })
+
+/* ★ 冻结密级上限：只有**这一条链接**的冻结值才算数，不用应用当前的密级冒充 */
+const VALID_LEVELS: ClassificationLevel[] = ['PUBLIC', 'INTERNAL', 'SECRET', 'CONFIDENTIAL']
+const ceiling = ref<ClassificationLevel | null>(null)
+
+/**
+ * 读 `PublicContext.maxClassification`（契约里是可选字段）。
+ * ★ 仍**逐值校验**再显示：后端理论上必须给四档之一，但万一给了别的字符串，
+ *   直接渲染出去就是把机器码当文案（本项目栽过）。不认识 ⇒ 整块不渲染。
+ */
+const readCeiling = (raw: PublicContext): ClassificationLevel | null => {
+  const value = raw.maxClassification
+  return typeof value === 'string' && (VALID_LEVELS as string[]).includes(value)
+    ? (value as ClassificationLevel)
+    : null
+}
 
 const activeRefIndex = ref<number | null>(null)
 const activeMessage = ref<ChatMessage | null>(null)
@@ -187,6 +242,26 @@ const reload = () => {
   if (token.value) chat.loadHistory(token.value)
 }
 
+/**
+ * 一次门禁 + 取数。`resolvePublicContext` 与 `loadHistory` **分开 try**：
+ * 前者失败 = 链接这一态（四态文案）；后者失败 = 记录读不到（可就地重试），
+ * 两者合并成一个 catch 会把"暂时读不到记录"说成"链接无效"。
+ */
+const gate = async () => {
+  gateError.value = null
+  context.value = null
+  ceiling.value = null
+  try {
+    const ctx = await conversationsApi.resolvePublicContext(token.value)
+    context.value = ctx
+    ceiling.value = readCeiling(ctx)
+  } catch (error) {
+    gateError.value = publicGateError(error)
+    return
+  }
+  await chat.loadHistory(token.value)
+}
+
 const onSend = async (text: string, attachments: AttachmentDraft[]) => {
   // 免登录会话 id 由 token 决定，后端按凭证隔离
   await chat.send({
@@ -207,21 +282,15 @@ const onContinue = (msg: ChatMessage) => {
 }
 
 const onCopy = async (msg: ChatMessage) => {
-  try {
-    await navigator.clipboard.writeText(msg.content)
-    ElMessage.success('已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选中复制')
-  }
+  const ok = await copyText(msg.content)
+  if (ok) ElMessage.success('已复制')
+  else ElMessage.warning('复制失败，请手动选中复制')
 }
 
 const onShare = async (msg: ChatMessage) => {
-  try {
-    await navigator.clipboard.writeText(`${window.location.href}\n\n${msg.content}`)
-    ElMessage.success('已复制链接与内容')
-  } catch {
-    ElMessage.warning('复制失败，请手动复制地址栏链接')
-  }
+  const ok = await copyText(`${window.location.href}\n\n${msg.content}`)
+  if (ok) ElMessage.success('已复制链接与内容')
+  else ElMessage.warning('复制失败，请手动复制地址栏链接')
 }
 
 const onSuggest = (text: string) => {
@@ -236,27 +305,12 @@ const onBack = () => {
 onMounted(async () => {
   syncWide()
   document.addEventListener('keydown', onEsc)
-  try {
-    context.value = await conversationsApi.resolvePublicContext(token.value)
-    await chat.loadHistory(token.value)
-  } catch (error) {
-    gateError.value = errText(error, '访问凭证无效')
-  }
+  await gate()
 })
 
 watch(token, () => {
   // token 变化（理论上少见）时重新校验
-  gateError.value = null
-  context.value = null
-  conversationsApi
-    .resolvePublicContext(token.value)
-    .then(async (ctx) => {
-      context.value = ctx
-      await chat.loadHistory(token.value)
-    })
-    .catch((error) => {
-      gateError.value = errText(error, '访问凭证无效')
-    })
+  void gate()
 })
 
 onBeforeUnmount(() => {
@@ -423,8 +477,10 @@ onBeforeUnmount(() => {
   padding: var(--space-lg);
 }
 
+/* 卡片比默认 420px 宽一档：四段文字（状态 / 为什么 / 怎么办 / 说明）挤在 420px 里
+   会变成一堵墙，反而没人读 */
 .card {
-  max-width: 420px;
+  max-width: 520px;
   padding: var(--space-lg);
   text-align: center;
   display: flex;
@@ -444,6 +500,18 @@ onBeforeUnmount(() => {
   font-size: var(--text-lg);
 }
 
+/* 状态标签：四态在卡片最上面一行就分开，不与"为什么"揉进同一句 */
+.gate-status {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-label);
+  color: var(--color-muted);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3xs) var(--space-xs);
+  background: var(--color-sunken);
+}
+
 .gate-title {
   margin: 0;
   font-family: var(--font-display);
@@ -451,6 +519,40 @@ onBeforeUnmount(() => {
   font-weight: 600;
   line-height: var(--leading-title);
   color: var(--color-ink);
+}
+
+.gate-hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+  color: var(--color-ink-2);
+  text-align: left;
+}
+
+.gate-extra {
+  text-align: left;
+  line-height: var(--leading-body);
+}
+
+.gate .notice {
+  text-align: left;
+}
+
+.ceiling {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-3xs);
+  flex-shrink: 0;
+}
+
+.history-fail {
+  padding: var(--space-md);
+}
+
+.history-fail .mt {
+  margin-top: var(--space-xs);
 }
 
 .stream-fail {
