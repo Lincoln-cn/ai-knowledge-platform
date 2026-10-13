@@ -144,8 +144,8 @@ class OcrAccuracyBaselineTest {
    *
    * <p>★ 必须<strong>逐页</strong>给，不能只给一个全局平均 —— 「平均 0.93」会掩盖「有一页 0.4」。
    *
-   * <p>★ 方法名用 ASCII、上面的中文才是"为什么"：本项目定过 —— 标识符一旦被非 UTF-8 的工具读写就会变形，
-   * 而人工维护的入口本来就是 javadoc（`TestNamingConventionTest` 会拦住中文标识符）。
+   * <p>★ 方法名用 ASCII、上面的中文才是"为什么"：本项目定过 —— 标识符一旦被非 UTF-8 的工具读写就会变形， 而人工维护的入口本来就是
+   * javadoc（`TestNamingConventionTest` 会拦住中文标识符）。
    */
   @Test
   void perPageAccuracyMatchesBaselineTable() throws Exception {
