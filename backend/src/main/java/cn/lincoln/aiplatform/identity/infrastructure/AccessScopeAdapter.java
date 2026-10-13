@@ -40,6 +40,12 @@ import org.springframework.web.context.request.RequestContextHolder;
  *
  * <p>★ 未认证时返回 {@link ScopeFilter#nobody()}：**什么都看不见**。 特别注意它<em>不是</em>"看得见 public 的资源" ——
  * 免登录面走的是公开凭证那条独立链路， 不经过这个判定（{@code 07 §3.1}：{@code public} 是"登录用户里人人可见"）。
+ *
+ * <p>★ <strong>两个委派入口（{@code 08 §4.4.4}）</strong>：{@link #asScope} 面向<strong>登录面</strong> （正当性 =
+ * "发起人就是当前登录用户"），{@link #asSubject} 面向<strong>公开面</strong> （正当性 = 调用方已经用 {@code
+ * PublicTokenResolver} 证明令牌有效，本类不复核）。 两者<strong>共用同一个"构造范围"实现</strong> ——
+ * 所以"判定只有一处"这条纪律不变，变的只是"谁有资格调它"。 ★ 第 17 周实现 {@code asSubject} 时， <strong>载入主体身份</strong>（角色 / 数据范围
+ * / 部门链）是新增的那一半， 它<strong>不许</strong>退化成"照抄当前请求者"。
  */
 @Component
 public class AccessScopeAdapter implements AccessScopePort {
@@ -154,6 +160,46 @@ public class AccessScopeAdapter implements AccessScopePort {
         DELEGATED.set(previous);
       }
     }
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>★★ <strong>公开面的入口（第 17 周实现，{@code 08 §4.4.4} · Issue {@code #92}）</strong>。与 {@link
+   * #asScope} 的差别<strong>只有一条</strong>：<strong>正当性怎么证明</strong>。
+   *
+   * <table>
+   *   <tr><th>入口</th><th>正当性来源</th><th>身份从哪来</th></tr>
+   *   <tr><td>{@link #asScope}</td><td>"发起人 = 当前登录用户"（{@code requesterId} 等于 JWT 的 {@code sub}）</td><td>当前请求者</td></tr>
+   *   <tr><td>{@code asSubject}</td><td>★ <strong>由调用方证明</strong>：公开面 = 令牌解析成功（{@code PublicTokenResolver}）；<strong>本类不复核</strong></td><td>★
+   *       <strong>按 {@code subjectId} 载入该主体本人</strong>（角色 / 数据范围 / 部门链）</td></tr>
+   * </table>
+   *
+   * <p>★★ <strong>为什么必须重载而不是照抄</strong>：公开面的正常使用者是<strong>未登录访客</strong>；"照抄当前请求者"在匿名面上没有定义 ——
+   * 照抄的结果是 {@link ScopeFilter#nobody()}（免责地什么都看不见，而这与"令牌有效却查不到"不可区分）。 <strong>密级仍取冻结值</strong>，方向仍是
+   * {@link ClassificationLevel#narrower}（与 {@code asScope} 同源：只许收窄）。
+   *
+   * <p>★ <strong>与 {@code asScope} 共用同一个"构造范围"的实现</strong>（{@code 08 §4.4.4}）：
+   * 落成一条<strong>私有</strong>方法（例如 {@code buildScope(身份四元组, 密级)}），两个入口都调它 —— 这样"构造范围"在物理上只有一份，
+   * 将来范围多加一个分量时也只会有一个改动点（否则又是一个"两处判定"）。
+   *
+   * <p>⚠️ <strong>两件"本方法必须<em>不</em>做"的事</strong>（做了都会造出静默放大）：
+   *
+   * <ol>
+   *   <li><strong>不校验令牌</strong>：令牌有效性（存在 / 未撤销 / 未过期 / 未停用）是 {@code PublicTokenResolver} 的职责；
+   *       在这里再判一次会造成"两处都判、口径不同"。撤销 / 过期时<strong>本方法照常构造范围</strong>，可见内容为 <strong>空</strong> ——
+   *       这是有意的 fail-closed：错误由解析入口报，见 {@code 13 §5.2} 第 ② 级。
+   *   <li><strong>不回落到"照抄调用者"</strong>：主体载入不出来（不存在 / 已删）时返回 {@link ScopeFilter#nobody()}，
+   *       <strong>绝不</strong>退回当前请求者的范围。★ 金丝雀：把这一句改成"照抄当前请求者" ⇒ 匿名面（不带 {@code Authorization}
+   *       头）上"用有效凭证检索"那条判据必须<strong>变红</strong>（{@code 08 §4.4.4} 判据 ③）。
+   * </ol>
+   *
+   * <p>★ 同时要求<strong>调用方</strong>收窄：一条链接被<strong>登录用户</strong>打开时，生效范围必须是「归属人范围 ∩ 冻结密级 ∩
+   * <strong>调用者自身范围</strong>」里更窄的那一份（{@code 08 §4.4.4} 判据 ②），否则登录用户能借链接拿到超出自己 clearance 的内容。
+   */
+  @Override
+  public <T> T asSubject(UUID subjectId, ClassificationLevel frozenClearance, Supplier<T> body) {
+    throw new UnsupportedOperationException("asSubject 是第 17 周（0.4.5）的活：本批只定口径（08 §4.4.4 · #92）");
   }
 
   // ────────────────────────── 内部 ──────────────────────────

@@ -35,7 +35,8 @@ class ApiResponseTest {
 
   /**
    * ★ 逐项对照 {@code frontend/src/api/types.ts:27-40}。
-   * 这八个值是<strong>契约已冻结</strong>的部分；新增错误码的正确顺序是"先改契约，再改枚举"。
+   * 这八个值是<strong>契约已冻结</strong>的部分；新增错误码的正确顺序是"先改契约，再改枚举"。 ★ 2026-10-13 追加公开面四态（{@code
+   * PUBLIC_TOKEN_*}）—— 它们此前是"契约与后端都没有、 只有 mock 与前端有"的那组码（{@code #41} 的同一族）。
    */
   @Test
   void 错误码必须与前端契约逐项一致() {
@@ -55,6 +56,14 @@ class ApiResponseTest {
     assertThat(ErrorCode.EMBEDDING_LOCKED.code()).isEqualTo(3001);
     assertThat(ErrorCode.SEGMENT_TOO_LONG.code()).isEqualTo(3002);
     assertThat(ErrorCode.PUBLISH_CHECK_FAILED.code()).isEqualTo(6001);
+    // ★★ 公开面四态（2026-10-13 补，见 ErrorCode 里那一段注释）：这四个码原先只活在
+    //   mock 与前端，第 17 周公开面接真后端前必须两侧都在。★ 它们与 HTTP 状态不重合。
+    assertThat(ErrorCode.PUBLIC_TOKEN_UNKNOWN.code()).isEqualTo(40401);
+    assertThat(ErrorCode.PUBLIC_TOKEN_REVOKED.code()).isEqualTo(40402);
+    assertThat(ErrorCode.PUBLIC_TOKEN_EXPIRED.code()).isEqualTo(40403);
+    assertThat(ErrorCode.PUBLIC_TOKEN_DISABLED.code()).isEqualTo(40404);
+    // ★ 反面：40405（内容升密失效）**按 13 §5.3 的 (a) 口径不需要** ⇒ 契约与枚举都不该有它。
+    assertThat(ErrorCode.fromCode(40405)).as("40405 是预留码；登记它会被读成'这一态存在'（13 §5.3 采用 (a)）").isNull();
   }
 
   @Test

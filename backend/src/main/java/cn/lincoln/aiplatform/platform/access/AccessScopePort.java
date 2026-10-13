@@ -63,4 +63,46 @@ public interface AccessScopePort {
     //   静默地把委派**当成没发生**（取数用的是请求者自己的范围）—— 那是一条不会报错的越权。
     throw new UnsupportedOperationException("这个 AccessScopePort 实现不支持委派范围（asScope）");
   }
+
+  /**
+   * 以<strong>某个主体的范围</strong>执行一段取数逻辑，返回它的结果（第 17 周要用 · {@code #92}）。
+   *
+   * <h3>为什么必须有第二个入口（不能复用 {@link #asScope}）</h3>
+   *
+   * <p>公开面（访问凭证 / 分享链接）的<strong>正常使用者是未登录访客</strong>，而 {@code asScope} 的正当性证明是
+   * "发起人必须是当前登录用户"（{@code requesterId} 等于 JWT 的 {@code sub}）—— 访客没有 JWT ⇒ <strong>这条路走不通</strong>。
+   *
+   * <p>根因是<strong>两种正当性来源被混成了一个参数</strong>：登录面证明的是"证明你是你"， 公开面证明的是"**令牌本身有效**"（存在 / 未撤销 / 未过期 /
+   * 未停用）。 ⇒ 本入口只认可后一种，而<strong>证明由谁做</strong>写在下面第 2 条。
+   *
+   * <h3>三条纪律（{@code 08 §4.4.4}）</h3>
+   *
+   * <ol>
+   *   <li>★★ <strong>服务端按 {@code subjectId} 载入该主体的身份</strong>（角色 / 数据范围 / 部门链）再构造范围 ——
+   *       <strong>绝不照抄请求者</strong>。匿名面上"照抄请求者"没有定义：照抄的结果要么是 {@link
+   *       ScopeFilter#nobody()}（什么都看不见），要么迫使调用方自己拼一份范围（= 第二处构造）。
+   *   <li><strong>正当性怎么证明由调用方负责</strong>，且两面的证明方式不同：公开面 = {@code PublicTokenResolver} 解析成功；登录面 =
+   *       {@code asScope} 的 {@code requesterId} 校验。 本入口<strong>不做</strong>令牌校验、<strong>不读</strong>
+   *       {@code SecurityContext}。
+   *   <li><strong>密级取冻结值</strong>，且与主体的 clearance 求<strong>更窄</strong> （{@link
+   *       ClassificationLevel#narrower}，与 {@code asScope} 同源）。
+   * </ol>
+   *
+   * <p>★ <strong>调用方必须收窄到"更窄的那一份"</strong>：一条链接被<strong>登录用户</strong>打开时， 生效范围必须是「归属人范围 ∩ 冻结密级 ∩
+   * <strong>调用者自身范围</strong>」——否则登录用户可以借别人的链接 拿到超出自己 clearance 的内容，而它<strong>不会报错</strong>（本项目头号病
+   * {@code silent-failure}）。
+   *
+   * <p>★ 两个入口<strong>共用同一个"构造范围"的实现</strong>（{@code 08 §4.4.4}）： 所以"可见性判定只有一处"（{@code 07
+   * §3.3}）这条纪律不变，变的只是"谁有资格调它"。
+   *
+   * @param subjectId 要行使其范围的主体（公开面 = 凭证 / 分享的<strong>归属人</strong> userId）
+   * @param frozenClearance 链接创建时冻结的密级上限（{@code share.maxClassification}，{@code 13 §5.2} ①）
+   * @param body 要执行的取数逻辑
+   */
+  default <T> T asSubject(UUID subjectId, ClassificationLevel frozenClearance, Supplier<T> body) {
+    // ★ 与 asScope 同一条理由：默认实现是"明确拒绝"而不是"直接执行 body" ——
+    //   后者会让一个没写这个方法的实现把委派**当成没发生**（取数用的是调用者自己的范围），
+    //   而公开面上那意味着"访客看到了调用者的东西"或"什么都看不到"，两种都不报错。
+    throw new UnsupportedOperationException("这个 AccessScopePort 实现不支持公开面的主体委派（asSubject）");
+  }
 }

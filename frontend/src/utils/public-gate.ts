@@ -1,4 +1,4 @@
-import { ApiError } from '@/api/types'
+import { ApiError, ErrorCode } from '@/api/types'
 
 /**
  * 未登录公开页的**失效/无权限态**文案（唯一出口）。
@@ -11,9 +11,10 @@ import { ApiError } from '@/api/types'
  *   本项目头号病（`silent-failure`）的界面版。
  *
  * ★ `code` 是**契约里已有的数值**（`ApiError.code`），读它不新增任何契约字段。
- *   与 `mock/handlers/conversations.ts` 的 `gatePublicToken` 同源；第 17 周公开面
- *   端点落地时，后端必须沿用同一组码（否则这里会落到"其它"分支 —— 那时应当补码，而不是
- *   把四态再合并回去）。
+ *   ★★ 2026-10-13（第 16 周末）：`40401`–`40404` 这四个码**已补进契约与后端枚举两侧**
+ *   （`ErrorCode.PUBLIC_TOKEN_*`，由 `frontend/check_error_codes.py` 每轮比对），所以下面
+ *   **只引用契约常量、不再各处写一遍数字**。第 17 周公开面端点落地时后端必须 emit 这四个码。
+ *   ★ `40405` **不在契约里**（按 `13 §5.3` 的 (a) 口径不需要它）⇒ 只有它仍是本文件的字面量，且**只预留给 mock 夹具**。
  */
 export interface PublicGateError {
   /** 状态标签：用户一眼看到这是"哪一态" */
@@ -26,18 +27,26 @@ export interface PublicGateError {
   action: string
 }
 
-/** 访问凭证 / 分享链接的四态 + 认不出。key = 后端业务码 */
+/**
+ * 访问凭证 / 分享链接的四态 + 认不出。key = 后端业务码。
+ *
+ * ★ 前四个来自**契约**（`ErrorCode.PUBLIC_TOKEN_*`）—— 不再在这里写第二遍数字：
+ *   写两遍的后果是"改了一处、另一处照旧"，而它不会报错（`#41` 那一族）。
+ * ★ `CEILING_RAISED`（`40405`）**不在契约里**：按 `13 §5.3` 的 (a) 口径，
+ *   升密后凭证仍有效、链接仍打得开，只是内容被同一个谓词滤掉 ⇒ 不需要第五个码。
+ *   它只被 mock 的升密夹具用（`mock/handlers/conversations.ts` 从这里取，避免两处字面量）。
+ */
 export const PUBLIC_GATE_CODES = {
   /** 认不出这个 token */
-  UNKNOWN: 40401,
+  UNKNOWN: ErrorCode.PUBLIC_TOKEN_UNKNOWN,
   /** 已撤销（终态） */
-  REVOKED: 40402,
+  REVOKED: ErrorCode.PUBLIC_TOKEN_REVOKED,
   /** 已过期 */
-  EXPIRED: 40403,
+  EXPIRED: ErrorCode.PUBLIC_TOKEN_EXPIRED,
   /** 已停用（可再启用） */
-  DISABLED: 40404,
-  /** 内容升密 ⇒ 原链接立即失效（`13 §5.3`）。**第 17 周公开面落地时才会真的返回**，
-   *  现在由 mock 的升密夹具演示，页面这一支必须先在 */
+  DISABLED: ErrorCode.PUBLIC_TOKEN_DISABLED,
+  /** 内容升密 ⇒ 原链接立即失效（`13 §5.3`）。★ **不在契约里、后端也不 emit**（(a) 口径不需要它）；
+   *  mock 的升密夹具用它演示，页面这一支必须先在 */
   CEILING_RAISED: 40405
 } as const
 

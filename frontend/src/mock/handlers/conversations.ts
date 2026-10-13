@@ -1,5 +1,6 @@
 import { ApiError, ErrorCode } from '@/api/types'
 import type { ClassificationLevel } from '@/api/types'
+import { PUBLIC_GATE_CODES } from '@/utils/public-gate'
 import type { ChatMessage, ShareScope } from '@/api/conversations'
 import { PERM } from '@/constants/permissions'
 import type { MockRoute } from '../dispatch'
@@ -86,11 +87,15 @@ const withApp = (conv: StoredConversation) => {
  *
  * | 业务码 | 态 | 能不能救 |
  * |---|---|---|
- * | `40401` | 认不出这个 token | 不能（链接本身不对） |
- * | `40402` | 已撤销 | ★ 不能（终态） |
- * | `40403` | 已过期 | 不能（有效期不可改） |
- * | `40404` | 已停用 | **能**（重新启用即可） |
- * | `40405` | 内容升密 ⇒ 原链接立即失效（`13 §5.3`） | 不能，只能重新生成 |
+ * | `PUBLIC_GATE_CODES.UNKNOWN`（`40401`） | 认不出这个 token | 不能（链接本身不对） |
+ * | `PUBLIC_GATE_CODES.REVOKED`（`40402`） | 已撤销 | ★ 不能（终态） |
+ * | `PUBLIC_GATE_CODES.EXPIRED`（`40403`） | 已过期 | 不能（有效期不可改） |
+ * | `PUBLIC_GATE_CODES.DISABLED`（`40404`） | 已停用 | **能**（重新启用即可） |
+ * | `PUBLIC_GATE_CODES.CEILING_RAISED`（`40405`） | 内容升密 ⇒ 原链接立即失效（`13 §5.3`） | 不能，只能重新生成 |
+ *
+ * ★ 码值**不再写在这个文件里**：`40401`–`40404` 取自契约 `ErrorCode.PUBLIC_TOKEN_*`
+ *   （经 `utils/public-gate.ts` 的 `PUBLIC_GATE_CODES` 转一手），`40405` 只在本文件与那个常量表里各出现一次。
+ *   同一条码写在四处（契约 / 前端 / mock / 后端）正是 `#41` 那一族 —— 改一处、其余照旧，且不报错。
  *
  * 合并成一句"链接无效"的后果是**让人按错的假设去等**：已停用可以恢复，已撤销不能。
  * 界面侧按同一组码还原四态（`utils/public-gate.ts`）。
@@ -126,7 +131,7 @@ function rejectCredential(
   if (cred.revokedAt) {
     return {
       ok: false,
-      code: 40402,
+      code: PUBLIC_GATE_CODES.REVOKED,
       message: '访问凭证已被撤销',
       hint: '撤销是终态，原链接不能恢复。请向分享者索取一条新链接'
     }
@@ -134,7 +139,7 @@ function rejectCredential(
   if (cred.enabled === false) {
     return {
       ok: false,
-      code: 40404,
+      code: PUBLIC_GATE_CODES.DISABLED,
       message: '访问凭证已被停用',
       hint: '凭证还在，链接暂停访问。请联系应用管理员重新启用，或索取一条新链接'
     }
@@ -142,7 +147,7 @@ function rejectCredential(
   if (cred.expiresAt && new Date(cred.expiresAt).getTime() < Date.now()) {
     return {
       ok: false,
-      code: 40403,
+      code: PUBLIC_GATE_CODES.EXPIRED,
       message: '访问凭证已过期',
       hint: '有效期在生成时定下、之后不能改，原链接不会自动恢复。请向分享者索取一条新链接'
     }
@@ -150,7 +155,7 @@ function rejectCredential(
   if (lockedByCeiling) {
     return {
       ok: false,
-      code: 40405,
+      code: PUBLIC_GATE_CODES.CEILING_RAISED,
       message: '被分享内容已升密，原链接失效',
       hint: '内容密级超出了这条链接冻结的密级上限（13 §5.2）。请向分享者索取一条新链接'
     }
@@ -197,7 +202,7 @@ function gatePublicToken(token: string): PublicGate {
 
   return {
     ok: false,
-    code: 40401,
+    code: PUBLIC_GATE_CODES.UNKNOWN,
     message: '访问凭证无效',
     hint: '链接可能被截断或不完整（复制、转帖时常见）。请向分享者重新索取一条完整链接'
   }
