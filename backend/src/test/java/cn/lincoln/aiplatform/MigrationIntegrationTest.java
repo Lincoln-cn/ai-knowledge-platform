@@ -8,6 +8,7 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,6 +50,38 @@ class MigrationIntegrationTest {
       assertThat(rs.next()).as("flyway_schema_history 里没有 V1 记录 ⇒ 迁移根本没跑").isTrue();
       assertThat(rs.getBoolean("success")).as("V1 执行失败").isTrue();
     }
+  }
+
+  /**
+   * ★★ 链末三个版本都要在，且都要 {@code success = true}（{@code V34} 的形状改动必须"没碰坏上一版"）。
+   *
+   * <p>★ 为什么单独断这一条：{@code V34} 改的是**已经建好表**的形状（加列、改可空、加 CHECK）， 而这类改动的失败方式很特别 —— 它可能让 {@code V34}
+   * 自己成功、却把 {@code V32}/{@code V33} 建立的 外键/约束关系弄坏（例如给 {@code kb_document.kb_id} 放开 not null
+   * 时误删了外键）。 只断"应用能起来"是看不出后者的。
+   *
+   * <p>★ 只核这三个版本号，不写死"总迁移数"：那个数字每加一条迁移就要改一次， 而它带来的信息量是零（真正的判据是"这一版的那几条特性还在不在"）。
+   */
+  @Test
+  void tailOfTheMigrationChainStaysSuccessful() throws Exception {
+    Map<String, Boolean> byVersion = new java.util.TreeMap<>();
+    try (Connection c = dataSource.getConnection();
+        Statement st = c.createStatement();
+        ResultSet rs =
+            st.executeQuery(
+                "select version, success from flyway_schema_history"
+                    + " where version in ('32', '33', '34') order by installed_rank")) {
+
+      while (rs.next()) {
+        byVersion.put(rs.getString("version"), rs.getBoolean("success"));
+      }
+    }
+
+    assertThat(byVersion.keySet())
+        .as("链末必须依次是 V32（会话表）/ V33（消息表）/ V34（检索域形状）—— 缺一个说明链被改过或号被抢过")
+        .containsExactly("32", "33", "34");
+    assertThat(byVersion)
+        .as("★ 这三个版本必须都 success=true：V34 是形状改动，它最容易'自己过、把上一版弄坏'")
+        .allSatisfy((version, success) -> assertThat(success).as("V%s 执行失败", version).isTrue());
   }
 
   @Test

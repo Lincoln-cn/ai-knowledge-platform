@@ -294,11 +294,12 @@ class PublicSubjectDelegationTest {
   private UUID insertDocumentAndSegment(String name, ClassificationLevel level, String text) {
     UUID docId = UUID.randomUUID();
     jdbc.update(
-        "insert into kb_document (id, kb_id, name, source, doc_type, org_id, classification,"
-            + " status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?, ?, ?, 'local', '制度', ?::uuid, ?, 'SUCCEEDED', 0, 1, true,"
+        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
+            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
+            + " values (?, ?, 'KB', ?, ?, 'local', '制度', ?::uuid, ?, 'SUCCEEDED', 0, 1, true,"
             + " now(), now())",
         docId,
+        kbId,
         kbId,
         name,
         ROOT_ORG.toString(),
@@ -306,14 +307,15 @@ class PublicSubjectDelegationTest {
 
     UUID segmentId = UUID.randomUUID();
     jdbc.update(
-        "insert into kb_segment (id, document_id, kb_id, ordinal, content, search_text,"
-            + " content_hash, char_count, enabled, embedding_status, created_at, updated_at,"
-            + " classification)"
+        "insert into kb_segment (id, document_id, kb_id, scope_kind, scope_id, ordinal, content,"
+            + " search_text, content_hash, char_count, enabled, embedding_status, created_at,"
+            + " updated_at, classification)"
             + // ★ 密级**从文档继承**（不进参数）：写死一个就会把被测的谓词换成另一条
-            " values (?, ?, ?, 0, ?, ?, ?, ?, true, 'PENDING_EMBEDDING', now(), now(),"
+            " values (?, ?, ?, 'KB', ?, 0, ?, ?, ?, ?, true, 'PENDING_EMBEDDING', now(), now(),"
             + " (select classification from kb_document where id = ?))",
         segmentId,
         docId,
+        kbId,
         kbId,
         text,
         text,

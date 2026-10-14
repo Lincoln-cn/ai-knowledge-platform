@@ -751,29 +751,31 @@ class PublicChatHttpTest {
       UUID kbId, String docName, ClassificationLevel level, String text) {
     UUID docId = UUID.randomUUID();
     jdbc.update(
-        "insert into kb_document (id, kb_id, name, source, doc_type, org_id, classification,"
-            + " status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?, ?, ?, 'local', '制度', ?::uuid, ?, 'SUCCEEDED', 0, 1, true,"
+        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
+            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
+            + " values (?, ?, 'KB', ?, ?, 'local', '制度', ?::uuid, ?, 'SUCCEEDED', 0, 1, true,"
             + " now(), now())",
         docId,
+        kbId,
         kbId,
         docName,
         ROOT_ORG,
         level.name());
     jdbc.update(
-        "insert into kb_segment (id, document_id, kb_id, ordinal, title, title_path, content,"
-            + " search_text, content_hash, char_count, is_table, is_code, oversized_risk, enabled,"
-            + " embedding_status, created_at, updated_at, classification)"
+        "insert into kb_segment (id, document_id, kb_id, scope_kind, scope_id, ordinal, title,"
+            + " title_path, content, search_text, content_hash, char_count, is_table, is_code,"
+            + " oversized_risk, enabled, embedding_status, created_at, updated_at, classification)"
             // ★ 密级**从文档继承**（不进参数）：写死一个就会把被测的谓词换成另一条
             // ★★ `title` 必须给：`SourceRef` 的紧凑构造器把 title/docName/kbName 都当**必填**
             //    （`引用的必填字段 title 不能为空`），而 `ChatService.retrieve` 的 catch 是**整批**的 ——
             //    一条没有标题的分段会让**这一轮全部引用**变成空。
             //    ★ 本批实测到的 refs 为空的第二个原因就是这个（逐字读数见交付报告）。
-            + " values (?, ?, ?, 0, ?, '第一章', ?, ?, ?, ?, false, false, false, true,"
+            + " values (?, ?, ?, 'KB', ?, 0, ?, '第一章', ?, ?, ?, ?, false, false, false, true,"
             + " 'PENDING_EMBEDDING', now(), now(),"
             + " (select classification from kb_document where id = ?))",
         UUID.randomUUID(),
         docId,
+        kbId,
         kbId,
         docName,
         text,

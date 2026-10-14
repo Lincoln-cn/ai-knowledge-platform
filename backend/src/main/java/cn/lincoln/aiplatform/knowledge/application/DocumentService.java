@@ -608,6 +608,11 @@ public class DocumentService {
                 UUID.randomUUID(),
                 document.id(),
                 document.kbId(),
+                // ★ 域从文档继承（V34，13 §11.3）：分段不允许有自己独立的归属 ——
+                //   域错了的后果不是报错，而是归属换了（会话附件被当成库文档）
+                document.scopeKind(),
+                document.scopeId(),
+                document.ownerId(),
                 p,
                 currentUserId,
                 // ★ 密级强制继承文档（13 §2.1 ②）：分段不允许有自己独立的密级

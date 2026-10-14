@@ -987,22 +987,25 @@ class ChatStreamHttpTest {
   private UUID seedDocumentAndSegment(UUID kbId, String docName, String text) {
     UUID docId = UUID.randomUUID();
     jdbc.update(
-        "insert into kb_document (id, kb_id, name, source, doc_type, org_id, classification,"
-            + " status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?, ?, ?, 'local', '制度', ?::uuid, 'INTERNAL', 'SUCCEEDED', 0, 1, true,"
-            + " now(), now())",
+        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
+            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
+            + " values (?, ?, 'KB', ?, ?, 'local', '制度', ?::uuid, 'INTERNAL', 'SUCCEEDED', 0, 1,"
+            + " true, now(), now())",
         docId,
+        kbId,
         kbId,
         docName,
         ROOT_ORG);
     UUID segmentId = UUID.randomUUID();
     jdbc.update(
-        "insert into kb_segment (id, document_id, kb_id, ordinal, content, search_text,"
-            + " content_hash, char_count, enabled, embedding_status, created_at, updated_at,"
-            + " classification) values (?, ?, ?, 0, ?, ?, ?, ?, true, 'PENDING_EMBEDDING',"
-            + " now(), now(), (select classification from kb_document where id = ?))",
+        "insert into kb_segment (id, document_id, kb_id, scope_kind, scope_id, ordinal, content,"
+            + " search_text, content_hash, char_count, enabled, embedding_status, created_at,"
+            + " updated_at, classification) values (?, ?, ?, 'KB', ?, 0, ?, ?, ?, ?, true,"
+            + " 'PENDING_EMBEDDING', now(), now(), (select classification from kb_document where id"
+            + " = ?))",
         segmentId,
         docId,
+        kbId,
         kbId,
         text,
         text,

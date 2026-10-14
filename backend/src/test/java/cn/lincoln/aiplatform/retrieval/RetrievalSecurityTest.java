@@ -341,12 +341,13 @@ class RetrievalSecurityTest {
     jdbc.update(
         // ★ 责任部门已改成 org_id（UUID 外键，V27）。用 ROOT 的**确定性** id（V25 种子写死）：
         //   org_id 是外键 ⇒ 不能塞随机 UUID。见 Issue #48。
-        "insert into kb_document (id, kb_id, name, source, doc_type, org_id, classification,"
-            + " status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?::uuid, ?::uuid, ?, 'local', '制度',"
-            + " '00000000-0000-4000-8000-000000000001'::uuid, ?, 'PENDING_EMBEDDING',"
-            + " 0, 0, true, now(), now())",
+        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
+            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
+            + " values (?::uuid, ?::uuid, 'KB', ?::uuid, ?, 'local', '制度',"
+            + " '00000000-0000-4000-8000-000000000001'::uuid, ?, 'PENDING_EMBEDDING', 0, 0, true,"
+            + " now(), now())",
         id,
+        kbId,
         kbId,
         name,
         classification);
@@ -356,16 +357,18 @@ class RetrievalSecurityTest {
   private String insertSegment(String kbId, String docId, int ordinal, String searchText) {
     String id = UUID.randomUUID().toString();
     jdbc.update(
-        "insert into kb_segment (id, document_id, kb_id, ordinal, title, title_path, content,"
-            + " search_text, content_hash, char_count, is_table, is_code, oversized_risk, enabled,"
-            + " embedding_status, created_at, updated_at, classification)"
-            + " values (?::uuid, ?::uuid, ?::uuid, ?, '夹具', '第一章', ?, ?, ?, ?, false, false,"
+        "insert into kb_segment (id, document_id, kb_id, scope_kind, scope_id, ordinal, title,"
+            + " title_path, content, search_text, content_hash, char_count, is_table, is_code,"
+            + " oversized_risk, enabled, embedding_status, created_at, updated_at, classification)"
+            + " values (?::uuid, ?::uuid, ?::uuid, 'KB', ?::uuid, ?, '夹具', '第一章', ?, ?, ?, ?,"
+            + " false, false,"
             // ★ 密级从文档继承（V22 的列是 not null，且 13 §2.1 ② 要求强制继承）——
             //   本类的夹具**必须**走这条继承路径：写死一个密级就会把被测的谓词换成另一条
             + " false, true, 'EMBEDDED', now(), now(),"
             + " (select classification from kb_document where id = ?::uuid))",
         id,
         docId,
+        kbId,
         kbId,
         ordinal,
         searchText,

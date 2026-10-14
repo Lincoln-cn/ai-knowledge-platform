@@ -5,6 +5,7 @@ import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBaseRepository;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.vector.VectorIndexPort;
 import java.util.ArrayList;
@@ -42,11 +43,33 @@ import org.springframework.stereotype.Component;
  * <p>所以流程是两步：① 先问库要真词元（{@code tsvector_to_array(to_tsvector('chinese_zh', ?))}）； ② 用这些词元拼
  * <strong>OR</strong> 查询。用 OR 而不是 AND 也是刻意的 —— AND 语义下"住宿标准是多少"里那个「是」会让一份含「住宿标准」的合同一条都不命中。
  *
- * <h3>★ 安全谓词只有一份（第 11 周 · 0.3.3）</h3>
+ * <h3>★★ 安全谓词只有一份（第 11 周 · 0.3.3；第 17 周扩成三域）</h3>
  *
- * <p>可见性与密级合成 {@link #SECURITY_PREDICATE}，<strong>三条查询（全文 / 向量 / 候选复判）用的都是它</strong>。
+ * <p>可见性与密级合成 {@link #SECURITY_PREDICATE}，<strong>四条查询（全文 / 向量 / 候选复判 / 显式密级列举） 用的都是它</strong>。
  * 这不是代码复用上的讲究，而是 {@code 13 §三} 闸门②的硬要求：<em>"只给一路加过滤条件"</em> 是本项目最贵的病，
  * 而合成的常量让"漏一路"从"忘了补一行"变成"得先把这两行拆开"。
+ *
+ * <h3>★★ 三域也长在同一个谓词里（第 17 周 · {@code #31} / {@code 13 §11.3}）</h3>
+ *
+ * <p>{@code 13 §11.3} 的原话是"一个谓词，不是三个分支"，所以域谓词**不是**三个 {@code if}，而是 {@link #SECURITY_PREDICATE}
+ * 里的一段 SQL：
+ *
+ * <pre>
+ *   域(s) = ( s.scope_kind = 'KB'           and s.scope_id in (:sharedKbIds) )   ← 共用库（可见性已判过）
+ *        or ( s.scope_kind = 'KB'           and s.scope_id = :personalKbId )     ← 我的个人库（隐式档）
+ *        or ( s.scope_kind = 'CONVERSATION' and s.scope_id = :conversationId
+ *                                           and s.owner_id = :ownerId )          ← 会话临时（本人 + 本会话）
+ * </pre>
+ *
+ * <p>★ 三支的绑定值来自 {@link RetrievalScope}，而它的解析只有一处（{@link #retrievalScope}）。 ★ 为什么过滤读的是 {@code
+ * s.}（分段）那一侧的**冗余列**而不是 {@code d.}（文档）那一侧： {@code 13 §6.4} 的三条 —— 见 {@code kb_segment.scope_kind}
+ * 的列注释。
+ *
+ * <h3>★★ 一条内连接陷阱（本批最容易长出来的静默洞）</h3>
+ *
+ * <p>原先是 {@code join kb_knowledge_base k on k.id = s.kb_id}。会话临时的分段<strong>没有库行</strong> （{@code 13
+ * §11.2}）⇒ 这条**内连接会把它们全部丢掉**，而症状只是"附件搜不到"（不报错）。 ⇒ 现在改成 {@code left join}，并把库的启用位判据收窄到"库域才判"（见
+ * {@link #VISIBLE_PREDICATE}）。
  *
  * <h3>★ 阈值不在这条路上</h3>
  *
@@ -69,13 +92,18 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   private static final int VISIBLE_KB_LIMIT = 500;
 
   /**
-   * 可见性判定 —— 三级启用位（库 / 文档 / 分段）各自"启用且未软删"。
+   * 启用位判定 —— 三级启用位（库 / 文档 / 分段）各自"启用且未软删"。
    *
    * <p>★ 它单独存在只是为了可读；<strong>任何查询都不许只用它</strong> —— 必须用 {@link #SECURITY_PREDICATE}。 只带它、不带密级条件，就是
    * {@code 13 §三} 点名的那个静默漏洞。
+   *
+   * <p>★★ <strong>库那一级只对库域判</strong>：会话临时的分段没有 {@code kb_knowledge_base} 行 （{@code 13 §11.2}），左连接下
+   * {@code k.enabled} 是 NULL —— 若写成 {@code k.enabled and …}， 会话附件会在 WHERE 里被静默滤掉（{@code FALSE or
+   * NULL} 那条三值逻辑正是这里要盯的）。
    */
   private static final String VISIBLE_PREDICATE =
-      " s.enabled and d.enabled and d.deleted_at is null and k.enabled and k.deleted_at is null";
+      " s.enabled and d.enabled and d.deleted_at is null"
+          + " and (s.scope_kind = 'CONVERSATION' or (k.enabled and k.deleted_at is null))";
 
   /**
    * 密级谓词（第 11 周 · 0.3.3）—— 「**不高于我的 clearance**」。
@@ -89,20 +117,33 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   private static final String CLASSIFICATION_PREDICATE = " and s.classification_rank <= ?";
 
   /**
-   * ★★ <strong>安全谓词 = 可见性 + 密级，三条查询用的都是这一份</strong>（{@code 13 §三} 闸门②：pre-filter，两路同谓词）。
+   * ★★ <strong>安全谓词 = 可见性 + 三域 + 密级，四条查询用的都是这一份</strong> （{@code 13 §三} 闸门②：pre-filter，两路同谓词；{@code
+   * 13 §11.3}：一个谓词，不是三个分支）。
    *
-   * <p>把两者<strong>合成一个常量</strong>是刻意的结构性选择：只给一路加过滤条件（本项目最贵的病） 在这里变成"得先把这两行拆开"，而不是"忘了在另一处补一行"。
-   * 三条查询（全文 / 向量 / 候选复判）全部引用它 —— 数量对不上就是评审时一眼能看出的东西。
+   * <p>★ 它是一个**常量**而不是"四条 SQL 各拼一段"：任何第二条手写 {@code classification_rank} / {@code scope_kind} 的 SQL
+   * 都意味着"两处写法迟早会漂"，而那正是本项目最贵的病。
    *
-   * <p>★ 绑定值的位置约定：{@code ?} 出现在 {@link #JOINS} <strong>之后</strong>， 所以每条 SQL 的参数顺序都是「其余参数 → 密级 →
-   * kbId 列表 → limit」。
+   * <p>★ 里面唯一的 {@code %s} 是共用库那一支的 {@code in (?,?,…)} —— 它随调用变化的只有**占位符个数**， 所以整条谓词仍是"一个常量 +
+   * 一次替换"，见 {@link #securityPredicate(int)}。
+   *
+   * <p>★ 它**以条件开头**（不带 {@code where}、也不带 {@code and}）：四条路的形态不同 —— 两条把它接在既有条件之后（{@code …
+   * and}），两条把它直接接在 {@code where} 之后。 ★ 这一条必须写下来：本批第一次就是把 {@code " and"} 焊在常量头上， 于是 {@code " where"
+   * + 常量} 拼出了 {@code where and …}（真栈直接 SQL 语法错）—— 它是**报错**的那一类，比静默错好，但白跑了一次真栈。
    */
-  private static final String SECURITY_PREDICATE = VISIBLE_PREDICATE + CLASSIFICATION_PREDICATE;
+  private static final String SECURITY_PREDICATE =
+      VISIBLE_PREDICATE
+          + " and ("
+          + "%s"
+          + " or (s.scope_kind = 'KB' and s.scope_id = cast(? as uuid))"
+          + " or (s.scope_kind = 'CONVERSATION' and s.scope_id = cast(? as uuid)"
+          + " and s.owner_id = cast(? as uuid)))"
+          + CLASSIFICATION_PREDICATE;
 
   private static final String JOINS =
       " from kb_segment s"
           + " join kb_document d on d.id = s.document_id"
-          + " join kb_knowledge_base k on k.id = s.kb_id";
+          // ★ 左连接（见类注释的内连接陷阱）：会话临时的分段没有库行
+          + " left join kb_knowledge_base k on k.id = s.kb_id";
 
   private final JdbcTemplate jdbc;
   private final KnowledgeBaseRepository bases;
@@ -121,6 +162,45 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   }
 
   /**
+   * 把 {@link #SECURITY_PREDICATE} 里那一个 {@code %s} 换成共用库那一支。
+   *
+   * <p>★ 两个刻意的写法：
+   *
+   * <ol>
+   *   <li><strong>共用库为空时那一支写成 {@code false}</strong>：{@code scope_id in ()} 在 SQL 里是
+   *       <strong>语法错误</strong> —— "没有共用库域"必须是"这一支恒假"，而不是一条会炸的 SQL （会话里只传了附件、没有绑定任何库，是一种合法情形）；
+   *   <li><strong>{@code cast(? as uuid)}</strong>：个人库/会话域"没开"时传的是 {@code null}， 而不带类型的 {@code ?}
+   *       会让 PG 报 {@code could not determine data type of parameter}； 加上 cast 之后 {@code null}
+   *       在**三值逻辑**下让那一支恒假 —— 正是"没开"该有的语义。
+   * </ol>
+   *
+   * @param sharedKbCount 共用库那一支要绑几个 id；{@code 0} ⇒ 那一支恒假
+   */
+  private static String securityPredicate(int sharedKbCount) {
+    String sharedKb =
+        sharedKbCount == 0
+            ? "false"
+            : "(s.scope_kind = 'KB' and s.scope_id in (" + placeholders(sharedKbCount) + "))";
+    return SECURITY_PREDICATE.formatted(sharedKb);
+  }
+
+  /**
+   * 谓词的绑定值 —— ★ <strong>顺序必须与 {@link #securityPredicate(int)} 里的 {@code ?} 逐个对齐</strong> （共用库 id 列表
+   * → 个人库 → 会话 → 传输者 → 密级上限）。
+   *
+   * <p>★ 与 {@link #securityPredicate(int)} 是**成对**的两件事，所以它们挨着放：分开之后 "改了条件没改参数"会变成一次 SQL 参数错位 ——
+   * 那种红会红在"看得见的内容不见了" （而不是"越权出现了"），最难查的一类。
+   */
+  private static void bindSecurityPredicate(
+      List<Object> args, RetrievalScope scope, int clearanceRank) {
+    args.addAll(scope.sharedKbIds());
+    args.add(scope.personalKbId());
+    args.add(scope.conversationId());
+    args.add(scope.ownerId());
+    args.add(clearanceRank);
+  }
+
+  /**
    * 当前用户的密级上限，转成与 {@code classification_rank} 同口径的整数（枚举 ordinal）。
    *
    * <p>★ 没有密级上限（未认证：{@link ScopeFilter#nobody()} 的 {@code maxClassification == null}） 返回
@@ -133,6 +213,30 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   private int clearanceRank() {
     ClassificationLevel clearance = accessScope.currentScope().maxClassification();
     return clearance == null ? -1 : clearance.ordinal();
+  }
+
+  /**
+   * ★★ 解析本次检索的域（{@code 13 §11.3} 三支的绑定值）—— <strong>域的解析只有这一处</strong>。
+   *
+   * <p>三件事在这里一次做完，调用方不需要（也不许）自己拼：
+   *
+   * <ol>
+   *   <li>共用库那一支：过 {@link #visibleKbIds}（可见性判定唯一的那一处）；
+   *   <li>个人库那一支：{@code kind = 'PERSONAL' and owner_id = 我} 的那一行（{@code 13 §11.2}）—— ★ 惰性创建还没落（随第
+   *       17 周），所以"还没有个人库"就是 {@code null} = 这一档不开；
+   *   <li>传输者：从<strong>当前范围</strong>取（{@link ScopeFilter#me()}），不由调用方传 ——
+   *       让调用方传这个参数等于把"用谁的身份检索会话附件"变成一个可以填错的入参。
+   * </ol>
+   *
+   * <p>★ 它与 {@code 07 §十一} 的"解析只能发生在构造范围的时候"是同一条纪律。
+   */
+  @Override
+  public RetrievalScope retrievalScope(
+      Collection<UUID> requested, UUID conversationId, boolean includePersonal) {
+    List<UUID> sharedKbIds = visibleKbIds(requested);
+    UUID me = accessScope.currentScope().me();
+    UUID personalKbId = includePersonal ? personalKbId(me) : null;
+    return new RetrievalScope(sharedKbIds, personalKbId, conversationId, me);
   }
 
   @Override
@@ -183,8 +287,8 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     if (query == null
         || query.question() == null
         || query.question().isBlank()
-        || query.kbIds() == null
-        || query.kbIds().isEmpty()
+        || query.scope() == null
+        || query.scope().isEmpty()
         || query.limit() <= 0) {
       return List.of();
     }
@@ -194,13 +298,14 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
       return List.of();
     }
     String tsquery = toOrQuery(lexemes);
+    RetrievalScope scope = query.scope();
 
     List<Object> args = new ArrayList<>();
     args.add(tsquery);
     args.add(String.join("\n", lexemes));
     args.add(lexemes.size());
-    args.add(clearanceRank()); // ★ 密级谓词的绑定值（与 SECURITY_PREDICATE 里的 ? 位置对应）
-    args.addAll(query.kbIds());
+    // ★ 绑定值的位置约定：其余参数 → 三域 → 密级 → limit
+    bindSecurityPredicate(args, scope, clearanceRank());
     args.add(Math.max(1, query.limit()));
 
     String sql =
@@ -214,10 +319,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
             + " cross join q"
             + " where s.content_tsv @@ q.tq"
             + " and"
-            + SECURITY_PREDICATE
-            + " and s.kb_id in ("
-            + placeholders(query.kbIds().size())
-            + ")"
+            + securityPredicate(scope.sharedKbIds().size())
             // ★ 同分时按 id 兜底排序：没有它，闸门会在同分样本上偶发红，而那种红会被误当成"检索坏了"
             + " order by ts_rank(s.content_tsv, q.tq) desc, s.id"
             + " limit ?";
@@ -229,9 +331,9 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   }
 
   /**
-   * 以<strong>显式的密级上限</strong>列出可见的分段（第 16 周 · 0.4.4）。
+   * 以<strong>显式的密级上限</strong>列出可见的分段（第 16 周 · 0.4.4；第 17 周加域感知重载）。
    *
-   * <p>★★ 它的全部意义是"<strong>换一个上限、谓词一个字不改</strong>"：用的仍然是 {@link #SECURITY_PREDICATE}（可见性 +
+   * <p>★★ 它的全部意义是"<strong>换一个上限、谓词一个字不改</strong>"：用的仍然是 {@link #SECURITY_PREDICATE}（可见性 + 三域 +
    * 密级），只把绑定值换成入参。
    *
    * <p>★ 为什么不能让调用方自己拼一条：那就是同一段安全谓词的<strong>第二处实现</strong>， 而"只给一路加过滤条件"正是 {@code 13 §三}
@@ -242,15 +344,13 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
    */
   @Override
   public List<Scored> visibleSegments(
-      Collection<UUID> kbIds, ClassificationLevel ceiling, int limit) {
-    if (kbIds == null || kbIds.isEmpty() || ceiling == null || limit <= 0) {
+      RetrievalScope scope, ClassificationLevel ceiling, int limit) {
+    if (scope == null || scope.isEmpty() || ceiling == null || limit <= 0) {
       return List.of();
     }
-    List<UUID> ids = List.copyOf(kbIds);
     List<Object> args = new ArrayList<>();
-    // ★ 绑定值的位置约定与另外两条路逐字一致：其余参数 → 密级 → kbId 列表 → limit
-    args.add(ceiling.ordinal());
-    args.addAll(ids);
+    // ★ 绑定值的位置约定与另外三条路逐字一致：三域 → 密级 → limit
+    bindSecurityPredicate(args, scope, ceiling.ordinal());
     args.add(limit);
     // ★ 排序必须确定：没有它，同一个问题两次访问可以返回不同的子集，而"可见集合收窄"那条判据
     //   会在 limit 截断处偶发红 —— 那种红会被误当成"密级过滤坏了"
@@ -258,10 +358,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
         "select s.id"
             + JOINS
             + " where"
-            + SECURITY_PREDICATE
-            + " and s.kb_id in ("
-            + placeholders(ids.size())
-            + ")"
+            + securityPredicate(scope.sharedKbIds().size())
             + " order by s.id"
             + " limit ?";
     return jdbc.query(
@@ -269,14 +366,14 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   }
 
   @Override
-  public Set<UUID> visibleAmong(Collection<UUID> candidateIds, Collection<UUID> kbIds) {
-    if (candidateIds == null || candidateIds.isEmpty() || kbIds == null || kbIds.isEmpty()) {
+  public Set<UUID> visibleAmong(Collection<UUID> candidateIds, RetrievalScope scope) {
+    if (candidateIds == null || candidateIds.isEmpty() || scope == null || scope.isEmpty()) {
       return Set.of();
     }
     List<UUID> candidates = List.copyOf(candidateIds);
     List<Object> args = new ArrayList<>(candidates);
-    args.add(clearanceRank()); // ★ 密级谓词的绑定值（与 SECURITY_PREDICATE 里的 ? 位置对应）
-    args.addAll(kbIds);
+    // ★ 绑定值的位置约定与另外三条路逐字一致：候选 id → 三域 → 密级
+    bindSecurityPredicate(args, scope, clearanceRank());
     String sql =
         "select s.id"
             + JOINS
@@ -284,10 +381,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
             + placeholders(candidates.size())
             + ")"
             + " and"
-            + SECURITY_PREDICATE
-            + " and s.kb_id in ("
-            + placeholders(kbIds.size())
-            + ")";
+            + securityPredicate(scope.sharedKbIds().size());
     return new LinkedHashSet<>(jdbc.queryForList(sql, UUID.class, args.toArray()));
   }
 
@@ -311,8 +405,8 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
         || query.limit() <= 0
         || query.vector() == null
         || query.vector().length == 0
-        || query.kbIds() == null
-        || query.kbIds().isEmpty()) {
+        || query.scope() == null
+        || query.scope().isEmpty()) {
       return List.of();
     }
     String table = vectorIndex.tableFor(query.dimension());
@@ -322,11 +416,12 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     }
     // ★ 打开迭代扫描：高选择性过滤下自动多扫几轮（PG 16 + pgvector 0.8+）
     jdbc.execute("set local hnsw.iterative_scan = strict_order");
+    RetrievalScope scope = query.scope();
 
     List<Object> args = new ArrayList<>();
     args.add(toVectorLiteral(query.vector()));
-    args.add(clearanceRank()); // ★ 密级谓词的绑定值（与 SECURITY_PREDICATE 里的 ? 位置对应）
-    args.addAll(query.kbIds());
+    // ★ 绑定值的位置约定与另外三条路逐字一致：向量字面量 → 三域 → 密级 → limit
+    bindSecurityPredicate(args, scope, clearanceRank());
     args.add(Math.max(1, query.limit()));
 
     // ★ 向量表写在最前 + order by distance limit：这是"top-N 按距离"的规范形状，
@@ -338,12 +433,9 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
             + " v"
             + " join kb_segment s on s.id = v.id"
             + " join kb_document d on d.id = s.document_id"
-            + " join kb_knowledge_base k on k.id = s.kb_id"
+            + " left join kb_knowledge_base k on k.id = s.kb_id"
             + " where"
-            + SECURITY_PREDICATE
-            + " and s.kb_id in ("
-            + placeholders(query.kbIds().size())
-            + ")"
+            + securityPredicate(scope.sharedKbIds().size())
             + " order by distance"
             + " limit ?";
 
@@ -389,6 +481,9 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
             + ")";
     // ★ 这里**不加**安全谓词：调用方刚刚用 visibleAmong 判过，这只是一次"取展示信息"。
     //   重复判一次不算错，但会让"看不见的分段"与"已被删的分段"给出同样的症状，反而难查。
+    // ★★ 会话域的行**没有库名**（左连接下 k 为 NULL ⇒ kbName 为 NULL），而契约的 SourceRef 要求
+    //   kbName 非空（引用组装那一批会直接报"引用的必填字段 kbName 不能为空"）。★ 给它什么显示口径
+    //   是一个**产品决定**（会话标题？"会话附件"？），本批不替产品定 —— 登记在交付报告的"待裁"里。
     return jdbc.query(
         sql,
         (rs, i) ->
@@ -402,6 +497,28 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   }
 
   // ────────────────────────── 内部 ──────────────────────────
+
+  /**
+   * 我的个人库 id（{@code 13 §11.2}：{@code kind = 'PERSONAL' and owner_id = 我} 的那一行）。
+   *
+   * <p>★ 惰性创建（首次上传时建）随第 17 周，所以"还没有"是正常状态 ⇒ 返回 {@code null} = 个人库那一档不开（与 {@code 13 §11.4}
+   * 的默认一致：个人库**默认不参与**）。
+   *
+   * <p>★ 每人至多一行由库层的 {@code uq_kb_personal_owner} 保证；这里不去"猜哪一行"——
+   * 多行时那是一条**已经坏了**的数据，而唯一索引让它在写入那一刻就红过。
+   */
+  private UUID personalKbId(UUID me) {
+    if (me == null) {
+      return null;
+    }
+    List<UUID> found =
+        jdbc.queryForList(
+            "select id from kb_knowledge_base"
+                + " where kind = 'PERSONAL' and owner_id = ? and deleted_at is null",
+            UUID.class,
+            me);
+    return found.isEmpty() ? null : found.getFirst();
+  }
 
   /** 交给库去分词，拿回真词元（★ 分词权威只有一处：{@code chinese_zh} 配置）。 */
   private List<String> lexemesOf(String question) {

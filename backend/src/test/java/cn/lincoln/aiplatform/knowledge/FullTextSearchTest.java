@@ -167,26 +167,29 @@ class FullTextSearchTest {
         // ★ 责任部门已改成 org_id（UUID 外键，V27）。这里用 ROOT 的**确定性** id（V25 种子写死的）：
         //   夹具不关心 org 语义，但 org_id 是**外键** ⇒ 不能随便塞一个随机 UUID（会违反约束，
         //   而报错会指向"约束"而不是"我改了哪里"）。见 Issue #48。
-        "insert into kb_document (id, kb_id, name, source, doc_type, org_id, classification,"
-            + " status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?::uuid, ?::uuid, ?, 'local', '制度',"
-            + " '00000000-0000-4000-8000-000000000001'::uuid, 'INTERNAL',"
-            + " 'PENDING_EMBEDDING', 0, 0, true, now(), now())",
+        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
+            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
+            + " values (?::uuid, ?::uuid, 'KB', ?::uuid, ?, 'local', '制度',"
+            + " '00000000-0000-4000-8000-000000000001'::uuid, 'INTERNAL', 'PENDING_EMBEDDING', 0,"
+            + " 0, true, now(), now())",
         docId,
+        kbId,
         kbId,
         "全文夹具-" + shortId());
 
     String id = UUID.randomUUID().toString();
     jdbc.update(
-        "insert into kb_segment (id, document_id, kb_id, ordinal, title, title_path, content,"
-            + " search_text, content_hash, char_count, is_table, is_code, oversized_risk, enabled,"
-            + " embedding_status, created_at, updated_at, classification)"
-            + " values (?::uuid, ?::uuid, ?::uuid, 0, '夹具', '第一章', ?, ?, ?, ?, false, false,"
+        "insert into kb_segment (id, document_id, kb_id, scope_kind, scope_id, ordinal, title,"
+            + " title_path, content, search_text, content_hash, char_count, is_table, is_code,"
+            + " oversized_risk, enabled, embedding_status, created_at, updated_at, classification)"
+            + " values (?::uuid, ?::uuid, ?::uuid, 'KB', ?::uuid, 0, '夹具', '第一章', ?, ?, ?, ?,"
+            + " false, false,"
             // 密级从文档继承（V22 的列是 not null）：夹具也用同一条规则，别自己另造一份
             + " false, true, 'EMBEDDED', now(), now(),"
             + " (select classification from kb_document where id = ?::uuid))",
         id,
         docId,
+        kbId,
         kbId,
         searchText,
         searchText,
