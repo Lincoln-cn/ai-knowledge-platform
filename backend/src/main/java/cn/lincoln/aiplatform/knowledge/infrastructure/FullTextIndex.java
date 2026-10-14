@@ -17,8 +17,9 @@ import org.springframework.stereotype.Component;
  * {@code tsearch_data}，表现都是"全文检索一条都搜不到"， 而向量路照常出结果 ⇒ 混合模式**静默退化成纯向量**（{@code 11 §风险} 第 3 条）。
  * 这正是本项目最怕的那类失效，所以设计册要求它与架构测试同等待遇。
  *
- * <p>★ 落在两处：<strong>这里</strong>（启动时一行显式日志，运维能一眼看到）与 {@code FullTextIndexTest}（CI
- * 里的断言，跟镜像一起换时会红）。只写日志不够 —— 没人读日志；只写测试也不够 —— 现场部署不会跑测试。
+ * <p>★ 落在两处：<strong>这里</strong>（启动时一行显式日志，运维能一眼看到）与 {@code FullTextSearchTest}（真栈
+ * 里的断言，跟镜像一起换时会红）。只写日志不够 —— 没人读日志；只写测试也不够 —— 现场部署不会跑测试。 （★ 2026-10-14 订正：此处原写 {@code
+ * FullTextIndexTest}，那个类**不存在**；实际覆盖它的是 {@code knowledge/FullTextSearchTest} —— 见 `#118` 的同类记账。）
  *
  * <p>★ 探测是<strong>懒加载 + 缓存</strong>（与 {@code OcrEngine} 同口径）：迁移还没跑完时
  * 不该把启动打挂；第一次真需要它的时候（或应用就绪时）才探测，之后复用结果。
