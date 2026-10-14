@@ -43,9 +43,46 @@ public class Document {
   @Column(name = "id", nullable = false)
   private UUID id;
 
-  /** 所属知识库。可见性继承它 —— 库不可见 ⇒ 其文档也不可见。 */
+  /**
+   * 所属知识库。可见性继承它 —— 库不可见 ⇒ 其文档也不可见。
+   *
+   * <p>★ 自 {@code V34} 起它是<strong>库域那一支的镜像列</strong>（{@code 13 §11.3} 的裁定 (A)）： 库层允许它为空（会话临时没有库行），但
+   * {@code chk_doc_scope_shape} 把它钉成 "库域 ⇒ 非空且等于 {@code scope_id}"。★ Java 侧仍是非空：本实体今天只构造**库域**文档
+   * （会话域要等附件上传那一批，届时走一个显式的工厂方法，见 {@link #scopeKind}）。
+   */
   @Column(name = "kb_id", nullable = false)
   private UUID kbId;
+
+  /**
+   * 归属**种类**（{@code 13 §11.3}，{@code V34}）。
+   *
+   * <p>★ 本实体今天只产出 {@link DocumentScopeKind#KB}：会话临时的文档由"上传附件"那条链路创建 （{@code POST /files}，随第 17
+   * 周），而它的形状要求是 {@code kbId = null} + {@code scopeKind = CONVERSATION} + {@code scopeId = 会话 id} ——
+   * ★ <strong>本批不预支那个工厂方法</strong>： 没有调用方的"形状载体"会变成空壳（{@code #27} 点名的 A 类病），而它可以被库层三条 CHECK 兜住。
+   */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "scope_kind", nullable = false, length = 16)
+  private DocumentScopeKind scopeKind;
+
+  /**
+   * 归属**主体**（{@code 13 §11.3}）：库域 = 知识库 id，会话域 = 会话 id。
+   *
+   * <p>★ 它与 {@link #kbId} 在库域是同一个值（库层的 CHECK 保证），不是第二处真相 —— 会话域没有库行，只有它能表达归属。
+   */
+  @Column(name = "scope_id", nullable = false)
+  private UUID scopeId;
+
+  /**
+   * <strong>传输者</strong>（{@code 13 §11.3} 的 {@code owner_id}，{@code V34} 新增）。
+   *
+   * <p>★ 前两支的可见性**不**看它（共用库靠 {@code visibility}/{@code grants}，个人库靠"它就是我的那一行"）；
+   * 只有会话域那一支拿它当附加条件（{@code owner_id = :me}）⇒ 它是"谁传的"，不是"这属于谁"。
+   *
+   * <p>★ 建档时取建档人（与 {@code created_by} 同源）；存量行由迁移回填自 {@code created_by} （可空，而库域不使用它 ⇒ 无害；会话域由库层
+   * CHECK 强制非空）。
+   */
+  @Column(name = "owner_id")
+  private UUID ownerId;
 
   @Column(name = "name", nullable = false, length = 255)
   private String name;
@@ -190,6 +227,13 @@ public class Document {
     }
     this.id = id;
     this.kbId = kbId;
+    // ★ 域的形状在**构造这一刻**就定下来（V34）：建档路径只产出库域文档，
+    //   而库域的 scope_id 就是 kb_id、传输者就是建档人 —— 两者都是直接派生，不是新参数。
+    //   ★ 为什么不做成"可空 + 以后再补"：域为空的行在检索侧**恒假**（谁都看不见），
+    //     而那是静默的；库层的 chk_doc_scope_shape / chk_doc_conversation_owner 是最后一道网。
+    this.scopeKind = DocumentScopeKind.KB;
+    this.scopeId = kbId;
+    this.ownerId = createdBy;
     this.name = name.trim();
     this.source = source == null || source.isBlank() ? "local" : source.trim();
     this.docType = docType.trim();
@@ -496,6 +540,21 @@ public class Document {
 
   public UUID kbId() {
     return kbId;
+  }
+
+  /** 归属种类（{@code V34}）。分段落库时**从文档继承**它（冗余列的写侧只有这一处）。 */
+  public DocumentScopeKind scopeKind() {
+    return scopeKind;
+  }
+
+  /** 归属主体（库域 = {@link #kbId()}；会话域 = 会话 id）。分段落库时从文档继承。 */
+  public UUID scopeId() {
+    return scopeId;
+  }
+
+  /** 传输者；会话域那一支的判据（库域不使用）。分段落库时从文档继承。 */
+  public UUID ownerId() {
+    return ownerId;
   }
 
   public String name() {

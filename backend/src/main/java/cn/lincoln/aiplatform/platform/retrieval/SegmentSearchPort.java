@@ -39,6 +39,37 @@ public interface SegmentSearchPort {
   List<UUID> visibleKbIds(Collection<UUID> requested);
 
   /**
+   * 解析本次检索的<strong>域</strong>（{@code 13 §11.3} 三支的绑定值）—— ★ 第 17 周新增，域的解析**只有这一处**。
+   *
+   * <h3>为什么"解析"要单独一个方法（而不是让调用方自己拼 {@link RetrievalScope}）</h3>
+   *
+   * <p>三支的绑定值来自**三个不同的地方**，而其中两个不许由调用方猜：
+   *
+   * <ol>
+   *   <li>共用库：要过可见性判定（{@link #visibleKbIds}）—— 它与"这个库存在吗"是两件事；
+   *   <li>个人库：是"{@code kind = 'PERSONAL' and owner_id = 我} 的那一行"（{@code 13 §11.2}）——
+   *       调用方手里只有一个开关（"加不加我的资料"），**没有**那个 id；
+   *   <li>★ {@code ownerId}（会话域那一支的传输者）：只能从**当前范围**取（{@code AccessScopePort}）。
+   *       让调用方传这个参数等于把"用谁的身份检索会话附件"变成一个可以填错的入参。
+   * </ol>
+   *
+   * <p>★ 与 {@code 07 §十一} 的"解析只能发生在构造范围的时候"是同一条纪律：范围/域在**一处**构造好， 下游只消费。
+   *
+   * <p>★★ <strong>公开面（{@code asSubject}）必须传 {@code includePersonal = false}</strong>： {@code 13
+   * §11.2} ③ 写明公开面的域**只有**共用库 + 该会话的会话临时 ⇒ 把个人库并进去 = 访客按 "作者的文档"检索（{@code #31} 点名的那个静默越权）。
+   *
+   * @param requested 调用方想检索的库；<strong>空</strong> = 全部可见的
+   * @param conversationId 本次会话 id；命中测试 / 管理面传 {@code null}
+   * @param includePersonal 是否把个人库计入本次检索域（「加上我的资料」开关，缺省 <strong>false</strong>）
+   */
+  default RetrievalScope retrievalScope(
+      Collection<UUID> requested, UUID conversationId, boolean includePersonal) {
+    // ★ 默认实现是"明确拒绝"而不是"只按共用库解析"：后者会静默丢掉会话域与个人域 ——
+    //   症状是"会话附件搜不到"（不报错，只是少看见），而那正是 #31 要防的那一类。
+    throw new UnsupportedOperationException("这个 SegmentSearchPort 实现不支持域的解析（retrievalScope）");
+  }
+
+  /**
    * 每个库用的向量模型 id（库 id → 模型 id）。
    *
    * <p>★ 用途有两件：把问题向量化、以及**决定查哪张维度表**。★ 按库给而不是给一个集合， 是因为「不传 kbIds =
@@ -62,8 +93,26 @@ public interface SegmentSearchPort {
    * ★ 两路同谓词：把候选 id 过一遍<strong>同一条</strong>可见性判定 （库启用 + 文档启用未删 + 分段启用）。
    *
    * <p>传进来的 kbIds 是"允许的范围"（{@link #visibleKbIds} 的结果）；不在范围内的候选直接丢弃 —— 双保险，因为向量路的元数据过滤是"优化"，不是判据。
+   *
+   * <p>★ 这个重载（只带共用库域）保留是为了既有调用点不必全改；它的语义与 {@code visibleAmong(candidateIds,
+   * RetrievalScope.shared(kbIds))} 逐字相同。
    */
-  Set<UUID> visibleAmong(Collection<UUID> candidateIds, Collection<UUID> kbIds);
+  default Set<UUID> visibleAmong(Collection<UUID> candidateIds, Collection<UUID> kbIds) {
+    return visibleAmong(candidateIds, RetrievalScope.shared(kbIds));
+  }
+
+  /**
+   * ★★ 域感知的复核（{@code 13 §11.3} 的同一个谓词，只换一个域）。
+   *
+   * <p>它的意义与 {@link #visibleAmong(Collection, Collection)} 完全一样，区别只是"允许的范围"从 "一组库 id"升级成"{@link
+   * RetrievalScope 三个域}"。★ 会话临时的分段 {@code kb_id} 是空的， 只按库 id
+   * 复核会把它们<strong>全部筛掉</strong>（而那是静默的：检索明明命中了，结果却少几条）。
+   */
+  default Set<UUID> visibleAmong(Collection<UUID> candidateIds, RetrievalScope scope) {
+    // ★ 与 retrievalScope 同一条理由：默认实现明确拒绝，而不是退化成"只按共用库判" ——
+    //   退化之后会话域/个人域的分段会在这一步被静默丢掉。
+    throw new UnsupportedOperationException("这个 SegmentSearchPort 实现不支持域感知的候选复核");
+  }
 
   /**
    * 以<strong>显式的密级上限</strong>列出可见的分段（第 16 周 · 0.4.4 新增）。
@@ -84,9 +133,21 @@ public interface SegmentSearchPort {
    */
   default List<Scored> visibleSegments(
       Collection<UUID> kbIds, ClassificationLevel ceiling, int limit) {
+    // ★ 只带共用库域的重载（既有调用点）；语义 = RetrievalScope.shared(kbIds)
+    return visibleSegments(RetrievalScope.shared(kbIds), ceiling, limit);
+  }
+
+  /**
+   * 域感知的版本（第 17 周）：{@code 13 §11.2} ③ 说公开面的域是"共用库 + **该会话的会话临时**" —— 只带库 id
+   * 的那个重载表达不了会话域，而"忘了带会话域"的症状正是<strong>附件的引用一条都出不来</strong> （{@code #31} 判据 2 的一半）。
+   *
+   * @param scope ★ 检索域。公开面<b>必须</b>用 {@code includePersonal = false} 解析出来的那个
+   */
+  default List<Scored> visibleSegments(
+      RetrievalScope scope, ClassificationLevel ceiling, int limit) {
     // ★ 默认实现是"明确拒绝"：这一条路带着**显式的密级上限**，而一个没写它的实现若静默返回
     //   全部候选，就等于"密级过滤没生效" —— 那是一条不会报错的越权。
-    throw new UnsupportedOperationException("这个 SegmentSearchPort 实现不支持显式密级上限的列举");
+    throw new UnsupportedOperationException("这个 SegmentSearchPort 实现不支持域感知的显式密级列举");
   }
 
   /** 命中分段的展示信息（引用组装用）。顺序不保证，调用方按 segmentId 索引。 */
@@ -109,20 +170,47 @@ public interface SegmentSearchPort {
    * 全文检索的请求。
    *
    * @param question 用户问题原文（分词的权威是库里的 {@code chinese_zh} 配置，**不在 Java 侧再分一次**）
-   * @param kbIds 允许的库范围
+   * @param scope ★ 检索域（{@code 13 §11.3} 的三支）。★ 它<b>同时</b>是"允许的库范围"与"个人库/会话域开不开" ——
+   *     三者必须一起表达，分开传就有"漏一支"的空间
    * @param limit 候选上限
    */
-  record TextQuery(String question, List<UUID> kbIds, int limit) {}
+  record TextQuery(String question, RetrievalScope scope, int limit) {
+
+    /**
+     * 只带共用库域的重载 —— 给"命中的库范围就是一个 id 列表"的调用点（命中测试 / 应用绑定 / 公开面预览 / 大量既有测试夹具）。语义与 {@code scope =
+     * RetrievalScope.shared(kbIds)} 逐字相同。
+     */
+    public TextQuery(String question, List<UUID> kbIds, int limit) {
+      this(question, RetrievalScope.shared(kbIds), limit);
+    }
+
+    /** 共用库那一支的库 id（既有读法的兼容入口，等价于 {@code scope.sharedKbIds()}）。 */
+    public List<UUID> kbIds() {
+      return scope.sharedKbIds();
+    }
+  }
 
   /**
    * 相似度检索的请求。
    *
    * @param dimension 目标向量维度（决定查哪张表）
    * @param vector 问题向量
-   * @param kbIds 允许的库范围（已由 {@link #visibleKbIds} 过过一遍可见性）
+   * @param scope ★ 检索域（已由 {@link #retrievalScope} 解析过）。★ 向量路按模型分组时用 {@link
+   *     RetrievalScope#withinShared} 收窄共用库那一支，其余两域照搬
    * @param limit 候选上限
    */
-  record VectorQuery(int dimension, float[] vector, List<UUID> kbIds, int limit) {}
+  record VectorQuery(int dimension, float[] vector, RetrievalScope scope, int limit) {
+
+    /** 只带共用库域的重载（语义同上）。 */
+    public VectorQuery(int dimension, float[] vector, List<UUID> kbIds, int limit) {
+      this(dimension, vector, RetrievalScope.shared(kbIds), limit);
+    }
+
+    /** 共用库那一支的库 id（既有读法的兼容入口）。 */
+    public List<UUID> kbIds() {
+      return scope.sharedKbIds();
+    }
+  }
 
   /**
    * 一路检索出来的候选。

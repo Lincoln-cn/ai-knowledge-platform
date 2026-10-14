@@ -454,6 +454,11 @@ public class SegmentService {
       segment.moveTo(
           targetDocumentId,
           target.kbId(),
+          // ★ 域也跟着搬（V34，与密级逐字同一条理由）：搬过去之后它属于目标文档 ——
+          //   留着源文档的域最坏会把"会话附件"搬成"库文档"，而那是静默的归属错位
+          target.scopeKind(),
+          target.scopeId(),
+          target.ownerId(),
           nextOrdinal++,
           searchText,
           contentHash,

@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.retrieval.domain.HopDecision;
 import cn.lincoln.aiplatform.retrieval.domain.HopStop;
@@ -138,9 +139,12 @@ public class RetrievalService {
     validate(request);
 
     // ① 可见范围：看不见的库既不进检索、也不给"存在性"信号（07 §3.3 硬规矩 1）
-    List<UUID> kbIds = segmentSearch.visibleKbIds(request.kbIds());
-    if (kbIds.isEmpty()) {
-      // ★ 这里是"没有可检索的库"，不是"没命中" —— 但对外都返空列表：
+    //   ★ 第 17 周起这一步解析的是**域**（13 §11.3 的三支绑定值），不再只是"一组库 id"：
+    //     命中测试没有会话（conversationId = null），且个人库按 13 §11.4 的默认**不参与**
+    //     （「加上我的资料」开关是契约上的可选字段，随问答链路那一批接）。
+    RetrievalScope scope = segmentSearch.retrievalScope(request.kbIds(), null, false);
+    if (scope.isEmpty()) {
+      // ★ 这里是"没有可检索的范围"，不是"没命中" —— 但对外都返空列表：
       //   区别只该出现在日志/埋点里，不该变成"这个库存在但你看不见"这种信息泄露。
       return new HitTestView(
           mode,
@@ -188,7 +192,7 @@ public class RetrievalService {
               retrieveOneQuery(
                   query,
                   mode,
-                  kbIds,
+                  scope,
                   candidateLimit,
                   request.thresholdOrDefault(),
                   vectorScores,
@@ -217,7 +221,7 @@ public class RetrievalService {
           retrieveOneQuery(
               request.question(),
               mode,
-              kbIds,
+              scope,
               candidateLimit,
               request.thresholdOrDefault(),
               vectorScores,
@@ -240,7 +244,7 @@ public class RetrievalService {
             ? runMultiHop(
                 request,
                 mode,
-                kbIds,
+                scope,
                 candidateLimit,
                 startedAt,
                 perSubQuestion,
@@ -278,7 +282,7 @@ public class RetrievalService {
       log.info("子问题配额合并：{}（补足 {} 条）", RrfQuotaJoiner.describe(merged), merged.fillInCount());
     }
     List<UUID> ordered = merged.selected();
-    Set<UUID> visible = segmentSearch.visibleAmong(ordered, kbIds);
+    Set<UUID> visible = segmentSearch.visibleAmong(ordered, scope);
     List<UUID> kept = ordered.stream().filter(visible::contains).toList();
 
     // ⑤b ★★ "改写把结果改没了"要兜住 —— 这一条是**真栈闸门逼出来的**（见类注释末尾）。
@@ -290,12 +294,12 @@ public class RetrievalService {
           retrieveOneQuery(
               request.question(),
               mode,
-              kbIds,
+              scope,
               candidateLimit,
               request.thresholdOrDefault(),
               vectorScores,
               textScores);
-      Set<UUID> visibleOriginal = segmentSearch.visibleAmong(fromOriginal, kbIds);
+      Set<UUID> visibleOriginal = segmentSearch.visibleAmong(fromOriginal, scope);
       List<UUID> fallback = fromOriginal.stream().filter(visibleOriginal::contains).toList();
       if (!fallback.isEmpty()) {
         log.warn("改写/扩展后的 {} 条查询一条都没命中，退回原始问题并召回了 {} 条", paths, fallback.size());
@@ -402,7 +406,7 @@ public class RetrievalService {
   private HopRun runMultiHop(
       HitTestQuery request,
       RetrievalMode mode,
-      List<UUID> kbIds,
+      RetrievalScope scope,
       int candidateLimit,
       long startedAt,
       List<List<UUID>> perSubQuestion,
@@ -463,7 +467,7 @@ public class RetrievalService {
             retrieveOneQuery(
                 decision.nextQuery(),
                 mode,
-                kbIds,
+                scope,
                 candidateLimit,
                 request.thresholdOrDefault(),
                 vectorScores,
@@ -549,14 +553,14 @@ public class RetrievalService {
   private List<UUID> retrieveOneQuery(
       String query,
       RetrievalMode mode,
-      List<UUID> kbIds,
+      RetrievalScope scope,
       int candidateLimit,
       double threshold,
       Map<UUID, Double> vectorScores,
       Map<UUID, Double> textScores) {
     List<UUID> vectorIds = List.of();
     if (mode != RetrievalMode.FULLTEXT) {
-      List<SegmentSearchPort.Scored> hits = vectorSearch(query, kbIds, candidateLimit);
+      List<SegmentSearchPort.Scored> hits = vectorSearch(query, scope, candidateLimit);
       for (SegmentSearchPort.Scored hit : hits) {
         vectorScores.merge(hit.segmentId(), hit.score(), Math::max);
       }
@@ -571,7 +575,7 @@ public class RetrievalService {
     List<UUID> textIds = List.of();
     if (mode != RetrievalMode.VECTOR) {
       List<SegmentSearchPort.Scored> hits =
-          segmentSearch.fullText(new SegmentSearchPort.TextQuery(query, kbIds, candidateLimit));
+          segmentSearch.fullText(new SegmentSearchPort.TextQuery(query, scope, candidateLimit));
       for (SegmentSearchPort.Scored hit : hits) {
         textScores.merge(hit.segmentId(), hit.score(), Math::max);
       }
@@ -594,8 +598,18 @@ public class RetrievalService {
    * 表"这种静默错位。
    */
   private List<SegmentSearchPort.Scored> vectorSearch(
-      String question, List<UUID> kbIds, int limit) {
-    Map<UUID, UUID> modelByKb = segmentSearch.embeddingModelByKb(kbIds);
+      String question, RetrievalScope scope, int limit) {
+    // ★ 向量模型只能从**有库行**的那部分域里问（共用库 + 个人库）：会话临时没有 kb_knowledge_base 行，
+    //   它的向量模型继承平台默认（13 §11.2）⇒ 那条解析本批**没有实现**（它随附件入库链一起落）。
+    //   ★ 这里**明确拒绝**而不是"悄悄跳过会话域"：跳过 = 会话附件在向量模式下少看见，
+    //     而那是静默的（#31 判据 1/2 会误以为通过）。全文路不受影响（content_tsv 在库里，不需要模型）。
+    if (scope.conversationId() != null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "会话临时附件的向量检索尚未实现（它的向量模型 = 平台默认，随附件入库链一起落）",
+          "请先用全文模式检索；向量/混合模式在会话内的检索随该批开放");
+    }
+    Map<UUID, UUID> modelByKb = segmentSearch.embeddingModelByKb(scope.kbIdsWithModelRows());
     if (modelByKb.isEmpty()) {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST, "这些知识库没有可用的向量模型，无法做向量检索", "请确认已绑定向量模型并已加载");
@@ -616,7 +630,7 @@ public class RetrievalService {
     for (Map.Entry<UUID, List<UUID>> group : kbIdsByModel.entrySet()) {
       try {
         List<SegmentSearchPort.Scored> hits =
-            searchWithinOneModel(group.getKey(), group.getValue(), question, limit);
+            searchWithinOneModel(group.getKey(), group.getValue(), scope, question, limit);
         rankedPerModel.add(ids(hits));
         for (SegmentSearchPort.Scored hit : hits) {
           similarity.merge(hit.segmentId(), hit.score(), Math::max);
@@ -653,7 +667,7 @@ public class RetrievalService {
 
   /** 同一个向量模型下的检索：问题 → 向量 → 按维度路由到表 → 相似度。 */
   private List<SegmentSearchPort.Scored> searchWithinOneModel(
-      UUID modelId, List<UUID> kbIds, String question, int limit) {
+      UUID modelId, List<UUID> kbIds, RetrievalScope scope, String question, int limit) {
     List<float[]> embedded = embeddingPort.embed(modelId, List.of(question));
     if (embedded == null || embedded.isEmpty() || embedded.getFirst() == null) {
       throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "向量模型没有返回向量", "请稍后重试或检查模型服务状态");
@@ -665,10 +679,12 @@ public class RetrievalService {
 
     // ★ 维度从**实际返回的向量长度**取，而不是查模型声明的维度：写入侧用的也是这个长度
     //   ⇒ 两边取法一致，才不会出现"写进 A 表、检索 B 表"这种静默错位。
-    // ★ 检索本身交给 knowledge（`SegmentSearchPort.vectorSearch`）：密级与三级过滤必须与
+    // ★ 检索本身交给 knowledge（`SegmentSearchPort.vectorSearch`）：密级与三域过滤必须与
     //   `<=>` 在同一条 SQL 里（pre-filter，13 §三），而只有那一侧认识这些谓词。
+    // ★ 域随模型分组收窄（`withinShared`）：这一组的库 + 属于这一组的个人库，
+    //   会话域照搬（它没有库行，本批在这条路上明确拒绝，见上面的守卫）。
     return segmentSearch.vectorSearch(
-        new SegmentSearchPort.VectorQuery(vector.length, vector, kbIds, limit));
+        new SegmentSearchPort.VectorQuery(vector.length, vector, scope.withinShared(kbIds), limit));
   }
 
   /** 单路直接用它的次序 —— 保留给"没有查询理解"的路径（模式内的融合在 {@link #retrieveOneQuery} 里做）。 */

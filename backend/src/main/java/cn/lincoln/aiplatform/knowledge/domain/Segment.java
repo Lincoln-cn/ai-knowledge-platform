@@ -50,6 +50,24 @@ public class Segment {
   @Column(name = "kb_id", nullable = false)
   private UUID kbId;
 
+  /**
+   * 归属**种类** —— ★ 冗余列（{@code V34}，{@code 13 §6.4} / §11.3）。
+   *
+   * <p>★ 为什么冗余一份而不是每次 join 文档：{@code content_tsv} 就在这张表上，两条检索路的 <strong>域过滤</strong>必须能在这张表上直接生效 ——
+   * 谓词只长在 {@code kb_document} 上时， "两路同谓词"就退化成"两处 join 写法必须一致"，而那种一致没人能保证。
+   */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "scope_kind", nullable = false, length = 16)
+  private DocumentScopeKind scopeKind;
+
+  /** 归属主体（冗余列）：KB ⇒ 库 id；CONVERSATION ⇒ 会话 id。与 {@link #kbId} 在库域是同一个值。 */
+  @Column(name = "scope_id", nullable = false)
+  private UUID scopeId;
+
+  /** 传输者（冗余列）：只有会话域那一支拿它当附加条件（{@code owner_id = :me}）。 */
+  @Column(name = "owner_id")
+  private UUID ownerId;
+
   /** 文档内序号（从 0 起）。 */
   @Column(name = "ordinal", nullable = false)
   private int ordinal;
@@ -141,16 +159,37 @@ public class Segment {
    *
    * @param planned 分段计划条目（含前缀拼接与哈希）
    * @param classification ★ <strong>所属文档的密级</strong>（{@code 13 §2.1} ②：强制继承，不允许单独下调）
+   * @param scopeKind ★ <strong>所属文档的归属种类</strong>（{@code V34}）。与密级同一条纪律：分段不允许 有自己独立的域 ——
+   *     域错了的后果不是报错，而是<strong>归属换了</strong>（会话附件被当成库文档，
+   *     凡能看那个库的人都检索得到）。所以三个域参数都由调用方从<strong>文档</strong>取。
+   * @param scopeId 所属文档的归属主体（库域 = {@code kbId}；会话域 = 会话 id）
+   * @param ownerId 所属文档的传输者（可空；会话域那一支要求非空）
    */
   public Segment(
       UUID id,
       UUID documentId,
       UUID kbId,
+      DocumentScopeKind scopeKind,
+      UUID scopeId,
+      UUID ownerId,
       PlannedSegment planned,
       UUID createdBy,
       ClassificationLevel classification) {
-    if (id == null || documentId == null || kbId == null) {
-      throw new IllegalArgumentException("分段 id / 文档 id / 知识库 id 不能为空");
+    if (id == null || documentId == null || scopeId == null) {
+      throw new IllegalArgumentException("分段 id / 文档 id / 归属主体不能为空");
+    }
+    if (scopeKind == null) {
+      // ★ 与密级同一条理由：默认成某个域就是把归属悄悄换掉，两个候选都是错的
+      throw new IllegalArgumentException("分段归属种类不能为空（13 §11.3：三域必须显式）");
+    }
+    if (scopeKind == DocumentScopeKind.KB && kbId == null) {
+      // ★ 与库层 chk_segment_scope_shape 逐字同一条规则（Java 侧先报，给的是可读原因）
+      throw new IllegalArgumentException("库域的分段必须有知识库（scope_kind = 'KB' ⇒ kb_id 非空且等于 scope_id）");
+    }
+    if (scopeKind == DocumentScopeKind.CONVERSATION && (kbId != null || ownerId == null)) {
+      // ★ 会话域没有库行；owner_id 为空会让第三支谓词恒假 ⇒ 会话附件谁都检索不到（静默失效）
+      throw new IllegalArgumentException(
+          "会话域的分段必须 kb_id 为空且 owner_id 非空（13 §11.3 第三支：owner_id = :me）");
     }
     if (classification == null) {
       // ★ 缺失即拒绝：默认成 PUBLIC 是一次静默越权，默认成最高档会让内容凭空消失 —— 都不该发生
@@ -165,6 +204,9 @@ public class Segment {
     this.id = id;
     this.documentId = documentId;
     this.kbId = kbId;
+    this.scopeKind = scopeKind;
+    this.scopeId = scopeId;
+    this.ownerId = ownerId;
     this.classification = classification;
     this.ordinal = planned.ordinal();
     this.title = clampTitle(planned.title());
@@ -302,17 +344,32 @@ public class Segment {
    *
    * <p>★ <strong>密级也要一起搬</strong>：搬过去之后它属于目标文档，留着源文档的密级就是一次 静默越权
    * ——把一段机密内容搬进公开文档、而它仍带着"机密"是保守的（看不见）；反过来才是漏洞， 而两者只差一个漏写的参数。
+   *
+   * <p>★ <strong>域同样要一起搬</strong>（{@code V34}，与密级逐字同一条理由）：搬过去之后它属于目标文档，
+   * 留着源文档的域就是一次<strong>归属错位</strong> —— 最坏的一种是"会话附件被搬成库文档" （凡能看那个库的人都检索得到），而它不会报错。
    */
   public void moveTo(
       UUID documentId,
       UUID kbId,
+      DocumentScopeKind scopeKind,
+      UUID scopeId,
+      UUID ownerId,
       int ordinal,
       String searchText,
       String contentHash,
       UUID updatedBy,
       ClassificationLevel classification) {
-    if (documentId == null || kbId == null) {
-      throw new IllegalArgumentException("目标文档与目标知识库不能为空");
+    if (documentId == null || scopeId == null) {
+      throw new IllegalArgumentException("目标文档与目标归属主体不能为空");
+    }
+    if (scopeKind == null) {
+      throw new IllegalArgumentException("目标归属种类不能为空（13 §11.3：三域必须显式）");
+    }
+    if (scopeKind == DocumentScopeKind.KB && kbId == null) {
+      throw new IllegalArgumentException("搬进库域的分段必须有知识库（scope_id = kb_id）");
+    }
+    if (scopeKind == DocumentScopeKind.CONVERSATION && (kbId != null || ownerId == null)) {
+      throw new IllegalArgumentException("搬进会话域的分段必须 kb_id 为空且 owner_id 非空");
     }
     if (classification == null) {
       throw new IllegalArgumentException("分段密级不能为空（搬移后它继承目标文档的密级）");
@@ -320,6 +377,9 @@ public class Segment {
     renumber(ordinal, updatedBy);
     this.documentId = documentId;
     this.kbId = kbId;
+    this.scopeKind = scopeKind;
+    this.scopeId = scopeId;
+    this.ownerId = ownerId;
     this.searchText = searchText;
     this.contentHash = contentHash;
     this.classification = classification;

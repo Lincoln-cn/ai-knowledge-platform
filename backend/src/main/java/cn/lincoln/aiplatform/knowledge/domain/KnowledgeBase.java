@@ -47,6 +47,18 @@ public class KnowledgeBase implements OwnedResource {
   @Column(name = "name", nullable = false, length = 30)
   private String name;
 
+  /**
+   * 库的<strong>种类</strong>（{@code V34}，{@code 13 §11.2}）：{@link KnowledgeBaseKind#SHARED} / {@link
+   * KnowledgeBaseKind#PERSONAL}。
+   *
+   * <p>★ 建档路径**只**产出 {@code SHARED}：建库要 {@code knowledge:manage}（{@code 13 §11.2}
+   * 的"创建者只做共用库"），而个人库是**隐式**创建的（首次上传时惰性创建、不出现在列表里）—— 那条路径随第 17 周，本批只落列（没有默认值可依赖：库层的 DEFAULT
+   * 只保证**存量行**的语义， 新写入一律显式给值）。
+   */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "kind", nullable = false, length = 16)
+  private KnowledgeBaseKind kind;
+
   /** 分类显示名（契约 {@code category: string}；分类字典随 FR-03-03 后补）。 */
   @Column(name = "category", nullable = false, length = 64)
   private String category;
@@ -196,6 +208,8 @@ public class KnowledgeBase implements OwnedResource {
       throw new IllegalArgumentException("库的密级上限必填");
     }
     this.id = id;
+    // ★ 建档路径只产出共用库（V34 / 13 §11.2）：个人库是隐式的，走的是另一条惰性创建路径
+    this.kind = KnowledgeBaseKind.SHARED;
     this.name = name.trim();
     this.category = category;
     this.description = description;

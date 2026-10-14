@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.retrieval.application.HitTestQuery;
 import cn.lincoln.aiplatform.retrieval.application.HitTestView;
@@ -266,6 +267,18 @@ class MultiHopTest {
       return List.of(KB);
     }
 
+    /**
+     * ★ 第 17 周（{@code #31}）新增的域解析 —— 本类是纯假的检索侧，只带共用库域即可。
+     *
+     * <p>★ 为什么必须**显式实现**而不是靠默认：端口的默认实现是"明确拒绝" （{@code UnsupportedOperationException}）——
+     * 一个没实现它的端口用在生产路径上会立刻红， 而不是静默退化成"只按共用库检索"（那会让会话域/个人域的内容**少看见**且不报错）。
+     */
+    @Override
+    public RetrievalScope retrievalScope(
+        Collection<UUID> requested, UUID conversationId, boolean includePersonal) {
+      return RetrievalScope.shared(List.of(KB));
+    }
+
     @Override
     public Map<UUID, UUID> embeddingModelByKb(Collection<UUID> kbIds) {
       return Map.of();
@@ -289,7 +302,7 @@ class MultiHopTest {
     }
 
     @Override
-    public Set<UUID> visibleAmong(Collection<UUID> candidateIds, Collection<UUID> kbIds) {
+    public Set<UUID> visibleAmong(Collection<UUID> candidateIds, RetrievalScope scope) {
       return new LinkedHashSet<>(candidateIds);
     }
 
