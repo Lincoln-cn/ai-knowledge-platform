@@ -205,6 +205,33 @@ public class ChatService {
    * @param sink 事件出口（断线时由它抛异常）
    */
   public void streamTurn(ChatTurnWriter.PreparedTurn turn, String question, EventSink sink) {
+    streamTurnWithTerminalGate(turn, question, sink, TerminalGate.NONE);
+  }
+
+  /**
+   * "第二个收尾入口"的把手（生产装配传 {@link TerminalGate#NONE}）。
+   *
+   * <p>★★ 它<strong>不是</strong>一个测试开关：本方法<strong>不读</strong>任何标志、<strong>不判</strong>任何模式 ——
+   * 它只是把"收尾入口"这个已经存在的东西<strong>交出去</strong>。交出去是必须的，因为"恰好一次终态"这道守卫 （{@link
+   * Run#terminalTaken}）防的是<strong>第二个调用方</strong>，而在收尾只由 {@code awaitTerminal}
+   * 调一次的今天，那个调用方在<strong>当前可达路径上不存在</strong> ⇒ 那道守卫无法被证伪。
+   *
+   * <p>★ 因此这里是"给链路开一个可控的测试出口"的落点，开的形状是<strong>依赖替换</strong>： 生产装配走的 {@link #streamTurn} 传的是 {@link
+   * TerminalGate#NONE}（什么都不做）， 而测试可以传一个"把重入那一刻接住"的实现，在<strong>同一个 {@code Run}</strong> 上再收一次尾 ——
+   * 于是被验的是生产里那道 CAS，不是测试自己模拟的一道闸。
+   *
+   * <p>★ 生产代码里<strong>没有</strong>一行 {@code if (testMode)}：本方法无论谁调，走的都是同一条收尾路径。
+   *
+   * @param turn 落库读数
+   * @param question 用户提问（进提示词）
+   * @param sink 事件出口（断线时由它抛异常）
+   * @param terminalGate 收尾入口的把手（生产传 {@link TerminalGate#NONE}）
+   */
+  void streamTurnWithTerminalGate(
+      ChatTurnWriter.PreparedTurn turn,
+      String question,
+      EventSink sink,
+      TerminalGate terminalGate) {
     long startedAtNanos = System.nanoTime();
     StreamAssembler assembler =
         new StreamAssembler(
@@ -212,6 +239,8 @@ public class ChatService {
             new StreamMeta(
                 turn.assistantMessageId().toString(), turn.traceId(), turn.modelLabel()));
     Run run = new Run(assembler, turn.assistantMessageId(), startedAtNanos, sink);
+    // ★ 收尾入口在这里交出去（它只指向同一个 Run 的收尾方法，不含任何判据）
+    terminalGate.onSecondTerminal(() -> finishTurn(turn, run, run.pathOf(), upstreamFailed(run)));
     // ★ meta 先发：前端拿到 messageId 才谈得上"生成中停止"（契约注释原文）
     assembler.begin();
     run.pump();
@@ -221,6 +250,33 @@ public class ChatService {
     awaitTerminal(turn, run);
     heartbeat.interrupt();
     model.interrupt();
+  }
+
+  /**
+   * "第二个收尾入口"的递交点。
+   *
+   * <p>★ 它存在<strong>只为一件事</strong>：让 {@link Run#terminalTaken}（"终态只取一次"）在今天就可证伪 —— 把"同一个 {@code
+   * Run} 上再收一次尾"这件事交给调用方，而生产装配给的 {@link #NONE} 什么都不做。于是"加了这个接口"不改变生产的任何一行行为。
+   *
+   * <p>★ 刻意<strong>不</strong>做成"可注入的依赖"（那要在生产构造器上多一个参数，而它没有任何生产语义）： 这里多出来的只是一个方法重载 +
+   * 一个空实现，判据一个都没改弱。
+   */
+  public interface TerminalGate {
+
+    /** 生产装配用的空实现（{@code streamTurn} 传的就是它）。 */
+    TerminalGate NONE = finishAgain -> {};
+
+    /**
+     * 收下"在同一个 {@code Run} 上再收一次尾"的入口。
+     *
+     * @param finishAgain 第二次收尾 —— ★ 它走的是生产里同一个 {@link #finishTurn}（含那道 CAS 守卫）
+     */
+    void onSecondTerminal(Runnable finishAgain);
+  }
+
+  /** 这一轮的上游是不是以失败收场（收尾判据里与路径正交的那一半）。 */
+  private static boolean upstreamFailed(Run run) {
+    return run.upstream.get() == ChatStreamPort.End.FAILED;
   }
 
   // ────────────────────────── 三条线程 ──────────────────────────
@@ -344,7 +400,7 @@ public class ChatService {
     if (run.timedOut) {
       run.upstreamStopped.set(true);
     }
-    finishTurn(turn, run, run.pathOf(), run.upstream.get() == ChatStreamPort.End.FAILED);
+    finishTurn(turn, run, run.pathOf(), upstreamFailed(run));
   }
 
   private static void sleepQuietly() {

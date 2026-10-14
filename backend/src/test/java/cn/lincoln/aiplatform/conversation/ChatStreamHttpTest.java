@@ -2,17 +2,22 @@ package cn.lincoln.aiplatform.conversation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.lincoln.aiplatform.conversation.application.ChatService;
 import cn.lincoln.aiplatform.conversation.application.ChatStopSignal;
+import cn.lincoln.aiplatform.conversation.application.ChatStreamProperties;
 import cn.lincoln.aiplatform.conversation.application.ChatStreamWriter;
+import cn.lincoln.aiplatform.conversation.application.ChatTurnStore;
+import cn.lincoln.aiplatform.conversation.application.ChatTurnWriter;
 import cn.lincoln.aiplatform.conversation.support.FakeChatStreamPorts;
+import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
+import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.Socket;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -22,6 +27,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -73,7 +81,19 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  *
  * <p>{@code stream-types.ts} 的 20s / 60s 是契约值，本类的 {@code @TestPropertySource} 把它们压到 300ms /
  * 1200ms（<strong>仍然满足</strong> {@code heartbeat × 3 ≤ idleTimeout}）： 判据是"这条关系成立"与"该发的时候真的发了"，不是"等
- * 20 秒"。 契约常量本身由 {@code ChatStreamTimingTest} 单独断言。
+ * 20 秒"。 契约常量本身由 {@code ChatStreamTimingTest} 单独断言（★ 它读的是契约文件，不是抄一遍 Java 常量）。
+ *
+ * <h3>★ 两处"分层读数"的分工（各读一半，合起来才是完整读数）</h3>
+ *
+ * <ul>
+ *   <li><strong>本类</strong>读 HTTP 层：真连接上收到的帧序列、{@code
+ *       text/event-stream}、以及<strong>重新查库</strong>读到的终态与正文；
+ *   <li><strong>{@code ChatStreamEventRecordingTest}</strong>（{@code conversation.application}
+ *       包）读事件层： {@code ChatService} 的四条路径各自产出哪几帧、顺序如何、落库终态是什么。
+ * </ul>
+ *
+ * <p>★ 为什么 {@code DISCONNECT} 那条必须由后者补位：连接是写不出去的，{@code error}/{@code done} 两帧
+ * <strong>到不了</strong>任何客户端 —— 于是"两帧的顺序与恰好一次"在真 HTTP 上原理性地读不到。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -119,6 +139,14 @@ class ChatStreamHttpTest {
   /** 开流填充注释帧的载荷前缀 —— 与 {@code ChatController} 里那个常量同源（见 {@link #isOpenPadding}）。 */
   private static final String OPEN_PADDING_MARKER = "open: ";
 
+  /**
+   * 注入写失败的那一帧：服务端写第 {@code FAIL_AFTER_FRAMES + 1} 帧时抛"连接已断开"。
+   *
+   * <p>★ 取 10：它排在 {@code meta} / {@code refs} 与<strong>若干个 {@code delta}</strong> 之后 ——
+   * 于是"断开不是清空"那条断言读到的正文<strong>非空</strong>（若在 {@code refs} 那一帧就断， 正文恒为空串，那条断言会退化成"空串也算保留"）。
+   */
+  private static final int FAIL_AFTER_FRAMES = 10;
+
   @LocalServerPort int port;
 
   @Autowired JdbcTemplate jdbc;
@@ -127,6 +155,24 @@ class ChatStreamHttpTest {
 
   /** 每个用例自己装一个假模型（见 {@link FakeChatStreamPorts}）；{@code null} = 用兜底实现。 */
   @Autowired AtomicReference<ChatStreamPort> fakeModel;
+
+  /**
+   * 写失败的注入开关：{@code > 0} 时"写满这么多帧之后断一次"。
+   *
+   * <p>★ 默认 {@code 0} = <strong>不注入</strong>：于是其余用例走的是生产那条"照收不误"的路径， 而只有 {@code clientDisconnect…}
+   * 那条用例显式打开它。反证的做法也正是"不打开它"。
+   */
+  @Autowired AtomicInteger failAfterFrames;
+
+  /** 那一次写失败真的发生了（★ "注入生效了吗"本身要可断言）。 */
+  @Autowired CountDownLatch writeFailureFired;
+
+  /**
+   * 服务端<strong>尝试</strong>写出去的事件名（含写失败那一次之后的重试）。
+   *
+   * <p>★ 它读的是"服务端试图写什么"，不是"客户端收到什么" —— {@code DISCONNECT} 那条路径上两者不同： 终态帧到不了客户端，但"服务端有没有尝试写它"是可读的。
+   */
+  @Autowired List<String> attemptedFrames;
 
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -155,6 +201,8 @@ class ChatStreamHttpTest {
     jdbc.update("delete from cv_conversation where user_id = ?::uuid", ADMIN_ID);
     jdbc.update("delete from cv_conversation where user_id = ?::uuid", SOMEBODY_ELSE);
     fakeModel.set(null);
+    // ★ 注入是"按用例"的一次性开关：不重置的话它会漏到下一条用例（而它正是"写失败⇒FAILED"的成因）
+    resetWriteFailureInjection();
   }
 
   // ────────────────────────── ① 正常路径：序列 + 落库 ──────────────────────────
@@ -356,79 +404,85 @@ class ChatStreamHttpTest {
   // ────────────────────────── ④ 连接断开（DISCONNECT）──────────────────────────
 
   /**
-   * ★★ 判据②（断开）：客户端读一半掐断连接 ⇒ 库里那条是 {@code FAILED}，且已经生成的正文不丢。
+   * ★★ 判据②（断开）：<strong>写连接失败</strong> ⇒ 库里那条是 {@code FAILED}，且已经生成的正文不丢。
    *
-   * <p>★★ <strong>为什么这条用例断言不了"error 帧 + done 帧"</strong>（如实记）：
-   * 连接是<strong>客户端主动掐的</strong>，之后服务端写什么都到不了 —— 那两帧在 wire 上不存在，
+   * <p>★★ <strong>为什么这条用例不断言"从响应流里读到 error 帧 + done 帧"</strong>（如实记）：
+   * 连接是<strong>写不出去的</strong>，之后服务端写什么都到不了客户端 —— 那两帧在 wire 上不存在，
    * 任何"从响应流里读帧"的断言都只能读到断点之前的部分。所以这一条读的是：
    *
    * <ol>
    *   <li><strong>库里的终态</strong>（{@code FAILED} + 原因）—— 那才是"服务端确实收尾了"的证据；
-   *   <li>库里的<strong>正文不是被清掉的</strong>（断开不清空）。
+   *   <li>库里的<strong>正文不是被清掉的</strong>（断开不清空）；
+   *   <li>★ 服务端<strong>确实尝试过</strong>把 {@code error} 与 {@code done} 写出去（见 {@link #attemptedFrames}
+   *       —— "写失败"只让那一次写失败，不代表服务端不再收尾）。
    * </ol>
    *
    * <p>★ 那两帧的顺序与"恰好一次"由 {@code ChatStreamEventRecordingTest} 用同一个 {@code ChatService}
    * 读（接管事件出口）：HTTP 层与事件层各读一半，合起来才是完整读数。
    *
-   * <p>★★ <strong>本批【未完成】—— 三次尝试都没能在真 HTTP 上制造出 DISCONNECT</strong>（如实记，不把断言改弱）：
+   * <h3>★★ 造法：依赖替换 —— 注入一次写失败（而不是"掐客户端连接"）</h3>
    *
-   * <ol>
-   *   <li>{@code HttpClient} + 关闭响应体：服务端下一次写照样成功（TCP 缓冲区吃得下、连接没被重置） ⇒ 库里读到 {@code GENERATED}；
-   *   <li>裸 socket + {@code setSoLinger(true, 0)} + {@code close()}（发 RST）：<strong>仍然</strong>读到
-   *       {@code GENERATED} —— 服务端那个"攒住响应头"的行为意味着它可能已经把整段写进了容器缓冲， 挂断时并没有一次真的 socket 写失败；
-   *   <li>把"掐断时刻"改成轮询数据库到 {@code GENERATING} 再掐（本条现在的写法）：同上。
-   * </ol>
+   * <p>★ 本批此前<strong>三次</strong>尝试在网络层制造 {@code DISCONNECT} 都读到 {@code GENERATED}（如实记在下面的"历史"里）。
+   * 根因不是服务端缺分支，而是<strong>缺一个注射点</strong>：客户端 RST 之后，服务端那次写很可能<strong>并没有失败</strong> （容器缓冲吞得下），于是
+   * {@code IOException} 从未发生。
    *
-   * <p>⇒ 缺的不是服务端那条分支（它由 {@code ChatStreamEventRecordingTest} 与装配器测试各自读），
-   * 而是<strong>"从客户端真的掐断一条正在写的连接"</strong>这个前置。 下一步方向：让测试能接管 {@code EventSink}（把写失败注入链路）而不是靠网络时序 ——
-   * 那需要生产代码开一个测试可注入的出口。
+   * <p>⇒ 现在改成<strong>依赖替换</strong>：{@link WriteFailingChatService} 在测试里 {@code @Primary} 覆盖 {@code
+   * ChatService}，把控制器给出的出口<strong>包一层</strong> —— 写满 {@link #FAIL_AFTER_FRAMES} 帧之后 抛一次 {@link
+   * java.io.UncheckedIOException}。于是：
    *
-   * <p>★ 保留 {@code @Disabled} 而不是删掉它、也不改成"恒真"：一个写在案上的未完成， 比一个假的绿或一个空壳都更有价值（先写下来的"没做完"）。
+   * <ul>
+   *   <li><strong>生产代码一行没改</strong>（没有 {@code if (testMode)}）：写失败这件事经由既有那条 {@code EventSink →
+   *       UncheckedIOException → DISCONNECT} 的路径发生；
+   *   <li>它落到真库上（本类是真 Testcontainers）：断言读的是 {@code select status from cv_message}。
+   * </ul>
+   *
+   * <p>★ 本批的三次网络层尝试（保留在案，免得下一个人再走一遍）：① {@code HttpClient} + 关闭响应体； ② 裸 socket + {@code SO_LINGER=0}
+   * 发 RST；③ 先轮询库到 {@code GENERATING} 再 RST —— 三次都读到 {@code GENERATED}。
+   *
+   * <p>★ <strong>本条可证伪</strong>：把注入去掉（{@code failAfterFrames} 设成够不着的大值），终态就会是 {@code
+   * GENERATED}，本用例判红（本批实测做过这一次反证）。
    */
   @Test
-  @org.junit.jupiter.api.Disabled("未完成：真 HTTP 上制造不出 DISCONNECT（见方法注释的三次尝试）")
   void clientDisconnectPersistsFailedWithoutLosingWhatWasGenerated() throws Exception {
     Fixture fixture = seedWithVisibleSegment();
-    fakeModel.set(FakeChatStreamPorts.longAnswerStreaming(120, 12));
-    String token = login();
-    String requestBody = body(fixture.appId(), null, "差旅住宿标准");
+    fakeModel.set(FakeChatStreamPorts.longAnswerStreaming(30, 6));
+    resetWriteFailureInjection();
 
+    // ★ 注入：服务端写第 FAIL_AFTER_FRAMES + 1 帧时失败（"客户端那条连接写不出去了"）
+    failAfterFrames.set(FAIL_AFTER_FRAMES);
     String messageId;
-    try (Socket socket = new Socket(java.net.InetAddress.getLoopbackAddress(), port)) {
-      socket.setTcpNoDelay(true);
-      OutputStream raw = socket.getOutputStream();
-      raw.write(
-          ("POST /api/v1/conversations/chat HTTP/1.1\r\n"
-                  + "Host: localhost:"
-                  + port
-                  + "\r\n"
-                  + "Authorization: Bearer "
-                  + token
-                  + "\r\n"
-                  + "Accept: text/event-stream\r\n"
-                  + "Content-Type: application/json\r\n"
-                  + "Content-Length: "
-                  + requestBody.getBytes(StandardCharsets.UTF_8).length
-                  + "\r\n"
-                  + "Connection: close\r\n\r\n"
-                  + requestBody)
-              .getBytes(StandardCharsets.UTF_8));
-      raw.flush();
-      // ★ 不从流里读 meta（本机实测：容器攒住响应头，整条流结束前读不到任何一帧）。
-      //   改成轮询数据库：助手消息**先于第一个字节就落库**，它出现即"服务端正在生成"。
+    Response response;
+    try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+      var running = pool.submit(() -> chat(login(), body(fixture.appId(), null, "差旅住宿标准")));
       messageId = waitForAssistantInStatus("GENERATING", 10_000);
-      // ★★ RST：SO_LINGER = 0 让 close() 发 RST 而不是 FIN（FIN 对面只会读到"流结束"）
-      socket.setSoLinger(true, 0);
+      assertThat(writeFailureFired.await(10, java.util.concurrent.TimeUnit.SECONDS))
+          .as("★★ 前置：注入的那一次写失败真的发生了（没发生的话下面每一条都在验一条没被触发的路径）")
+          .isTrue();
+      response = running.get(60, java.util.concurrent.TimeUnit.SECONDS);
     }
 
+    // ★★ 判据②：先等收尾落到库里，再读它（收尾在服务端另一条线上）
     waitForStatus(messageId, "FAILED", 10_000);
     assertThat(statusInDb(messageId))
-        .as("★★ 断开 ⇒ FAILED（不是 STOPPED：客户端断开不等于用户点了停止，见 ABORT 那条用例）")
+        .as("★★ 写失败 ⇒ FAILED（不是 GENERATED：写失败与「生成完了」必须可分）")
         .isEqualTo("FAILED");
-    assertThat(failReasonInDb(messageId)).as("★ 断开也要给出可读原因").isNotBlank();
-    assertThat(contentInDb(messageId))
-        .as("★ 断开不是清空：库里仍是断开那一刻已经生成的那一段（可以是空串，但绝不能是被清掉的）")
-        .isNotNull();
+    assertThat(failReasonInDb(messageId))
+        .as("★ 写失败这一路没有上游 detail ⇒ 库里记「连接中断」（与 error 帧同源）")
+        .isEqualTo("连接中断");
+    assertThat(contentInDb(messageId)).as("★★ 断开不是清空：库里仍是断开那一刻已经生成的那一段（不能是被清掉的）").isNotEmpty();
+    assertThat(FakeChatStreamPorts.LONG_ANSWER)
+        .as("★ 它确实是答案的前缀 —— 即断开发生在写完之前（否则这条断言在「其实写完了」时也会绿）")
+        .startsWith(contentInDb(messageId));
+
+    // ★ 服务端确实尝试过终态那两帧（它们到不了客户端，但"有没有尝试写"是可读的）
+    List<String> attempted = attemptedFrames();
+    assertThat(attempted)
+        .as("★★ 写失败之后服务端仍然收尾：error 与 done 都被尝试写出去了（顺序：error 在前）")
+        .containsSubsequence("error", "done");
+    assertThat(attempted.stream().filter("done"::equals).count())
+        .as("★ 尝试写出去的 done 恰好一条")
+        .isEqualTo(1L);
+    assertThat(response.status()).as("★ 响应码仍是 200（流已经开始了，终态在流里，不是 HTTP 错误）").isEqualTo(200);
   }
 
   /** 从已经打开的读端读到某个事件名为止（含它）。 */
@@ -627,6 +681,137 @@ class ChatStreamHttpTest {
       return null;
     }
     return new Frame(event, data == null ? "" : data, comment != null, false);
+  }
+
+  /** 服务端尝试写出去的事件名（副本；见 {@link #attemptedFrames} 那条字段的说明）。 */
+  private List<String> attemptedFrames() {
+    synchronized (attemptedFrames) {
+      return List.copyOf(attemptedFrames);
+    }
+  }
+
+  /**
+   * 关掉写失败注入并清空上一次的读数。
+   *
+   * <p>★ 每个用例开头与 {@code @AfterEach} 各调一次：注入是一个<strong>进程级</strong>开关（bean 是单例）， 漏掉重置会让下一条用例莫名其妙地读到
+   * {@code FAILED}。
+   */
+  private void resetWriteFailureInjection() {
+    failAfterFrames.set(0);
+    synchronized (attemptedFrames) {
+      attemptedFrames.clear();
+    }
+    while (writeFailureFired.getCount() > 0) {
+      writeFailureFired.countDown();
+    }
+  }
+
+  /**
+   * 把"写失败"注入链路 —— ★ 依赖替换：{@code @Primary} 覆盖生产那个 {@code ChatService}。
+   *
+   * <h3>★★ 为什么这样开测试出口（而不是在生产里加开关）</h3>
+   *
+   * <p>写失败这件事在链路上<strong>本来就有一条路径</strong>：控制器的 {@code EventSink} 把 {@code IOException} 包成 {@link
+   * UncheckedIOException}，{@code ChatService} 按它判 {@code DISCONNECT}。缺的从来不是分支，而是
+   * <strong>一个能真的触发它的出口</strong>。
+   *
+   * <p>⇒ 本类在<strong>测试层</strong>替换 {@code ChatService}：{@link WriteFailingChatService} 把控制器给出的
+   * 出口包一层，写满 N 帧之后抛一次那个异常 —— 而<strong>生产代码一行没改</strong>（没有 {@code if (testMode)}、
+   * 没有测试专用分支，判据也没改弱）。其余用例（{@code failAfterFrames == 0}）走的就是纯粹的生产路径。
+   */
+  @TestConfiguration
+  static class WriteFailureConfig {
+
+    @Bean
+    AtomicInteger failAfterFrames() {
+      return new AtomicInteger();
+    }
+
+    @Bean
+    CountDownLatch writeFailureFired() {
+      return new CountDownLatch(1);
+    }
+
+    @Bean
+    List<String> attemptedFrames() {
+      return java.util.Collections.synchronizedList(new ArrayList<>());
+    }
+
+    /**
+     * 覆盖生产的 {@code ChatService}：收尾那一侧<strong>逐字继承</strong>生产实现，只重写"进去的那条路" （把事件出口包一层）。
+     *
+     * <p>★ 依赖显式传入并原样交给 {@code super}：本类<strong>不</strong>造第二份编排， 而是站在生产那一份之上拦一次。
+     */
+    @Bean
+    @Primary
+    WriteFailingChatService writeFailingChatService(
+        ChatTurnStore turns,
+        SegmentSearchPort segmentSearch,
+        AccessScopePort accessScope,
+        ChatStreamPort chatStream,
+        ChatStopSignal stopSignal,
+        ChatStreamProperties properties,
+        AtomicInteger failAfterFrames,
+        CountDownLatch writeFailureFired,
+        List<String> attemptedFrames) {
+      return new WriteFailingChatService(
+          turns,
+          segmentSearch,
+          accessScope,
+          chatStream,
+          stopSignal,
+          properties,
+          failAfterFrames,
+          writeFailureFired,
+          attemptedFrames);
+    }
+  }
+
+  /**
+   * 只做一件事的 {@code ChatService} 子类：把事件出口包成"写满 N 帧后断一次"，并记下服务端尝试写的帧名。
+   *
+   * <p>★ 它与生产实现的差别<strong>只有</strong>下面那个重写的方法 —— 落库、线程、心跳、四路径判定全部继承。
+   */
+  static final class WriteFailingChatService extends ChatService {
+
+    private final AtomicInteger failAfterFrames;
+    private final CountDownLatch writeFailureFired;
+    private final List<String> attemptedFrames;
+
+    WriteFailingChatService(
+        ChatTurnStore turns,
+        SegmentSearchPort segmentSearch,
+        AccessScopePort accessScope,
+        ChatStreamPort chatStream,
+        ChatStopSignal stopSignal,
+        ChatStreamProperties properties,
+        AtomicInteger failAfterFrames,
+        CountDownLatch writeFailureFired,
+        List<String> attemptedFrames) {
+      super(turns, segmentSearch, accessScope, chatStream, stopSignal, properties);
+      this.failAfterFrames = failAfterFrames;
+      this.writeFailureFired = writeFailureFired;
+      this.attemptedFrames = attemptedFrames;
+    }
+
+    @Override
+    public void streamTurn(
+        ChatTurnWriter.PreparedTurn turn, String question, ChatService.EventSink sink) {
+      int failAfter = failAfterFrames.get();
+      AtomicBoolean broken = new AtomicBoolean(false);
+      super.streamTurn(
+          turn,
+          question,
+          event -> {
+            attemptedFrames.add(event.kind().wireName());
+            if (failAfter > 0 && !broken.get() && attemptedFrames.size() > failAfter) {
+              broken.set(true);
+              writeFailureFired.countDown();
+              throw ChatStreamWriter.disconnected(new IOException("测试注入：写连接失败"));
+            }
+            sink.onEvent(event);
+          });
+    }
   }
 
   private static String messageIdOf(List<Frame> frames) {
