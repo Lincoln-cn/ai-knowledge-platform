@@ -687,25 +687,29 @@ export interface RetrievalParams {
 
 ### 8.2 `SourceRef` 新增可选字段（`frontend/src/api/stream-types.ts`）
 
-```ts
-export interface SourceRef {
-  index: number          // 正文里 [N] 的编号，从 1 连续递增（不变）
-  title: string
-  docName: string
-  kbName: string
-  score: number
-  rank?: number
-  full?: string
-  segmentId?: string
-  documentId?: string
-  kbId?: string
+> ★★ **2026-10-14 裁定（第 17 周 SSE 契约测试第一段对账时发现）：这三个字段\*不\*进契约，改走埋点。**
+>
+> **发现**：本节下面那段代码块写着"本册新增（可选）"，但 `frontend/src/api/stream-types.ts` 的 `SourceRef`
+> **至今只有 10 个字段**（`index/title/docName/kbName/score/rank?/full?/segmentId?/documentId?/kbId?`）——
+> 设计册承诺了、契约里没有。实现侧按**契约**做，并用 `containsExactlyElementsOf` **双向钉死**（谁加谁红）。
+>
+> **为什么裁定"不进契约"而不是"补进去"**：
+> 1. ★ **这三个维度是"归因"信息，不是"回执"信息** —— 它们的用途是排查/调参（"这条引用凭什么被召回"），
+>    而**接口回执的每一个字段都会长出消费者期望**（前端会想展示它、文档会想解释它、测试会钉它）；
+> 2. ★ **归因维度的正确载体是埋点**（§7.1）—— 埋点不进契约、改动零成本、且已经承载同类维度
+>    （`#88` 的 `configVersion` 也走埋点）。B1/B3 不达标时的归因**靠埋点读数**，不靠引用回执字段；
+> 3. ★ 与 `#79` 同族的教训：**契约里多一个"没人用"的字段，与页面多一个"没人调"的端点是同一类病**（三缺一）。
+>
+> **⇒ 落地**：① 契约**不加**这三个字段（`SourceRef` 保持 10 字段）；② 三个维度改为**埋点维度**
+> （`subQuestion` 从 1 起 / `round` 从 1 起 / `matchedQuery`），随 §7.1 的埋点一起落；
+> ③ ★ **触发器**：若将来真要做"引用抽屉按子问题分组 / 按轮次标注"的 UI，那是**加可选字段**的一批（契约冻结期只加可选字段），
+> 本节的代码块到那时**再启用** —— 现在它是**被取代的提案**。
 
-  // ↓↓↓ 本册新增（可选）—— **判据 4「可解释」的载体**
-  /** 这条引用属于哪个子问题（从 1 起）。未分解时恒为 1 */
+```ts
+// ⚠️ 历史提案（**未进契约**，见上面那段裁定；启用条件 = 真要做归因类 UI）
+export interface SourceRefProposal {
   subQuestion?: number
-  /** 这条引用来自第几轮检索（从 1 起）。未启用多跳时恒为 1 */
   round?: number
-  /** 命中它的那条查询词（改写/扩展后）。用于"为什么召回了它"的溯源 */
   matchedQuery?: string
 }
 ```
