@@ -132,16 +132,43 @@ class ContractDriftTest {
    * 已知例外：双向都不比对的<strong>精确路径</strong>，每项必须写清理由。
    *
    * <p>★ 它不是"放过一切"的垃圾桶：只放"形态特殊 / 已被裁决不实现"的少数路径， 且每项都要能被审阅者独立验证。
+   *
+   * <p>★★ 每一条都必须写清<strong>三件事</strong>：为什么它是例外 · 它的真源在哪 · ★ 什么条件下这一条必须被删掉。 第三件是防"例外变黑洞"的那一件 —— 由
+   * {@link #例外清单不得变成黑洞()} 强制（见它的说明）。
    */
   private static final Set<String> KNOWN_EXCEPTIONS =
       Set.of(
           // ★ 后端有、api/*.ts 没有 —— 形态特殊：它被 lib/http.ts 的 401 拦截器直接调用
           //   （不走 request() 封装），所以不会出现在 api/*.ts 的 url: 字面量里。
           //   ROADMAP §3.4 裁决「补进契约文件」，在补登记之前先在这里挂账，避免规则 1 误伤。
+          //   真源 = frontend/src/lib/http.ts:60 的 `${API_PREFIX}/auth/refresh`。
+          //   删除条件：该端点被写进 api/*.ts 的 request({url}) 字面量之后（那时双向对账自己就能管住它）。
           "/auth/refresh",
+          // ★ 问答 SSE 端点（第 17 周 · 0.4.5）—— 后端有、api/** 没有，而它<strong>只能</strong>这样。
+          //
+          //   ① 为什么是例外：SSE 走不了 api/** 那条链。契约里的 request() 是 axios 封装
+          //      （lib/http.ts：拦截器 + 统一包络解包 + JSON 解析），而流式响应要的是"逐帧增量"——
+          //      axios 会把响应体整段缓冲完再交给调用方，于是"边生成边到"（逐字效果、首字延迟 B4）
+          //      全都消失，且不会报错。所以前端这一条走 fetch() 流的独立通道。
+          //
+          //   ② 真源在哪：frontend/src/lib/sse.ts:166 的 `fetch(`${API_PREFIX}/conversations/chat`,
+          // {method:'POST'})`；
+          //      它的请求体（ChatStreamOptions）与事件形状（六种事件 + 心跳注释帧）在
+          //      frontend/src/api/stream-types.ts —— ★ 形状那一半<strong>在契约里</strong>，只有 url/method
+          // 字面量不在。
+          //      后端侧的真源 = conversation/web/ChatController 的 @PostMapping("/chat")（类级
+          // /api/v1/conversations）。
+          //
+          //   ③ ★ 触发条件（防黑洞）：一旦有人把 /conversations/chat 也写进 api/** 的 request({...}) 字面量，
+          //      <strong>这一条必须从这里删掉</strong> —— 那时它两侧都有，主闸门的双向对账（含方法维度）本来就能管住它；
+          //      而留着它等于给这条路径开一个"永远不必再对账"的后门（例外吸收掉规则 1 的漂移）。
+          //      ★ 这一条由 例外清单不得变成黑洞() 强制，不靠人记得。
+          "/conversations/chat",
           // ★ mock 专用端点（ROADMAP §3.4 已裁决后端**不实现**：它们是"故意违法样例图"的载体，
           //   只服务于校验演示）。目前只在 mock/handlers/workflow.ts 里，不在 api/*.ts 契约中；
           //   若将来误入契约，靠此例外明确"后端永不实现"，而不是被未实现清单吸收成永久欠账。
+          //   删除条件：它们被写进 api/*.ts 之后（那时"后端不实现"由**已经登记在册的 /workflow 前缀**
+          //   表达，而"双向都不比对"这一条就只剩噪音了）。
           "/workflow/demo/invalid-graph",
           "/workflow/demo/valid-graph");
 
@@ -205,6 +232,22 @@ class ContractDriftTest {
           .as("未实现清单里的 %s 在契约中已无欠账（后端全实现了，或契约里根本没这个域）⇒ 请从清单删除，" + "否则它会变成没人再看的黑洞", prefix)
           .isNotEmpty();
     }
+  }
+
+  /**
+   * ★ 已知例外清单不得变成黑洞：某条例外一旦<strong>进了契约</strong>，它就不再是例外，必须从清单里删掉。
+   *
+   * <h3>★★ 为什么必须有这一条（它与 {@link #未实现清单里的域名必须仍然有欠账()} 是同一条纪律）</h3>
+   *
+   * <p>例外清单的语义是"这条路径<strong>双向都不比对</strong>"。于是它天然有一个危险方向： 一旦某条路径两侧都有了（例如有人把 SSE 端点补登记进了 {@code
+   * api/**}）， <strong>主闸门永远不会再检查它</strong> —— 后端后来把方法从 {@code POST} 改成 {@code GET}、
+   * 或把路径挪走，全都不会红。例外就成了一个"这条路径不必再对账"的后门。
+   *
+   * <p>★ 与未实现清单的"防黑洞"是同一件事的两种形态：那边防"清单里留着早已实现的"， 这边防"例外里留着早已进契约的"。两者都在维护"清单还能不能被审阅者信任"。
+   */
+  @Test
+  void 例外清单不得变成黑洞() {
+    assertExceptionsAreStillStale(contractEndpoints(), KNOWN_EXCEPTIONS);
   }
 
   // ────────────────────────── 金丝雀 ──────────────────────────
@@ -316,7 +359,47 @@ class ContractDriftTest {
         Set.of());
   }
 
+  /**
+   * 金丝雀（例外清单防黑洞）：某条路径既在例外清单里、又出现在契约里 ⇒ 必须被抓到。
+   *
+   * <p>★ 没有这一条，{@link #例外清单不得变成黑洞()} 就是一条"永远为真"的规则：真实契约当前确实不含那几条例外路径，
+   * 所以它绿得毫无信息量。这里的坏样本把"例外进了契约"这个形状<strong>造出来</strong>， 于是"规则写反了 / 集合取错了 / 断言方向颠倒了"都会让金丝雀先红。
+   */
+  @Test
+  void 金丝雀_例外清单里的端点进了契约必须被抓到() {
+    assertThatThrownBy(
+            () ->
+                assertExceptionsAreStillStale(
+                    // 契约里真的出现了 /conversations/chat（模拟"有人把它补登记进 api/**"）
+                    endpoints("POST", "/conversations/chat", "POST", "/auth/refresh"),
+                    Set.of("/conversations/chat")))
+        .as("坏样本没被拦下 ⇒ 例外清单的防黑洞规则已经失效，主代码的绿说明不了任何事")
+        .isInstanceOf(AssertionError.class);
+  }
+
   // ────────────────────────── 规则本体 ──────────────────────────
+
+  /**
+   * ★ 例外清单的"防黑洞"规则：同一规则跑两组数据 —— 真实契约必须过、坏样本必须不过。
+   *
+   * <p>★ 与 {@link #assertNoDrift} 同构（本项目所有闸门的写法）：判据必须能被<strong>一次故意的坏样本</strong>证明它还活着，
+   * 否则"主代码是绿的"说明不了任何事。
+   *
+   * @param contractEndpoints 契约端点（归一化路径 → 方法集合）
+   * @param knownExceptions 已知例外（精确路径）
+   */
+  private static void assertExceptionsAreStillStale(
+      Map<String, Set<String>> contractEndpoints, Set<String> knownExceptions) {
+    for (String path : knownExceptions) {
+      assertThat(contractEndpoints)
+          .as(
+              "已知例外 %s 已经出现在契约（frontend/src/api/**）里 ⇒ 它不再是例外："
+                  + "请把它从 KNOWN_EXCEPTIONS 删掉 —— 两侧都有时主闸门的双向对账（含方法维度）本来就能管住它，"
+                  + "而留着它等于给这条路径开一个'永远不必再对账'的后门（例外吸收掉规则 1 的漂移）",
+              path)
+          .doesNotContainKey(path);
+    }
+  }
 
   /**
    * 双向对账规则。同一规则跑两组数据：真实契约必须过、金丝雀样本必须不过。

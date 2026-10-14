@@ -9,11 +9,16 @@
  * {@code :keep-alive}（20s，60s 空闲主动结束）。流式下命中文档要从流元素 context 读， 不能等 {@code
  * ChatResponse.metadata}（{@code 11 §9}）。
  *
- * <p>依赖：{@code platform} · {@code identity} · {@code modelcatalog} · {@code retrieval} · {@code
- * assistant}。
+ * <p>依赖：{@code platform} · {@code identity} · {@code modelcatalog} · {@code retrieval}。
+ *
+ * <p>★★ {@code assistant} <strong>已从本清单撤下</strong>（第 17 周收口）：问答链路此前直接持有 {@code Assistant}/{@code
+ * AssistantRepository}，那读的是另一个 {@code CLOSED} 模块的内部类型；现在它只认识 {@code
+ * platform.assistant.AppBindingPort}（跨模块 SPI 放 platform、实现放 assistant）。
+ *
+ * <p>★ 撤下这一条本身就是<strong>收紧</strong>：将来若有人再让 {@code conversation} 直接依赖 {@code assistant}
+ * 的内部类型，{@code ModuleBoundaryTest} 会立刻判红（而不是等到"那个类型恰好不在暴露面上"才偶然红一次）。
  */
-@ApplicationModule(
-    allowedDependencies = {"platform", "identity", "modelcatalog", "retrieval", "assistant"})
+@ApplicationModule(allowedDependencies = {"platform", "identity", "modelcatalog", "retrieval"})
 package cn.lincoln.aiplatform.conversation;
 
 import org.springframework.modulith.ApplicationModule;
