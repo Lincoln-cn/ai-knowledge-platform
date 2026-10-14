@@ -7,6 +7,7 @@ import javax.crypto.spec.SecretKeySpec;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -70,8 +71,24 @@ public class SecurityConfig {
                     .requestMatchers(
                         "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/captcha")
                     .permitAll()
-                    // 免登录问答面（M4 才有实体，先留面）
+                    // 免登录问答面（公开上下文端点：GET /api/v1/public/{token}）
                     .requestMatchers("/api/v1/public/**")
+                    .permitAll()
+                    // ★★ 免登录问答**流**（第 17 周 · 0.4.5）—— 放行的是**一条方法 + 一条路径**。
+                    //
+                    //   为什么它能匿名：前端 lib/sse.ts 的免登录形状打的就是**这个** URL，
+                    //   只是把 Authorization 换成 X-Access-Credential（契约 stream-types.ts 的
+                    //   `credentialToken`）⇒ 访客没有 JWT，不给这条放行的话公开页永远 401。
+                    //
+                    //   ★ 边界（三条，都不许放宽）：
+                    //     ① 只放行 POST + 这一条路径，**不是**整个 /api/v1/conversations/**；
+                    //     ② 放行的是**认证**，授权仍在方法级：ChatController.chat 的
+                    //        `@PreAuthorize("hasAuthority('conversation:view') or #credentialToken
+                    // != null")`
+                    //        —— 两个条件缺一不可，少写一个就是"这条端点对匿名全开"；
+                    //     ③ 匿名**不**意味着范围更宽：公开面由 PublicChatService 走
+                    //        AccessScopePort#asSubject(归属人, 冻结密级)，且带登录身份时再收窄。
+                    .requestMatchers(HttpMethod.POST, "/api/v1/conversations/chat")
                     .permitAll()
                     .anyRequest()
                     .authenticated())
