@@ -1,0 +1,185 @@
+package cn.lincoln.aiplatform.conversation.application;
+
+import cn.lincoln.aiplatform.conversation.domain.stream.StreamEvent;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.UncheckedIOException;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.util.function.Supplier;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import tools.jackson.databind.ObjectMapper;
+
+/**
+ * SSE 响应体的<strong>唯一装配点</strong>（第 17 周 · 0.4.5，本批从 {@code ChatController} 抽出）。
+ *
+ * <h3>★★ 它为什么必须是一个独立的组件（抽出来的理由，不是"整理一下"）</h3>
+ *
+ * <p>公开面（免登录问答）要的是<strong>同一条链路换一个正当性入口</strong>，而"写帧"这件事 <strong>只允许有一处实现</strong>：开流填充帧、{@code
+ * IOException → UncheckedIOException} 的包装、 安全上下文跨线程传播 —— 抄第二份的话，第二份不会跟着改，而症状是"公开面的流偶尔少一帧 / 断连后库里停在
+ * GENERATING" 这类不会报错的偏差。
+ *
+ * <table>
+ *   <tr><th>保证</th><th>载体</th></tr>
+ *   <tr><td>帧的 wire 形状（{@code event:}/{@code data:}/注释帧）</td><td>{@link ChatStreamWriter}</td></tr>
+ *   <tr><td>每帧立刻 flush / 断连可观测</td><td>本类的 {@link #streamOf}</td></tr>
+ *   <tr><td>安全上下文跨线程</td><td>本类的 {@link #streamOf}（捕获 + 在异步线程上装上）</td></tr>
+ *   <tr><td>事件顺序与恰好一次 {@code done}</td><td>{@code StreamAssembler}（经 {@link ChatService}）</td></tr>
+ * </table>
+ *
+ * <h3>★★ 为什么用 {@link StreamingResponseBody} 而不是 {@code SseEmitter}</h3>
+ *
+ * <ol>
+ *   <li><strong>每帧立刻 flush</strong>（{@code Writer#flush}）—— {@code SseEmitter} 也有，但它的 {@code send}
+ *       会把事件重新拼一遍，"事件名从 {@code EventKind} 取"这条唯一性就多了一个绕行点；
+ *   <li><strong>注释帧</strong>—— {@code SseEmitter} 只发 {@code event/data}，发注释要塞一个特殊对象再自己序列化，
+ *       那等于把心跳的形状搬到控制器里；
+ *   <li><strong>写失败能抛 {@code IOException}</strong>—— 这是 {@code DISCONNECT} 唯一的观测方式； {@code
+ *       SseEmitter} 把写失败变成"完成回调"，调用方拿不到那个异常。
+ * </ol>
+ *
+ * <h3>★★ 三个 {@link Supplier} 钩子的分工（这是本类能被两处复用的全部原因）</h3>
+ *
+ * <ol>
+ *   <li>{@link AsyncTurn#authorize(Supplier)}（可选，默认"直接执行"）—— ★ 两个入口唯一的差别：
+ *       <strong>正当性怎么证明</strong>（{@code 08 §4.4.4}）。公开面在这里调 {@code AccessScopePort#asSubject}
+ *       把"链接那一份范围"装上。★ 它<strong>必须</strong>发生在异步线程上： 范围是 {@code ThreadLocal}，在请求线程上装、在异步线程上读，读到的是
+ *       {@code nobody()} （检索安静地返 0 条， 看起来像"知识库里没有"）。
+ *   <li>{@link AsyncTurn#beforeStream()} —— 正事开跑之前要做的落库（登录面 / 公开面都为空，两者都在
+ *       <strong>请求线程</strong>上先把消息落好，这样"先建立连接"与"错误仍走包络"两件事同时成立）；
+ *   <li>{@link #streamOf} 自己 —— 开流填充帧 → {@link ChatService#streamTurn} 逐帧写出去。
+ * </ol>
+ */
+@Component
+public class ChatStreamAssembler {
+
+  /**
+   * 开流时那条"填充"注释帧的载荷 —— ★ 它必须<strong>足够长</strong>，长到能让容器把 HTTP 响应头提交出去。
+   *
+   * <p>2KB 是本机实测的可用量级（Tomcat 默认的响应缓冲是 8KB，但它对"已经 flush 过一次"的响应会立刻提交头部）。 ★ 它的前 6 个字符是 {@code open:
+   * }：注释帧的内容对前端没有语义，但一个可读的前缀能让 "抓包看到的第一条注释帧"自己说明来意（而不是一串看起来像乱码的填充）。
+   */
+  private static final String OPEN_PADDING =
+      "open: " + "sse-response-header-commit-padding.".repeat(80);
+
+  private final ChatService chatService;
+  private final ChatStreamWriter writer;
+
+  public ChatStreamAssembler(ChatService chatService, ObjectMapper json) {
+    this.chatService = chatService;
+    this.writer = new ChatStreamWriter(json);
+  }
+
+  /**
+   * 一个异步入口要用到的三个钩子。
+   *
+   * @param turn 这一轮（{@code meta} 的 messageId 由它给出）
+   * @param question 用户提问（进提示词）
+   * @param beforeStream 开流填充帧之后、{@link ChatService#streamTurn} 之前要做的事（可空 = 什么都不做）
+   * @param authorize ★ 正当性钩子（见 {@link Authorizer}）；可空 = 直接执行
+   */
+  public record AsyncTurn(
+      ChatTurnWriter.PreparedTurn turn,
+      String question,
+      Runnable beforeStream,
+      Authorizer authorize) {
+
+    /**
+     * 只给"这一轮怎么跑"的入口（登录面用它）。
+     *
+     * <p>★ 默认 {@code authorize} 是<strong>空</strong>而不是"不做任何事"的一个 lambda：让"没人包装"这件事在 {@link
+     * #streamOf} 里被显式读出来，而不是藏在一个恒等函数里。
+     */
+    public AsyncTurn(ChatTurnWriter.PreparedTurn turn, String question) {
+      this(turn, question, null, null);
+    }
+  }
+
+  /**
+   * 正当性包装器 —— 收下"要跑的取数逻辑"，在<strong>正确的正当性上下文里</strong>执行它。
+   *
+   * <p>★ 定义成钩子而不是"一个 {@code ScopeFilter} 参数"：本类<strong>不</strong>认识范围、 也<strong>不</strong>许自己往
+   * {@code ThreadLocal} 里塞东西 —— 那是 {@code AccessScopeAdapter} 里 {@code asSubject} / {@code asScope}
+   * 唯一的那一处实现（{@code 08 §4.4.4} 纪律 4）。 本类只保证"这段逻辑跑在异步线程上、 安全上下文已经装上"。
+   */
+  @FunctionalInterface
+  public interface Authorizer {
+
+    /**
+     * @param body 真正要跑的取数逻辑（执行它 = 跑完这一轮问答）
+     */
+    void authorize(Runnable body);
+  }
+
+  /**
+   * 把这一轮问答装配成一个 SSE 响应体（★ 真正的工作在 MVC 的<strong>异步线程</strong>上发生）。
+   *
+   * <p>★ 顺序是刻意的：<strong>先写开流填充帧，再跑取数与生成</strong>。 填充帧的用途是"把 HTTP 响应头提交出去"，
+   * 它必须在任何可能耗时的事情之前发生，否则客户端在整条流结束之前读不到任何一帧（见 {@link #writeOpenPadding}）。
+   *
+   * @return SSE 响应体；媒体类型由调用方在 {@code ResponseEntity} 上<strong>显式</strong>给出
+   */
+  public StreamingResponseBody streamOf(AsyncTurn asyncTurn) {
+    // ★ 在**当前（请求）线程**上捕获安全上下文：MVC 的异步执行在另一条线程上，
+    //   而 SecurityContextHolder 默认是 ThreadLocal（项目没开它的策略配置）。
+    //   ★ 不传播的症状极具误导性：检索侧的密级谓词读 currentScope() ⇒ 拿不到身份 ⇒
+    //     AccessScopeAdapter 返回 nobody() ⇒ 检索安静地返 0 条（看起来像"知识库里没有"）。
+    SecurityContext context = SecurityContextHolder.getContext();
+    Runnable beforeStream = asyncTurn.beforeStream() == null ? () -> {} : asyncTurn.beforeStream();
+    Authorizer authorize = asyncTurn.authorize();
+    return outputStream -> {
+      SecurityContext previous = SecurityContextHolder.getContext();
+      SecurityContextHolder.setContext(context);
+      try (Writer out = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8)) {
+        writeOpenPadding(out);
+        Runnable turn =
+            () -> {
+              beforeStream.run();
+              chatService.streamTurn(
+                  asyncTurn.turn(), asyncTurn.question(), event -> write(event, out));
+            };
+        if (authorize == null) {
+          turn.run();
+        } else {
+          authorize.authorize(turn);
+        }
+      } finally {
+        SecurityContextHolder.setContext(previous);
+      }
+    };
+  }
+
+  /**
+   * 开流先写一条 SSE <strong>注释帧</strong>（{@code : open} + 2KB 填充）并立刻 flush（本批实测踩到过）。
+   *
+   * <p>{@code StreamingResponseBody} 的第一个字节写出去<strong>不等于</strong> HTTP 响应头已经提交：
+   * 容器会把头部攒在缓冲区里，直到它觉得"差不多了"（数据够多 / 缓冲区满 / 响应结束）。 于是客户端在<strong>整条流结束之前</strong>一个字节都读不到 —— 第一帧
+   * {@code meta} 也要等 10 秒才出现。
+   *
+   * <p>症状极具误导性：前端"生成中停止"的按钮要等 {@code meta} 拿到 {@code messageId} 才可用， 而 {@code meta} 要等整篇答案写完才到 ⇒
+   * <strong>停止按钮永远点不了</strong>， 而界面看起来只是"有点慢"。★ 本批的停止用例就是这么发现的： 客户端置停止信号的那一刻，服务端早就写完了。
+   *
+   * <p>⇒ ① 它<strong>不是</strong>业务事件（前端解析器跳过，不影响事件序列）； ② 2KB 足够让容器把响应头提交出去（本机实测：提交之后逐帧都是实时的）。
+   * 心跳同样是注释帧，所以这一步不引入任何新形状。
+   */
+  private void writeOpenPadding(Writer out) {
+    try {
+      writer.writeComment(OPEN_PADDING, out);
+    } catch (IOException failure) {
+      // ★ 第一帧就写不出去 ⇒ 与后续每一帧同一条路径（DISCONNECT 的观测点只有一个形状）
+      throw ChatStreamWriter.disconnected(failure);
+    }
+  }
+
+  /** 把一条领域事件写成 wire 帧；写失败以 {@link UncheckedIOException} 传出（{@code DISCONNECT} 的唯一依据）。 */
+  private int write(StreamEvent event, Writer out) {
+    try {
+      return writer.write(event, out);
+    } catch (IOException failure) {
+      throw ChatStreamWriter.disconnected(failure);
+    }
+  }
+}

@@ -245,8 +245,26 @@ public class ChatService {
     assembler.begin();
     run.pump();
 
+    // ★★ 检索必须在**调用线程**上跑，不能放进模型线程（第 17 周修掉的一个静默失效）
+    //
+    //   `retrieve` 读 `accessScope.currentScope().maxClassification()` 当密级上限，而
+    //   `currentScope()` 的两个来源**都是 ThreadLocal**：
+    //     · `AccessScopeAdapter.DELEGATED`（委派范围：公开面的冻结密级）
+    //     · `SecurityContextHolder`（登录面的 JWT）
+    //   把它们挪到模型线程上，两条都读不到 ⇒ `nobody()` ⇒ `ceiling == null` ⇒ `retrieve`
+    //   走"取不到身份（fail-closed）：一条都不给"那条分支 ⇒ **引用永远为空**。
+    //
+    //   ★ 症状极具误导性（本项目头号病）：模型照常回答、界面照常显示答案，**只是引用栏永远空着** ——
+    //     看起来像"这个知识库里确实没有相关内容"，而真相是"身份没跟过来"。它不会报任何错。
+    //   ★ 为什么放在 meta 之后：`meta` 是"能停止"的前提（前端要它的 messageId），别让一次检索拖慢它。
+    //   ★ 为什么放在起线程之前：装配器要求"引用先于第一个 delta"，而这里是**唯一**能读到正确范围的地方。
+    List<SourceRef> refs = retrieve(question, turn.kbIds());
+    run.assembler.references(refs);
+    run.bindRefs(refs);
+    run.pump();
+
     Thread heartbeat = startHeartbeatThread(run);
-    Thread model = startModelThread(turn, question, run);
+    Thread model = startModelThread(turn, question, refs, run);
     awaitTerminal(turn, run);
     heartbeat.interrupt();
     model.interrupt();
@@ -282,20 +300,22 @@ public class ChatService {
   // ────────────────────────── 三条线程 ──────────────────────────
 
   /**
-   * 模型线程：跑检索、把引用交给装配器，再调模型端口逐块喂给它。
+   * 模型线程：把引用交给装配器，再调模型端口逐块喂给它。
    *
    * <p>★ 它<strong>不做终态</strong>：终态只由 {@link #awaitTerminal} 出（唯一出口）。
+   *
+   * <p>★★ 它<strong>不</strong>跑检索（第 17 周改）：检索读的是 {@code accessScope.currentScope()}
+   * 的密级上限，而范围与安全上下文都是 {@code ThreadLocal} —— 在本线程（新建的模型线程）上两者皆空 ⇒ {@code nobody()} ⇒ 引用恒为空。检索由调用方在
+   * **能读到范围的那条线程** 上跑完再传进来。
+   *
+   * @param refs 这一轮的引用（★ 调用方已按正确范围检索过）
    */
-  private Thread startModelThread(ChatTurnWriter.PreparedTurn turn, String question, Run run) {
+  private Thread startModelThread(
+      ChatTurnWriter.PreparedTurn turn, String question, List<SourceRef> refs, Run run) {
     Thread thread =
         new Thread(
             () -> {
               try {
-                List<SourceRef> refs = retrieve(question, turn.kbIds());
-                // ★ 引用必须在第一个 delta 之前交给装配器（首元素缓冲的前提）
-                run.assembler.references(refs);
-                run.bindRefs(refs);
-                run.pump();
                 chatStream.stream(
                     turn.modelId(),
                     promptOf(question, refs),

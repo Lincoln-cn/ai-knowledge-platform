@@ -27,10 +27,32 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <ul>
  *   <li>链接的可用性（存在 / 已撤销 / 已过期 / 已停用）不在这里判 —— 那是 {@code PublicTokenResolver} 的事；
- *   <li>账号状态（{@code status}）<strong>不</strong>在这里判：把"账号被停用"混进"范围构造的材料"， 会让"这条链接为什么失效"多出第二个真源；链接自己的
- *       {@code enabled} / {@code revokedAt} 才是它的生命周期；
  *   <li>范围本身不在这里构造 —— 那是 {@code AccessScopeAdapter} 那一处（端口只给材料，见 record 的注释）。
  * </ul>
+ *
+ * <h3>★★ 账号被停用（{@code status != ACTIVE}）⇒ 载入不出（第 17 周补，{@code 08 §4.4.4} 末尾那条产品口径）</h3>
+ *
+ * <p>口径原文：<strong>主体账号被停用（{@code iam_user.status != ACTIVE}）⇒ 它发出的公开链接不再返回任何内容</strong>
+ * （fail-closed：本端口载入不出 ⇒ {@code AccessScopeAdapter.asSubject} 装 {@code nobody()}）。
+ * 理由：账号停用最常见的原因是<strong>离职 / 处置</strong>，若它的链接继续有效，等于"停用账号"不起作用。
+ *
+ * <p>★ 本条与上面"账号状态不在这里判"那句的关系，必须说清（否则读代码的人会以为是两处口径打架）：
+ *
+ * <table>
+ *   <tr><th>问题</th><th>谁回答</th><th>为什么</th></tr>
+ *   <tr><td>"这条<strong>链接</strong>还能用吗"（存在 / 撤销 / 过期 / 停用）</td><td>{@code PublicTokenResolver}
+ *       </td><td>链接自己的生命周期。四个码（{@code 40401}–{@code 40404}）由它一处发出，前端按码分四态文案</td></tr>
+ *   <tr><td>"行使范围的这个<strong>人</strong>还算数吗"</td><td>★ 本类（本方法）</td>
+ *       <td>身份材料的一部分：一个已停用账号的角色 / 数据范围 / 密级<strong>不该再被拿来取数</strong>。判在这里，
+ *       是因为"载入不出 ⇒ nobody()"这条 fail-closed 的落点就在本端口的返回值上</td></tr>
+ * </table>
+ *
+ * <p>★ 两者的<strong>观感差别是有意的</strong>（口径自己写下了这笔代价）：链接失效 ⇒ 访客看到四态文案之一； 账号停用 ⇒
+ * 链接<strong>打得开</strong>，但<strong>没有内容</strong>。 把后者也做成"链接已失效"需要新增第五个码与一处自动撤销 —— 那是 {@code 13 §5.3}
+ * 读法 (b)，MVP 明确不采用。
+ *
+ * <p>★ 判据的可核对形态：{@code conversation/PublicChatHttpTest} 里"停用账号 ⇒ 不出内容"那一条 （SSE 里 {@code refs}
+ * 为空、正文不含任何库内内容），以及 {@code AccessScopeAdapter.asSubject} 的 「载入不出 ⇒ {@code nobody()}」那条常驻断言。
  */
 @Component
 public class SubjectIdentityAdapter implements SubjectIdentityPort {
@@ -66,6 +88,18 @@ public class SubjectIdentityAdapter implements SubjectIdentityPort {
     if (user == null) {
       // ★ 不存在 / 已软删 ⇒ empty（**不**抛异常：公开面上"这个人没了"的正确表现是"什么都看不见"，
       //   而抛异常会把一次正常的失效变成一次 500）
+      return Optional.empty();
+    }
+    if (!user.canLogin()) {
+      // ★★ 账号被停用 / 待审核 ⇒ 载入不出（08 §4.4.4 末尾的产品口径，见类注释那条表）。
+      //   走去重入口 user.canLogin() 而不是在这里写 `status != ACTIVE`：三态（正常/停用/待审核）里
+      //   只有"正常"能做事，而那条判断在领域对象上只有一处（User.canLogin）——
+      //   将来加第四态时只会有一个改动点。
+      //   ★ 观感是有意的：访客看到的是"没有内容"而不是"链接已失效"（代价写在类注释里）。
+      log.warn(
+          "公开面的主体 {} 账号状态不是 ACTIVE（{}）⇒ 本次委派什么都看不见（fail-closed，08 §4.4.4）",
+          subjectId,
+          user.status());
       return Optional.empty();
     }
     Role role = roles.findById(user.roleId()).orElse(null);

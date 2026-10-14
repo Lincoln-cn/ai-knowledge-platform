@@ -1,16 +1,12 @@
 package cn.lincoln.aiplatform.conversation.web;
 
 import cn.lincoln.aiplatform.conversation.application.ChatService;
-import cn.lincoln.aiplatform.conversation.application.ChatStreamWriter;
+import cn.lincoln.aiplatform.conversation.application.ChatStreamAssembler;
 import cn.lincoln.aiplatform.conversation.application.ChatTurnWriter;
+import cn.lincoln.aiplatform.conversation.application.PublicChatService;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
-import java.io.IOException;
-import java.io.OutputStreamWriter;
-import java.io.UncheckedIOException;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -18,16 +14,14 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
-import tools.jackson.databind.ObjectMapper;
 
 /**
  * 问答流端点（契约：{@code frontend/src/lib/sse.ts} 的 {@code chatStreamViaSse}）。
@@ -67,34 +61,32 @@ import tools.jackson.databind.ObjectMapper;
  * <p>{@code SecurityContextHolder} 默认是 {@code ThreadLocal}：MVC 的异步执行在<strong>另一条线程</strong>上，
  * 而检索侧的密级谓词读的是 {@code currentScope()} —— 不传播的后果是 {@code AccessScopeAdapter} 返回 {@link
  * cn.lincoln.aiplatform.platform.access.ScopeFilter#nobody()} ⇒ <strong>检索安静地返 0
- * 条</strong>（看起来像"知识库里没有"，而真实原因是"身份没跟过来"）。 所以这里手工把上下文交给异步线程（项目没开 {@code SecurityContextHolder}
- * 的策略配置， 而"默认的东西"正是最容易在换容器 / 换线程模型时静默失效的那一层）。
+ * 条</strong>（看起来像"知识库里没有"，而真实原因是"身份没跟过来"）。 ★ 那件事的载体现在是 {@link ChatStreamAssembler}
+ * ——本类与公开面共用它，于是"传播"只有一处实现（本批从本类抽出去的，见那个类的注释）。
  *
  * <h3>★ 权限点</h3>
  *
  * <p>{@code conversation:view}（{@code Permissions.CONVERSATION_VIEW}）：问答是"用会话"这件事， 它自带 {@code
  * conversation:share} / {@code conversation:manage} 两档更细的权限，与它们同族。 ★ 写端点<strong>必须</strong>带
  * {@code @PreAuthorize}：{@code AuthorizationDeclarationTest} 构建期检查，漏一个就红。
+ *
+ * <p>★★ 免登录面的同一个端点（{@code POST /api/v1/public/{token}/messages}）在 {@code PublicChatController}：
+ * 它<strong>不</strong>是本类的特例分支，而是"同一台引擎换一个正当性入口"（{@code 08 §4.4.4}）， 两者共用 {@link
+ * ChatStreamAssembler} 与 {@link ChatService}。
  */
 @RestController
 @RequestMapping("/api/v1/conversations")
 public class ChatController {
 
-  /**
-   * 开流时那条"填充"注释帧的载荷 —— ★ 它必须<strong>足够长</strong>，长到能让容器把 HTTP 响应头提交出去。
-   *
-   * <p>2KB 是本机实测的可用量级（Tomcat 默认的响应缓冲是 8KB，但它对"已经 flush 过一次"的响应会立刻提交头部）。 ★ 它的前 6 个字符是 {@code open:
-   * }：注释帧的内容对前端没有语义，但一个可读的前缀能让 "抓包看到的第一条注释帧"自己说明来意（而不是一串看起来像乱码的填充）。
-   */
-  private static final String OPEN_PADDING =
-      "open: " + "sse-response-header-commit-padding.".repeat(80);
-
   private final ChatService chatService;
-  private final ChatStreamWriter writer;
+  private final ChatStreamAssembler assembler;
+  private final PublicChatService publicChat;
 
-  public ChatController(ChatService chatService, ObjectMapper json) {
+  public ChatController(
+      ChatService chatService, ChatStreamAssembler assembler, PublicChatService publicChat) {
     this.chatService = chatService;
-    this.writer = new ChatStreamWriter(json);
+    this.assembler = assembler;
+    this.publicChat = publicChat;
   }
 
   /**
@@ -116,9 +108,36 @@ public class ChatController {
    * 形状写在一处，而不是靠注解的隐式协商）。
    */
   @PostMapping("/chat")
-  @PreAuthorize("hasAuthority('conversation:view')")
+  // ★★ 两个正当性入口（08 §4.4.4）—— 一条端点、两种身份：
+  //   · 登录面：带 JWT 且令牌里有 conversation:view ⇒ 照旧（现状一个字节没改）
+  //   · 公开面：**没有 JWT、但有 X-Access-Credential**（前端 lib/sse.ts:161 的免登录形状）
+  //     ⇒ 走 PublicChatService：PublicTokenResolver 解析 + asSubject(归属人, 冻结值)
+  //   ★ 为什么要写成 `or`：这条端点必须在过滤器链上 permitAll（匿名访客没有 JWT），
+  //     于是**授权只剩方法级这一处** —— 它必须同时表达两种正当性，少写半个条件就是"对匿名全开"。
+  @PreAuthorize("hasAuthority('conversation:view') or #credentialToken != null")
   public ResponseEntity<StreamingResponseBody> chat(
-      @RequestBody ChatStreamBody body, @AuthenticationPrincipal Jwt jwt) {
+      @RequestBody ChatStreamBody body,
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestHeader(value = "X-Access-Credential", required = false) String credentialToken) {
+    // ★ 凭据头优先 —— ★ 这一条**刻意**与"有 JWT 走登录面"的字面顺序不同，理由如下：
+    //   ① 带链接的请求是"关于这条链接"的请求，而 asSubject 保证生效范围只会**收窄**、绝不放大
+    //      （密级取两者更低的、其余分量照抄调用者）⇒ 这条分支不可能让它看到更多；
+    //   ② 反过来（JWT 优先）的代价是"登录用户拿同一条链接不放大"这条判据**在 HTTP 层读不到**；
+    //   ③ 前端两条通道互斥（lib/sse.ts 只设其中之一）⇒ 这个分支在生产上不影响任何人。
+    if (credentialToken != null) {
+      UUID requesterId = jwt == null ? null : subjectOf(jwt);
+      PublicChatService.PreparedTurn turn =
+          publicChat.startTurn(credentialToken, body.question(), requesterId);
+      return ResponseEntity.ok()
+          .contentType(MediaType.TEXT_EVENT_STREAM)
+          .body(
+              assembler.streamOf(
+                  new ChatStreamAssembler.AsyncTurn(
+                      turn.prepared(),
+                      body.question().strip(),
+                      null,
+                      publicChat.streamTurn(turn))));
+    }
     UUID userId = subjectOf(jwt);
     // ★ 落库与归属判定走服务层（看不见 ⇒ 404）；它在写流之前发生，所以错误还能用包络返回
     ChatTurnWriter.PreparedTurn prepared =
@@ -127,7 +146,9 @@ public class ChatController {
                 body.appId(), body.conversationId(), body.question(), userId));
     return ResponseEntity.ok()
         .contentType(MediaType.TEXT_EVENT_STREAM)
-        .body(streamOf(prepared, body.question().strip()));
+        .body(
+            assembler.streamOf(
+                new ChatStreamAssembler.AsyncTurn(prepared, body.question().strip())));
   }
 
   /**
@@ -162,53 +183,19 @@ public class ChatController {
           case NOT_FOUND -> HttpStatus.NOT_FOUND;
           case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
           case FORBIDDEN -> HttpStatus.FORBIDDEN;
+          // ★ 公开面四态码（40401–40404）：它们的数值不与 HTTP 状态重合（40001–59999），全局处理器
+          //   会落进 default 给 400 —— 而这四态与 NOT_FOUND 是同一族"这条链接打不开"。
+          //   ★ 判据取包络里的 code，不取 HTTP 状态（前端 utils/public-gate.ts 就是这么分支的）。
+          case PUBLIC_TOKEN_UNKNOWN,
+              PUBLIC_TOKEN_REVOKED,
+              PUBLIC_TOKEN_EXPIRED,
+              PUBLIC_TOKEN_DISABLED ->
+              HttpStatus.NOT_FOUND;
           default -> HttpStatus.BAD_REQUEST;
         };
     return ResponseEntity.status(status)
         .contentType(MediaType.APPLICATION_JSON)
         .body(ApiResponse.from(cause));
-  }
-
-  /**
-   * 真正写帧的那一段（跑在 MVC 的异步线程上）。
-   *
-   * <p>★ 三件事：① 装上安全上下文（见类注释）；② 把每一个事件写成帧并 flush； ③ 让 {@code IOException} 以 {@link
-   * UncheckedIOException} 传出去 —— 那是 {@code ChatService} 判定 {@code DISCONNECT} 的唯一依据。
-   *
-   * <h3>★★ 为什么开头要写一条"填充"注释帧并立刻 flush（本批实测踩到过）</h3>
-   *
-   * <p>{@code StreamingResponseBody} 的第一个字节写出去<strong>不等于</strong> HTTP 响应头已经提交：
-   * 容器会把头部攒在缓冲区里，直到它觉得"差不多了"（数据够多 / 缓冲区满 / 响应结束）。 于是客户端在<strong>整条流结束之前</strong>一个字节都读不到 —— 第一帧
-   * {@code meta} 也要等 10 秒才出现。
-   *
-   * <p>症状极具误导性：前端"生成中停止"的按钮要等 {@code meta} 拿到 {@code messageId} 才可用， 而 {@code meta} 要等整篇答案写完才到 ⇒
-   * <strong>停止按钮永远点不了</strong>， 而界面看起来只是"有点慢"。★ 本批的停止用例就是这么发现的： 客户端置停止信号的那一刻，服务端早就写完了。
-   *
-   * <p>⇒ 开流先写一条 SSE <strong>注释帧</strong>（{@code : open} + 2KB 填充）再 flush： ①
-   * 它<strong>不是</strong>业务事件（前端解析器跳过，不影响事件序列）； ② 2KB 足够让容器把响应头提交出去（本机实测：提交之后逐帧都是实时的）。
-   * 心跳同样是注释帧，所以这一步不引入任何新形状。
-   */
-  private StreamingResponseBody streamOf(ChatTurnWriter.PreparedTurn prepared, String question) {
-    SecurityContext context = SecurityContextHolder.getContext();
-    return outputStream -> {
-      SecurityContext previous = SecurityContextHolder.getContext();
-      SecurityContextHolder.setContext(context);
-      try (Writer out = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8)) {
-        writer.writeComment(OPEN_PADDING, out);
-        chatService.streamTurn(
-            prepared,
-            question,
-            event -> {
-              try {
-                writer.write(event, out);
-              } catch (IOException failure) {
-                throw ChatStreamWriter.disconnected(failure);
-              }
-            });
-      } finally {
-        SecurityContextHolder.setContext(previous);
-      }
-    };
   }
 
   /**
