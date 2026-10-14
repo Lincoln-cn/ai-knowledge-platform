@@ -1,0 +1,306 @@
+package cn.lincoln.aiplatform.conversation.application;
+
+import cn.lincoln.aiplatform.conversation.domain.Conversation;
+import cn.lincoln.aiplatform.conversation.domain.ConversationRepository;
+import cn.lincoln.aiplatform.conversation.domain.Message;
+import cn.lincoln.aiplatform.conversation.domain.MessageRepository;
+import cn.lincoln.aiplatform.conversation.domain.SourceRef;
+import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
+import cn.lincoln.aiplatform.conversation.domain.stream.StreamTerminationPath;
+import cn.lincoln.aiplatform.platform.assistant.AppBindingPort;
+import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.model.ChatPort;
+import java.util.List;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * 问答轮的<strong>落库侧</strong>（第 17 周 · 0.4.5）—— 取会话 / 建消息 / 周期性 flush / 终态回写。
+ *
+ * <h3>★★ 为什么把这些动作单独一个类（而不是塞进编排里）</h3>
+ *
+ * <p>编排那条链跑在<strong>另一条线程</strong>上（SSE 的 {@code StreamingResponseBody} 由 MVC 的异步支持执行），
+ * 而落库动作用的是<strong>短事务</strong>：每一笔（建消息 / flush / 终态）各自一个事务。两者混在一个类里，
+ * 最自然的写法会变成"整条链一个长事务"——而那正是要避免的：一个事务跨越"等模型吐字"意味着 <strong>数据库连接被占住整个生成过程</strong>（可以几十秒），且中途的 flush
+ * 对外不可见 （另一个连接读不到未提交的行 —— 而 {@code A2 刷新不重置} 正是靠"生成中途能读到"成立的）。
+ *
+ * <h3>★★ 状态机与累积都<strong>不在这里</strong></h3>
+ *
+ * <p>三态转移（{@code complete}/{@code stop}/{@code fail}）、文本累积（{@code appendText}）、 引用快照（{@code
+ * bindReferences}）全部在 {@link Message} 上，本类只调用它们 —— 所以"状态机在哪儿生效"只有一个答案（{@code MessageRepository}
+ * 的类注释把这条写死了）。
+ *
+ * <h3>★ 归属判定：看不见 ⇒ 404（不是 403）</h3>
+ *
+ * <p>会话是私人资源（{@code 07 §3.1}：默认 {@code PRIVATE} + {@code ownerId}）。
+ * "别人的会话"与"不存在的会话"返回<strong>同一个</strong> 404：403 等于告诉对方"这个 id 是存在的"， 那是一次免费的探测（{@code 07 §3.3} 纪律 2
+ * / {@code 08 §4.4.3} 纪律 2）。
+ *
+ * <h3>★★ 应用那一侧<strong>不再</strong>直接依赖 {@code assistant}：走平台端口</h3>
+ *
+ * <p>本类此前持有 {@code Assistant}/{@code AssistantRepository}，于是 {@code conversation} 越界读了另一个 {@code
+ * CLOSED} 模块的<strong>内部类型</strong>（{@code ModuleBoundaryTest} 判红： {@code Module 'conversation'
+ * depends on non-exposed type assistant.domain.AssistantRepository}）。
+ *
+ * <p>★ 处置按本项目既定口径（<strong>跨模块 SPI 放 {@code platform}、实现放提供方模块</strong>）： 这里只认识 {@link
+ * AppBindingPort} 给的那三个事实（{@code appId} / {@code modelId} / {@code kbIds}），
+ * 而"应用是否存在、我看不看得见"的判定留在实现（{@code AppBindingAdapter}）里 —— 于是本类<strong>没有机会</strong>
+ * 忘记那一次可见性检查，也不再认识应用实体的任何字段。
+ */
+@Service
+public class ChatTurnWriter implements ChatTurnStore {
+
+  private static final Logger log = LoggerFactory.getLogger(ChatTurnWriter.class);
+
+  /** 新建会话的初始标题（{@code 02 §2.6}：默认取首个问题前若干字）。 */
+  private static final int TITLE_MAX_CHARS = 30;
+
+  private final ConversationRepository conversations;
+  private final MessageRepository messages;
+  private final AppBindingPort appBindings;
+  private final ChatPort chatModels;
+
+  public ChatTurnWriter(
+      ConversationRepository conversations,
+      MessageRepository messages,
+      AppBindingPort appBindings,
+      ChatPort chatModels) {
+    this.conversations = conversations;
+    this.messages = messages;
+    this.appBindings = appBindings;
+    this.chatModels = chatModels;
+  }
+
+  /**
+   * 一轮问答的落库侧读数（编排用它填 {@code meta} 并驱动检索）。
+   *
+   * @param conversationId 会话 id（本轮消息都挂它）
+   * @param assistantMessageId 新助手消息 id（{@code meta} 与 {@code done} 里的那个值）
+   * @param userMessageId 新用户消息 id
+   * @param traceId 链路追踪 id（本次问答一个；用户报障时靠它把界面与日志对上）
+   * @param modelLabel 写进 {@code meta.model} 的模型标识（模型目录的 id 串）
+   * @param modelId 真正要调用的模型 id（取不到模型时 {@link #prepare} 已经抛，不会是 {@code null}）
+   * @param kbIds 本轮要检索的知识库（= 应用绑定的那些；应用没绑或通用问答 ⇒ 空 ⇒ 检索侧按"全部可见"处理）
+   */
+  public record PreparedTurn(
+      UUID conversationId,
+      UUID assistantMessageId,
+      UUID userMessageId,
+      String traceId,
+      String modelLabel,
+      UUID modelId,
+      List<UUID> kbIds) {}
+
+  /**
+   * 建这一轮的两条消息（用户消息 + {@code GENERATING} 助手消息）并把模型定下来。
+   *
+   * <p>★ 顺序是刻意的：<strong>先落库再开流</strong>。这样"刷新页面看到生成中"（{@code A2}）在第一个字节发出去之前就成立； 反过来（先发 {@code
+   * meta} 再落库）会出现一个窗口：界面已经显示生成中、库里却什么都没有。
+   *
+   * <p>★ 模型取不到时<strong>抛 400</strong>而不是静默降级：没有对话模型就没有回答， "答一句我没法回答"是编的。
+   *
+   * @param conversationId 会话 id；{@code null} = 新建会话（{@code appId} 决定它属于哪个应用）
+   * @param appId 应用 id；{@code null} = 通用问答
+   * @param question 用户提问（非空 —— 空提问由控制器与领域各自挡一道）
+   * @param userId 当前登录用户（归属判定用；★ 从 JWT 的 {@code sub} 取，不接受请求体传）
+   * @return 这一轮的落库读数
+   * @throws BusinessException 会话不存在 / 不属于当前用户（{@code 404}）· 应用不存在或不可见（{@code 404}）· 没有可用对话模型（{@code
+   *     400}）
+   */
+  @Override
+  @Transactional
+  public PreparedTurn prepare(UUID conversationId, UUID appId, String question, UUID userId) {
+    AppBindingPort.AppBinding app = appId == null ? null : requireVisibleApp(appId);
+    Conversation conversation = resolveOrCreate(conversationId, app, question, userId);
+
+    // ★ 用户消息先落库：它是"这轮问了什么"的唯一痕迹（助手消息失败/停止都不影响它）
+    Message userMessage = Message.user(UUID.randomUUID(), conversation.id(), question);
+    messages.save(userMessage);
+
+    UUID modelId = pickModelId(app);
+    Message assistant = new Message(UUID.randomUUID(), conversation.id(), "");
+    assistant.bindModel(modelId);
+    messages.save(assistant);
+
+    String traceId = "trace_" + assistant.id();
+    log.info(
+        "会话 {} 开始一轮问答：助手消息 {}（trace {}，模型 {}，应用 {})",
+        conversation.id(),
+        assistant.id(),
+        traceId,
+        modelId,
+        app == null ? "通用问答" : app.appId());
+
+    return new PreparedTurn(
+        conversation.id(),
+        assistant.id(),
+        userMessage.id(),
+        traceId,
+        modelId.toString(),
+        modelId,
+        app == null ? List.of() : app.kbIds());
+  }
+
+  /**
+   * 周期性 flush（{@code 03 §1.4}：500ms 或 200 字先到者）—— 把<strong>还没落库的那一段</strong>追加进去。
+   *
+   * <p>★ 增量而不是整段覆盖：正文的唯一写路径是 {@link Message#appendText}（只追加）。 每次 flush 由编排方传入"已经落过库的字符数"，这里只追加尾巴 ——
+   * 于是"库里那一行"在生成过程中 一直等于用户此刻看到的那一段（{@code A2} 的字面要求）。
+   *
+   * @param messageId 助手消息 id
+   * @param fullTextSoFar 到目前为止的完整正文（装配器累加出来的）
+   * @param persistedChars 上一次 flush 时已经落库的字符数
+   * @return 本次 flush 之后已落库的字符数
+   */
+  @Override
+  @Transactional
+  public int flush(UUID messageId, String fullTextSoFar, int persistedChars) {
+    if (fullTextSoFar.length() <= persistedChars) {
+      return persistedChars;
+    }
+    Message message = requireMessage(messageId);
+    // ★ 只追加尾巴：整段重放会绕过"只追加"这条口径（而它正是"停止保留内容"的前提）
+    message.appendText(fullTextSoFar.substring(persistedChars));
+    messages.save(message);
+    return fullTextSoFar.length();
+  }
+
+  /**
+   * 终态回写（★ 四路径 → 三态，状态取自 {@link StreamTerminationPath#status()} 那一处映射）。
+   *
+   * <p>★ 三件事的顺序有讲究，而且都必须发生：
+   *
+   * <ol>
+   *   <li>补齐还没落库的正文（停止 / 失败路径上<strong>已生成的内容必须保留</strong>：{@code A5} / MSG-I2）；
+   *   <li>绑引用快照（{@code A4} 的载体；★ 只在真的拿到过引用时绑 —— {@code null} 与 {@code []} 是两件事）；
+   *   <li>走终态入口（{@code complete} / {@code stop} / {@code fail}）并计 tokens。
+   * </ol>
+   *
+   * <p>★ 失败路径的 {reason, hint} 与 {@code error} 帧<strong>同源</strong>：都由装配器给出 （{@code StreamAssembler}
+   * 按路径合成），这里原样收下 —— 若这里再编一句，就会出现 "界面上看到的失败原因"与"库里记的原因"不一致，而它不会报错。
+   *
+   * @param messageId 助手消息 id
+   * @param path 终止路径（四选一）
+   * @param fullTextSoFar 完整正文
+   * @param persistedChars 已落库字符数
+   * @param references 引用快照；{@code null} = 这一批引用从来没到过
+   * @param usage 本次问答全部模型调用的用量（可空 = 一次都没报）
+   * @param durationMs 从开始生成到收尾的耗时
+   * @param failReason 失败原因（{@link StreamTerminationPath#errorPrecedesDone()} 为真时必填）
+   * @param failHint 失败后的下一步提示（可空）
+   */
+  @Override
+  @Transactional
+  public void finish(
+      UUID messageId,
+      StreamTerminationPath path,
+      String fullTextSoFar,
+      int persistedChars,
+      List<SourceRef> references,
+      TokenUsage usage,
+      long durationMs,
+      String failReason,
+      String failHint) {
+    Message message = requireMessage(messageId);
+    if (fullTextSoFar.length() > persistedChars) {
+      message.appendText(fullTextSoFar.substring(persistedChars));
+    }
+    message.bindReferences(references);
+    switch (path) {
+      case COMPLETE -> message.complete(usage, durationMs);
+      case ABORT -> message.stop(durationMs);
+      case DISCONNECT, IDLE_TIMEOUT -> message.fail(failReason, failHint, durationMs);
+    }
+    messages.save(message);
+    log.info(
+        "会话 {} 的助手消息 {} 收尾：{}（正文 {} 字，耗时 {}ms）",
+        message.conversationId(),
+        messageId,
+        path.status(),
+        message.content().length(),
+        durationMs);
+  }
+
+  // ────────────────────────── 内部 ──────────────────────────
+
+  /**
+   * 取会话或新建一个。
+   *
+   * <p>★ 传了 {@code conversationId} 就<strong>不再看 appId</strong>：会话的应用在创建时定下来，
+   * 让它跟着每一轮请求体漂移会让"这个会话属于哪个应用"变成两处口径（而它决定了检索范围）。
+   */
+  private Conversation resolveOrCreate(
+      UUID conversationId, AppBindingPort.AppBinding app, String question, UUID userId) {
+    if (conversationId != null) {
+      Conversation found =
+          conversations
+              .findById(conversationId)
+              .orElseThrow(() -> notFound("会话不存在", "它可能已被删除，请刷新会话列表后重试"));
+      if (!found.userId().equals(userId)) {
+        // ★ 与"不存在"同一个出口、同一段文案：403 会告诉对方"这个会话是存在的"
+        throw notFound("会话不存在", "它可能已被删除，或者不在你的可见范围内");
+      }
+      return found;
+    }
+    Conversation created =
+        new Conversation(
+            UUID.randomUUID(), userId, app == null ? null : app.appId(), titleOf(question));
+    return conversations.save(created);
+  }
+
+  /**
+   * 应用存在且可见（看不见 ⇒ 404，与 {@code AccessCredentialService} 同一条口径）。
+   *
+   * <p>★ 判定<strong>不在这里</strong>：{@link AppBindingPort#findVisibleById} 把"不存在"与"看不见"
+   * 合并成同一个空返回（实现里走的是 {@code AccessScopePort#canSee} 那一处 —— {@code 07 §3.3}："归属 + 可见性 +
+   * 共享"三条的合成，在这里抄一遍就少一处会跟着改的地方）。
+   *
+   * <p>★ 所以这里只有一条出口、一段文案：能分辨两者就等于确认了这个 id 的存在性。
+   */
+  private AppBindingPort.AppBinding requireVisibleApp(UUID appId) {
+    return appBindings
+        .findVisibleById(appId)
+        .orElseThrow(() -> notFound("应用不存在", "它可能已被删除，或者不在你的可见范围内"));
+  }
+
+  /**
+   * 这一轮用哪个模型：应用绑了就用它，否则挑一个可用的。
+   *
+   * <p>★ 挑不到 ⇒ 400（不是 500、也不是静默用别的模型）：没有对话模型时这一轮<strong>无法产生答案</strong>。
+   *
+   * <p>★ 应用的 {@code modelId} 可以是 {@code null}（{@code WORKFLOW} 类型没有应用级模型）—— 那不是"出错"，
+   * 而是"另挑一个可用的"这条正常降级输入（与 {@code ChatPort#pickChatModel} 的语义同源）。
+   */
+  private UUID pickModelId(AppBindingPort.AppBinding app) {
+    if (app != null && app.modelId() != null) {
+      return app.modelId();
+    }
+    return chatModels
+        .pickChatModel()
+        .orElseThrow(
+            () ->
+                new BusinessException(
+                    ErrorCode.BAD_REQUEST, "当前没有可用的对话模型", "请在「模型管理」里加载一个对话模型后重试"));
+  }
+
+  /** 取消息；★ 不存在 ⇒ {@code IllegalStateException}（这是链路内部的破洞，不是调用方的输入问题）。 */
+  private Message requireMessage(UUID messageId) {
+    return messages
+        .findById(messageId)
+        .orElseThrow(() -> new IllegalStateException("助手消息 " + messageId + " 不见了 —— 本轮开始时它刚被落库"));
+  }
+
+  /** 标题 = 问题前若干字（{@code 02 §2.6}）；截断而不是报错，因为标题不是用户输入的一部分。 */
+  private static String titleOf(String question) {
+    String trimmed = question == null ? "" : question.strip();
+    return trimmed.length() <= TITLE_MAX_CHARS ? trimmed : trimmed.substring(0, TITLE_MAX_CHARS);
+  }
+
+  private static BusinessException notFound(String message, String hint) {
+    return new BusinessException(ErrorCode.NOT_FOUND, message, hint);
+  }
+}
