@@ -527,8 +527,20 @@ public class ChatService {
    *   <li>{@link SegmentSearchPort#fullText} —— 全文那一路。<strong>本批不走向量路</strong>： 它要先把问题向量化（{@code
    *       EmbeddingPort}），而"引用先到"这条保证与向量无关 —— 三模式融合是检索策略那一侧的事（{@code
    *       RetrievalService}），不在这条链上再实现一遍；
-   *   <li>{@link SegmentSearchPort#load} —— 展示信息（标题 / 正文 / 文档名 / 库名）。
+   *   <li>{@link SegmentSearchPort#load} —— 展示信息（标题 / 正文 / 文档名 / 库名 / 文档 id / 库 id）。
    * </ol>
+   *
+   * <h3>★★ 引用载荷里的结构性事实（第 17 周补：深链与"来源类型"）</h3>
+   *
+   * <p>{@code documentId} 与 {@code kbId} 直接取自 {@link SegmentSearchPort.Card} 的**真实值**，
+   * 本层<strong>不做任何兜底或填充</strong>：
+   *
+   * <ul>
+   *   <li>{@code documentId} 为空 ⇒ 前端拼不出深链的 query ⇒ 点击<strong>静默 no-op</strong>（{@code #91}
+   *       的根因就是装配点恒传 {@code null}）；
+   *   <li>{@code kbId} 是前端"知识库引用 vs 会话域引用"那条<strong>结构性</strong>判据的判据本身（缺失 = 会话域）。 ★ 给所有引用都补一个值 =
+   *       把那条判据变成恒真 —— 而那正是它要防的误判。会话域本来就是 {@code null}。
+   * </ul>
    *
    * <h3>★★ 失败粒度：两类失败必须分开（{@code #123}）</h3>
    *
@@ -541,12 +553,18 @@ public class ChatService {
    *       <td>{@link SourceRef} 的必填字段（{@code title} / {@code docName} / {@code kbName}）为空 ——
    *           ★ {@code kb_segment.title} 在库里<strong>可空</strong>（{@code V15}），所以这条路径今天就会被真实数据触发，
    *           不是理论问题</td>
-   *       <td>★ <strong>跳过这一条 + 计数</strong>，其余照常返回；一条 WARN 带计数（不许静默）</td></tr>
+   *       <td>★ 先做<strong>读取侧兜底</strong>（{@code title} 为空 ⇒ 用 {@code docName} 顶上，见 {@link #titleOf}）；
+   *           兜不住（{@code docName} / {@code kbName} 也为空）⇒ <strong>跳过这一条 + 计数</strong>，其余照常返回；
+   *           一条 WARN 带计数（不许静默）</td></tr>
    * </table>
    *
    * <p>★ 这两类曾经被<strong>一个 try/catch 包住整批</strong>（{@code #123} 的现象）：于是一条 {@code title} 为空的分段把
    * <strong>整轮</strong>引用降级成"零命中"，而"零命中"在本项目是<strong>合法状态</strong>（库里真的没有）⇒ 两者在读数上不可区分。
    * 那是"作用域选错了"，不是"实现写错了"。
+   *
+   * <p>★★ <strong>"范围为空"这条早退的两种形状必须能分开读</strong>（第 17 周补的留痕）：它此前一条日志都没有，
+   * 于是"用户确实没有任何可见库"（合法）与"身份没跟过来（{@code nobody()}）"（异常，第 17 周那个 P0）在读数上完全一样。
+   * 现在两条都留痕，且<strong>文案可分</strong>；★ 返回值仍然一个字没改。
    *
    * <p>★ 两类失败都<strong>不让这一轮打死</strong>（{@code 10 §3.2.3}"部分成功是常态"），但都不静默：整批那条记一条 warn 并把引用给成空列表
    * （{@code references(List.of())} 是明确的"零命中"，与"检索没跑"在装配器里是两件事），逐条那条记一条带计数的 warn。
@@ -562,7 +580,23 @@ public class ChatService {
       // ── 第一类失败的作用域：身份 / 范围 / 命中集合（★ 取不到 ⇒ 整批 fail-closed，一条都不给）──
       List<UUID> kbIds = segmentSearch.visibleKbIds(requestedKbIds);
       if (kbIds.isEmpty()) {
-        // 委派范围为空 ⇒ 可见性无法判定：整批 fail-closed（与下面 ceiling 那条同属第一类）
+        // ★★ 这一条早退的留痕是补上的（第 17 周）：它此前**一条日志都没有** ⇒ 与"库里确实没有相关内容"
+        //   在读数上完全一样。而它的成因有两个形状，处置相同、含义完全不同：
+        //     ① **范围为空** —— 用户确实没有任何可见库（合法状态）；
+        //     ② **身份为空** —— currentScope() 是 nobody()（me 为 null）⇒ 可见性**无法判定**（异常形状）。
+        //   ★ 第 17 周那个 P0（检索跑在模型线程上 ⇒ 范围 ThreadLocal 读不到 ⇒ 引用永远为空）走的就是 ②。
+        //   ★ 返回值语义一个字都没改：两种形状都是"整批 fail-closed、一条引用都不给"。
+        UUID me = accessScope.currentScope().me();
+        if (me == null) {
+          log.warn(
+              "检索范围为空，且当前范围取不到身份（currentScope() 是 nobody()，me 为 null）："
+                  + "本轮按 fail-closed 零引用继续 —— 这是异常形状，不是『用户确实没有可见库』");
+        } else {
+          log.info(
+              "本轮没有可检索的知识库范围（用户 {} 没有任何可见库，请求范围 {} 条）⇒ 零引用继续（合法状态）",
+              me,
+              requestedKbIds == null ? 0 : requestedKbIds.size());
+        }
         return List.of();
       }
       ClassificationLevel ceiling = accessScope.currentScope().maxClassification();
@@ -621,15 +655,20 @@ public class ChatService {
         refs.add(
             new SourceRef(
                 index,
-                card.title(),
+                titleOf(card),
                 card.docName(),
                 card.kbName(),
                 scoreById.getOrDefault(id, 0.0),
                 index,
                 card.content(),
                 id.toString(),
-                null,
-                null));
+                // ★★ 深链的两个分量取自**真实的行**（第 17 周修掉 #91 的根因）：此前这里恒传 null ⇒
+                //   前端 Index.vue 拼不出 query ⇒ 点了没反应也不报错（静默 no-op）。
+                card.documentId() == null ? null : card.documentId().toString(),
+                // ★★ kbId 是前端"知识库引用 vs 会话域引用"那条结构性判据的判据本身（缺失 = 会话域）：
+                //   此前恒传 null ⇒ 真栈上连库引用也没有它 ⇒ 每条库引用都被读成「来源：」。
+                //   ★ 会话域那一行本来就是 null（没有库行），所以这里**不许**兜底 —— 兜了就抹掉了判据。
+                card.kbId() == null ? null : card.kbId().toString()));
         // ★ 只有真的装成了一条才占号（见方法注释末条）
         index++;
       } catch (RuntimeException singleItemFailed) {
@@ -646,6 +685,26 @@ public class ChatService {
     }
     log.info("本轮检索到 {} 条引用（上限 {}）", refs.size(), RETRIEVAL_LIMIT);
     return refs;
+  }
+
+  /**
+   * 引用的标题：★ <strong>读取侧兜底</strong> —— {@code title} 为空时用 {@code docName} 顶上（第 17 周）。
+   *
+   * <h3>为什么不许把"title 为空"直接当成坏数据摘掉</h3>
+   *
+   * <p>库里 {@code kb_segment.title} <strong>可空</strong>（{@code V15} 就是这么建的，那是有意的数据侧自由：
+   * 无标题的段落是真实存在的），而契约 {@link SourceRef} 把 {@code title} 当<strong>必填</strong>。 两者的差额此前靠"逐条跳过"兜着 ⇒
+   * 一条**本可以展示**的引用被丢掉：用户看到的是"库里有、引用栏没有"， 而它与"库里确实没有相关内容"在读数上不可区分（本项目头号病）。
+   *
+   * <p>★ 兜底值取 {@code docName} 而不是占位串（"无标题" / 分段 id）：文档名是**库里真实存在的字**， 界面上的「知识库：制度库 / 文档名」那一行本来就显示它
+   * —— 用占位串会让引用栏出现一个用户在任何地方都找不到的名字。
+   *
+   * <p>★ 第二层防御仍在：{@code docName} 也为空时这里返回的仍是空 ⇒ {@link SourceRef} 的构造器抛， 逐条那条 {@code catch}
+   * 把它摘掉并计数（见 {@link #retrieve} 的失败粒度表）。
+   */
+  private static String titleOf(SegmentSearchPort.Card card) {
+    String title = card.title();
+    return title == null || title.isBlank() ? card.docName() : title;
   }
 
   /**

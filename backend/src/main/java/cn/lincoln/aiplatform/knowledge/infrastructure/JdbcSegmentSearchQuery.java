@@ -472,9 +472,14 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
       return List.of();
     }
     List<UUID> ids = List.copyOf(segmentIds);
+    // ★★ 深链与"来源类型"的那两列（第 17 周补）：{@code s.document_id} 与 {@code k.id}。
+    //   查询语义/谓词一个字没改 —— 要的两列本来就在已 join 的两张表上（{@code kb_segment.document_id}
+    //   是它的列、{@code kb_knowledge_base} 早就左连接着），所以这是"把已有的事实读出来"，
+    //   不是"新增一条产品决定"。★ 会话域那一行天然是 NULL（左连接下没有库行）—— 那正是前端的判据。
     String sql =
         "select s.id as segment_id, s.title as title, s.content as content,"
-            + " d.name as doc_name, k.name as kb_name"
+            + " s.document_id as document_id, d.name as doc_name,"
+            + " k.id as kb_id, k.name as kb_name"
             + JOINS
             + " where s.id in ("
             + placeholders(ids.size())
@@ -484,6 +489,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     // ★★ 会话域的行**没有库名**（左连接下 k 为 NULL ⇒ kbName 为 NULL），而契约的 SourceRef 要求
     //   kbName 非空（引用组装那一批会直接报"引用的必填字段 kbName 不能为空"）。★ 给它什么显示口径
     //   是一个**产品决定**（会话标题？"会话附件"？），本批不替产品定 —— 登记在交付报告的"待裁"里。
+    //   ★ 而同一行的 {@code kb_id} 是 NULL 这件事**不是待裁**：它是前端结构性判据的那一半（见 Card）。
     return jdbc.query(
         sql,
         (rs, i) ->
@@ -492,7 +498,9 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
                 rs.getString("title"),
                 rs.getString("content"),
                 rs.getString("doc_name"),
-                rs.getString("kb_name")),
+                rs.getString("kb_name"),
+                rs.getObject("document_id", UUID.class),
+                rs.getObject("kb_id", UUID.class)),
         ids.toArray());
   }
 

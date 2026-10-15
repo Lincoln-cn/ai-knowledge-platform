@@ -41,7 +41,13 @@ class MultiHopJudgeTest {
   private static final List<SegmentSearchPort.Card> HITS =
       List.of(
           new SegmentSearchPort.Card(
-              S1, "X 公司合同（编号 A-102）", "本合同编号 A-102，违约金上限见附件三。", "合同", "法务库"));
+              S1,
+              "X 公司合同（编号 A-102）",
+              "本合同编号 A-102，违约金上限见附件三。",
+              "合同",
+              "法务库",
+              UUID.randomUUID(),
+              UUID.randomUUID()));
 
   private final RecordingChat chat = new RecordingChat();
   private final MultiHopService service = new MultiHopService(chat);

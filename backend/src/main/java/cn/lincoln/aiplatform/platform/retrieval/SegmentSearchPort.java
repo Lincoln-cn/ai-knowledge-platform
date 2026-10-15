@@ -21,7 +21,7 @@ import java.util.UUID;
  *   <li>{@link #vectorSearch} —— 向量那一路（★ 密级与三级过滤与 {@code <=>} 同一条 SQL）；
  *   <li>{@link #visibleAmong} —— ★ <strong>两路同谓词</strong>：向量路拿回来的候选也要过同一套判定 （{@code 13}
  *       五道闸门之二：只给一路加条件就是"看着能过滤"的静默漏洞）；
- *   <li>{@link #load} —— 命中的展示信息（标题/正文/文档名/库名），组装引用用。
+ *   <li>{@link #load} —— 命中的展示信息（标题/正文/文档名/库名 + 文档 id/库 id），组装引用用。
  * </ol>
  *
  * <p>★ <strong>不在这个端口里的东西</strong>：排序融合（那是 {@code retrieval} 的策略）、 以及"表叫什么、表形是什么"（那是 {@code
@@ -223,9 +223,36 @@ public interface SegmentSearchPort {
   /**
    * 命中分段的展示信息。
    *
-   * @param title 分段标题（{@code 12 §3.4} 推出来的那个）
+   * <h3>★★ 后两个分量是"引用卡片按来源类型切换标签"与深链的载体（第 17 周补）</h3>
+   *
+   * <p>它们此前**不在这个类型里**，于是装配点只能给每一条引用都传 {@code null}（{@code ChatService#retrieve}）—— 后果有两条，而且都不报错：
+   *
+   * <ol>
+   *   <li>{@code kbId} 缺失是前端"知识库引用 vs 会话域引用"那条<strong>结构性</strong>判据的判据本身 （缺失 = 会话域）⇒
+   *       生产链路上<strong>连知识库引用也没有它</strong>，界面上每条库引用都被读成「来源：」；
+   *   <li>{@code documentId} 缺失让引用深链拼不出 query ⇒ 点了没反应（{@code #91}）。
+   * </ol>
+   *
+   * <p>★ 所以这两个分量必须来自**真实的行**（{@code JdbcSegmentSearchQuery} 的 select），不许在装配点补默认值： "给所有引用都补一个
+   * kbId"会把上面那条判据变成恒真，而它正是前端的判据。★ 这里写 {@code JdbcSegmentSearchQuery} 而不是链接：本端口在 {@code
+   * platform}，那个类在 {@code knowledge} —— 跨模块的 javadoc 链接解析不了。
+   *
+   * @param title 分段标题（{@code 12 §3.4} 推出来的那个）。★ 库里这一列**可空**（{@code V15}）⇒ 读取侧用 {@code docName}
+   *     兜底（{@code ChatService#retrieve}）
    * @param content ★ 是 {@code content} 而不是 {@code search_text} —— 引用展示必须给干净原文 （{@code 12 §4.2} 纪律
    *     1）
+   * @param documentId 所属文档 id（{@code kb_document.id}）—— 引用深链的载体。★ 两个域都有值：会话临时的分段虽然没有库行，
+   *     但**有文档行**（{@code 13 §11.2}）
+   * @param kbId 所属知识库 id（{@code kb_knowledge_base.id}）。★★ <strong>会话临时的分段这里是 {@code null}</strong>
+   *     —— 那一行的 {@code kb_id} 为空（{@code 13 §11.2}），左连接下拿不到库行。这正是前端那条结构性判据（缺失 =
+   *     会话域）成立的地方，所以<strong>绝不许</strong>兜底成空串、占位串或"最近的一个库"。
    */
-  record Card(UUID segmentId, String title, String content, String docName, String kbName) {}
+  record Card(
+      UUID segmentId,
+      String title,
+      String content,
+      String docName,
+      String kbName,
+      UUID documentId,
+      UUID kbId) {}
 }

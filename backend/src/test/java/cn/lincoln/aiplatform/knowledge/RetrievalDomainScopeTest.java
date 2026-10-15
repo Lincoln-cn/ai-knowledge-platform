@@ -9,7 +9,9 @@ import cn.lincoln.aiplatform.platform.vector.VectorIndexPort;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import cn.lincoln.aiplatform.support.SecurityContexts;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -194,6 +196,53 @@ class RetrievalDomainScopeTest {
         .doesNotContain(segPersonal, segConvB, segConvOther);
   }
 
+  // ────────────────────────── 引用素材的标识：两个域各一条 ──────────────────────────
+
+  /**
+   * ★★ {@code load} 给出的标识必须来自<strong>真实的行</strong>：知识库域带 {@code kbId}、会话域<strong>必为 {@code
+   * null}</strong>，而两个域都带 {@code documentId}。
+   *
+   * <h3>为什么这一条落在端口这一层、而且是同一条用例里两个方向</h3>
+   *
+   * <p>这两个分量的来源就在这一条 SQL 的两个列上（{@code s.document_id} 与左连接的 {@code k.id}）：
+   *
+   * <ul>
+   *   <li>{@code kbId} 是前端「引用卡片按来源类型切换标签」那条<strong>结构性</strong>判据的判据本身 （缺失 = 会话域）⇒
+   *       生产链路上连库引用也必须带上它，而**会话域必须是 null**。两个方向一起钉， 才挡得住"给所有引用都补一个 kbId"那种改法（它会让库引用那条断言照样绿、而判据被毁掉）；
+   *   <li>{@code documentId} 为空的症状是引用深链<strong>静默 no-op</strong>（{@code #91}）：前端拼出的 query
+   *       是空的，点了没反应也不报错。★ 会话域的文档行同样存在 ⇒ 它也该有值。
+   * </ul>
+   *
+   * <p>★ 只钉一端不够：装配点恒传 {@code null}（本批修掉的那一处）会让"会话域为空"这条**恒绿**；
+   * 而只钉另一端则挡不住"全都补上"。所以两个方向在<strong>同一条用例</strong>里。
+   */
+  @Test
+  void loadCarriesTheKbAndDocumentIdentityOnBothDomains() {
+    Map<UUID, SegmentSearchPort.Card> cards =
+        segmentSearch.load(List.of(segShared, segConvA)).stream()
+            .collect(Collectors.toMap(SegmentSearchPort.Card::segmentId, card -> card));
+
+    assertThat(cards)
+        .as("★ 前置：两条分段（库域 + 会话域）都必须取得到展示信息，否则下面两条断言在空跑")
+        .containsOnlyKeys(segShared, segConvA);
+    SegmentSearchPort.Card kbCard = cards.get(segShared);
+    SegmentSearchPort.Card conversationCard = cards.get(segConvA);
+
+    assertThat(kbCard.kbId())
+        .as("★★ 判据 1：知识库域的引用素材必须带真实库 id —— 缺了它，前端会把每条库引用读成「来源：」" + "（那正是 kbId 恒 null 时的症状）")
+        .isEqualTo(sharedKb);
+    assertThat(kbCard.documentId())
+        .as("★★ 判据 3（#91）：documentId 必须来自那一行，否则引用深链拼不出 query（静默 no-op）")
+        .isEqualTo(documentIdOf(segShared));
+
+    assertThat(conversationCard.kbId())
+        .as("★★ 判据 2：会话临时的分段没有库行 ⇒ 这里**必须**是 null（不许兜底成空串、占位串或『最近的一个库』）——" + "它正是前端那条结构性判据成立的地方")
+        .isNull();
+    assertThat(conversationCard.documentId())
+        .as("★ 会话域的文档行是真实存在的 ⇒ 它的深链载体同样要有值（会话附件也点得开）")
+        .isEqualTo(documentIdOf(segConvA));
+  }
+
   // ────────────────────────── 域的解析只有一处 ──────────────────────────
 
   /**
@@ -286,6 +335,12 @@ class RetrievalDomainScopeTest {
   }
 
   // ────────────────────────── 夹具（纯 SQL） ──────────────────────────
+
+  /** 某条分段所属的文档 id（★ 从库里读，不由夹具自己记一个期望值 —— 那会让读数变成自证）。 */
+  private UUID documentIdOf(UUID segmentId) {
+    return jdbc.queryForObject(
+        "select document_id from kb_segment where id = ?", UUID.class, segmentId);
+  }
 
   /** 一次真检索（全文那一路就是 {@code RetrievalService.retrieveOneQuery} 消费的那一条）。 */
   private List<UUID> hitIds(RetrievalScope scope) {

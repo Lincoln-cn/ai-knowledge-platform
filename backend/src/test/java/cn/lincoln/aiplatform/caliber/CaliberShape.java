@@ -47,7 +47,16 @@ final class CaliberShape {
   /** 迁移文件的 classpath 根（{@code backend/src/main/resources/db/migration}）。 */
   private static final String MIGRATION_ROOT = "db/migration";
 
-  /** 迁移文件的相对路径（相对 {@link #MIGRATION_ROOT}）。 */
+  /**
+   * 迁移文件的相对路径（相对 {@link #MIGRATION_ROOT}）。
+   *
+   * <p>★★ <strong>这份清单必须"跑完全部迁移"逐字齐全</strong> —— 它的每一处遗漏都会让 {@link #tableColumns} 与 {@link
+   * #migrationText()} <strong>静默少读一段</strong>，而那两条断言写的是"全量清单相等"：
+   * 少读的那一段会让基线<strong>看起来是对的</strong>（两侧同时变旧）。{@code V34} 就是这么被发现的 —— 它给 {@code kb_document}
+   * 加了四列，而本清单停在 {@code V30}，于是"列清单"那条断言在 实体字段那条已经红了的情况下<strong>照样绿</strong>（假绿）。
+   *
+   * <p>★ 判据：<strong>新增任何迁移文件时，这里必须同步</strong>；一个新增的迁移若在这份清单之外， 它建出来的形状对所有口径断言<strong>不存在</strong>。
+   */
   private static final List<String> MIGRATION_FILES =
       List.of(
           "platform/V1__platform_baseline.sql",
@@ -78,8 +87,12 @@ final class CaliberShape {
           "knowledge/V22__knowledge_segment_classification.sql",
           "knowledge/V23__knowledge_base_query_understanding.sql",
           "knowledge/V27__knowledge_document_org.sql",
+          "knowledge/V31__knowledge_qa_pair.sql",
+          "knowledge/V34__knowledge_document_scope.sql",
           "assistant/V29__assistant_app.sql",
-          "assistant/V30__assistant_access_credential.sql");
+          "assistant/V30__assistant_access_credential.sql",
+          "conversation/V32__conversation.sql",
+          "conversation/V33__conversation_message.sql");
 
   private CaliberShape() {}
 

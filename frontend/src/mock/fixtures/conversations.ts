@@ -90,8 +90,21 @@ export const segmentFullTexts: Record<string, string> = {
  * 给 SourceRef 补上 full / 跳转所需 id。
  * id 必须与 `fixtures/knowledge.ts` 里真实存在的分段/文档/知识库对齐，
  * 否则「跳转到分段管理」会落到不存在的分段上（跨模块 id 对不上时界面只会静默显示空）。
+ *
+ * ★ 会话域例外（**一个字段都不补**）：夹具已经显式给出 `segmentId` + `documentId`、
+ *   却**没有** `kbId` 的那一条，代表「没有知识库行」的会话临时附件 ——
+ *   补上 `kbId` 它就会在界面上冒充知识库引用（标签写成「知识库：」、
+ *   还会多出一个指向不存在知识库的「跳转到分段管理」）。
+ *
+ * ★ 判据与 `RefPanel.vue` 的 `isConversationDomain` 同口径（缺 kbId = 会话域），
+ *   这里多做一次"分段/文档已定死"的确认，是为了不把"只是没写全的库引用"卷进来。
+ * ★ 后面 `chat-store` 存盘时会再过一次这里，所以本函数必须**幂等**：
+ *   库引用的 `kbId` 一旦补上就不会再被改，会话域那条永远走早退。
  */
 export function enrichRef(ref: SourceRef): SourceRef {
+  if (ref.segmentId && ref.documentId && !ref.kbId) {
+    return { ...ref }
+  }
   const key = ref.index === 1 ? 'seg3' : 'seg4'
   return {
     ...ref,

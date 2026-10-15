@@ -135,7 +135,13 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
   }
 
   // 通用问答不带知识库，因此不带引用 —— 与页面上的「不显示引用来源区块」一致
-  const payload = options.appId ? cannedAnswer.withRefs : cannedAnswer.withoutRefs
+  // ★ 问句带了会话临时附件 ⇒ 引用里会出现「没有知识库行」的那一种（会话域），
+  //   走独立语料，让「来源：」这一支在 mock 下可被看见、可被断言。
+  const payload = options.attachmentIds?.length
+    ? cannedAnswer.withAttachmentRef
+    : options.appId
+      ? cannedAnswer.withRefs
+      : cannedAnswer.withoutRefs
   const thinkingMs = options.thinking ? 1200 : 0
   const shouldFail = options.question.includes(FAIL_TRIGGER)
   const shouldEmpty = options.question.includes(EMPTY_TRIGGER)

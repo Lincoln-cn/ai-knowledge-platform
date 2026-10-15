@@ -8,6 +8,7 @@ import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
+import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.lang.ArchRule;
 import org.junit.jupiter.api.Test;
 
@@ -19,12 +20,32 @@ import org.junit.jupiter.api.Test;
  *
  * <p>★ 与 {@code ModuleBoundaryTest} / {@code AuthorizationDeclarationTest} 同构：
  * 同一条规则跑两个命名空间，应用代码必须过、坏样本必须被抓到。
+ *
+ * <h3>★ 扫描范围：只扫<strong>主代码</strong>（{@code src/main/java}）</h3>
+ *
+ * <p>{@code DO_NOT_INCLUDE_TESTS} 按类文件位置排除<strong>测试输出目录</strong>（Maven = {@code
+ * target/test-classes}；Gradle / IntelliJ 的对应目录 ArchUnit 自己也认），于是这份导入剩下的就是 {@code src/main/java}
+ * 编译出来的那一份。
+ *
+ * <p>★ 为什么必须限定：本闸门守的是<strong>生产代码</strong>的架构约束（"可见性判定只有一处实现"，{@code 07 §3.3}）， 而测试里的 {@code
+ * AccessScopePort} 替身（{@code ChatStreamEventRecordingTest$AnonymousScope} / {@code
+ * $KnownScope}）是<strong>刻意</strong>造的窄替身 —— 它们要构造"身份取不到"、"范围为空"这类<strong>边界输入</strong>，
+ * 本来就该住在被测类旁边，而不是为了迁就一条针对主代码的规则搬进 {@code identity}。 ★ 让替身去迁就规则，会把规则的真实意图
+ * （<strong>判定属于身份域</strong>）悄悄换成"测试替身也必须住在身份域"—— 那既没有意义，又会诱使后来者把替身塞进 {@code
+ * identity}，而闸门从此对这些替身再也说不出任何话。
+ *
+ * <p>★★ 排除测试<strong>不等于放宽</strong>：主代码里再出现一个 {@code AccessScopePort} 的实现（非 {@code platform}、
+ * 非接口）照样会红。★ 反过来也要说清：下面那条金丝雀证明的是<strong>规则</strong>还能红，它<strong>证明不了</strong> "这份收窄后的导入还看得见主代码"——
+ * 后者只能由一次<strong>临时</strong>的主代码违规来证明（在生产代码里加一个实现 ⇒ 必须红 ⇒ 还原），因为常驻的坏样本只能住在测试源集里，而它恰好被这次的收窄排除在外。
  */
 class AccessScopeUniquenessTest {
 
   private static final JavaClasses APP_CLASSES =
-      new ClassFileImporter().importPackages("cn.lincoln.aiplatform");
+      new ClassFileImporter()
+          .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+          .importPackages("cn.lincoln.aiplatform");
 
+  /** ★ 金丝雀住在测试源集里，所以它单独导入、<strong>不</strong>套用上面的收窄。 */
   private static final JavaClasses CANARY_CLASSES =
       new ClassFileImporter().importPackages("canaryfixture");
 

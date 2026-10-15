@@ -4,6 +4,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
+import com.tngtech.archunit.core.importer.ImportOption;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -25,11 +26,30 @@ import org.junit.jupiter.api.Test;
  *
  * <p>{@code jackson-databind 2.x} 仍然在依赖树里（Tika 用它），本闸门**管不到也不打算管**它 —— 它管的是<strong>我们的代码</strong>不再
  * import 2.x 的 {@code databind} / {@code core}。 换言之：jar 在不在不是判据，我们的 import 在不在才是。
+ *
+ * <h3>★ 扫描范围：只扫<strong>主代码</strong>（{@code src/main/java}）</h3>
+ *
+ * <p>{@code DO_NOT_INCLUDE_TESTS} 按类文件位置排除<strong>测试输出目录</strong>（Maven = {@code
+ * target/test-classes}），于是这份导入剩下的就是 {@code src/main/java} 编译出来的那一份。
+ *
+ * <p>★ 为什么必须限定：上一条"我们的代码"指的是<strong>生产代码</strong>；测试里有一处是<strong>刻意</strong>用 Jackson 2 的 —— {@code
+ * conversation/domain/SourceRefSerializationTest}。写 {@code jsonb} 列的是 <strong>Hibernate 的 {@code
+ * JsonFormatMapper}</strong>，而 Hibernate 7.4.5 用的是 Jackson 2 ⇒ 那个类必须用<strong>与落库同一台</strong>的序列化器，
+ * "真库里读到什么"这个读数才成立（见该类 javadoc）。 把测试源集也扫进来，等于要求它为了迁就闸门换一台序列化器 ——
+ * 那会让我们测的<strong>不再</strong>是真正落库的那台： 闸门绿了，读数假了。
+ *
+ * <p>★★ 排除测试<strong>不等于放宽</strong>：主代码里再 import 一次 {@code com.fasterxml.jackson.databind..} /
+ * {@code core..} 照样会红（做法：在 {@code conversation/domain} 下临时加一个类 import 它 ⇒ 必须红 ⇒ 还原）。 ★
+ * 本类<strong>没有</strong>常驻金丝雀，而且做不到：坏样本只能住在<strong>测试</strong>源集里，而这次收窄恰好把它排除在外 ⇒
+ * 任何常驻金丝雀都<strong>证明不了</strong>"收窄后还看得见主代码"。那条只能由一次<strong>临时</strong>的主代码违规来证明。
  */
 class JacksonUnificationTest {
 
+  /** ★ 只导入主代码；测试源集里的序列化器（如 {@code SourceRefSerializationTest}）不属本闸门范围。 */
   private static final JavaClasses APP_CLASSES =
-      new ClassFileImporter().importPackages("cn.lincoln.aiplatform");
+      new ClassFileImporter()
+          .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+          .importPackages("cn.lincoln.aiplatform");
 
   /**
    * 我们的代码不得再出现 Jackson 2 的 {@code databind} / {@code core} —— 中文的"为什么"写在类 javadoc 里 （标识符一律
