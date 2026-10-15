@@ -28,7 +28,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -100,6 +102,13 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  *
  * <p>★ 为什么 {@code DISCONNECT} 那条必须由后者补位：连接是写不出去的，{@code error}/{@code done} 两帧
  * <strong>到不了</strong>任何客户端 —— 于是"两帧的顺序与恰好一次"在真 HTTP 上原理性地读不到。
+ *
+ * <h3>★ 会话的两列冗余计数（{@code #108} 的第二件）也在这里读</h3>
+ *
+ * <p>{@link #conversationCountersFollowThePersistedMessagesAcrossTwoRounds()}：一轮问答之后 {@code
+ * cv_conversation} 的 {@code message_count} / {@code last_message_at} 必须与 {@code cv_message} 里
+ * 真实的那几条相符，且<strong>第二轮接着库里的数累加</strong>（{@code A2 刷新不重置}）。 ★ 放在这个类里的理由：它是**唯一**跑真 HTTP
+ * 问答链的地方，而那两个数正是"消息落库那一处"写出来的。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -736,6 +745,61 @@ class ChatStreamHttpTest {
         .isZero();
   }
 
+  // ────────────────────────── ⑥ 会话计数器（#108）──────────────────────────
+
+  /**
+   * ★★ <strong>{@code cv_conversation} 的两列冗余计数在真链路上被写对了</strong>（Issue {@code #108} 的第二件）。
+   *
+   * <p>这两列（{@code message_count} / {@code last_message_at}）在本批之前<strong>没有任何写入方</strong> —— 恒
+   * {@code 0} / {@code NULL}，而列表页读的就是它们。判据三面：
+   *
+   * <ol>
+   *   <li><strong>与实际相符</strong>：一轮问答 = 两条消息 ⇒ {@code message_count} 必须等于 {@code select count(*)
+   *       from cv_message}；{@code last_message_at} 必须等于 {@code max(cv_message.created_at)}（★
+   *       相等判定<strong>放在库里做</strong>，见 {@link #lastMessageAtMatchesTheLastMessage}）；
+   *   <li>★ <strong>刷新不重置</strong>（{@code ROADMAP §二} 的 {@code A2}）：第 2 轮是<strong>一次新的 HTTP 请求 +
+   *       新事务</strong>，它必须<strong>接着库里那个数</strong>累加（2 → 4），而不是从头再来；
+   *       并且这两个值是从<strong>库</strong>里读出来的（{@code JdbcTemplate}，不经过任何内存对象）；
+   *   <li><strong>水位只前移</strong>：第 2 轮的 {@code last_message_at} 必须晚于第 1 轮的值。
+   * </ol>
+   *
+   * <p>★ <strong>本条可证伪</strong>：把 {@code ChatTurnWriter#prepare} 里那两次 {@code recordMessage}
+   * 去掉（写入点消失）⇒ 第 1 轮就是 {@code 0 ≠ 2}，立刻红。
+   */
+  @Test
+  void conversationCountersFollowThePersistedMessagesAcrossTwoRounds() throws Exception {
+    Fixture fixture = seedWithVisibleSegment();
+    fakeModel.set(FakeChatStreamPorts.streaming(0, 20, 12));
+    UUID conversationId = seedConversation(ADMIN_ID, "计数器夹具会话");
+    String token = login();
+
+    chat(token, body(fixture.appId(), conversationId, "差旅住宿标准"));
+    assertCountersMatchTheMessages(conversationId, 2, "第 1 轮之后");
+    Instant firstRoundLastMessageAt = lastMessageAtInDb(conversationId);
+
+    // ★ 第二轮是一次全新的 HTTP 请求（新事务、会话从库里重新读）—— 若那两个数是内存里的，这一步会露馅
+    chat(token, body(fixture.appId(), conversationId, "差旅住宿标准"));
+    assertCountersMatchTheMessages(conversationId, 4, "第 2 轮之后（★ 刷新不重置：接着库里的数累加）");
+
+    assertThat(lastMessageAtInDb(conversationId))
+        .as("★ 水位只前移：第二轮的 last_message_at 必须晚于第一轮的（它是 max，不是'最近一次写'）")
+        .isAfter(firstRoundLastMessageAt);
+  }
+
+  /** 两列冗余计数与真实消息相符（条数 + 最后一条的时间）。 */
+  private void assertCountersMatchTheMessages(UUID conversationId, int expectedCount, String when) {
+    assertThat(messageCountInDb(conversationId))
+        .as("★★ %s：message_count 必须等于这个会话里真实的消息条数 —— 它此前恒 0（列在、没人写），" + "而列表页读的就是它", when)
+        .isEqualTo(actualMessageCountInDb(conversationId))
+        .isEqualTo(expectedCount);
+    assertThat(lastMessageAtMatchesTheLastMessage(conversationId))
+        .as(
+            "★★ %s：last_message_at 必须等于 max(cv_message.created_at)（判定在库里做：两个时钟各写一个时间的话，"
+                + "这里会差几百微秒 —— 断言看得出来、界面看不出来）",
+            when)
+        .isTrue();
+  }
+
   // ────────────────────────── HTTP 与解析工具 ──────────────────────────
 
   /** 一帧 SSE。{@code openPadding} 区分"开流填充帧"与"心跳"——两者都是注释帧，但语义不同。 */
@@ -1040,6 +1104,47 @@ class ChatStreamHttpTest {
         "select reference_snapshot::text from cv_message where id = ?::uuid",
         String.class,
         messageId);
+  }
+
+  // ── 会话那两列冗余计数的读数（#108）──
+
+  private Integer messageCountInDb(UUID conversationId) {
+    return jdbc.queryForObject(
+        "select message_count from cv_conversation where id = ?::uuid",
+        Integer.class,
+        conversationId);
+  }
+
+  private Integer actualMessageCountInDb(UUID conversationId) {
+    return jdbc.queryForObject(
+        "select count(*) from cv_message where conversation_id = ?::uuid",
+        Integer.class,
+        conversationId);
+  }
+
+  /**
+   * {@code last_message_at} 是不是"最后一条消息的时间"—— ★ <strong>相等判定交给库</strong>。
+   *
+   * <p>★ 为什么不在 Java 里比 {@code Instant}：消息的 {@code created_at} 由 Hibernate 的
+   * {@code @CreationTimestamp} 在 JVM 里生成，而读数与它的比较一旦跨了格式（{@code timestamptz} 的微秒精度 /
+   * 时区呈现）就会变成"差一点点"——那种断言会在实现<strong>正确</strong>时也红，于是被人加一个容差，而容差又把
+   * "写成了第一条消息的时间"这种真错一起放过。库里那一句是<strong>同一个类型的等值比较</strong>，没有这些出口。
+   */
+  private Boolean lastMessageAtMatchesTheLastMessage(UUID conversationId) {
+    return jdbc.queryForObject(
+        "select c.last_message_at = (select max(m.created_at) from cv_message m"
+            + " where m.conversation_id = c.id) from cv_conversation c where c.id = ?::uuid",
+        Boolean.class,
+        conversationId);
+  }
+
+  private Instant lastMessageAtInDb(UUID conversationId) {
+    Timestamp value =
+        jdbc.queryForObject(
+            "select last_message_at from cv_conversation where id = ?::uuid",
+            Timestamp.class,
+            conversationId);
+    return value == null ? null : value.toInstant();
   }
 
   /**

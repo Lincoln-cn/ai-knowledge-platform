@@ -31,10 +31,16 @@ import java.util.UUID;
  *
  * <pre>
  *   message.bindReferences(refs);
- *   conversation.raiseClassification(maxOf(refs));   // 领域层：只升不降
- *   messages.save(message);                          // ← 两次 save 必须在同一个事务里
- *   conversations.save(conversation);
+ *   messages.save(message);
+ *   conversations.raiseClassification(conversationId, maxOf(refs));  // ★ 库侧一条 UPDATE，不读实体
  * </pre>
+ *
+ * <p>★★ <strong>2026-10-16 订正（{@code #108}）</strong>：上面第二句原先写的是 {@code
+ * conversation.raiseClassification(...)} + {@code conversations.save(conversation)} —— 那是
+ * <strong>"读 → 改 → 更新"</strong>，<strong>同事务之外</strong>的两次并发抬升会丢更新（会话密级滞后于真实 max， 不报错、不留痕）。★ 抬升现在走
+ * {@link ConversationRepository#raiseClassification} （<strong>不接收实体</strong> ⇒
+ * "把陈旧实体写回去"这条路径在签名上不存在）。 ★ 但 {@code save(Conversation)} 仍然会写 {@code max_classification} 这一列 ——
+ * 谁沿用上面那段老写法， 谁就把丢更新原样搬回来（本批未封死，见 {@code ConversationClassificationWriteTest} 里那条反向读数）。
  *
  * <p>⇒ 事务的开合属于<strong>用例层</strong>（第 17 周），而不是这两个仓储方法各自的事：
  * 把它们各自标成"独立事务"恰好会拆散那条口径，制造出"引用已落库、会话密级还没跟上"的窗口 （{@code V32} 的注释把那个窗口叫"越权能看到"）。本批的测试因此显式开事务来验这一条。

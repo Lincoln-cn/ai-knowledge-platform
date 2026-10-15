@@ -34,6 +34,14 @@ import org.springframework.transaction.annotation.Transactional;
  * bindReferences}）全部在 {@link Message} 上，本类只调用它们 —— 所以"状态机在哪儿生效"只有一个答案（{@code MessageRepository}
  * 的类注释把这条写死了）。
  *
+ * <h3>★★ 会话的两列冗余计数在这里写（{@code #108} 的第二个交付）</h3>
+ *
+ * <p>{@code cv_conversation.message_count} / {@code last_message_at} 在本批之前<strong>没有任何写入方</strong>
+ * （恒 {@code 0} / {@code NULL}）。它们由 {@link #recordMessage} 在<strong>消息落库的同一个事务里</strong>
+ * 更新（每落一条消息一次），落库动作本身（{@code message_count + 1} 与 {@code greatest(现值,
+ * max(cv_message.created_at))}）在库侧一条 UPDATE 里 —— 见 {@code ConversationRepository#recordMessage}。★
+ * 于是列表页的那个数字<strong>来自库</strong>， 刷新页面不会把它重置（{@code ROADMAP §二} 的 {@code A2}）。
+ *
  * <h3>★ 归属判定：看不见 ⇒ 404（不是 403）</h3>
  *
  * <p>会话是私人资源（{@code 07 §3.1}：默认 {@code PRIVATE} + {@code ownerId}）。
@@ -120,11 +128,13 @@ public class ChatTurnWriter implements ChatTurnStore {
     // ★ 用户消息先落库：它是"这轮问了什么"的唯一痕迹（助手消息失败/停止都不影响它）
     Message userMessage = Message.user(UUID.randomUUID(), conversation.id(), question);
     messages.save(userMessage);
+    recordMessage(conversation);
 
     UUID modelId = pickModelId(app);
     Message assistant = new Message(UUID.randomUUID(), conversation.id(), "");
     assistant.bindModel(modelId);
     messages.save(assistant);
+    recordMessage(conversation);
 
     String traceId = "trace_" + assistant.id();
     log.info(
@@ -292,6 +302,32 @@ public class ChatTurnWriter implements ChatTurnStore {
     return messages
         .findById(messageId)
         .orElseThrow(() -> new IllegalStateException("助手消息 " + messageId + " 不见了 —— 本轮开始时它刚被落库"));
+  }
+
+  /**
+   * ★★ <strong>记一条消息落库</strong>（{@code cv_conversation} 的 {@code message_count} / {@code
+   * last_message_at}）。
+   *
+   * <h3>为什么在这里，而不是在 {@code MessageRepository} 的适配器里"顺手 +1"</h3>
+   *
+   * <p>消息落库那一处<strong>就是这里</strong>（下方两次 {@code messages.save}），而且本方法本来就在 {@code prepare}
+   * 的<strong>同一个事务</strong>里 —— {@code 02 §5.2} 与 {@code #44} 的口径是"写入侧同事务"， 把它塞进 {@code
+   * MessageRepositoryAdapter} 只会让"谁说了算"多一个候选（那个类的类注释把这条写死了）。
+   *
+   * <h3>★★ 一条消息一次调用（而不是"一轮 +2"）</h3>
+   *
+   * <p>{@code +1} 由"消息真的落库了"这件事驱动：两次 {@code save} 就两次 {@code recordMessage}。 写成"一轮 {@code
+   * +2}"是<strong>第二份"一轮等于几条消息"的说法</strong> —— 将来多一条消息（例如重生成的新助手消息） 时它不会报错，只会少记。
+   *
+   * <h3>★ 为什么 {@code false} 要抛而不是忽略</h3>
+   *
+   * <p>{@code false} = 那一条 UPDATE 一行都没改 = 会话行不在 —— 而本方法刚刚才建过或读过它。 这是<strong>链路内部的破洞</strong>（与
+   * {@link #requireMessage} 同一档），静默忽略的话症状是 "消息在库里、计数停在 0"（{@code #44} 记的正是这个形状）。
+   */
+  private void recordMessage(Conversation conversation) {
+    if (!conversations.recordMessage(conversation.id())) {
+      throw new IllegalStateException("会话 " + conversation.id() + " 的消息计数没有落库 —— 它在本轮开始时刚被建过或读过");
+    }
   }
 
   /** 标题 = 问题前若干字（{@code 02 §2.6}）；截断而不是报错，因为标题不是用户输入的一部分。 */
