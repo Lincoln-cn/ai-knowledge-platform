@@ -124,3 +124,24 @@ tools\run-frontend-gates.cmd     ← 跑 11 道浏览器闸门 + verify_features
 而前 11 道只需 dev server。⇒ 脚本现在**先探后端 18088**，探不到就把那两道记为 **`SKIPPED`** 并在摘要里单独计数
 （★ **`SKIPPED` 是"缺读数"，绝不是"通过"** —— 不许让它读起来像绿的）。
 
+---
+
+## 九、本机启动器住在 `scripts/`（**不在 `%TEMP%`**）
+
+★ **起因**：2026-10-15 早上发现 `%TEMP%` 下的三个启动器**全都没了**（临时目录被清理）⇒ 用户**点不到**，
+而"服务由用户起、agent 只做只读检查"这条纪律当场的表现就是**整条读数链断掉**（前端闸门跑不了、桩起不来）。
+⇒ **真源进仓库**，`%TEMP%` 只留**两行薄包装**（`call` 到仓库脚本），两边不会漂移。
+
+| 脚本 | 起什么 | 端口 | 谁要它 |
+|---|---|---|---|
+| `scripts/aip-fe-live.cmd` | 前端 dev（**mock**） | 5280 | ★ 11 道浏览器闸门 |
+| `scripts/aip-fe-real.cmd` | 前端 dev（**`VITE_USE_MOCK=false`**） | 5280 | 真栈两道（`verify_features` / `smoke_test`） |
+| `scripts/aip-be-live.cmd` | 后端（`SERVER_PORT=18088`） | 18088 | 真栈两道 + 手工端到端 |
+| `scripts/aip-stub.cmd` | 假模型（`backend/tools/openai_stub.py`） | 11434 | 真栈两道 + ★ 三个桩依赖测试类 |
+
+★ **`--check` 是这条纪律的补丁**：agent **不许起服务**，但**可以验"路径与前置对不对"** ⇒
+四个启动器都支持 `cmd /c "scripts\aip-fe-live.cmd" --check`（只打印解析出的路径 + npm/python/包装脚本在不在，**不起服务**）。
+★ 注意 **5280 同一时刻只能一种模式** ⇒ 13 道闸门要**两趟**（先 mock 跑 11 道，再真栈跑 2 道）。
+★ 详见 `scripts/README.md`（含 CRLF/ASCII 两条硬约束与 18088 的由来）。
+
+
