@@ -305,6 +305,43 @@ class ChatStreamEventRecordingTest {
     assertThat(persisted.failReason()).isNull();
   }
 
+  // ────────────────────────── ⑥ 身份取不到 ⇒ 整批 fail-closed（#123 判据③）──────────────────────────
+
+  /**
+   * ★★ 判据③（{@code #123}）：<strong>身份 / 范围取不到 ⇒ 整批 fail-closed（一条引用都不给）</strong>。
+   *
+   * <p>★ 这条用例存在的理由不是"多验一条边界"，而是它是"改一处不能碰另一处"的<strong>反证</strong>： {@code ChatService#retrieve}
+   * 这一批把"单条坏数据"改成了<strong>逐条跳过</strong>，而"身份取不到"必须 <strong>仍然</strong>是整批的 —— 两者一旦被合成一条（例如把 {@code
+   * ceiling == null} 也当成"这一条装不成"）， "可见性无法判定"就会降级成"照常返回几条引用"。那不是省事，那是把 fail-closed 换成了 fail-open：
+   * 给出去的东西<strong>没人判过可见性</strong>，而且不报错。
+   *
+   * <p>造法：检索端口<strong>有</strong>命中（可见库、命中集合、展示信息都齐），而范围端口是 {@link ScopeFilter#nobody()} （{@code
+   * maxClassification == null}）—— 这正是"能查到数据、但身份没跟过来"那一刻的形状 （第 17 周那个 P0 的成因）。⇒
+   * 期望：引用给成<strong>空</strong>，而答案照常生成、照常收尾。
+   */
+  @Test
+  void anUnavailableIdentityKeepsTheWholeBatchFailClosed() {
+    Fixture fixture = new Fixture(new HitSearchPort(), new AnonymousScope());
+    fixture.model.set(new ScriptedModel(0L, 0L, 6, SHORT_ANSWER));
+    ChatTurnWriter.PreparedTurn turn = fixture.prepare();
+    RecordingSink sink = new RecordingSink();
+
+    fixture.chatService().streamTurn(turn, QUESTION, sink);
+
+    assertThat(sink.refs())
+        .as("★★ 取不到身份 ⇒ 一条引用都不给（不是『跳过几条之后照常返回』，更不是『给全部』）" + "—— 可见性无法判定时，唯一安全的方向是什么都不给")
+        .isEmpty();
+    assertThat(sink.kinds())
+        .as("★ 零引用不是失败：仍然是一条正常收尾的流（fail-closed 的引用与『检索没跑』在装配器里是两件事）")
+        .startsWith(EventKind.META, EventKind.REFS)
+        .endsWith(EventKind.DONE);
+    assertThat(sink.kinds()).doesNotContain(EventKind.ERROR);
+    TerminalPersisted persisted = fixture.store.finishOf(turn.assistantMessageId());
+    assertThat(persisted.path())
+        .as("★ 收尾路径不受影响（引用为空不改这一轮的结局）")
+        .isEqualTo(StreamTerminationPath.COMPLETE);
+  }
+
   // ────────────────────────── 一轮问答的最小真实装配 ──────────────────────────
 
   /**
@@ -322,15 +359,30 @@ class ChatStreamEventRecordingTest {
 
     private final ChatStopSignal stopSignal = new ChatStopSignal();
 
-    private final ChatService chatService =
-        new ChatService(
-            store,
-            new EmptySearchPort(),
-            new AnonymousScope(),
-            (modelId, prompt, timeout, callback) ->
-                model.get().stream(modelId, prompt, timeout, callback),
-            stopSignal,
-            PROPERTIES);
+    private final ChatService chatService;
+
+    /** 默认装配：检索<strong>零命中</strong> + 身份<strong>取不到</strong>（见两个替身的注释）。 */
+    private Fixture() {
+      this(new EmptySearchPort(), new AnonymousScope());
+    }
+
+    /**
+     * 换掉检索与身份这两个端口。
+     *
+     * <p>★ 需要它的是判据③那条用例：它要的正是 {@link HitSearchPort}"有命中" + {@link AnonymousScope} "身份取不到"这个组合 ——
+     * 两者在"引用为空"这个返回值上不可分，只有分开装配才能把 "是身份没跟过来"与"库里确实没有"分开。
+     */
+    private Fixture(SegmentSearchPort search, AccessScopePort scope) {
+      this.chatService =
+          new ChatService(
+              store,
+              search,
+              scope,
+              (modelId, prompt, timeout, callback) ->
+                  model.get().stream(modelId, prompt, timeout, callback),
+              stopSignal,
+              PROPERTIES);
+    }
 
     private ChatService chatService() {
       return chatService;
@@ -406,6 +458,15 @@ class ChatStreamEventRecordingTest {
 
     private StreamEvent.StreamErrorEvent error() {
       return (StreamEvent.StreamErrorEvent) lastOf(EventKind.ERROR);
+    }
+
+    /**
+     * {@code refs} 帧里<strong>到底是哪几条引用</strong>。
+     *
+     * <p>★ 与"那一帧在不在"是两件事：只读 kinds 的话，"引用整体为空"与"引用内容对不上"读数完全一样 —— 第 17 周那个 P0（引用恒为空）正是从这个缝里过去的。
+     */
+    private List<SourceRef> refs() {
+      return ((StreamEvent.References) lastOf(EventKind.REFS)).refs();
     }
 
     private StreamEvent lastOf(EventKind kind) {
@@ -627,6 +688,53 @@ class ChatStreamEventRecordingTest {
     @Override
     public boolean canSee(OwnedResource resource) {
       return false;
+    }
+  }
+
+  /**
+   * 检索端口替身：★ <strong>有命中</strong>（可见库 / 命中集合 / 展示信息全齐），只差"身份"。
+   *
+   * <p>★ 它与 {@link EmptySearchPort} 的分工：那个读"零命中"这条正常路径，这个读"身份取不到"那条 fail-closed 路径。
+   * 两者在"引用为空"这个返回值上<strong>不可分</strong> —— 而判据③要验的恰恰是"这一批走的是哪一条分支"，
+   * 所以这里必须让命中<strong>真的存在</strong>：只有这样才能证明引用为空的原因不是"没搜到"。
+   *
+   * <p>★ 没被用到的那些方法照旧<strong>抛</strong>（与 {@link EmptySearchPort} 同一条纪律）：
+   * 本类若哪天开始走向量路，那说明这条链的形状变了，应当红而不是安静地拿到空结果。
+   */
+  private static final class HitSearchPort implements SegmentSearchPort {
+
+    private static final UUID KB_ID = UUID.fromString("0a000000-0000-4000-8000-000000000001");
+
+    private static final UUID SEGMENT_ID = UUID.fromString("0b000000-0000-4000-8000-000000000001");
+
+    @Override
+    public List<UUID> visibleKbIds(Collection<UUID> requested) {
+      return List.of(KB_ID);
+    }
+
+    @Override
+    public List<Scored> fullText(TextQuery query) {
+      return List.of(new Scored(SEGMENT_ID, 0.9));
+    }
+
+    @Override
+    public List<Card> load(Collection<UUID> segmentIds) {
+      return List.of(new Card(SEGMENT_ID, "差旅住宿标准章节", "差旅住宿标准为每人每天500元", "SSE 差旅制度文档", "SSE 夹具库"));
+    }
+
+    @Override
+    public Map<UUID, UUID> embeddingModelByKb(Collection<UUID> kbIds) {
+      throw new UnsupportedOperationException("本类不走向量路");
+    }
+
+    @Override
+    public Set<UUID> visibleAmong(Collection<UUID> candidateIds, Collection<UUID> kbIds) {
+      throw new UnsupportedOperationException("本类不做两路同谓词");
+    }
+
+    @Override
+    public List<Scored> vectorSearch(VectorQuery query) {
+      throw new UnsupportedOperationException("本类不走向量路");
     }
   }
 }
