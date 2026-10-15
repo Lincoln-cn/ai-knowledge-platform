@@ -487,9 +487,13 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     // ★ 这里**不加**安全谓词：调用方刚刚用 visibleAmong 判过，这只是一次"取展示信息"。
     //   重复判一次不算错，但会让"看不见的分段"与"已被删的分段"给出同样的症状，反而难查。
     // ★★ 会话域的行**没有库名**（左连接下 k 为 NULL ⇒ kbName 为 NULL），而契约的 SourceRef 要求
-    //   kbName 非空（引用组装那一批会直接报"引用的必填字段 kbName 不能为空"）。★ 给它什么显示口径
-    //   是一个**产品决定**（会话标题？"会话附件"？），本批不替产品定 —— 登记在交付报告的"待裁"里。
-    //   ★ 而同一行的 {@code kb_id} 是 NULL 这件事**不是待裁**：它是前端结构性判据的那一半（见 Card）。
+    //   kbName 非空。★ 这一格**不许在这里补**：Card 的两个分量必须都来自**真实的列**（见 Card 的
+    //   javadoc），在端口出口补一个假值会让"这一行到底有没有库"当场消失，下游再也分不出
+    //   "会话域的引用"与"名字叫那个固定串的知识库"。产品口径（2026-10-15 已裁定）由装配点按
+    //   `kb_id` 是否为空来落 —— 常量只有一处（platform.retrieval.SourceLabels），消费点是
+    //   `ChatService#retrieve` / `#kbNameOf`（本端口在 knowledge，那是 conversation 那一侧的类，
+    //   跨模块的 javadoc 链接解析不了，所以这里只写名字）。
+    //   ★ 而同一行的 {@code kb_id} 是 NULL 这件事**不是**展示口径：它是前端结构性判据的那一半（见 Card）。
     return jdbc.query(
         sql,
         (rs, i) ->

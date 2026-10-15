@@ -10,7 +10,9 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.platform.retrieval.SourceLabels;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -258,7 +260,7 @@ public class ChatService {
     //     看起来像"这个知识库里确实没有相关内容"，而真相是"身份没跟过来"。它不会报任何错。
     //   ★ 为什么放在 meta 之后：`meta` 是"能停止"的前提（前端要它的 messageId），别让一次检索拖慢它。
     //   ★ 为什么放在起线程之前：装配器要求"引用先于第一个 delta"，而这里是**唯一**能读到正确范围的地方。
-    List<SourceRef> refs = retrieve(question, turn.kbIds());
+    List<SourceRef> refs = retrieve(question, turn.kbIds(), turn.conversationId());
     run.assembler.references(refs);
     run.bindRefs(refs);
     run.pump();
@@ -522,18 +524,28 @@ public class ChatService {
    * <p>三步都是既有的端口调用，本层不自己写 SQL：
    *
    * <ol>
-   *   <li>{@link SegmentSearchPort#visibleKbIds} —— 可见性判定唯一的那一处 （应用绑的库可能被停用 / 软删 /
-   *       取消可见，所以绑过也还要过一遍）；
+   *   <li>{@link SegmentSearchPort#retrievalScope} —— ★★ <strong>域的解析与装配唯一的那一处</strong>（{@code 13
+   *       §11.3} 三支的绑定值）。它里面含可见性判定（应用绑的库可能被停用 / 软删 / 取消可见，所以绑过也还要过一遍）； ★ 装配点只在**这里**拼一次范围：本方法之后，域随
+   *       {@link SegmentSearchPort.TextQuery} 走，谁都不许再拼一份；
    *   <li>{@link SegmentSearchPort#fullText} —— 全文那一路。<strong>本批不走向量路</strong>： 它要先把问题向量化（{@code
    *       EmbeddingPort}），而"引用先到"这条保证与向量无关 —— 三模式融合是检索策略那一侧的事（{@code
-   *       RetrievalService}），不在这条链上再实现一遍；
+   *       RetrievalService}），不在这条链上再实现一遍。★ 会话附件在检索侧今天**只**能走这一路（见 {@code
+   *       RetrievalService#vectorSearch} 开头那条边界：会话域不参与向量路）；
    *   <li>{@link SegmentSearchPort#load} —— 展示信息（标题 / 正文 / 文档名 / 库名 / 文档 id / 库 id）。
    * </ol>
+   *
+   * <h3>★★ 会话域的接线（第 17 周 · 判据 1 的落点）</h3>
+   *
+   * <p>{@code conversationId} 必须从<strong>这一轮的上下文</strong>传进来（{@code ChatTurnWriter.PreparedTurn}
+   * 里已有它）。此前本方法用的是"只带共用库域"的重载（{@code new TextQuery(问题, kbIds, limit)} ⇒ {@code
+   * RetrievalScope.shared}），于是<strong>会话域那一支恒假</strong> —— 会话里传的附件**永远检索不到**，不报错、也不留痕。
+   *
+   * <p>★ 个人库那一档仍然关（{@code includePersonal = false}）：它只在隐式档（{@code 13 §11.4}），本批不开。
    *
    * <h3>★★ 引用载荷里的结构性事实（第 17 周补：深链与"来源类型"）</h3>
    *
    * <p>{@code documentId} 与 {@code kbId} 直接取自 {@link SegmentSearchPort.Card} 的**真实值**，
-   * 本层<strong>不做任何兜底或填充</strong>：
+   * 本层<strong>不做任何兜底或填充</strong>（{@code kbName} 那一格是唯一的例外，且它不是兜底 —— 见 {@link #kbNameOf}）：
    *
    * <ul>
    *   <li>{@code documentId} 为空 ⇒ 前端拼不出深链的 query ⇒ 点击<strong>静默 no-op</strong>（{@code #91}
@@ -547,12 +559,13 @@ public class ChatService {
    * <table>
    *   <tr><th>类别</th><th>判据</th><th>处置</th></tr>
    *   <tr><td><strong>身份 / 范围取不到</strong></td>
-   *       <td>{@code visibleKbIds} 为空 · {@code ceiling == null} · 检索端口抛异常 —— 即<strong>可见性无法判定</strong></td>
+   *       <td>{@code retrievalScope} 解析出三支全关 · {@code ceiling == null} · 检索端口抛异常 —— 即<strong>可见性无法判定</strong></td>
    *       <td>★ <strong>整批 fail-closed</strong>：一条都不给（现状语义，一个字没动）</td></tr>
    *   <tr><td><strong>单条数据坏</strong></td>
    *       <td>{@link SourceRef} 的必填字段（{@code title} / {@code docName} / {@code kbName}）为空 ——
    *           ★ {@code kb_segment.title} 在库里<strong>可空</strong>（{@code V15}），所以这条路径今天就会被真实数据触发，
-   *           不是理论问题</td>
+   *           不是理论问题。★ {@code kbName} 那一格只对<strong>库域</strong>的引用可能是空的：会话域的引用由
+   *           {@link #kbNameOf} 按约定补上（它的 {@code kb_id} 为空 ⇒ 那是"没有库行"，不是坏数据）</td>
    *       <td>★ 先做<strong>读取侧兜底</strong>（{@code title} 为空 ⇒ 用 {@code docName} 顶上，见 {@link #titleOf}）；
    *           兜不住（{@code docName} / {@code kbName} 也为空）⇒ <strong>跳过这一条 + 计数</strong>，其余照常返回；
    *           一条 WARN 带计数（不许静默）</td></tr>
@@ -572,20 +585,27 @@ public class ChatService {
    * <p>★ 跳过一条时<strong>不递增</strong> {@code index}：{@code [N]} 必须从 1 连续递增，跳过的空位若占了号，
    * 正文里就会出现一个指向不存在引用的 {@code [N]}。
    */
-  private List<SourceRef> retrieve(String question, Collection<UUID> requestedKbIds) {
+  private List<SourceRef> retrieve(
+      String question, Collection<UUID> requestedKbIds, UUID conversationId) {
     List<UUID> ordered;
     Map<UUID, Double> scoreById;
     Map<UUID, SegmentSearchPort.Card> cards;
     try {
       // ── 第一类失败的作用域：身份 / 范围 / 命中集合（★ 取不到 ⇒ 整批 fail-closed，一条都不给）──
-      List<UUID> kbIds = segmentSearch.visibleKbIds(requestedKbIds);
-      if (kbIds.isEmpty()) {
+      // ★★ 域在**一处**解析（第 17 周 · #31 判据 1 的接线点）：★ 传 `false` 是有意的 —— 个人库只在隐式档
+      //   （13 §11.4），本批不开；而 `conversationId` 必须跟着这一轮走，否则会话附件**永远检索不到**
+      //   （旧的 `new TextQuery(问题, kbIds, limit)` 走的是 RetrievalScope.shared ⇒ 会话域那一支恒假）。
+      // ★ 为什么用 retrievalScope 而不是 visibleKbIds：三支的绑定值来自三个不同的地方，其中 ownerId
+      //   只能从当前范围取 —— 让装配点自己拼等于把"用谁的身份检索会话附件"变成一个可以填错的入参。
+      RetrievalScope scope = segmentSearch.retrievalScope(requestedKbIds, conversationId, false);
+      if (scope.isEmpty()) {
         // ★★ 这一条早退的留痕是补上的（第 17 周）：它此前**一条日志都没有** ⇒ 与"库里确实没有相关内容"
         //   在读数上完全一样。而它的成因有两个形状，处置相同、含义完全不同：
         //     ① **范围为空** —— 用户确实没有任何可见库（合法状态）；
         //     ② **身份为空** —— currentScope() 是 nobody()（me 为 null）⇒ 可见性**无法判定**（异常形状）。
         //   ★ 第 17 周那个 P0（检索跑在模型线程上 ⇒ 范围 ThreadLocal 读不到 ⇒ 引用永远为空）走的就是 ②。
         //   ★ 返回值语义一个字都没改：两种形状都是"整批 fail-closed、一条引用都不给"。
+        //   ★ 现在"三支全关"才走这里：会话里有附件、却没绑任何库，是一种**合法且能命中**的情形（不是零引用）。
         UUID me = accessScope.currentScope().me();
         if (me == null) {
           log.warn(
@@ -608,7 +628,7 @@ public class ChatService {
       List<SegmentSearchPort.Scored> hits =
           segmentSearch.fullText(
               new SegmentSearchPort.TextQuery(
-                  question, kbIds, RETRIEVAL_LIMIT * RETRIEVAL_OVERFETCH));
+                  question, scope, RETRIEVAL_LIMIT * RETRIEVAL_OVERFETCH));
       if (hits.isEmpty()) {
         return List.of();
       }
@@ -657,7 +677,9 @@ public class ChatService {
                 index,
                 titleOf(card),
                 card.docName(),
-                card.kbName(),
+                // ★★ 会话域**没有库行** ⇒ 左连接下 kb_name 是 NULL，而契约把 kbName 当必填 ⇒ 不给这条约定，
+                //   会话附件的引用会被"逐条跳过"整批丢掉（有 WARN、界面一条都没有）。产品口径见 SourceLabels。
+                kbNameOf(card),
                 scoreById.getOrDefault(id, 0.0),
                 index,
                 card.content(),
@@ -705,6 +727,35 @@ public class ChatService {
   private static String titleOf(SegmentSearchPort.Card card) {
     String title = card.title();
     return title == null || title.isBlank() ? card.docName() : title;
+  }
+
+  /**
+   * 引用的来源名：★★ <strong>会话域那一格由约定常量给出</strong>（{@link SourceLabels#CONVERSATION_ATTACHMENT}）。
+   *
+   * <h3>为什么"补这一格"是必须的，而它又不是兜底</h3>
+   *
+   * <p>会话临时的分段<strong>没有 {@code kb_knowledge_base} 行</strong> ⇒ 左连接下 {@code kb_name} 是 {@code
+   * NULL}； 而契约 {@code SourceRef} 把 {@code kbName} 当<strong>必填</strong>（与 {@code title} / {@code
+   * docName} 同一档）。 不给这一格，{@link #retrieve} 的"逐条跳过"会把<strong>整批</strong>会话附件引用摘掉：日志里一条 WARN 带计数，
+   * 而界面上<strong>一条都没有</strong> —— 它与"这个会话确实没有相关附件"在读数上完全一样（本项目头号病）。
+   *
+   * <p>★ 它<strong>不是</strong>"给缺字段补个默认值"那种兜底：兜底会掩盖数据坏味，而这里补的是
+   * <strong>一个已知合法类别的显示名</strong>（会话域的引用按产品口径就该叫这个）。两条纪律把它与兜底分开：
+   *
+   * <ol>
+   *   <li>判据取 {@link SegmentSearchPort.Card#kbId()}（<strong>结构性</strong>事实：没有库行）， 而不是 {@code
+   *       kbName} 为空 —— 一个<strong>库域</strong>的引用若库名为空，那是数据坏了， 仍然走"逐条跳过 + 计数 WARN"那条路（{@code #123}
+   *       的失败粒度一个字不改）；
+   *   <li>值来自 {@link SourceLabels}（唯一一处），不在本方法里写字面量 —— 否则前端那句"值归后端"就有两处真相。
+   * </ol>
+   *
+   * <p>★ 前端只用 {@code kbId} 是否为 {@code null} 判"是不是会话域"，与这里的判据同源。
+   */
+  private static String kbNameOf(SegmentSearchPort.Card card) {
+    if (card.kbId() == null) {
+      return SourceLabels.CONVERSATION_ATTACHMENT;
+    }
+    return card.kbName();
   }
 
   /**

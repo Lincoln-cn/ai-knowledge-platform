@@ -18,7 +18,9 @@ import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.platform.retrieval.SourceLabels;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -364,12 +366,16 @@ class ChatStreamEventRecordingTest {
    *
    * <p>把装配点的 {@code card.kbId()} 改回 {@code null} ⇒ 本用例第一条断言立刻红（见交付报告里逐字读数）。 ★ 同理，把 {@code
    * card.documentId()} 改回 {@code null} ⇒ 第二条红（{@code #91} 的根因读数）。
+   *
+   * <p>★ 本用例的会话域那一条**必须**在会话 A 里跑（{@code prepare(CONVERSATION_A)}）：会话域那一支的绑定值 就是这一轮的会话 id，而 {@link
+   * HitSearchPort#fullText} 按它过滤 —— 用随机会话 id 的话两条命中会变成一条， 本用例的前置断言会先红（那正是判据 1 的读数，见 {@link
+   * #theAttachmentOfThisConversationIsReferencedAndAnotherConversationsIsNot()}）。
    */
   @Test
   void referencesCarryTheRealDocumentAndKbIdWhileTheConversationDomainStaysNull() {
     Fixture fixture = new Fixture(new HitSearchPort(), new KnownScope());
     fixture.model.set(new ScriptedModel(0L, 0L, 6, SHORT_ANSWER));
-    ChatTurnWriter.PreparedTurn turn = fixture.prepare();
+    ChatTurnWriter.PreparedTurn turn = fixture.prepare(HitSearchPort.CONVERSATION_A);
     RecordingSink sink = new RecordingSink();
 
     fixture.chatService().streamTurn(turn, QUESTION, sink);
@@ -398,8 +404,108 @@ class ChatStreamEventRecordingTest {
     assertThat(conversationRef.documentId())
         .as(
             "★ 会话域引用同样带 documentId（文档行两个域都有）⇒ 深链在会话附件上也拼得出 query"
-                + "（会话域的**库名**口径是另一件事，尚未裁定，见 JdbcSegmentSearchQuery#load）")
+                + "（来源名的口径见 #theConversationAttachmentSourceNameIsTheAgreedConstant）")
         .isEqualTo(HitSearchPort.CONVERSATION_DOCUMENT_ID.toString());
+  }
+
+  // ────────────────────────── ⑦b 会话域的接线（本批 · 判据 1 / 判据 2）──────────────────────────
+
+  /**
+   * ★★ <strong>本会话的附件引用得到，另一个会话引用不到</strong> —— 两个方向在<strong>同一条用例</strong>里。
+   *
+   * <h3>它钉的是什么（这是"会话附件真的接进检索链路了吗"的唯一读数）</h3>
+   *
+   * <p>接线之前，{@code ChatService#retrieve} 用的是"只带共用库域"的重载 （{@code new TextQuery(问题, kbIds, limit)} ⇒
+   * {@code RetrievalScope.shared}）⇒ <strong>会话域那一支恒假</strong>：
+   * 会话里传的附件<strong>永远检索不到</strong>（能建、谓词也通，就是没接上），而且不报错、不留痕。
+   *
+   * <p>★ 两个方向<strong>必须一起钉</strong>：
+   *
+   * <ul>
+   *   <li>只钉"会话 A 能引用到" ⇒ "把范围放大成不分会话"（甚至"把 {@code conversationId} 去掉、回到 shared"）
+   *       那些改法里，有的<strong>照样绿</strong>；
+   *   <li>只钉"会话 B 引用不到" ⇒ 变量是"检索端口压根不支持域"（替身不实现 {@code retrievalScope}， 异常被整批 fail-closed 接住 ⇒ 恒空 ⇒
+   *       恒绿）。两个方向一起，才逼出"这一轮的会话 id 真的进了域"。
+   * </ul>
+   *
+   * <p>★ 同时也是判据 1 的**内容**读数（不是"有引用"而是"引用到的是那条附件的正文"）：断言里是这个附件的 正文关键词，而不是"refs 非空" ——
+   * 后者在"引用到的是知识库那条"时也成立。
+   *
+   * <p>★★ 金丝雀（本批实测）：把装配点改回 {@code new TextQuery(question, turn.kbIds(), …)}（即 {@code
+   * RetrievalScope.shared}）⇒ 本用例<strong>会话 A 那一半立刻红</strong>（逐字读数见交付报告）。
+   */
+  @Test
+  void theAttachmentOfThisConversationIsReferencedAndAnotherConversationsIsNot() {
+    Fixture fixture = new Fixture(new HitSearchPort(), new KnownScope());
+    fixture.model.set(new ScriptedModel(0L, 0L, 6, SHORT_ANSWER));
+
+    // ── 方向一：会话 A（附件属于它）⇒ 引用得到 ──
+    RecordingSink inConversationA = new RecordingSink();
+    fixture
+        .chatService()
+        .streamTurn(fixture.prepare(HitSearchPort.CONVERSATION_A), QUESTION, inConversationA);
+
+    assertThat(inConversationA.refs())
+        .as("★★ 判据 1：会话里传的附件必须能被这一轮的问答引用到 —— 接线前它恒为空（会话域那一支恒假），且不报错")
+        .anySatisfy(
+            ref ->
+                assertThat(ref.full())
+                    .as("★ 引用到的是**那条附件的正文**（不只是『refs 非空』：引用到知识库那条也会非空）")
+                    .isEqualTo(HitSearchPort.CONVERSATION_CONTENT));
+    assertThat(inConversationA.refs())
+        .as("★ 前置：这一轮同时引用到知识库那一条（两条命中都在，说明下面会话 B 的『引用不到』不是『检索整体坏了』）")
+        .anySatisfy(
+            ref -> assertThat(ref.segmentId()).isEqualTo(HitSearchPort.SEGMENT_ID.toString()));
+
+    // ── 方向二：同一个人的**另一个**会话 ⇒ 引用不到 ──
+    RecordingSink inConversationB = new RecordingSink();
+    fixture
+        .chatService()
+        .streamTurn(fixture.prepare(HitSearchPort.CONVERSATION_B), QUESTION, inConversationB);
+
+    assertThat(inConversationB.refs())
+        .as("★★ 判据 2：同一条附件在**另一个会话**里必须引用不到（会话域那一支带 scope_id = :conversationId）")
+        .noneSatisfy(ref -> assertThat(ref.full()).isEqualTo(HitSearchPort.CONVERSATION_CONTENT));
+    assertThat(inConversationB.refs())
+        .as("★ 前置：会话 B 里知识库那一条照常在（判据 3：库引用不受影响）—— 否则『引用不到』可能只是检索没跑")
+        .anySatisfy(
+            ref -> assertThat(ref.segmentId()).isEqualTo(HitSearchPort.SEGMENT_ID.toString()));
+  }
+
+  /**
+   * ★★ 会话域引用的 {@code kbName} <strong>逐字等于约定的常量</strong>（{@link
+   * SourceLabels#CONVERSATION_ATTACHMENT}）。
+   *
+   * <h3>为什么这条必须有</h3>
+   *
+   * <p>会话临时的分段没有库行 ⇒ 左连接下 {@code kb_name} 是 {@code NULL}，而契约 {@code SourceRef.kbName}
+   * <strong>必填</strong> ⇒ 不给这条约定，这些引用会被"逐条跳过"<strong>整批丢掉</strong>： 日志里一条 WARN
+   * 带计数、界面上<strong>一条都没有</strong>（与"这个会话没有相关附件"不可分）。
+   *
+   * <p>★ 两个方向一起钉：会话域那一条等于常量，而<strong>知识库引用仍然是它自己的库名</strong> ——
+   * 只钉前者的话，"给所有引用都补上这个值"这种改法照样绿（而它会让库引用的来源全变成"会话附件"）。
+   *
+   * <p>★ 替身那一侧刻意给的是 {@code null}（真实左连接的形状）：所以这条断言读的正是 <strong>装配点补的那一格</strong>，不是替身自己塞的值。
+   */
+  @Test
+  void theConversationAttachmentSourceNameIsTheAgreedConstant() {
+    Fixture fixture = new Fixture(new HitSearchPort(), new KnownScope());
+    fixture.model.set(new ScriptedModel(0L, 0L, 6, SHORT_ANSWER));
+    RecordingSink sink = new RecordingSink();
+
+    fixture.chatService().streamTurn(fixture.prepare(HitSearchPort.CONVERSATION_A), QUESTION, sink);
+
+    List<SourceRef> refs = sink.refs();
+    assertThat(refs).as("★ 前置：两条命中都装成了引用（否则下面两条断言在空跑）").hasSize(2);
+
+    assertThat(refOf(refs, HitSearchPort.CONVERSATION_SEGMENT_ID).kbName())
+        .as(
+            "★★ 判据 4：会话域的引用没有库行 ⇒ 后端按约定发这个常量（前端把它渲染成 `来源：<kbName>`）。"
+                + "★ 不给它，这一条会被逐条跳过整批丢掉：界面一条都没有")
+        .isEqualTo(SourceLabels.CONVERSATION_ATTACHMENT);
+    assertThat(refOf(refs, HitSearchPort.SEGMENT_ID).kbName())
+        .as("★ 判据 3 的另一半：知识库引用仍然是**它自己的库名** —— 若被一起换成常量，库引用的来源就全错了")
+        .isEqualTo("SSE 夹具库");
   }
 
   // ────────────────────────── ⑧ "范围为空"那条早退的留痕（第 17 周补）──────────────────────────
@@ -562,6 +668,17 @@ class ChatStreamEventRecordingTest {
     /** 建这一轮的落库读数（替身不发号，id 由这里现造）。 */
     private ChatTurnWriter.PreparedTurn prepare() {
       return store.prepare(null, null, QUESTION, UUID.randomUUID());
+    }
+
+    /**
+     * 建这一轮，并指定<strong>它属于哪个会话</strong>。
+     *
+     * <p>★ 需要它的理由：会话域那一支的绑定值就在这一轮的上下文里（{@code PreparedTurn.conversationId}）——
+     * 而"检索范围带没带会话域"这件事，只有让这一轮的会话是<strong>一个已知的 id</strong> 才读得出来 （随机会话 id 下，判据 1 与判据 2
+     * 都会退化成"谁也命中不了"）。
+     */
+    private ChatTurnWriter.PreparedTurn prepare(UUID conversationId) {
+      return store.prepare(conversationId, null, QUESTION, UUID.randomUUID());
     }
   }
 
@@ -816,6 +933,21 @@ class ChatStreamEventRecordingTest {
       return List.of();
     }
 
+    /**
+     * ★ 与生产侧同一份语义（{@code JdbcSegmentSearchQuery#retrievalScope} 的**唯一**解析点）：共用库那一支为空 ⇒ 三支全关 ⇒
+     * {@code ChatService} 走"范围为空"那条早退。
+     *
+     * <p>★★ 为什么<strong>必须显式实现</strong>而不是靠端口的默认：默认实现是"明确拒绝" （{@code
+     * UnsupportedOperationException}），而它会被 {@code ChatService#retrieve} 那个"整批 fail-closed"的 {@code
+     * catch (RuntimeException)} 接住 —— 于是本类会<strong>绿着</strong>，但绿的是一条"检索端口还不支持域解析"
+     * 的路径，而不是本类声称在读的那条。★ 这类"替身没跟上端口、测试照样绿"的洞正是本仓最贵的那一类。
+     */
+    @Override
+    public RetrievalScope retrievalScope(
+        Collection<UUID> requested, UUID conversationId, boolean includePersonal) {
+      return RetrievalScope.shared(List.of());
+    }
+
     @Override
     public Map<UUID, UUID> embeddingModelByKb(Collection<UUID> kbIds) {
       throw new UnsupportedOperationException("本类不走向量路");
@@ -892,14 +1024,44 @@ class ChatStreamEventRecordingTest {
     private static final UUID CONVERSATION_DOCUMENT_ID =
         UUID.fromString("0c000000-0000-4000-8000-000000000002");
 
+    /** ★ 会话附件正文里的关键词：判据 1 就是"另一轮的 refs 里能不能读到它"。 */
+    static final String CONVERSATION_CONTENT = "会话附件正文：合同违约金上限见附件三";
+
+    /** ★ 这一条属于哪个会话（会话域那一支按它过滤 —— 换一个会话就检索不到，判据 2）。 */
+    static final UUID CONVERSATION_A = UUID.fromString("0e000000-0000-4000-8000-0000000000aa");
+
+    /** ★ 同一个人的**另一个**会话：同一个问题在它里面不许引用到 A 的附件。 */
+    static final UUID CONVERSATION_B = UUID.fromString("0e000000-0000-4000-8000-0000000000bb");
+
+    /**
+     * ★ 与生产侧同一份语义：共用库那一支过一遍可见性，会话域那一支**照搬调用方给的会话 id** （生产侧再从当前范围取 {@code ownerId}；本替身没有身份那一维 ⇒
+     * 只在有会话时补一个非空 owner， 因为 {@code RetrievalScope} 的构造不变量要求 {@code conversationId != null ⇒ ownerId
+     * != null}）。
+     */
+    @Override
+    public RetrievalScope retrievalScope(
+        Collection<UUID> requested, UUID conversationId, boolean includePersonal) {
+      return new RetrievalScope(
+          List.of(KB_ID), null, conversationId, conversationId == null ? null : UUID.randomUUID());
+    }
+
     @Override
     public List<UUID> visibleKbIds(Collection<UUID> requested) {
       return List.of(KB_ID);
     }
 
+    /**
+     * ★★ 域感知的全文检索：会话域**只在这个会话是 {@link #CONVERSATION_A} 时**贡献那一条附件。
+     *
+     * <p>它让判据 1 / 判据 2 在<strong>同一条用例</strong>里两个方向都可读：同一个人换个会话，同一条附件就该消失。 ★ 这也正是生产侧那道谓词（{@code
+     * scope_kind = 'CONVERSATION' and scope_id = :conversationId}）的可读替身。
+     */
     @Override
     public List<Scored> fullText(TextQuery query) {
-      return List.of(new Scored(SEGMENT_ID, 0.9), new Scored(CONVERSATION_SEGMENT_ID, 0.8));
+      if (CONVERSATION_A.equals(query.scope().conversationId())) {
+        return List.of(new Scored(SEGMENT_ID, 0.9), new Scored(CONVERSATION_SEGMENT_ID, 0.8));
+      }
+      return List.of(new Scored(SEGMENT_ID, 0.9));
     }
 
     @Override
@@ -907,15 +1069,18 @@ class ChatStreamEventRecordingTest {
       List<Card> cards = new ArrayList<>();
       for (UUID id : segmentIds) {
         if (CONVERSATION_SEGMENT_ID.equals(id)) {
-          // ★ 会话域的 kbName 口径**尚未裁定**（见 JdbcSegmentSearchQuery#load 的注释）：这里给一个非空占位值
-          //   只是为了让这一条过得了 SourceRef 的必填校验 —— 本用例的断言只针对 kbId / documentId 这两个分量。
+          // ★★ 这一格**必须**是 null：真实的那一行来自左连接，而会话临时没有 kb_knowledge_base 行
+          //   ⇒ `k.name` 是 NULL。早先这里给的是"会话附件"这个字面量，于是"装配点补没补这一格"
+          //   在本类里**读不出来**（替身替它补了）。现在由装配点补（SourceLabels），断言见
+          //   #theConversationAttachmentSourceNameIsTheAgreedConstant 与
+          //   #referencesCarryTheRealDocumentAndKbIdWhileTheConversationDomainStaysNull。
           cards.add(
               new Card(
                   id,
                   "会话附件里的段落",
-                  "会话附件正文：合同违约金上限见附件三",
+                  CONVERSATION_CONTENT,
                   "附件-合同.docx",
-                  "会话附件",
+                  null,
                   CONVERSATION_DOCUMENT_ID,
                   null));
         } else {
