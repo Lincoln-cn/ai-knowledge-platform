@@ -152,6 +152,7 @@ jobs:
           #   真栈那五条闸门全在知识库域，画布只有 mock 在守 ⇒ 这一类必须在静态层钉住。
           python check_workflow_node_types.py
 
+          python check_deeplink_segments.py
       # ── 第二组：需要 dev server + 浏览器 ──
       # ★ 实测结论（2026-09，本机两遍）：这 19 个 .py 里有 16 个 import playwright，
       #   其中 14 个（3 个纯静态 + 11 个浏览器）两遍结果**完全一致**，可以当确定性闸门用；

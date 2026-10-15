@@ -22,6 +22,12 @@
         <div class="micro muted">已回到知识库列表。</div>
       </div>
 
+      <!-- 深链带了 doc/segment 却没有 kb：连库都定位不了，也要说出来（同族的静默 no-op） -->
+      <div v-if="deepLinkNoKb" class="notice warn">
+        <div><b>这条引用没有指向任何知识库，无法定位到分段。</b></div>
+        <div class="micro muted">链接里缺少知识库参数（会话附件没有知识库行，属正常现象）。</div>
+      </div>
+
       <!-- 错误态：与空态严格区分，不许把"加载失败"渲染成"还没有知识库" -->
       <div v-if="listError" class="empty panel error-state">
         <div class="empty-title">知识库列表加载失败</div>
@@ -181,6 +187,27 @@
         </template>
       </PageHeader>
 
+      <!--
+        引用深链的**接收端**：会话页「跳转到分段管理」发过来的就是这三个键
+        （`jumpToSegment` 逐字拼 `doc` / `segment` / `kb`）。没有这一块，
+        参数照样进得来、却没有人读它 —— 用户点了没反应，且没有任何提示。
+        所以这里两件事都要做：**读**它，读不到时**说出来**（不许静默回落）。
+      -->
+      <div v-if="segmentLinkState === 'loading'" class="notice info">
+        <div><b>正在定位引用分段…</b></div>
+      </div>
+      <div v-else-if="segmentLinkState === 'error'" class="notice warn">
+        <div><b>{{ segmentLinkError }}</b></div>
+        <div class="micro muted">已切到分段视图；下面的列表按文档筛选。该分段可能已被删除，或你没有访问权限。</div>
+      </div>
+      <div v-else-if="targetSegment" class="notice info">
+        <div>
+          已按引用定位到分段：<b>{{ targetSegment.title || '（无标题）' }}</b>
+          <span class="micro muted"> · {{ targetSegment.charCount }} 字</span>
+        </div>
+        <p class="micro muted link-preview">{{ targetSegment.content }}</p>
+      </div>
+
       <div class="detail">
         <!--
           入库流水线 —— 本页唯一那一次深色石墨带（Cobalt 签名 4 + 8，见 design.md § 仪器面板）。
@@ -217,6 +244,7 @@
             v-else-if="activeTab === 'segments'"
             :kb-id="openedKb.id"
             :initial-document-id="segmentDocId"
+            :highlight-segment-id="targetSegment?.id"
           />
           <HitTestPanel
             v-else-if="activeTab === 'hittest'"
@@ -242,8 +270,9 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
-import { ingestionApi, knowledgeApi } from '@/api'
+import { conversationsApi, ingestionApi, knowledgeApi } from '@/api'
 import { ApiError, ErrorCode } from '@/api/types'
+import type { SegmentBrief } from '@/api/conversations'
 import type { DocumentStatus, IngestionProgress } from '@/api/ingestion'
 import type { KnowledgeBase, KnowledgeCategory } from '@/api/knowledge'
 import { PERM } from '@/constants/permissions'
@@ -294,6 +323,19 @@ const currentKb = ref<KnowledgeBase | null>(null)
 const segmentDocId = ref<string | undefined>(undefined)
 
 /**
+ * 引用深链的目标分段（引用回溯）。
+ *
+ * 契约里那条接口是 `conversationsApi.getSegment(id)`（`GET /segments/:id`，返回 `SegmentBrief`）——
+ * 它就是为「跳转分段管理 / 抽屉里补全文」写的，所以这里**不新增接口、不新增字段**。
+ * `SegmentBrief.documentId` 很有用：`?segment=` 有而 `?doc=` 缺（或指错）时，
+ * 只有它能告诉我们这条分段属于哪篇文档。
+ */
+const targetSegment = ref<SegmentBrief | null>(null)
+/** 深链定位的状态机：idle 没带深链 · loading 正在取 · ready 取到了 · error 取不到（必须说出来） */
+const segmentLinkState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
+const segmentLinkError = ref('')
+
+/**
  * #14 详情壳状态机：
  *  - idle    未打开（走列表模板）
  *  - loading 深链/点开后读取中 —— 不许闪回列表
@@ -319,12 +361,37 @@ const query = reactive({
   page: 1
 })
 
-const activeTab = computed<TabKey>(() => {
-  const t = String(route.query.tab ?? 'documents')
-  return (TABS.some((x) => x.key === t) ? t : 'documents') as TabKey
-})
+/**
+ * 会话页「跳转到分段管理」发来的两个键。
+ *
+ * ★ 键名是**逐字**对着发送端核过的，不是猜的：
+ *   `pages/conversation/Index.vue` 与 `pages/conversation/public/Index.vue`
+ *   两处 `jumpToSegment` 拼的都是 `doc` / `segment` / `kb`（`kb` 由下面的 `kbId` 消费）。
+ *   改这里的任何一个字母都会让跳转退回「静默 no-op」——
+ *   `frontend/check_deeplink_segments.py` 钉的就是这条一致性。
+ */
+const deepLinkDocId = computed(() => (route.query.doc ? String(route.query.doc) : ''))
+const deepLinkSegmentId = computed(() => (route.query.segment ? String(route.query.segment) : ''))
 
 const kbId = computed(() => (route.query.kb ? String(route.query.kb) : ''))
+
+/**
+ * 深链带了 `doc` / `segment` 却**没有** `kb`：定位不到任何知识库，只能停在列表。
+ * 那就必须说出来 —— 这正是本页原来的病（参数进得来、没人读、界面一声不响）。
+ * 消费者形态除外：他本来就只有列表态（07 §五），不该看到建设语汇的报错。
+ */
+const deepLinkNoKb = computed(
+  () => !consumer.value && !kbId.value && !!(deepLinkDocId.value || deepLinkSegmentId.value)
+)
+
+const activeTab = computed<TabKey>(() => {
+  const t = String(route.query.tab ?? '')
+  if (TABS.some((x) => x.key === t)) return t as TabKey
+  // 深链带了 `doc` / `segment` 却停在「文档」页，等于跳到了、但看不到目标 ——
+  // 发送端的意图就是「分段管理」，所以缺 `tab` 时按深链参数落到分段视图。
+  if (deepLinkDocId.value || deepLinkSegmentId.value) return 'segments'
+  return 'documents'
+})
 
 const formatChars = (n: number) => {
   if (n >= 10000) return `${(n / 10000).toFixed(1)}万`
@@ -551,12 +618,23 @@ const setCategory = (name: string) => {
 }
 
 const openDetail = (id: string) => {
-  router.push({ query: { ...route.query, kb: id, tab: 'documents' } })
+  // ★ 引用深链的 `doc` / `segment` 不跟着「从列表点进另一个库」走：
+  //   那两个 id 属于上一个库，带过去会让新库被上一个库的深链定位
+  //   （`?doc=X` 的 X 根本不属于这个库 ⇒ 分段列表筛成空）。
+  const next: Record<string, string> = {}
+  for (const [k, v] of Object.entries(route.query)) {
+    if (k === 'doc' || k === 'segment') continue
+    if (v != null && typeof v === 'string') next[k] = v
+  }
+  router.push({ query: { ...next, kb: id, tab: 'documents' } })
 }
 
 const closeDetail = () => {
   currentKb.value = null
   segmentDocId.value = undefined
+  targetSegment.value = null
+  segmentLinkState.value = 'idle'
+  segmentLinkError.value = ''
   detailState.value = 'idle'
   detailError.value = ''
   deepLinkError.value = ''
@@ -585,6 +663,65 @@ const gotoSegments = (documentId: string) => {
   segmentDocId.value = documentId
   setTab('segments')
 }
+
+/**
+ * 消费引用深链（本页原来完全没有这一半）。
+ *
+ * 处置三档，任何一档都不许停在「点了没反应」：
+ *  ① 只有 `?doc=`  → 切分段视图 + 按该文档筛选（不发多余请求）
+ *  ② 有 `?segment=` → 用契约的 `getSegment` 把目标分段**取回来展示**；
+ *     文档筛选以 `SegmentBrief.documentId` 为准（`?doc=` 缺失/指错时它就是唯一的答案）
+ *  ③ 取不到（404 / 无权 / 网络错）→ 画一条可读提示，仍留在分段视图，不静默回落列表
+ */
+const applyDeepLink = async () => {
+  const segId = deepLinkSegmentId.value
+  const docId = deepLinkDocId.value
+
+  // 与 `?kb=` 同口径：消费者没有详情壳，深链也不给他开（07 §五）
+  if (!openedKb.value || (!segId && !docId)) {
+    targetSegment.value = null
+    segmentLinkState.value = 'idle'
+    segmentLinkError.value = ''
+    return
+  }
+
+  segmentDocId.value = docId || undefined
+  if (!segId) {
+    targetSegment.value = null
+    segmentLinkState.value = 'idle'
+    segmentLinkError.value = ''
+    return
+  }
+  if (targetSegment.value?.id === segId) {
+    segmentLinkState.value = 'ready'
+    return
+  }
+
+  segmentLinkState.value = 'loading'
+  segmentLinkError.value = ''
+  try {
+    const seg = await conversationsApi.getSegment(segId)
+    targetSegment.value = seg
+    // 分段自己的归属优先 —— `?doc=` 只是发送端顺手带的，可能缺、可能是旧的
+    segmentDocId.value = seg.documentId
+    segmentLinkState.value = 'ready'
+  } catch (error) {
+    targetSegment.value = null
+    segmentLinkError.value = errText(error, '加载引用分段失败').reason
+    segmentLinkState.value = 'error'
+  }
+}
+
+/*
+  深链消费的触发点：详情壳就绪（`openedKb` 由空变有）或 URL 上的深链参数变了。
+  必须 watch `openedKb` 而不是 `onMounted` —— `?segment=` 到场时分段接口还调不了，
+  得等 `fetchDetail` 把库读出来；而深链**同库内**再来一次（kb 不变）只有参数变化能触发。
+*/
+watch(
+  () => [openedKb.value?.id ?? '', deepLinkDocId.value, deepLinkSegmentId.value] as const,
+  () => applyDeepLink(),
+  { immediate: true }
+)
 
 const onKbChanged = async () => {
   if (kbId.value) await fetchDetail(kbId.value)
@@ -881,6 +1018,16 @@ onBeforeUnmount(() => {
 
 .detail-loading {
   min-height: 240px;
+}
+
+/* 引用定位提示里那段正文：三行封顶，详情在下面的分段列表里看 */
+.link-preview {
+  margin: var(--space-2xs) 0 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
 }
 
 .pager {
