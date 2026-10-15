@@ -14,8 +14,8 @@ package cn.lincoln.aiplatform.conversation.domain.stream;
  * 归一化取值：它让"心跳"进入同一条有序事件序列，从而"心跳发生在检索阶段而不是只在生成阶段" （{@code 03 §1.6}、{@code 10
  * §6.4}）这件事可以被<strong>断言</strong>，而不是只靠读代码。
  *
- * <p>★ 本批<strong>不发</strong>心跳：定时与"无业务帧时发"属于传输层（第 17 周 SSETransport 的职责）。 这里只承载它，让装配器里的顺序断言能把它算进去（见
- * {@code StreamAssembler#heartbeat()}）。
+ * <p>★ 心跳<strong>由传输层驱动</strong>（{@code ChatService} 的心跳线程；{@code #142} ③ 之后它覆盖检索阶段）， 本枚举只承载取值 ——
+ * 让"心跳发生在哪一段"能被断言，而不是只靠读代码（见 {@code StreamAssembler#heartbeat()}）。
  */
 public enum EventKind {
 

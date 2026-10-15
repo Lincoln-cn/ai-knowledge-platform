@@ -32,6 +32,16 @@ class StreamTokensTest {
    *
    * <p>★ 断言的是 {@code done} 事件上的那个 payload（而不是 {@code assembler.tokens()}）：
    * 真正发出去的是事件里的那一份，两者若来自不同的字段，本用例会红。
+   *
+   * <p>★★ <strong>本用例是域层单测：这三笔用量由这里<u>直接喂入</u></strong>（{@link StreamAssembler#addUsage}）。
+   * 它证明的是"累加口只有一个、且总和进 {@code done}"——<strong>它不证明"真实链路会喂"</strong>。 （{@code #142} ④
+   * 之前这里写的是"这一次在真实链路上发生在检索之前"，那是一句<strong>把未实现当成已实现</strong>的前提： 当时 {@code addUsage} 在 {@code
+   * backend/src/main} 是<strong>零调用点</strong>。）
+   *
+   * <p>★★ 生产上的喂入点与它的真栈读数在<strong>别处</strong>： {@code ChatStreamPort.Callback#onUsage} → {@code
+   * ChatService.Run#onUsage} → {@link StreamAssembler#addUsage}， 由真栈用例 {@code
+   * ChatStreamUsageHttpTest} 钉住（它读 HTTP 上 {@code done} 帧的三字段与库里那两列， 逐字等于假模型上报的分量）。★ 查询理解 /
+   * 多跳判定那两次调用<strong>今天还没有接进问答链路</strong> （属检索策略那一批），所以这里前两笔是"将来的形状"：等它们接进来，累加口径一个字都不必改。
    */
   @Test
   void tokensSumEveryModelCallNotJustTheGeneration() {
@@ -39,11 +49,11 @@ class StreamTokensTest {
     assembler.begin();
     assembler.references(refs());
 
-    // ① 查询理解（改写 + 扩展）：这一次在真实链路上发生在检索之前
+    // ① 查询理解（改写 + 扩展）那一笔 —— ★ 直接喂入：它今天的生产调用点还不存在（见方法注释）
     assembler.addUsage(new TokenUsage(120, 40));
-    // ② 多跳判定
+    // ② 多跳判定那一笔 —— 同上（真栈上这两笔接进来时，喂的仍是这同一个 addUsage）
     assembler.addUsage(new TokenUsage(300, 10));
-    // ③ 生成（文本块之后回来）
+    // ③ 生成那一笔（真栈上由 ChatStreamPort.Callback#onUsage 喂进来，就在 onEnd 之前）
     assembler.delta("根据文档规定，");
     assembler.addUsage(new TokenUsage(820, 340));
 

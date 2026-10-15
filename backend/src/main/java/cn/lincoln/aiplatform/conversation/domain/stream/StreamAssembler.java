@@ -192,9 +192,12 @@ public final class StreamAssembler {
   /**
    * 发一个心跳（契约①的 {@code : keep-alive}）。
    *
-   * <p>★ <strong>本批不驱动它</strong>：心跳的定时（20s / 无业务帧时发）属于传输层。这里提供的是一个
-   * <strong>可以被断言的入口</strong>，用来钉住"检索阶段也能发心跳"这条（{@code 03 §1.6}、{@code 10 §6.4} 的 "心跳逻辑必须覆盖检索阶段"）——
-   * 判据是：心跳发出之后，{@code refs} 仍然排在第一个 {@code delta} 之前。
+   * <p>★ <strong>驱动的不是本类</strong>：心跳的定时（"无业务帧时按心跳间隔发"）属于传输层，今天的调用方是 {@code ChatService} 的心跳线程 ——
+   * 而它<strong>在检索之前就起</strong>（{@code #142} ③）， 于是"检索阶段也发心跳"（{@code 03 §1.6}、{@code 10
+   * §6.4}）在生产链路上成立，而不只是本类的一个入口。
+   *
+   * <p>★ 本方法只保证一件事：心跳进同一条<strong>有序</strong>事件序列 —— 判据是"心跳发出之后， {@code refs} 仍然排在第一个 {@code delta}
+   * 之前"。
    *
    * @return 刚产出的事件对象（便于调用方直接写出去）
    */

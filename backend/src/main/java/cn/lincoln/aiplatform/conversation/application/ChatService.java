@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.conversation.application;
 
 import cn.lincoln.aiplatform.conversation.domain.SourceRef;
+import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
 import cn.lincoln.aiplatform.conversation.domain.stream.StreamAssembler;
 import cn.lincoln.aiplatform.conversation.domain.stream.StreamEvent;
 import cn.lincoln.aiplatform.conversation.domain.stream.StreamMeta;
@@ -86,10 +87,11 @@ import org.springframework.stereotype.Service;
  * <h3>★ 线程模型（三条线，收尾只有一个出口）</h3>
  *
  * <ul>
- *   <li><strong>收尾线程</strong>（本方法的调用线程）：跑检索、启动模型线程、轮询"完事了吗 / 超时了吗"， 并在唯一的那一刻做终态（发 {@code
+ *   <li><strong>收尾线程</strong>（本方法的调用线程）：跑检索、启动心跳线程与模型线程、轮询"完事了吗 / 超时了吗"， 并在唯一的那一刻做终态（发 {@code
  *       error}/{@code done} + 落库）；
  *   <li><strong>模型线程</strong>：调 {@link ChatStreamPort#stream}，逐块喂装配器（写出去 + 按阈值 flush）；
- *   <li><strong>心跳线程</strong>：无业务帧时发注释帧；发现闲置超时就<strong>置标志</strong>（收尾仍由收尾线程做）。
+ *   <li><strong>心跳线程</strong>：无业务帧时发注释帧；发现闲置超时就<strong>置标志</strong>（收尾仍由收尾线程做）。 ★
+ *       它在<strong>检索之前</strong>就起 （{@code #142} ③）：检索期间也必须有心跳，否则"慢检索"在界面上看起来就是卡死。
  * </ul>
  *
  * <p>★ 收尾只有一个出口：{@link Run#terminalTaken}（{@code compareAndSet}）。三条线都可能先到， 先到的那一条收，其余的什么都不做 ——
@@ -267,12 +269,24 @@ public class ChatService {
     //     看起来像"这个知识库里确实没有相关内容"，而真相是"身份没跟过来"。它不会报任何错。
     //   ★ 为什么放在 meta 之后：`meta` 是"能停止"的前提（前端要它的 messageId），别让一次检索拖慢它。
     //   ★ 为什么放在起线程之前：装配器要求"引用先于第一个 delta"，而这里是**唯一**能读到正确范围的地方。
+    //
+    // ★★ #142 ③：**心跳线程必须在检索开始之前就起**（此前它在 retrieve 之后才起 ⇒ 检索期间一个字节都不发）。
+    //
+    //   检索可能很慢（长文档 / 多跳），而那段时间里既没有业务帧、也没有心跳帧 —— 前端的闲置计时一路涨到
+    //   阈值，用户看到的是"卡死"，服务端却什么都不知道（这条链路上的检索**不走** RetrievalService 的
+    //   5000ms 预算）。所以心跳的覆盖面必须是"这一轮从 meta 发出到 done 为止"，而不是"生成那一段"。
+    //
+    //   ★ 超时口径**没有**因此改变（这一点值得写清楚，免得下一个人以为这里动过语义）：
+    //     闲置超时的时钟是 `lastBusinessFrameAtNanos`，它在 `Run` 构造时就起算 ⇒ **检索耗时早就在这个预算里**
+    //     （修之前，检索超过 idleTimeout 的那一轮会在心跳线程起来后的第一圈就被判超时）。本行移动只改变了
+    //     "在检索期间就发现超时"还是"检索回来才发现"——两者收尾都是 IDLE_TIMEOUT，都拿不到模型的一个字。
+    //     而"检索要不要有自己的预算"是另一件事（`error.reason` 今天仍借"生成超时"那句文案），见交付报告。
+    Thread heartbeat = startHeartbeatThread(run);
     List<SourceRef> refs = retrieve(question, turn.kbIds(), turn.conversationId());
     run.assembler.references(refs);
     run.bindRefs(refs);
     run.pump();
 
-    Thread heartbeat = startHeartbeatThread(run);
     Thread model = startModelThread(turn, question, refs, run);
     awaitTerminal(turn, run);
     heartbeat.interrupt();
@@ -1006,6 +1020,27 @@ public class ChatService {
       if (end == ChatStreamPort.End.FAILED) {
         lastFailReason = detail;
       }
+    }
+
+    /**
+     * ★★ {@code #142} ④ 的<strong>喂入点</strong>：把模型端口上报的用量交给装配器累加，再由 {@code done.tokens} 与落库两条路径读出去。
+     *
+     * <h3>★★ 为什么这一行必须有（去掉它会发生什么）</h3>
+     *
+     * <p>去掉它，{@code StreamAssembler#addUsage} 在 {@code backend/src/main} 就<strong>零调用点</strong>， 而
+     * {@code done.tokens} 恒为 {@code TokenUsage.zero()} —— 界面上、库里、成本口径上全是 0，
+     * 并且<strong>不报任何错</strong>（这正是这一批要收掉的那条静默失效）。判据落在真栈用例 {@code ChatStreamUsageHttpTest}：它读 HTTP 上
+     * {@code done} 帧里的三字段与库里那两列，逐字等于假模型上报的两个分量。
+     *
+     * <p>★ 分量折成领域值对象只在这一处（{@code TokenUsage} 属于 {@code conversation.domain}， 而 SPI 在 {@code
+     * platform} —— 让 SPI 引用它会形成模块环，所以端口只传两个 int，见 {@link ChatStreamPort.Callback#onUsage}）。
+     *
+     * <p>★ 终态之后再上报会被装配器拒绝（{@code requireNotSettled}）而不是被静默丢掉： "一条流终态之后账就封了"这条口径由 {@code
+     * StreamTokensTest#usageAfterDoneIsRefused} 与 {@code Message} 的状态机各自钉住一半。
+     */
+    @Override
+    public void onUsage(int promptTokens, int completionTokens) {
+      assembler.addUsage(new TokenUsage(promptTokens, completionTokens));
     }
 
     /**
