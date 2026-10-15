@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import http.server
+import os
 import socketserver
 import threading
 import time
@@ -17,7 +18,11 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent
-PORT = 4209
+# ★ 3788-4586 在部分开发机上被 Windows 动态端口排除占掉（Hyper-V/WSL 那一族）
+#   => bind() 直接 WSAEACCES/10013，换哪个用户跑都一样。
+#   默认值保持 4209（CI 依赖它），但允许用 AIP_GATE_PORT 覆盖，好让本机也能跑：
+#     set AIP_GATE_PORT=14205  &&  python smoke_test.py
+PORT = int(os.environ.get("AIP_GATE_PORT", "4209"))
 BASE = f"http://127.0.0.1:{PORT}/"
 
 results: list[tuple[bool, str, str]] = []
