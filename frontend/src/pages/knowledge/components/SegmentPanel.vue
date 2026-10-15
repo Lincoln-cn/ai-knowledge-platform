@@ -38,7 +38,8 @@
         :class="{
           oversized: seg.charCount > modelLimit,
           disabled: !seg.enabled,
-          selected: selectedIds.includes(seg.id)
+          selected: selectedIds.includes(seg.id),
+          linked: !!highlightSegmentId && seg.id === highlightSegmentId
         }"
         @click="onCardClick(seg)"
       >
@@ -51,6 +52,9 @@
           />
           <span class="sg-title ellipsis">{{ seg.title || '（无标题）' }}</span>
           <span class="grow" />
+          <el-tag v-if="highlightSegmentId && seg.id === highlightSegmentId" size="small" type="primary" effect="plain">
+            引用定位
+          </el-tag>
           <el-tag v-if="seg.charCount > modelLimit" size="small" type="warning" effect="plain">超长</el-tag>
           <el-tag size="small" effect="plain" :type="embeddingTagType(seg.embedding)">
             {{ labelOf(SEGMENT_EMBEDDING_LABELS, seg.embedding) }}
@@ -140,7 +144,12 @@ import SegmentEditDialog from './SegmentEditDialog.vue'
 import EmptyArt from '@/components/EmptyArt.vue'
 import { SEGMENT_EMBEDDING_LABELS, labelOf } from '@/constants/labels'
 
-const props = defineProps<{ kbId: string; initialDocumentId?: string }>()
+const props = defineProps<{
+  kbId: string
+  initialDocumentId?: string
+  /** 引用深链的目标分段（`?segment=`）：命中的那张卡要能一眼认出来 */
+  highlightSegmentId?: string
+}>()
 
 const session = useSessionStore()
 const canEdit = computed(() => session.can(PERM.segmentEdit))
@@ -455,6 +464,13 @@ onMounted(async () => {
   border-color: var(--color-accent-line);
   background: var(--color-accent-soft);
   box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+/* 引用定位命中的那张：与「批量选中」分开两套语义 ——
+   选中是「我要对它做动作」，定位是「这里就是引用指的那一段」 */
+.seg-card.linked {
+  border-color: var(--color-accent-line);
+  box-shadow: inset 0 0 0 1px var(--color-accent-line);
 }
 
 .seg-card.disabled {
