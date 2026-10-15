@@ -1,38 +1,35 @@
 @echo off
 setlocal enabledelayedexpansion
 rem ============================================================================
-rem  Frontend browser gates runner -- used while GitHub Actions is unavailable
-rem  (account quota / billing limit, see Issue #102 and the no-CI development
-rem   and verification plan under docs/).
+rem  Frontend gates runner -- used while GitHub Actions is unavailable
+rem  (account quota / billing limit: Issue #102, plan under docs/).
 rem
-rem  WHY THIS SCRIPT EXISTS: these gates bind their own ports
-rem  (4205 / 4209 / 4210). The agent sandbox refuses to bind them
-rem  (WinError 10013), so these readings can only be produced on this machine.
+rem  WHAT IT RUNS (13 gates, two families with different preconditions):
+rem    A) 11 browser gates  -> need the dev server on 5280
+rem       (mock mode is what .env.development defaults to)
+rem    B) verify_features + smoke_test -> serve their own copy of dist/,
+rem       so they need a FRESH dist/ (npm run build:mock) and NO backend:
+rem       in CI they run in the frontend job right after npm run build:mock.
+rem       smoke_test refuses to run on a stale dist on purpose.
 rem
-rem  ASCII + CRLF ONLY on purpose:
-rem    - non-ASCII comments are parsed as GBK by cmd.exe and can eat the next
-rem      line (that already happened once in this repo),
-rem    - an LF-only .cmd is mis-read by cmd.exe (it once read
-rem      "setlocal enabledelayedexpansion" as "ayedexpansion").
+rem  ASCII + CRLF ONLY: non-ASCII comments are parsed as GBK by cmd.exe and can
+rem  eat the next line; an LF-only .cmd is mis-read (it once read
+rem  "setlocal enabledelayedexpansion" as "ayedexpansion").
 rem
-rem  *** NEVER PROBE A SINGLE LITERAL ADDRESS ***
-rem  Vite binds only ::1 (IPv6) on this machine, so a 127.0.0.1 probe gets
-rem  WinError 10061 while the dev server is perfectly healthy -- that is what
-rem  made this runner report "dev server is not answering" with the server up.
-rem  All probing goes through tools\probe_http.py, which tries
-rem  localhost / [::1] / 127.0.0.1 in turn (and bypasses HTTP proxies).
-rem
-rem  TWO KINDS OF GATES, TWO DIFFERENT PRECONDITIONS:
-rem    1) the 11 browser gates -> need the frontend dev server on 5280
-rem       (mock mode is fine; that is what .env.development defaults to)
-rem    2) verify_features + smoke_test -> need the REAL stack: a backend on
-rem       18088 (frontend/.env.development VITE_API_TARGET) + stub on 11434.
-rem    Without the backend those 2 are SKIPPED and counted separately:
-rem    a SKIPPED gate is a MISSING READING, never a pass.
+rem  *** THREE TRAPS THIS SCRIPT NOW AVOIDS (all three were shipped once) ***
+rem  1) NEVER probe a single literal address: Vite binds only ::1 here, so a
+rem     127.0.0.1 probe says "not answering" while the server is healthy.
+rem     Probing goes through tools\probe_http.py which tries
+rem     localhost / [::1] / 127.0.0.1 and bypasses HTTP proxies.
+rem  2) NEVER put an unescaped closing paren in echo text inside an if block:
+rem     cmd closes the block early and the rest of the block runs
+rem     unconditionally -- the symptom is "always fails, message truncated".
+rem  3) ports 4205/4209/4210 sit inside this machine Windows excluded port
+rem     range 3788-4287, so bind fails with errno 13 for every user.
+rem     The two family-B gates therefore run on 14205/14209 via
+rem     AIP_GATE_PORT. Their built-in default is unchanged, so CI is unaffected.
 rem
 rem  USAGE:  cmd /c "tools\run-frontend-gates.cmd"
-rem  NEEDED: python on PATH, playwright installed, dev server on 5280
-rem          (scripts\aip-fe-live.cmd)
 rem  REPORT: .git\frontend-gates-report.txt   (never committed)
 rem ============================================================================
 
@@ -40,6 +37,8 @@ set "ROOT=%~dp0.."
 set "FE=%ROOT%\frontend"
 set "REPORT=%ROOT%\.git\frontend-gates-report.txt"
 set "PROBE=%ROOT%\tools\probe_http.py"
+set "GATE_PORT_A=14205"
+set "GATE_PORT_B=14209"
 
 if not exist "%FE%\package.json" (
   echo [ERROR] frontend folder not found at "%FE%"
@@ -50,35 +49,21 @@ if not exist "%PROBE%" (
   exit /b 1
 )
 
-> "%REPORT%" echo Frontend browser gates report
+> "%REPORT%" echo Frontend gates report
 >> "%REPORT%" echo Started: %DATE% %TIME%
 >> "%REPORT%" echo.
 
-rem --- step 1: the 11 browser gates need the dev server on 5280 -----------------
->> "%REPORT%" echo == probe dev server on 5280 (localhost / ::1 / 127.0.0.1) ==
+rem --- step 1: can we run family A? -------------------------------------------
+set "DEVUP=1"
+>> "%REPORT%" echo == probe dev server on 5280 ==
 python "%PROBE%" 5280 >> "%REPORT%" 2>&1
 if errorlevel 1 (
-  echo [ERROR] frontend dev server is not answering on 5280 -- tried localhost, ::1 and 127.0.0.1
-  echo         start it in another window first:
-  echo             scripts\aip-fe-live.cmd
-  echo         or:  cd /d "%FE%"  ^&^&  npm run dev
-  echo         NOTE: Vite binds ::1 only here -- 127.0.0.1 alone is always refused.
-  echo [ERROR] dev server not answering on 5280 >> "%REPORT%"
-  echo Full report: %REPORT%
-  exit /b 1
-)
->> "%REPORT%" echo dev server OK on 5280
-
-rem --- step 2: do we have the real stack for the last 2 gates? -----------------
-set "REALSTACK=1"
->> "%REPORT%" echo == probe backend on 18088/actuator/health ==
-python "%PROBE%" 18088 --path /actuator/health >> "%REPORT%" 2>&1
-if errorlevel 1 (
-  set "REALSTACK=0"
-  >> "%REPORT%" echo backend not answering on 18088 -- the 2 real-stack gates will be SKIPPED
-  echo [WARN] backend not answering on 18088.
-  echo        verify_features.py + smoke_test.py need the REAL stack and will be SKIPPED.
-  echo        A skipped gate is a MISSING READING -- write it down, never read it as green.
+  set "DEVUP=0"
+  >> "%REPORT%" echo dev server not answering on 5280 -- the 11 browser gates will be SKIPPED
+  echo [WARN] dev server not answering on 5280 -- the 11 browser gates will be SKIPPED.
+  echo        start it first:  scripts\aip-fe-live.cmd
+  echo        NOTE: Vite binds ::1 only here, so 127.0.0.1 alone is always refused.
+  echo        A SKIPPED gate is a MISSING READING -- never read it as green.
 )
 
 set "FAILED=0"
@@ -91,7 +76,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem --- step 3: the 11 browser gates --------------------------------------------
+rem --- step 2: family A -- the 11 browser gates -------------------------------
 for %%G in (check_theme check_nodeconfig check_node_menu check_canvas check_collapse ^
 check_history check_palette check_pickers check_assistants check_singleton ^
 check_publish) do (
@@ -99,26 +84,9 @@ check_publish) do (
   echo === %%G.py ===
   >> "%REPORT%" echo.
   >> "%REPORT%" echo === %%G.py ===
-  python "%%G.py" >> "%REPORT%" 2>&1
-  if errorlevel 1 (
-    echo     FAIL  %%G.py
-    >> "%REPORT%" echo RESULT: FAIL %%G.py
-    set /a FAILED+=1
-  ) else (
-    echo     PASS  %%G.py
-    >> "%REPORT%" echo RESULT: PASS %%G.py
-  )
-)
-
-rem --- step 4: the 2 self-hosted gates (real stack) ----------------------------
-for %%G in (verify_features smoke_test) do (
-  set /a TOTAL+=1
-  echo === %%G.py ===
-  >> "%REPORT%" echo.
-  >> "%REPORT%" echo === %%G.py ===
-  if "!REALSTACK!"=="0" (
-    echo     SKIP  %%G.py   - no real stack
-    >> "%REPORT%" echo RESULT: SKIPPED %%G.py -- backend 18088 not answering -- MISSING READING, not a pass
+  if "!DEVUP!"=="0" (
+    echo     SKIP  %%G.py   - no dev server
+    >> "%REPORT%" echo RESULT: SKIPPED %%G.py -- dev server not answering on 5280 -- MISSING READING
     set /a SKIPPED+=1
   ) else (
     python "%%G.py" >> "%REPORT%" 2>&1
@@ -132,6 +100,48 @@ for %%G in (verify_features smoke_test) do (
     )
   )
 )
+
+rem --- step 3: family B needs a fresh dist/ (mock build), so build once -------
+>> "%REPORT%" echo.
+>> "%REPORT%" echo == npm run build:mock ==
+echo === build:mock ===
+call npm run build:mock >> "%REPORT%" 2>&1
+if errorlevel 1 (
+  set "DISTOK=0"
+  >> "%REPORT%" echo build:mock FAILED -- the 2 self-hosted gates will be SKIPPED
+  echo [WARN] npm run build:mock failed -- verify_features + smoke_test will be SKIPPED.
+) else (
+  set "DISTOK=1"
+  >> "%REPORT%" echo build:mock OK
+)
+
+rem --- step 4: family B -- the 2 self-hosted gates on non-reserved ports ------
+>> "%REPORT%" echo.
+>> "%REPORT%" echo == self-hosted gates on AIP_GATE_PORT %GATE_PORT_A% / %GATE_PORT_B% ==
+set "AIP_GATE_PORT=%GATE_PORT_A%"
+for %%G in (verify_features smoke_test) do (
+  set /a TOTAL+=1
+  echo === %%G.py ===
+  >> "%REPORT%" echo.
+  >> "%REPORT%" echo === %%G.py ===
+  if "!DISTOK!"=="0" (
+    echo     SKIP  %%G.py   - no dist build
+    >> "%REPORT%" echo RESULT: SKIPPED %%G.py -- build:mock failed -- MISSING READING
+    set /a SKIPPED+=1
+  ) else (
+    python "%%G.py" >> "%REPORT%" 2>&1
+    if errorlevel 1 (
+      echo     FAIL  %%G.py
+      >> "%REPORT%" echo RESULT: FAIL %%G.py
+      set /a FAILED+=1
+    ) else (
+      echo     PASS  %%G.py
+      >> "%REPORT%" echo RESULT: PASS %%G.py
+    )
+  )
+  set "AIP_GATE_PORT=%GATE_PORT_B%"
+)
+set "AIP_GATE_PORT="
 
 >> "%REPORT%" echo.
 >> "%REPORT%" echo ================= SUMMARY =================
