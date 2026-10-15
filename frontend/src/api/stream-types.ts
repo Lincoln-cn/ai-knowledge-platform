@@ -80,6 +80,22 @@ export type StreamTerminationPath =
   | 'IDLE_TIMEOUT'
 
 /**
+ * ★★ `ABORT` 与 `DISCONNECT` 靠什么分开（`#119` 的收口，读这一段的都是要动这条链的人）。
+ *
+ * `ABORT` 是**用户意图**，它必须由一次**显式请求**表达，不能由"连接没了"推断 ——
+ * 而 `abort()`（`lib/sse.ts` 掐 fetch）在服务端**只表现为"连接断了"**。
+ * 所以停止的表达位是契约里的 `stopMessage`
+ * （`POST /conversations/:conversationId/messages/:messageId/stop`，见 `conversations.ts`）。
+ *
+ * 调用方的顺序是**写死的**（`useChatSession` 的 `stop`）：先发停止请求、**再** `abort()`，
+ * 且请求成功与否都要 `abort()`（只发不 abort ⇒ 流一直挂着；只 abort 不发 ⇒ 服务端分不出这两件事）。
+ *
+ * ★ 「还没收到 `meta` 就点停止」的降级**写在 `stopMessage` 的注释里**：那时拿不到 `messageId`，
+ * 只能跳过请求直接 `abort()` —— 服务端按 `DISCONNECT` 收（`FAILED`）。这条降级是契约的一部分，
+ * 不许在实现里悄悄改成别的形状。
+ */
+
+/**
  * ③ 任务推进与前端连接无关。
  *
  * 任务（问答生成、向量化进度、导入等）的**唯一真相源在后端**；

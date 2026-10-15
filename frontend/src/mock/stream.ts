@@ -46,6 +46,35 @@ const FAIL_TRIGGER = '模拟失败'
 /** 问题里带这个词就模拟「已生成但正文为空」 */
 const EMPTY_TRIGGER = '模拟空回答'
 
+/**
+ * ★★ 正在生成的 mock 流：`messageId → 停止函数`。
+ *
+ * <h3>为什么 mock 也要有一张表（不是"多余的一层"）</h3>
+ *
+ * 契约里停止是一个**显式请求**（`conversations.ts` 的 `stopMessage`，
+ * `POST /conversations/:id/messages/:messageId/stop`）。而 mock 的"服务端"就在浏览器里：
+ * 没有这张表，那条请求在 `VITE_USE_MOCK=true` 下**没有对象可停**——
+ * 调用方只会 await 到一次 404，于是"停止"在 mock 下变成一条没人接的请求
+ * （而页面看起来一切正常，只是库里那条最终是 `FAILED`）。
+ *
+ * ★ 表里挂的是**同一个** `abort`：mock 的停止端点与页面上那个停止按钮走的是**一条**收尾路径
+ * （`finish('STOPPED')` → 已生成内容落库），所以两种入口在 mock 下的读数必须一致。
+ */
+const inFlightStops = new Map<string, () => void>()
+
+/**
+ * 请求停止某一条正在生成的 mock 流（mock 版的停止端点用）。
+ *
+ * @param messageId 助手消息 id（mock 里在 `meta` 之前就已生成，与真实后端不同）
+ * @return 是否真的停下了这一条（`false` = 没有这条流在跑 ⇒ 调用方按"已收尾"应答）
+ */
+export function requestMockStop(messageId: string): boolean {
+  const stop = inFlightStops.get(messageId)
+  if (!stop) return false
+  stop()
+  return true
+}
+
 export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
   const startedAt = Date.now()
   const messageId = `msg_${Date.now().toString(36)}`
@@ -97,6 +126,8 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
     if (closed) return
     closed = true
     cleanup()
+    // ★ 收尾即摘牌：留着它会让一次迟到的停止请求命中一个已经结束的流
+    inFlightStops.delete(messageId)
 
     // 落库同步完成：localStorage.setItem 无异步间隙，停止后立刻刷新也不丢
     try {
@@ -230,14 +261,25 @@ export function chatStreamMock(options: ChatStreamOptions): StreamHandle {
     tick()
   }, 520 + thinkingMs)
 
+  /**
+   * 收尾为 `STOPPED`（**已生成的半截照样落库** —— 这是「用户点停止后数据不能丢」的兑现点）。
+   *
+   * <p>★ 页面上的停止按钮（`abort()`）与 mock 的停止端点（`requestMockStop`）都走这一个函数：
+   * 两个入口在 mock 下的终态与落库内容必须一模一样，否则"mock 下停止是对的、真栈上是错的"
+   * 这类偏差不会有人发现。
+   */
+  const stopStream = () => {
+    if (aborted || closed) return
+    aborted = true
+    const completion = Math.round(Math.max(emittedText.length, 1) / 2.2)
+    finish('STOPPED', { prompt: 812, completion, total: 812 + completion })
+  }
+
+  // ★ 登记这一条正在跑的流（停止端点靠它找到"停谁"）；收尾（finish）会摘牌
+  inFlightStops.set(messageId, stopStream)
+
   return {
     messageId,
-    abort() {
-      if (aborted || closed) return
-      aborted = true
-      // 已生成的半截照样落库 —— 这是「用户点停止后数据不能丢」的兑现点
-      const completion = Math.round(Math.max(emittedText.length, 1) / 2.2)
-      finish('STOPPED', { prompt: 812, completion, total: 812 + completion })
-    }
+    abort: stopStream
   }
 }

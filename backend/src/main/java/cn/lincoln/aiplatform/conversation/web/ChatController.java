@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.conversation.web;
 
 import cn.lincoln.aiplatform.conversation.application.ChatService;
+import cn.lincoln.aiplatform.conversation.application.ChatStopService;
 import cn.lincoln.aiplatform.conversation.application.ChatStreamAssembler;
 import cn.lincoln.aiplatform.conversation.application.ChatTurnWriter;
 import cn.lincoln.aiplatform.conversation.application.PublicChatService;
@@ -16,6 +17,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -81,12 +83,17 @@ public class ChatController {
   private final ChatService chatService;
   private final ChatStreamAssembler assembler;
   private final PublicChatService publicChat;
+  private final ChatStopService chatStop;
 
   public ChatController(
-      ChatService chatService, ChatStreamAssembler assembler, PublicChatService publicChat) {
+      ChatService chatService,
+      ChatStreamAssembler assembler,
+      PublicChatService publicChat,
+      ChatStopService chatStop) {
     this.chatService = chatService;
     this.assembler = assembler;
     this.publicChat = publicChat;
+    this.chatStop = chatStop;
   }
 
   /**
@@ -149,6 +156,49 @@ public class ChatController {
         .body(
             assembler.streamOf(
                 new ChatStreamAssembler.AsyncTurn(prepared, body.question().strip())));
+  }
+
+  /**
+   * ★★ 停止生成（契约 {@code stopMessage}）—— <strong>显式停止的唯一表达位</strong>（{@code #119} 的收口）。
+   *
+   * <h3>为什么必须是一条<strong>独立</strong>的端点</h3>
+   *
+   * <p>契约给两个不同的终态：{@code ABORT ⇒ done(STOPPED)}（不发 error、保留已生成内容）与 {@code DISCONNECT ⇒ error +
+   * done(FAILED)}。而前端的 {@code abort()} 掐的是 fetch ——
+   * 服务端只看到"连接没了"，<strong>分不出</strong>"用户点了停止"与"网线掉了"。 用户意图只能由一次显式请求表达，这条端点就是它。
+   *
+   * <h3>★★ 它与 {@code chat} 端点的一条重要差别：<strong>不</strong>是流</h3>
+   *
+   * <p>这是一次普通的 JSON 请求（{@code 200} + 回执），不是 {@code text/event-stream}：
+   * 它回答的是"请求收下了没有"，而"这一轮最终停在哪一态"由生成那条流上的 {@code done} 帧回答。 把两件事塞进一条流只会让"停止请求到底生效了吗"更难读。
+   *
+   * <h3>★★ 判定顺序（写死，不看竞态）</h3>
+   *
+   * <p>收到显式停止<strong>优先于</strong>连接断开：先停止、再断连 ⇒ 终态是 {@code STOPPED}； 从没收到过停止、只是断连 ⇒ {@code
+   * FAILED}。顺序的落点在 {@code ChatService.Run#decideTerminalPath()} 的第一行。
+   *
+   * <h3>★ 权限点</h3>
+   *
+   * <p>{@code conversation:view}（与 {@code chat} 登录面那一半同一个权限点）：停止是"用会话"这件事的一部分， 它自带 {@code
+   * conversation:share} / {@code conversation:manage} 两档更细的权限，与它们同族。 ★ 写端点<strong>必须</strong>带
+   * {@code @PreAuthorize}（{@code AuthorizationDeclarationTest} 构建期检查）。
+   *
+   * <p>★ 这条端点<strong>只有登录面</strong>：{@code chat} 端点的公开面分支（{@code X-Access-Credential}） 在 {@code
+   * chat} 那条上共用，而公开面今天的"停止"仍退化为客户端 {@code abort()} ——
+   * 那是<strong>已知缺口</strong>（写在交付报告与契约注释里），不是这里漏了一个分支。
+   *
+   * @param conversationId 会话 id
+   * @param messageId 助手消息 id（契约 {@code meta} 帧给出）
+   * @param jwt 当前登录用户（★ 取不出 {@code sub} ⇒ 401，与 {@code chat} 同一条口径）
+   * @return 停止回执（{@code accepted} + 服务端此刻读到的状态）
+   */
+  @PostMapping("/{conversationId}/messages/{messageId}/stop")
+  @PreAuthorize("hasAuthority('conversation:view')")
+  public ApiResponse<ChatStopService.Receipt> stop(
+      @PathVariable UUID conversationId,
+      @PathVariable UUID messageId,
+      @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(chatStop.requestStop(conversationId, messageId, subjectOf(jwt)));
   }
 
   /**

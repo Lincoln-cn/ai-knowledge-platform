@@ -76,6 +76,13 @@ import org.springframework.stereotype.Service;
  * 若按断开判停止，真正的断网会被显示成"已停止"（用户以为是自己停的，而答案其实没写完）。 所以停止必须是<strong>独立于连接</strong>的显式信号 —— {@link
  * ChatStopSignal} 就是那个入口。
  *
+ * <p>★★ <strong>判定顺序写死：显式停止优先于连接断开</strong>（{@code #119} 的落点）。两者的到达顺序不受服务端控制 —— "先停止、再断连"必须收 {@code
+ * STOPPED}（不是 {@code FAILED}），而"从没收到停止、只是断连"必须收 {@code FAILED}。 判据落在 {@link
+ * Run#decideTerminalPath()} 的第一行（收尾那一刻再读一次停止信号）：那之前， 这个顺序<strong>取决于有没有下一个块</strong>，也就是取决于竞态。
+ *
+ * <p>★ 停止请求从哪来：契约的 {@code stopMessage} （{@code POST
+ * /conversations/:conversationId/messages/:messageId/stop}）—— 见 {@link ChatStopService}。
+ *
  * <h3>★ 线程模型（三条线，收尾只有一个出口）</h3>
  *
  * <ul>
@@ -812,6 +819,14 @@ public class ChatService {
     /** ★ 终态的唯一出口（多条线竞争，先到者收）。 */
     private final AtomicBoolean terminalTaken = new AtomicBoolean(false);
 
+    /**
+     * 终态判定的<strong>快照</strong>（{@link #pathOf()} 只判一次，之后谁来读都是同一个答案）。
+     *
+     * <p>★ 为什么必须快照：判定本体里有一个<strong>一次性</strong>动作（读走停止信号，{@code consume}）。 判两次就会有第二次读到"已经没有信号了"⇒
+     * 同一个 {@code Run} 上出现两个终态答案 （第二次收尾由 {@link #terminalTaken} 挡住，但"答案会漂"这件事本身就该被消灭）。
+     */
+    private final AtomicReference<StreamTerminationPath> terminalPath = new AtomicReference<>();
+
     private final AtomicReference<ChatStreamPort.End> upstream =
         new AtomicReference<>(ChatStreamPort.End.COMPLETE);
 
@@ -853,9 +868,52 @@ public class ChatService {
       this.lastFlushAtNanos = startedAtNanos;
     }
 
-    /** 这一轮该收在哪条路径上（★ 四路径只在这里判一次）。 */
+    /**
+     * 这一轮该收在哪条路径上（★ 四路径只在这里判一次；判定顺序见下）。
+     *
+     * <h3>★★ 判定顺序是<strong>写死</strong>的，而它正是 {@code #119} 的落点</h3>
+     *
+     * <ol>
+     *   <li><strong>显式停止</strong>（{@link ChatStopSignal}）—— ★ 最高优先：用户点了停止就是停止，
+     *       此后连接断没断<strong>不改变</strong>这个事实（终态 {@code STOPPED}，不是 {@code FAILED}）；
+     *   <li>闲置超时；
+     *   <li>连接断开 / 上游失败。
+     * </ol>
+     *
+     * <p>★★ 为什么不能只靠 {@link #onChunk} 里那个检查点：它<strong>要等下一个块</strong>。
+     * 而"用户停止"与"连接断掉"之间经常一个块都没有（甚至从头到尾一个块都没有）⇒ {@code cancelledByStop} 一直是 {@code false}，而 {@code
+     * disconnected} 已经是 {@code true} ⇒ 终态落到 {@code FAILED}，
+     * <strong>结果取决于竞态</strong>。那正是"先停止、再断连"这条路今天的病：两个判据谁也不看谁。
+     *
+     * <p>★ 所以这里在收尾那一刻<strong>再读一次</strong>停止信号（{@link ChatStopSignal#consume}，读到即清）：
+     * 显式停止压过断开。反之——从头到尾<strong>没收到过</strong>停止、只是连接断了——落 {@code DISCONNECT} （{@code
+     * FAILED}），这一个字节没改。
+     *
+     * <p>★ 结论按 {@link #terminalPath} 快照：本方法可能被读多次（第二个收尾入口），答案必须只有一个。
+     */
     private StreamTerminationPath pathOf() {
-      if (cancelledByStop) {
+      StreamTerminationPath decided = terminalPath.get();
+      if (decided != null) {
+        return decided;
+      }
+      StreamTerminationPath computed = decideTerminalPath();
+      if (terminalPath.compareAndSet(null, computed)) {
+        return computed;
+      }
+      return terminalPath.get();
+    }
+
+    /**
+     * 终态判定的本体 —— <strong>顺序即上面那张表的顺序</strong>（只在 {@link #pathOf()} 里被调一次）。
+     *
+     * <p>★ 第一行那个 {@code consume} 是"显式停止优先"的<strong>唯一</strong>实现点，也是本批新增的那一步： 去掉它（或让它排在 {@code
+     * disconnected} 之后）⇒ 先停止再断连就会收成 {@code FAILED}， 也就是 {@code #119} 里的竞态。这一条由真栈用例 {@code
+     * ConversationStopEndpointTest#stopThenDisconnectStillEndsAsStopped} 钉住。
+     */
+    private StreamTerminationPath decideTerminalPath() {
+      // ★★ ① 显式停止优先于一切（读到即清 —— 留着会让下一轮同名消息一上来就被停）
+      boolean stopRequested = stopSignal.consume(messageId);
+      if (cancelledByStop || stopRequested) {
         return StreamTerminationPath.ABORT;
       }
       if (timedOut) {

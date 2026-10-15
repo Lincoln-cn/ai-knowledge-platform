@@ -1,7 +1,12 @@
 import { ApiError, ErrorCode } from '@/api/types'
 import type { ClassificationLevel } from '@/api/types'
 import { PUBLIC_GATE_CODES } from '@/utils/public-gate'
-import type { ChatMessage, PublicContext, ShareScope } from '@/api/conversations'
+import type {
+  ChatMessage,
+  ChatStopReceipt,
+  PublicContext,
+  ShareScope
+} from '@/api/conversations'
 import { PERM } from '@/constants/permissions'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
@@ -11,6 +16,7 @@ import {
 } from '../fixtures/conversations'
 import { assistants, credentials as assistantCredentials } from '../fixtures/assistants'
 import { cannedAnswer } from '../fixtures/canned'
+import { requestMockStop } from '../stream'
 import { clearanceFromToken } from '../fixtures/identity'
 import { documents, knowledgeBases, segments } from '../fixtures/knowledge'
 import {
@@ -527,6 +533,57 @@ export const conversationRoutes: MockRoute[] = [
         return paginate(list, { ...query, page: lastPage, size })
       }
       return paginate(list, query)
+    }
+  ],
+
+  /**
+   * ★★ 停止生成（契约 `stopMessage`）—— **显式停止的表达位**（`#119` 的收口）。
+   *
+   * <h3>为什么 mock 必须实现它（而不是靠"没实现就 404"）</h3>
+   *
+   * 契约里"用户停止"（`ABORT ⇒ STOPPED`）与"连接断开"（`DISCONNECT ⇒ FAILED`）是**两个**终态，
+   * 而前端的 `abort()` 在服务端只表现为"连接断了"。mock 是契约的第二种实现，
+   * 少了这条路由 ⇒ `VITE_USE_MOCK=true` 下"停止"变成一条**没人接的请求**：
+   * 页面照常收尾（本地 `abort` 给 `STOPPED`），但库里那一轮永远只能按断开收 ——
+   * 于是最该在 mock 下先跑通的那条路径，恰恰是唯一跑不通的。
+   *
+   * <h3>两件事（顺序即语义）</h3>
+   *
+   * <ol>
+   *   <li><strong>正在生成的那一条</strong> ⇒ 当场按 {@code STOPPED} 收尾
+   *       （走 mock 流自己的收尾函数 —— 与页面上的停止按钮**同一条**路径，含"已生成内容落库"）；
+   *   <li><strong>已经收尾的那一条</strong> ⇒ {@code accepted: false} + 它当前的状态。
+   *       ★ 晚到的停止不是错误（用户真的点了），但也**不许静默** —— {@code accepted} 就是那个可读的位。
+   * </ol>
+   *
+   * <p>★ 判定顺序与真实后端**逐字一致**：先"显式停止"（这就是它），后"连接断开"（`abort()`）。
+   * 两者在 mock 下的终态也必须一样（都是 `STOPPED`、都保留已生成内容）。
+   *
+   * <p>★ 权限：写操作前置也要过判定（{@code 07 §3.3} 硬规矩 1）—— 看不见的会话一律 **404**
+   * （不是 403：403 等于确认这个 id 存在）。
+   */
+  [
+    'POST',
+    '/conversations/:conversationId/messages/:messageId/stop',
+    ({ path, token }) => {
+      findConv(path.conversationId, token)
+
+      // ① 这条正在生成：mock 的流住在浏览器里，消息要到收尾才落库 ⇒ 先问流，再查库
+      if (requestMockStop(path.messageId)) {
+        const accepted: ChatStopReceipt = { accepted: true, status: 'GENERATING' }
+        return accepted
+      }
+
+      // ② 已经收尾（或压根不是这个会话的消息）：状态从存储里读，对不上就是 404
+      const msg = findMessage(path.messageId)
+      if (!msg || msg.conversationId !== path.conversationId) {
+        throw new ApiError(ErrorCode.NOT_FOUND, `消息「${path.messageId}」不存在`)
+      }
+      if (msg.role !== 'ASSISTANT') {
+        throw new ApiError(ErrorCode.BAD_REQUEST, '只能停止助手回答')
+      }
+      const late: ChatStopReceipt = { accepted: false, status: msg.status }
+      return late
     }
   ],
 
