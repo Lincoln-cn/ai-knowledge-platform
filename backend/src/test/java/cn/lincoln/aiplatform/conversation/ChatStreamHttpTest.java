@@ -2,6 +2,9 @@ package cn.lincoln.aiplatform.conversation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import cn.lincoln.aiplatform.conversation.application.ChatService;
 import cn.lincoln.aiplatform.conversation.application.ChatStopSignal;
 import cn.lincoln.aiplatform.conversation.application.ChatStreamProperties;
@@ -10,6 +13,7 @@ import cn.lincoln.aiplatform.conversation.application.ChatTurnStore;
 import cn.lincoln.aiplatform.conversation.application.ChatTurnWriter;
 import cn.lincoln.aiplatform.conversation.support.FakeChatStreamPorts;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.support.PostgresImage;
@@ -33,6 +37,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -220,6 +225,8 @@ class ChatStreamHttpTest {
   @Test
   void normalPathEmitsTheContractSequenceAndPersistsTheAnswer() throws Exception {
     Fixture fixture = seedWithVisibleSegment();
+    // ★ 第二条好分段：让下面那条"index 连续递增"的逐字段核对不是平凡的（只剩一条时它恒真）
+    seedDocumentAndSegment(fixture.kbId(), "SSE 报销制度文档", "报销凭证章节", "差旅住宿标准按职级分档，住宿费上限见附表");
     // ★ 长答案 + 60ms/块：给下面那条"生成中"读数留出足够长的窗口（短答案会在采样前就写完）
     fakeModel.set(FakeChatStreamPorts.longAnswerStreaming(60, 12));
 
@@ -248,11 +255,33 @@ class ChatStreamHttpTest {
     assertThat(refsData)
         .as(
             "★ refs 帧的 wire 形状是 {\"refs\":[...]}（契约里它是一个 SourceRef 数组）。"
-                + "★ 元素级字段名（index/title/docName/kbName/score/segmentId）不在本类断言："
-                + "本类夹具在真栈上全文检索零命中（见交付报告的'未完成'），那 10 个字段名由既有的"
+                + "★ 元素级字段名（index/title/docName/kbName/score/segmentId）由既有"
                 + " SourceRefSerializationTest / MessageContractCrossCheckTest 逐字钉住（本类不重复一份）")
         .startsWith("{\"refs\":[")
         .endsWith("]}");
+    // ★★ 验内容（#123 的判据）：只验形状的断言在"引用整体为空"时照样绿 —— 第 17 周那个 P0
+    //   （检索跑在模型线程上 ⇒ 身份 ThreadLocal 读不到 ⇒ 引用永远为空）正是从它眼皮底下过去的。
+    //   所以这里必须读"这一轮到底给出了哪几条引用"，而不只是"这一帧长得对不对"。
+    assertThat(refsData)
+        .as("★★ 引用里必须含夹具正文的关键词 —— 检索真的跑了，而且返回的就是这两条分段（空引用时这条立刻红）")
+        .contains("差旅住宿标准为每人每天500元")
+        .contains("住宿费上限见附表");
+    assertThat(refsData)
+        .as("★ 逐字段核对：index 从 1 连续递增、title/docName/kbName 非空且是夹具里那几个值、深链 id 是那条分段")
+        .contains("\"index\":1")
+        .contains("\"index\":2")
+        .doesNotContain("\"index\":3")
+        .contains("\"title\":\"差旅住宿标准章节\"")
+        .contains("\"docName\":\"SSE 差旅制度文档\"")
+        .contains("\"docName\":\"SSE 报销制度文档\"")
+        .contains("\"kbName\":\"SSE 夹具库\"")
+        .contains("\"segmentId\":\"" + fixture.segmentId() + "\"");
+    assertThat(classificationRankInDb(fixture.segmentId()))
+        .as(
+            "★ 密级与预期一致：SourceRef 里**没有** classificationRank 这个字段（契约 stream-types.ts:105-120 冻结的"
+                + " 10 个字段里没有它），密级跑在检索的 pre-filter 上、不进引用载荷 ⇒ 只能从库里那两列核"
+                + "（生成列 classification_rank 与 Java 枚举的 ordinal 必须同口径）")
+        .isEqualTo(ClassificationLevel.INTERNAL.ordinal());
     assertThat(response.dataOf("delta")).as("delta 的字段名是 text").contains("\"text\"");
     String doneData = response.dataOf("done");
     assertThat(doneData)
@@ -274,12 +303,73 @@ class ChatStreamHttpTest {
     assertThat(contentInDb(messageId))
         .as("★★ 正文逐字（假模型的答案与库里那一段必须一字不差）")
         .isEqualTo(FakeChatStreamPorts.LONG_ANSWER);
-    assertThat(refsInDb(messageId))
-        .as("★ A4 的载体：引用快照随消息落库（本类夹具全文检索零命中 ⇒ 是明确的空数组，" + "而不是 NULL —— '零命中'与'引用从没到过'是两件事）")
-        .isEqualTo("[]");
+    String refsSnapshot = refsInDb(messageId);
+    assertThat(refsSnapshot)
+        .as("★★ A4 的载体：引用快照随消息落库，且内容是**那两个分段**（引用为空时这条立刻红）")
+        .contains("差旅住宿标准为每人每天500元")
+        .contains("住宿费上限见附表");
+    assertThat(refsSnapshot)
+        .as("★ '零命中'（[]）与'引用从没到过'（NULL）仍是两个不同的值：本轮的引用既非空数组、也不是 NULL")
+        .isNotNull()
+        .isNotEqualTo("[]");
     assertThat(tokensInDb(messageId))
         .as("★ tokens 落库（本批假模型不报用量 ⇒ 两列都是 0，而不是 NULL —— 调用确实发生过）")
         .isNotNull();
+  }
+
+  /**
+   * ★★ 判据①（{@code #123}）：单条坏数据 ⇒ <strong>摘掉这一条 + 计数</strong>，同一轮里其余引用照常返回。
+   *
+   * <p>造法：同一轮里放两条都能被全文检索命中的分段，其中一条 {@code title} 为 {@code NULL} —— ★ 那不是"造一个不可能的数据"： {@code
+   * kb_segment.title} 在库里<strong>可空</strong>（{@code V15}），而 {@code SourceRef} 把它当必填，
+   * 所以这条路径今天就会被真实数据触发。
+   *
+   * <p>★★ 断言的四面（少一面这条用例就变成「看起来在验」）：
+   *
+   * <ol>
+   *   <li>好的那条<strong>照常</strong>出现在 {@code refs} 帧与库里的引用快照里；
+   *   <li>坏的那条<strong>不在</strong>引用里（连它的正文关键词都不许出现）；
+   *   <li>活下来的那条 {@code index} 仍然是 <strong>1</strong> —— 跳过的空位不许占号，否则正文里的 {@code [N]} 会指向不存在的引用；
+   *   <li>★ 日志里能读到 {@code 跳过 1 条} 且带字段名（降级<strong>不许静默</strong>）。
+   * </ol>
+   *
+   * <p>★★ <strong>本条可证伪</strong>（金丝雀 A）：把逐条保护改回"一个 {@code catch} 包整批" ⇒ 这一条立刻变红 （引用整体变空 ⇒ 上面第
+   * 1/2/3/4 面一起红）。它不是"理论上会红"，本批实测红过一次并逐字记在交付报告里。
+   */
+  @Test
+  void aSegmentWithBlankRequiredFieldIsSkippedWhileTheOthersStillReachTheWire() throws Exception {
+    Fixture fixture = seedWithVisibleSegment();
+    UUID badSegmentId =
+        seedDocumentAndSegment(fixture.kbId(), "SSE 差旅补充文档", null, "差旅住宿标准为每人每天300元（补充口径）");
+    fakeModel.set(FakeChatStreamPorts.streaming(0, 20, 12));
+
+    ListAppender<ILoggingEvent> chatServiceLog = captureChatServiceLog();
+    Response response;
+    try {
+      response = chat(login(), body(fixture.appId(), null, "差旅住宿标准"));
+    } finally {
+      releaseLogCapture(chatServiceLog);
+    }
+
+    String refsData = response.dataOf("refs");
+    assertThat(refsData).as("★★ 判据①：一条分段装不成 ⇒ 其余引用照常返回（不是'整轮零引用'）").contains("差旅住宿标准为每人每天500元");
+    assertThat(refsData)
+        .as("★ 判据①：坏的那条（title 为空）不许出现在引用里 —— 连它的正文关键词都不许有")
+        .doesNotContain(badSegmentId.toString())
+        .doesNotContain("300元");
+    assertThat(refsData)
+        .as("★ 判据①：活下来的那条 index 仍从 1 起（跳过的空位不占号，正文里的 [N] 才不会指向不存在的引用）")
+        .contains("\"index\":1")
+        .doesNotContain("\"index\":2");
+
+    String messageId = messageIdOf(response.frames());
+    assertThat(refsInDb(messageId))
+        .as("★ 同一批引用也随消息落库 —— 库里的快照与 wire 上那一帧是同一批（不是'发出去有、存下来没有'）")
+        .contains("差旅住宿标准为每人每天500元")
+        .doesNotContain("300元");
+    assertThat(logMessagesOf(chatServiceLog))
+        .as("★★ 判据③：降级必须留痕 —— 日志里要能读到『跳过 1 条』，而且带上是哪个必填字段（不许静默：" + "静默时它与'库里确实没有相关内容'不可区分）")
+        .anyMatch(message -> message.contains("跳过 1 条") && message.contains("title"));
   }
 
   /**
@@ -846,6 +936,41 @@ class ChatStreamHttpTest {
         messageId);
   }
 
+  /**
+   * 某条分段在库里的密级 rank（{@code V22} 的生成列）。
+   *
+   * <p>★ 为什么从库里核而不是从 {@code refs} 载荷里核：{@code SourceRef}（契约 {@code stream-types.ts:105-120} 冻结的 10
+   * 个字段）里<strong>没有</strong> classificationRank 这一类字段 —— 密级是检索 pre-filter 的判据，
+   * 不进引用载荷。所以"密级与预期一致"只能这样读： 库里那两列（密级字符串与生成列 rank）彼此同口径。
+   */
+  private int classificationRankInDb(UUID segmentId) {
+    return jdbc.queryForObject(
+        "select classification_rank from kb_segment where id = ?", Integer.class, segmentId);
+  }
+
+  /**
+   * 给 {@code ChatService} 那个 logger 挂一个内存追加器（读完必须 {@link #releaseLogCapture}）。
+   *
+   * <p>★ 为什么需要它：本类要断言的"跳过 N 条"是<strong>日志</strong>里的读数 —— 它没有别的载体（不落库、不进事件）， 而"降级不许静默"这条判据不验就等于没做。
+   */
+  private static ListAppender<ILoggingEvent> captureChatServiceLog() {
+    ListAppender<ILoggingEvent> appender = new ListAppender<>();
+    appender.start();
+    ((Logger) LoggerFactory.getLogger(ChatService.class)).addAppender(appender);
+    return appender;
+  }
+
+  /** 摘掉上面那个追加器（★ 不摘会把本用例的日志漏给下一条用例，而那种漏读起来像"别处也在跳过"）。 */
+  private static void releaseLogCapture(ListAppender<ILoggingEvent> appender) {
+    ((Logger) LoggerFactory.getLogger(ChatService.class)).detachAppender(appender);
+    appender.stop();
+  }
+
+  /** 那个追加器收到的日志正文（已经过占位符格式化）。 */
+  private static List<String> logMessagesOf(ListAppender<ILoggingEvent> appender) {
+    return appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+  }
+
   private Integer tokensInDb(String messageId) {
     return jdbc.queryForObject(
         "select prompt_tokens + completion_tokens from cv_message where id = ?::uuid",
@@ -935,7 +1060,13 @@ class ChatStreamHttpTest {
     return json.toString();
   }
 
-  /** 建模型 → 库 → 应用 → 文档 → 分段（分段正文含"差旅住宿标准"，全文检索能命中）。 */
+  /**
+   * 建模型 → 库 → 应用 → 文档 → 分段（分段正文含"差旅住宿标准"，全文检索能命中）。
+   *
+   * <p>★ 夹具的分段<strong>必须带 title</strong>：库里那一列可空（{@code V15}），而 {@code SourceRef} 把 {@code title}
+   * 当必填 —— 夹具一旦让它为 NULL，引用就会<strong>整批</strong>装不成（{@code #123} 那条路径），
+   * 于是本类所有"引用"读数都会安静地退化成"零引用"（这正是第 17 周那个 P0 能长期没被发现的形状）。
+   */
   private Fixture seedWithVisibleSegment() {
     UUID chatModel = seedChatModel();
     UUID embeddingModel = seedEmbeddingModel();
@@ -959,7 +1090,7 @@ class ChatStreamHttpTest {
     jdbc.update(
         "insert into as_assistant_kb (assistant_id, knowledge_base_id) values (?, ?)", appId, kbId);
     seededApps.add(appId);
-    UUID segmentId = seedDocumentAndSegment(kbId, "SSE 差旅制度文档", "差旅住宿标准为每人每天500元");
+    UUID segmentId = seedDocumentAndSegment(kbId, "SSE 差旅制度文档", "差旅住宿标准章节", "差旅住宿标准为每人每天500元");
     return new Fixture(appId, kbId, segmentId);
   }
 
@@ -984,7 +1115,13 @@ class ChatStreamHttpTest {
     return id;
   }
 
-  private UUID seedDocumentAndSegment(UUID kbId, String docName, String text) {
+  /**
+   * 造一条文档 + 一条分段（{@code ordinal = 0}）。
+   *
+   * @param title 分段标题 —— ★ <strong>允许为 {@code null}</strong>：库里那一列可空（{@code V15}）， "title
+   *     为空的分段"是真实数据的形状，{@code #123} 判据①要造的就是它（而 {@code SourceRef} 把 title 当必填 ⇒ 这一条装不成、必须被逐条摘掉）
+   */
+  private UUID seedDocumentAndSegment(UUID kbId, String docName, String title, String text) {
     UUID docId = UUID.randomUUID();
     jdbc.update(
         "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
@@ -998,15 +1135,16 @@ class ChatStreamHttpTest {
         ROOT_ORG);
     UUID segmentId = UUID.randomUUID();
     jdbc.update(
-        "insert into kb_segment (id, document_id, kb_id, scope_kind, scope_id, ordinal, content,"
-            + " search_text, content_hash, char_count, enabled, embedding_status, created_at,"
-            + " updated_at, classification) values (?, ?, ?, 'KB', ?, 0, ?, ?, ?, ?, true,"
-            + " 'PENDING_EMBEDDING', now(), now(), (select classification from kb_document where id"
-            + " = ?))",
+        "insert into kb_segment (id, document_id, kb_id, scope_kind, scope_id, ordinal, title,"
+            + " content, search_text, content_hash, char_count, enabled, embedding_status,"
+            + " created_at, updated_at, classification) values (?, ?, ?, 'KB', ?, 0, ?, ?, ?, ?, ?,"
+            + " true, 'PENDING_EMBEDDING', now(), now(), (select classification from kb_document"
+            + " where id = ?))",
         segmentId,
         docId,
         kbId,
         kbId,
+        title,
         text,
         text,
         UUID.randomUUID().toString().replace("-", "")

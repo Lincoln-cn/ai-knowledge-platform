@@ -530,18 +530,45 @@ public class ChatService {
    *   <li>{@link SegmentSearchPort#load} —— 展示信息（标题 / 正文 / 文档名 / 库名）。
    * </ol>
    *
-   * <p>★ 任何一步异常都<strong>不让整轮失败</strong>：搜不到引用不是"答不了"，而是"这一轮没有引用"。 但也不静默 —— 记一条
-   * warn，并把引用给成空列表（{@code references(List.of())} 是明确的"零命中"， 与"检索没跑"在装配器里是两件事）。
+   * <h3>★★ 失败粒度：两类失败必须分开（{@code #123}）</h3>
+   *
+   * <table>
+   *   <tr><th>类别</th><th>判据</th><th>处置</th></tr>
+   *   <tr><td><strong>身份 / 范围取不到</strong></td>
+   *       <td>{@code visibleKbIds} 为空 · {@code ceiling == null} · 检索端口抛异常 —— 即<strong>可见性无法判定</strong></td>
+   *       <td>★ <strong>整批 fail-closed</strong>：一条都不给（现状语义，一个字没动）</td></tr>
+   *   <tr><td><strong>单条数据坏</strong></td>
+   *       <td>{@link SourceRef} 的必填字段（{@code title} / {@code docName} / {@code kbName}）为空 ——
+   *           ★ {@code kb_segment.title} 在库里<strong>可空</strong>（{@code V15}），所以这条路径今天就会被真实数据触发，
+   *           不是理论问题</td>
+   *       <td>★ <strong>跳过这一条 + 计数</strong>，其余照常返回；一条 WARN 带计数（不许静默）</td></tr>
+   * </table>
+   *
+   * <p>★ 这两类曾经被<strong>一个 try/catch 包住整批</strong>（{@code #123} 的现象）：于是一条 {@code title} 为空的分段把
+   * <strong>整轮</strong>引用降级成"零命中"，而"零命中"在本项目是<strong>合法状态</strong>（库里真的没有）⇒ 两者在读数上不可区分。
+   * 那是"作用域选错了"，不是"实现写错了"。
+   *
+   * <p>★ 两类失败都<strong>不让这一轮打死</strong>（{@code 10 §3.2.3}"部分成功是常态"），但都不静默：整批那条记一条 warn 并把引用给成空列表
+   * （{@code references(List.of())} 是明确的"零命中"，与"检索没跑"在装配器里是两件事），逐条那条记一条带计数的 warn。
+   *
+   * <p>★ 跳过一条时<strong>不递增</strong> {@code index}：{@code [N]} 必须从 1 连续递增，跳过的空位若占了号，
+   * 正文里就会出现一个指向不存在引用的 {@code [N]}。
    */
   private List<SourceRef> retrieve(String question, Collection<UUID> requestedKbIds) {
+    List<UUID> ordered;
+    Map<UUID, Double> scoreById;
+    Map<UUID, SegmentSearchPort.Card> cards;
     try {
+      // ── 第一类失败的作用域：身份 / 范围 / 命中集合（★ 取不到 ⇒ 整批 fail-closed，一条都不给）──
       List<UUID> kbIds = segmentSearch.visibleKbIds(requestedKbIds);
       if (kbIds.isEmpty()) {
+        // 委派范围为空 ⇒ 可见性无法判定：整批 fail-closed（与下面 ceiling 那条同属第一类）
         return List.of();
       }
       ClassificationLevel ceiling = accessScope.currentScope().maxClassification();
       if (ceiling == null) {
-        // 取不到身份（fail-closed）：一条都不给，而不是"给全部"
+        // 取不到身份（fail-closed）：一条都不给，而不是"给全部"。★ 必须留痕 —— 它与"零命中"在返回值上不可分
+        log.warn("取不到身份（密级上限为 null），本轮按 fail-closed 处置：一条引用都不给");
         return List.of();
       }
       List<SegmentSearchPort.Scored> hits =
@@ -551,8 +578,8 @@ public class ChatService {
       if (hits.isEmpty()) {
         return List.of();
       }
-      List<UUID> ordered = new ArrayList<>(RETRIEVAL_LIMIT);
-      Map<UUID, Double> scoreById = new LinkedHashMap<>();
+      ordered = new ArrayList<>(RETRIEVAL_LIMIT);
+      scoreById = new LinkedHashMap<>();
       for (SegmentSearchPort.Scored hit : hits) {
         if (ordered.size() >= RETRIEVAL_LIMIT) {
           break;
@@ -566,18 +593,31 @@ public class ChatService {
       if (ordered.isEmpty()) {
         return List.of();
       }
-      Map<UUID, SegmentSearchPort.Card> cards = new LinkedHashMap<>();
+      cards = new LinkedHashMap<>();
       for (SegmentSearchPort.Card card : segmentSearch.load(ordered)) {
         cards.put(card.segmentId(), card);
       }
-      List<SourceRef> refs = new ArrayList<>(ordered.size());
-      int index = 1;
-      for (UUID id : ordered) {
-        SegmentSearchPort.Card card = cards.get(id);
-        if (card == null) {
-          // 判过可见却取不到展示信息：只可能是并发删除。跳过而不是塞空壳 —— 空壳会让 [N] 编号与实际内容错位
-          continue;
+    } catch (RuntimeException failure) {
+      log.warn("检索失败，本轮以'零引用'继续：{}", failure.getMessage());
+      return List.of();
+    }
+
+    // ── 第二类失败的作用域：逐条组装（★ 单条装不成 ⇒ 跳过这一条 + 计数，其余照常返回）──
+    List<SourceRef> refs = new ArrayList<>(ordered.size());
+    int skipped = 0;
+    String firstSkipReason = null;
+    int index = 1;
+    for (UUID id : ordered) {
+      SegmentSearchPort.Card card = cards.get(id);
+      if (card == null) {
+        // 判过可见却取不到展示信息：只可能是并发删除。跳过而不是塞空壳 —— 空壳会让 [N] 编号与实际内容错位
+        skipped++;
+        if (firstSkipReason == null) {
+          firstSkipReason = "分段已被并发删除（取不到展示信息）";
         }
+        continue;
+      }
+      try {
         refs.add(
             new SourceRef(
                 index,
@@ -590,15 +630,22 @@ public class ChatService {
                 id.toString(),
                 null,
                 null));
+        // ★ 只有真的装成了一条才占号（见方法注释末条）
         index++;
+      } catch (RuntimeException singleItemFailed) {
+        // ★ 可见性判定没问题，只是这一条装不成（title/docName/kbName 为空等）⇒ 摘掉这一条
+        skipped++;
+        if (firstSkipReason == null) {
+          firstSkipReason = singleItemFailed.getMessage();
+        }
       }
-      log.info("本轮检索到 {} 条引用（上限 {}）", refs.size(), RETRIEVAL_LIMIT);
-      return refs;
-    } catch (RuntimeException failure) {
-      // ★ 检索坏了不许把这一轮打死（与 10 §3.2.3"部分成功是常态"同一条口径），但必须留痕
-      log.warn("检索失败，本轮以'零引用'继续：{}", failure.getMessage());
-      return List.of();
     }
+    if (skipped > 0) {
+      // ★ 不许静默：降级必须留痕，且带着条数（"一条脏数据"与"整轮没引用"必须能分开）
+      log.warn("本轮跳过 {} 条引用（其余 {} 条照常返回）：{}", skipped, refs.size(), firstSkipReason);
+    }
+    log.info("本轮检索到 {} 条引用（上限 {}）", refs.size(), RETRIEVAL_LIMIT);
+    return refs;
   }
 
   /**
