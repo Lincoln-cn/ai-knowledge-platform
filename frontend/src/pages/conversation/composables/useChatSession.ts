@@ -238,6 +238,17 @@ export function useHistoryPanel() {
 
 /* ── 问答会话（流式） ── */
 
+/**
+ * 停止请求的等待上限（毫秒）。
+ *
+ * ★ 为什么这里**必须等**：服务端能不能分出"用户停止"（`ABORT ⇒ STOPPED`）与"连接断了"
+ *   （`DISCONNECT ⇒ FAILED`），取决于显式停止请求**先到**服务端。先 `abort()` 再发请求的话，
+ *   服务端那边连接已经没了 ⇒ 终态落到 `FAILED`，`#119` 的病就还在（只是换了个位置）。
+ * ★ 为什么这里**必须有上限**：停止请求卡住（网络抖动 / 网关吞请求）时不许把用户留在"生成中" ——
+ *   超时即按"已经发过请求"处置，照常 `abort()`。**失败不能把用户卡住**。
+ */
+const STOP_REQUEST_TIMEOUT_MS = 3000
+
 export interface ChatSessionOptions {
   /** 应用 id；不传为通用问答 */
   appId?: string
@@ -352,12 +363,64 @@ export function useChatSession(options: ChatSessionOptions = {}) {
   }
 
   /**
-   * 主动停止。sse 保证任何终止路径都恰好一次 onDone（含「已停止」），
-   * 这里先立刻收口呈现（转圈停掉、状态改掉），onDone 再以终态覆盖一遍 —— 两处一致。
+   * 发一次**显式停止请求**（契约 `stopMessage`）；无论成败都 resolve —— 调用方在它之后一定要 `abort`。
+   *
+   * <h3>★★ 为什么不能只 abort（`#119` 的病因）</h3>
+   *
+   * 契约把"用户停止"（`ABORT ⇒ done(STOPPED)`，不发 `error`，保留已生成内容）与"连接断开"
+   * （`DISCONNECT ⇒ error + done(FAILED)`）定成**两条路径、两个终态**，而 `abort()` 掐的是 fetch ——
+   * 服务端只看到"连接没了"，分不出这两件事。停下的**用户意图**只能由这一次请求表达。
+   *
+   * <h3>★ 三种发不出去 / 发不成的情形，各自怎么处置（都写下来，不静默）</h3>
+   *
+   * <ol>
+   *   <li><strong>还没收到 `meta`</strong> ⇒ 拿不到 `messageId` ⇒ 发不出（契约里写明的降级：
+   *       直接 `abort()`，服务端按 `DISCONNECT` 收）。见 `api/conversations.ts` 的 `stopMessage` 注释；
+   *   <li><strong>公开面（免登录）</strong> ⇒ 契约里的停止端点走登录面，公开面今天**没有**停止端点 ⇒
+   *       同样退化为 `abort()`。★ 这是一处**已知缺口**（见交付报告），不是这里忘了写；
+   *   <li><strong>请求失败 / 超时</strong> ⇒ 吞掉异常：终态由 `abort()` 那条路径收口。
+   *       失败原因不往界面上抛 —— 用户按的是"停止"，给他看一条报错是错的。
+   * </ol>
+   */
+  const requestServerStop = async (conversationId: string, messageId: string): Promise<void> => {
+    if (options.credentialToken) return
+    if (!conversationId || !messageId) return
+    try {
+      await Promise.race([
+        conversationsApi.stopMessage(conversationId, messageId),
+        new Promise<void>((resolve) => setTimeout(resolve, STOP_REQUEST_TIMEOUT_MS))
+      ])
+    } catch {
+      // 停止请求失败不改变收尾方式：下面那次 abort 才是"一定会发生"的那件事
+    }
+  }
+
+  /**
+   * 主动停止。
+   *
+   * <h3>★★ 顺序写死：先发停止请求，**再** abort（两件都要做）</h3>
+   *
+   * <ul>
+   *   <li><strong>只 abort 不发请求</strong> ⇒ 服务端分不出"用户停止"与"连接断了"
+   *       （`DISCONNECT ⇒ FAILED`），用户点了停止却看到"出故障了"——`#119`；
+   *   <li><strong>只发请求不 abort</strong> ⇒ 流一直挂着、界面停在"生成中"
+   *       （`sse.ts` 的"恰好一次 onDone"里那条 abort 分支也就永远走不到）；
+   *   <li>所以：请求的成败<strong>只影响服务端能不能判成 `ABORT`</strong>，不影响"这一轮一定收尾"。
+   * </ul>
+   *
+   * <p>★ 立即收口呈现（转圈停掉、状态改掉）仍然放在**发请求之前**：
+   * 界面反馈不该等一次网络往返；`onDone` 再以终态覆盖一遍 —— 两处一致。
    */
   const stop = () => {
     if (!handle) return
-    handle.abort()
+    const target = handle
+    // ★ 停止请求要用「停哪一条」：messageId 由 meta 帧给出（没收到就是空串 ⇒ 降级为直接 abort）
+    const messageId = target.messageId
+    const pending = messages.value.find(
+      (m) => m.role === 'ASSISTANT' && m.status === 'GENERATING'
+    )
+    const conversationId = pending?.conversationId ?? activeConvId
+
     handle = null
     generating.value = false
     for (const m of messages.value) {
@@ -365,6 +428,9 @@ export function useChatSession(options: ChatSessionOptions = {}) {
         m.status = 'STOPPED'
       }
     }
+
+    // ★★ 唯一的一处顺序（本文件里"停止"只有这一个出口）：请求 → 无论成败 → abort
+    void requestServerStop(conversationId, messageId).finally(() => target.abort())
   }
 
   interface StartStreamInput {

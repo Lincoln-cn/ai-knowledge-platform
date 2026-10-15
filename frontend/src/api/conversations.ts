@@ -160,6 +160,80 @@ export const listMessages = (conversationId: string, query: MessageQuery = {}) =
   })
 
 /**
+ * 停止回执（`POST /conversations/:conversationId/messages/:messageId/stop`）。
+ *
+ * ★ 它回答的是「服务端有没有收下这次停止请求」，**不是**「这一轮已经停住了」——
+ * 终态由生成线程写到消息上（`STOPPED`），那一刻与这次响应之间有一段正常的间隔。
+ * 所以 `status` 在城市话里是「服务端此刻读到的状态」，`GENERATING` 是**正常**取值。
+ */
+export interface ChatStopReceipt {
+  /** 收下并置上了停止信号。`false` = 这一轮已经收尾（停止请求晚到了），服务端什么都没做 */
+  accepted: boolean
+  /** 服务端此刻读到的消息状态（可能仍是 `GENERATING` —— 终态由生成线程落库） */
+  status: MessageStatus
+}
+
+/**
+ * ★★ 停止生成 —— **显式停止的表达位**（`03 §1.5` 的"显式停止"那一行；`#119` 的收口）。
+ *
+ * <h3>为什么必须加这条端点（不这么做，"停止"与"断开"在服务端长得一模一样）</h3>
+ *
+ * 契约给「用户停止」与「连接断开」**两个不同的终态**：
+ *
+ * | 事件 | 契约终态（`stream-types.ts` 的 `StreamTerminationPath`） |
+ * |---|---|
+ * | 用户点停止（`ABORT`） | `done(STOPPED)`，**不发** `error`，**保留**已生成内容 |
+ * | 连接断开（`DISCONNECT`） | `error` + `done(FAILED)` |
+ *
+ * 而在此之前，前端唯一的停止动作是 `lib/sse.ts` 的 `abort()`（掐 fetch）——
+ * 它对服务端**只表现为"连接断了"**⇒ 服务端分不出"用户点了停止"与"网线掉了"，
+ * 于是用户停止会被记成故障、真正的断网会被记成用户意图（`A3 失败可见`失真）。
+ * 停止必须是一个**独立于连接的显式请求**，这条端点就是它。
+ *
+ * <h3>★★ 形状：按消息 id（不是按会话）</h3>
+ *
+ * 两条都可行，取舍写在这里，免得后人以为是随手选的：
+ *
+ * - **按消息 id（本选择）**：与既有的停止机制 `ChatStopSignal`（**进程内、按助手消息 id** 的一次性信号）
+ *   一一对应 —— 收到即 `request(messageId)`，**没有第二处"这一轮是谁"的口径**，也不需要先在库里
+ *   查"这个会话当前哪条消息在生成"。消息 id 由 `meta` 帧给出，客户端在收到 `meta` 之后就有它。
+ *   代价：没收到 `meta` 之前点停止时客户端**拿不到** messageId（见下面的降级）。
+ * - 按会话 id：不需要 messageId，但它必须由服务端回答"这个会话**当前哪一轮**在生成"——
+ *   那是第二处真相源，且多出一个失败态（"当前没有正在生成的消息"）。
+ *
+ * <h3>★★ 「还没收到 `meta` 就点了停止」怎么处置（写下来的降级，不是默默如此）</h3>
+ *
+ * `meta` 是流的第一条业务帧，且它带着本轮的 `messageId`。在它到达之前客户端**没有**这个值，
+ * 于是发不出按消息的停止请求。契约在此**明确允许**降级：
+ *
+ * - 客户端**跳过**这次请求，**直接** `abort()`（`lib/sse.ts`）；
+ * - 服务端因此只看到"连接断了" ⇒ 本轮按 `DISCONNECT` 收尾，库里是 `FAILED`
+ *   （而界面侧由 `abort()` 分支给出 `STOPPED`）。
+ *
+ * ★ 这是一个**已知且被接受**的不一致窗口（它只存在于 `meta` 到达之前，正常是毫秒级）；
+ * 要消掉它只能改成按会话的端点（上面那条代价），本批选择"一处机制"而不是"消掉这个窗口"。
+ *
+ * <h3>★★ 服务端的判定顺序（写死，不看竞态）</h3>
+ *
+ * 「收到显式停止」**优先于**「连接断了」：先停止、再断连 ⇒ 终态必须是 `STOPPED`（不是 `FAILED`）。
+ * 反过来，从头到尾没收到过停止、只是连接断了 ⇒ `FAILED`。
+ *
+ * <h3>★ 边界（本批明确不做，见交付报告）</h3>
+ *
+ * 这条端点走**登录面**（`conversation:view`）。免登录公开面的问答流（`X-Access-Credential`）
+ * 今天**没有**停止端点 ⇒ 公开页的"停止"仍退化为 `abort()`（= `DISCONNECT` ⇒ `FAILED`）。
+ *
+ * @param conversationId 会话 id（与 `listMessages` 同一条路径前缀，也是权限判定的入口）
+ * @param messageId 助手消息 id（`meta` 帧的 `messageId`）
+ */
+export const stopMessage = (conversationId: string, messageId: string): Promise<ChatStopReceipt> =>
+  request<ChatStopReceipt>({
+    method: 'POST',
+    url: '/conversations/:conversationId/messages/:messageId/stop',
+    path: { conversationId, messageId }
+  })
+
+/**
  * 按 id 取一条知识分段（引用回溯用）。
  * 跳转「分段管理」与抽屉里补全文都靠它；看不见一律 404（与单条取数同口径）。
  */
