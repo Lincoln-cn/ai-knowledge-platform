@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.conversation;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.conversation.application.ChatStreamWriter;
+import cn.lincoln.aiplatform.conversation.support.AssistantGeneratedTextWait;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import java.io.BufferedReader;
@@ -147,7 +148,7 @@ class ConversationStopEndpointTest {
    * ★★ 判据①：真 HTTP 上调停止端点 ⇒ 本轮收在 {@code STOPPED}，且<strong>已生成内容保留</strong>。
    *
    * <p>造法：假模型吐得很慢（约 17 块 × 200ms ≈ 3.4 秒，见 {@link #LONG_ANSWER}）。主线程<strong>轮询数据库</strong>
-   * 等那条助手消息<strong>正文非空</strong>（= 它真的吐过字，见 {@link #waitForAssistantWithContent}），再打停止端点 ——
+   * 等那条助手消息<strong>正文非空</strong>（= 它真的吐过字，见 {@link AssistantGeneratedTextWait#await}），再打停止端点 ——
    * 于是这一条读的是"从 HTTP 打进来的停止请求" 真的能把一轮收成 {@code STOPPED}（在此之前，只有测试里直接置 {@code ChatStopSignal} 才做得到，
    * 也就是说这条链在真栈上<strong>不可用</strong>）。
    *
@@ -172,8 +173,9 @@ class ConversationStopEndpointTest {
     UUID messageId;
     try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
       var running = pool.submit(() -> chatFrames(token, conversationId, "差旅住宿标准"));
-      // ★★ 等它"真的吐过字"（库里正文非空）—— ★ 不是等状态 GENERATING（见方法注释：那会造出"先停后吐"那条假红）
-      messageId = waitForAssistantWithContent(conversationId, 10_000);
+      // ★★ 等它"真的吐过字"（库里正文非空）—— ★ 不是等状态 GENERATING（见 AssistantGeneratedTextWait 的类注释：
+      //     那会造出"先停后吐"那条假红）。★ 这把等待全仓只有一处（#125 的收尾）
+      messageId = AssistantGeneratedTextWait.await(jdbc, conversationId, 10_000);
       Receipt receipt = stop(token, conversationId, messageId);
       assertThat(receipt.status()).as("★ 端点回执的 HTTP 码必须是 200（停止是一次正常请求，不是错误）").isEqualTo(200);
       assertThat(receipt.body())
@@ -635,54 +637,12 @@ class ConversationStopEndpointTest {
   }
 
   /**
-   * ★★ 等某个会话的助手消息<strong>正文已经非空</strong>（= 它真的吐过 ≥1 个 chunk）并返回它的 id。
-   *
-   * <h3>★★ 它与 {@link #waitForAssistantInStatus} 的区别就是"等的到底是什么"（{@code #125} 的同族）</h3>
-   *
-   * <p>助手消息是<strong>先落库、再开流</strong>的（{@code ChatTurnWriter#prepare}）⇒ "状态 = {@code
-   * GENERATING}"这一行在<strong>第一个 chunk 之前</strong>就已经存在。 把它当成"已经生成了"的观测点，就会造出"停止请求赶在第一块之前到达"这条路径：
-   * 那时停止走的是"上游还没吐字"那一半，终态<strong>仍然</strong>是 {@code STOPPED}，但<strong>正文是空的</strong> ——
-   * 于是"停止保留已生成内容"的断言红，而红的样子像是功能坏了、真实原因是<strong>等待条件选错了观测点</strong>。
-   *
-   * <p>★ 所以凡是要读"已生成内容"的用例，都必须等<strong>正文非空</strong>：它才是"这一轮真的吐过字"的证据 （{@code A2}/{@code A5}
-   * 的判据本来就是"重新查库"）。
-   *
-   * <p>★ 与另一个批次在 {@code ChatStreamHttpTest} 里抽的那把等待<strong>同一口径</strong>（本类自己写一份等价物， 不改那个文件）。
-   *
-   * @param conversationId 会话 id
-   * @param timeoutMs 上限（超时即断言失败 —— 不藏缺陷）
-   * @return 那条已经吐过字的助手消息 id
-   */
-  private UUID waitForAssistantWithContent(UUID conversationId, long timeoutMs)
-      throws InterruptedException {
-    long deadline = System.nanoTime() + Duration.ofMillis(timeoutMs).toNanos();
-    while (System.nanoTime() < deadline) {
-      List<String> found =
-          jdbc.queryForList(
-              "select m.id::text from cv_message m where m.conversation_id = ?::uuid"
-                  + " and m.role = 'ASSISTANT' and m.content <> '' order by m.created_at desc"
-                  + " limit 1",
-              String.class,
-              conversationId);
-      if (!found.isEmpty()) {
-        return UUID.fromString(found.getFirst());
-      }
-      Thread.sleep(20);
-    }
-    throw new AssertionError(
-        "在 "
-            + timeoutMs
-            + "ms 内没有等到正文非空的助手消息 —— "
-            + "★ 等待条件必须是「库里正文非空」（= 真的吐过字），不是「状态 GENERATING」");
-  }
-
-  /**
    * 等某个会话里出现指定状态的助手消息，并返回它的 id（★ 有上限，超时即断言失败 —— 不藏缺陷）。
    *
    * <p>★ 为什么走库而不是"从响应流里读 {@code meta}"：本机实测客户端在整条流结束之前可能读不到帧， 而助手消息<strong>先于第一个字节就落库</strong> ⇒
    * 库里那一行是更早、更确定的观测点。
    *
-   * <p>★★ <strong>它不能用来等"已经生成过内容"</strong>（见 {@link #waitForAssistantWithContent}）： 状态 {@code
+   * <p>★★ <strong>它不能用来等"已经生成过内容"</strong>（见 {@link AssistantGeneratedTextWait#await}）： 状态 {@code
    * GENERATING} 在第一个 chunk 之前就有了。
    */
   private UUID waitForAssistantInStatus(UUID conversationId, String status, long timeoutMs)
@@ -700,7 +660,7 @@ class ConversationStopEndpointTest {
         return UUID.fromString(found.getFirst());
       }
       // ★ 20ms 只是轮询粒度（这一句等的是"那一行出现了没有"，不是"吐过字没有"——
-      //   后者是 waitForAssistantWithContent 的事，两者别混用）
+      //   后者是 AssistantGeneratedTextWait#await 的事，两者别混用）
       Thread.sleep(20);
     }
     throw new AssertionError("在 " + timeoutMs + "ms 内没有等到状态为 " + status + " 的助手消息");

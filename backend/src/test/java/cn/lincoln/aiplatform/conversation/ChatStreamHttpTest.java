@@ -11,6 +11,7 @@ import cn.lincoln.aiplatform.conversation.application.ChatStreamProperties;
 import cn.lincoln.aiplatform.conversation.application.ChatStreamWriter;
 import cn.lincoln.aiplatform.conversation.application.ChatTurnStore;
 import cn.lincoln.aiplatform.conversation.application.ChatTurnWriter;
+import cn.lincoln.aiplatform.conversation.support.AssistantGeneratedTextWait;
 import cn.lincoln.aiplatform.conversation.support.FakeChatStreamPorts;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
@@ -495,7 +496,7 @@ class ChatStreamHttpTest {
    *
    * <p>造法：假模型吐得很慢（600 字 / 每块 120ms ≈ 6 秒），HTTP 请求跑在<strong>另一条线程</strong>上；
    * 主线程<strong>轮询数据库</strong>等到那条助手消息<strong>已经有正文</strong>（{@link
-   * #waitForAssistantWithGeneratedText}），再置上显式停止信号。
+   * AssistantGeneratedTextWait#await}），再置上显式停止信号。
    *
    * <p>★★ <strong>观测点必须是"正文非空"，不能是"状态是 GENERATING"</strong>（{@code #125} 的修法）： 助手行在<strong>第一个
    * delta 之前</strong>就落库（{@code A2} 要的形状），所以"状态出现"发生在"生成开始"之<strong>前</strong> ——
@@ -517,7 +518,10 @@ class ChatStreamHttpTest {
     Fixture fixture = seedWithVisibleSegment();
     fakeModel.set(FakeChatStreamPorts.longAnswerStreaming(120, 12));
     String token = login();
-    String requestBody = body(fixture.appId(), null, "差旅住宿标准");
+    // ★ 本用例显式建一个会话：等待的那把（全仓唯一，见 AssistantGeneratedTextWait）按**会话**定位 ——
+    //   "这个会话里那条助手消息的正文非空"才是这条用例真正依赖的观测点
+    UUID conversationId = seedConversation(ADMIN_ID, "停止夹具会话");
+    String requestBody = body(fixture.appId(), conversationId, "差旅住宿标准");
 
     Response response;
     String messageId;
@@ -528,7 +532,11 @@ class ChatStreamHttpTest {
       //     于是"看到 GENERATING"与"模型已经吐过第一个字"是两件事 —— 拿前者当后者，停止信号就可能
       //     赶在 Run#onChunk 第一次跑之前置上 ⇒ 一个 chunk 都没进装配器 ⇒ 终态 STOPPED 且正文是空串
       //     ⇒ 下面那条 A5「停止保留已生成内容」必然红（同一批代码实测 4 次运行绿/红/红/绿）。
-      messageId = waitForAssistantWithGeneratedText(10_000);
+      //   ★ 等待的实现在全仓只有一处（AssistantGeneratedTextWait）：两处各写一把时，下一个人就会照着抄
+      //     第三把 —— #119 的新用例正是这么把 #125 的老洞原样抄了一遍，所以它现在由
+      //     GeneratedTextWaitSingleSourceTest 守着。
+      //   ★ 它按会话定位、返回那个 id 的 UUID 形式；本类那几处库读数用的是文本形式的 id，于是这里收成字符串
+      messageId = AssistantGeneratedTextWait.await(jdbc, conversationId, 10_000).toString();
       requestStop(messageId);
       response = running.get(60, java.util.concurrent.TimeUnit.SECONDS);
     }
@@ -1096,7 +1104,7 @@ class ChatStreamHttpTest {
    *
    * <p>★★ <strong>它只回答"那一行在不在"，不回答"生成有没有开始"</strong>（{@code #125}）：助手行在第一个 {@code delta} 之前就落库，状态也是
    * {@code GENERATING}、正文还是空串。 ⇒ <strong>凡是要断言"已经生成过内容"的用例，必须用 {@link
-   * #waitForAssistantWithGeneratedText}</strong>；等状态只够用来拿 messageId（例如 {@code DISCONNECT} 那条，
+   * AssistantGeneratedTextWait#await}</strong>；等状态只够用来拿 messageId（例如 {@code DISCONNECT} 那条，
    * 它的中断是"写满 N 帧"注入的、与这个窗口无关）。
    *
    * <p>★ 等待有上限，超时即断言失败 —— 它不会把"服务端没收尾"这个缺陷藏起来。
@@ -1119,50 +1127,6 @@ class ChatStreamHttpTest {
       Thread.sleep(20);
     }
     throw new AssertionError("在 " + timeoutMs + "ms 内没有等到状态为 " + status + " 的助手消息");
-  }
-
-  /**
-   * 等"那条助手消息"在库里<strong>已经有正文</strong>，并返回它的 id —— ★★ {@code #125}（~50% 偶发）的修法。
-   *
-   * <h3>★★ 为什么不能等状态（本批实测的机制，不是推断）</h3>
-   *
-   * <p>{@code ChatTurnWriter#prepare} 在<strong>第一个 {@code delta} 之前</strong>就把助手行落库：状态 {@code
-   * GENERATING}、正文空串 —— 那正是 {@code A2}（刷新不重置）要的形状。于是 <strong>"看到
-   * GENERATING"与"模型已经吐过第一个字"是两件事</strong>：
-   *
-   * <ul>
-   *   <li>等状态命中 ⇒ 立刻 {@code requestStop} ⇒ 若那条信号赶在 {@code Run#onChunk} 第一次跑之前落到， 则一个 chunk 都没进装配器 ⇒
-   *       终态 {@code STOPPED} + 正文空串 ⇒ {@code A5}「停止<strong>保留已生成内容</strong>」 必然红（逐字是 {@code
-   *       Expecting actual not to be empty}）；
-   *   <li>★ 它是 ~50% 偶发而不是恒红：信号先到还是第一个 chunk 先到，取决于"测试轮询线程"与"模型线程"的调度。 ⇒
-   *       <strong>单次红不足以证明它坏了、单次绿也不足以证明它好了</strong>（本类那一条的反证要跑多次）。
-   * </ul>
-   *
-   * <p>★ 这里等的就是那条断言真正依赖的东西：<strong>已经收到过至少 1 个 chunk</strong>。载体取库里的正文非空 （编排按 {@code
-   * flush-interval-ms=60} 周期 flush，见本类的 {@code @TestPropertySource}）——
-   * 而正文<strong>只增不减</strong>（{@code Message#appendText} 只追加、停止不清空），所以它一旦非空， 停止之后也仍然非空。
-   *
-   * <p>★★ <strong>它没有把断言改弱</strong>：等到正文非空之后再停，下面那三条断言（非空 / 不等于全文 / 是全文的前缀）一条都没动。改的只是"等什么"——
-   * 从一个<strong>不成立的观测点</strong>换成一个成立的。
-   *
-   * <p>★ 等待有上限，超时即断言失败：生成没起来 / flush 没发生，都会被读成一次红的失败，而不是被藏起来。
-   */
-  private String waitForAssistantWithGeneratedText(long timeoutMs) throws InterruptedException {
-    long deadline = System.nanoTime() + Duration.ofMillis(timeoutMs).toNanos();
-    while (System.nanoTime() < deadline) {
-      List<String> found =
-          jdbc.queryForList(
-              "select m.id::text from cv_message m join cv_conversation c on c.id ="
-                  + " m.conversation_id where c.user_id = ?::uuid and m.role = 'ASSISTANT' and"
-                  + " m.content <> '' order by m.created_at desc limit 1",
-              String.class,
-              ADMIN_ID);
-      if (!found.isEmpty()) {
-        return found.getFirst();
-      }
-      Thread.sleep(20);
-    }
-    throw new AssertionError("在 " + timeoutMs + "ms 内没有等到正文非空的助手消息（生成没开始？flush 没发生？）");
   }
 
   /**
