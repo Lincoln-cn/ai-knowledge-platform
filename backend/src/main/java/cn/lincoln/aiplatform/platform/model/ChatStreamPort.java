@@ -46,7 +46,7 @@ public interface ChatStreamPort {
    */
   void stream(UUID modelId, String prompt, Duration timeout, Callback callback);
 
-  /** 逐块回调。★ 三个方法都<strong>可能</strong>被调用方抛异常打断 —— 见 {@link Callback#onChunk}。 */
+  /** 逐块回调。★ 业务帧那几个方法都<strong>可能</strong>被调用方抛异常打断 —— 见 {@link Callback#onChunk}。 */
   interface Callback {
 
     /**
@@ -59,6 +59,39 @@ public interface ChatStreamPort {
      * @param chunk 一段增量（实现不应送空串；空串由调用方按"无操作"处理）
      */
     void onChunk(String chunk);
+
+    /**
+     * 这一路调用<strong>上报用量</strong>（{@code #142} ④：此前本接口没有这条通道 ⇒ 生产上 {@code done.tokens}
+     * 恒为零，而"零用量"与"没有模型调用"在成本口径上完全不可分）。
+     *
+     * <h3>★★ 为什么是独立的一个方法，而不是让 {@link #onEnd} 多带一份用量</h3>
+     *
+     * <ol>
+     *   <li><strong>依赖方向</strong>：本接口在 {@code platform}，而用量的值对象 {@code TokenUsage} 在 {@code
+     *       conversation.domain}。让 SPI 引用它就是把依赖反过来（{@code conversation} 已经依赖 {@code platform}）⇒
+     *       模块环，{@code ModuleBoundaryTest} 的 {@code verify()} 当场判红。所以这里只传两个
+     *       <strong>分量</strong>，由消费方折成它自己的值对象；
+     *   <li><strong>到达时机与终态无关</strong>：兼容 OpenAI 的流式实现在<strong>最后一个块</strong>里给用量，也就是 {@code onEnd}
+     *       之前那一刻 —— 把它挂在 {@code onEnd} 上会逼实现"为了带用量而推迟报终态"；
+     *   <li><strong>"没报"必须是一个可表达的状态</strong>：不给 {@code onEnd} 加一个可空的第三参，是因为那样
+     *       "这一路没有用量"与"实现忘了传"在签名上长得一模一样（本仓最贵的那类洞）。<strong>不调用本方法</strong>就是"没报"。
+     * </ol>
+     *
+     * <h3>★ 三条语义</h3>
+     *
+     * <ul>
+     *   <li><strong>可以不调</strong>：没有用量可报时（例如兜底实现走的 {@code ChatPort#complete} 只回原文）
+     *       就<strong>不调</strong>，<strong>不要报 0</strong> —— 报 0 与"没调用"在成本口径上是两个不同的答案 （{@code 10
+     *       §8.4}；{@code TokenUsage.zero()} 的注释把这条写死了）；
+     *   <li><strong>可以调多次</strong>：消费方负责累加（一次问答的 {@code done.tokens} 是全部调用之和）；
+     *   <li><strong>必须在 {@link #onEnd} 之前调</strong>：一条流一旦终态，账就封了 —— 终态之后再报会被装配器拒绝 （{@code
+     *       StreamAssembler#addUsage} 的 {@code requireNotSettled}）。
+     * </ul>
+     *
+     * @param promptTokens 提示词 token 数（非负）
+     * @param completionTokens 生成 token 数（非负）
+     */
+    void onUsage(int promptTokens, int completionTokens);
 
     /**
      * 这一路调用结束了。
