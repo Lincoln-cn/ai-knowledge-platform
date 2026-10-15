@@ -86,10 +86,44 @@ public record RetrievalScope(
   }
 
   /**
+   * ★★ <strong>向量那一路今天对会话域的处置：不参与</strong>（{@code #31} 判据 1 的另一半，本批显式钉住）。
+   *
+   * <h3>为什么需要把"不参与"写成一个具名常量</h3>
+   *
+   * <p>{@link #kbIdsWithModelRows()} 已经"会话域不在里面"，但那是一个<strong>推论</strong>（它是从"会话域没有库行"
+   * 推出来的）。而"向量路要不要在会话域上检索"是一条<strong>产品/排期决定</strong>，不是一个推论 ——
+   * 把决定写在推论里，下一个读代码的人会以为"会话域刚好没库行"而不是"我们决定它今天不走向量路"。 这里把它写成具名的 {@code
+   * false}，于是"放开"是一次<strong>显式的改口</strong>，不是一次不留痕的顺带。
+   *
+   * <h3>★★ 触发条件（什么时候该把它改成 {@code true}）</h3>
+   *
+   * <p><strong>当且仅当"平台默认向量模型"那一格被定清并落地</strong>：会话临时的分段没有 {@code kb_knowledge_base} 行，
+   * 它的向量模型继承<strong>平台默认</strong>（{@code 13 §11.2}）。今天那个概念<strong>无处解析</strong> —— 库里没有"平台默认向量模型"
+   * 这一行，{@code embeddingModelByKb(空)} 也问不出模型 ⇒ 向量路既嵌不了问题、也定不了查哪张维度表。
+   * 所以在那之前，会话域<strong>只走全文一路</strong>（{@code content_tsv} 在库里，不需要模型）。
+   *
+   * <p>★ 它与 {@link #personalKbId()} 那种"暂时没有"是两件不同的事：个人库那一档<strong>有</strong>解析路径 （{@code kind =
+   * 'PERSONAL' and owner_id = 我}），只是惰性创建还没落；会话域的向量模型是<strong>根本没有那一格</strong>。
+   */
+  public static final boolean CONVERSATION_SCOPE_IN_VECTOR_PATH = false;
+
+  /**
+   * 本次检索的域里含会话域吗（{@code conversationId != null}）。
+   *
+   * <p>★ 与 {@link #CONVERSATION_SCOPE_IN_VECTOR_PATH} 配套：一个说"域里有没有会话临时"，一个说"向量路收不收它"。
+   * 向量路的装配点（{@code RetrievalService#vectorSearch}）读这两个值做判定 —— 于是"会话附件不参与向量检索"
+   * 是一条可以逐字读到的判定，而不是"模型查不到 ⇒ 顺手报了个错"。
+   */
+  public boolean hasConversationScope() {
+    return conversationId != null;
+  }
+
+  /**
    * 向量模型查询要用的库 id：域里**有库行**的那部分（共用库 + 个人库）。
    *
    * <p>★ 会话域<strong>故意不在里面</strong>：它没有 {@code kb_knowledge_base} 行，向量模型继承**平台默认** （{@code 13
-   * §11.2}）—— 那是另一条解析路径，不能靠 {@code embeddingModelByKb} 假装有。
+   * §11.2}）—— 那是另一条解析路径，不能靠 {@code embeddingModelByKb} 假装有。 ★ 而"向量路收不收会话域"这条决定本身见 {@link
+   * #CONVERSATION_SCOPE_IN_VECTOR_PATH}（它是因，这里只是它的一个后果）。
    */
   public List<UUID> kbIdsWithModelRows() {
     LinkedHashSet<UUID> all = new LinkedHashSet<>(sharedKbIds);

@@ -596,18 +596,40 @@ public class RetrievalService {
    * <p>★ <strong>维度从"实际返回的向量长度"取</strong>，而不是查模型声明的维度： 写入侧用的也是这个长度（{@code
    * JdbcSegmentEmbeddingAdapter} 的 {@code embedding.dimension()} 来自返回向量）⇒ 两边取法一致，才不会出现"写进 A 表、检索 B
    * 表"这种静默错位。
+   *
+   * <h3>★★ 会话域在这条路上的边界：<strong>不让过</strong>（本批显式声明，见第一条判定）</h3>
+   *
+   * <p>会话临时的分段没有 {@code kb_knowledge_base} 行 ⇒ 它的向量模型继承<strong>平台默认</strong>（{@code 13
+   * §11.2}），而"平台默认向量模型"那一格今天<strong>无处解析</strong>：库里没有那样一行，{@code embeddingModelByKb(空)} 也问不出模型 ⇒
+   * 这条路既嵌不了问题向量、也定不了查哪张维度表。
+   *
+   * <p>本批的裁定是<strong>会话附件暂不参与向量路</strong>（只走全文一路），并且把它写成方法开头的<strong>显式判定</strong>：
+   *
+   * <ul>
+   *   <li>它读的是 {@link RetrievalScope#hasConversationScope()} 与 {@link
+   *       RetrievalScope#CONVERSATION_SCOPE_IN_VECTOR_PATH} 两个具名值 —— 于是"会话域进了向量路"是一次
+   *       <strong>可读到的</strong>判定，而不是"模型查不到 ⇒ 顺手抛了个错"；
+   *   <li>★ 判定的<strong>唯一入口</strong>就是这里：本方法此前是 {@code private}，而"边界在不在"这件事必须能从测试里
+   *       直接读到（否则只能靠一条公开路径撞上去，而那条路径今天传不进会话域）⇒ 改成包内可见，理由写在改动说明里；
+   *   <li>★ 放开它的<strong>触发条件</strong>：当且仅当"平台默认向量模型"定清并落地（见 {@link
+   *       RetrievalScope#CONVERSATION_SCOPE_IN_VECTOR_PATH}）—— 那时把那个常量改成 {@code true}
+   *       并<strong>删掉这一段</strong>， 而不是在这里加一个分支。
+   * </ul>
+   *
+   * <p>★ 为什么是"明确拒绝"而不是"把会话域从域里摘掉再查"：摘掉之后会话附件在向量/混合模式下<strong>少看见</strong>，
+   * 而那件事在读数上与"这次查询确实没命中"完全一样（本项目头号病）。拒绝会让"会话内走向量/混合模式"这件事 以一条带出处的消息暴露出来（{@code
+   * RetrievalService.hitTest} 会把这一路丢掉并把原因记进轨迹 / 日志）。
    */
-  private List<SegmentSearchPort.Scored> vectorSearch(
-      String question, RetrievalScope scope, int limit) {
-    // ★ 向量模型只能从**有库行**的那部分域里问（共用库 + 个人库）：会话临时没有 kb_knowledge_base 行，
-    //   它的向量模型继承平台默认（13 §11.2）⇒ 那条解析本批**没有实现**（它随附件入库链一起落）。
-    //   ★ 这里**明确拒绝**而不是"悄悄跳过会话域"：跳过 = 会话附件在向量模式下少看见，
-    //     而那是静默的（#31 判据 1/2 会误以为通过）。全文路不受影响（content_tsv 在库里，不需要模型）。
-    if (scope.conversationId() != null) {
+  List<SegmentSearchPort.Scored> vectorSearch(String question, RetrievalScope scope, int limit) {
+    // ★★ 会话域的向量路边界（本批唯一的一处声明，见方法注释）：
+    //   · 常量说"当前**不**收会话域"（放开它的触发条件写在 RetrievalScope#CONVERSATION_SCOPE_IN_VECTOR_PATH）；
+    //   · 判定说"这一批域里确实有会话临时，所以拒绝"。
+    //   两件事分开写：谁把常量改成 true，这条判定就自动不再拦人（那时按方法注释删掉本段）。
+    if (!RetrievalScope.CONVERSATION_SCOPE_IN_VECTOR_PATH && scope.hasConversationScope()) {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST,
-          "会话临时附件的向量检索尚未实现（它的向量模型 = 平台默认，随附件入库链一起落）",
-          "请先用全文模式检索；向量/混合模式在会话内的检索随该批开放");
+          "会话附件暂不参与向量检索（它的向量模型 = 平台默认，那一格今天无处解析）",
+          "会话内的检索请用全文模式；向量/混合模式覆盖会话附件随「平台默认向量模型」那一批开放");
     }
     Map<UUID, UUID> modelByKb = segmentSearch.embeddingModelByKb(scope.kbIdsWithModelRows());
     if (modelByKb.isEmpty()) {
