@@ -25,11 +25,20 @@ final class Caliber {
    * <p>★ 基线里<strong>没有</strong>任何"源系统的授权依据"：没有 {@code sourceAcl} / {@code sourceAclRef} / {@code
    * sourcePermissions}。已有的 {@code source} 是契约 {@code DocumentItem.source} 那个
    * <strong>来源渠道</strong>串（今天恒为 {@code local}，见 {@code V13} 的列注释），它<strong>不是</strong>权限依据。
+   *
+   * <p>★★ <strong>新增实体字段时这条基线必须同步</strong> —— 否则 {@code DocumentVersionAbsenceTest} / {@code
+   * SourceAclAuthorityAbsenceTest} 会把你新加的字段<strong>误报成"版本字段"</strong>（或"授权依据字段"）：
+   * 那两条断言写的是"全量清单逐字相等"，它们看见的是"基线里<strong>没有</strong>的字段"，
+   * 分不出「这是版本/权限维度」与「这是忘了同步基线」。所以一条红的第一问是"我加的是不是那个概念"， 第二问才是"基线跟上了没有"。{@code V34} 加的三列（{@code
+   * scopeKind} / {@code scopeId} / {@code ownerId}）就是走第二问进来的：它们是<strong>归属形状</strong>，与"新旧版本关系"无关。
    */
   static final java.util.List<String> DOCUMENT_FIELDS =
       java.util.List.of(
           "id: UUID",
           "kbId: UUID",
+          "scopeKind: DocumentScopeKind",
+          "scopeId: UUID",
+          "ownerId: UUID",
           "name: String",
           "source: String",
           "docType: String",
@@ -53,7 +62,14 @@ final class Caliber {
           "updatedBy: UUID",
           "deletedAt: Instant");
 
-  /** {@code kb_document} 跑完全部迁移之后的列（{@code V13} 建表 + {@code V14/V18/V21/V27} 增量）。 */
+  /**
+   * {@code kb_document} 跑完全部迁移之后的列（{@code V13} 建表 + {@code V14/V18/V21/V27/V34} 增量）。
+   *
+   * <p>★ {@code V34} 的四列是<strong>同一个形状</strong>的两半：{@code scope_kind} / {@code scope_id} 是归属的
+   * 种类与主体，{@code owner_id} 是传输者，而 {@code conversation_id} 是由前两者导出的<strong>生成列</strong> （{@code 13
+   * §11.3}）—— 它不是 {@code Document} 上的字段（实体刻意不映射它，因为它是派生的）， 所以"实体字段数 ≠
+   * 列数"是<strong>对的</strong>，两处的差集今天 = {@code classification_rank} + {@code conversation_id}。
+   */
   static final java.util.List<String> DOCUMENT_COLUMNS =
       java.util.List.of(
           "id",
@@ -80,7 +96,11 @@ final class Caliber {
           "ocr_page_count",
           "classification_rank",
           "department_legacy",
-          "org_id");
+          "org_id",
+          "scope_kind",
+          "scope_id",
+          "owner_id",
+          "conversation_id");
 
   /**
    * {@code #81} 的禁用词：源系统授权依据的痕迹。

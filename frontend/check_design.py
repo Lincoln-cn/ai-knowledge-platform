@@ -2,10 +2,14 @@
 
 对 `src/**` 逐文件扫描，按 design.md 的硬约束打分。任一维度非零即列出。
 
+★ 另有一组**非令牌**的口径断言：引用卡片的「来源标签」（`RefPanel` 的会话域分支）——
+  它同样是"用户看的东西必须对"这一类，且是纯静态可查的（见文末 `ref_source_tag_problems`）。
+
 用法：
     python check_design.py                # 全量扫描
     python check_design.py --top 25       # 只列违规最多的 25 个文件
     python check_design.py --file <路径>   # 只看一个文件（子代理自查用）
+    ★ 引用来源标签那组不受 `--file` 影响：它是全局不变量，永远参与判定。
 
 退出码：0 = 全部为零；1 = 有违规。
 
@@ -126,6 +130,126 @@ EMOJI_ANY = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]")
 
 HAS_FOCUS_VISIBLE = re.compile(r":focus-visible")
 HAS_REDUCED_MOTION = re.compile(r"prefers-reduced-motion")
+
+
+# ── 引用来源标签口径（RefPanel 的会话域分支） ──────────────────────────────
+#
+# ★ 为什么挂在这道闸门里：它是**纯静态**、CI 已经在跑的那一组
+#   （`.github/workflows/ci.yml` 的「静态闸门」），不需要 dev server。
+#   口径本身只有这一处实现 —— 不另开一个没人调用、等于没有读数的 check_*.py。
+#
+# 背景：会话临时附件**没有知识库行**，所以它的引用拿不到 `kbId`；标签要按来源类型切换
+# （知识库引用「知识库：<kbName>」/ 会话域引用「来源：<kbName>」），而且会话域引用不能出现
+# 「跳转到分段管理」（它没有知识库，跳过去是空页 —— 静默 no-op，`#91` 同族）。
+# ★ 判据必须是**结构性**的（缺 kbId），**不许**拿 `kbName` 去比字符串 ——
+#   真有某个知识库叫「会话附件」时，字符串判据会把它误判成会话域。
+
+REF_PANEL = ROOT / "src" / "pages" / "conversation" / "components" / "RefPanel.vue"
+CONVERSATION_PAGES = ROOT / "src" / "pages" / "conversation"
+MOCK_CANNED = ROOT / "src" / "mock" / "fixtures" / "canned.ts"
+MOCK_STREAM = ROOT / "src" / "mock" / "stream.ts"
+
+# 约定常量由**后端**产出（会话附件没有库行 ⇒ 库名为空，而契约要求 kbName 非空）。
+# 前端只负责标签 ⇒ 这个字面量只许出现在 mock（传输层替身）里。
+CONV_KB_NAME_LITERAL = "会话附件"
+
+DOMAIN_DECL = re.compile(
+    r"const\s+isConversationDomain\s*=\s*\([^)]*\)\s*(?::\s*boolean\s*)?=>\s*"
+    r"(?:!\s*\w+\.kbId\b|\w+\.kbId\s*==\s*null|\w+\.kbId\s*===\s*undefined)"
+)
+# 标签：会话域走『来源：』，其余走『知识库：』；`kbName` 仍然渲染（知识库那行不许回归）
+LABEL_BRANCHES = re.compile(
+    r"\{\{\s*isConversationDomain\(ref\)\s*\?\s*'来源：'\s*:\s*'知识库：'\s*\}\}"
+    r"\s*\{\{\s*ref\.kbName\s*\}\}"
+)
+JUMP_BUTTON = re.compile(r"<button\b([^>]*)>\s*跳转到分段管理\s*</button>", re.S)
+BACK_BUTTON = re.compile(r"<button\b([^>]*)>\s*回到原句\s*</button>", re.S)
+KB_NAME_COMPARE = re.compile(
+    r"\.kbName\s*(?:===|!==|==|!=)\s*['\"]"
+    r"|\.kbName\s*\.\s*(?:includes|startsWith|endsWith|indexOf)\("
+)
+STREAM_SELECTS_FIXTURE = re.compile(
+    r"attachmentIds\?\.length[\s\S]{0,160}?cannedAnswer\.withAttachmentRef"
+)
+
+
+def ref_source_tag_problems() -> list[str]:
+    """引用卡片的来源标签口径 —— 返回问题清单（空 = 通过）。"""
+    problems: list[str] = []
+    if not REF_PANEL.exists():
+        # 目标没了也要报：否则这条口径会静默地"通过"
+        return [f"断言目标不存在：{REF_PANEL.relative_to(ROOT).as_posix()}（这条口径没有读数了）"]
+
+    text = REF_PANEL.read_text(encoding="utf-8", errors="replace")
+    # ★ 注释要先去掉再判：本文件的用法说明里就写着「不许写成『知识库：会话附件』」，
+    #   拿它当违规就是把"解释一个反模式"算成"犯了它"（本脚本自己踩过一次）。
+    code = strip_html_comments(strip_comments(text, scss=True))
+    tpl = strip_html_comments("\n".join(template_blocks(text)))
+
+    # ① 判据是结构性的，且只有一处实现
+    if len(re.findall(r"const\s+isConversationDomain\b", code)) != 1:
+        problems.append("会话域判据必须只有一处实现：找不到唯一的 `const isConversationDomain`")
+    if not DOMAIN_DECL.search(code):
+        problems.append(
+            "会话域判据必须是结构性的：期望 `const isConversationDomain = (ref): boolean => !ref.kbId`"
+            "（缺 kbId = 这条引用没有知识库行；拿 kbName 比字符串会在真有知识库叫「会话附件」时误判）"
+        )
+    if KB_NAME_COMPARE.search(code):
+        problems.append("会话域判据不许拿 kbName 的值做比较（===/==/includes…）—— 那是字符串判据，会误判")
+
+    # ② 标签按来源类型切换，且 kbName 仍然渲染
+    if not LABEL_BRANCHES.search(tpl):
+        problems.append(
+            "标签必须按来源类型切换且仍渲染 kbName：期望 "
+            "`{{ isConversationDomain(ref) ? '来源：' : '知识库：' }}{{ ref.kbName }}`"
+            "（知识库引用仍是「知识库：<kbName>」，会话域引用是「来源：<kbName>」）"
+        )
+
+    # ③ 「跳转到分段管理」只给知识库引用
+    jump = JUMP_BUTTON.search(tpl)
+    if not jump:
+        problems.append("找不到「跳转到分段管理」按钮 —— 口径的载体没了，这条断言就没有读数")
+    elif not re.search(r'v-if\s*=\s*"[^"]*isConversationDomain\(ref\)', jump.group(1)):
+        problems.append(
+            "「跳转到分段管理」必须按会话域判据条件渲染：会话附件没有知识库 ⇒ 跳过去是空页"
+            "（静默 no-op，与 #91 同族），所以要挂在 `v-if=\"!isConversationDomain(ref)\"` 上"
+        )
+
+    # ④ 「回到原句」：会话域引用同样有意义，不许被一起条件掉
+    back = BACK_BUTTON.search(tpl)
+    if not back:
+        problems.append("找不到「回到原句」按钮 —— 它对会话域引用仍然有意义，必须保留")
+    elif re.search(r"v-if\s*=", back.group(1)):
+        problems.append("「回到原句」被加了 v-if —— 它对会话域引用仍然有意义，不该被条件掉")
+
+    # ⑤ 前端页面不许硬编码后端要发的那个 kbName 值（只判代码，注释里解释它不算犯）
+    for page in sorted(CONVERSATION_PAGES.rglob("*")):
+        if page.suffix not in (".vue", ".ts"):
+            continue
+        raw = page.read_text(encoding="utf-8", errors="replace")
+        page_code = strip_comments(raw, scss=True)
+        if page.suffix == ".vue":
+            page_code = strip_html_comments(page_code)
+        if CONV_KB_NAME_LITERAL in page_code:
+            problems.append(
+                f"{page.relative_to(ROOT).as_posix()} 里出现了字面量「{CONV_KB_NAME_LITERAL}」——"
+                "那是后端负责产出的 kbName 值，前端只负责标签，不许硬编码它"
+            )
+
+    # ⑥ mock 里那条会话域夹具必须在，而且真的能被走到（否则这条分支没有可看见的读数）
+    canned = MOCK_CANNED.read_text(encoding="utf-8", errors="replace") if MOCK_CANNED.exists() else ""
+    if canned.count("CONVERSATION_ATTACHMENT_KB_NAME") < 2 or CONV_KB_NAME_LITERAL not in canned:
+        problems.append(
+            "mock 夹具缺少会话域引用：期望 fixtures/canned.ts 定义并使用 "
+            "`CONVERSATION_ATTACHMENT_KB_NAME = '会话附件'`，且那条引用**不给** kbId"
+        )
+    stream = MOCK_STREAM.read_text(encoding="utf-8", errors="replace") if MOCK_STREAM.exists() else ""
+    if not STREAM_SELECTS_FIXTURE.search(stream):
+        problems.append(
+            "mock 流式入口没有按「带附件」选中那条夹具 ⇒ 会话域分支在 mock 下走不到：期望 stream.ts 在 "
+            "`attachmentIds?.length` 非空时选 `cannedAnswer.withAttachmentRef`"
+        )
+    return problems
 
 
 class Report:
@@ -264,7 +388,16 @@ def main() -> int:
             print(f"  {s:>4}  {rel}")
             print(f"        {detail}")
 
-    return 1 if grand else 0
+    # ── 引用来源标签口径（不是令牌计数，是"这条 UI 分支还在不在"） ──
+    tag_problems = ref_source_tag_problems()
+    print("\n── 引用来源标签口径（RefPanel 的会话域分支） ──")
+    if tag_problems:
+        for problem in tag_problems:
+            print("  ✗ " + problem)
+    else:
+        print("  ✓ 判据结构性（缺 kbId = 会话域）· 标签按来源切换 · 跳转按钮只给知识库引用")
+
+    return 1 if (grand or tag_problems) else 0
 
 
 if __name__ == "__main__":

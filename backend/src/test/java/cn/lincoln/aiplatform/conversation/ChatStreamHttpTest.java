@@ -226,7 +226,8 @@ class ChatStreamHttpTest {
   void normalPathEmitsTheContractSequenceAndPersistsTheAnswer() throws Exception {
     Fixture fixture = seedWithVisibleSegment();
     // ★ 第二条好分段：让下面那条"index 连续递增"的逐字段核对不是平凡的（只剩一条时它恒真）
-    seedDocumentAndSegment(fixture.kbId(), "SSE 报销制度文档", "报销凭证章节", "差旅住宿标准按职级分档，住宿费上限见附表");
+    UUID secondSegmentId =
+        seedDocumentAndSegment(fixture.kbId(), "SSE 报销制度文档", "报销凭证章节", "差旅住宿标准按职级分档，住宿费上限见附表");
     // ★ 长答案 + 60ms/块：给下面那条"生成中"读数留出足够长的窗口（短答案会在采样前就写完）
     fakeModel.set(FakeChatStreamPorts.longAnswerStreaming(60, 12));
 
@@ -276,6 +277,27 @@ class ChatStreamHttpTest {
         .contains("\"docName\":\"SSE 报销制度文档\"")
         .contains("\"kbName\":\"SSE 夹具库\"")
         .contains("\"segmentId\":\"" + fixture.segmentId() + "\"");
+    // ★★ 判据①：真栈上"知识库引用必带 kbId" —— 这一条就是让前端那条结构性判据成立的那条读数。
+    //   判据用的是 SourceRef.kbId **缺失**（而不是某个字符串值），所以这里必须把真实库 id 钉在 wire 上。
+    //   ★ 两条引用都要核（只核一条的话，"装配点只给第一条接了真实值"这种改法照样绿）。
+    String documentId = documentIdInDb(fixture.segmentId());
+    String secondDocumentId = documentIdInDb(secondSegmentId);
+    assertThat(refsData)
+        .as(
+            "★★ 判据①（真栈）：知识库引用必须带 kbId —— 前端「引用卡片按来源类型切换标签」用的就是这条"
+                + "结构性判据（kbId 缺失 = 会话域）。此前装配点恒传 null ⇒ 真栈上连库引用也没有 kbId ⇒"
+                + " 每条库引用都被读成「来源：」")
+        .contains("\"kbId\":\"" + fixture.kbId() + "\"")
+        .doesNotContain("\"kbId\":null");
+    // ★★ 判据③：documentId 非空 —— 同一条恒 null 的分量就是 #91（引用深链是静默 no-op）的根因：
+    //   前端 Index.vue 用它拼深链的 query，而为 null 时它拼出空 query ⇒ 点了没反应也不报错。
+    assertThat(refsData)
+        .as(
+            "★★ 判据③（真栈 · #91 的根因）：documentId 必须非空 —— 前端 Index.vue 用它拼深链的 query，"
+                + "恒为 null 时点击是一次**静默 no-op**（不报错、也不跳转）")
+        .contains("\"documentId\":\"" + documentId + "\"")
+        .contains("\"documentId\":\"" + secondDocumentId + "\"")
+        .doesNotContain("\"documentId\":null");
     assertThat(classificationRankInDb(fixture.segmentId()))
         .as(
             "★ 密级与预期一致：SourceRef 里**没有** classificationRank 这个字段（契约 stream-types.ts:105-120 冻结的"
@@ -312,17 +334,83 @@ class ChatStreamHttpTest {
         .as("★ '零命中'（[]）与'引用从没到过'（NULL）仍是两个不同的值：本轮的引用既非空数组、也不是 NULL")
         .isNotNull()
         .isNotEqualTo("[]");
+    assertThat(refsSnapshot)
+        .as(
+            "★ 深链的两个分量也随引用快照落库 —— 库里的快照与 wire 上那一帧是同一批"
+                + "（否则『点开历史会话里的引用』永远拼不出 query，而那是另一条静默 no-op）。"
+                + "★ 注意库里那一列是 jsonb，它的 ::text 输出在冒号后**带一个空格**（wire 上那一帧是紧凑 JSON）")
+        .contains("\"kbId\": \"" + fixture.kbId() + "\"")
+        .contains("\"documentId\": \"" + documentId + "\"");
     assertThat(tokensInDb(messageId))
         .as("★ tokens 落库（本批假模型不报用量 ⇒ 两列都是 0，而不是 NULL —— 调用确实发生过）")
         .isNotNull();
   }
 
   /**
+   * ★★ 判据④：{@code title} 为 {@code NULL} 的分段<strong>仍然出现</strong>，而且它的 {@code title} 是 {@code
+   * docName} （读取侧兜底）。
+   *
+   * <p>★ 造法与前一条同源（{@code kb_segment.title} 在库里可空，{@code V15}），但期望<strong>相反</strong>：
+   * 前一条钉"兜不住的那一类仍然逐条跳过"，这一条钉"兜得住的那一类不再被丢掉"。
+   *
+   * <p>★★ 为什么兜底值必须是 {@code docName} 而不是占位串：文档名是<strong>库里真实存在的字</strong>， 界面上「知识库 / 文档名」那一行本来就显示它
+   * —— 换成"无标题"或分段 id，用户会在引用栏里看到一个 <strong>在任何地方都找不到的名字</strong>，而那正是引用可信度的反例。
+   *
+   * <p>★ 本条可证伪：把 {@code ChatService#titleOf} 的兜底去掉（直接 {@code card.title()}）⇒
+   * 这一条立刻红（那一条引用会被逐条摘掉，{@code refs} 里只剩另一条）。
+   */
+  @Test
+  void aSegmentWithNullTitleFallsBackToItsDocumentNameInsteadOfBeingDropped() throws Exception {
+    Fixture fixture = seedWithVisibleSegment();
+    UUID titlelessSegmentId =
+        seedDocumentAndSegment(fixture.kbId(), "SSE 差旅补充文档", null, "差旅住宿标准为每人每天300元（补充口径）");
+    fakeModel.set(FakeChatStreamPorts.streaming(0, 20, 12));
+
+    ListAppender<ILoggingEvent> chatServiceLog = captureChatServiceLog();
+    Response response;
+    try {
+      response = chat(login(), body(fixture.appId(), null, "差旅住宿标准"));
+    } finally {
+      releaseLogCapture(chatServiceLog);
+    }
+
+    String refsData = response.dataOf("refs");
+    assertThat(refsData)
+        .as(
+            "★★ 判据④：title 为空**不再是**『这条引用被摘掉』的理由 —— 用 docName 兜底之后它照常出现在引用栏里"
+                + "（它此前被丢掉，而丢掉之后的读数与『库里确实没有相关内容』完全一样）")
+        .contains("差旅住宿标准为每人每天300元")
+        .contains("\"segmentId\":\"" + titlelessSegmentId + "\"");
+    assertThat(refsData)
+        .as("★★ 判据④的另一面：兜底值取的是 docName（同一条引用的 docName 与 title 是同一个值）——" + "不是占位串、也不是分段 id")
+        .contains("\"title\":\"SSE 差旅补充文档\"")
+        .contains("\"docName\":\"SSE 差旅补充文档\"");
+    assertThat(refsData)
+        .as("★ 两条都装成了 ⇒ 编号仍从 1 连续递增（兜底不许把编号打乱）")
+        .contains("\"index\":1")
+        .contains("\"index\":2")
+        .doesNotContain("\"index\":3");
+    assertThat(logMessagesOf(chatServiceLog))
+        .as("★ 兜底成功时**不是**一次降级：这一轮不许记『跳过 N 条』（否则日志会把合法数据读成脏数据）")
+        .noneMatch(message -> message.contains("跳过"));
+
+    String messageId = messageIdOf(response.frames());
+    assertThat(refsInDb(messageId))
+        .as("★ 落库的引用快照里也是兜底后的 title（库里的快照与 wire 上那一帧不许分叉）——" + "★ 库里那列是 jsonb，::text 输出在冒号后带一个空格")
+        .contains("\"title\": \"SSE 差旅补充文档\"")
+        .contains(titlelessSegmentId.toString());
+  }
+
+  /**
    * ★★ 判据①（{@code #123}）：单条坏数据 ⇒ <strong>摘掉这一条 + 计数</strong>，同一轮里其余引用照常返回。
    *
-   * <p>造法：同一轮里放两条都能被全文检索命中的分段，其中一条 {@code title} 为 {@code NULL} —— ★ 那不是"造一个不可能的数据"： {@code
-   * kb_segment.title} 在库里<strong>可空</strong>（{@code V15}），而 {@code SourceRef} 把它当必填，
-   * 所以这条路径今天就会被真实数据触发。
+   * <p>造法：同一轮里放两条都能被全文检索命中的分段，其中一条的<strong>文档名为空串</strong> —— ★ 那是 {@code title}
+   * 兜底的<strong>第二层防御</strong>要处理的那一类：{@code title} 为空时读取侧用 {@code docName} 顶上（见 {@link
+   * #aSegmentWithNullTitleFallsBackToItsDocumentNameInsteadOfBeingDropped}），而 {@code docName}
+   * 自己也为空时兜底就顶不住了 ⇒ 只能摘掉。
+   *
+   * <p>★ 库里 {@code kb_document.name} 只约束 {@code not null}、不约束非空串（{@code V13}）， 而 {@code SourceRef}
+   * 把 {@code title} / {@code docName} 当必填 —— 所以这条路径今天就会被真实数据触发。
    *
    * <p>★★ 断言的四面（少一面这条用例就变成「看起来在验」）：
    *
@@ -330,17 +418,16 @@ class ChatStreamHttpTest {
    *   <li>好的那条<strong>照常</strong>出现在 {@code refs} 帧与库里的引用快照里；
    *   <li>坏的那条<strong>不在</strong>引用里（连它的正文关键词都不许出现）；
    *   <li>活下来的那条 {@code index} 仍然是 <strong>1</strong> —— 跳过的空位不许占号，否则正文里的 {@code [N]} 会指向不存在的引用；
-   *   <li>★ 日志里能读到 {@code 跳过 1 条} 且带字段名（降级<strong>不许静默</strong>）。
+   *   <li>★ 日志里能读到 {@code 跳过 1 条} 且带可读原因（降级<strong>不许静默</strong>）。
    * </ol>
    *
    * <p>★★ <strong>本条可证伪</strong>（金丝雀 A）：把逐条保护改回"一个 {@code catch} 包整批" ⇒ 这一条立刻变红 （引用整体变空 ⇒ 上面第
    * 1/2/3/4 面一起红）。它不是"理论上会红"，本批实测红过一次并逐字记在交付报告里。
    */
   @Test
-  void aSegmentWithBlankRequiredFieldIsSkippedWhileTheOthersStillReachTheWire() throws Exception {
+  void aSegmentWithBlankDocumentNameIsSkippedWhileTheOthersStillReachTheWire() throws Exception {
     Fixture fixture = seedWithVisibleSegment();
-    UUID badSegmentId =
-        seedDocumentAndSegment(fixture.kbId(), "SSE 差旅补充文档", null, "差旅住宿标准为每人每天300元（补充口径）");
+    UUID badSegmentId = seedDocumentAndSegment(fixture.kbId(), "", null, "差旅住宿标准为每人每天300元（补充口径）");
     fakeModel.set(FakeChatStreamPorts.streaming(0, 20, 12));
 
     ListAppender<ILoggingEvent> chatServiceLog = captureChatServiceLog();
@@ -354,7 +441,7 @@ class ChatStreamHttpTest {
     String refsData = response.dataOf("refs");
     assertThat(refsData).as("★★ 判据①：一条分段装不成 ⇒ 其余引用照常返回（不是'整轮零引用'）").contains("差旅住宿标准为每人每天500元");
     assertThat(refsData)
-        .as("★ 判据①：坏的那条（title 为空）不许出现在引用里 —— 连它的正文关键词都不许有")
+        .as("★ 判据①：坏的那条（文档名为空 ⇒ title 兜底也顶不住）不许出现在引用里 —— 连它的正文关键词都不许有")
         .doesNotContain(badSegmentId.toString())
         .doesNotContain("300元");
     assertThat(refsData)
@@ -368,8 +455,8 @@ class ChatStreamHttpTest {
         .contains("差旅住宿标准为每人每天500元")
         .doesNotContain("300元");
     assertThat(logMessagesOf(chatServiceLog))
-        .as("★★ 判据③：降级必须留痕 —— 日志里要能读到『跳过 1 条』，而且带上是哪个必填字段（不许静默：" + "静默时它与'库里确实没有相关内容'不可区分）")
-        .anyMatch(message -> message.contains("跳过 1 条") && message.contains("title"));
+        .as("★★ 判据④：降级必须留痕 —— 日志里要能读到『跳过 1 条』，而且带上是哪个必填字段（不许静默：" + "静默时它与'库里确实没有相关内容'不可区分）")
+        .anyMatch(message -> message.contains("跳过 1 条") && message.contains("不能为空"));
   }
 
   /**
@@ -934,6 +1021,16 @@ class ChatStreamHttpTest {
         "select reference_snapshot::text from cv_message where id = ?::uuid",
         String.class,
         messageId);
+  }
+
+  /**
+   * 某条分段所属的文档 id（{@code #91} 的深链载体）。
+   *
+   * <p>★ 为什么从库里查而不是让夹具返回：本类要验的正是"装配点有没有把**真实的行**接上去" —— 夹具自己记一个期望值，等于让被验的那条读数由夹具出题（它可能记错）。
+   */
+  private String documentIdInDb(UUID segmentId) {
+    return jdbc.queryForObject(
+        "select document_id::text from kb_segment where id = ?", String.class, segmentId);
   }
 
   /**

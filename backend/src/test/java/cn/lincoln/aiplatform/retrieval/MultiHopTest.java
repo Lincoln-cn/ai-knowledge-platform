@@ -310,7 +310,15 @@ class MultiHopTest {
     public List<Card> load(Collection<UUID> segmentIds) {
       List<Card> cards = new ArrayList<>();
       for (UUID id : segmentIds) {
-        cards.add(new Card(id, "标题-" + id, "正文内容，用于判定的前 100 字。", "文档", "库"));
+        cards.add(
+            new Card(
+                id,
+                "标题-" + id,
+                "正文内容，用于判定的前 100 字。",
+                "文档",
+                "库",
+                UUID.randomUUID(),
+                UUID.randomUUID()));
       }
       return cards;
     }

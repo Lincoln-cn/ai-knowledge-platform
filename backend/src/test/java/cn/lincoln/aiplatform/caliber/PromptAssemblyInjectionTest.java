@@ -68,7 +68,13 @@ class PromptAssemblyInjectionTest {
             "本制度什么时候执行",
             List.of(
                 new SegmentSearchPort.Card(
-                    UUID.randomUUID(), "第三章 执行", POISONED_SEGMENT, "制度.md", "制度库")),
+                    UUID.randomUUID(),
+                    "第三章 执行",
+                    POISONED_SEGMENT,
+                    "制度.md",
+                    "制度库",
+                    UUID.randomUUID(),
+                    UUID.randomUUID())),
             1_000);
 
     assertThat(outcome.usable()).as("夹具前提：这一次判定必须是可用的，否则下面的断言是空跑").isTrue();
@@ -104,7 +110,13 @@ class PromptAssemblyInjectionTest {
         question,
         List.of(
             new SegmentSearchPort.Card(
-                UUID.randomUUID(), "第三章 执行", POISONED_SEGMENT, "制度.md", "制度库")),
+                UUID.randomUUID(),
+                "第三章 执行",
+                POISONED_SEGMENT,
+                "制度.md",
+                "制度库",
+                UUID.randomUUID(),
+                UUID.randomUUID())),
         1_000);
 
     String prompt = chat.prompts.get(0);

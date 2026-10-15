@@ -3,6 +3,9 @@ package cn.lincoln.aiplatform.conversation.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import cn.lincoln.aiplatform.conversation.domain.SourceRef;
 import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
 import cn.lincoln.aiplatform.conversation.domain.stream.EventKind;
@@ -10,6 +13,8 @@ import cn.lincoln.aiplatform.conversation.domain.stream.StreamEvent;
 import cn.lincoln.aiplatform.conversation.domain.stream.StreamStatus;
 import cn.lincoln.aiplatform.conversation.domain.stream.StreamTerminationPath;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
@@ -25,6 +30,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /**
  * ★★ {@code ChatService} 层的<strong>事件读数</strong>：四条终止路径各自的事件序列、终态与落库终态 （第 17 周 · 0.4.5）。
@@ -340,6 +346,171 @@ class ChatStreamEventRecordingTest {
     assertThat(persisted.path())
         .as("★ 收尾路径不受影响（引用为空不改这一轮的结局）")
         .isEqualTo(StreamTerminationPath.COMPLETE);
+  }
+
+  // ────────────────────────── ⑦ 引用载荷的两个结构性分量（第 17 周）──────────────────────────
+
+  /**
+   * ★★ 引用载荷里那两个结构性分量<strong>取自真实值</strong>：知识库引用必带 {@code kbId} / {@code documentId}，
+   * 而<strong>会话域引用的 {@code kbId} 必为 {@code null}</strong> —— <strong>同一条用例里两个方向都钉住</strong>。
+   *
+   * <h3>为什么必须两个方向在同一条用例里</h3>
+   *
+   * <p>只钉"库引用有 {@code kbId}"这一条的话，"给所有引用都补一个 kbId"这种改法<strong>照样绿</strong> —— 而它恰好会毁掉前端的判据（{@code
+   * kbId} 缺失 = 会话域 ⇒ 会话附件被读成「知识库：」）。 反过来只钉"会话域为空"也不行：装配点恒传 {@code
+   * null}（本批修掉的那一处）会让它<strong>恒绿</strong>。 两个方向一起才把"真实值透传"这件事钉成一个可证伪的命题。
+   *
+   * <h3>★ 金丝雀（本批实测做过一次）</h3>
+   *
+   * <p>把装配点的 {@code card.kbId()} 改回 {@code null} ⇒ 本用例第一条断言立刻红（见交付报告里逐字读数）。 ★ 同理，把 {@code
+   * card.documentId()} 改回 {@code null} ⇒ 第二条红（{@code #91} 的根因读数）。
+   */
+  @Test
+  void referencesCarryTheRealDocumentAndKbIdWhileTheConversationDomainStaysNull() {
+    Fixture fixture = new Fixture(new HitSearchPort(), new KnownScope());
+    fixture.model.set(new ScriptedModel(0L, 0L, 6, SHORT_ANSWER));
+    ChatTurnWriter.PreparedTurn turn = fixture.prepare();
+    RecordingSink sink = new RecordingSink();
+
+    fixture.chatService().streamTurn(turn, QUESTION, sink);
+
+    List<SourceRef> refs = sink.refs();
+    assertThat(refs).as("★ 前置：两条命中（知识库域 + 会话域）都必须装成引用 —— 否则下面两条断言都在空跑").hasSize(2);
+    SourceRef kbRef = refOf(refs, HitSearchPort.SEGMENT_ID);
+    SourceRef conversationRef = refOf(refs, HitSearchPort.CONVERSATION_SEGMENT_ID);
+
+    assertThat(kbRef.kbId())
+        .as(
+            "★★ 判据 1：真栈上的知识库引用**必须带 kbId** —— 它就是前端"
+                + "「知识库：<kbName>」那条结构性判据的判据本身（缺失 = 会话域）。此前装配点恒传 null ⇒ 每条库引用都被读成「来源：」")
+        .isEqualTo(HitSearchPort.KB_ID.toString());
+    assertThat(kbRef.documentId())
+        .as(
+            "★★ 判据 3（#91 的根因）：documentId 必须非空 —— 前端 Index.vue 用它拼深链的 query，"
+                + "恒为 null 时点击是一次**静默 no-op**（不报错、也不跳转）")
+        .isEqualTo(HitSearchPort.DOCUMENT_ID.toString());
+
+    assertThat(conversationRef.kbId())
+        .as(
+            "★★ 判据 2：会话域引用的 kbId **必为 null**（那一行没有库行）——"
+                + "若这里被补上了值，前端就会把会话附件读成「知识库：」，而那是本批要修的那个误判本身")
+        .isNull();
+    assertThat(conversationRef.documentId())
+        .as(
+            "★ 会话域引用同样带 documentId（文档行两个域都有）⇒ 深链在会话附件上也拼得出 query"
+                + "（会话域的**库名**口径是另一件事，尚未裁定，见 JdbcSegmentSearchQuery#load）")
+        .isEqualTo(HitSearchPort.CONVERSATION_DOCUMENT_ID.toString());
+  }
+
+  // ────────────────────────── ⑧ "范围为空"那条早退的留痕（第 17 周补）──────────────────────────
+
+  /**
+   * ★★ 判据 5 的一半：<strong>"范围为空"（合法状态）必须留痕，且与"身份为空"可分</strong>。
+   *
+   * <p>它此前<strong>一条日志都没有</strong> ⇒ 与"库里确实没有相关内容"在读数上完全一样。而它有两个成因： ① 用户确实没有任何可见库（本用例：身份正常，只是没有库）；②
+   * {@code currentScope()} 是 {@code nobody()} （下一条用例）。两者<strong>处置相同</strong>（整批
+   * fail-closed）、<strong>含义完全不同</strong> ⇒ 必须能分开读。
+   *
+   * <p>★ 同时钉住<strong>返回值语义一个字没改</strong>：引用仍是空、终态仍是 {@code GENERATED}、收尾路径仍是 {@code
+   * COMPLETE}（零引用不是失败，也不是"检索没跑"）。
+   */
+  @Test
+  void anEmptyVisibleRangeIsLoggedAsALegitimateState() {
+    Fixture fixture = new Fixture(new EmptySearchPort(), new KnownScope());
+    fixture.model.set(new ScriptedModel(0L, 0L, 6, SHORT_ANSWER));
+    ChatTurnWriter.PreparedTurn turn = fixture.prepare();
+    RecordingSink sink = new RecordingSink();
+
+    List<String> messages = streamTurnCapturingLog(fixture, turn, sink);
+
+    assertThat(messages)
+        .as("★★ 范围为空必须留痕（它此前是**无日志早退**：与『库里确实没有』不可分）")
+        .anyMatch(message -> message.contains("没有任何可见库"));
+    assertThat(messages)
+        .as("★ 两种形状必须可分：身份正常时**不许**出现 nobody() 那条（否则这条日志读起来与身份缺失一样）")
+        .noneMatch(message -> message.contains("nobody()"));
+
+    assertThat(sink.refs()).as("★ 返回值语义未变：范围为空 ⇒ 一条引用都不给（整批 fail-closed）").isEmpty();
+    assertThat(sink.done().status())
+        .as("★ 零引用不是失败：终态仍是 GENERATED")
+        .isEqualTo(StreamStatus.GENERATED);
+    assertThat(sink.kinds()).doesNotContain(EventKind.ERROR);
+    assertThat(fixture.store.finishOf(turn.assistantMessageId()).path())
+        .as("★ 收尾路径未被这一批影响")
+        .isEqualTo(StreamTerminationPath.COMPLETE);
+  }
+
+  /**
+   * ★★ 判据 5 的另一半：<strong>"身份为空"（异常形状）也必须留痕，且文案与"范围为空"不同</strong>。
+   *
+   * <p>造法：范围端口是 {@link ScopeFilter#nobody()}（{@code me == null}）而检索端口"没有可见库" —— 这正是 第 17 周那个 P0
+   * 的形状（模型线程上读不到范围的 {@code ThreadLocal}）：可见性<strong>无法判定</strong>， 于是 {@code visibleKbIds} 为空。★
+   * 它与"用户没有库"在返回值上不可分，所以只能靠<strong>日志</strong>分。
+   */
+  @Test
+  void anUnavailableIdentityIsLoggedDistinctlyFromAnEmptyRange() {
+    Fixture fixture = new Fixture(new EmptySearchPort(), new AnonymousScope());
+    fixture.model.set(new ScriptedModel(0L, 0L, 6, SHORT_ANSWER));
+    ChatTurnWriter.PreparedTurn turn = fixture.prepare();
+    RecordingSink sink = new RecordingSink();
+
+    List<String> messages = streamTurnCapturingLog(fixture, turn, sink);
+
+    assertThat(messages)
+        .as("★★ 身份为空（currentScope() 是 nobody()）必须留痕，而且要与『用户没有可见库』区分开")
+        .anyMatch(message -> message.contains("nobody()"));
+    assertThat(messages)
+        .as("★ 两种形状必须可分：身份缺失时**不许**把它读成『用户确实没有可见库』这条合法状态")
+        .noneMatch(message -> message.contains("没有任何可见库"));
+
+    assertThat(sink.refs()).as("★ 返回值语义未变：整批 fail-closed，一条引用都不给").isEmpty();
+    assertThat(sink.done().status()).as("★ 零引用不改这一轮的结局").isEqualTo(StreamStatus.GENERATED);
+    assertThat(fixture.store.finishOf(turn.assistantMessageId()).path())
+        .as("★ 收尾路径未被这一批影响")
+        .isEqualTo(StreamTerminationPath.COMPLETE);
+  }
+
+  /** 跑一轮并把它写给 {@code ChatService} 那个 logger 的日志读回来（读完即摘，不留给下一条用例）。 */
+  private static List<String> streamTurnCapturingLog(
+      Fixture fixture, ChatTurnWriter.PreparedTurn turn, RecordingSink sink) {
+    ListAppender<ILoggingEvent> appender = captureChatServiceLog();
+    try {
+      fixture.chatService().streamTurn(turn, QUESTION, sink);
+    } finally {
+      releaseLogCapture(appender);
+    }
+    return logMessagesOf(appender);
+  }
+
+  /** 按分段 id 取那一条引用（★ 不按下标取：下标依赖假端口的返回顺序，那是另一个变量的读数）。 */
+  private static SourceRef refOf(List<SourceRef> refs, UUID segmentId) {
+    return refs.stream()
+        .filter(ref -> segmentId.toString().equals(ref.segmentId()))
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("引用里没有分段 " + segmentId));
+  }
+
+  /**
+   * 给 {@code ChatService} 那个 logger 挂一个内存追加器（读完必须 {@link #releaseLogCapture}）。
+   *
+   * <p>★ 为什么需要它：判据要读的"这条早退走的是哪个形状"只有<strong>日志</strong>这一个载体 —— 它不落库、不进事件， 而"降级不许静默"这条判据不验就等于没做。
+   */
+  private static ListAppender<ILoggingEvent> captureChatServiceLog() {
+    ListAppender<ILoggingEvent> appender = new ListAppender<>();
+    appender.start();
+    ((Logger) LoggerFactory.getLogger(ChatService.class)).addAppender(appender);
+    return appender;
+  }
+
+  /** 摘掉上面那个追加器（★ 不摘会把本用例的日志漏给下一条用例，而那种漏读起来像"别处也在这么做"）。 */
+  private static void releaseLogCapture(ListAppender<ILoggingEvent> appender) {
+    ((Logger) LoggerFactory.getLogger(ChatService.class)).detachAppender(appender);
+    appender.stop();
+  }
+
+  /** 那个追加器收到的日志正文（已经过占位符格式化）。 */
+  private static List<String> logMessagesOf(ListAppender<ILoggingEvent> appender) {
+    return appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
   }
 
   // ────────────────────────── 一轮问答的最小真实装配 ──────────────────────────
@@ -698,6 +869,10 @@ class ChatStreamEventRecordingTest {
    * 两者在"引用为空"这个返回值上<strong>不可分</strong> —— 而判据③要验的恰恰是"这一批走的是哪一条分支"，
    * 所以这里必须让命中<strong>真的存在</strong>：只有这样才能证明引用为空的原因不是"没搜到"。
    *
+   * <p>★★ 它给的是<strong>两条</strong>命中，一条知识库域、一条会话域（{@code kbId} 为 {@code null}）——
+   * 引用载荷里那两个结构性分量（{@code kbId} / {@code documentId}）的两个方向就落在这个形状上 （见 {@link
+   * #referencesCarryTheRealDocumentAndKbIdWhileTheConversationDomainStaysNull}）。
+   *
    * <p>★ 没被用到的那些方法照旧<strong>抛</strong>（与 {@link EmptySearchPort} 同一条纪律）：
    * 本类若哪天开始走向量路，那说明这条链的形状变了，应当红而不是安静地拿到空结果。
    */
@@ -705,7 +880,17 @@ class ChatStreamEventRecordingTest {
 
     private static final UUID KB_ID = UUID.fromString("0a000000-0000-4000-8000-000000000001");
 
+    /** 知识库域那一条：★ 它属于 {@link #KB_ID} 那个库。 */
     private static final UUID SEGMENT_ID = UUID.fromString("0b000000-0000-4000-8000-000000000001");
+
+    /** 会话域那一条：★ <strong>没有库行</strong> ⇒ 期望它的 {@code kbId} 是 {@code null}。 */
+    private static final UUID CONVERSATION_SEGMENT_ID =
+        UUID.fromString("0b000000-0000-4000-8000-000000000002");
+
+    private static final UUID DOCUMENT_ID = UUID.fromString("0c000000-0000-4000-8000-000000000001");
+
+    private static final UUID CONVERSATION_DOCUMENT_ID =
+        UUID.fromString("0c000000-0000-4000-8000-000000000002");
 
     @Override
     public List<UUID> visibleKbIds(Collection<UUID> requested) {
@@ -714,12 +899,32 @@ class ChatStreamEventRecordingTest {
 
     @Override
     public List<Scored> fullText(TextQuery query) {
-      return List.of(new Scored(SEGMENT_ID, 0.9));
+      return List.of(new Scored(SEGMENT_ID, 0.9), new Scored(CONVERSATION_SEGMENT_ID, 0.8));
     }
 
     @Override
     public List<Card> load(Collection<UUID> segmentIds) {
-      return List.of(new Card(SEGMENT_ID, "差旅住宿标准章节", "差旅住宿标准为每人每天500元", "SSE 差旅制度文档", "SSE 夹具库"));
+      List<Card> cards = new ArrayList<>();
+      for (UUID id : segmentIds) {
+        if (CONVERSATION_SEGMENT_ID.equals(id)) {
+          // ★ 会话域的 kbName 口径**尚未裁定**（见 JdbcSegmentSearchQuery#load 的注释）：这里给一个非空占位值
+          //   只是为了让这一条过得了 SourceRef 的必填校验 —— 本用例的断言只针对 kbId / documentId 这两个分量。
+          cards.add(
+              new Card(
+                  id,
+                  "会话附件里的段落",
+                  "会话附件正文：合同违约金上限见附件三",
+                  "附件-合同.docx",
+                  "会话附件",
+                  CONVERSATION_DOCUMENT_ID,
+                  null));
+        } else {
+          cards.add(
+              new Card(
+                  id, "差旅住宿标准章节", "差旅住宿标准为每人每天500元", "SSE 差旅制度文档", "SSE 夹具库", DOCUMENT_ID, KB_ID));
+        }
+      }
+      return cards;
     }
 
     @Override
@@ -735,6 +940,30 @@ class ChatStreamEventRecordingTest {
     @Override
     public List<Scored> vectorSearch(VectorQuery query) {
       throw new UnsupportedOperationException("本类不走向量路");
+    }
+  }
+
+  /**
+   * 范围端口替身：<strong>身份正常</strong>（{@code me} 与密级上限都在）。
+   *
+   * <p>★ 它与 {@link AnonymousScope} 的分工正是"范围为空"那两个成因：用本替身时 {@code visibleKbIds} 为空
+   * 只能是"用户确实没有任何可见库"（合法状态）；用那个替身时 {@code currentScope()} 是 {@code nobody()} （异常形状）。两者在读数上必须能分开 —— 见
+   * {@link #anEmptyVisibleRangeIsLoggedAsALegitimateState()} 与 {@link
+   * #anUnavailableIdentityIsLoggedDistinctlyFromAnEmptyRange()}。
+   */
+  private static final class KnownScope implements AccessScopePort {
+
+    private static final UUID ME = UUID.fromString("0d000000-0000-4000-8000-000000000001");
+
+    @Override
+    public ScopeFilter currentScope() {
+      return new ScopeFilter(
+          ME, DataScope.OWN, Set.of("ADMIN"), ClassificationLevel.INTERNAL, Set.of());
+    }
+
+    @Override
+    public boolean canSee(OwnedResource resource) {
+      return true;
     }
   }
 }
