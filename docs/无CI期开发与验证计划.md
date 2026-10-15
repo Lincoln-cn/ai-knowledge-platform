@@ -104,3 +104,23 @@ tools\run-frontend-gates.cmd     ← 跑 11 道浏览器闸门 + verify_features
 
 ★ 同族纪律（`#49`）：**破坏性 git 操作会吃掉子代理的未提交改动** —— `reset --hard` 已经因此丢过 9 个文件；
 要"干净基线"用 `git switch -c <new> origin/main`（切分支不动未提交改动），**绝不用 `reset --hard`**。
+
+---
+
+## 八、`.cmd` 闸门脚本的两条硬约束（2026-10-15 实测踩到，**改脚本前先读**）
+
+`tools/run-frontend-gates.cmd` 是断供期的**唯一**前端读数来源，它两个坑**都会让"闸门红"与"脚本坏"混在一起**（本项目的头号病形态：**读数不可信**）：
+
+| 坑 | 症状（逐字） | 约束 |
+|---|---|---|
+| ★ **行尾必须是 CRLF** | `'ayedexpansion' is not recognized…` · `'ser' is not recognized…` —— cmd.exe 把 `setlocal enabledelayedexpansion` 读断、逐行撕开 | ★ 用**任何编辑器/工具重写该文件后**，必须确认**行尾仍是 CRLF**（LF-only 的 `.cmd` 会被 cmd.exe 逐字节误读）；判据 = 文件头前 20 字节含 `13,10` |
+| ★ **内容必须纯 ASCII** | 非 ASCII 注释被 cmd.exe 按 **GBK** 解析 ⇒ **吃掉后续行**（本项目已栽过：`.cmd` 里的中文注释连带吃掉了 `set VITE_USE_MOCK=false`，前端静默跑成 mock） | ★ 连**文档名**都不要写中文；要引用就用 ASCII 描述（"the no-CI plan under `docs/`"） |
+| ★★ **`python -c` 不许用 `\` 续行** | `SyntaxError: unexpected EOF while parsing` —— cmd.exe **不认反斜杠续行**，它把字面 `\` 交给 Python | ★ 内联 Python **一律压成一行**；★ 症状是"**看起来像 5280 没起**"，而实际上**即使服务起着也会报同一个错** —— 这条最坑，因为它伪装成环境问题 |
+
+★ **本次实测**（2026-10-15）：修前在 5280 **未起**时报 `SyntaxError`（伪装成环境问题）；修后同一场景报干净的
+`[ERROR] frontend dev server is not answering on http://127.0.0.1:5280` + **该敲哪两条命令**，报告里 `SyntaxError` 命中 **0**、`not recognized` 命中 **0**。
+
+★ **顺带一条设计（同批落的）**：最后两道闸门（`verify_features` / `smoke_test`）需要**真栈**（后端 + 桩），
+而前 11 道只需 dev server。⇒ 脚本现在**先探后端 18088**，探不到就把那两道记为 **`SKIPPED`** 并在摘要里单独计数
+（★ **`SKIPPED` 是"缺读数"，绝不是"通过"** —— 不许让它读起来像绿的）。
+
