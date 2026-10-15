@@ -8,6 +8,8 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.List;
 import java.util.UUID;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
@@ -26,13 +28,27 @@ import org.hibernate.annotations.UpdateTimestamp;
  * 症状是<strong>静默降密</strong>（会话从机密掉回内部，且没有任何地方报错）。 所以"只升不降"这条不变量<strong>在领域层挡住</strong>： {@link
  * #raiseClassification} 是唯一能改这个字段的方法，它对下调<strong>不做任何事</strong>（见该方法）。
  *
+ * <p>★★ <strong>2026-10-16 补（{@code #108}）—— 落库那一步不在这个对象上，而在库侧一条 UPDATE</strong>：
+ * 上面那条"唯一写入口"只管<strong>内存里的这个对象</strong>；而 {@code save()} 是"读 → 改 → 更新"，
+ * <strong>同事务之外</strong>的两次并发抬升会<strong>丢更新</strong>（各自读到同一个现值、各自提交）⇒ 会话密级<strong>滞后于真实
+ * max</strong>（不报错、不留痕，且它是后续每一轮处理内容的依据）。 {@code #108} 的择一是 **(a) 库侧单调**：落库走 {@link
+ * ConversationRepository#raiseClassification}（一条 {@code update … where id = ? and
+ * max_classification in (严格低于本轮 max 的那些档)}）， 它<strong>不读实体</strong> ⇒ "拿陈旧实体写回"这条路径在签名上就不存在。
+ *
+ * <p>★★ <strong>"会不会被抬升"这条规则只有一处</strong>：{@link #strictlyLowerThan}。 内存里的 {@link
+ * #raiseClassification} 与库侧那条 UPDATE 的 {@code where} <strong>同取它</strong> —— 于是"口径在 SQL
+ * 里再写一遍"这个代价被压到"只有集合成员判定，没有第二份密级次序" （两侧一致由 {@code ConversationClassificationWriteTest} 的等价用例逐对钉住）。
+ *
  * <h3>★ 本批的边界（读这个类时请连着读）</h3>
  *
  * <ul>
  *   <li><strong>做</strong>：数据层（{@code V32} 的表 + 本实体 + {@link
  *       ConversationRepository}）与<strong>领域不变量</strong>。
  *   <li><strong>不做</strong>：服务层编排（创建会话 / 追加消息 / 落引用集合那一整条链）与 HTTP 端点 —— 它们的载体是第 17 周的 SSE
- *       问答链路（{@code 13 §8.3} 的 M4b 行）。{@link #raiseClassification} 今天<strong>还没有生产调用方</strong>，
+ *       问答链路（{@code 13 §8.3} 的 M4b 行）。★ <strong>写侧的"落库机制"已随 {@code #108} 落</strong>（见上一段： {@link
+ *       ConversationRepository#raiseClassification}），但它的<strong>生产调用方仍未出现</strong>：
+ *       "本轮引用集合的最高密级"这个值今天到不了落库那一刻（契约的 {@code SourceRef} 十个字段里<strong>没有</strong>
+ *       classification，{@code 10 §8.2} 已裁定归因类字段走埋点），所以那一步要连带改检索侧的装配 —— 属第 17 周。
  *       这一点是<strong>刻意</strong>的：{@code #27} 判的是"表与领域口径现在落，消费者第 17 周接"， 而不是"先造一个空壳服务假装会话密级在工作"（那正是该
  *       Issue 点名的 A 类病）。
  *   <li><strong>不碰</strong>：{@code cv_message}（消息、引用快照、附件）—— 那是第 17 周的下一张表。
@@ -73,12 +89,26 @@ public class Conversation {
   /**
    * 展示用的冗余计数（列表页不必为每一行数一次消息）。
    *
-   * <p>★ 本批<strong>没有任何地方写它</strong> —— 消息的写入路径在第 17 周。列先占住位置，写法口径（谁在何时 +1、怎么对账）见 Issue {@code
-   * #44}。
+   * <p>★ <strong>写入方（2026-10-16 补）</strong>：{@link ConversationRepository#recordMessage} —— 每落库一条消息
+   * <strong>+1</strong>，由消息落库那一处（{@code ChatTurnWriter#prepare}）在<strong>同一个事务</strong>里调用。 在这一批之前它
+   * <strong>恒为 0</strong>（列在、没人写），症状是"列表页的消息数永远是 0"。
+   *
+   * <p>★ 它是<strong>增量</strong>而不是"重算 count(*)"：重算在并发下读到的是<strong>语句快照</strong> （另一个事务的消息还没提交）⇒
+   * 少记；增量在行锁上重评估 ⇒ 不漏。 ★ 写法口径（谁在何时 +1）见 Issue {@code #44}；
+   * <strong>存量回填与巡检仍缺</strong>（本批只做写入侧，见交付报告"明确没做的"）。
    */
   @Column(name = "message_count", nullable = false)
   private int messageCount;
 
+  /**
+   * 最后一条消息的时间 = {@code max(该会话消息的 created_at)} —— ★ 与 {@link #maxClassification} 同族：
+   * 它是一个<strong>只增不减的水位</strong>，不是"最近一次写它是什么时候"。
+   *
+   * <p>★ <strong>写入方</strong>：同 {@link #messageCount}，且它取自 <strong>消息表自己的 {@code
+   * created_at}</strong>（{@code greatest(现值, max(cv_message.created_at))}）—— 于是它与 {@code
+   * max(cv_message.created_at)} <strong>逐微秒相等</strong>，不会出现"两个时钟各写一个时间"的分叉（那会让 {@code
+   * idx_conv_user} 排出来的"最近发言"与消息列表对不上）。可空 = 这个会话还没有任何消息。
+   */
   @Column(name = "last_message_at")
   private Instant lastMessageAt;
 
@@ -138,6 +168,11 @@ public class Conversation {
   /**
    * ★★ 按本轮回答的引用集合<strong>抬升</strong>会话密级（{@code 13 §2.2} 的写侧维护）。
    *
+   * <p>★★ <strong>它管的是<em>内存里的这个对象</em>；落库那一步不在这里</strong>（{@code #108} 的择一 (a)）： 把它改完再 {@code
+   * save()} 是"读 → 改 → 更新"，同事务之外的并发抬升会丢更新。 生产写入点是 {@link
+   * ConversationRepository#raiseClassification}（库侧一条 UPDATE，<strong>不经过这个对象</strong>）；
+   * 本方法仍然值钱，因为它是<strong>{@link #strictlyLowerThan} 那句规则的领域侧表达</strong>， 而那两处必须逐对一致（等价用例钉住）。
+   *
    * <p>语义三条，缺一条都不算做到：
    *
    * <ol>
@@ -164,12 +199,43 @@ public class Conversation {
       // 本轮没有任何引用 ⇒ 空集合的 max 是单位元，会话密级不变
       return false;
     }
-    if (this.maxClassification != null && refsMax.ordinal() <= this.maxClassification.ordinal()) {
-      // ★ 只升不降 + 相等幂等：低于或等于现值一律不动（把"降密"这条路径在领域层直接封死）
+    if (this.maxClassification != null
+        && !strictlyLowerThan(refsMax).contains(this.maxClassification)) {
+      // ★ 只升不降 + 相等幂等：现值不在"严格低于本轮 max"那一档里 ⇒ 一律不动（把"降密"这条路径直接封死）
       return false;
     }
     this.maxClassification = refsMax;
     return true;
+  }
+
+  /**
+   * ★★ <strong>"这一次抬升会不会发生"的<em>唯一</em>规则</strong>：现值在这个集合里 ⟺ 抬升发生。
+   *
+   * <p>它有两处消费者，而这两处<strong>必须逐对一致</strong>：
+   *
+   * <ol>
+   *   <li>内存里的 {@link #raiseClassification}（上面那个 {@code contains} 就是它）；
+   *   <li>库侧那条单调 UPDATE 的 {@code where}（{@link ConversationRepository#raiseClassification}
+   *       的实现把同一个集合当 {@code in (…)} 的参数传下去）。
+   * </ol>
+   *
+   * <p>★★ <strong>为什么收成一个方法而不是各写一遍</strong>：{@code #108} 的择一 (a)（库侧单调）把落库那一步 <strong>挪到了 SQL
+   * 里</strong>，代价正是"口径要写第二遍"。把它压成"<strong>一个集合</strong>（次序仍只由 {@link ClassificationLevel} 的声明顺序给出）+
+   * 成员判定"之后，SQL 里<strong>不出现任何密级次序字面量</strong>—— 两处不一致只剩下一种可能（有人改了这个方法却没改另一处），而那种可能被等价用例逐对抓红。
+   *
+   * <p>★ 返回值口径：{@code refsMax} 为 {@code null}（本轮没有引用）⇒ <strong>空集合</strong> ⇒ 任何现值都不在里面 ⇒ 抬升不发生。这与
+   * {@link #raiseClassification} 对 {@code null} 的处理同源（空集合的 max 是单位元）。
+   *
+   * @param refsMax 本轮回答引用的 chunk 里最高的那一档（可空）
+   * @return 严格低于 {@code refsMax} 的那几档（按声明顺序；{@code refsMax} 为 {@code PUBLIC} 或 {@code null} 时为空）
+   */
+  public static List<ClassificationLevel> strictlyLowerThan(ClassificationLevel refsMax) {
+    if (refsMax == null) {
+      return List.of();
+    }
+    return Arrays.stream(ClassificationLevel.values())
+        .filter(level -> level.ordinal() < refsMax.ordinal())
+        .toList();
   }
 
   /**
@@ -212,7 +278,10 @@ public class Conversation {
     return lastMessageAt;
   }
 
-  /** ★★ 会话累计密级。★ 只读 —— 改它只有 {@link #raiseClassification} 一条路。 */
+  /**
+   * ★★ 会话累计密级。★ 只读 —— 改它只有两条路，而它们是同一句规则的两侧：内存里的 {@link #raiseClassification} 与库侧的 {@link
+   * ConversationRepository#raiseClassification}（{@code #108}）。
+   */
   public ClassificationLevel maxClassification() {
     return maxClassification;
   }
