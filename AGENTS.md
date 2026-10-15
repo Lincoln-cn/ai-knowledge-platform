@@ -2,7 +2,7 @@
 
 > 迁移自 mimo code 的项目记忆（`C:\Users\Administrator\.local\share\mimocode\memory\projects\4f1e1818-e94a-4dfb-90c6-5de39df27f83\MEMORY.md`），2026-10-13 由 `migrate-mimo-memory.mjs` 生成。
 > 以下为该项目记忆的「耐久段落」逐字摘录，未做改写；其余内容（Discovered / Dead ends / 历次 session 记录）
-> 见 `docs/mimo-memory/MEMORY.md` 与 `docs/mimo-memory/archive/`。
+> 见 `innerdoc/docs/mimo-memory/MEMORY.md` 与 `innerdoc/docs/mimo-memory/archive/`。
 
 ## Project context
 _What is this project? What's its goal? High-level identity._
@@ -104,7 +104,7 @@ _Major design choices with rationale. The "why" matters more than the "what" for
 
 ## 历史记忆归档位置
 
-- `docs/mimo-memory/MEMORY.md` —— 迁移时刻的项目记忆全文
-- `docs/mimo-memory/archive/` —— 83 个历史分册
-- `docs/mimo-memory/sessions/` —— 2 个已迁移会话的会话级记忆
-- `docs/mimo-memory/global/` —— mimo 全局记忆归档
+- `innerdoc/docs/mimo-memory/MEMORY.md` —— 迁移时刻的项目记忆全文
+- `innerdoc/docs/mimo-memory/archive/` —— 83 个历史分册
+- `innerdoc/docs/mimo-memory/sessions/` —— 2 个已迁移会话的会话级记忆
+- `innerdoc/docs/mimo-memory/global/` —— mimo 全局记忆归档
