@@ -249,13 +249,20 @@ class MessageContractCrossCheckTest {
     }
   }
 
-  /** ★ 仓储端口的形状：一个写入口 + 两个只读入口（多出来的写路径就是"状态机被绕开"的入口）。 */
+  /**
+   * ★ 仓储端口的形状：<strong>一个写入口</strong> + 只读入口（多出来的写路径就是"状态机被绕开"的入口）。
+   *
+   * <p>★★ 2026-10-17（{@code #143} 同批）：只读口从两个长到四个 —— {@code listByConversation}（整条会话）· {@code
+   * slice}（常规分页档）· {@code windowAround}（{@code around} 档） 都是登录面历史消息端点要用的读法。★ 写入口**仍然只有一个** {@code
+   * save}， 这条断言守的那件事（状态机判断在领域对象里、不在 SQL 里）一个字都没变。
+   */
   @Test
   void repositoryPortKeepsASingleWritePath() {
     assertThat(MessageRepository.class.getDeclaredMethods())
         .as("★ 仓储端口的写入口必须唯一（状态机判断在领域对象里，不在 SQL 里）")
         .filteredOn(m -> !m.isSynthetic())
         .extracting(java.lang.reflect.Method::getName)
-        .containsExactlyInAnyOrder("save", "findById", "listByConversation");
+        .containsExactlyInAnyOrder(
+            "save", "findById", "listByConversation", "slice", "windowAround");
   }
 }
