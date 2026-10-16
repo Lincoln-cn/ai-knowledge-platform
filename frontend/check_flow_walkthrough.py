@@ -471,6 +471,55 @@ def main() -> int:
                             f"{name}（{route}）结果区显示了多跳的轮次与停止原因（界面文案含「多跳」「停止」）",
                         )
 
+                # ★★ 第 17 周（`#91` 判据 4）：<strong>引用回溯的深链必须真的定位</strong>。
+                #
+                #   为什么必须进这一档：这条链的两端**各自都"完成"了** ——
+                #   发送方 `jumpToSegment` 拼了 `/knowledge?doc=…&segment=…&kb=…`，
+                #   接收方有参数解析逻辑 —— 而它们**参数名对不上** ⇒ 整条链的效果是
+                #   "跳到知识库首页，什么都没定位"，且**没有任何一处会红**（`#91` 的根因）。
+                #   ★ 静态闸门 `check_deeplink_segments.py` 管"两端键名一致 + 接收端读了它 + 按契约取回"，
+                #     而**"界面上真的到了那个位置"只有走查能验** —— 两档互补，不是重复。
+                #
+                #   ★ 判据照 `#91` 原文：必须处于「该库 + 该文档 + 该分段」的定位态，
+                #     **或**出现"无法定位"的可读提示；★ 现在的行为（跳到首页、无提示）**不能通过**。
+                # ★ 目标分段现查一条（夹具已经把文档向量化过 ⇒ 分段一定存在）；
+                #   查不到就不做这一条 —— 但**要显式说出来**，不许静默跳过（"没跑"和"跑绿了"必须可分）。
+                deep_seg_id = ""
+                # ★ 分段列表的真实路径是 `/segments?kbId=…`（契约 `listSegments`；
+                #   ★ 不是 `/knowledge-bases/{id}/segments` —— 我第一版就是那样猜错的）。
+                st_seg, seg_body = api("GET", f"/segments?kbId={kb_id}&size=1", token)
+                if st_seg == 200 and (seg_body.get("data") or {}).get("list"):
+                    deep_seg_id = str(seg_body["data"]["list"][0].get("id") or "")
+                if not deep_seg_id:
+                    check(False, f"引用回溯深链（#91）拿不到夹具分段（status={st_seg}）—— 这一条没跑到，不是通过")
+                else:
+                    failed_calls.clear()
+                    console_errors.clear()
+                    page.goto(
+                        # ★ 只带 `?kb=` 与 `?segment=`，**刻意不带 `?doc=`**：
+                        #   ① 走查里拿不到 docId（它是 `seed_hit_test_fixture` 的局部量）；
+                        #   ② 而接收端的设计恰好覆盖这个形状 —— 页面注释逐字写着
+                        #      "`?segment=` 有而 `?doc=` 缺（或指错）时，只有 `SegmentBrief.documentId`
+                        #      能告诉我们这条分段属于哪篇文档"。
+                        #   ⇒ 这一条顺带验了"缺 doc 也能定位"，而清一色带上 doc 反而验不到它。
+                        f"{BASE}/#/knowledge?kb={kb_id}&segment={deep_seg_id}",
+                        wait_until="domcontentloaded",
+                    )
+                    page.wait_for_timeout(3000)
+                    deep_text = page.evaluate("() => document.body.innerText")
+                    positioned = "已按引用定位到分段" in deep_text
+                    unlocatable = ("无法定位" in deep_text) or ("找不到该分段" in deep_text)
+                    check(
+                        positioned or unlocatable,
+                        "引用回溯深链（#91）在界面上落到了定位态或给了「无法定位」的可读提示"
+                        f" —— 实际：positioned={positioned} unlocatable={unlocatable}"
+                        "（跳到首页且无提示 = 静默 no-op，正是 #91 的根因）",
+                    )
+                    check(
+                        not console_errors[:2],
+                        f"引用回溯深链（#91）控制台无错误 —— 实际：{console_errors[:2]}",
+                    )
+
                 # 收尾：清掉夹具库（与其它闸门同口径：闸门不留垃圾数据）
                 # ★ 排障时用 KEEP_FIXTURE=1 保留它 —— 否则"为什么检索返空"这种问题
                 #   连现场都被自己清掉了（本次就是靠它查出向量路返空的真因）。
