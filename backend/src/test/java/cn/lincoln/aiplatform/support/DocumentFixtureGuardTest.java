@@ -23,21 +23,17 @@ import org.junit.jupiter.api.Test;
  * <p>★★ 更危险的一面（{@code #48} 危害 2）：如果某次改动<strong>只影响夹具而主代码没变</strong>， 那一批测试根本不会提醒你 —— 它们测的是自己拼的
  * SQL，不是产品路径。<strong>夹具与产品是两份真相。</strong>
  *
- * <h3>★★ 为什么是"台账"而不是"必须为 1"</h3>
+ * <h3>★★ 现在它是一条硬判据（2026-10-17 收紧）</h3>
  *
- * <p>{@code #48} 原文判据 2 写的是"grep = 1"（只允许一处共用夹具）。<strong>本批实测：全库已经是 15 处</strong> （写这条时的 4
- * 处，此后每加一个真栈测试就多一处 —— 症状一直在扩散）。
+ * <p>{@code #48} 原文判据 2 是"grep = 1"。开工时全库是 <strong>16 处</strong>（写这条时 4 处， 此后每加一个真栈测试就多一处 ——
+ * 症状一直在扩散）⇒ 先按"台账式"落地（只许变少）。
  *
- * <p>★ 本批<strong>尝试过</strong>把 15 处全部迁进一个共用夹具（{@code DocumentFixture}），实测 <strong>3 红 + 16
- * 错</strong>，其中 {@code DocumentScopeShapeTest} 出现"expected 1 but was 0"这种
- * <strong>语义回归</strong>（那些类造的正是"产品路径<em>不产生</em>的归属形状"，逐处迁移会改变语义）。 ⇒
- * 按"不许把红的树留在身后"，整批回退；<strong>只留下这条闸门</strong>，并把判据改成它今天真能兑现的形状：
+ * <p>★ 随后把 16 处<strong>逐类</strong>迁进共用夹具 {@code DocumentFixture}（分批 + 每批跑一遍那些类）， 全部迁完 ⇒
+ * <strong>判据已收紧回原文形状</strong>：只有 {@code DocumentFixture} 里允许出现它。
  *
- * <ul>
- *   <li><strong>计数不许上升</strong>（今天基线 {@value #BASELINE} —— 实测 16 个类各一处）—— 谁再添第 16 处，这条当场红；
- *   <li>★ <strong>只许下降</strong>：每把一个类迁到共用夹具，就把 {@link #BASELINE} 减一。
- *       基线数字是一次**签名**：改它必须在提交里说明"迁了哪一个类"。
- * </ul>
+ * <p>★★ 「逐类」这三个字是拿读数换来的：第一版一次性全迁，实测 <strong>3 红 + 16 错</strong> （会话域文档<strong>没有库行</strong> ⇒ 18 个
+ * NPE；{@code DocumentScopeShapeTest} 出现 {@code expected: 1 but was: 0} 这种<strong>语义回归</strong>）⇒
+ * 那一版整批回退。 分批之后每一批都能定位到具体原因（例如"扩展列段的 {@code kb_id} 必须 {@code cast(? as uuid)}"）。
  *
  * <h3>★ 判据的读法（本批返工两次，都记在这里）</h3>
  *
@@ -53,13 +49,8 @@ import org.junit.jupiter.api.Test;
  */
 class DocumentFixtureGuardTest {
 
-  /**
-   * ★★ 今天的基线：全库有 15 个测试类里直接拼 {@code insert into kb_document}。
-   *
-   * <p>★ 这个数字**只许下降**：迁一个类到共用夹具，就把它减一。改了它而提交里说不清"迁了哪个类"， 那这次改动就是把闸门调松了 ——
-   * 与"修闸门"读数完全一样，唯一能区分的是**它还能不能红**。
-   */
-  private static final int BASELINE = 16;
+  /** ★ {@link DocumentFixture} 里那两条是**允许**的那一处（`#48` 判据 2 的唯一合法落点）。 */
+  private static final String ALLOWED_FILE = "DocumentFixture.java";
 
   /** ★ 闸门自己排除（它引用这句 SQL 是为了断言，不是又写一份）。 */
   private static final String SELF_FILE = "DocumentFixtureGuardTest.java";
@@ -67,9 +58,10 @@ class DocumentFixtureGuardTest {
   private static final String NEEDLE = "insert into kb_document";
 
   @Test
-  void rawDocumentInsertCountOnlyGoesDown() throws IOException {
+  void onlyTheSharedFixtureWritesTheDocumentTable() throws IOException {
     Path testRoot = sourceRoot();
-    List<String> hits = new ArrayList<>();
+    List<String> offenders = new ArrayList<>();
+    int total = 0;
     for (Path file : javaFiles(testRoot)) {
       String name = file.getFileName().toString();
       if (name.equals(SELF_FILE)) {
@@ -86,22 +78,35 @@ class DocumentFixtureGuardTest {
       }
       int count = countOccurrences(code.toString(), NEEDLE);
       if (count > 0) {
-        hits.add(name + " ×" + count);
+        total += count;
+        if (!name.equals(ALLOWED_FILE)) {
+          offenders.add(name + " ×" + count);
+        }
       }
     }
 
-    assertThat(hits)
+    assertThat(offenders)
         .as(
             """
-            ★★ #48 判据 2（台账式）：全库直接写 kb_document 的地方**只许变少**。
-            今天基线 = %d，实测 = %d。
-            ⇒ 若你新添了一处裸 SQL：请改成走共用夹具（列清单收在一处）——
-              那条路正是 #48 要收掉的"夹具与产品两份真相"。
-            ⇒ 若你迁走了一处：把 BASELINE 减一，并在提交里写明迁的是哪个类。
-            当前命中：%s\
+            ★★ #48 判据 2：`insert into kb_document` 只许出现在共用夹具 DocumentFixture 里。
+            多出来的那些就是"夹具与产品两份真相"的入口：改一处列名，它们会在看起来无关的地方红，
+            而只影响夹具的改动它们又不会提醒你。
+            ⇒ 把新添的那一处改成走 DocumentFixture（列清单加在夹具里，不在用例里另拼一份）。
+            ★ 若它造的是"产品路径拒绝或不产生的形状"（密级高于库上限的存量文档 · org_id 为空而
+              department_legacy 非空的回填残留 · 任意 scope_kind/owner_id 组合 · 会话域文档），
+              请把**列**或**入口**加进夹具，而不是在用例里另拼一份。
+            当前在别处的命中：%s\
             """,
-            BASELINE, hits.size(), hits)
-        .hasSizeLessThanOrEqualTo(BASELINE);
+            offenders)
+        .isEmpty();
+    // ★★ 2026-10-17：**全仓 16 处已全部迁进夹具**，判据因此收紧到 `#48` 原文的形状（只许一处）。
+    //   ★ 为什么仍允许 2 条而不是 1 条：夹具里刻意有两条 INSERT ——
+    //     ① `INSERT`（常规：scope_kind 恒 'KB'、无 owner_id）
+    //     ② `INSERT_WITH_SCOPE`（扩展列：scope_kind/scope_id/owner_id 显式给，且 kb_id 可空）
+    //     ★ 后者是为"产品路径不产生的形状"留的入口；少了它，调用方就得为 owner_id 复制整段 SQL
+    //     —— 那正是 #48 要防的事。
+    //   ★ 数字钉死是为了让"又加一条"必须被显式改一次这个常量（而不是悄悄多一条）。
+    assertThat(total).as("夹具里恰好两条 INSERT（常规 + 扩展列）；多一条就要在这里显式说明它为什么必须存在").isEqualTo(2);
   }
 
   // ────────────────────────── 定位源码 ──────────────────────────

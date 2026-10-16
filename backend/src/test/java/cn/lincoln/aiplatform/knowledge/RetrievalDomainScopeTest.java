@@ -6,6 +6,7 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.vector.VectorIndexPort;
+import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import cn.lincoln.aiplatform.support.SecurityContexts;
 import java.util.List;
@@ -425,21 +426,10 @@ class RetrievalDomainScopeTest {
   }
 
   private UUID insertDocument(UUID kbId, String scopeKind, UUID scopeId, UUID owner, String name) {
-    UUID id = UUID.randomUUID();
-    jdbc.update(
-        "insert into kb_document (id, kb_id, scope_kind, scope_id, owner_id, name, source,"
-            + " doc_type, org_id, classification, status, char_count, segment_count, enabled,"
-            + " created_at, updated_at)"
-            + " values (?, ?, ?, ?, ?, ?, 'local', '制度', ?, 'INTERNAL',"
-            + " 'PENDING_EMBEDDING', 0, 0, true, now(), now())",
-        id,
-        kbId,
-        scopeKind,
-        scopeId,
-        owner,
-        name,
-        UUID.fromString(ROOT_ORG));
-    return id;
+    // ★ `#48`：裸 SQL 收进了 `DocumentFixture`（全仓唯一一处写 kb_document 的地方）。
+    //   ★ 本类要造的是**产品路径不产生**的归属形状（任意 scope_kind / owner_id 组合，含会话域）。
+    return DocumentFixture.insertWithScope(
+        jdbc, UUID.randomUUID(), kbId, scopeKind, scopeId, owner, name, ROOT_ORG, "INTERNAL");
   }
 
   private UUID insertSegment(

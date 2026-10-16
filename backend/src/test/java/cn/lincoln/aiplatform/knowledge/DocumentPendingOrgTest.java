@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.knowledge;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -141,19 +142,13 @@ class DocumentPendingOrgTest {
   // ---------------------------- fixtures and readings ----------------------------
 
   private void insertDocument(String kbId, String name, String orgId, String legacy) {
-    jdbc.update(
-        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
-            + " department_legacy, classification, status, char_count, segment_count, enabled,"
-            + " created_at, updated_at)"
-            + " values (?::uuid, ?::uuid, 'KB', ?::uuid, ?, 'local', '制度', ?::uuid, ?, ?,"
-            + " 'PENDING_EMBEDDING', 0, 0, true, now(), now())",
-        UUID.randomUUID().toString(),
-        kbId,
+    // ★ `#48`：裸 SQL 收进了 `DocumentFixture`（全仓唯一一处写 kb_document 的地方）。
+    DocumentFixture.insert(
+        jdbc,
         kbId,
         name,
-        orgId,
-        legacy,
-        ClassificationLevel.INTERNAL.name());
+        ClassificationLevel.INTERNAL.name(),
+        DocumentFixture.Options.defaults().withOrgId(orgId).withDepartmentLegacy(legacy));
   }
 
   private UUID documentIdByName(String kbId, String name) {

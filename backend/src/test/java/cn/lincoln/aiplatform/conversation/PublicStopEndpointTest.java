@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.lincoln.aiplatform.conversation.support.AssistantGeneratedTextWait;
 import cn.lincoln.aiplatform.conversation.support.FakeChatStreamPorts;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
+import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -614,17 +615,9 @@ class PublicStopEndpointTest {
    * 写死一个常量就会把被测的谓词换成另一条），只去掉本类用不到的"四条密级文档"。
    */
   private void seedDocumentAndSegment(UUID kbId) {
-    UUID docId = UUID.randomUUID();
-    jdbc.update(
-        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
-            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?, ?, 'KB', ?, ?, 'local', '制度', ?::uuid, 'INTERNAL', 'SUCCEEDED', 0, 1,"
-            + " true, now(), now())",
-        docId,
-        kbId,
-        kbId,
-        FIXTURE_PREFIX + "文档",
-        ROOT_ORG);
+    // ★ `#48`：裸 SQL 收进了 `DocumentFixture`（全仓唯一一处写 kb_document 的地方）。
+    UUID docId =
+        DocumentFixture.insertSucceeded(jdbc, kbId.toString(), FIXTURE_PREFIX + "文档", "INTERNAL");
     jdbc.update(
         "insert into kb_segment (id, document_id, kb_id, scope_kind, scope_id, ordinal, title,"
             + " title_path, content, search_text, content_hash, char_count, is_table, is_code,"

@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.knowledge;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -192,19 +193,8 @@ class DocumentListClearanceTest {
   }
 
   private String insertDocument(String kbId, String name, String classification) {
-    String id = UUID.randomUUID().toString();
-    jdbc.update(
-        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
-            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?::uuid, ?::uuid, 'KB', ?::uuid, ?, 'local', '制度', ?::uuid, ?,"
-            + " 'PENDING_EMBEDDING', 0, 0, true, now(), now())",
-        id,
-        kbId,
-        kbId,
-        name,
-        ROOT_ORG,
-        classification);
-    return id;
+    // ★ `#48`：裸 SQL 收进了 `DocumentFixture`（全仓唯一一处写 kb_document 的地方）。
+    return DocumentFixture.insertPending(jdbc, kbId, name, classification).toString();
   }
 
   private String createKb(String token) throws Exception {

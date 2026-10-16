@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assumptions.assumeThat;
 import cn.lincoln.aiplatform.knowledge.infrastructure.FullTextIndex;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import cn.lincoln.aiplatform.support.SecurityContexts;
 import java.net.URI;
@@ -162,20 +163,9 @@ class FullTextSearchTest {
   // ────────────────────────── 夹具 ──────────────────────────
 
   private String insertSegment(String kbId, String searchText) {
-    String docId = UUID.randomUUID().toString();
-    jdbc.update(
-        // ★ 责任部门已改成 org_id（UUID 外键，V27）。这里用 ROOT 的**确定性** id（V25 种子写死的）：
-        //   夹具不关心 org 语义，但 org_id 是**外键** ⇒ 不能随便塞一个随机 UUID（会违反约束，
-        //   而报错会指向"约束"而不是"我改了哪里"）。见 Issue #48。
-        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
-            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?::uuid, ?::uuid, 'KB', ?::uuid, ?, 'local', '制度',"
-            + " '00000000-0000-4000-8000-000000000001'::uuid, 'INTERNAL', 'PENDING_EMBEDDING', 0,"
-            + " 0, true, now(), now())",
-        docId,
-        kbId,
-        kbId,
-        "全文夹具-" + shortId());
+    // ★ `#48`：裸 SQL 收进了 `DocumentFixture`（全仓唯一一处写 kb_document 的地方）。
+    String docId =
+        DocumentFixture.insertPending(jdbc, kbId, "全文夹具-" + shortId(), "INTERNAL").toString();
 
     String id = UUID.randomUUID().toString();
     jdbc.update(

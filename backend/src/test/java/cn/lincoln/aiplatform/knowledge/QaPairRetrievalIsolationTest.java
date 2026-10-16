@@ -7,6 +7,7 @@ import cn.lincoln.aiplatform.knowledge.application.QaPairService.ImportPair;
 import cn.lincoln.aiplatform.knowledge.domain.QaPairOrigin;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import cn.lincoln.aiplatform.support.SecurityContexts;
 import java.util.List;
@@ -232,19 +233,11 @@ class QaPairRetrievalIsolationTest {
   }
 
   private void insertSegment(String kbId, int ordinal, String text) {
-    String docId = UUID.randomUUID().toString();
-    jdbc.update(
-        // ★ 责任部门已改成 org_id（UUID 外键，V27）。用 ROOT 的**确定性** id（V25 种子写死的）：
-        //   org_id 是外键 ⇒ 不能塞随机 UUID。见其它夹具的同一条注释（Issue #48）。
-        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
-            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?::uuid, ?::uuid, 'KB', ?::uuid, ?, 'local', '制度',"
-            + " '00000000-0000-4000-8000-000000000001'::uuid, 'INTERNAL', 'PENDING_EMBEDDING', 0,"
-            + " 0, true, now(), now())",
-        docId,
-        kbId,
-        kbId,
-        "问答对隔离夹具文档-" + docId.substring(0, 8));
+    // ★ `#48`：裸 SQL 收进了 `DocumentFixture`（全仓唯一一处写 kb_document 的地方）。
+    String docId =
+        DocumentFixture.insertPending(
+                jdbc, kbId, "问答对隔离夹具文档-" + UUID.randomUUID().toString().substring(0, 8), "INTERNAL")
+            .toString();
 
     jdbc.update(
         "insert into kb_segment (id, document_id, kb_id, scope_kind, scope_id, ordinal, title,"

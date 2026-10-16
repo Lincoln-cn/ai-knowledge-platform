@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import cn.lincoln.aiplatform.support.SecurityContexts;
 import java.io.IOException;
@@ -438,19 +439,19 @@ class DocumentScopeShapeTest {
   }
 
   private void insertDocumentRaw(UUID kbId, String scopeKind, UUID scopeId, UUID owner, UUID id) {
-    jdbc.update(
-        "insert into kb_document (id, kb_id, scope_kind, scope_id, owner_id, name, source,"
-            + " doc_type, org_id, classification, status, char_count, segment_count, enabled,"
-            + " created_at, updated_at)"
-            + " values (?, ?, ?, ?, ?, ?, 'local', '制度', ?, 'INTERNAL',"
-            + " 'PENDING_EMBEDDING', 0, 0, true, now(), now())",
+    // ★ `#48`：裸 SQL 收进了 `DocumentFixture`（全仓唯一一处写 kb_document 的地方）。
+    //   ★ 本类要造的是**产品路径不产生**的归属形状，且**文档 id 由调用方给定**
+    //     （断言要按那几个已知 id 去核列表）⇒ 走"显式 id"那个重载。
+    DocumentFixture.insertWithScope(
+        jdbc,
         id,
         kbId,
         scopeKind,
         scopeId,
         owner,
         "形状夹具文档-" + id.toString().substring(0, 8),
-        UUID.fromString(ROOT_ORG));
+        ROOT_ORG,
+        "INTERNAL");
   }
 
   private UUID insertSegmentRaw(
