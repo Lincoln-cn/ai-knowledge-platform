@@ -115,4 +115,23 @@ public interface ConversationRepository {
 
   /** 按用户列出（未软删，最近发言在前；没有发言的会话排在最后）。 */
   List<Conversation> listByUser(UUID userId);
+
+  /**
+   * ★★ <strong>某人在某个应用下最近的一条会话</strong>（未软删）—— 公开面"续写同一条对话"的读口（{@code 13 §5.2.1}）。
+   *
+   * <h3>它服务哪一条口径</h3>
+   *
+   * <p>公开面（免登录）的问答流**收不到 `conversationId`**（诚实原因：公开页手上只有合成串 {@code public:<token>}， 拿不出一个真的 UUID）⇒
+   * "这一轮写进哪条会话"只能由服务端反解。{@code 13 §5.2.1} 把键定成 <strong>{@code (归属人, 应用)}
+   * 的会话链</strong>：有最近一条就续写它，没有才新建。 少了这个读口，公开面每问一轮都新建一条会话 ⇒ <strong>刷新后永远读不回历史</strong>（A2
+   * 在公开面缺的那一半）。
+   *
+   * <p>★★ <strong>为什么不加一条只读的"查询方法"给分页用</strong>：那是另一条账（消息列表的分页/窗口属 {@code
+   * /conversations/:id/messages}），本方法只回答"最近一条是哪条"，所以它返回 {@link Optional} 而不是列表。
+   *
+   * @param userId 会话归属人（公开面传的是**链接归属人**，见 {@code 13 §5.2}）
+   * @param assistantId 应用 id；{@code null} = 通用问答（那一档自己是一条链，不与任何应用共享）
+   * @return 最近一条（按 {@code last_message_at}、再按 {@code created_at} 倒序）；没有时空
+   */
+  Optional<Conversation> findLatestByUserAndAssistant(UUID userId, UUID assistantId);
 }

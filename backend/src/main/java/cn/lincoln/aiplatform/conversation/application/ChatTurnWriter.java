@@ -13,6 +13,7 @@ import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -250,6 +251,12 @@ public class ChatTurnWriter implements ChatTurnStore {
    *
    * <p>★ 传了 {@code conversationId} 就<strong>不再看 appId</strong>：会话的应用在创建时定下来，
    * 让它跟着每一轮请求体漂移会让"这个会话属于哪个应用"变成两处口径（而它决定了检索范围）。
+   *
+   * <p>★★ <strong>没传 {@code conversationId} 时：续写"最近一条同 (归属人, 应用) 的会话"，找不到才新建</strong> （{@code 13
+   * §5.2.1}）。这是公开面（免登录）那条链的**唯一**形状 —— 公开页拿不出一个真的 UUID （它手上的 {@code conversationId} 是合成串 {@code
+   * public:<token>}），所以"写进哪条会话"必须由服务端反解；
+   * 而"每轮新建一条"的后果是<strong>刷新后永远读不回历史</strong>（A2「刷新不重置」在公开面缺的那一半）。 ★ 它同一条结论也覆盖登录面"通用问答不带 {@code
+   * conversationId}"那一档。
    */
   private Conversation resolveOrCreate(
       UUID conversationId, AppBindingPort.AppBinding app, String question, UUID userId) {
@@ -263,6 +270,11 @@ public class ChatTurnWriter implements ChatTurnStore {
         throw notFound("会话不存在", "它可能已被删除，或者不在你的可见范围内");
       }
       return found;
+    }
+    Optional<Conversation> latest =
+        conversations.findLatestByUserAndAssistant(userId, app == null ? null : app.appId());
+    if (latest.isPresent()) {
+      return latest.get();
     }
     Conversation created =
         new Conversation(

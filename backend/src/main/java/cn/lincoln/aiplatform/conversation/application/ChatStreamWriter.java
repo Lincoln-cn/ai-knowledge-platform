@@ -136,8 +136,12 @@ public final class ChatStreamWriter {
    * 加分量时<strong>必须</strong>同批加到这里 —— 否则那个字段在类型上存在、在线上不存在， 而两个测试都可能照样绿（{@code
    * SourceRefSerializationTest} 验的是 jsonb 那一侧、本类验的是 SSE 这一侧）。 {@code classification}（{@code
    * #27}）就是这么加上来的：它今天没有前端消费点，但 <strong>契约成员就必须出现在线上</strong>，否则"契约里到底有什么"又多一处口径。
+   *
+   * <p>★ <strong>包私有而不是私有</strong>：引用在**两条**线上都要出现 —— SSE 的 {@code refs} 帧（本类） 与历史消息的 {@code
+   * ChatMessage.refs}（同一个包里的 {@code ChatMessageView}）。两处各写一份映射， 就会出现"同一个引用在流里带 {@code
+   * classification}、在历史里不带"这种<strong>不报错</strong>的分叉。
    */
-  private static List<Map<String, Object>> refsOf(List<SourceRef> refs) {
+  static List<Map<String, Object>> refsOf(List<SourceRef> refs) {
     return refs.stream()
         .map(
             ref -> {

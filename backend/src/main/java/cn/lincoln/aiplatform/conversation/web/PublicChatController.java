@@ -1,8 +1,10 @@
 package cn.lincoln.aiplatform.conversation.web;
 
+import cn.lincoln.aiplatform.conversation.application.ChatMessageView;
 import cn.lincoln.aiplatform.conversation.application.PublicChatService;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -100,6 +102,30 @@ public class PublicChatController {
   public ApiResponse<PublicChatService.PublicContext> context(
       @PathVariable String token, @AuthenticationPrincipal Jwt jwt) {
     return ApiResponse.ok(publicChat.resolve(token, requesterId(jwt)));
+  }
+
+  /**
+   * ★★ 公开面（免登录）的<strong>历史消息</strong>（契约 {@code listPublicMessages}；公开页**已在调**它）。
+   *
+   * <h3>它补的是哪一个"页面在调、后端没有"</h3>
+   *
+   * <p>契约 {@code conversations.ts} 的 {@code listPublicMessages(token)} 与 {@code
+   * useChatSession#loadHistory} 的公开面分支一直在调这条路径，而本类此前<strong>只有</strong> {@code GET /{token}} 一个端点 ⇒
+   * 公开页刷新后读不回历史（{@code ROADMAP §11.2} 第 17 周"下一步" 第 3 条点名的那一格；也是 A2「刷新不重置」在公开面缺的那一半）。
+   *
+   * <h3>★ 形状：只收 token，会话由服务端反解（与 {@link #stop} 同一条理由）</h3>
+   *
+   * <p>公开页的 {@code conversationId} 是合成串 {@code public:<token>}，拿不出一个真的 UUID ⇒ 归属键只能是 {@code (链接归属人,
+   * 应用)} 的会话链（口径与判据见 {@code 13 §5.2.1}）。 判定与读取全在 {@link PublicChatService#listMessages}。
+   *
+   * @param token 链接里的令牌原文
+   * @param jwt ★ 可空：匿名访客没有它。有值时只用于收窄，绝不当作正当性来源
+   * @return 该会话链上的全部消息（{@code created_at} 升序；还没问过 ⇒ 空列表）
+   */
+  @GetMapping("/{token}/messages")
+  public ApiResponse<List<ChatMessageView>> messages(
+      @PathVariable String token, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(publicChat.listMessages(token, requesterId(jwt)));
   }
 
   /**

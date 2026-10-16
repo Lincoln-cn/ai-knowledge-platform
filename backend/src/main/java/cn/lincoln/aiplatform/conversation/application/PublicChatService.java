@@ -284,6 +284,50 @@ public class PublicChatService {
     return new StopReceipt(true, message.status());
   }
 
+  /**
+   * ★★ 公开面（免登录）的<strong>历史消息</strong>（契约 {@code listPublicMessages}；页面**已经在调**它： {@code
+   * useChatSession#loadHistory} 在有 {@code credentialToken} 时走这一条）。
+   *
+   * <h3>★★ 归属键 = {@code (链接归属人, 应用)} 的"会话链"（{@code 13 §5.2.1}，本批新增的口径）</h3>
+   *
+   * <p>端点**只收 token**（契约 {@code listPublicMessages(token)}），所以"读哪条会话"必须由服务端反解：
+   * 取<strong>归属人在这个应用下最近的一条会话</strong>，把它那一整串消息按 {@code created_at} 升序返回。
+   * 于是公开页<strong>刷新之后读得回历史</strong> —— 这既是 A2「状态真实性：刷新页面不重置」在公开面的那一半， 也是"同一台引擎换一个正当性入口"这句话的必然要求。
+   *
+   * <p>★ 它**不</strong>按"每次访问"或"每个访客"分桶：拿到链接的人本来就能看到归属人范围内的检索结果， 所以"看到同一条对话"**不放大**任何东西；真正约束它的仍是
+   * {@code 13 §5.2} 那两级过滤 （每次访问按**冻结值**实时再滤），见该节的表。
+   *
+   * <p>★ 今天<strong>没有分页</strong>（{@code MessageRepository#listByConversation} 就是"整条会话"这个最小形状）： 分页 /
+   * 窗口那一批属登录面的 {@code GET /conversations/:id/messages}，与 {@code page} / {@code around} 的优先级口径同批落 ——
+   * 在这里先发明一个分页形状会让两处口径分叉。
+   *
+   * @param rawToken 链接里的令牌原文
+   * @param requesterId 发起请求的已登录用户；匿名时为 {@code null}（只用于收窄，不是正当性来源）
+   * @return 该会话链上的全部消息（{@code created_at} 升序；**没有**则空列表）
+   * @throws BusinessException 令牌四态之一 · 链接当前不可用（{@code 404}）
+   */
+  public List<ChatMessageView> listMessages(String rawToken, UUID requesterId) {
+    PublicTokenResolver.PublicAccess link = resolveCredential(rawToken, requesterId);
+    // ★ 与 resolve / startTurn / stopTurn 逐字同一条：可见性判定读的是 `currentScope()`，
+    //   所以必须装在链接的范围里问（匿名访客自己的范围是 nobody() ⇒ 不装就永远"链接不可用"）。
+    boolean linkUsable =
+        accessScope.asSubject(
+            link.subjectId(),
+            link.maxClassification(),
+            () -> publicApps.findVisibleById(link.assistantId()).isPresent());
+    if (!linkUsable) {
+      throw linkUnavailable();
+    }
+    return conversations
+        .findLatestByUserAndAssistant(link.subjectId(), link.assistantId())
+        .map(
+            latest ->
+                messages.listByConversation(latest.id()).stream().map(ChatMessageView::of).toList())
+        // ★ 还没问过 ⇒ **空列表**而不是 404：链接是好的，"这个人还没发过言"是正常状态
+        //   （与"令牌无效 / 链接不可用"必须可分 —— 前者前端该显示空对话，后者该显示四态文案）
+        .orElseGet(List::of);
+  }
+
   // ────────────────────────── 内部 ──────────────────────────
 
   /**

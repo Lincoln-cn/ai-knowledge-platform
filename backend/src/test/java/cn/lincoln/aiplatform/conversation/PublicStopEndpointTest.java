@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.conversation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.lincoln.aiplatform.conversation.support.AssistantGeneratedTextWait;
 import cn.lincoln.aiplatform.conversation.support.FakeChatStreamPorts;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.support.PostgresImage;
@@ -12,6 +13,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -252,6 +254,85 @@ class PublicStopEndpointTest {
         .contains("STOPPED");
   }
 
+  // ────────────────────────── ④ 公开面历史消息（#143 同批：归属键 = 会话链）──────────────────────────
+
+  /**
+   * ★★ 判据④（{@code 13 §5.2.1} 判据①）：<strong>同一个 token 连问两轮 ⇒ 只有一条会话</strong>。
+   *
+   * <p>★★ 这一条钉的是归属键本身：公开面的问答流**收不到 {@code conversationId}**（公开页手上只有合成串 {@code public:<token>}）⇒
+   * "这一轮写进哪条会话"由服务端反解。改成"每轮新建一条"这一条立刻红 （计数变成 2），而它的症状是**刷新后永远读不回历史** —— 不报错、只是历史没了。
+   */
+  @Test
+  void twoPublicTurnsLandInTheSameConversation() throws Exception {
+    runTurnToCompletion();
+    assertThat(conversationCountInDb()).as("前提：第一轮之后恰好一条会话（多一条会让下面的计数分不清是第几轮建的）").isEqualTo(1);
+
+    runTurnToCompletion();
+
+    assertThat(conversationCountInDb())
+        .as(
+            "★★ 判据④（13 §5.2.1）：公开面连问两轮必须落在**同一条**会话上（服务端按 (归属人, 应用) "
+                + "找最近一条续写）。改成每轮新建一条这一条立刻红：计数会是 2，而症状是刷新后读不回历史")
+        .isEqualTo(1);
+  }
+
+  /**
+   * ★★ 判据⑤（{@code 13 §5.2.1} 判据②）：公开面**读得回历史**，且引用快照逐字带回来（含 {@code #27} 的密级）。
+   *
+   * <p>★ 三件事一起断言，因为它们各自坏掉的症状不同：
+   *
+   * <ol>
+   *   <li><strong>读不回</strong>（今天修之前的样子）⇒ 页面刷新后是空对话；
+   *   <li><strong>顺序不对</strong> ⇒ 用户问与答错位（库里按 {@code created_at} 升序，这一条要能读出来）；
+   *   <li>★ <strong>引用快照丢了 {@code classification}</strong> ⇒ 历史里的引用与流里的引用**不一致**， 而"这条引用当时是什么密级"正是
+   *       A4「引用可展开溯源」要读的那一格。
+   * </ol>
+   */
+  @Test
+  void publicHistoryReadsBackTheConversationWithItsReferences() throws Exception {
+    runTurnToCompletion();
+
+    HttpResponse<String> history = getMessages(token);
+
+    assertThat(history.statusCode()).as("★ 公开面历史对**匿名**访客必须可用（正当性 = 令牌有效）").isEqualTo(200);
+    String body = history.body();
+    assertThat(body)
+        .as("★ 契约形状：listPublicMessages 返回的是数组（不是分页对象）")
+        .contains("\"role\":\"USER\"")
+        .contains("\"role\":\"ASSISTANT\"");
+    assertThat(indexOf(body, "\"role\":\"USER\""))
+        .as("★★ 顺序：用户消息必须排在助手回答**之前**（库里按 created_at 升序，反了就是问答错位）")
+        .isLessThan(indexOf(body, "\"role\":\"ASSISTANT\""));
+    assertThat(body)
+        .as(
+            "★★ A4 溯源：历史里的引用快照必须逐字带回来 —— 含 #27 新加的 classification"
+                + "（值取自夹具读出来的那一档：那条分段**继承文档密级** INTERNAL）。"
+                + "少了它，历史引用与流里引用就不一致，而「这条引用当时多密」无处可读")
+        .contains("\"refs\":[{")
+        .contains("\"classification\":\"INTERNAL\"");
+    assertThat(body)
+        .as("★ 用户消息那一侧的 refs 必须是 null（不是 []）：它没有引用快照，与「零命中」是两件事")
+        .contains("\"role\":\"USER\",\"content\":\"合同违约金\",\"status\":\"GENERATED\",\"refs\":null");
+  }
+
+  /**
+   * ★★ 判据⑥（{@code 13 §5.2.1} 判据③）：<strong>无效 token 读历史 ⇒ 404</strong>，且与"还没问过"可分。
+   *
+   * <p>★ 这两件事在界面上完全不同（四态文案 vs 空对话），后端却都可能返回"空"——
+   * 一个把两者糊成一个的实现，会让"链接已撤销"显示成"这里还没有人说过话"。所以：令牌无效走**四态码**， "还没问过"走 <strong>200 + {@code
+   * []}</strong>。
+   */
+  @Test
+  void unknownTokenCannotReadHistoryWhileAnEmptyChainIsAnEmptyList() throws Exception {
+    HttpResponse<String> unknown = getMessages("pk_live_" + randomToken());
+    assertThat(unknown.statusCode()).as("★ 不认识的令牌 ⇒ 404（四态里的第①态），不是 200 + 空列表").isEqualTo(404);
+
+    // ★ 同一条有效 token、还没问过 ⇒ 200 + 空数组（链接是好的，只是没人说过话）
+    HttpResponse<String> empty = getMessages(token);
+    assertThat(empty.statusCode()).as("★ 有效令牌但还没有对话 ⇒ 200").isEqualTo(200);
+    assertThat(empty.body().replace(" ", "")).as("★ 空链是 []，与'令牌无效'必须可分").contains("\"data\":[]");
+  }
+
   // ────────────────────────── 假模型配置 ──────────────────────────
 
   /**
@@ -287,6 +368,13 @@ class PublicStopEndpointTest {
    * 开一轮公开问答，并在**异步线程**上读那条流（读完整条就结束），返回助手消息 id。
    *
    * <p>★ 为什么要异步：这一轮的正文很长（假模型逐块吐 + 块间 120ms）⇒ 同步读会把测试卡在流上， 而我们要的是"生成**中途**去发停止请求"。
+   *
+   * <p>★★ <strong>等的是"库里正文非空"，而且是全仓唯一那一把</strong> （{@link
+   * AssistantGeneratedTextWait#await}）：本项目的口径闸门 （{@code
+   * GeneratedTextWaitSingleSourceTest}）要求**驱动停止的用例必须引用它** —— 本类第一版自己写了一个 "等到状态离开
+   * GENERATING"的私有等待，闸门当场红（`Expecting empty but was: [...PublicStopEndpointTest.java]`）。 ★ 那条闸门挡的正是
+   * {@code #125} 那个洞：助手行在**第一个 chunk 之前**就已经是 {@code GENERATING} 了， 等状态会让"停止"赶在第一块之前（终态确实是 {@code
+   * STOPPED}，但正文是空的）。
    */
   private String startPublicTurnAndWaitUntilGenerating() throws Exception {
     HttpRequest request =
@@ -315,27 +403,27 @@ class PublicStopEndpointTest {
     reader.setDaemon(true);
     reader.start();
 
-    String messageId = waitUntilGenerating();
-    return messageId;
+    // ★ 会话要先有：助手行随 prepare 落库，而这一轮是公开面建的（没有 conversationId 可传）⇒ 从库里找。
+    UUID conversationId = waitUntilConversationExists();
+    return AssistantGeneratedTextWait.await(jdbc, conversationId, 30_000).toString();
   }
 
-  /** 等到库里出现一条 {@code GENERATING} 的助手消息，返回它的 id。 */
-  private String waitUntilGenerating() throws Exception {
+  /** 等这一轮（公开面建的）会话出现，返回它的 id。★ 只用来定位会话，**判据不是它**。 */
+  private UUID waitUntilConversationExists() throws Exception {
     long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
     while (System.nanoTime() < deadline) {
-      String id =
-          jdbc.query(
-              "select id::text from cv_message where role = 'ASSISTANT' and status = 'GENERATING'"
-                  + " and conversation_id in (select id from cv_conversation where user_id = ?)"
+      List<UUID> found =
+          jdbc.queryForList(
+              "select id from cv_conversation where user_id = ? and deleted_at is null"
                   + " order by created_at desc limit 1",
-              rs -> rs.next() ? rs.getString(1) : null,
+              UUID.class,
               ZHANGYUN);
-      if (id != null) {
-        return id;
+      if (!found.isEmpty()) {
+        return found.getFirst();
       }
       Thread.sleep(50);
     }
-    throw new AssertionError("夹具前提不成立：30 秒内没有出现 GENERATING 的助手消息（这一轮没开起来）");
+    throw new AssertionError("夹具前提不成立：30 秒内这一轮公开会话没有落库");
   }
 
   /** 等那条消息落到终态（收尾是另一条线程做的，读数必须等它）。 */
@@ -353,6 +441,45 @@ class PublicStopEndpointTest {
   private String statusInDb(String messageId) {
     return jdbc.queryForObject(
         "select status from cv_message where id = ?::uuid", String.class, messageId);
+  }
+
+  /** 归属人名下（未软删）的会话条数 —— 判据④ 的读数。 */
+  private int conversationCountInDb() {
+    Integer count =
+        jdbc.queryForObject(
+            "select count(*) from cv_conversation where user_id = ? and deleted_at is null",
+            Integer.class,
+            ZHANGYUN);
+    return count == null ? 0 : count;
+  }
+
+  /**
+   * 跑完整一轮公开问答，**等到库里那条助手消息落到终态**才算这一轮结束。
+   *
+   * <p>★ <strong>为什么不用"响应体里有没有 {@code event:done}"当判据</strong>（本批实测踩到过）： 这条流会先发一大段 {@code : open:}
+   * 填充注释帧（{@code sse-response-header-commit-padding}）， 同步读到的响应体在缓冲上会分成多段 ⇒
+   * 拿"字符串包含"当"跑完了"的判据**不可靠**（读到的是前半段， 本批第一次就是这么红的）。★ 可靠口径与判据① 完全同源：<strong>去看库里那一行</strong>
+   * （终态只由收尾那条路径写）。
+   */
+  private void runTurnToCompletion() throws Exception {
+    String messageId = startPublicTurnAndWaitUntilGenerating();
+    waitUntilTerminal(messageId);
+  }
+
+  /** 读公开面历史（★ 匿名：不带 Authorization，令牌在路径里）。 */
+  private HttpResponse<String> getMessages(String linkToken) throws Exception {
+    HttpRequest request =
+        HttpRequest.newBuilder(URI.create(base() + "/api/v1/public/" + linkToken + "/messages"))
+            .timeout(Duration.ofSeconds(20))
+            .header("Accept", "application/json")
+            .GET()
+            .build();
+    return http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+  }
+
+  /** 子串下标（顺序断言用；不存在 ⇒ -1，而 -1 会让 `isLessThan` 报错，正是我们要的显性失败）。 */
+  private static int indexOf(String haystack, String needle) {
+    return haystack.indexOf(needle);
   }
 
   private String base() {

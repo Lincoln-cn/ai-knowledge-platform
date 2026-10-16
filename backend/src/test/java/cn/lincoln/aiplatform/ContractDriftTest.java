@@ -114,8 +114,11 @@ class ContractDriftTest {
           // 第 17 周 0.4.5：SSE 问答链路（会话 CRUD 与消息流）
           "/conversations",
           "/messages",
-          // 第 16 周 0.4.4：公开凭证 + 分享冻结（/public/:token 链路）
-          "/public",
+          // ★ 第 16 周 0.4.4 的 `/public` 已于 2026-10-16 **从清单删除**：它下面的每一条契约路径
+          //   （GET /{token} · GET /{token}/messages · POST /{token}/messages/{messageId}/stop）
+          //   后端都已实现 ⇒ 留着它就成了"曾经欠过、现在早已实现"的噪音，而**防黑洞测试会当场红**
+          //   （`未实现清单里的域名必须仍然有欠账`）。★ 与上面 /documents、/segments、/retrieval
+          //   三次删除同一条纪律：清单靠"零欠账就删"保持可读。
           // 第 17 周随问答链路：附件上传（POST /files，multipart）
           "/files",
           // 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）
