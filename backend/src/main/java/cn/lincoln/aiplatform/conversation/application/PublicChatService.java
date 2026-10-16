@@ -278,9 +278,15 @@ public class PublicChatService {
       return new StopReceipt(false, message.status());
     }
 
-    // ── ④ 置信号：与登录面**同一个机制**（ChatStopSignal），没有第二套停止 ──
+    // ── ④ 置上 → 登记：与登录面**同一个机制、同一条时序**（先 request 再 accept）──
+    //   ★ accept=false = 这一轮在这一瞬已经收尾 ⇒ 当场拒收，**不留残留**（#143 后半；理由见 ChatStopService 第 ④ 步）。
     stopSignal.request(messageId);
-    log.info("公开面已置停止信号：会话 {} 的助手消息 {} 将按 ABORT 收尾（STOPPED，保留已生成内容）", conversation.id(), messageId);
+    if (!stopSignal.agree(messageId)) {
+      log.info("公开面停止请求晚到了：助手消息 {} 在这一瞬已经收尾 ⇒ 当场拒收（不留残留）", messageId);
+      return new StopReceipt(false, message.status());
+    }
+    log.info(
+        "公开面已认领停止信号：会话 {} 的助手消息 {} 将按 ABORT 收尾（STOPPED，保留已生成内容）", conversation.id(), messageId);
     return new StopReceipt(true, message.status());
   }
 

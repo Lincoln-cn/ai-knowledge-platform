@@ -41,6 +41,14 @@ public final class AssistantGeneratedTextWait {
   /** 轮询粒度（毫秒）：只影响"多快被发现"，不影响"等的是什么"。 */
   private static final long POLL_INTERVAL_MS = 20L;
 
+  /**
+   * ★★ 判据本体：<strong>"正文非空"这一句，全仓只有这一处</strong>（{@code #125} 收尾的全部意义）。
+   *
+   * <p>本类的两个入口（按会话 / 按候选 id）都要用它 —— 抽成常量的理由不是"少打字"，而是 {@code GeneratedTextWaitSingleSourceTest}
+   * 的判据正是"这个比较**恰好出现一处**"： 两处等价而不共享的比较并存时，下一个人就会照着抄第三把。
+   */
+  private static final String CONTENT_NOT_EMPTY = "m.content <> ''";
+
   private AssistantGeneratedTextWait() {}
 
   /**
@@ -64,8 +72,9 @@ public final class AssistantGeneratedTextWait {
       List<String> found =
           jdbc.queryForList(
               "select m.id::text from cv_message m where m.conversation_id = ?::uuid"
-                  + " and m.role = 'ASSISTANT' and m.content <> '' order by m.created_at desc"
-                  + " limit 1",
+                  + " and m.role = 'ASSISTANT' and "
+                  + CONTENT_NOT_EMPTY
+                  + " order by m.created_at desc limit 1",
               String.class,
               conversationId);
       if (!found.isEmpty()) {
@@ -79,5 +88,54 @@ public final class AssistantGeneratedTextWait {
             + "ms 内没有等到正文非空的助手消息 —— "
             + "★ 等待条件必须是「库里正文非空」（= 真的吐过字），不是「状态 GENERATING」："
             + "助手行在第一个 chunk 之前就已经是 GENERATING 了（#125）");
+  }
+
+  /**
+   * ★★ 同一把等待的<strong>第二个入口</strong>：在给定的一批消息 id 里，等**其中某一条**正文非空，返回它。
+   *
+   * <h3>为什么"按会话取最新"这一个入口<strong>不够</strong>（本批实测撞到）</h3>
+   *
+   * <p>公开面的两轮问答落在<strong>同一条会话</strong>上（{@code 13 §5.2.1} 的会话链）⇒ 第二轮再用 {@link #await(JdbcTemplate,
+   * UUID, long)} 会命中"该会话里正文非空、按 {@code created_at} 最新"的那一条 ——
+   * 而<strong>第一轮那条已经收尾、正文非空</strong>，于是它被原样返回：两轮拿到**同一个 id**，
+   * 读数是"第二轮被停"，真因是**观测点取错了行**（本批实测：`round1 == round2`）。
+   *
+   * <p>★ 所以这里只把<strong>锚点</strong>从"会话里最新"换成"你指定的这一批 id"， <strong>判据一个字没改</strong>（仍是「助手角色 +
+   * 正文非空」）—— 全仓唯一的实现仍然只有这一处， 不存在"第二把等待"（{@code GeneratedTextWaitSingleSourceTest} 会把那种写法当场判红）。
+   *
+   * @param jdbc 真栈测试自己的 {@link JdbcTemplate}
+   * @param candidateIds 候选消息 id（调用方负责"这些是这一轮新出现的"）
+   * @param timeoutMs 上限（超时即断言失败）
+   * @return 其中第一条正文非空的消息 id
+   */
+  public static UUID awaitAnyOf(
+      JdbcTemplate jdbc, java.util.Collection<UUID> candidateIds, long timeoutMs)
+      throws InterruptedException {
+    List<UUID> candidates = List.copyOf(candidateIds);
+    if (candidates.isEmpty()) {
+      throw new AssertionError("awaitAnyOf 的候选集为空 —— 调用方要先确认'这一轮新出现了哪些消息'");
+    }
+    long deadline = System.nanoTime() + Duration.ofMillis(timeoutMs).toNanos();
+    while (System.nanoTime() < deadline) {
+      for (UUID candidate : candidates) {
+        List<String> found =
+            jdbc.queryForList(
+                "select m.id::text from cv_message m where m.id = ?::uuid"
+                    + " and m.role = 'ASSISTANT' and "
+                    + CONTENT_NOT_EMPTY,
+                String.class,
+                candidate);
+        if (!found.isEmpty()) {
+          return UUID.fromString(found.getFirst());
+        }
+      }
+      Thread.sleep(POLL_INTERVAL_MS);
+    }
+    throw new AssertionError(
+        "在 "
+            + timeoutMs
+            + "ms 内，候选的 "
+            + candidates.size()
+            + " 条消息里没有一条正文非空 —— ★ 判据与按会话那一把逐字相同（角色 + 正文非空），只是锚点不同");
   }
 }

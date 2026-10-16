@@ -13,7 +13,9 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -91,6 +93,9 @@ class PublicStopEndpointTest {
 
   /** 每个用例自己装一个假模型（见下面的配置类）。 */
   @Autowired AtomicReference<ChatStreamPort> fakeModel;
+
+  /** ★ 直接观测信号残留（成因层读数）—— 不必绕真栈去猜"下一轮为什么被停"。 */
+  @Autowired cn.lincoln.aiplatform.conversation.application.ChatStopSignal stopSignal;
 
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -254,6 +259,48 @@ class PublicStopEndpointTest {
         .contains("STOPPED");
   }
 
+  /**
+   * ★★ 判据③之二（{@code #143} 后半的**收回**那一半）：<strong>晚到的停止不留残留</strong>。
+   *
+   * <p>场景逐字：第一轮正常地被停止（终态 {@code STOPPED}），然后一个**晚到的**停止请求打到同一条消息上。 那一刻收尾路径**已经跑完**（它的 {@code
+   * consume} 早走了）⇒ 如果这里只是"置上信号就返回"， 那个 id 会永远留在集合里（没有任何人在消费它），直到某天有人重发同一个消息 id。
+   *
+   * <p>⇒ 本用例断言回执说"没停成"（{@code accepted=false}），而**紧接着的第二轮必须照常跑完**
+   * （`twoPublicTurnsLandInTheSameConversation` 那一侧的同时，这里额外证明"晚到的停止没有毒到下一轮"）。
+   *
+   * <p>★ 它同时是"{@code ChatStopService} 第 ⑤ 步（置完再读一次、读到就收回）"的观测点。
+   */
+  @Test
+  void aLateStopLeavesNoResidueBehind() throws Exception {
+    String messageId = startPublicTurnAndWaitUntilGenerating();
+
+    assertThat(postStop(token, messageId).body()).contains("\"accepted\":true");
+    waitUntilTerminal(messageId);
+
+    // 晚到的停止（这一刻收尾已经发生）
+    assertThat(postStop(token, messageId).body()).contains("\"accepted\":false");
+
+    // ★★ 直接观测"残留"（比只看第二轮的结果状态更精确）：这一刻信号集合里**不该有这条消息**。
+    //   它是 #143 后半那条账的**成因层**读数 —— 残留若在，下一轮一定会被停，而界面上只是"没有回答"。
+    assertThat(stopSignal.isRequested(UUID.fromString(messageId)))
+        .as("★★ #143 后半：晚到的停止必须**当场拒收、不留残留** —— 否则这个 id 会一直留在集合里，" + "直到某天有人重发同一个消息 id（一种没有症状的泄漏）")
+        .isFalse();
+
+    // ★ 第二轮：必须照常跑完 —— 而它落在**同一条会话**上（§5.2.1 的会话链），所以"残留毒到下一轮"在这里读得出来
+    String nextMessageId = startPublicTurnAndWaitUntilGenerating();
+    waitUntilTerminal(nextMessageId);
+
+    assertThat(nextMessageId)
+        .as("★ 第二轮是一条**新的**助手消息（这与'消息 id 不复用'那条约定一致，也正是 begin 的兜底对象）")
+        .isNotEqualTo(messageId);
+    assertThat(statusInDb(nextMessageId))
+        .as(
+            "★★ #143 后半：晚到的停止**不许**毒到下一轮 —— 若残留信号还在，这一轮会在第一个块上就按 ABORT 收尾"
+                + "（终态 STOPPED，而用户根本没点过这一轮的停止）。取证：round1=%s round2=%s 信号状态=%s",
+            messageId, nextMessageId, stopSignal.isRequested(UUID.fromString(nextMessageId)))
+        .isEqualTo("GENERATED");
+  }
+
   // ────────────────────────── ④ 公开面历史消息（#143 同批：归属键 = 会话链）──────────────────────────
 
   /**
@@ -377,6 +424,11 @@ class PublicStopEndpointTest {
    * STOPPED}，但正文是空的）。
    */
   private String startPublicTurnAndWaitUntilGenerating() throws Exception {
+    // ★★ 先记下"起跑线上已经有哪些助手消息"：本类的两轮落在**同一条会话**上（§5.2.1 的会话链），
+    //   所以"最新一条"在第二轮会指到第一轮那条还在生成的身上（本批实测就踩到了：两轮拿到同一个 id）。
+    //   ⇒ 判据必须是"**新的**那一条"，不是"最新那一条"。
+    Set<String> before = assistantMessageIds();
+
     HttpRequest request =
         HttpRequest.newBuilder(URI.create(base() + CHAT_PATH))
             .timeout(Duration.ofSeconds(60))
@@ -403,12 +455,46 @@ class PublicStopEndpointTest {
     reader.setDaemon(true);
     reader.start();
 
-    // ★ 会话要先有：助手行随 prepare 落库，而这一轮是公开面建的（没有 conversationId 可传）⇒ 从库里找。
+    // ★ 会话要先有（**必须在发请求之后等**：会话是这一轮公开问答建的）—— 用来给唯一那把等待定位会话。
     UUID conversationId = waitUntilConversationExists();
-    return AssistantGeneratedTextWait.await(jdbc, conversationId, 30_000).toString();
+
+    // ★★ 等这一轮**新出现**的那条助手消息 —— 锚点是"新出现的 id 集合"，走唯一那把等待的第二个入口。
+    //   ★ 本批实测踩到的坑（必须记下来）：`AssistantGeneratedTextWait#await(jdbc, 会话, …)` 的锚点是
+    //   "该会话里正文非空、按 created_at 排序的最新那一条" —— 而本类的两轮落在**同一条会话**上
+    //   （§5.2.1 的会话链），第一轮那条**已经收尾、正文非空** ⇒ 第二轮调用它会**原样返回第一轮那条**
+    //   （两轮拿到同一个 id，而"第二轮被停"的读数其实是在第一轮那行上取的 —— 本批实测 `round1 == round2`）。
+    //   ⇒ 换成 `awaitAnyOf`：判据一个字没改（助手角色 + 正文非空），只把锚点从"会话里最新"换成"新出现的这批 id"。
+    long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+    while (System.nanoTime() < deadline) {
+      Set<String> now = assistantMessageIds();
+      now.removeAll(before);
+      if (!now.isEmpty()) {
+        Set<UUID> fresh = new HashSet<>();
+        for (String id : now) {
+          fresh.add(UUID.fromString(id));
+        }
+        return AssistantGeneratedTextWait.awaitAnyOf(jdbc, fresh, 30_000).toString();
+      }
+      Thread.sleep(50);
+    }
+    throw new AssertionError("夹具前提不成立：30 秒内这一轮没有新建助手消息（会话 " + conversationId + "）");
   }
 
-  /** 等这一轮（公开面建的）会话出现，返回它的 id。★ 只用来定位会话，**判据不是它**。 */
+  /** 归属人名下全部助手消息 id（判据只用来算"新出现的那一条"）。 */
+  private Set<String> assistantMessageIds() {
+    return new java.util.HashSet<>(
+        jdbc.queryForList(
+            "select m.id::text from cv_message m join cv_conversation c on c.id = m.conversation_id"
+                + " where c.user_id = ? and m.role = 'ASSISTANT'",
+            String.class,
+            ZHANGYUN));
+  }
+
+  /**
+   * 等这一轮（公开面建的）会话出现，返回它的 id。
+   *
+   * <p>★ 只用来定位会话，**判据不是它** —— 而且它天然是"链上那一条"：两轮落在同一条会话上（§5.2.1）。
+   */
   private UUID waitUntilConversationExists() throws Exception {
     long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
     while (System.nanoTime() < deadline) {

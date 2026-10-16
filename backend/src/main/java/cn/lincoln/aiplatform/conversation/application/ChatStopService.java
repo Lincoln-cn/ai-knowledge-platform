@@ -52,6 +52,13 @@ import org.springframework.stereotype.Service;
  * <p>★ 并且<strong>不置信号</strong>：为一条已经收尾的消息置信号，那个 id 会永远留在 {@link ChatStopSignal} 的集合里（它是"一次性事件"、只由
  * {@code consume} 取走）。 那是一种没有症状的泄漏：直到某天有人重发同一个消息 id，它一上来就被停。
  *
+ * <p>★★ <strong>2026-10-16 补（{@code #143} 后半）：上面那条判定<strong>不够</strong>，因为它有窗口</strong> —— "读到
+ * {@code GENERATING}"与"置上信号"是两次独立操作，而收尾那条路径（{@code ChatService.Run#decideTerminalPath} 里的 {@code
+ * consume}）可能在两者之间跑完。那一刻置上的信号<strong>不会有人再消费</strong> ⇒ 同一个泄漏。 处置 =
+ * <strong>置完再读一次，读到就当场收回</strong>（见 {@code requestStop} 第 ⑤ 步）： 于是每一个信号都只有两个归宿 ——
+ * 被收尾路径消费、或被本次请求收回，<strong>两者必居其一</strong>。 ★
+ * 它不是"再判一次状态"（那会造出第二处口径），而是一个<strong>原子性的补票</strong>：`consume` 是全仓唯一那处消费点。
+ *
  * <h3>★ 已知不足（如实记，见交付报告）</h3>
  *
  * <p>信号在 {@link ChatStopSignal} 里是<strong>进程内</strong>的：多实例部署时停止请求可能落到另一个实例。 本批没有改它（MVP
@@ -118,9 +125,22 @@ public class ChatStopService {
       return new Receipt(false, message.status());
     }
 
-    // ── ④ 置信号：这是"用户点了停止"在服务端唯一的落点（机制仍是既有的 ChatStopSignal）──
+    // ── ④ 置上 → 登记：一个入口 `accept`，但它要求信号**已经被置上**（见该方法注释）──
+    // ★ 时序：先 `request`（把"用户点了停止"这件事置上），再 `accept`。
+    //   `accept` 返回 false 的含义只有一种：这一刻已经没有任何"待领"的信号 ⇒ 这一轮在我读到 GENERATING
+    //   之后、置信号之前**已经收尾**（收尾路径的 consume 早跑过了）⇒ 当场拒收，不留残留。
+    // ★ 为什么不能只 `request`（第一版）：那一刻收尾路径可能已经跑完，这个信号不会有人再消费
+    //   ⇒ 它永远留在集合里，直到某天有人重发同一个消息 id（一种没有症状的泄漏）。
+    // ★ 为什么也不能"置上再 consume 当收回"（第二版，真栈当场证伪）：生成线程先读走信号时，
+    //   请求侧会看到"信号没了"从而**误报 accepted=false**，而用户明明点中了停止
+    //   —— ConversationStopEndpointTest 断言 accepted=true，它抓住了这个错。
     stopSignal.request(messageId);
-    log.info("已置停止信号：会话 {} 的助手消息 {} 将按 ABORT 收尾（STOPPED，保留已生成内容）", conversation.id(), messageId);
+    if (!stopSignal.agree(messageId)) {
+      log.info("停止请求晚到了：助手消息 {} 在这一瞬已经收尾 ⇒ 当场拒收（不留残留）", messageId);
+      return new Receipt(false, message.status());
+    }
+
+    log.info("已认领停止信号：会话 {} 的助手消息 {} 将按 ABORT 收尾（STOPPED，保留已生成内容）", conversation.id(), messageId);
     return new Receipt(true, message.status());
   }
 

@@ -885,6 +885,11 @@ public class ChatService {
       this.lastBusinessFrameAtNanos = startedAtNanos;
       this.lastHeartbeatAtNanos = startedAtNanos;
       this.lastFlushAtNanos = startedAtNanos;
+      // ★★ 一轮开始就作废这条消息 id 上的**残留信号**（#143 后半）：收尾那一刻的 consume 漏掉了一种时序 ——
+      //   停止请求在"收尾路径最后一次 consume"之后才置上信号（用户点停止、生成恰好同一毫秒写完）
+      //   ⇒ 那个 id 会带着上一轮的停止活到下一轮。这一步把它变成显式机制，于是
+      //   "这一轮会不会被停"只看这一轮自己的请求（#143 判据：同 id 二次生成不受前一次停止影响）。
+      stopSignal.begin(messageId);
     }
 
     /**
