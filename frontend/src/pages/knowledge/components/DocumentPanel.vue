@@ -15,12 +15,43 @@
         <el-option label="全部状态" value="" />
         <el-option v-for="s in STATUSES" :key="s" :label="labelOf(DOCUMENT_STATUS_LABELS, s)" :value="s" />
       </el-select>
+      <!--
+        ★ `#56`：待补归属这一档。加它以前，回填时匹配不上责任部门的文档只能靠"那一列空着"被发现，
+        看起来像"还没填"，而不像"系统需要你处理"（`department_legacy` 是不可更新的存档列）。
+      -->
+      <el-select
+        v-model="query.orgAssignment"
+        size="small"
+        placeholder="全部归属"
+        style="width: 130px"
+        @change="onFilterChange"
+      >
+        <el-option label="全部归属" value="" />
+        <el-option label="待补归属" value="UNASSIGNED" />
+        <el-option label="已有归属" value="ASSIGNED" />
+      </el-select>
       <el-button size="small" :icon="Refresh" :loading="loading" @click="manualRefresh">刷新</el-button>
       <span class="grow" />
       <el-button v-if="canUpload" size="small" type="primary" @click="openUpload">+ 上传文档</el-button>
     </div>
 
     <GlobalProgress :progress="progress" :load-error="progressError" @retry="manualRefresh" />
+
+    <!--
+      ★★ `#56` 的可读提示：只把文档列出来还不够 —— 这一行必须说明"为什么它们在这里"。
+      没有它，用户看到的是"责任部门那一列空着"，读起来像"还没填"，而不像"系统需要你处理"
+      （那正是这条账被埋了两个月的原因）。
+
+      ★★ 措辞是**刻意保守**的：今天建档之后**没有**修改责任部门的入口（`orgId` 只在导入向导里能设），
+      所以这里不写"请逐条指定责任部门" —— 那是一句做不到的操作指引（会让用户找半天）。
+      缺口单独立账见 `#150`；等那条落了，这一段再改成真正的操作指引。
+    -->
+    <div v-if="query.orgAssignment === 'UNASSIGNED'" class="notice info">
+      <div>
+        <b>待补归属：{{ total }} 篇。</b>
+        这些文档在导入时<strong>无法按责任部门名称自动匹配</strong>（原值已存档），因此归属为空。
+      </div>
+    </div>
 
     <div v-if="loadError" class="notice err">
       <div><b>加载失败：</b>{{ loadError.reason }}</div>
@@ -159,7 +190,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { EditPen, Loading, Refresh, Search } from '@element-plus/icons-vue'
 import { ingestionApi } from '@/api'
 import { ApiError } from '@/api/types'
-import type { DocumentItem, DocumentStatus, IngestionProgress } from '@/api/ingestion'
+import type { DocumentItem, DocumentStatus, IngestionProgress, OrgAssignment } from '@/api/ingestion'
 import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 import GlobalProgress from './GlobalProgress.vue'
@@ -220,6 +251,12 @@ const expandedFails = ref(new Set<string>())
 const query = reactive({
   keyword: '',
   status: '' as DocumentStatus | '',
+  /**
+   * ★ 责任部门归属筛选（`#56`）：`V27` 把责任部门从自由字符串换成 `org_id` 时按名字回填，
+   * **匹配不上的原值留在 `department_legacy`**，而它们此前没有任何界面入口能列出来。
+   * 选「待补归属」即列出这批文档 —— 指定归属后它们会从这一档消失。
+   */
+  orgAssignment: '' as OrgAssignment | '',
   page: 1
 })
 
@@ -252,6 +289,7 @@ const fetchList = async () => {
     const result = await ingestionApi.listDocuments(props.kbId, {
       keyword: query.keyword || undefined,
       status: query.status || undefined,
+      orgAssignment: query.orgAssignment || undefined,
       page: query.page,
       size: pageSize
     })
