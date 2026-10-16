@@ -239,8 +239,25 @@ export const listDocuments = (kbId: string, query: DocumentQuery = {}) =>
     query
   })
 
-/** 上传文档。走 multipart，与其它接口共用同一出口 */
-export const uploadDocuments = (
+/**
+ * ★★ 指定/变更某篇文档的**责任部门**（契约 `assignDocumentOrg`；`#150`）。
+ *
+ * 它是「待补归属」那一档（`listDocuments` 的 `orgAssignment: 'UNASSIGNED'`，`#56`）真正的出口：
+ * 在那之前责任部门**只能在导入向导里设**，建档之后没有修改入口 ⇒ 待补的文档列得出来却处理不掉
+ * （唯一的绕法是删档重建，而重建会丢掉 `department_legacy` 那个存档值）。
+ *
+ * ★ 只改归属：密级 / 文种 / 分段 / 向量一概不动，`department_legacy` 也不许清（它是"当初没匹配上"的证据）。
+ * ★ 部门不存在/已停用 ⇒ 400；文档不在这个库 ⇒ 404（不是 403 —— 那会确认 id 存在）。
+ */
+export const assignDocumentOrg = (kbId: string, documentId: string, orgId: string) =>
+  request<DocumentItem>({
+    method: 'PATCH',
+    url: '/knowledge-bases/:kbId/documents/:documentId/org',
+    path: { kbId, documentId },
+    body: { orgId }
+  })
+
+/** 上传文档。走 multipart，与其它接口共用同一出口 */export const uploadDocuments = (
   kbId: string,
   files: File[],
   meta?: { docType: string; orgId: string; classification: ClassificationLevel }

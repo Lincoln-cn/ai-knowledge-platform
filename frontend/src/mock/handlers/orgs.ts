@@ -31,7 +31,12 @@ interface Org {
 
 const ROOT_ID = '00000000-0000-4000-8000-000000000001'
 
-const orgs: Org[] = [
+/**
+ * 组织清单（★ 导出给别的 handler 做**归属校验**用：`#150` 的"指定责任部门"必须能判断
+ * "这个 id 是不是一个真实存在的部门" —— 不校验就会把 400 做成"静默写进去一个不存在的部门"，
+ * 而那正是真后端那条校验存在的理由）。
+ */
+export const orgs: Org[] = [
   { id: ROOT_ID, parentId: null, code: 'ROOT', name: '总部', path: '/ROOT/', sort: 0, enabled: true },
   ...(
     [

@@ -17,6 +17,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -51,6 +52,31 @@ public class DocumentController {
   public DocumentController(DocumentService documentService) {
     this.documentService = documentService;
   }
+
+  /**
+   * ★★ 指定/变更文档的责任部门（契约 {@code assignDocumentOrg}；{@code #150}）。
+   *
+   * <p>★ 它是 {@code #56} 那一档（{@code ?orgAssignment=UNASSIGNED}）真正的出口：没有它， 用户按提示找到"待补归属"的文档之后无事可做 ——
+   * 只能删档重建，而重建会丢掉 {@code department_legacy} 那个存档值。
+   *
+   * <p>★ 权限点 {@code knowledge:document:upload}（与建档同一个）：改归属与建档属于同一类动作
+   * （"把文档放进这个库并说明它归谁"），而**不是**阅读动作。
+   *
+   * <p>★ 只改归属：密级 / 文种 / 分段 / 向量一概不动，{@code department_legacy} 是存档列也不许清 （理由见 {@code
+   * DocumentService#assignOrg} 的注释）。
+   */
+  @PatchMapping("/{kbId}/documents/{documentId}/org")
+  @PreAuthorize("hasAuthority('knowledge:document:upload')")
+  public ApiResponse<DocumentView> assignOrg(
+      @PathVariable UUID kbId,
+      @PathVariable UUID documentId,
+      @RequestBody(required = false) AssignOrgBody body) {
+    return ApiResponse.ok(
+        documentService.assignOrg(kbId, documentId, body == null ? null : body.orgId()));
+  }
+
+  /** 指定责任部门的请求体（{@code orgId} 必填 —— 见 {@code Document#assignOrg} 的第二条纪律）。 */
+  public record AssignOrgBody(UUID orgId) {}
 
   /**
    * 按库分页列文档（契约 {@code listDocuments}）。
