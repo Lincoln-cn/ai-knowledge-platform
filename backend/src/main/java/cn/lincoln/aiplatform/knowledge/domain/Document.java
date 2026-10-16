@@ -115,6 +115,23 @@ public class Document {
   @Column(name = "classification", nullable = false, length = 16)
   private ClassificationLevel classification;
 
+  /**
+   * ★★ 密级的<strong>排序口径</strong>（{@code V21} 的生成列）—— 列表/计数侧密级谓词的载体（{@code #25}）。
+   *
+   * <p>★ 库层是 {@code generated always as (case classification … ) stored}（与 {@code V22} 的 {@code
+   * kb_segment.classification_rank}、{@code V31} 的 {@code kb_qa_pair.classification_rank}
+   * <strong>逐字同一个 CASE</strong>）⇒ 这里 {@code insertable = false, updatable = false}：它由库算，应用绝不写。
+   *
+   * <p>★★ 为什么要有这个 Java 字段：它是**密级谓词要用的那一列**。检索侧早就在用 （{@code JdbcSegmentSearchQuery} 的 {@code
+   * s.classification_rank <= ?}），而<strong>列表与计数侧</strong> 一直只有"软删 + 所属库"两个条件 ⇒ 低 clearance
+   * 的用户**能数出**自己看不到的文档（{@code #25} 记的 存在性侧信道：不仅数得出条数，还看得到标题与密级本身）。把它映射进来，列表侧才有一个与检索侧**同源**的比较轴。
+   *
+   * <p>★ 绑定值一律来自 {@link ClassificationLevel#ordinal()}（{@code 14 §2.1} 的机器码声明顺序）—— 不在这里、也不在任何 SQL
+   * 里写第二份密级次序。
+   */
+  @Column(name = "classification_rank", insertable = false, updatable = false)
+  private Short classificationRank;
+
   /** 加工状态。初值 {@link DocumentStatus#PENDING_PARSE}。 */
   @Enumerated(EnumType.STRING)
   @Column(name = "status", nullable = false, length = 32)
@@ -580,6 +597,16 @@ public class Document {
 
   public ClassificationLevel classification() {
     return classification;
+  }
+
+  /**
+   * 密级的排序口径（{@code V21} 的生成列；{@code #25} 的列表谓词读它）。
+   *
+   * <p>★ 它是<strong>库算出来的</strong>，所以与 {@link #classification()} 的 {@code ordinal()} 必须相等 —— 这条口径由
+   * {@code ClassificationRankTest} 钉住（同一份 {@code CASE} 在 {@code V21}/{@code V22}/{@code V31} 三处）。
+   */
+  public Short classificationRank() {
+    return classificationRank;
   }
 
   public DocumentStatus status() {
