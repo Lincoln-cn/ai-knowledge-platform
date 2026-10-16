@@ -376,18 +376,26 @@ export function useChatSession(options: ChatSessionOptions = {}) {
    * <ol>
    *   <li><strong>还没收到 `meta`</strong> ⇒ 拿不到 `messageId` ⇒ 发不出（契约里写明的降级：
    *       直接 `abort()`，服务端按 `DISCONNECT` 收）。见 `api/conversations.ts` 的 `stopMessage` 注释；
-   *   <li><strong>公开面（免登录）</strong> ⇒ 契约里的停止端点走登录面，公开面今天**没有**停止端点 ⇒
-   *       同样退化为 `abort()`。★ 这是一处**已知缺口**（见交付报告），不是这里忘了写；
+   *   <li><strong>公开面（免登录）</strong> ⇒ 走**另一条**操作 `stopPublicMessage(token, messageId)`
+   *       （`#143` 前半，2026-10-16）：公开面只发消息 id，会话由服务端从消息行反解
+   *       —— 公开页的 `conversationId` 是合成串 `public:<token>`，用它打登录面那条 UUID 路径必 400；
    *   <li><strong>请求失败 / 超时</strong> ⇒ 吞掉异常：终态由 `abort()` 那条路径收口。
    *       失败原因不往界面上抛 —— 用户按的是"停止"，给他看一条报错是错的。
    * </ol>
    */
   const requestServerStop = async (conversationId: string, messageId: string): Promise<void> => {
-    if (options.credentialToken) return
-    if (!conversationId || !messageId) return
+    if (!messageId) return
+    // ★ 公开面：令牌在 options 里（`sse.ts` 把它当 X-Access-Credential 头发出去），而停止走公开面那条端点 ——
+    //   它**不需要** conversationId（那正是这条端点存在的理由：公开页拿不出一个真的 UUID）。
+    const stopRequest = options.credentialToken
+      ? conversationsApi.stopPublicMessage(options.credentialToken, messageId)
+      : !conversationId
+        ? null
+        : conversationsApi.stopMessage(conversationId, messageId)
+    if (!stopRequest) return
     try {
       await Promise.race([
-        conversationsApi.stopMessage(conversationId, messageId),
+        stopRequest,
         new Promise<void>((resolve) => setTimeout(resolve, STOP_REQUEST_TIMEOUT_MS))
       ])
     } catch {

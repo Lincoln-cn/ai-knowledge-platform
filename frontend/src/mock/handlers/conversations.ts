@@ -694,5 +694,49 @@ export const conversationRoutes: MockRoute[] = [
       const gate = gateOrThrow(path.token)
       return publicMessagesFor(gate)
     }
+  ],
+
+  /**
+   * ★★ 公开面的停止生成（`#143` 前半，2026-10-16）—— 与登录面那条**同一套处置**，只换正当性入口。
+   *
+   * <h3>为什么 mock 必须有它（与上面那条登录面停止同一条理由）</h3>
+   *
+   * 少了这条路由，`VITE_USE_MOCK=true` 下公开页的停止就是一条**没人接的请求** ⇒ 它悄悄退化成
+   * `abort()`（`DISCONNECT ⇒ FAILED`），而界面上仍然写着「已停止」—— 正是 `#143` 要消掉的那个静默降级
+   * 在 mock 侧又活了一遍。
+   *
+   * <h3>边界：消息必须属于**这条令牌**的会话</h3>
+   *
+   * 公开面**只发消息 id**（会话由服务端反解），所以"这条消息是不是这条链接的"必须在这里判 ——
+   * 少这一句，任何有效令牌都能停别人的消息（在 mock 里表现为"停了一条看不见的消息"）。
+   * 判定口径与真后端一致：对不上 ⇒ **404**（不是 403）。
+   */
+  [
+    'POST',
+    '/public/:token/messages/:messageId/stop',
+    ({ path }) => {
+      const gate = gateOrThrow(path.token)
+      const visible = publicMessagesFor(gate).map((m) => m.id)
+      if (!visible.includes(path.messageId)) {
+        throw new ApiError(ErrorCode.NOT_FOUND, `消息「${path.messageId}」不存在`)
+      }
+
+      // ① 正在生成：mock 的流住在浏览器里（与登录面那条同一条收尾路径，含"已生成内容落库"）
+      if (requestMockStop(path.messageId)) {
+        const accepted: ChatStopReceipt = { accepted: true, status: 'GENERATING' }
+        return accepted
+      }
+
+      // ② 已经收尾 ⇒ accepted:false + 当前状态（晚到的停止不是错误，但也不许静默）
+      const msg = findMessage(path.messageId)
+      if (!msg) {
+        throw new ApiError(ErrorCode.NOT_FOUND, `消息「${path.messageId}」不存在`)
+      }
+      if (msg.role !== 'ASSISTANT') {
+        throw new ApiError(ErrorCode.BAD_REQUEST, '只能停止助手回答')
+      }
+      const late: ChatStopReceipt = { accepted: false, status: msg.status }
+      return late
+    }
   ]
 ]
