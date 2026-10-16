@@ -1,5 +1,7 @@
 package cn.lincoln.aiplatform.conversation.domain;
 
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+
 /**
  * 一条引用来源（SSE 契约里的 {@code refs} 事件元素 · {@code 03 §1.2}）。
  *
@@ -12,6 +14,22 @@ package cn.lincoln.aiplatform.conversation.domain;
  * StreamContractCrossCheckTest} 会在两侧任一侧改字段名时变红。
  *
  * <p>★ <strong>契约里没有的字段不许自创</strong>：多一个字段并不会让前端报错，但它会让"契约里到底有什么"这件事变成两处口径。
+ *
+ * <h3>★★ 第 11 个分量「密级」为什么在生产端是<strong>必填</strong>（{@code #27}，2026-10-16 拍板）</h3>
+ *
+ * <p>它<strong>只服务一件事</strong>：会话累计密级 = {@code max(历史引用的 classification)}（{@code 13 §2.2}：
+ * "一旦引用过机密，整个会话就是机密的"）。载体 = {@code cv_conversation.max_classification}，写入口 = {@code
+ * ConversationRepository#raiseClassification}（只升不降，{@code #108}），而<strong>调用点</strong>就是这里 ——
+ * 引用集合自带密级之后，"本轮引用集合的最高密级"才到得了落库那一刻。
+ *
+ * <p>★★ <strong>契约写成可选（{@code ?}），这里不兜底</strong> —— 与 {@code title} / {@code docName} / {@code
+ * kbName} 是同一落法（契约允许缺、生产端不许缺）。理由是可核对的一条：兜底成 {@code PUBLIC} 会让会话水位<strong>算低</strong> ⇒
+ * <strong>静默降密</strong>（会话从机密掉回公开，不报错、不留痕）。而它与会话域那条"{@code kbId} 缺失有语义"不同 ——
+ * 密级的缺失<strong>没有任何语义</strong>：{@code kb_segment.classification} 是 {@code V22} 的非空列， 装配点的素材（{@code
+ * SegmentSearchPort.Card}）没有"取不到"这一档。
+ *
+ * <p>★ 因此这里<strong>不做</strong>{@code blankToNull} 那种规范化（密级不是字符串）： {@code null} ⇒ 立刻抛，理由与 {@code
+ * index < 1} 那条完全相同。
  *
  * <h3>★★ 一处「设计册写了、契约里没有」的差异（本批按契约实现，已登记待裁）</h3>
  *
@@ -46,6 +64,7 @@ package cn.lincoln.aiplatform.conversation.domain;
  * @param segmentId 分段 id —— 深链用（可空）
  * @param documentId 所属文档 id —— 深链用（可空）
  * @param kbId 所属知识库 id —— 深链用（可空）
+ * @param classification ★ 这条引用（分段）的密级 —— <strong>会话累计密级的唯一来源</strong>（{@code #27}）
  */
 public record SourceRef(
     int index,
@@ -57,7 +76,8 @@ public record SourceRef(
     String full,
     String segmentId,
     String documentId,
-    String kbId) {
+    String kbId,
+    ClassificationLevel classification) {
 
   /**
    * 规范化可选字段：契约里这些字段是"要么有要么没有"，不是"空串"。
@@ -69,6 +89,11 @@ public record SourceRef(
   public SourceRef {
     if (index < 1) {
       throw new IllegalArgumentException("引用编号 index 必须从 1 起（契约口径：正文里 [N] 从 1 连续递增），实际为 " + index);
+    }
+    if (classification == null) {
+      throw new IllegalArgumentException(
+          "引用缺少密级（classification）—— 它是会话累计密级的唯一来源，兜底成 PUBLIC 会让会话水位算低（静默降密）。"
+              + "素材见 SegmentSearchPort.Card#classification（kb_segment.classification 是 V22 的非空列）");
     }
     title = requireText(title, "title");
     docName = requireText(docName, "docName");

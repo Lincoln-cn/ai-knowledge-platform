@@ -23,6 +23,9 @@
  * 写进来了就必须做，前端按此验收。
  */
 
+// ★ 密级的机器码类型 —— 与 `types.ts` 同一处定义（标识符 = 线上值 = 库存值三者同名）
+import type { ClassificationLevel } from './types'
+
 /**
  * ① 心跳帧 —— wire 形状。
  *
@@ -133,6 +136,21 @@ export interface SourceRef {
   documentId?: string
   /** 所属知识库 id —— 深链用（`/knowledge?kb=`） */
   kbId?: string
+  /**
+   * 这一条引用（分段）的密级（机器码 `PUBLIC` / `INTERNAL` / `SECRET` / `CONFIDENTIAL`）。
+   *
+   * ★ **它的用途只有一处**：会话累计密级 = `max(历史引用的 classification)` —— 「一旦引用过机密，
+   * 整个会话就是机密的」，语义见 `13 §2.2`；跨轮只升不降，落库在 `cv_conversation.max_classification`。
+   *
+   * ★★ **写入侧（后端）是必填，这里的 `?` 只服务两件事**（与 `title` / `docName` / `kbName`
+   * 同一落法：契约允许缺、生产端不许缺）：
+   *   1. mock 与历史快照可以不写它；
+   *   2. 今天**没有前端消费点**，缺了照样渲染。
+   *
+   * ★ 为什么"缺了"必须被当成错误而不是兜底成 `PUBLIC`：兜底 = 会话水位算低 ⇒ **静默降密**
+   * （会话从机密掉回公开，不报错、不留痕）。后端 `SourceRef` 的构造器因此对它做非空校验。
+   */
+  classification?: ClassificationLevel
 }
 
 export type Artifact =

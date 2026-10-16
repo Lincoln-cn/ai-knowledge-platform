@@ -7,6 +7,7 @@ import cn.lincoln.aiplatform.conversation.domain.MessageRepository;
 import cn.lincoln.aiplatform.conversation.domain.SourceRef;
 import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
 import cn.lincoln.aiplatform.conversation.domain.stream.StreamTerminationPath;
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.assistant.AppBindingPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -220,6 +221,13 @@ public class ChatTurnWriter implements ChatTurnStore {
       message.appendText(fullTextSoFar.substring(persistedChars));
     }
     message.bindReferences(references);
+    // ★★ 会话累计密级的**生产调用点**（#27，2026-10-16）：引用集合自带密级之后，抬升发生在
+    //   "引用集合落库的同一个事务里"（本方法 @Transactional）—— 这正是 13 §2.2 / V32 注释写的那个写入点。
+    //   ★ references == null 与空列表**不是一回事**（ChatService.java 传的是 `refsBound ? refs : null`）：
+    //     null = 这一批引用从来没到过 ⇒ 水位不动；空列表 = 明确的零命中 ⇒ maxOf 也返回 null ⇒ 同样不动。
+    //   ★ 只升不降由库侧那条 UPDATE 的 where 保证（Conversation#strictlyLowerThan 是唯一口径），
+    //     这里**不做任何比较** —— 在调用方比一次就多一处会漂的口径（V32 注释逐字）。
+    conversations.raiseClassification(message.conversationId(), maxClassificationOf(references));
     switch (path) {
       case COMPLETE -> message.complete(usage, durationMs);
       case ABORT -> message.stop(durationMs);
@@ -328,6 +336,40 @@ public class ChatTurnWriter implements ChatTurnStore {
     if (!conversations.recordMessage(conversation.id())) {
       throw new IllegalStateException("会话 " + conversation.id() + " 的消息计数没有落库 —— 它在本轮开始时刚被建过或读过");
     }
+  }
+
+  /**
+   * ★★ 本轮引用集合的<strong>最高密级</strong>（{@code #27}）—— 会话累计密级的输入。
+   *
+   * <h3>为什么次序只用 {@link ClassificationLevel#max}</h3>
+   *
+   * <p>"哪一档更高"只有一处权威：{@link ClassificationLevel} 的<strong>声明顺序</strong>（{@code 13 §2.2}）。 在这里写
+   * {@code ordinal()} 比较、或写一个密级次序表，都会多出第二处会漂的口径 —— 而它漂了的症状是 <strong>静默降密</strong>（本项目已实测过一次：PG 的
+   * {@code greatest('CONFIDENTIAL','SECRET') = 'SECRET'}， 字典序 ≠ 密级次序）。
+   *
+   * <h3>★ 三种"没有值"的输入都返回 null（= 水位不动）</h3>
+   *
+   * <ul>
+   *   <li>{@code references == null} —— 这一批引用<strong>从来没到过</strong>（{@code #142} 那种"检索还没回来就收尾"）；
+   *   <li>空列表 —— 明确的<strong>零命中</strong>；
+   *   <li>元素里出现 {@code null} 密级 —— 今天装不出来（{@code SourceRef} 的构造器非空校验 + 库里那一列非空），
+   *       但这里<strong>不抛</strong>：本方法的语义是"能算出多少算多少"，而一条算不出密级的引用不该让整轮落库失败。
+   * </ul>
+   *
+   * <p>★ 语义与 {@code Conversation#raiseClassification(null)} 逐字同源：{@code null} 是"本轮没有引用"，
+   * <strong>不是</strong>"本轮引用是公开的"。
+   */
+  private static ClassificationLevel maxClassificationOf(List<SourceRef> references) {
+    if (references == null || references.isEmpty()) {
+      return null;
+    }
+    ClassificationLevel highest = null;
+    for (SourceRef ref : references) {
+      if (ref != null && ref.classification() != null) {
+        highest = highest == null ? ref.classification() : highest.max(ref.classification());
+      }
+    }
+    return highest;
   }
 
   /** 标题 = 问题前若干字（{@code 02 §2.6}）；截断而不是报错，因为标题不是用户输入的一部分。 */

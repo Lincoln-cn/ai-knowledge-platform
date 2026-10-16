@@ -8,6 +8,7 @@ import cn.lincoln.aiplatform.conversation.domain.MessageRepository;
 import cn.lincoln.aiplatform.conversation.domain.MessageStatus;
 import cn.lincoln.aiplatform.conversation.domain.SourceRef;
 import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import java.util.List;
 import java.util.UUID;
@@ -197,7 +198,8 @@ class MessagePersistenceTest {
                 "第一条 为规范…",
                 "aa000000-0000-4000-8000-000000000001",
                 "bb000000-0000-4000-8000-000000000001",
-                "cc000000-0000-4000-8000-000000000001"),
+                "cc000000-0000-4000-8000-000000000001",
+                ClassificationLevel.SECRET),
             new SourceRef(
                 2,
                 "第三章 报销标准",
@@ -208,9 +210,20 @@ class MessagePersistenceTest {
                 null,
                 "aa000000-0000-4000-8000-000000000002",
                 "bb000000-0000-4000-8000-000000000001",
-                "cc000000-0000-4000-8000-000000000001"),
+                "cc000000-0000-4000-8000-000000000001",
+                ClassificationLevel.INTERNAL),
             new SourceRef(
-                3, "附件 A 住宿标准表", "报销管理规定.pdf", "制度库", 0.71, null, null, null, null, null));
+                3,
+                "附件 A 住宿标准表",
+                "报销管理规定.pdf",
+                "制度库",
+                0.71,
+                null,
+                null,
+                null,
+                null,
+                null,
+                ClassificationLevel.PUBLIC));
 
     Message saved = new Message(id, CONVERSATION, "");
     saved.appendText("根据《报销管理规定》第三条");
@@ -229,13 +242,17 @@ class MessagePersistenceTest {
         jdbc.queryForObject(
             "select reference_snapshot::text from cv_message where id = ?::uuid", String.class, id);
     assertThat(rawJson)
-        .as("★ 库里的 reference_snapshot 列必须真有那 10 个字段的名字（只走端口的话，一条 @Transient 也能让它绿）")
+        .as(
+            "★ 库里的 reference_snapshot 列必须真有那 11 个字段的名字（只走端口的话，一条 @Transient 也能让它绿）；"
+                + "classification 尤其重要 —— 它是会话累计密级的历史溯源，丢了就只能读会话水位")
         .contains("\"index\"")
         .contains("\"docName\"")
         .contains("\"kbName\"")
         .contains("\"segmentId\"")
         .contains("\"documentId\"")
         .contains("\"kbId\"")
+        .contains("\"classification\"")
+        .contains("\"SECRET\"")
         .contains("第一章 总则");
 
     // ③ index 从 1 连续递增（契约口径）

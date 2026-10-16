@@ -1082,11 +1082,19 @@ class ChatStreamEventRecordingTest {
                   "附件-合同.docx",
                   null,
                   CONVERSATION_DOCUMENT_ID,
-                  null));
+                  null,
+                  ClassificationLevel.INTERNAL));
         } else {
           cards.add(
               new Card(
-                  id, "差旅住宿标准章节", "差旅住宿标准为每人每天500元", "SSE 差旅制度文档", "SSE 夹具库", DOCUMENT_ID, KB_ID));
+                  id,
+                  "差旅住宿标准章节",
+                  "差旅住宿标准为每人每天500元",
+                  "SSE 差旅制度文档",
+                  "SSE 夹具库",
+                  DOCUMENT_ID,
+                  KB_ID,
+                  ClassificationLevel.SECRET));
         }
       }
       return cards;

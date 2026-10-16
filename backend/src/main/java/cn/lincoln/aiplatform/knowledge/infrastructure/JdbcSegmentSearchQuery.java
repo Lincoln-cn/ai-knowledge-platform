@@ -479,7 +479,11 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     String sql =
         "select s.id as segment_id, s.title as title, s.content as content,"
             + " s.document_id as document_id, d.name as doc_name,"
-            + " k.id as kb_id, k.name as kb_name"
+            + " k.id as kb_id, k.name as kb_name,"
+            // ★ 密级（#27）：库里那一列是 V22 的非空列（强制继承所属文档），所以这不是"新增一条产品决定"，
+            //   而是"把已有的事实读出来" —— 与上面那两列（document_id / kb_id）完全同一个形状。
+            //   会话密级的装配点靠它算"本轮引用集合的最高密级"。
+            + " s.classification as classification"
             + JOINS
             + " where s.id in ("
             + placeholders(ids.size())
@@ -504,7 +508,10 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
                 rs.getString("doc_name"),
                 rs.getString("kb_name"),
                 rs.getObject("document_id", UUID.class),
-                rs.getObject("kb_id", UUID.class)),
+                rs.getObject("kb_id", UUID.class),
+                // ★ 列是 varchar(16) 上的机器码（14 册 §2.1）⇒ 显式取值再转枚举：
+                //   靠驱动自动映射会在"取值不在枚举里"时给出一个含糊的错，那样反而难查
+                ClassificationLevel.valueOf(rs.getString("classification"))),
         ids.toArray());
   }
 

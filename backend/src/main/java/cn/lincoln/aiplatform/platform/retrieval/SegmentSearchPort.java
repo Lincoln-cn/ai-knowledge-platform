@@ -246,6 +246,14 @@ public interface SegmentSearchPort {
    * @param kbId 所属知识库 id（{@code kb_knowledge_base.id}）。★★ <strong>会话临时的分段这里是 {@code null}</strong>
    *     —— 那一行的 {@code kb_id} 为空（{@code 13 §11.2}），左连接下拿不到库行。这正是前端那条结构性判据（缺失 =
    *     会话域）成立的地方，所以<strong>绝不许</strong>兜底成空串、占位串或"最近的一个库"。
+   * @param classification ★ 这一行的密级（{@code #27}，2026-10-16 补）。它<strong>只被一个消费者读</strong>：引用装配点
+   *     {@code ChatService#retrieve} 把它放进 {@code SourceRef}，于是"本轮引用集合的最高密级"能到会话落库那一刻 （会话累计密级 =
+   *     {@code max(历史引用的 classification)}，写入口见 {@code ConversationRepository#raiseClassification}）。
+   *     <p>★ <strong>为什么它必须有值、且不许兜底</strong>：库里那一列是 {@code V22} 的 {@code not null} （{@code
+   *     kb_segment.classification}，强制继承所属文档），所以"取不到"这一档不存在；而兜底成 {@code PUBLIC}
+   *     会让会话水位<strong>算低</strong> ⇒ 静默降密。
+   *     <p>★ 它也<strong>不是</strong>"版本维度"那类字段（{@code #86} 的守卫读的就是本 record 的全量清单）：
+   *     密级回答"这条引用有多敏感"，回答不了"来自哪一次上传"。
    */
   record Card(
       UUID segmentId,
@@ -254,5 +262,6 @@ public interface SegmentSearchPort {
       String docName,
       String kbName,
       UUID documentId,
-      UUID kbId) {}
+      UUID kbId,
+      ClassificationLevel classification) {}
 }

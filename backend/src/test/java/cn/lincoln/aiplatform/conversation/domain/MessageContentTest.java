@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.conversation.domain;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -180,6 +181,17 @@ class MessageContentTest {
 
   /** 造一条契约字段齐全的引用（{@code index} 由调用方给，便于验"顺序与取值都不被动过"）。 */
   static SourceRef ref(int index, String title) {
-    return new SourceRef(index, title, "报销管理规定.pdf", "制度库", 0.87, null, null, null, null, null);
+    return new SourceRef(
+        index,
+        title,
+        "报销管理规定.pdf",
+        "制度库",
+        0.87,
+        null,
+        null,
+        null,
+        null,
+        null,
+        ClassificationLevel.PUBLIC);
   }
 }

@@ -127,10 +127,15 @@ public final class ChatStreamWriter {
   }
 
   /**
-   * 引用列表 ⇒ 契约那 10 个字段。
+   * 引用列表 ⇒ 契约那 11 个字段。
    *
    * <p>★ 逐字照 {@code stream-types.ts} 的 {@code SourceRef}，一个不多一个不少： 多一个字段前端不读也照常工作，于是它会安静地活很久 ——
    * 而"契约里到底有什么"就变成了两处口径。
+   *
+   * <p>★★ 反过来更要紧：<strong>少一个字段同样不会报错</strong>。所以这个映射是手写的（不是反射 / 不是自动序列化）， 给 record
+   * 加分量时<strong>必须</strong>同批加到这里 —— 否则那个字段在类型上存在、在线上不存在， 而两个测试都可能照样绿（{@code
+   * SourceRefSerializationTest} 验的是 jsonb 那一侧、本类验的是 SSE 这一侧）。 {@code classification}（{@code
+   * #27}）就是这么加上来的：它今天没有前端消费点，但 <strong>契约成员就必须出现在线上</strong>，否则"契约里到底有什么"又多一处口径。
    */
   private static List<Map<String, Object>> refsOf(List<SourceRef> refs) {
     return refs.stream()
@@ -147,6 +152,8 @@ public final class ChatStreamWriter {
               item.put("segmentId", ref.segmentId());
               item.put("documentId", ref.documentId());
               item.put("kbId", ref.kbId());
+              // ★ 枚举 ⇒ 枚举名（Jackson 的默认口径，与库里 varchar(16) 的机器码逐字同值）
+              item.put("classification", ref.classification());
               return item;
             })
         .toList();
