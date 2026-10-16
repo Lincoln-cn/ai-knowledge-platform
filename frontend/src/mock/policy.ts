@@ -72,7 +72,12 @@ export function subjectSetOf(
 export function subjectsOf(user: { id: string; roleId: string }): SubjectSet {
   const role = roles.find((r) => r.id === user.roleId)
   const subjects: Subject[] = [{ kind: 'USER', id: user.id }]
-  if (role) subjects.push({ kind: 'ROLE', id: role.id })
+  // ★★ `#57`：角色主体一律用 **code**（不是 mock 内部 id）—— 共享授权的 `subject.id` 对 `ROLE`
+  //   在库列注释（`V12`）、平台值对象 `KnowledgeBaseGrant`、后端校验 `GrantSubjectAdapter`
+  //   （`roles.findByCode(id)`）与知识库契约四处都是 **code**。
+  //   ★ 这里写成 `role.id` 的症状是**静默不命中**：界面按 code 传（`ShareDialog` 的 `:value="r.code"`），
+  //     而 `subjectKey` 是 `kind:id` ⇒ 键对不上 ⇒ 「共享给角色」永远不生效，表现得与"没共享过"一模一样。
+  if (role) subjects.push({ kind: 'ROLE', id: role.code })
   return subjectSetOf(subjects, role?.permissions ?? [], role?.dataScope ? [role.dataScope] : [])
 }
 
