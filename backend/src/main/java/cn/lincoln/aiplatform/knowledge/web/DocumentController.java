@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.knowledge.application.DocumentService;
 import cn.lincoln.aiplatform.knowledge.application.DocumentView;
 import cn.lincoln.aiplatform.knowledge.application.IngestionProgressView;
 import cn.lincoln.aiplatform.knowledge.application.ReembedKbView;
+import cn.lincoln.aiplatform.knowledge.domain.OrgAssignment;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -55,14 +56,22 @@ public class DocumentController {
    * 按库分页列文档（契约 {@code listDocuments}）。
    *
    * <p>★ 库不可见 ⇒ 404（文档可见性继承库）。
+   *
+   * <p>★★ {@code orgAssignment} 查询参数（{@code #56} 的出口）：{@code ?orgAssignment=UNASSIGNED} 列出
+   * "回填责任部门时按名字匹配不上"的文档（{@code org_id} 为空、原值在 {@code department_legacy}）。 ★ 不传 = {@link
+   * OrgAssignment#ANY} = 加这一档之前的行为，**既有调用方一个字节都不用改**。
+   *
+   * <p>★ 为什么用**状态名**而不是 {@code ?unassigned=true}：这一档回答的是"这些文档处于哪种归属状态"， 而布尔参数在调用点上读不出意图（与 {@code
+   * OrgAssignment} 的类注释同一条）。
    */
   @GetMapping("/{kbId}/documents")
   @PreAuthorize("hasAuthority('knowledge:view')")
   public ApiResponse<PageResult<DocumentView>> list(
       @PathVariable UUID kbId,
       @RequestParam(required = false) Integer page,
-      @RequestParam(required = false) Integer size) {
-    return ApiResponse.ok(documentService.list(kbId, page, size));
+      @RequestParam(required = false) Integer size,
+      @RequestParam(required = false) OrgAssignment orgAssignment) {
+    return ApiResponse.ok(documentService.list(kbId, page, size, orgAssignment));
   }
 
   /**

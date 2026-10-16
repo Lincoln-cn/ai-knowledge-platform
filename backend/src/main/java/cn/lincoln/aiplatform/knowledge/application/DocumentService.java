@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.knowledge.domain.ChunkSource;
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
+import cn.lincoln.aiplatform.knowledge.domain.OrgAssignment;
 import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
 import cn.lincoln.aiplatform.knowledge.domain.PlannedSegment;
 import cn.lincoln.aiplatform.knowledge.domain.SearchText;
@@ -117,15 +118,27 @@ public class DocumentService {
    * 按库分页列文档。★ 库不可见 ⇒ <strong>404</strong>（继承库的可见性，与批 1 同一判定）。
    *
    * <p>★ {@code total} 是本库过滤之后的数，与页内条数同口径。
+   *
+   * <p>★★ {@code orgAssignment}（{@code #56} 的出口）：传 {@link OrgAssignment#UNASSIGNED} 就把
+   * "回填责任部门时按名字匹配不上"的文档列出来 —— 它们 {@code org_id} 为空、原值留在 {@code
+   * department_legacy}（不可更新的存档列）。**列出来才处理得了**：在那之前界面只显示 "责任部门那一列空着"，看起来像"还没填"，而不像"系统需要你处理"。
+   *
+   * @param kbId 知识库 id
+   * @param page 页码（1 起）
+   * @param size 页大小
+   * @param orgAssignment 归属过滤；{@code null} 视为 {@link OrgAssignment#ANY}（不过滤 = 加这一档之前的行为）
    */
   @Transactional(readOnly = true)
-  public PageResult<DocumentView> list(UUID kbId, Integer page, Integer size) {
+  public PageResult<DocumentView> list(
+      UUID kbId, Integer page, Integer size, OrgAssignment orgAssignment) {
     // ★ 先做库的可见性判定：库不可见 ⇒ 其文档也不可见（读 404）
     knowledgeBases.get(kbId);
     int safeSize = size == null ? 20 : Math.min(Math.max(1, size), MAX_PAGE_SIZE);
     int safePage = page == null ? 1 : Math.max(1, page);
-    List<Document> found = documents.findByKbId(kbId, (safePage - 1) * safeSize, safeSize);
-    long total = documents.countByKbId(kbId);
+    OrgAssignment filter = orgAssignment == null ? OrgAssignment.ANY : orgAssignment;
+    // ★ 列表与 total 传**同一个** filter：两处各拼一遍必然漂移（08 §4.4.3 纪律 1）
+    List<Document> found = documents.findByKbId(kbId, (safePage - 1) * safeSize, safeSize, filter);
+    long total = documents.countByKbId(kbId, filter);
     return PageResult.of(
         found.stream().map(DocumentView::from).toList(), total, safePage, safeSize);
   }

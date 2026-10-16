@@ -97,7 +97,21 @@ export interface Segment {
 
 export interface DocumentQuery extends PageQuery {
   status?: DocumentStatus
+  /**
+   * 按**责任部门归属状态**过滤（`#56`）。
+   *
+   * - `UNASSIGNED`：只列**待补归属**的文档 —— `V27` 把责任部门从自由字符串换成 `org_id` 时
+   *   按名字回填，**匹配不上的原值留在 `department_legacy`**（不可更新的存档列），而它们此前
+   *   **没有任何界面入口能列出来**（`#56`：开发库 112 篇里 3 篇）。指定归属后即从这一档消失。
+   * - `ASSIGNED`：只列已有归属的。不传：不过滤（既有行为）。
+   *
+   * ★ 用状态名而不是布尔（`?unassigned=true`）：调用点上要能读出意图。
+   */
+  orgAssignment?: OrgAssignment
 }
+
+/** 责任部门归属过滤的三态（与后端 `OrgAssignment` 同源，`07 §11.4 ③`） */
+export type OrgAssignment = 'ANY' | 'ASSIGNED' | 'UNASSIGNED'
 
 export interface SegmentQuery extends PageQuery {
   documentId?: string

@@ -19,8 +19,19 @@ public interface DocumentRepository {
 
   Document save(Document document);
 
-  /** 按库分页查文档（创建时间倒序）。★ 软删的不进列表。 */
-  List<Document> findByKbId(UUID kbId, int offset, int limit);
+  /**
+   * 按库分页查文档（创建时间倒序）。★ 软删的不进列表。
+   *
+   * <p>★★ {@code orgFilter} 是 {@code #56} 的出口：{@link OrgAssignment#UNASSIGNED} 把
+   * "回填时匹配不上责任部门"的文档列出来（它们 {@code org_id} 为空、原值留在 {@link Document#departmentLegacy()}）。★
+   * 三态而不是布尔：调用点上能读出意图。
+   *
+   * @param kbId 知识库
+   * @param offset 偏移（0 起）
+   * @param limit 条数
+   * @param orgFilter 归属过滤（{@link OrgAssignment#ANY} = 不过滤，与加这一档之前的行为一致）
+   */
+  List<Document> findByKbId(UUID kbId, int offset, int limit, OrgAssignment orgFilter);
 
   /**
    * 按库查<strong>全部</strong>文档（不分页）。★ 给「库级重新向量化」这类要遍历整库的动作用。
@@ -30,8 +41,13 @@ public interface DocumentRepository {
    */
   List<Document> findAllByKbId(UUID kbId);
 
-  /** 与 {@link #findByKbId} 同条件的总数。★ 过滤之后的数，不能是表行数。 */
-  long countByKbId(UUID kbId);
+  /**
+   * 与 {@link #findByKbId} 同条件的总数。★ 过滤之后的数，不能是表行数。
+   *
+   * <p>★ 必须与列表<strong>同一份谓词、同一个 orgFilter</strong>：两处各拼一遍会出现 "页里有 3 条、total 说 7 条"那种没人会怀疑的读数（{@code
+   * 08 §4.4.3} 纪律 1）。
+   */
+  long countByKbId(UUID kbId, OrgAssignment orgFilter);
 
   /**
    * 按状态分组计数（库级进度聚合，{@code 03 §3.4}）。

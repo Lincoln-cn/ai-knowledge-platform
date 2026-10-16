@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.knowledge.infrastructure;
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
+import cn.lincoln.aiplatform.knowledge.domain.OrgAssignment;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
@@ -58,20 +59,22 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
   }
 
   @Override
-  public List<Document> findByKbId(UUID kbId, int offset, int limit) {
+  public List<Document> findByKbId(UUID kbId, int offset, int limit, OrgAssignment orgFilter) {
     // 领域给 offset/limit；Spring Data 要「第几页、每页几条」。limit 恒 > 0（调用方已归一化）
-    return jpa.findAll(filter(kbId), PageRequest.of(offset / limit, limit, sort())).getContent();
+    return jpa.findAll(filter(kbId, orgFilter), PageRequest.of(offset / limit, limit, sort()))
+        .getContent();
   }
 
   @Override
-  public long countByKbId(UUID kbId) {
+  public long countByKbId(UUID kbId, OrgAssignment orgFilter) {
     // ★ 与 findByKbId 共用同一份谓词 —— 两处各拼一遍必然漂移
-    return jpa.count(filter(kbId));
+    return jpa.count(filter(kbId, orgFilter));
   }
 
   @Override
   public List<Document> findAllByKbId(UUID kbId) {
-    return jpa.findAll(filter(kbId), sort());
+    // ★ 遍历整库的动作（重新向量化）**不按归属过滤**：过滤会把待补归属的文档静默排除在动作之外
+    return jpa.findAll(filter(kbId, OrgAssignment.ANY), sort());
   }
 
   @Override
@@ -92,23 +95,39 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
   }
 
   /**
-   * ★★ 列表 / 计数 / 进度分母<strong>唯一</strong>的谓词来源：软删 + 所属库 + <strong>密级上限</strong>（{@code #25}）。
+   * ★★ 列表 / 计数 / 进度分母<strong>唯一</strong>的谓词来源：软删 + 所属库 + <strong>密级上限</strong>（{@code #25}） +
+   * <strong>归属三态</strong>（{@code #56}）。
    *
-   * <p>★ 为什么三处必须共用它：{@code total} 与 {@code list} 各拼一遍谓词，就会出现"页里有 3 条、 total 说 7 条"那种没人会怀疑的读数（{@code
-   * 08 §4.4.3} 纪律 1 的原话）。
+   * <p>★ 为什么这几处必须共用它：{@code total} 与 {@code list} 各拼一遍谓词，就会出现"页里有 3 条、 total 说 7
+   * 条"那种没人会怀疑的读数（{@code 08 §4.4.3} 纪律 1 的原话）。
    *
    * <p>★ 密级那一轴读的是当前范围的上限（{@code ScopeFilter#maxClassification}），绑定值是它的 {@link
    * ClassificationLevel#ordinal()} —— 与检索侧 {@code s.classification_rank <= ?} <strong>同源</strong>。
    * 上限为 {@code null} ⇒ 比较恒假 ⇒ fail-closed。
+   *
+   * <p>★ 归属那一轴（{@code #56}）：{@link OrgAssignment#UNASSIGNED} 用 {@code isNull(orgId)} ——
+   * 它列的正是"回填时按名字匹配不上"的那批文档（{@code org_id} 为空、原值在 {@code department_legacy}）。
    */
-  private Specification<Document> filter(UUID kbId) {
+  private Specification<Document> filter(UUID kbId, OrgAssignment orgFilter) {
     Short ceiling = ceilingRank();
+    // ★ 三态映射成二值：ANY ⇒ null（不加这一条谓词），其余 ⇒ Boolean（cb.isNull / cb.isNotNull）
+    Boolean orgAssigned =
+        switch (orgFilter == null ? OrgAssignment.ANY : orgFilter) {
+          case ANY -> null;
+          case ASSIGNED -> Boolean.TRUE;
+          case UNASSIGNED -> Boolean.FALSE;
+        };
     return (root, query, cb) ->
         cb.and(
             cb.isNull(root.get("deletedAt")),
             cb.equal(root.get("kbId"), kbId),
             // ★ 传 null 时 `<=` 恒假（SQL 三值逻辑），无需再写一条分支 —— 这正是 fail-closed 的载体
-            cb.lessThanOrEqualTo(root.get("classificationRank"), ceiling));
+            cb.lessThanOrEqualTo(root.get("classificationRank"), ceiling),
+            // ★ null ⇒ 这一条不参与（ConstantExpression 为 null 时 Hibernate 会当成"恒真"，
+            //   所以必须显式跳过，不能把 null 传进 isNull/isNotNull）
+            orgAssigned == null
+                ? cb.conjunction()
+                : (orgAssigned ? cb.isNotNull(root.get("orgId")) : cb.isNull(root.get("orgId"))));
   }
 
   /**
