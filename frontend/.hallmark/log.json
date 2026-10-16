@@ -1,5 +1,23 @@
 [
   {
+    "date": "2026-10-16",
+    "scope": "app",
+    "round": 3,
+    "macrostructure": "Workbench",
+    "theme": "Cobalt",
+    "theme_axes": "light / grotesk-sans / cool",
+    "register": "Editorial（★ 第三轮新增的排印档：分面用发丝线而不是卡片边框 · 三段节奏可辨 64/40/24 · 字重 400↔700 · 非对称优先 · 不用 eyebrow）",
+    "nav": "报头 60px + 双发丝线 + 全宽分组面板（每个目的地带一句话描述）+ ⌘K（N6/N9 的 editorial 语汇，形态按 12 个目的地的 app 需要调整）",
+    "enrichment": "不变（有界 art 层：页头 hatch 带 / 沉浸页 wash / 空态线稿 / 石墨带内 hatch）",
+    "brief": "知识助理平台 · 第三轮：使用者「需要一个更现代的设计 + 页面的功能还是太紧凑了 + 现在的设计还是偏向于一个传统的管理平台」",
+    "why": "先做了一次预检 + 诊断 + 提案（把全库断言过的选择器 grep 了一遍才动手），使用者选定：基调 Editorial · 主因「单页堆的功能太多」· 推进方式「先系统层 + 2 页试点」。诊断结论：**问题不在配色** —— 冷调近白 + 单一钴蓝 + 三字族本身就是现代 SaaS 语汇。「传统管理平台」的观感来自三处执行：① 全站同构（19 个路由只有 3 种骨架）② 线条密度过高（.panel/.card 全是 1px 实线，连过滤条都套 panel）③ 密度与层级都太平（页边距/区块间距/卡片内边距 24/16/16 几乎相等；字号 12-13-14 是增量不是比率；标题 600 对正文 400 只差 200 单位）。",
+    "preserved": "★ 色板与字族一个都没动（诊断的结论是'问题不在配色'）· 4pt 刻度骨架 · 令牌单行道 · EP 单向桥 · 契约冻结 · 依赖白名单",
+    "changed": "字号阶梯重排（14px 档消失：12/13/15/18/22/28/36/44）· 角色间距令牌（--page-pad-* / --band-gap / --section-gap / --grid-gap / --card-pad / --row-pad-y）· 圆角各松一档（8/12/999）· --ring-hairline · 版面度量（--content-max / --measure）· 报头 48→60 + 双发丝线 + 全宽面板 · 去盒化（el-card 靠色阶不靠边框）· 表格去底色 + 行高 34→44 + 字号 13→15 · 说明文字移出界面",
+    "scope_this_round": "系统层（tokens.css / design.md / index.css / element-plus.css / PageHeader.vue / _shell/Index.vue / routes.ts）+ 2 页试点（overview 工作台 / models 模型管理）。其余 17 个路由的逐页动作见 design.md §『第三轮进度台账』",
+    "frozen_hooks": "本轮把全库断言过的选择器 grep 了一遍并登记进 design.md §『冻结的 DOM 钩子』（.topbar / .nav-item / .nav-trigger / .hint / .page-head / .stat×4 / .app-row / .entry / .app-name / .model-card / .mc-facts .fact / .grid / .filters .el-select）★ 推论：使用者要的『单页功能太多』不许靠隐藏闸门断言到的东西来实现",
+    "verification": "静态：check_design.py / check_template_tags.py / verify_refs.py 三道 exit 0 · typecheck exit 0 · build:mock exit 0。★ DOM 级闸门（check_theme / smoke_test / verify_features / shot_sweep / check_canvas / check_flow_walkthrough）**未跑** —— dev server 未运行，而项目纪律是服务由使用者用启动器起、agent 只做只读探测。check_canvas.py 风险最高（正文 14→15px）"
+  },
+  {
     "date": "2026-09-25",
     "scope": "app",
     "round": 2,

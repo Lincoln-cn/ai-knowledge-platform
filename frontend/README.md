@@ -4,7 +4,9 @@
 但 mock 与真实后端是**同一契约的两种实现**，切换只改一个环境变量。
 
 **依赖白名单**：`element-plus` · `@element-plus/icons-vue` · `pinia` · `vue-router` · `axios` ·
-`dayjs` · `lodash-es` · `mitt` · `echarts` · `@logicflow/*`（编排画布）· `@antv/layout`。
+`dayjs` · `lodash-es` · `mitt` · `echarts` · `@logicflow/*`（编排画布）· `@antv/layout` ·
+`gsap`（★ 唯一一条**非 OSI 许可**的依赖：登录页多层光场的动效；零依赖；
+许可与使用情形见根目录 [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) 的 `gsap` 一节）。
 **不用**任何商业基座框架及其 CRUD 模板产物，不用 `vuex`，不用 `moment`（冗余的日期库），
 不用非 ESM 版的 `lodash`。字体自托管（OFL-1.1），不引外部 CDN。
 

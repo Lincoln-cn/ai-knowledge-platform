@@ -24,6 +24,36 @@
 | `zrender` | 5.6.x | `echarts` 的渲染引擎（传递依赖，此处列出以履行署名） | **BSD-3-Clause** |
 | `@logicflow/core` | 1.2.x | 编排画布内核 | **Apache-2.0** |
 | `@logicflow/extension` | 1.2.x | 编排画布扩展 | **Apache-2.0** |
+| `gsap` | 3.15.x | 登录页多层光场的动效（沉浸页装饰件的运动；**无任何依赖**） | ⚠️ **Standard "No Charge" License —— 非 OSI 许可，见下** |
+
+### ⚠️ `gsap` —— 本仓库唯一一条非 OSI 许可的运行时依赖
+
+`gsap` 的 `package.json` 里 `license` 字段**不是** SPDX 标识，而是一句话：
+
+```
+Standard 'no charge' license: https://gsap.com/standard-license.
+```
+
+许可原文见 <https://gsap.com/community/standard-license/>（生效 2025-04-30，最后修改 2025-05-30）。
+实读要点（**逐条对着原文抄，不是按印象**）：
+
+- **免费**：「Can I really use GSAP in commercial projects without paying anything? **Yes, really!**
+  Commercial usage is covered under the standard license.」—— 含此前「会员专属」的插件（SplitText、MorphSVG 等）。
+- **允许**：在「任何网站、Web 应用或数字界面」上使用（`Permitted Uses`）。
+- **禁止**：用于「让用户无代码构建动画、与 Webflow 的可视化动画能力竞争」的工具（`Prohibited Uses`）；
+  反向工程以制造竞品；**移除或修改 GSAP 产品上的专有声明或品牌**。
+- **归属**：全部知识产权属 Webflow，本许可**不转移任何所有权**。
+- **终止与修订**：Webflow 可在你违约时终止许可；并**保留随时修改条款的权利**（继续使用即视为接受）。
+
+**本仓库的使用情形**：一个自托管的企业级 RAG 平台（知识库 / 应用编排 / 权限），
+**不是**可视化动画构建器 ⇒ 属于 `Permitted Uses`，不触碰任何 `Prohibited Use`。
+本条声明本身就是"不移除专有声明"那一款的履行方式。
+
+> ★ 把这条记在这里的原因不只是合规：它是**整张表里唯一一条可以被对方单方面修改的许可**。
+> 对本仓库"Apache-2.0、准备开源"的定位来说，这是一个**显式的、被记录下来的取舍**，
+> 不是被忽略的细节。若要回到"全是 OSI 许可"的依赖面，替代品是 MIT 的 `motion`
+> （见 `frontend/README.md` 的依赖白名单注记）。
+
 
 ## 构建期依赖
 

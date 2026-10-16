@@ -80,7 +80,7 @@
       <el-button size="small" @click="fetchList">重试</el-button>
     </div>
 
-    <div v-else v-loading="loading" class="grid">
+    <div v-else v-loading="loading" class="grid enter">
       <el-card
         v-for="a in list"
         :id="`market-card-${a.id}`"

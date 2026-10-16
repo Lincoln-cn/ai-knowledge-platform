@@ -46,7 +46,13 @@
               @keydown="onMenuKeydown($event, itemIndex)"
             >
               <el-icon aria-hidden="true"><component :is="item.icon" /></el-icon>
-              <span class="menu-label">{{ item.label }}</span>
+              <span class="menu-text">
+                <span class="menu-label">{{ item.label }}</span>
+                <!-- ★ 第三轮：每个目的地带一句话描述。
+                     11 个目的地靠"记住它在哪个分组下"是找不到的；
+                     面板化之后判据变成"扫一眼就知道这个是干什么的"。 -->
+                <span v-if="item.desc" class="menu-desc">{{ item.desc }}</span>
+              </span>
               <span v-if="activePath === item.path" class="menu-flag">当前</span>
             </router-link>
           </div>
@@ -54,6 +60,12 @@
       </nav>
 
       <div class="grow" />
+
+      <!-- meta 行（★ 第三轮 · Editorial）：报头右侧的 mono 大写元信息。
+           显示当前数据链路（MOCK / LIVE）—— 这是**真实值**（`USE_MOCK`），不是装饰。
+           为什么值得占一个位置：本工程的纪律是"mock 与真后端是同一契约的两种实现"，
+           而"我现在看的是哪一种"是排错时要回答的第一个问题。 -->
+      <span class="meta hd-mode">{{ dataMode }}</span>
 
       <button
         ref="hintEl"
@@ -91,7 +103,17 @@
     </header>
 
     <main class="main scroll-y" @scroll.passive="onScroll">
-      <router-view />
+      <!-- ★ 导航切换（第三轮）：`mode="out-in"` + 极短交叉淡入。
+           为什么必须 out-in：不加模式时新旧两页会同时在 DOM 里，而 `main` 是单列 flex 容器
+           ⇒ 那一瞬间高度算错（这就是"换页闪一下"的根因）。out-in 同一时刻只有一个孩子。
+           为什么**不加 `:key`**：加了之后 `?conversationId=` 这类 query 变化也会整页重挂载
+           ⇒ 会话页 / 知识库详情的状态会被清掉。不加 key 时只有"组件真的换了"才过渡，正是想要的。
+           副作用（想要的）：过渡期间 `main` 短暂无子节点 ⇒ 滚动位置归零 ⇒ **换页即回顶部**。 -->
+      <router-view v-slot="{ Component }">
+        <Transition name="route" mode="out-in">
+          <component :is="Component" />
+        </Transition>
+      </router-view>
     </main>
 
     <CommandPalette v-model="paletteOpen" />
@@ -106,7 +128,7 @@ import { ElMessage } from 'element-plus'
 import BrandMark from '@/components/BrandMark.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import AccountDialog from './AccountDialog.vue'
-import { APP_TITLE } from '@/config/env'
+import { APP_TITLE, USE_MOCK } from '@/config/env'
 import { canReach } from '@/lib/reach'
 import { navGroups } from '@/router/routes'
 import { useSessionStore } from '@/stores/session'
@@ -127,6 +149,9 @@ const isMac = /mac/i.test(navigator.userAgent)
 const modKey = isMac ? '⌘' : 'ctrl'
 const shortcutLabel = isMac ? '⌘K' : 'Ctrl+K'
 const shortcutKeys = isMac ? 'Meta+K' : 'Control+K'
+
+/* 报头 meta 行的内容：当前数据链路。真实值，不是装饰。 */
+const dataMode = USE_MOCK ? 'MOCK' : 'LIVE'
 
 /* 取最长匹配的那个导航项为高亮项。
    否则 /assistants/prompts 会让 /assistants 与它同时高亮。 */
@@ -279,15 +304,23 @@ const onCommand = async (command: string) => {
   flex-direction: column;
 }
 
-/* 带框顶栏（Cobalt 签名 5）：通栏 + 单条底部发丝线。
+/* 报头（★ 第三轮：48 → 60px，单线 → 双发丝线）。
    全工程唯一允许 backdrop-filter 的位置。 */
 .topbar {
-  height: 48px;
+  position: relative;
+  height: 60px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: 0 var(--space-md);
+  /* ★ 报头内容与**居中后的页内容**对齐在同一栅格上。
+     页面有 `max-width: --content-max` + 居中 + 40px 内边距，而报头是全宽的，
+     所以用 max() 同时表达"窄屏走 40px"与"宽屏走居中偏移 + 40px"。
+     一行 CSS 省掉一层 DOM 包装 —— 少一层就少一处会漂移的地方。 */
+  padding-inline: max(
+    var(--page-pad-inline),
+    calc((100% - var(--content-max)) / 2 + var(--page-pad-inline))
+  );
   background: color-mix(in oklch, var(--color-surface) 72%, transparent);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--color-rule-2);
@@ -295,6 +328,20 @@ const onCommand = async (command: string) => {
   transition:
     background-color var(--dur-short) var(--ease-out),
     border-color var(--dur-short) var(--ease-out);
+}
+
+/* ★ 双发丝线（Editorial 的报头签名）：第二条线画在 3px 之下。
+   用伪元素而不是第二个 border —— border 只有上下各一条，而第二条线要**恒定**
+   是次线，只有第一条线随滚动收紧（见 .topbar.scrolled）。 */
+.topbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 1px;
+  background: var(--color-rule-2);
+  pointer-events: none;
 }
 
 /* 页面滚动后顶栏与内容的分界收紧一档：从次线变成主线 */
@@ -314,8 +361,9 @@ const onCommand = async (command: string) => {
 .brand-name {
   font-family: var(--font-display);
   font-size: var(--text-md);
-  font-weight: 600;
+  font-weight: 700;
   line-height: var(--leading-tight);
+  /* ★ 中文平台名不给负字距 —— `--tracking-display` 只许加在纯拉丁上（撞笔画） */
   letter-spacing: var(--tracking-body);
 }
 
@@ -341,7 +389,7 @@ const onCommand = async (command: string) => {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2xs);
-  height: 28px;
+  height: 34px;
   padding: 0 var(--space-xs);
   border: none;
   border-radius: var(--radius);
@@ -354,7 +402,8 @@ const onCommand = async (command: string) => {
   white-space: nowrap;
   transition:
     background-color var(--dur-micro) var(--ease-out),
-    color var(--dur-micro) var(--ease-out);
+    color var(--dur-micro) var(--ease-out),
+    transform 100ms var(--ease-out);
 }
 
 .nav-item:hover {
@@ -362,8 +411,10 @@ const onCommand = async (command: string) => {
   color: var(--color-ink);
 }
 
+/* ★ 按下：触觉隐喻（鼠标与触摸都成立）。不做 hover 抬升 —— 那是被点名的模板动作。 */
 .nav-item:active {
   background: var(--color-sunken);
+  transform: translateY(1px);
 }
 
 .nav-item.active,
@@ -384,17 +435,20 @@ const onCommand = async (command: string) => {
   transform: rotate(180deg);
 }
 
+/* ★ 第三轮：小下拉 → **全宽式面板**（11 个目的地从"靠记忆找"变成"扫一眼"）。
+   面板给每个目的地配一句话描述（`NavItem.desc`），所以宽度从 200 提到 320。 */
 .menu {
   position: absolute;
   top: calc(100% + var(--space-2xs));
   left: 0;
-  min-width: 200px;
+  min-width: 320px;
   display: flex;
   flex-direction: column;
-  padding: var(--space-2xs);
+  gap: var(--space-3xs);
+  padding: var(--space-xs);
   background: var(--color-surface-2);
-  border: 1px solid var(--color-rule);
-  border-radius: var(--radius);
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-float);
   z-index: var(--z-dropdown);
   animation: menu-in var(--dur-short) var(--ease-out) both;
@@ -422,7 +476,13 @@ const onCommand = async (command: string) => {
   color: var(--color-ink-2);
   transition:
     background-color var(--dur-micro) var(--ease-out),
-    color var(--dur-micro) var(--ease-out);
+    color var(--dur-micro) var(--ease-out),
+    transform 100ms var(--ease-out);
+}
+
+.menu-item:active {
+  background: var(--color-sunken);
+  transform: translateY(1px);
 }
 
 .menu-item:hover {
@@ -430,18 +490,30 @@ const onCommand = async (command: string) => {
   color: var(--color-ink);
 }
 
-.menu-item:active {
-  background: var(--color-sunken);
-}
-
 .menu-item.active {
   color: var(--color-ink);
-  font-weight: 500;
+  font-weight: 700;
+}
+
+/* 目的地的文字块：名称一行 + 描述一行（★ 第三轮）。
+   描述用 12px + `--leading-tight`，与名称形成两级但不抢戏。 */
+.menu-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .menu-label {
-  flex: 1;
   min-width: 0;
+}
+
+.menu-desc {
+  font-size: var(--text-2xs);
+  line-height: var(--leading-tight);
+  color: var(--color-muted);
+  white-space: normal;
 }
 
 .menu-flag {
@@ -551,6 +623,31 @@ const onCommand = async (command: string) => {
   flex: 1;
   min-width: 0;
   background: var(--color-paper);
+}
+
+/* ── 导航切换（★ 第三轮） ──────────────────────────────────────────────
+   出场 72ms / 入场 160ms —— canon 要求出场 ≈ 入场的 0.6～0.75，
+   总耗时压在 ~230ms，换页不拖。只动 opacity 与 transform。 */
+.route-enter-active {
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.route-leave-active {
+  transition:
+    opacity calc(var(--dur-fast) * 0.45) var(--ease-in),
+    transform calc(var(--dur-fast) * 0.45) var(--ease-in);
+}
+
+.route-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.route-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 /* 降低动效：不许有位移，只留透明度交叉淡入 */

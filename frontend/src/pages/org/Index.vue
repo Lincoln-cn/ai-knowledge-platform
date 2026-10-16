@@ -1,6 +1,14 @@
 <template>
-  <div class="org-page">
-    <PageHeader title="组织机构" desc="部门树 —— 数据权限的载体（共享给部门、按部门筛文档）" />
+  <!-- ★ 第三轮：根元素必须同时挂 `page` 与 `org-page`。
+       `page` 才承载全局页骨（40px 内边距 / `--content-max` 居中 / 三段节奏）；
+       `org-page` 是 `verify_features.py` 里 15 条断言的**作用域前缀**（`.org-page .el-tree-node`
+       等），所以两个类名都不能少 —— 一个是设计，一个是读数。
+       ⚠️ 这条约束以前没有读数 ⇒ 本页曾静默地贴着窗口边缘渲染。现在有闸门了
+       （`check_design.py` 的「页面骨架口径」）。 -->
+  <div class="page org-page">
+    <PageHeader title="组织机构" desc="部门树 —— 数据权限的载体（共享给部门、按部门筛文档）">
+      <template #meta>共 {{ flat.length }} 个部门</template>
+    </PageHeader>
 
     <div class="org-split">
       <!-- 左：树（默认全展开：部门层级通常不深，收起来反而多一次点击） -->
@@ -44,13 +52,16 @@
             <code class="micro muted">{{ selected.code }}</code>
           </div>
 
-          <!-- ★ 身份与表达必须分开（用户 2026-10-08 订正）：可变的东西不许参与身份判定。
-               初稿这里写的是"改名要重新向量化"，那是把可变展示名当成了身份的一部分 —— 方向错了。 -->
+          <!-- ★ 第三轮：这块说明从 5 行收到 2 行 —— 界面要回答"这个字段能不能改"，
+               不是讲完整的设计理由。深层理由留在下面（从界面移出去，不是删掉）：
+               · 身份与表达必须分开：`code` 参与共享主体与审计，`name` 只用于显示
+               · 同级重名的后果是「一个部门看到另一个部门的文档」**且不报错**（静默）
+               · 已入库的分段里留着旧名字（那是入库时的快照），新入库的用新名字
+
+               ⚠️ 断言面：`verify_features.py:357` 要求 `.detail-panel` 的 innerText 里
+                 同时有 `TECH`（来自上面的 .panel-hd）与 **「不可改」**。收短时必须保住这两个词。 -->
           <div class="notice">
-            展示名只用于显示，<code>code</code> 才是身份且<strong>不可改</strong>（共享主体与审计里用它）。
-            展示名可改，但<strong>同级不能重名</strong> —— 重名会让"按名字比较"的地方把两个部门混成一个，
-            表现为一个部门看到另一个部门的文档，且不报错。权限判定一律走 <code>code</code> 与 <code>path</code>，
-            与展示名无关。已入库的分段里仍留着旧名字（那是入库时的快照），新入库的用新名字。
+            <code>code</code> 是身份且<strong>不可改</strong>；展示名可改，同级不能重名。
           </div>
 
           <el-form label-width="88px" class="detail-form">
@@ -341,44 +352,56 @@ onMounted(load)
 </script>
 
 <style scoped>
+/* ★ 第三轮重写（本页此前是"没有按设计落地"的典型）：
+   · 根元素补上 `.page`（页骨：内边距 / 居中 / 节奏）—— 原来一个都没有
+   · 删掉一条 `.notice { font-size: 12px; color: var(--el-text-color-secondary) }` ——
+     那是**页面里直接写 `--el-*`**（design.md 明令禁止），而且把说明压到 12px，
+     又小又挤正是本页"没落地"的第二个原因。全局 `.notice` 现在自己是对的。
+   · 主从两栏的间距与面板内边距改走角色令牌（--grid-gap / --card-pad） */
 .org-split {
   display: grid;
   grid-template-columns: 360px 1fr;
-  gap: var(--space-md);
+  gap: var(--grid-gap);
   align-items: start;
 }
+
 .tree-panel,
 .detail-panel {
-  padding: var(--space-md);
+  padding: var(--card-pad);
 }
+
 .panel-hd {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  margin-bottom: var(--space-sm);
+  margin-bottom: var(--space-md);
 }
+
 .panel-hd .h4 {
   margin-right: auto;
+  /* 面板标题抬到卡片标题档（18px / 700）—— `.h4` 的全局值（15px / 500）层级不够 */
+  font-size: var(--text-md);
+  font-weight: 700;
 }
+
 .node {
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
 }
+
 .node.off {
   opacity: 0.55;
 }
+
 .node-name {
   font-weight: 500;
 }
+
 .detail-form {
-  margin-top: var(--space-sm);
+  margin-top: var(--space-md);
 }
-.notice {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  line-height: 1.6;
-}
+
 @media (max-width: 900px) {
   .org-split {
     grid-template-columns: 1fr;

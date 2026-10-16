@@ -155,9 +155,41 @@ def main() -> int:
         print(f"  被切出画布节点      {r['clipped']}（应 0）")
         print(f"  卡内可滚动          {r['bodyScrolls']}")
         print(f"  节点名换行          {r['titleWrapped']} 个（应 0）{r['wrappedTexts'] if r['wrappedTexts'] else ''}")
-        print(f"  节点名被截断        {r['titleTruncated']} 个")
+        print(f"  节点名被截断        {r['titleTruncated']} 个（应 0）")
         print(f"  控制台错误          {errs if errs else 0}")
+
+        # ★ 2026-10-16：此前本函数**永远 return 0** —— 上面那些"（应 0）"只是打印，
+        #   没有任何断言 ⇒ 这是一道**不可能变红的闸门**。
+        #   实证：第三轮把全局 h4 从 16px 抬到 18px 后，节点名被截断 2 个
+        #   （A/B：h4 回到 16px 时是 0 个），它照样 exit 0。
+        #   ★ 一个不可能变红的闸门比一个偶发失败的闸门更危险 —— 后者训练人重跑，
+        #     前者训练人"整套都不看了"（design.md 已有同款判据）。
+        problems: list[str] = []
+        if r["clipped"]:
+            problems.append(f"被切出画布节点 {r['clipped']} 个（应 0）")
+        if r["overlap"]:
+            problems.append(f"重叠对数 {r['overlap']}（应 0）")
+        if r["titleWrapped"]:
+            problems.append(f"节点名换行 {r['titleWrapped']} 个（应 0）：{r['wrappedTexts']}")
+        if r["titleTruncated"]:
+            problems.append(f"节点名被截断 {r['titleTruncated']} 个（应 0）")
+        try:
+            if float(r["scale"]) < 0.45:
+                problems.append(f"fitView 缩放 {r['scale']} < 0.45（节点被压到读不了）")
+        except (TypeError, ValueError):
+            problems.append(f"fitView 缩放读不出来：{r['scale']!r}")
+        if errs:
+            problems.append(f"控制台错误：{errs}")
+
         b.close()
+
+    if problems:
+        print("\n✗ 画布几何不合格：")
+        for p in problems:
+            print("  - " + p)
+        return 1
+
+    print("\n✓ 画布几何：无截断 / 无换行 / 无重叠 / 无被切 / 缩放达标 / 控制台干净")
     return 0
 
 

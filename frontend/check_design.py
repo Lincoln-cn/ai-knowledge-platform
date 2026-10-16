@@ -2,8 +2,10 @@
 
 对 `src/**` 逐文件扫描，按 design.md 的硬约束打分。任一维度非零即列出。
 
-★ 另有一组**非令牌**的口径断言：引用卡片的「来源标签」（`RefPanel` 的会话域分支）——
-  它同样是"用户看的东西必须对"这一类，且是纯静态可查的（见文末 `ref_source_tag_problems`）。
+★ 另有一组**非令牌**的口径断言，同样是"用户看的东西必须对"这一类，且是纯静态可查的：
+  ① 引用卡片的「来源标签」（`RefPanel` 的会话域分支）—— 见文末 `ref_source_tag_problems`；
+  ② 页面骨架（应用页必须挂全局页骨 `.page`）—— 见文末 `page_frame_problems`。
+  ★ 这两组都**不受 `--file` 影响**：它们是全局不变量，永远参与判定。
 
 用法：
     python check_design.py                # 全量扫描
@@ -173,6 +175,82 @@ STREAM_SELECTS_FIXTURE = re.compile(
 )
 
 
+# ── 页面骨架口径（★ 第三轮新增：应用页必须吃到 `.page` 页骨） ────────────────
+#
+# ★ 为什么要有这条：第三轮把"页内边距 / 居中 / 节奏"全部收进全局 `.page`
+#   （src/styles/index.css），但 `.page` 只是一个**约定**，不是强制 ——
+#   一个页面只要把根元素的类名写成别的（`<div class="org-page">`），
+#   它就**静默地**拿不到 40px 内边距、`--content-max` 居中与三段节奏。
+#
+#   实际发生的事：`/org` 就是这样漏掉的（使用者 2026-10-16 报「组织机构页没有按设计落地」）。
+#   它的 scoped 里甚至没有 `.org-page` 的样式 —— 类名只是个空壳，页面贴着窗口边缘渲染。
+#   而 19 个页面里只有它一个，所以**肉眼看不出规律**：这类"约定没被守住"必须变成读数。
+#
+# ★ 判据是结构性的（根元素的 class 列表里有没有 `page`），不是"看着对不对"。
+#   沉浸页与满高画布**不是漏**，是有意为之 ⇒ 它们进 EXEMPT_ROOTS，且每条都要写理由。
+PAGE_ROOT_FILES = ("src/pages/*/Index.vue", "src/pages/*/*/Index.vue")
+
+EXEMPT_ROOTS = {
+    "src/pages/_shell/Index.vue": "外壳本身，不是页面",
+    "src/pages/login/Index.vue": "沉浸页：深色拍子 + 表单左栏自成一屏",
+    "src/pages/conversation/Index.vue": "对话页：三栏满高（历史 / 消息 / 引用），自己管滚动",
+    "src/pages/conversation/public/Index.vue": "沉浸页：免登录公开问答",
+    "src/pages/workflow/Index.vue": "编排画布：flex:1 吃满剩余高度（禁止 100vh）",
+}
+
+TAG_ANY = re.compile(r"<([a-zA-Z][\w-]*)\b([^>]*)>")
+CLASS_ATTR = re.compile(r'class="([^"]*)"')
+
+
+def root_class_list(path: Path) -> list[str] | None:
+    """取页面根元素的 class 列表。
+
+    跳过 `<template>`（它常被用作 `v-if` 的包裹层，不是渲染出来的根），
+    取**第一个真正的元素**。取不到返回 None（那是另一类问题，由本函数之外报）。
+    """
+    text = path.read_text(encoding="utf-8", errors="replace")
+    blocks = template_blocks(text)
+    if not blocks:
+        return None
+    body = strip_html_comments(blocks[0])
+    for m in TAG_ANY.finditer(body):
+        if m.group(1).lower() == "template":
+            continue
+        cm = CLASS_ATTR.search(m.group(2))
+        return cm.group(1).split() if cm else []
+    return None
+
+
+def page_frame_problems() -> list[str]:
+    """应用页是否挂上了全局页骨 `.page` —— 返回问题清单（空 = 通过）。"""
+    problems: list[str] = []
+    seen: set[str] = set()
+
+    for pattern in PAGE_ROOT_FILES:
+        for path in sorted(ROOT.glob(pattern)):
+            rel = path.relative_to(ROOT).as_posix()
+            seen.add(rel)
+            classes = root_class_list(path)
+            if classes is None:
+                problems.append(f"{rel}：读不到根元素（模板为空或结构异常）—— 这条口径没有读数了")
+                continue
+            if "page" in classes:
+                continue
+            if rel in EXEMPT_ROOTS:
+                continue
+            problems.append(
+                f"{rel}：根元素 class={classes or '（无 class）'}，**没有 `.page`** ⇒ "
+                "拿不到 40px 内边距 / `--content-max` 居中 / 三段节奏。"
+                "要么加上 `page`，要么在 EXEMPT_ROOTS 里登记并写明理由"
+            )
+
+    # 豁免清单必须跟着代码收缩：登记了豁免、但那个文件已经不在了 ⇒ 清单在腐烂
+    for rel, why in EXEMPT_ROOTS.items():
+        if rel not in seen:
+            problems.append(f"EXEMPT_ROOTS 里的 {rel}（理由：{why}）**已经不存在了** —— 请删掉这一条")
+    return problems
+
+
 def ref_source_tag_problems() -> list[str]:
     """引用卡片的来源标签口径 —— 返回问题清单（空 = 通过）。"""
     problems: list[str] = []
@@ -256,7 +334,6 @@ class Report:
     def __init__(self) -> None:
         self.per_file: dict[str, dict[str, int]] = {}
         self.global_hits: dict[str, list[str]] = {}
-
     def add(self, path: str, key: str, n: int = 1) -> None:
         if not n:
             return
@@ -397,7 +474,16 @@ def main() -> int:
     else:
         print("  ✓ 判据结构性（缺 kbId = 会话域）· 标签按来源切换 · 跳转按钮只给知识库引用")
 
-    return 1 if (grand or tag_problems) else 0
+    # ── 页面骨架口径（应用页有没有吃到 `.page` 页骨） ──
+    frame_problems = page_frame_problems()
+    print("\n── 页面骨架口径（应用页必须挂 `.page`） ──")
+    if frame_problems:
+        for problem in frame_problems:
+            print("  ✗ " + problem)
+    else:
+        print("  ✓ 应用页都挂了 `.page`；沉浸页与满高画布只在 EXEMPT_ROOTS 里（各带理由）")
+
+    return 1 if (grand or tag_problems or frame_problems) else 0
 
 
 if __name__ == "__main__":

@@ -51,6 +51,14 @@ PAGES = [
     ("analytics", "/analytics", "运营看板", ".page-header", "运营看板"),
     ("feedback", "/feedback", "反馈处理", ".page-header", "反馈处理"),
     ("admin", "/admin", "系统管理", ".page-header", "账号与权限"),
+    # ★ 2026-10-16 补：这五页此前**不在视觉闸门的覆盖里** ——
+    #   而使用者报的"组织机构页没有按设计落地"恰好就落在其中。
+    #   判据：**一个页面只要没人拍它，它就会漂移**。补齐后每个应用页都有读数。
+    ("org", "/org", "组织机构（树 + 详情主从）", ".org-page", "组织机构"),
+    ("basedata", "/basedata", "基础数据（四类字典）", ".page-header", "基础数据"),
+    ("market", "/market", "应用市场（卡片网格）", ".page-header", "应用市场"),
+    ("hittest", "/knowledge/hittest", "命中测试", ".page-header", "命中测试"),
+    ("change-password", "/change-password", "修改密码", ".page-header", "修改密码"),
     ("workflow", "/assistants/as5/workflow", "编排画布", ".workflow-page", None),
     ("not-found", "/no-such-page", "404", ".empty-title", "页面不存在"),
 ]
@@ -87,7 +95,36 @@ def main() -> int:
                 landed = True
             except Exception:
                 landed = False
-            page.wait_for_timeout(1100)
+            # ★ 2026-10-16：有 `v-loading` 的页面要等**遮罩消失**再拍，而不是靠固定睡眠。
+            #   判据用语义（没有加载遮罩了）而不是把睡眠加长 —— 加长照样会在慢接口上撒谎。
+            #   ⚠️ 这**不适用于工作台**：它的模板里没有 `v-loading`，所以这条等待会立刻返回。
+            #      工作台截图里的「四个读数全是 —」是另一个真缺陷（刷新后数据丢失，
+            #      见 design.md 的『本轮发现的既有缺陷』），不是截图时序问题 —— 别用加睡眠来"修"它。
+            page.wait_for_timeout(400)
+            try:
+                page.wait_for_selector(".el-loading-mask", state="hidden", timeout=6000)
+            except Exception:
+                pass
+            # ★ 2026-10-16：再等"**有限**动画"跑完（无限循环的不算 —— 它们本来就不会结束）。
+            #   为什么：登录页那片云有 1.6s 的"到达"动画，而固定睡眠会在它到位前拍 ——
+            #   实测拍到 opacity 0.29 / scale 0.98 的中间态（读图的人会以为"云偏小偏暗"）。
+            #   判据用"还有没有在跑的有限动画"，而不是把睡眠加长：动画时长是已知有界的，
+            #   而接口耗时不是 —— 两种等待要分开表达（数据用遮罩、动效用动画状态）。
+            try:
+                page.wait_for_function(
+                    """() => {
+                        if (!document.getAnimations) return true;
+                        return document.getAnimations().every((a) => {
+                            const t = a.effect && a.effect.getTiming ? a.effect.getTiming() : null;
+                            if (t && t.iterations === Infinity) return true;
+                            return a.playState !== 'running';
+                        });
+                    }""",
+                    timeout=4000,
+                )
+            except Exception:
+                pass
+            page.wait_for_timeout(200)
 
             body = page.inner_text("body")
             landed_error = "页面不存在" in body or "没有访问该页面的权限" in body

@@ -43,6 +43,17 @@ export interface NavItem {
   path: string
   label: string
   icon: string
+  /**
+   * 一句话说明「这个页面是干什么的」（★ 第三轮新增）。
+   *
+   * 为什么加：11 个目的地靠"记住它在哪个分组下"是找不到的 —— 旧版只有一个
+   * 200px 宽的名字列表，用户得先猜分组、再在列表里认名字。
+   * 面板化之后判据变成"扫一眼就知道这个是干什么的"。
+   *
+   * 写法：**动词开头、说清产出物**，不要复述菜单名。
+   * 例：「建档、切分、看解析结果」优于「知识库管理」。
+   */
+  desc?: string
 }
 
 export interface NavGroup {
@@ -54,20 +65,20 @@ export const navGroups: NavGroup[] = [
   {
     title: '对话与知识',
     items: [
-      { path: '/conversation', label: '对话', icon: 'ChatDotRound' },
-      { path: '/knowledge', label: '知识库', icon: 'Collection' },
-      { path: '/market', label: '应用市场', icon: 'Shop' },
-      { path: '/assistants', label: '应用管理', icon: 'Grid' }
+      { path: '/conversation', label: '对话', icon: 'ChatDotRound', desc: '选应用提问，答案带引用出处' },
+      { path: '/knowledge', label: '知识库', icon: 'Collection', desc: '建档、切分、看解析与向量化结果' },
+      { path: '/market', label: '应用市场', icon: 'Shop', desc: '找别人共享出来的应用直接开问' },
+      { path: '/assistants', label: '应用管理', icon: 'Grid', desc: '把模型、知识库、提示词组装成应用' }
     ]
   },
   {
     title: '配置与运营',
     items: [
       // 提示词跟着「应用管理」办，但它是配置资产（写应用时才用），不是终端用户内容
-      { path: '/assistants/prompts', label: '提示词', icon: 'EditPen' },
-      { path: '/models', label: '模型管理', icon: 'Cpu' },
-      { path: '/analytics', label: '运营看板', icon: 'TrendCharts' },
-      { path: '/feedback', label: '反馈处理', icon: 'ChatLineSquare' }
+      { path: '/assistants/prompts', label: '提示词', icon: 'EditPen', desc: '按类型维护可复用的提示词资产' },
+      { path: '/models', label: '模型管理', icon: 'Cpu', desc: '注册模型、加载、探测能力三态' },
+      { path: '/analytics', label: '运营看板', icon: 'TrendCharts', desc: '用量趋势、应用排行、质量观测' },
+      { path: '/feedback', label: '反馈处理', icon: 'ChatLineSquare', desc: '把赞踩与意见办成可追踪的任务' }
     ]
   },
   {
@@ -75,11 +86,11 @@ export const navGroups: NavGroup[] = [
     items: [
       // 基础数据（密级/文种/提示词类型/库分类）改一次影响全平台的下拉与既有数据的展示，
       // 与「账号与权限」同属管理员那一档，所以并排放在「管理」下
-      { path: '/basedata', label: '基础数据', icon: 'Tickets' },
+      { path: '/basedata', label: '基础数据', icon: 'Tickets', desc: '密级、文种、提示词类型、库分类' },
       // ★ 组织机构独立成一个菜单项（用户口径）：它是**数据权限的载体**（共享给部门、按部门筛文档），
       //   与"账号/角色/权限点"不是一件事，也不该再往系统管理里堆 tab
-      { path: '/org', label: '组织机构', icon: 'OfficeBuilding' },
-      { path: '/admin', label: '系统管理', icon: 'Setting' }
+      { path: '/org', label: '组织机构', icon: 'OfficeBuilding', desc: '部门树 —— 共享与筛文档的权限载体' },
+      { path: '/admin', label: '系统管理', icon: 'Setting', desc: '账号、角色与权限点清单' }
     ]
   }
 ]

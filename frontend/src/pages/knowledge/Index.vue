@@ -71,7 +71,7 @@
           <span class="micro muted">共 {{ total }} 个</span>
         </div>
 
-        <div v-loading="loading" class="grid">
+        <div v-loading="loading" class="grid enter">
           <el-card
             v-for="kb in list"
             :key="kb.id"

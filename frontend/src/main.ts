@@ -16,6 +16,12 @@ import App from './App.vue'
 import { installStores } from '@/bootstrap/stores'
 import { installRouter } from '@/bootstrap/router'
 import { permissionGuard } from '@/bootstrap/permission'
+import { initMotionPreference } from '@/lib/motion'
+
+/* 动效偏好必须在**挂载前**落地：它决定 <html data-motion>，而 CSS 的降动效守卫读这个属性。
+   挂载后再写会让首帧先按"已塌缩"渲染、再跳成完整动效 —— 那是可见的闪烁。
+   见 src/lib/motion.ts（`?motion=on` / `?motion=off`，持久化到 localStorage）。 */
+initMotionPreference()
 
 const app = createApp(App)
 

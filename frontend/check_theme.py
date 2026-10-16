@@ -39,6 +39,21 @@ def read_var(page, name: str) -> str:
     )
 
 
+def max_transition_seconds(value: str) -> float:
+    """把 `transition-duration` 的列表值取最大（"0.22s, 0.12s" → 0.22）。
+
+    ★ 为什么要取 max：`transition-duration` 可能是一串值，只看第一个会漏掉最慢的那条。
+    """
+    nums = []
+    for part in value.split(","):
+        part = part.strip()
+        if part.endswith("ms"):
+            nums.append(float(part[:-2]) / 1000)
+        elif part.endswith("s"):
+            nums.append(float(part[:-1]))
+    return max(nums) if nums else 0.0
+
+
 def main() -> int:
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome")
@@ -136,6 +151,32 @@ def main() -> int:
         page.wait_for_timeout(1200)
 
         print(f"\n== 4. 登录后：{page.url} ==")
+
+        # ── 4.5 降低动效必须真的生效（★ 第三轮新增） ──────────────────────
+        # 为什么要有这条：第三轮给界面加了一批交互动效（按下 / 错峰入场 / 读数跳动 /
+        # 导航切换 / 浮层开合）。它们**全靠 `src/styles/index.css` 末尾那条全局
+        # `prefers-reduced-motion` 规则兜底** —— 没有断言的话，"兜底规则被人删掉"是静默的：
+        # 降动效的用户只觉得"这网站晃得难受"，而 CI 全绿。
+        #
+        # ★ 判据要有**区分力**，所以分两步：
+        #   ① 先证明 `.topbar` 平时的过渡 **>150ms**（否则下面那条恒真，等于没测）；
+        #   ② 再证明降到 ≤150ms。
+        #   取 `.topbar` 的理由：它恒在、且过渡走 `--dur-short`（220ms），值确定。
+        print("\n== 4.5 降低动效（prefers-reduced-motion） ==")
+        topbar = page.locator(".topbar").first
+        normal = topbar.evaluate("el => getComputedStyle(el).transitionDuration")
+        check(
+            max_transition_seconds(normal) > 0.15,
+            f"判据有区分力：.topbar 平时过渡 >150ms（实得 {normal}）—— 否则本条恒真",
+        )
+        page.emulate_media(reduced_motion="reduce")
+        page.wait_for_timeout(150)
+        reduced = topbar.evaluate("el => getComputedStyle(el).transitionDuration")
+        page.emulate_media(reduced_motion="no-preference")
+        check(
+            max_transition_seconds(reduced) <= 0.15,
+            f"降动效下 .topbar 过渡塌到 ≤150ms（{normal} → {reduced}）",
+        )
 
         # 表头字体必须在**真有表格的页面**上验，且**无条件**。
         # ⚠️ 这里原来是 `if 有表格: 验` —— 一个"有就验、没有就算过"的条件断言。

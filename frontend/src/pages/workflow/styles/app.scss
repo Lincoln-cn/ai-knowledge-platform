@@ -840,6 +840,13 @@ h5 {
   标签 12px / 输入 14px / 垂直节奏走 --space-*，17 种节点共用这一套。
 */
 .workflow-node-container {
+    /* ★ 节点卡标题：走**画布密集档**，不跟全局 h4（全局现为 18px）。
+       实证（check_canvas 的 A/B）：18px 会把 2 个节点名截断；回到 16px 截断 0 个。
+       这是本模块唯一一处"不跟随全局排印"的地方，理由与证据写在 variables.scss 里。 */
+    h4 {
+        font-size: var(--canvas-text-title);
+    }
+
     .el-form-item {
         margin-bottom: var(--space-md);
     }
@@ -853,7 +860,7 @@ h5 {
     }
 
     .el-form-item__content {
-        font-size: var(--text-sm);
+        font-size: var(--canvas-text-body);
         line-height: var(--leading-tight);
         color: var(--color-ink-2);
     }

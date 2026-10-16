@@ -1,8 +1,39 @@
 <template>
   <div class="login">
     <aside class="slate">
-      <!-- 叠层英雄构图：一片有机色块衬在文字后。装饰件，不进无障碍树。 -->
-      <span class="slate-art" aria-hidden="true"></span>
+      <!-- 底光：一层**重模糊、完全静止**的冷色场。它只负责"这里有光"，
+           不再承担任何动效 —— 使用者对"会动的云"的判词是「只是一个云 太丑了」。 -->
+      <span class="slate-halo" aria-hidden="true"></span>
+
+      <!-- 自绘拓扑（★ 第三轮第四次改）：GSAP 的 DrawSVG 让这张图画出来 ——
+           线生长 → 节点在"第一条边画到"时亮起 → 钴蓝信号沿边扫过、终点打点 →
+           溶解 → **重新洗牌**再来一轮（所以永不重复）。
+           ★ 为什么换成它：素材不再是位图而是**线条本身**，"知识图谱"这个隐喻
+             与"工程图纸 + 发丝线"这套视觉语言同时对得上。
+           见 src/pages/login/useSlateTopology.ts。装饰件，不进无障碍树。 -->
+      <svg
+        ref="topologyRef"
+        class="slate-topology"
+        viewBox="0 0 672 900"
+        preserveAspectRatio="xMidYMid slice"
+        aria-hidden="true"
+      >
+        <!-- ★ 这一层只为"整组色相漂移"而存在：一次 `hue-rotate` 作用在全组上，
+             比给 127 个元素逐个补间颜色便宜得多（见 useSlateTopology.ts）。 -->
+        <g class="topology-field">
+          <g>
+            <path v-for="(d, i) in topologyEdges" :key="`w${i}`" class="wire" :d="d" />
+          </g>
+          <g>
+            <path v-for="(d, i) in topologyEdges" :key="`p${i}`" class="pulse" :d="d" />
+          </g>
+          <g>
+            <g v-for="(node, i) in topologyNodes" :key="`n${i}`" class="node">
+              <rect :x="node[0] - 3" :y="node[1] - 3" width="7" height="7" />
+            </g>
+          </g>
+        </g>
+      </svg>
       <span class="slate-grain" aria-hidden="true"></span>
 
       <div class="slate-brand">
@@ -24,7 +55,11 @@
     </aside>
 
     <main class="pane">
-      <div class="form-col rise">
+      <!-- ★ 第三轮：登录页的入场从"整列一起淡入"（`.rise`）改成**错峰入场**（`.enter`）——
+           顺序按人读页面的顺序来：标题 → 表单 → 按钮 → 说明。
+           预算：本页用了两个原语（错峰入场 + 按下），浮层/读数/导航都不适用。
+           ⚠️ 深度上不叠 `.rise`：两个入场动画叠在同一个容器上会互相打架。 -->
+      <div class="form-col enter">
         <div class="form-head">
           <h2 class="h2">登录</h2>
           <p class="micro muted">账号密码登录，进入知识助理平台</p>
@@ -93,10 +128,28 @@ import BrandMark from '@/components/BrandMark.vue'
 import { ApiError, identityApi } from '@/api'
 import { APP_TITLE, USE_MOCK } from '@/config/env'
 import { useSessionStore } from '@/stores/session'
+import {
+  TOPOLOGY_EDGES,
+  TOPOLOGY_NODES,
+  edgePath,
+  useSlateTopology
+} from './useSlateTopology'
 
 const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
+
+/* ── 左栏的自绘拓扑（★ 第三轮第四次改）────────────────────────────────
+   动效交给 GSAP（DrawSVGPlugin），编排与"为什么这么设计"都在 useSlateTopology.ts 里。
+   节点与边是**数据**，路径 `d` 由 edgePath() 算出来 —— 模板里不写死坐标。
+
+   ★ 这里刻意**没有**任何 CSS 动画：GSAP 走 rAF + 内联样式，**不受 CSS 的
+     `prefers-reduced-motion` 约束**，所以降动效必须在 JS 里处理（motionAllowed()）——
+     两边都写就成了"两个主人"，其中一边会静默失效（本轮踩过同类坑）。 */
+const topologyNodes = TOPOLOGY_NODES
+const topologyEdges = TOPOLOGY_EDGES.map(([a, b]) => edgePath(TOPOLOGY_NODES[a], TOPOLOGY_NODES[b]))
+const topologyRef = ref<SVGSVGElement | null>(null)
+useSlateTopology(topologyRef)
 
 const formRef = ref<FormInstance>()
 const loading = ref(false)
@@ -223,11 +276,16 @@ const submit = async () => {
    所以宽视口下色块的**相对**构图基本稳定（实测 1440×900 为 1.19 栏宽、
    1920×1080 与 2560×1440 为 1.07、1280×1024 为 1.52）。
    四个窄宽度（320/375/414/768）走下面那条 media query 的落点。 */
-.slate-art {
+/* 底光：一层重模糊、**完全静止**的冷色场。它只负责"这里有光"，不再承担动效。
+   ★ 静止是刻意的：使用者对"会动的云"的判词是「只是一个云 太丑了」——
+     动的东西全部交给下面的拓扑线，屏幕上只有**一处**在动。 */
+.slate-halo {
   position: absolute;
-  right: -34%;
-  bottom: -18%;
-  width: clamp(60%, 80vh, 1200px);
+  /* ★ 铺满整栏（使用者：「动画范围可以是那个墨蓝色背景的全部吧，现在范围太小」）：
+     光场放大到覆盖整块墨蓝底，最亮仍在右下 —— 否则"整栏在动、光只在一角"会脱节。 */
+  right: -20%;
+  bottom: -30%;
+  width: clamp(90%, 122vh, 1700px);
   aspect-ratio: 1 / 1;
   z-index: 0;
   pointer-events: none;
@@ -236,11 +294,55 @@ const submit = async () => {
   background-position: center;
   background-size: contain;
   mix-blend-mode: screen;
-  opacity: var(--art-opacity-screen);
+  filter: blur(34px);
+  opacity: calc(var(--art-opacity-screen) * 0.8);
 }
 
-/* 本栏的颗粒，一片，硬上限 --art-opacity-grain（0.15）。
-   深底上同样走 screen：素材本身是冷炭色，multiply 在石墨上留不下任何东西。 */
+/* ── 自绘拓扑（线索） ───────────────────────────────────────────────────
+   发丝线走 `--color-graphite-rule`（石墨底上的细线），信号走 accent（钴蓝）。
+   ★ `vector-effect: non-scaling-stroke`：让 1px 在任何 viewBox 缩放下都是 1px。
+     发丝线一旦被缩放成 0.7px 或 1.4px，"利"的感觉就没了 —— 这是这套语言的命门。
+   ★ accent 用量：信号只是 1.4px 宽的一小段线，占视口面积远低于 5% 的上限。
+   ★ 这里**没有任何 CSS 动画**：生长/扫过/溶解全部由 GSAP 驱动（见 useSlateTopology.ts），
+     因为 drawSVG 动的是 stroke-dashoffset，是 JS 侧的编排而不是 CSS 关键帧。 */
+.slate-topology {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.wire {
+  fill: none;
+  /* ★ 颜色：由 JS 每轮从 `--art-wire-1..5`（蓝族五档，定义在 tokens.css）**随机分配**，
+     并随整组做缓慢色相漂移。这里的 `var(--art-wire-3)` 只是 JS 未跑那一瞬的兜底。
+     为什么不给"看得见/不抢戏"再手调一个灰：使用者要求"不要纯白、要动态颜色" ——
+     有颜色的线本来就不需要靠灰度去压存在感，色相与明度共同承担了这件事。 */
+  stroke: var(--wire-tone, var(--art-wire-3));
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.pulse {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  opacity: 0;
+  vector-effect: non-scaling-stroke;
+}
+
+.node rect {
+  /* ★ 改成**实心**方点，颜色每轮随机取（枢纽节点固定取 accent）。
+     两个理由：① 本系统"状态方点"的语言本来就是实心 5×5 方块，空心框读起来像复选框；
+     ② 空心框加彩色描边在 1px 下几乎看不出颜色，实心才真的"有颜色"。 */
+  fill: var(--node-tone, var(--art-wire-2));
+  stroke: none;
+}
+
+
 .slate-grain {
   position: absolute;
   inset: 0;
@@ -425,11 +527,17 @@ code {
   /* 窄屏下左栏变成顶部一条 band，原来的"右下角"就是文字区 ——
      色块缩到 ≈ 0.78 视口宽，核心挪到 band **右上角**的空区
      （品牌字在左、标题与标语在下，右上角没有内容）。 */
-  .slate-art {
-    right: -26%;
-    top: -50%;
+  /* 窄屏下左栏变成顶部一条 band：底光挪到右上角的空区，
+     拓扑整体压淡（它会被 band 的高度裁掉一部分，所以只当纹理用，不抢品牌字与标题）。 */
+  .slate-halo {
+    right: -18%;
+    top: -46%;
     bottom: auto;
-    width: min(78vw, 460px);
+    width: min(86vw, 500px);
+  }
+
+  .slate-topology {
+    opacity: 0.55;
   }
 
   .slate-title {

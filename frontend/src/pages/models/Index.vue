@@ -7,12 +7,12 @@
       </template>
     </PageHeader>
 
-    <div class="notice info">
-      模型的<b>思考模式</b>与<b>工具调用</b>是三态而非开关：<code>无</code> 时整项不渲染、<code>可开关</code>
-      时默认关闭并给说明、<code>强制开启</code> 时置开且禁用并标注原因。这直接决定应用配置页能配出什么。
-    </div>
-
-    <div class="filters panel">
+    <!-- ★ 第三轮：删掉这块说明。
+         它复述的是 PageHeader 的 `desc` 已经在说的事，而且把"三态怎么呈现"这种**设计口径**
+         写在了用户界面上 —— 用户要回答的是"这个模型能不能思考"，不是"三态而非开关"。
+         口径留在 design.md 与 `ModelFormDialog` 的就地提示里（那里才有上下文）。
+         这正是使用者说的「单页功能堆太多」的第一类：**把文档放进了界面**。 -->
+    <div class="filters">
       <el-input
         v-model="query.keyword"
         size="small"
@@ -41,7 +41,7 @@
       </span>
     </div>
 
-    <div v-loading="loading" class="grid">
+    <div v-loading="loading" class="grid enter">
       <el-card v-for="m in list" :key="m.id" shadow="never" class="model-card" :class="{ failed: m.status === 'LOAD_FAILED' }">
         <div class="mc-head">
           <span class="mc-name ellipsis">{{ m.name }}</span>
@@ -410,7 +410,12 @@ const remove = async (model: ModelInfo) => {
   align-items: center;
   gap: var(--space-xs);
   flex-wrap: wrap;
-  padding: var(--space-sm) var(--space-md);
+  /* ★ 第三轮：去框（原来是 `.filters.panel` —— 一条工具条外面还套一个 panel 盒子）。
+     ⚠️ `.filters` 是**冻结钩子**：`smoke_test.py:244/263/271` 断言 `.filters .el-select`
+     与 `.filters input[placeholder*='搜索模型名称']`。所以类名、子项顺序、控件都**不许动** ——
+     "单页功能太多"要从别处减（说明文字、卡片事实），不许靠隐藏它们来实现。 */
+  padding: var(--toolbar-pad-y) 0;
+  border-bottom: 1px solid var(--color-rule-2);
 }
 
 .live {
@@ -421,25 +426,29 @@ const remove = async (model: ModelInfo) => {
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: var(--space-sm);
+  gap: var(--grid-gap);
   min-height: 120px;
 }
 
+/* 卡片：长相交给 element-plus.css 的 `.el-card`（去边框，靠 --color-surface 与画布的
+   2% 明度差托起来）。这里只补它自己的排版节奏。 */
 .model-card {
-  border-radius: var(--radius);
   display: flex;
   flex-direction: column;
 }
 
 .model-card :deep(.el-card__body) {
-  padding: var(--space-md);
+  padding: var(--card-pad);
   height: 100%;
   display: flex;
   flex-direction: column;
 }
 
+/* ★ `.failed` 从「染边框」改为「描一圈环」：卡片已经没有边框了（第三轮去盒化），
+   再写 `border-color` 就什么都不显示 —— 那是静默失效。
+   环用 box-shadow 画，1px、30% 危险色，语义与旧版一致但不再依赖边框。 */
 .model-card.failed {
-  border-color: color-mix(in oklch, var(--color-danger) 30%, var(--color-rule));
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-danger) 30%, var(--color-rule));
 }
 
 .mc-head {
@@ -448,10 +457,12 @@ const remove = async (model: ModelInfo) => {
   gap: var(--space-2xs);
 }
 
+/* 卡片标题：mono 保留（模型名是标识符，等宽才排得整齐），字号抬到卡片标题档 18px。
+   ★ 判据是 400 对 700 的对比 —— 旧版 600 对 400 只差 200 单位，读起来是"默认设置"。 */
 .mc-name {
   font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   max-width: 62%;
 }
@@ -460,7 +471,7 @@ const remove = async (model: ModelInfo) => {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2xs);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
 }
 
 .st-idle {
@@ -480,19 +491,21 @@ const remove = async (model: ModelInfo) => {
 }
 
 .mc-facts {
-  margin: var(--space-sm) 0 0;
+  margin: var(--space-md) 0 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2xs);
+  gap: var(--space-xs);
   flex: 1;
 }
 
+/* 事实行：标签 12px mono（`.label` 全球原子）+ 值 13px。
+   ★ 第三轮把行距从 `--space-2xs`（4）放到 `--space-xs`（8）—— 4px 是"挤"的来源之一。 */
 .fact {
   display: flex;
   align-items: baseline;
   gap: var(--space-xs);
-  font-size: var(--text-2xs);
-  line-height: var(--leading-body);
+  font-size: var(--text-xs);
+  line-height: var(--leading-ui);
 }
 
 .fact dt {
@@ -511,41 +524,44 @@ const remove = async (model: ModelInfo) => {
 .caps {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-xs) var(--space-sm);
+  gap: var(--space-xs) var(--space-md);
 }
 
 .cap {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3xs);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
 }
 
 .mc-remark {
-  margin: var(--space-xs) 0 0;
+  margin: var(--space-sm) 0 0;
+  font-size: var(--text-xs);
   line-height: var(--leading-body);
+  color: var(--color-muted);
 }
 
 .mc-fail {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2xs);
-  margin-top: var(--space-xs);
-  font-size: var(--text-2xs);
+  margin-top: var(--space-sm);
+  font-size: var(--text-xs);
 }
 
+/* 操作区：一条发丝线把它从事实区分开（Editorial：靠线，不靠框） */
 .mc-actions {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
-  margin-top: var(--space-sm);
-  padding-top: var(--space-xs);
+  margin-top: var(--space-md);
+  padding-top: var(--space-sm);
   border-top: 1px solid var(--color-rule-2);
 }
 
 .empty {
   grid-column: 1 / -1;
-  padding: var(--space-xl) var(--space-md);
+  padding: var(--space-2xl) var(--space-md);
   text-align: center;
   display: flex;
   flex-direction: column;

@@ -3,7 +3,7 @@
     <div class="page-head">
       <div class="head-main">
         <h1 class="h1">工作台</h1>
-        <p class="micro muted intro">
+        <p class="muted intro">
           <template v-if="consumer">
             近 {{ rangeDays }} 天（{{ range.from }} ~ {{ range.to }}）的使用情况。
             选一个应用开始提问，或继续上次的对话。
@@ -20,41 +20,46 @@
       </div>
     </div>
 
-    <!-- 指标条：消费者看「我的」口径，建设者/运营看平台口径（07 §五） -->
-    <div v-if="consumer" class="stats panel">
+    <!-- 指标条：★ 第三轮从 `.stats.panel`（一个盒子，里面四格）改成 `.stats.band`
+         （一条带，上下发丝线 + 格与格之间的竖发丝线）。
+         ★ 为什么保留 `flex:1` 等分：自然宽度只占 27%，右侧会留出近千像素空白。
+         ★ 动效：`.enter` 让四格错峰入场，`CountUp` 让读数从 0 跳上来 ——
+           两者合起来是**一个**编排式原语组（本页预算 3：入场+读数 / 导航切换 / 按下）。
+         ⚠️ `.stat` **必须恰好 4 个** —— `smoke_test.py:132` 断言 `stats == 4`。 -->
+    <div v-if="consumer" class="stats band enter">
       <div class="stat">
         <span class="stat-k label">我的提问</span>
-        <span class="stat-v num">{{ fmtCount(mySummary?.myQuestionCount) }}</span>
+        <CountUp class="stat-v num" :value="mySummary?.myQuestionCount" :format="fmtCount" />
       </div>
       <div class="stat">
         <span class="stat-k label">我的对话</span>
-        <span class="stat-v num">{{ fmtCount(mySummary?.myConversationCount) }}</span>
+        <CountUp class="stat-v num" :value="mySummary?.myConversationCount" :format="fmtCount" />
       </div>
       <div class="stat">
         <span class="stat-k label">我的赞</span>
-        <span class="stat-v num">{{ fmtCount(mySummary?.myUp) }}</span>
+        <CountUp class="stat-v num" :value="mySummary?.myUp" :format="fmtCount" />
       </div>
       <div class="stat">
         <span class="stat-k label">我的踩</span>
-        <span class="stat-v num">{{ fmtCount(mySummary?.myDown) }}</span>
+        <CountUp class="stat-v num" :value="mySummary?.myDown" :format="fmtCount" />
       </div>
     </div>
-    <div v-else class="stats panel">
+    <div v-else class="stats band enter">
       <div class="stat">
         <span class="stat-k label">对话次数</span>
-        <span class="stat-v num">{{ fmtCount(overview?.questionCount) }}</span>
+        <CountUp class="stat-v num" :value="overview?.questionCount" :format="fmtCount" />
       </div>
       <div class="stat">
         <span class="stat-k label">活跃用户</span>
-        <span class="stat-v num">{{ fmtCount(overview?.activeUserCount) }}</span>
+        <CountUp class="stat-v num" :value="overview?.activeUserCount" :format="fmtCount" />
       </div>
       <div class="stat">
         <span class="stat-k label">满意度</span>
-        <span class="stat-v num">{{ fmtPct(overview?.satisfaction) }}</span>
+        <CountUp class="stat-v num" :value="overview?.satisfaction" :format="fmtPct" />
       </div>
       <div class="stat">
         <span class="stat-k label">待处理反馈</span>
-        <span class="stat-v num">{{ fmtCount(quality?.pendingFeedbackCount) }}</span>
+        <CountUp class="stat-v num" :value="quality?.pendingFeedbackCount" :format="fmtCount" />
       </div>
     </div>
 
@@ -178,6 +183,7 @@ import { analyticsApi, conversationsApi, feedbackApi } from '@/api'
 import type { AnalyticsRange, AssistantRankItem, MeSummary, OverviewMetrics, QualityMetrics } from '@/api/analytics'
 import type { Conversation } from '@/api/conversations'
 import type { FeedbackItem, FeedbackStatus } from '@/api/feedback'
+import CountUp from '@/components/CountUp.vue'
 import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/components/InstrumentCard.vue'
 import { PERM } from '@/constants/permissions'
 import { canReach } from '@/lib/reach'
@@ -379,13 +385,16 @@ const fmtPct = (n: number | null | undefined) =>
 }
 
 .intro {
-  margin: 0;
+  margin: var(--space-2xs) 0 0;
+  font-size: var(--text-sm);
   line-height: var(--leading-body);
-  max-width: 880px;
+  max-width: var(--measure);
 }
 
-/* 指标条：一条 panel，内部等分。等分是为了铺满 —— 自然宽度只占 27%，
-   右侧会留出近千像素空白，看着像没做完。 */
+/* 指标条：一条 `--band-gap` 之外的带。等分是为了铺满（见上）。
+   ★ 第三轮：不再有 `.panel` 的盒体与底色 —— 靠上下发丝线把它从流里分出来。
+   ★ 格与格之间的竖线由全局 `.band > * + *` 提供，所以这里**不再画 border-right**
+     （两边都画会得到 2px 的线）。 */
 .stats {
   display: flex;
   align-items: stretch;
@@ -397,26 +406,24 @@ const fmtPct = (n: number | null | undefined) =>
   display: flex;
   flex-direction: column;
   gap: var(--space-2xs);
-  padding: var(--space-sm) var(--space-md);
-  border-right: 1px solid var(--color-rule-2);
+  padding: var(--space-md) var(--space-lg);
 }
 
-.stat:last-child {
-  border-right: none;
-}
-
+/* 读数：★ 第三轮 22 → 28px + 字重 700。
+   这是本页的"焦点"之一 —— 编辑式版面的做法是让**数字**承担视觉重量，
+   而不是给数字套一个彩色卡片。字体仍是 mono（`.num`）+ tabular-nums，读起来像仪表。 */
 .stat-v {
-  font-size: var(--text-lg);
-  font-weight: 600;
+  font-size: var(--text-xl);
+  font-weight: 700;
   color: var(--color-ink);
-  line-height: 1.2;
+  line-height: var(--leading-display);
 }
 
 /* 两栏不等宽：常用应用/我的对话是主体，入门入口是窄栏 —— 不搞等宽双栏那种模板感 */
 .cols {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
-  gap: var(--space-md);
+  gap: var(--section-gap);
   align-items: start;
 }
 
@@ -424,7 +431,7 @@ const fmtPct = (n: number | null | undefined) =>
 .consumer-main {
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: var(--section-gap);
   min-width: 0;
 }
 
@@ -441,16 +448,21 @@ const fmtPct = (n: number | null | undefined) =>
   padding: 0;
 }
 
+/* 行：★ 第三轮改成「上边线 + 更松的行距」——
+   发丝线只出现在行与行之间，行内不画框（Editorial：Hairlines, not card borders）。
+   行距从 `--space-xs`（8）提到 `--row-pad-y`（12）。
+   ⚠️ `.app-row` 是冻结钩子（`smoke_test.py:134` 断言 > 0 行），类名不许动。 */
 .app-row {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: var(--space-xs) var(--space-md);
-  border-bottom: 1px solid var(--color-rule-2);
+  padding: var(--row-pad-y) var(--space-2xs);
+  border-top: 1px solid var(--color-rule-2);
+  transition: background-color var(--dur-micro) var(--ease-out);
 }
 
-.app-row:last-child {
-  border-bottom: none;
+.app-row:first-child {
+  border-top: none;
 }
 
 .app-row:hover {
@@ -476,12 +488,12 @@ const fmtPct = (n: number | null | undefined) =>
   display: flex;
   flex-direction: column;
   gap: var(--space-3xs);
-  padding: var(--space-xs) var(--space-md);
-  border-bottom: 1px solid var(--color-rule-2);
+  padding: var(--row-pad-y) var(--space-2xs);
+  border-top: 1px solid var(--color-rule-2);
 }
 
-.entry-row:last-child .entry {
-  border-bottom: none;
+.entry-row:first-child .entry {
+  border-top: none;
 }
 
 .entry:hover {
