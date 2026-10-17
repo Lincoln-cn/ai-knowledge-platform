@@ -143,27 +143,28 @@ def main() -> int:
     app_id = seed_app()
     print(f"  已建应用 {app_id}")
 
-    try:
-        _run_under_failure(app_id)
-    finally:
-        # ★★ 必须在 finally 里复原：本闸门把桩改成"100% 失败"，而真栈 job 的 12 条闸门是
-        #   **顺序跑**的 ⇒ 只要这里异常退出而没复原，后面每一条都会看到"上游全 500"。
-        #   那会把"一次闸门崩溃"放大成"一整片红"，排查方向会被完全带偏。
-        restored = stub_config({"fail_rate": 0.0})
-        print(f"  [复原] 桩 fail_rate 已归零（{restored}）")
-
-    # ★ 先确认桩真的被置成"必失败"——否则下面的红会指向产品
+    # ★★ 顺序是判据的一部分（第一版写反了，闸门因此跑了**两遍**）：
+    #   ① 先**注入失败**并断言注入成功 → ② 再在"必失败"前提下验界面 → ③ 最后复原并验对照。
+    #   ★ 第一版写成「try: 跑 → finally: 复原」，而"注入"排在 try **之后** ⇒
+    #     第一次跑时桩还是正常的（`①b` 看到的是成功页面、自然没有"失败"字样 ⇒ 红），
+    #     而 `problems` 保留了那一次的失败项 ⇒ 出现"同一条判据既 ✓ 又 [FAIL]"的怪相。
+    #   ★ 教训：**闸门自己的前置顺序**也是判据的一部分；顺序错了，红会红在莫名其妙的地方。
     check(
         stub_config({"fail_rate": 1.0}),
         "⓪ 桩已注入 100% 失败（`POST /__stub/config {fail_rate:1.0}`）",
     )
 
-    _run_under_failure(app_id)
+    try:
+        _run_under_failure(app_id)
+    finally:
+        # ★ 必须在 finally 里复原：真栈 job 的闸门是**顺序跑**的，泄漏的 fail_rate
+        #   会让后面每一条都看到"上游全 500" —— 那会把"一次闸门崩溃"放大成"一整片红"。
+        restored = stub_config({"fail_rate": 0.0})
+        print(f"  [复原] 桩 fail_rate 已归零（{restored}）")
 
     # ── ③ 对照：把注入关掉之后，**同一条链必须真的能成功** ──
     #   ★ 这不是"配置改回去了"就算 —— 要拿一次真实的问答读数。
     #     没有它，一个"永远失败"的实现也能让 ①② 绿。
-    check(stub_config({"fail_rate": 0.0}), "③a 已把桩恢复成正常（`fail_rate=0`）")
     status, payload = call(
         "POST",
         "/conversations/chat",
