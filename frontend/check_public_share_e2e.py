@@ -98,7 +98,24 @@ def login() -> str:
     return json.loads(payload)["data"]["accessToken"]
 
 
-def create_app(token: str) -> str:
+def first_chat_model(token: str) -> str:
+    """取一个**已加载**的对话模型 id。
+
+    ★ 为什么要它：契约的 `UpsertAssistantBody.modelId` 是**必填**，而"应用选了哪个模型"
+      正是 S2 的第一步（建应用 → 选模型）。★ 取不到就直接退出并打出清单 ——
+      "建应用失败: modelId 为空"这种报错会让人去查应用，而不是查模型目录。
+    """
+    status, payload = call("GET", "/models?size=50", token)
+    if status != 200:
+        raise SystemExit(f"取模型目录失败（{status}）：{payload[:200]}")
+    rows = (json.loads(payload).get("data") or {}).get("list") or []
+    for row in rows:
+        if row.get("kind") == "CHAT" and row.get("status") == "LOADED":
+            return row["id"]
+    raise SystemExit(f"没有已加载的对话模型（共 {len(rows)} 个模型）：真栈夹具要求先加载一个 CHAT 模型")
+
+
+def create_app(token: str, model_id: str) -> str:
     """建一个最小应用（S2 的第一步：建应用）。
 
     ★ 名字带时间戳：闸门要能重复跑，重名会让"按名字找应用"在下一次读到自己上次建的。
@@ -111,11 +128,25 @@ def create_app(token: str) -> str:
         "/assistants",
         token,
         {
+            # ★ 契约 `UpsertAssistantBody` 里的字段**全是必填**（`api/assistants.ts`）——
+            #   第一次 CI 跑就因为漏了 `type` 红：逐字「应用类型必填（SIMPLE / WORKFLOW）」。
+            #   ⇒ 按契约填全，而不是"只填看起来必要的几个"。
             "name": name,
+            "icon": "📄",
             "description": "S2 公开链接闸门用的临时应用",
-            "modelId": None,
+            # ★ S2 走的是**问答**链路（不是编排画布）⇒ SIMPLE。
+            "type": "SIMPLE",
+            "modelId": model_id,
+            "kbIds": [],
             "rolePrompt": "你是知识助理，请基于参考资料回答。",
+            "promptIds": [],
+            "retrieval": {"mode": "HYBRID", "topK": 5, "scoreThreshold": 0},
+            "multiTurn": True,
+            "thinkingEnabled": False,
+            "prologue": "",
+            "quickQuestions": [],
         },
+
     )
     if status not in (200, 201):
         raise SystemExit(f"建应用失败（{status}）：{payload[:300]}")
@@ -161,7 +192,10 @@ def main() -> int:
     token = login()
     print("  已登录（admin）")
 
-    app_id = create_app(token)
+    model_id = first_chat_model(token)
+    print(f"  已取到对话模型 {model_id}")
+
+    app_id = create_app(token, model_id)
     print(f"  已建应用 {app_id}")
 
     credential, credential_id = issue_credential(token, app_id)
