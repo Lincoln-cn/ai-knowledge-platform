@@ -115,7 +115,27 @@ def first_chat_model(token: str) -> str:
     raise SystemExit(f"没有已加载的对话模型（共 {len(rows)} 个模型）：真栈夹具要求先加载一个 CHAT 模型")
 
 
-def create_app(token: str, model_id: str) -> str:
+def first_kb_with_documents(token: str) -> str:
+    """取一个**真的有文档**的知识库。
+
+    ★★ 为什么这一步不能省：S2 要断的是「未登录提问得**带引用**答案」。
+      第一版把 `kbIds` 设成空数组 ⇒ 应用没绑任何库 ⇒ 检索没有可引用的东西 ⇒
+      refs 恒 0 条。★ 那不是产品缺陷，是**闸门自己没搭好前提** ——
+      而"前提没搭好"与"链路坏了"在读数上长得一模一样，正是本仓头号病的形状。
+
+    ★ 选"有文档的"而不是"第一个"：空库同样会让 refs 恒 0。
+    """
+    status, payload = call("GET", "/knowledge-bases?size=50", token)
+    if status != 200:
+        raise SystemExit(f"取知识库列表失败（{status}）：{payload[:200]}")
+    rows = (json.loads(payload).get("data") or {}).get("list") or []
+    for row in rows:
+        if (row.get("documentCount") or 0) > 0:
+            return row["id"]
+    raise SystemExit(f"没有含文档的知识库（共 {len(rows)} 个库）：S2 要求有可引用的内容")
+
+
+def create_app(token: str, model_id: str, kb_id: str) -> str:
     """建一个最小应用（S2 的第一步：建应用）。
 
     ★ 名字带时间戳：闸门要能重复跑，重名会让"按名字找应用"在下一次读到自己上次建的。
@@ -137,7 +157,7 @@ def create_app(token: str, model_id: str) -> str:
             # ★ S2 走的是**问答**链路（不是编排画布）⇒ SIMPLE。
             "type": "SIMPLE",
             "modelId": model_id,
-            "kbIds": [],
+            "kbIds": [kb_id],
             "rolePrompt": "你是知识助理，请基于参考资料回答。",
             "promptIds": [],
             "retrieval": {"mode": "HYBRID", "topK": 5, "scoreThreshold": 0},
@@ -195,7 +215,10 @@ def main() -> int:
     model_id = first_chat_model(token)
     print(f"  已取到对话模型 {model_id}")
 
-    app_id = create_app(token, model_id)
+    kb_id = first_kb_with_documents(token)
+    print(f"  已取到知识库 {kb_id}")
+
+    app_id = create_app(token, model_id, kb_id)
     print(f"  已建应用 {app_id}")
 
     credential, credential_id = issue_credential(token, app_id)
@@ -209,9 +232,15 @@ def main() -> int:
     )
     if status == 200:
         data = json.loads(payload).get("data") or {}
+        # ★ 字段名取自契约 `PublicContext.appName`（不是 assistantName/name）——
+        #   第一版猜错了，CI 逐字报「实得 None」。
         check(
-            bool(data.get("assistantName") or data.get("name")),
-            f"① 上下文里有应用名（实得 {data.get('assistantName') or data.get('name')}）",
+            bool(data.get("appName")),
+            f"① 上下文里有应用名（实得 {data.get('appName')}）",
+        )
+        check(
+            bool(data.get("maxClassification")) is not False,
+            f"① 公开面必须给出冻结密级（契约必填，实得 {data.get('maxClassification')}）",
         )
 
     # ── ② 未登录能提问，且答案带引用 ──
