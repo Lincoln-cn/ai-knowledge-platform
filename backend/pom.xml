@@ -121,6 +121,32 @@
       <artifactId>spring-ai-starter-model-openai</artifactId>
     </dependency>
 
+    <!-- ─── 进程内向量化（本地 ONNX）───
+         ★ 为什么用它而不是自己接 onnxruntime：官方模块已经做了
+           「ONNX 会话 + HuggingFace tokenizer + 池化 + 维度」这一整套，
+           而本仓的口径是「官方能力优先扩展、别自研」。
+         ★ 它带进 onnxruntime 与 tokenizer 的原生库；模型文件**不进仓库**（见 models/README.md），
+           路径由 `app.embedding.local.*` 给出，缺文件时**显式失败**（不静默回退到上游）。 -->
+    <dependency>
+      <groupId>org.springframework.ai</groupId>
+      <artifactId>spring-ai-transformers</artifactId>
+      <exclusions>
+        <!-- ★★ 必须排除：`ai.djl.pytorch:pytorch-engine` 会在 tokenizer 初始化时触发 DJL
+             去**下载 LibTorch**（几百 MB）；失败时抛的是一句与向量化毫不相干的
+             `Failed to save pytorch index file` —— 实测就是这个错。
+             本仓只用 ONNX 推理，不需要任何 PyTorch 引擎。 -->
+        <exclusion>
+          <groupId>ai.djl.pytorch</groupId>
+          <artifactId>pytorch-engine</artifactId>
+        </exclusion>
+        <!-- 模型动物园同理：模型从本地文件加载，不需要在线下载 -->
+        <exclusion>
+          <groupId>ai.djl</groupId>
+          <artifactId>model-zoo</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+
     <!-- ─── 请求校验 ─── -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

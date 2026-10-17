@@ -51,6 +51,37 @@ public class GlobalExceptionHandler {
    * <p>★ {@code IllegalArgumentException} 同族处理（领域校验如「分段正文不能为空」「向量维度不匹配」）—— 它们的消息同样是写给人看的中文，没有理由降级成
    * 500。
    */
+  /**
+   * 上传文件超过大小上限（`FR-03-05-3` 要求单文件 100MB、超限拒绝并提示）。
+   *
+   * <h3>★★ 为什么必须有这一条</h3>
+   *
+   * <p>实测过一个很难查的现场：16 个语料文件上传，**≤662KB 的全成功、≥1368KB 的全部 HTTP 500**。 原因是 Spring Boot 的 multipart
+   * 默认上限 **1MB**，而本仓此前**没有**任何 multipart 配置， 也**没有**这条异常处理 ⇒ 超限被兜底成 500「服务器内部错误」。
+   *
+   * <p>★ 这条的两种失真都很贵：
+   *
+   * <ul>
+   *   <li><b>限额错了 100 倍</b>：设计书 `FR-03-05-3` 写的是 **100MB**，实际 1MB；
+   *   <li><b>状态码误导</b>：500 让调用方以为"服务端坏了"，于是**重试** —— 而重试永远不会成功。 正确的形状是 413 + "这个文件多大、上限多大"。
+   * </ul>
+   *
+   * <p>★ 用 413（Payload Too Large）而不是 400：4xx 里只有它准确表达"不是格式错，是太大了"。
+   *
+   * @param cause Spring 抛的原始异常（里面带着具体是哪个文件超了）
+   * @return 413 + 可读原因
+   */
+  @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+  public ResponseEntity<ApiResponse<Void>> onUploadTooLarge(
+      org.springframework.web.multipart.MaxUploadSizeExceededException cause) {
+    return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+        .body(
+            ApiResponse.fail(
+                ErrorCode.BAD_REQUEST,
+                "上传文件超过大小上限",
+                "单文件上限 100MB（FR-03-05-3）。请拆分或压缩后重试 —— ★ 重试同一个文件不会成功"));
+  }
+
   @ExceptionHandler({IllegalStateException.class, IllegalArgumentException.class})
   public ResponseEntity<ApiResponse<Void>> onIllegalState(RuntimeException cause) {
     return ResponseEntity.status(HttpStatus.BAD_REQUEST)
