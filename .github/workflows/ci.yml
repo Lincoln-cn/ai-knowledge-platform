@@ -1,7 +1,24 @@
-name: CI
+name: 真栈 · 端到端闸门
 
-# ★ 每一道闸门都必须能在"没有任何人工"的情况下跑完 —— 这是"每周算发布"判据 3
-#   （四道回归全绿）的前提，见 ROADMAP §4.7.1。
+# ══════════════════════════════════════════════════════════════════════════════
+#  本文件是原 `ci.yml` 的**第四块**（2026-10-17 拆分）。
+#
+#  ★ 其余三块分别住在这里：
+#      · `ci-fast.yml`            —— 后端编译 + spotless + 前端 typecheck + 静态闸门（目标 <3 分钟）
+#      · `ci-backend.yml`         —— 架构/口径闸门（先跑，不要 DB）+ 整包 `mvn verify`（871 秒那块）
+#      · `ci-frontend-gates.yml`  —— 11 个确定性浏览器闸门（193 秒）
+#      · `ci-frontend-build.yml`  —— mock 构建 + dist 冒烟（118 秒）
+#
+#  ★ 为什么真栈单独一条 workflow（原文件里就有这条理由，照抄）：
+#    失败时一眼能看出「是真栈的问题，还是界面的问题」。
+#    ★ 四条 workflow **互不 `needs`**：任一侧红都各自报出来，互不遮蔽。
+#
+#  ★ 真栈这一块实测 6 分 17 秒，其中 `真栈闸门（逐条记账）` 一步 261 秒；
+#    其余 128 秒全是**起环境**（PG 镜像 9s · 后端 jar 25s · 起后端 15s · 前端依赖 10s ·
+#    playwright 20s · OCR 10s）。★ 所以它没法再"拆快"——除非把环境做成可复用镜像，
+#    而那会把"真栈"变成"半真栈"，不值。
+# ══════════════════════════════════════════════════════════════════════════════
+
 on:
   push:
     branches: [main]
@@ -9,260 +26,10 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: realstack-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  backend:
-    name: 后端 · 编译 + 四类闸门
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # ★ 版本线：Temurin 25（09 §4.1）。本机是靠 backend\mvn-jdk25.cmd 钉的，
-      #   CI 里由 setup-java 提供 —— 两条路都指向同一个 JDK，避免"本地过了 CI 挂"。
-      - name: 安装 JDK 25
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '25'
-          cache: maven
-
-      # ★ 先起 OpenAI 桩服务，否则 OpenAiStubContractTest 会整体跳过 ——
-      #   那 6 条里有两条是"框架有没有把 reasoning_effort 发出去""base-url 打得对不对"
-      #   这类真证据，跳过它等于让这条回归在 CI 里静默失效。
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: 起 OpenAI 桩服务（供契约测试用）
-        working-directory: backend
-        run: |
-          python tools/openai_stub.py --port 11434 > /tmp/stub.log 2>&1 &
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:11434/v1/models > /dev/null; then
-              echo "桩服务就绪"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "★ 桩服务起不来 —— 契约测试会因此被跳过。日志："
-          cat /tmp/stub.log
-          exit 1
-
-      # ★ OCR 引擎与语言包必须装，否则 OcrParserTest（5 条）与 OcrEngineTest 里
-      #   依赖真引擎的两条会**整体 assumeThat 跳过** —— CI 显示绿，而扫描件识别
-      #   **没有任何回归在守**（issue #2）。
-      # ★ 三个包都要列：官方 `tesseract-ocr` **只带 eng**，漏了 `tesseract-ocr-chi-sim`
-      #   会让中文退化成方块/乱码 —— 而且不报错、不影响启动，是部署期最不可见的一类漏装。
-      #   （`deploy/README.md` §三 的离线交付清单里，这三行与镜像是同源的。）
-      - name: 装 OCR 引擎与语言包
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
-          echo "已装："
-          tesseract --version | head -1
-          tesseract --list-langs
-
-      # ★ 自制 PG 镜像（pgvector + zhparser）—— 集成测试（Testcontainers）靠它。
-      #   设计册 `09 §10.2 #3` 的中文全文检索是 `to_tsvector('chinese_zh', …)`，
-      #   而 `chinese_zh` 的 parser 只能是 zhparser；实测 pgvector 官方镜像里没有它、
-      #   PGDG/Debian 也无现成包 ⇒ 只能自己编译（`deploy/pg/Dockerfile`）。
-      #   ★ 带 GHA 层缓存：SCWS + zhparser 的编译只在缓存失效时发生（首次约 3–4 分钟，
-      #     之后是命中缓存）。★ 这里放 buildx + build-push-action 而不是 `docker build`，
-      #     就是为了拿到这份跨运行的缓存。
-      - uses: docker/setup-buildx-action@v3
-
-      - name: 构建 PG 镜像（自制：pgvector + zhparser）
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: deploy/pg/Dockerfile
-          tags: ai-knowledge-platform-pg:dev
-          load: true
-          cache-from: type=gha,scope=pg-zhparser
-          cache-to: type=gha,scope=pg-zhparser,mode=max
-
-      # ★ 镜像自己的闸门（11 项）在"用镜像之前"跑：pgvector 真功能（建表/HNSW/余弦排序）、
-      #   zhparser 精确分词（`'合同':1 '违约金':2`）、`simple` 对照、已知上限金丝雀、
-      #   以及"交付镜像里没有 gcc/git"。镜像坏了必须在这里红，而不是伪装成"测试坏了"。
-      - name: PG 镜像自检
-        run: python deploy/verify_image_pg.py
-
-      # 四类闸门一次跑完：单测 / 集成（Testcontainers 真 PG）/ 架构（Modulith verify + 金丝雀）/ 格式化。
-      # ★ GitHub 的 ubuntu runner 自带 Docker，Testcontainers 可直接用。
-      - name: mvn verify
-        working-directory: backend
-        run: mvn -B verify
-
-      # ★ 零用例闸门：`Tests run: 0` 一律按失败处理（Issue #53 判据 ① / #50 判据 ②）。
-      #   形态：`@BeforeAll` 里的 `assumeThat` 不成立 ⇒ JUnit **中止整个容器** ⇒ surefire 打出的正是
-      #   `Tests run: 0, Failures: 0, Errors: 0, Skipped: 0` + `BUILD SUCCESS` —— 不含 skip、不含失败、纯绿。
-      #   2026-10-11 实测：桩（11434）没起时 8 个依赖它的类全部以这种形态"绿"着（见 Issue #53）。
-      #   本 job 的桩在上面那一步已经起了（起不来会直接红），所以这些类**本该跑起来**：
-      #   真出现 `Tests run: 0` 就是真问题，不是环境噪声。
-      #   扫 surefire 报告目录（CI 每次全新 ⇒ 不存在"上一次留下的旧报告"）。
-      - name: 零用例闸门
-        run: python tools/check_zero_tests.py backend/target/surefire-reports
-
-      - name: 失败时留测试报告
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-surefire-reports
-          path: backend/target/surefire-reports/
-          if-no-files-found: ignore
-
-  frontend:
-    name: 前端 · 闸门 + 构建
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      # ★ 必须在跑 python 脚本之前：runner 上只有 python3，
-      #   而这些脚本全部以 `python xxx.py` 的方式被调用
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: 安装依赖
-        working-directory: frontend
-        run: npm ci
-
-      # ── 第一组：不需要 dev server。这四个是真正的纯静态闸门 ──
-      - name: 静态闸门
-        working-directory: frontend
-        run: |
-          python verify_refs.py
-          python check_template_tags.py
-          python check_design.py
-          # ★ 错误码一致性（issue #8）：契约 ↔ 后端枚举 ↔ mock 三处逐值核对。
-          #   这条拦的是"两边各写一份取值、没人核"——mock 曾自造 4001–4006 与 40404/30xx，
-          #   而后端一律返契约里的码，前端当时又不按码分支 ⇒ 完全看不见的分歧。
-          python check_error_codes.py
-          # ★ 画布节点类型（issue #20/#21）：注册名必须是契约取值，不是目录名的 kebab 形态。
-          #   #20 就是"注册名 start-node vs 契约 START_NODE" ⇒ 画布整页不可用、活了 9 天。
-          #   真栈那五条闸门全在知识库域，画布只有 mock 在守 ⇒ 这一类必须在静态层钉住。
-          python check_workflow_node_types.py
-
-          python check_deeplink_segments.py
-      # ── 第二组：需要 dev server + 浏览器 ──
-      # ★ 实测结论（2026-09，本机两遍）：这 19 个 .py 里有 16 个 import playwright，
-      #   其中 14 个（3 个纯静态 + 11 个浏览器）两遍结果**完全一致**，可以当确定性闸门用；
-      #   另外 3 个当前 flaky，**故意不放在这里**（理由见下面的注释）。
-      - name: 装 playwright 浏览器（Python 侧）
-        run: |
-          pip install playwright
-          playwright install --with-deps chromium
-
-      - name: 起 dev server 并等就绪
-        working-directory: frontend
-        run: |
-          npm run dev > /tmp/vite.log 2>&1 &
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:5280 > /dev/null; then
-              echo "dev server ready after ${i} tries"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "★ dev server 起不来 —— 后面所有浏览器闸门都会以 ERR_CONNECTION_REFUSED 失败，"
-          echo "  那不是页面有问题，是基础设施没就绪。日志："
-          cat /tmp/vite.log
-          exit 1
-
-      # ★ 等就绪之后还要再等一拍：vite 是**首次访问才编译**，
-      #   curl 通只代表端口在听。实测在这一拍上踩过：verify_permissions 冷启动时报
-      #   "49/50"，热了之后是 "49/49" —— 数字不同不是代码变了，是页面还没编译完。
-      - name: 预热首页（触发 vite 首次编译）
-        run: |
-          curl -s http://localhost:5280 > /dev/null
-          curl -s http://localhost:5280/login > /dev/null
-          sleep 5
-
-      # ★★ 逐条跑完并记账，**不让第一个失败遮蔽其余**（issue #19）。
-      #
-      #   这些闸门是互相独立的信号。用 shell 的 `set -e`（GHA 默认）串起来，等于
-      #   "第一个坏了就再也看不到后面 10 条" —— 实测代价：2026-09-28 起 `check_nodeconfig.py`
-      #   超时，于是 check_node_menu / check_canvas / … 共 9 条**连续一周多从没在 CI 里执行过**，
-      #   工作流里却写着"11 个确定性闸门"。那也是一种"看起来在做、实际没生效"。
-      #
-      #   ★ 判据没有弱化：任一条红，这一步最后照样 exit 1。变的是"红的时候能不能看见全貌"。
-      - name: 浏览器闸门（11 个确定性闸门）
-        working-directory: frontend
-        run: |
-          failed=()
-          for g in check_theme check_nodeconfig check_node_menu check_canvas check_collapse \
-                   check_history check_palette check_pickers check_assistants check_singleton \
-                   check_publish; do
-            echo "::group::${g}.py"
-            if python "${g}.py"; then
-              echo "✓ ${g}.py 通过"
-            else
-              echo "::error::${g}.py 失败"
-              failed+=("${g}.py")
-            fi
-            echo "::endgroup::"
-          done
-          if [ ${#failed[@]} -gt 0 ]; then
-            echo "★ 失败 ${#failed[@]}/11：${failed[*]}"
-            exit 1
-          fi
-          echo "11 个浏览器闸门全部通过"
-
-      # ── 第三组：自带静态服务器 serve `dist/` 的两个闸门（issue #14）──
-      #
-      # ★ 它们在 42xx 端口上自己起 http.server 服务 `dist/`，所以**必须在 build 之后**跑。
-      #
-      # ★ 这两条此前被排除在 CI 之外，理由是"断言总数在变 ⇒ 随机变红"。本轮按实测修掉了：
-      #     · verify_features.py —— 实测的时序是：填弱口令 +100ms 出校验文案；
-      #       改填合格口令后旧文案**要到 +300ms 才消失**。原先读一次（固定 900ms）在 CI 上不够。
-      #       改成「等文案静默 400ms 再读」（> 实测的 300ms 转换窗口）⇒ 之后 11 轮连续全绿。
-      #     · smoke_test.py —— 原先稳定红 1 条（32/33），而那不是 flaky，是**真缺陷**：
-      #       模型列表的「类型」筛选选项值是 `chat`/`embedding`，而 mock 与后端都比 SCREAMING_SNAKE
-      #       ⇒ 选「向量模型」恒筛出 0 条（issue #23）。修完是 34/34。
-      #       ★ 这条闸门抓出了真缺陷却没人知道 —— 因为它不在 CI 里。这正是 #14 的代价。
-      - name: 类型检查 + 构建（mock 模式）
-        working-directory: frontend
-        run: npm run build:mock
-
-      - name: 功能点 / 冒烟闸门（自带 dist 服务）
-        working-directory: frontend
-        run: |
-          failed=()
-          for g in verify_features smoke_test; do
-            echo "::group::${g}.py"
-            if python "${g}.py"; then
-              echo "✓ ${g}.py 通过"
-            else
-              echo "::error::${g}.py 失败"
-              failed+=("${g}.py")
-            fi
-            echo "::endgroup::"
-          done
-          if [ ${#failed[@]} -gt 0 ]; then
-            echo "★ 失败 ${#failed[@]}/2：${failed[*]}"
-            exit 1
-          fi
-          echo "两条闸门全部通过"
-
-      # ⚠️ 仍然**故意不接入** CI 的一个闸门：
-      #
-      #   verify_permissions.py —— 权限矩阵。本轮已修掉一处确定的时序问题
-      #     （登录后固定等 1600ms 就断言 URL 变了 → 改成 `wait_for_url` 等真的离开登录页），
-      #     但**仍有约 1/8 的偶发**：报「仍停在 /#/login」且等 20s 也不跳转，
-      #     而现场（值已填对、无报错文案、无控制台错误）看不出原因，本机探针单独连登 8 次是 8/8 干净。
-      #   ⇒ 没弄清之前不接进来：随机红比不红更坏（报红会有人去改本来没错的东西）。
-      #     下一次它红的时候，失败信息里会带上现场（输入框值 / 验证码控件数 / 提示气泡 / 表单校验文案），
-      #     那时就能定因。跟踪：issue #14。
-
   # ══════════════════════════════════════════════════════════════════════════════
   #  真栈 · 五条端到端闸门（issue #3）
   #
@@ -280,6 +47,11 @@ jobs:
   realstack:
     name: 真栈 · 端到端闸门
     runs-on: ubuntu-latest
+    # ★ 实测 6 分 17 秒；给 30 分钟上限。
+    #   ★ 补这一条的理由：本文件拆出来之前，整条 ci.yml **没有一处 `timeout-minutes`** ——
+    #     卡住时会占满 GitHub 默认的 6 小时。那不只是慢，它会把同一并发组里的后续运行**挤掉**
+    #     （`ci.yml` 原来是单文件三 job，一个卡住会连累另两个的排队）。
+    timeout-minutes: 30
 
     # ★ 这个 job **没有** `services:` 了 —— 原来起的 `postgres` 是官方 pgvector 镜像，
     #   而现在 PG 必须是自制镜像（pgvector + zhparser），GitHub 的 **service 容器只能拉

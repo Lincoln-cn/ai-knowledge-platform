@@ -1,0 +1,89 @@
+name: 前端 · 构建 + 冒烟
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  从 ci.yml 拆出来的第四块（原前端的"第三组"）
+#
+#  ★ 拆之前的读数：`类型检查 + 构建（mock 模式）` 27 秒 · `功能点 / 冒烟闸门` 118 秒。
+#    ⇒ typecheck 已进 `ci-fast.yml`（那里最先红），本文件只留
+#      **构建产物 + 用 dist 跑的冒烟/功能点**两件 —— 它们的共同前提是"要有 dist"。
+#
+#  ★ 为什么这两条曾经**不在 CI 里**，以及为什么现在必须在（原 ci.yml 的注释照抄）：
+#    · `verify_features.py` —— 实测时序：填弱口令 +100ms 出校验文案；
+#      改填合格口令后旧文案**要到 +300ms 才消失**。原先读一次（固定 900ms）在 CI 上不够。
+#      改成「等文案静默 400ms 再读」⇒ 之后 11 轮连续全绿。
+#    · `smoke_test.py` —— 原先稳定红 1 条（32/33），而那不是 flaky，是**真缺陷**：
+#      模型列表的「类型」筛选选项值是 `chat`/`embedding`，而 mock 与后端都比 SCREAMING_SNAKE
+#      ⇒ 选「向量模型」恒筛出 0 条（issue #23）。修完是 34/34。
+#      ★ 这条闸门抓出了真缺陷却没人知道 —— 因为它不在 CI 里。这正是 #14 的代价。
+# ══════════════════════════════════════════════════════════════════════════════
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: frontend-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-smoke:
+    name: 前端 · 构建 + dist 冒烟
+    runs-on: ubuntu-latest
+    # ★ 实测 ~2.5 分钟。给 20 分钟上限。
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        working-directory: frontend
+        run: npm ci
+
+      # ★ `build:mock` 同时做两件事：`vue-tsc` 类型检查 + 产 dist。
+      #   ★ 类型检查现在**也在** `ci-fast.yml` 里跑一遍 —— 那不是重复劳动：
+      #     快闸要的是"1 分钟内知道类型坏了"，这里要的是"**产物真的能构建出来**"。
+      #     两者失败的成因可以不同（快闸是 vue-tsc 单跑；这里是完整 vite 构建）。
+      - name: 构建（mock 模式）
+        working-directory: frontend
+        run: npm run build:mock
+
+      # ★★ 两条闸门**自带**静态服务器去 serve `dist/`（42xx 端口），
+      #   所以必须在 build 之后跑。★ 逐条记账、不遮蔽（同原文件）。
+      - name: 功能点 / 冒烟闸门（自带 dist 服务）
+        working-directory: frontend
+        run: |
+          failed=()
+          for g in verify_features smoke_test; do
+            echo "::group::${g}.py"
+            if python "${g}.py"; then
+              echo "✓ ${g}.py 通过"
+            else
+              echo "::error::${g}.py 失败"
+              failed+=("${g}.py")
+            fi
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "★ 失败 ${#failed[@]}/2：${failed[*]}"
+            exit 1
+          fi
+          echo "两条闸门全部通过"
+
+      - name: 失败时留截图
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-smoke-screenshots
+          path: frontend/screenshots/
+          if-no-files-found: ignore
