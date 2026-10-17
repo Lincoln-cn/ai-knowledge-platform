@@ -284,6 +284,36 @@ export interface SegmentBrief {
 export const getSegment = (id: string) =>
   request<SegmentBrief>({ method: 'GET', url: '/segments/:id', path: { id } })
 
+/**
+ * 会话评分（设计册 `05 §6.2`：`POST /conversations/{id}/feedback`）。
+ *
+ * 口径（来自设计册 `02:415` 的 `Feedback` 聚合：消息、会话、用户、赞踩、评分、评论）：
+ * - `score` 1–5 整数；越界是**调用方**的问题 ⇒ 服务端 400（带合法范围）；
+ * - `comment` 可选、最多 500 字；
+ * - ★ 同一用户对同一会话**只有一条**评分 ⇒ 再提交是**覆盖**（`createdAt` 不变、`updatedAt` 变），
+ *   不是追加 —— 设计册里只有「提交评分」，没有「追加」。
+ */
+export interface ConversationFeedback {
+  conversationId: string
+  /** 1–5 */
+  score: number
+  comment: string | null
+  createdAt: string
+  /** 最近一次提交时间；覆盖提交时它会变 */
+  updatedAt: string
+}
+
+export const submitConversationFeedback = (
+  conversationId: string,
+  body: { score: number; comment?: string | null }
+) =>
+  request<ConversationFeedback>({
+    method: 'POST',
+    url: '/conversations/:conversationId/feedback',
+    path: { conversationId },
+    body
+  })
+
 /** 赞踩互斥且可撤销：type 传 null 表示取消 */
 export const submitMessageFeedback = (messageId: string, type: MessageFeedback | null) =>
   request<ChatMessage>({
