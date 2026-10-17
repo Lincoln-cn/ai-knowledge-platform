@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.conversation.web;
 
 import cn.lincoln.aiplatform.conversation.application.ChatHistoryService;
 import cn.lincoln.aiplatform.conversation.application.ChatMessageView;
+import cn.lincoln.aiplatform.conversation.application.ChatMode;
 import cn.lincoln.aiplatform.conversation.application.ChatService;
 import cn.lincoln.aiplatform.conversation.application.ChatStopService;
 import cn.lincoln.aiplatform.conversation.application.ChatStreamAssembler;
@@ -168,6 +169,11 @@ public class ChatController {
     //   ② 反过来（JWT 优先）的代价是"登录用户拿同一条链接不放大"这条判据**在 HTTP 层读不到**；
     //   ③ 前端两条通道互斥（lib/sse.ts 只设其中之一）⇒ 这个分支在生产上不影响任何人。
     if (credentialToken != null) {
+      // ★★ 公开面显式拒绝「重新生成」—— 必须在**任何落库之前**（见 rejectRegenerate 的 javadoc：
+      //   放在 startTurn 之后再拒会留下一条永远生成不完的空消息）。
+      if (ChatMode.parse(body.mode()) != ChatMode.NEW) {
+        publicChat.rejectRegenerate();
+      }
       UUID requesterId = jwt == null ? null : subjectOf(jwt);
       PublicChatService.PreparedTurn turn =
           publicChat.startTurn(credentialToken, body.question(), requesterId);

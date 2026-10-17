@@ -118,6 +118,25 @@ public class PublicChatService {
   }
 
   /**
+   * ★★ 公开面<strong>显式拒绝</strong>「重新生成」（契约 {@code ChatMode.REGENERATE}）。
+   *
+   * <h3>为什么必须拒绝，而不是"当 NEW 处理"</h3>
+   *
+   * <p>契约的 {@code REGENERATE} 语义是「<strong>覆盖</strong> {@code targetMessageId} 对应的原答案
+   * （<strong>不新增消息对</strong>）」。公开面若静默按 {@code NEW} 走，就会 <strong>新增一问一答</strong> ——
+   * 与契约直接矛盾，而界面上它看起来完全正常 （用户点"重新生成"，多出来一条），这正是本仓头号病 {@code silent-failure} 的形状。
+   *
+   * <p>★ 为什么本轮不给公开面<strong>做</strong>重生成：公开面的目标消息归属只能靠 "链接归属人"间接判定，而重生成会<strong>覆盖</strong>那条答案 ——
+   * 覆盖面比"读"大得多。 这一格留到"公开面是否允许改动历史"这条口径定下来之后（已记进冲刺清单）。
+   *
+   * <p>★★ 位置是刻意的：它必须在<strong>任何落库之前</strong>抛。放在 {@code chatService.startTurn} 之后再拒，会留下一条 {@code
+   * GENERATING} 的空消息 （"一条永远生成不完的回答"），那比"拒绝"糟得多。
+   */
+  public void rejectRegenerate() {
+    throw new BusinessException(ErrorCode.BAD_REQUEST, "公开链接不支持重新生成", "请在登录后于会话页重新生成；公开页每一轮都是新会话");
+  }
+
+  /**
    * 开一轮免登录问答：解析令牌 → 在链接的范围里落库（建会话 / 建两条消息 / 定模型）。
    *
    * @throws BusinessException 令牌四态之一 · 链接当前不可用（{@code 404}）· 没有可用对话模型 / 空提问（{@code 400}）
