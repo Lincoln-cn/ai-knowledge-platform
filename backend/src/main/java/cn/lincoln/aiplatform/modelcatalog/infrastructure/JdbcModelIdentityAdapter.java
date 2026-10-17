@@ -36,7 +36,7 @@ public class JdbcModelIdentityAdapter implements RoutingEmbeddingAdapter.ModelId
     try {
       String baseModel =
           jdbc.queryForObject(
-              "select base_model from mc_model where id = ?", String.class, modelId);
+              "select base_model from ai_model where id = ?", String.class, modelId);
       if (baseModel == null || baseModel.isBlank()) {
         throw new BusinessException(
             ErrorCode.BAD_REQUEST,

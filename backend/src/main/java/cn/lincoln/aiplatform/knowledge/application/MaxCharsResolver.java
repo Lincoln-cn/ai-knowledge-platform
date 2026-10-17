@@ -70,6 +70,26 @@ public class MaxCharsResolver {
     try {
       var base = knowledgeBases.get(kbId);
       UUID modelId = UUID.fromString(base.embeddingModelId());
+      // ★★ 三级退让（顺序不能反）：
+      //   ① `max_chars` —— 登记的人写的确切值（单位：字），最可信；
+      //   ② `context_window × 0.78` —— 只对**对话模型**有值；向量模型这一列**恒为 null**
+      //      （`ai_model` 表注释写死），所以这一级对向量化通常不动；
+      //   ③ 配置回落值。
+      //   实测教训：本类此前只问 `context_window`，而它在向量模型上永远是 null ⇒
+      //   「本地 ONNX 压到 400 字」这条口径**从来没有生效过**，一直是配置在起作用。
+      Integer declared = modelCapability.maxChars(modelId);
+      if (declared != null && declared > 0) {
+        int effective = Math.min(fallback, declared);
+        if (effective < fallback) {
+          log.info(
+              "分段上限被模型登记的字符预算收口：配置={} → 实际={}（模型 {} 的 max_chars={}）",
+              fallback,
+              effective,
+              modelId,
+              declared);
+        }
+        return Math.max(1, effective);
+      }
       Integer window = modelCapability.contextWindow(modelId);
       if (window != null && window > 0) {
         // ★ 保守比：0.78 的来历 = 本机要接入的 `bge-small-zh-v1.5`（窗口 512）的安全字数

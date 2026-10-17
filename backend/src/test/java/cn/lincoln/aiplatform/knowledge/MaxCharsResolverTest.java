@@ -46,6 +46,8 @@ class MaxCharsResolverTest {
     when(bases.get(KB)).thenReturn(view);
 
     ModelCapabilityPort caps = mock(ModelCapabilityPort.class);
+    // ★ 向量模型的 `max_chars` 默认未登记（真实情况：靠 context_window 那条对向量模型是 null）
+    when(caps.maxChars(any())).thenReturn(null);
     when(caps.contextWindow(any())).thenReturn(window);
     return new MaxCharsResolver(bases, caps);
   }
@@ -66,6 +68,37 @@ class MaxCharsResolverTest {
     assertThat(withWindow(512).resolve(KB, 300))
         .as("★ 取 min 而不是取窗口 —— 配置比模型预算小时必须听配置")
         .isEqualTo(300);
+  }
+
+  /** ★★ 登记了 `max_chars` 就听它 —— 这才是「本地 ONNX 压到 400 字」的落地点。 */
+  @Test
+  void declaredMaxCharsIsHonoured() {
+    MaxCharsResolver resolver = withDeclared(399, null);
+
+    assertThat(resolver.resolve(KB, 1200))
+        .as(
+            "★★ 向量模型的 `context_window` 恒为 null（ai_model 表注释写死），所以 400 字只能靠"
+                + " `max_chars` 落地。若这条得到 1200，说明「本地 ONNX 强制 400 字」仍然只是文档里的一句话")
+        .isEqualTo(399);
+  }
+
+  @Test
+  void declaredMaxCharsStillCannotExceedTheConfiguredValue() {
+    MaxCharsResolver resolver = withDeclared(399, null);
+
+    assertThat(resolver.resolve(KB, 200)).as("★ 仍是取 min：配置更小时听配置（用户想切更碎是他的自由）").isEqualTo(200);
+  }
+
+  /** 造一个「登记了 max_chars」的解析器，窗口列按真实情况给 null。 */
+  private MaxCharsResolver withDeclared(Integer maxChars, Integer window) {
+    KnowledgeBaseService bases = mock(KnowledgeBaseService.class);
+    KnowledgeBaseView view = mock(KnowledgeBaseView.class);
+    when(view.embeddingModelId()).thenReturn(MODEL.toString());
+    when(bases.get(KB)).thenReturn(view);
+    ModelCapabilityPort caps = mock(ModelCapabilityPort.class);
+    when(caps.maxChars(any())).thenReturn(maxChars);
+    when(caps.contextWindow(any())).thenReturn(window);
+    return new MaxCharsResolver(bases, caps);
   }
 
   @Test
