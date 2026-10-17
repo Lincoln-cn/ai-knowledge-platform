@@ -219,12 +219,18 @@ MUST_WORK: list[tuple[str, str, str]] = [
     #   是**闸门自己**要求移的："已不再报失败 => 请把它从 KNOWN_PENDING 移走" —— 那条断言防的正是
     #   "曾经欠过、现在早已实现，而清单还挂着它"的黑洞（同族：ContractDriftTest 的未实现前缀）。
     ("/assistants", "应用管理", "应用"),
+    # ★ 2026-10-17 从 KNOWN_PENDING 升级上来（PR #162）：`GET`/`POST /conversations` 落地后，
+    #   这一页 `失败接口=0 控制台错误=0` ⇒ 闸门要求升级成"必须真的不报失败"。
+    ("/conversation", "对话", "对话"),
 ]
 
 # ── 已知后端未落地：**加载时就会报失败**（各自有周次计划，只记录不判失败）──
 KNOWN_PENDING: list[tuple[str, str, str]] = [
     ("/", "工作台", "工作台"),
-    ("/conversation", "对话", "对话"),
+    # ★ `/conversation` 已从本清单**移走**（2026-10-17 · PR #162）：`GET`/`POST /conversations`
+    #   落地后，这一页 `失败接口=0 控制台错误=0`，闸门自己也要求移
+    #   （逐字：`[NG] 对话（/conversation）已不再报失败 => 请把它从 KNOWN_PENDING 移走`）。
+    #   ⇒ 它现在进了 `MUST_WORK` —— 从"只记录"升级成"必须真的不报失败"。
     ("/assistants/prompts", "提示词", "提示词"),
     ("/market", "应用市场", "应用"),
     ("/analytics", "运营看板", "看板"),
