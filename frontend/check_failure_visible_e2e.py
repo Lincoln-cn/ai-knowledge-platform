@@ -222,8 +222,24 @@ def _run_under_failure(app_id: str) -> None:
         body = page.inner_text("body")
         print(f"  [诊断] 失败后页面片段 = {body[:260]!r}")
 
+        # ★★ ① 的口径（本版加强过，理由写在文件头）：
+        #   不能只断"含某个词" —— 实测页面上那句是 `生成失败：refs.map is not a function`，
+        #   **它含"失败"**，而用户读到的是一句 JS 类型错误。⇒ 「含某个词」不是「可读」。
+        JS_ERROR_MARKERS = (
+            "is not a function",
+            "TypeError",
+            "Cannot read",
+            "undefined is not",
+            "[object Object]",
+        )
+        leaked = [marker for marker in JS_ERROR_MARKERS if marker in body]
+        check(
+            not leaked,
+            f"①a ★★ 界面上**不许出现内部 JS 错误**（实得泄漏的标记 {leaked}）"
+            f" —— 那是实现细节，不是给用户的原因（账在 #164）",
+        )
         readable = any(word in body for word in ("失败", "错误", "异常", "重试"))
-        check(readable, "① ★ 失败之后界面**给出了可读原因**（正文含 失败/错误/异常/重试 之一）")
+        check(readable, "①b ★ 失败之后界面**给出了可读原因**（正文含 失败/错误/异常/重试 之一）")
 
         retry = page.locator("button:has-text('重试'), button:has-text('重新生成')")
         check(
@@ -232,7 +248,14 @@ def _run_under_failure(app_id: str) -> None:
             f" —— 只给原因不给入口，用户只能刷新",
         )
 
-        check(not errors, f"④ 全程无未处理页面异常（实得 {errors[:2]}）")
+        # ★ ④ 的口径：只豁免**已登记为未实现**的端点（`/analytics`，账在 `#160`），
+        #   且逐条打印被豁免的 —— 不许"过滤掉所有 pageerror"（那等于把 ④ 删掉）。
+        KNOWN_UNIMPLEMENTED = "接口不存在：api/v1/analytics"
+        surfaced = [e for e in errors if KNOWN_UNIMPLEMENTED not in e]
+        waived = [e for e in errors if KNOWN_UNIMPLEMENTED in e]
+        if waived:
+            print(f"  [豁免] 已登记未实现端点的页面错误 {len(waived)} 条（账在 #160）：{waived[:2]}")
+        check(not surfaced, f"④ ★ 除已登记的未实现端点外，无页面异常（实得 {surfaced[:2]}）")
 
         browser.close()
 
