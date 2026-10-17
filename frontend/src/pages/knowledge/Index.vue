@@ -246,6 +246,10 @@
             :initial-document-id="segmentDocId"
             :highlight-segment-id="targetSegment?.id"
           />
+          <QuestionPanel
+            v-else-if="activeTab === 'questions'"
+            :kb-id="openedKb.id"
+          />
           <HitTestPanel
             v-else-if="activeTab === 'hittest'"
             :kb-id="openedKb.id"
@@ -282,6 +286,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import CreateWizard from './components/CreateWizard.vue'
 import DocumentPanel from './components/DocumentPanel.vue'
 import SegmentPanel from './components/SegmentPanel.vue'
+import QuestionPanel from './components/QuestionPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import HitTestPanel from './components/HitTestPanel.vue'
 
@@ -304,6 +309,7 @@ const consumer = computed(() => session.dataScope === 'SHARED')
 const TABS = [
   { key: 'documents', label: '文档' },
   { key: 'segments', label: '分段' },
+  { key: 'questions', label: '问题' },
   { key: 'hittest', label: '命中测试' },
   { key: 'settings', label: '设置' }
 ] as const
