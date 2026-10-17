@@ -152,6 +152,20 @@ public class Message {
   @Column(name = "fail_hint")
   private String failHint;
 
+  /**
+   * 消息级赞踩（契约 {@code ChatMessage.feedback}）。{@code null} = 未评价。
+   *
+   * <p>★ 取值域由库层 {@code chk_msg_feedback}（{@code V35}）兜住； 而"<strong>只有助手消息可被评价</strong>"这条只能在应用层
+   * （{@link #rate}）—— PG 的 {@code CHECK} 不能跨行引用 {@code role}。
+   */
+  // ★ EnumType.STRING 是必须的：Hibernate 6 对枚举默认 ORDINAL（smallint），
+  //   而契约要 'UP'/'DOWN' 字面量、库里也是 varchar(8)。少这一行会在起容器时炸 schema validation
+  //   （本批实测：found [varchar (Types#VARCHAR)], but expecting [smallint (Types#TINYINT)]），
+  //   而那种红看起来像"迁移写错了"。
+  @Enumerated(EnumType.STRING)
+  @Column(name = "feedback", length = 8)
+  private MessageFeedback feedback;
+
   @CreationTimestamp
   @Column(name = "created_at", nullable = false, updatable = false)
   private Instant createdAt;
@@ -439,6 +453,40 @@ public class Message {
    */
   public String failHint() {
     return failHint;
+  }
+
+  /** 消息级赞踩；{@code null} = 未评价。 */
+  public MessageFeedback feedback() {
+    return feedback;
+  }
+
+  /**
+   * 赞 / 踩 / 取消评价（S3 的「赞/取消赞刷新后仍在」）。
+   *
+   * <h3>★ 三条守卫，各对应一种"能写进去但语义不成立"的形状</h3>
+   *
+   * <ol>
+   *   <li><b>只有助手消息可被评价</b> —— 用户自己那条消息上的"赞"没有任何含义； ★ 库层 {@code CHECK} 做不到（不能跨行引用 {@code
+   *       role}），所以必须在这里挡；
+   *   <li><b>生成中不许评价</b> —— 一条还在 {@code GENERATING} 的消息，用户评的是"没写完的东西"； 而且它随后可能变成 {@code
+   *       FAILED}，那时"赞"就与 {@code fail_reason} 自相矛盾；
+   *   <li><b>可撤销</b> —— 传 {@code null} 表示取消，回到"未评价"。★ 这是契约明写的语义 （"赞踩互斥且<b>可撤销</b>：type 传 null
+   *       表示取消"），不是容错。
+   * </ol>
+   *
+   * <p>★ 幂等：重复提交同一个评价不报错、不改 {@code updated_at} 的语义（它本来就会被更新， 但"赞两次"不该变成一种错误 —— 用户的动作就是"赞"，不是"切换"）。
+   *
+   * @param next 目标评价；{@code null} = 取消
+   * @throws IllegalArgumentException 违反上面第 1 或第 2 条
+   */
+  public void rate(MessageFeedback next) {
+    if (role != MessageRole.ASSISTANT) {
+      throw new IllegalArgumentException("只有助手的回答可以被赞/踩（这条消息是 " + role + "）");
+    }
+    if (status == MessageStatus.GENERATING) {
+      throw new IllegalArgumentException("这一条还在生成中，等它结束再评价");
+    }
+    this.feedback = next;
   }
 
   public Instant createdAt() {

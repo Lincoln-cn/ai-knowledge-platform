@@ -119,7 +119,13 @@ class ContractDriftTest {
           //   （契约里 `GET /{id}/messages` 挂在 /conversations 下，而消息自己的 CRUD 挂 /messages）
           //   ⇒ 删前缀时要两条一起判，不能只看一条。
           "/conversations",
-          "/messages",
+          // ★ 第 18 周 0.5.0 的 `/messages` 已于 2026-10-17 **从清单删除**：它下面唯一的契约路径
+          //   （`POST /messages/{messageId}/feedback`，赞踩）已实现 ⇒ 零欠账。
+          //   ★ 删它是**防黑洞测试逼出来的**（`未实现清单里的域名必须仍然有欠账` 当场红，
+          //   逐字「[未实现清单里的 /messages 在契约中已无欠账 … ⇒ 请从清单删除，否则它会变成没人再看的黑洞]」）——
+          //   与本文件里 /documents、/segments、/retrieval、/public 那几次删除同一条纪律。
+          //   ★ 注意 `/conversations` **必须留着**：它自己的 `POST`（建会话）、`PATCH`/`DELETE /{id}`
+          //   以及 `/conversations/chat`（那条另有 KNOWN_EXCEPTIONS 的账）都还没实现 ⇒ 还没到触发点。
           // ★ 第 16 周 0.4.4 的 `/public` 已于 2026-10-16 **从清单删除**：它下面的每一条契约路径
           //   （GET /{token} · GET /{token}/messages · POST /{token}/messages/{messageId}/stop）
           //   后端都已实现 ⇒ 留着它就成了"曾经欠过、现在早已实现"的噪音，而**防黑洞测试会当场红**
