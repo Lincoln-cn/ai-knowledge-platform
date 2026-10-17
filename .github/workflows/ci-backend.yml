@@ -14,10 +14,15 @@ name: 后端 · 回归 + 架构闸门
 #         一旦写错一个字，job 会**立刻红**；而 110 个测试类靠手抄清单，写错的概率不低。
 #      ② 拆档的风险是**漏类**（漏一个类 = 那一批回归在 CI 里静默失效，正是本项目头号病）。
 #      ⇒ 整包跑是"不丢东西"的保证；本批只在**它之外**另加一条"架构闸门先跑"的快车道。
-#    · 架构闸门单独成 job（`architecture`）：它**不需要 PG / 桩 / 浏览器**，所以能先绿先报。
+#    · 架构闸门单独成 job（`architecture`）：顶层那 9 个类里绝大多数只要编译，红的定位比混在整包里精确；
+#      ★ 但**并非全部** —— `ContractDriftTest` / `MigrationIntegrationTest` 要 Testcontainers 的 PG 镜像
+#      （本批真跑才发现的，逐字见该 job 的注释）。所以两个 job 都要先构建 PG 镜像。
 #
 #  ★ 判据：把 `ModuleBoundaryTest` 的边界弄坏 ⇒ 只有 `architecture` 红，`backend` 照常出读数；
 #    把某条集成测试弄坏 ⇒ 只有 `backend` 红。任一侧红都不遮蔽另一侧。
+#  ★★ 本批实测的收益（2026-10-17）：`architecture` 在 **2 分钟**内就报出了
+#    "两个类拉不到 PG 镜像"，而同一轮的整包 `backend` 跑到 **13 分钟**才结束 ——
+#    这正是拆分的意义（虽然那次红是我自己的假设错了，见该 job 的注释）。
 # ══════════════════════════════════════════════════════════════════════════════
 
 on:
@@ -31,9 +36,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ─────────────────────── ① 架构 / 口径闸门（不要 DB，最先出结果）───────────────────────
+  # ─────────────────────── ① 架构 / 口径闸门（先跑，比整包早十几分钟出结果）───────────────────────
+  #
+  #  ★★ 本批实测纠正了一个**我自己的错误假设**：第一版这个 job 的名字写的是"不要 DB"，
+  #    因为顶层的架构闸门（ModuleBoundary / PlatformPurity / TestNaming…）确实只要编译。
+  #    但真跑当场红了，逐字：
+  #        ContractDriftTest » ContainerFetch Can't get Docker image: ai-knowledge-platform-pg:dev
+  #        MigrationIntegrationTest » ContainerFetch Can't get Docker image: ai-knowledge-platform-pg:dev
+  #        Tests run: 17, Errors: 2
+  #    —— ★ **`ContractDriftTest` 与 `MigrationIntegrationTest` 要 Testcontainers 的 PG 镜像**。
+  #    ⇒ 本 job 必须与 `backend` job 一样先构建镜像。（本地能过我，是因为本机有那个镜像 —— 典型的环境差异。）
+  #  ★ 它仍然值得单独成 job：17 条里 15 条只要编译，红的定位比混在整包里精确得多，
+  #    而且**它 2 分钟就给出了答案**（整包 verify 要 15 分钟）。
   architecture:
-    name: 架构 + 口径闸门（不要 DB）
+    name: 架构 + 口径闸门
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -45,6 +61,21 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
+
+      # ★ 自制 PG 镜像（pgvector + zhparser）—— `ContractDriftTest` / `MigrationIntegrationTest`
+      #   通过 Testcontainers 拉 `ai-knowledge-platform-pg:dev`，缺它就直接 ContainerFetch 失败。
+      #   ★ 与 `backend` job 用**同一个 gha 缓存 scope**（`pg-zhparser`）⇒ 第二次起基本秒级命中。
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 构建 PG 镜像（自制：pgvector + zhparser）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/pg/Dockerfile
+          tags: ai-knowledge-platform-pg:dev
+          load: true
+          cache-from: type=gha,scope=pg-zhparser
+          cache-to: type=gha,scope=pg-zhparser,mode=max
 
       # ★★ 两条通配符**各跑一次**，这是本仓的硬纪律：
       #   `*` **不跨包** ⇒ `cn.lincoln.aiplatform.*Test` 只匹配顶层包那 9 个类，
