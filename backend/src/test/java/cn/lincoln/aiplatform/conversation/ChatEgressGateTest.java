@@ -256,6 +256,14 @@ class ChatEgressGateTest {
   private static final class RecordingStore implements ChatTurnStore {
 
     @Override
+    public java.util.List<cn.lincoln.aiplatform.platform.model.ChatMessage> historyBefore(
+        UUID conversationId, UUID userMessageId, int maxMessages) {
+      // ★ `#168`：本类不消费历史（多轮那一路由 ChatService 的多轮判据覆盖）。
+      //   ★ 抛而不是返回空/null —— 返回空会让"这里没测"伪装成"测过了且是对的"。
+      throw new UnsupportedOperationException("本替身不提供历史（#168）");
+    }
+
+    @Override
     public ChatTurnWriter.PreparedTurn prepare(
         UUID conversationId, UUID appId, String question, UUID userId) {
       UUID conversation = conversationId == null ? UUID.randomUUID() : conversationId;
@@ -267,7 +275,8 @@ class ChatEgressGateTest {
           "trace_" + assistantMessageId,
           "fixture-model",
           MODEL_ID,
-          List.of());
+          List.of(),
+          false);
     }
 
     @Override
