@@ -106,8 +106,15 @@ public class ConversationListService {
               conversation.title() == null
                   || !conversation.title().toLowerCase(Locale.ROOT).contains(needle));
     }
-    // ★ 最近活动在前：侧栏默认就该是"我刚聊过的在最上面"
-    all.sort((left, right) -> lastActivityOf(right).compareTo(lastActivityOf(left)));
+    // ★★ 这里**刻意不再排序**（我第一版写了一行 `all.sort(...)`，已删）。
+    //   原因：`ConversationRepository#listByUser` 背后的查询就叫
+    //   `findByUserIdAndDeletedAtIsNullOrderByLastMessageAtDescCreatedAtDesc`
+    //   —— **SQL 里已经按最近活动倒序**（活动时间相同再按创建时间倒序）。
+    //   ★ 为什么值得留这段注释：我做金丝雀时把 `all.sort(...)` 删掉，用例**没有红**。
+    //     那不代表断言无效，而是说明**排序早就在 SQL 里**、Java 那行是冗余的。
+    //     若不留这句，下一个人会「补一行排序让代码看起来更完整」—— 那会掩盖真正的排序来源。
+    //   ⇒ 排序这条行为的守门人是 `listIsOrderedByRecentActivity`，而它守的是**整条读路径**
+    //     （仓储换掉/查询改名，它就会红）。
 
     long total = all.size();
     int totalPages = (int) Math.max(1, (total + safeSize - 1) / safeSize);
@@ -166,15 +173,5 @@ public class ConversationListService {
         conversation.messageCount(),
         conversation.updatedAt(),
         conversation.userId());
-  }
-
-  /** 会话的"最近活动"：优先 {@code lastMessageAt}，没有再退回 {@code updatedAt}（都可能为空）。 */
-  private static Instant lastActivityOf(Conversation conversation) {
-    Instant last = conversation.lastMessageAt();
-    if (last != null) {
-      return last;
-    }
-    Instant updated = conversation.updatedAt();
-    return updated == null ? Instant.EPOCH : updated;
   }
 }
