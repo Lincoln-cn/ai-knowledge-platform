@@ -16,6 +16,7 @@ import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.support.PostgresImage;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -71,6 +72,8 @@ class RegenerateTurnTest {
   @Autowired MessageRepository messages;
 
   @Autowired ChatService chat;
+
+  @Autowired cn.lincoln.aiplatform.assistant.domain.AssistantRepository assistants;
 
   @Test
   void regenerateOverwritesInsteadOfAddingAMessagePair() {
@@ -153,6 +156,47 @@ class RegenerateTurnTest {
     assertThat(reloaded.tokens()).as("★ 用量清零：保留累加会让『这条答案花了多少』同时算上两次生成（成本读数就错了）").isNull();
   }
 
+  /**
+   * ★★ 会话**绑了应用**时的重新生成 —— 补的是原有 7 条用例漏掉的那一支。
+   *
+   * <h3>为什么这一支必须被本地回归守住</h3>
+   *
+   * <p>那 7 条全部传 `appId = null` ⇒ `conversation.assistantId()` 为 null ⇒ `prepareRegenerate` 走 `app
+   * == null` 那一支 ⇒ **永远不读 `Assistant.kbIds`** （一个懒加载集合）。
+   *
+   * <p>★ 而真栈上正是这一支炸过：重新生成直接 **500**， `LazyInitializationException: Cannot lazily initialize
+   * collection of role '…Assistant.kbIds'` —— 根因是 `prepareRegenerate` 漏了 `@Transactional`（同类的
+   * `prepare` 有它）。
+   *
+   * <p>⇒ 这条用例的价值不是"多一条断言"，而是**把"有关联数据"那一支纳入本地回归**： 替身造的场景如果比真实场景简单，漏掉的恰好是这种"关联"。
+   */
+  @Test
+  void regenerateWorksWhenTheConversationIsBoundToAnApp() {
+    seedKnowledgeBase();
+    UUID appId = seedAppWithKb();
+    UUID conversationId = seedConversation(appId);
+    UUID answer = seedTurn(conversationId, "报销标准是多少", "第一次的答案");
+
+    // ★★ 身份必须显式给：equireVisibleApp 走 AccessScopePort（JWT 驱动），
+    //   非 HTTP 测试里它是 nobody() ⇒ 会报「应用不存在」，而那不是应用的问题。
+    ChatService.StartedTurn started =
+        cn.lincoln.aiplatform.support.SecurityContexts.asUser(
+            OWNER,
+            ClassificationLevel.CONFIDENTIAL,
+            () ->
+                chat.startTurn(
+                    new ChatService.ChatRequest(appId, conversationId, "", OWNER),
+                    ChatMode.REGENERATE,
+                    answer));
+
+    assertThat(started.turn().assistantMessageId())
+        .as("★ 绑了应用时重生成也必须覆盖同一条（这一支会读 Assistant.kbIds —— 懒加载集合，事务一关就炸）")
+        .isEqualTo(answer);
+    assertThat(started.turn().kbIds())
+        .as("★ 重新生成沿用会话绑的应用的库（不跟请求体漂移）⇒ 必须拿到那个库")
+        .containsExactly(KB_ID);
+  }
+
   // ────────────────────────── 两条拒绝路径 ──────────────────────────
 
   @Test
@@ -212,6 +256,56 @@ class RegenerateTurnTest {
   private String feedbackColumnOf(UUID messageId) {
     return jdbc.queryForObject(
         "select feedback from cv_message where id = ?", String.class, messageId);
+  }
+
+  /** 本类专属的库 id（断言"沿用会话的应用的库"要用它）。 */
+  private static final UUID KB_ID = UUID.fromString("1f000000-0000-4000-8000-0000000000dd");
+
+  /** 本类专属的模型 id（库里 `embedding_model_id` 是必填外键）。 */
+  private static final UUID EMBEDDING_MODEL =
+      UUID.fromString("1f000000-0000-4000-8000-0000000000ee");
+
+  /**
+   * 造一条真的 `kb_knowledge_base` 行。
+   *
+   * <p>★ 必须真造：`as_assistant_kb.knowledge_base_id` 上有外键指向它 （实测：只给一个随机 UUID 会 `violates foreign key
+   * constraint`）。 ★ 列清单抄自 `PublicChatHttpTest` 的同一段 —— 那是本仓"造库"的既有口径。
+   */
+  private void seedKnowledgeBase() {
+    jdbc.update(
+        "insert into kb_knowledge_base (id, name, category, import_type, embedding_model_id,"
+            + " max_classification, owner_id, visibility, created_at, updated_at)"
+            + " values (?, ?, '制度规范', 'LOCAL', ?, 'INTERNAL', ?, 'PRIVATE', now(), now())",
+        KB_ID,
+        "重生成夹具库",
+        EMBEDDING_MODEL,
+        OWNER);
+  }
+
+  /** 造一个已发布、绑了一个库的应用（★ `kbIds` 是懒加载集合 —— 正是原本漏掉的那一支）。 */
+  private UUID seedAppWithKb() {
+    UUID appId = UUID.randomUUID();
+    var assistant =
+        new cn.lincoln.aiplatform.assistant.domain.Assistant(
+            appId,
+            "重生成夹具应用",
+            "🤖",
+            "回答制度问题",
+            cn.lincoln.aiplatform.assistant.domain.AssistantType.SIMPLE,
+            EMBEDDING_MODEL,
+            "你是制度助手",
+            OWNER,
+            OWNER);
+    assistant.bind(List.of(KB_ID), List.of(), OWNER);
+    assistants.save(assistant);
+    return appId;
+  }
+
+  /** 造一条**绑了应用**的会话。 */
+  private UUID seedConversation(UUID appId) {
+    UUID id = UUID.randomUUID();
+    conversations.save(new Conversation(id, OWNER, appId, "重生成夹具（绑应用）"));
+    return id;
   }
 
   private UUID seedConversation() {
