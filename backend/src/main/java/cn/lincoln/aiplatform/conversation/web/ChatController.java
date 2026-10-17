@@ -6,6 +6,7 @@ import cn.lincoln.aiplatform.conversation.application.ChatMode;
 import cn.lincoln.aiplatform.conversation.application.ChatService;
 import cn.lincoln.aiplatform.conversation.application.ChatStopService;
 import cn.lincoln.aiplatform.conversation.application.ChatStreamAssembler;
+import cn.lincoln.aiplatform.conversation.application.ConversationListService;
 import cn.lincoln.aiplatform.conversation.application.PublicChatService;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -90,18 +91,21 @@ public class ChatController {
   private final PublicChatService publicChat;
   private final ChatStopService chatStop;
   private final ChatHistoryService chatHistory;
+  private final ConversationListService conversationList;
 
   public ChatController(
       ChatService chatService,
       ChatStreamAssembler assembler,
       PublicChatService publicChat,
       ChatStopService chatStop,
-      ChatHistoryService chatHistory) {
+      ChatHistoryService chatHistory,
+      ConversationListService conversationList) {
     this.chatService = chatService;
     this.assembler = assembler;
     this.publicChat = publicChat;
     this.chatStop = chatStop;
     this.chatHistory = chatHistory;
+    this.conversationList = conversationList;
   }
 
   /**
@@ -122,6 +126,44 @@ public class ChatController {
    * 这是<strong>读</strong>端点，所以它不触发 {@code AuthorizationDeclarationTest} 的写端点规则； 但会话归属的判定仍然必须有 ——
    * 少了它会变成"任何登录用户都能读别人的会话"。
    */
+  /**
+   * 会话列表（契约 `listConversations`：`GET /conversations`）。
+   *
+   * <p>★★ 这个端点补的是一个**让 A2 在界面上不成立**的洞：会话页加载时调它拿"历史会话"， 而它此前不存在 ⇒ 侧栏永远空 ⇒ **刷新后没有会话可恢复**（诊断逐字见
+   * `ConversationListService` 的类注释）。服务层那一半一直是对的。
+   *
+   * @param appId 只看某个应用的会话（可空 = 全部）
+   * @param keyword 按标题模糊搜索（可空）
+   * @param page 页码，{@code -1} = 最后一页（与历史消息同一条约定）
+   */
+  /**
+   * 新建会话（契约 `createConversation`：`POST /conversations`，body `{appId?}`）。
+   *
+   * <p>★ 与列表一起落：契约闸门要求「同路径上的方法单边变更会静默漂移」， 而页面的「新建会话」按钮调的就是它（真栈诊断逐字见过 `接口不存在：api/v1/conversations`）。
+   */
+  @PostMapping
+  @PreAuthorize("hasAuthority('conversation:view')")
+  public ApiResponse<ConversationListService.ConversationListItem> createConversation(
+      @RequestBody(required = false) CreateConversationBody body,
+      @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        conversationList.create(subjectOf(jwt), body == null ? null : body.appId()));
+  }
+
+  /** 新建会话的请求体（契约里只有一个可选字段）。 */
+  public record CreateConversationBody(UUID appId) {}
+
+  @GetMapping
+  @PreAuthorize("hasAuthority('conversation:view')")
+  public ApiResponse<PageResult<ConversationListService.ConversationListItem>> conversations(
+      @RequestParam(required = false) UUID appId,
+      @RequestParam(required = false) String keyword,
+      @RequestParam(required = false) Integer page,
+      @RequestParam(required = false) Integer size,
+      @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(conversationList.list(subjectOf(jwt), appId, keyword, page, size));
+  }
+
   @GetMapping("/{conversationId}/messages")
   @PreAuthorize("hasAuthority('conversation:view')")
   public ApiResponse<PageResult<ChatMessageView>> messages(
