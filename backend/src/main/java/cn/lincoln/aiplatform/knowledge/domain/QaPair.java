@@ -207,6 +207,51 @@ public class QaPair {
     this.updatedBy = createdBy;
   }
 
+  // ────────────────────────── 命令（FR-03-12 的 web 入口）──────────────────────────
+
+  /**
+   * 改名（需求 {@code FR-03-12-2}）。
+   *
+   * <p>★ <strong>只改问题</strong>：答案 / 出处 / 密级各有各的入口与校验。把它们混进一个 {@code update(...)}
+   * 很容易出现"只想改个错字，结果顺手把密级从 SECRET 改成了 INTERNAL" —— 而那种改动**没有任何地方会报错**，只是从某一刻起变得可见了。
+   *
+   * @param newQuestion 新问题 ★ 空串与空白一律拒绝（空问题是一条"看着有、其实没用"的行）
+   * @param by 操作人
+   */
+  public void rename(String newQuestion, UUID by) {
+    if (newQuestion == null || newQuestion.isBlank()) {
+      throw new IllegalArgumentException("问题必填");
+    }
+    this.question = newQuestion.trim();
+    this.updatedBy = by;
+  }
+
+  /**
+   * 软删（需求 {@code FR-03-12-3}）。
+   *
+   * <p>★ 软删而不是物删：命中计数、来源追溯（{@code source_ref}）都是"删了就没有了"的证据，
+   * 而问答对将来要进检索，删掉的问答对是否曾命中过是判断"这套机制值不值"的读数。
+   *
+   * <p>★ <strong>幂等</strong>：已经删过的再删一次不报错、也不刷新时间 —— 否则两次删除会得到 两个不同的 {@code
+   * deletedAt}，而"什么时候被删的"就说不清了。
+   *
+   * @param by 操作人
+   */
+  public void softDelete(UUID by) {
+    if (this.deletedAt != null) {
+      return;
+    }
+    this.deletedAt = Instant.now();
+    this.updatedBy = by;
+  }
+
+  /**
+   * @return 是否已软删
+   */
+  public boolean deleted() {
+    return deletedAt != null;
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {

@@ -30,6 +30,11 @@ public class QaPairRepositoryAdapter implements QaPairRepository {
   }
 
   @Override
+  public QaPair save(QaPair pair) {
+    return jpa.save(pair);
+  }
+
+  @Override
   public List<QaPair> saveAll(List<QaPair> pairs) {
     return jpa.saveAll(pairs);
   }
