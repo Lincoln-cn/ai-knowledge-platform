@@ -5,7 +5,6 @@ import cn.lincoln.aiplatform.conversation.application.ChatMessageView;
 import cn.lincoln.aiplatform.conversation.application.ChatService;
 import cn.lincoln.aiplatform.conversation.application.ChatStopService;
 import cn.lincoln.aiplatform.conversation.application.ChatStreamAssembler;
-import cn.lincoln.aiplatform.conversation.application.ChatTurnWriter;
 import cn.lincoln.aiplatform.conversation.application.PublicChatService;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -184,15 +183,19 @@ public class ChatController {
     }
     UUID userId = subjectOf(jwt);
     // ★ 落库与归属判定走服务层（看不见 ⇒ 404）；它在写流之前发生，所以错误还能用包络返回
-    ChatTurnWriter.PreparedTurn prepared =
+    // ★★ 按**模式**启动：REGENERATE 的问题来自库里（那一条回答之前最近的用户消息），
+    //   所以必须用返回的 question，不能用请求体里的那个。
+    ChatService.StartedTurn started =
         chatService.startTurn(
             new ChatService.ChatRequest(
-                body.appId(), body.conversationId(), body.question(), userId));
+                body.appId(), body.conversationId(), body.question(), userId),
+            cn.lincoln.aiplatform.conversation.application.ChatMode.parse(body.mode()),
+            body.targetMessageId());
     return ResponseEntity.ok()
         .contentType(MediaType.TEXT_EVENT_STREAM)
         .body(
             assembler.streamOf(
-                new ChatStreamAssembler.AsyncTurn(prepared, body.question().strip())));
+                new ChatStreamAssembler.AsyncTurn(started.turn(), started.question())));
   }
 
   /**
@@ -316,5 +319,9 @@ public class ChatController {
       UUID conversationId,
       String question,
       List<String> attachmentIds,
-      Boolean thinking) {}
+      Boolean thinking,
+      // 契约 ChatMode = 'NEW' | 'REGENERATE' | 'CONTINUE'（不传按 NEW 处理）
+      String mode,
+      // 重生成 / 继续生成的目标助手消息（REGENERATE 必填）
+      UUID targetMessageId) {}
 }

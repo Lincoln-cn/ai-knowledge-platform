@@ -196,6 +196,61 @@ public class ChatService {
   public record ChatRequest(UUID appId, UUID conversationId, String question, UUID userId) {}
 
   /**
+   * 一轮的启动结果：<strong>落库读数 + 真正要问的问题</strong>。
+   *
+   * <p>★★ 为什么必须把 {@code question} 一起返回：{@link ChatMode#REGENERATE} 的问题
+   * <strong>来自库里</strong>（那一条回答之前最近的用户消息），请求体里的 {@code question}
+   * 不表达任何新意图。若调用方仍用请求体那个，重新生成会用一个无关的问题去答 —— 而界面上它看起来只是"重生成了一次"。
+   *
+   * @param turn 落库读数（{@code REGENERATE} 时 {@code assistantMessageId} 是<strong>被覆盖的那条</strong>）
+   * @param question 送进模型的问题（★ 调用方必须用它）
+   */
+  public record StartedTurn(ChatTurnWriter.PreparedTurn turn, String question) {}
+
+  /**
+   * 按<strong>模式</strong>启动一轮（契约 {@code mode} + {@code targetMessageId}）。
+   *
+   * <p>★ 这是 {@link #startTurn} 的超集：{@code NEW}/{@code null} 走原来那条路， 读数与行为<strong>一个字节都不变</strong>。
+   *
+   * @param request 一轮的入参
+   * @param mode 生成模式（{@code null} ⇒ {@code NEW}）
+   * @param targetMessageId 重生成的目标助手消息（{@code REGENERATE} 必填）
+   * @return 落库读数 + 真正要问的问题
+   * @throws cn.lincoln.aiplatform.platform.domain.BusinessException {@code CONTINUE} 未实现（400）·
+   *     {@code REGENERATE} 缺 {@code targetMessageId}（400）· 目标消息看不见（404）
+   */
+  public StartedTurn startTurn(ChatRequest request, ChatMode mode, UUID targetMessageId) {
+    ChatMode effective = mode == null ? ChatMode.NEW : mode;
+    if (effective == ChatMode.CONTINUE) {
+      // ★★ 显式拒绝，不静默当 NEW：静默降级会**新增一条消息**，与契约的"接着已有内容续写"直接矛盾，
+      //   而界面上它看起来完全正常（多出一问一答）。见 ChatMode 的类注释。
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "继续生成（CONTINUE）尚未实现", "本版请使用普通提问或重新生成");
+    }
+    if (effective == ChatMode.NEW) {
+      ChatTurnWriter.PreparedTurn turn = startTurn(request);
+      return new StartedTurn(turn, request.question().strip());
+    }
+    if (targetMessageId == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "重新生成必须给出 targetMessageId", "请指明要重新生成哪一条回答");
+    }
+    ChatTurnWriter.PreparedTurn turn = turns.prepareRegenerate(targetMessageId, request.userId());
+    // ★ 问题**从库里取**（那一条回答之前最近的用户消息），不能用请求体里的
+    return new StartedTurn(turn, regenerateQuestionOf(turn));
+  }
+
+  /**
+   * 取"重新生成时要问的问题" —— 由 {@link ChatTurnWriter#prepareRegenerate} 已经确定， 这里只负责把它从落库读数里读出来。
+   *
+   * <p>★ 为什么要绕一次、而不是让 {@code prepareRegenerate} 直接返回 {@code (turn, question)}： 那个方法的返回值是 {@code
+   * PreparedTurn}（既有类型，多处消费），改它会牵动所有调用点； 而本类是唯一需要这句话的地方。★ 代价是**多一次库读**，但那一次读与 {@code
+   * prepareRegenerate} 内部的判定走的是同一个方法（{@code preceding}），不会分叉。
+   */
+  private String regenerateQuestionOf(ChatTurnWriter.PreparedTurn turn) {
+    return turns.questionOf(turn.userMessageId());
+  }
+
+  /**
    * 事件出口。
    *
    * <p>★ 叫 {@code onEvent} 而不是 {@code write}：生产实现是"写帧 + flush"，测试实现是"记下一条"。

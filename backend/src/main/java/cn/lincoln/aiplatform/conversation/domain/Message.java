@@ -461,6 +461,56 @@ public class Message {
   }
 
   /**
+   * ★★ 重新生成：把这一条<strong>覆盖</strong>成一次新的生成（S3「重新生成」的领域侧入口）。
+   *
+   * <h3>契约已经定死的那一条</h3>
+   *
+   * <p>{@code api/stream-types.ts:172} 逐字：「{@code REGENERATE} <strong>覆盖</strong> {@code
+   * targetMessageId} 对应的原答案（<strong>不新增消息对</strong>）」 ⇒ 旧答案<strong>被覆盖、不保留</strong>。 ★
+   * 想"保留历史答案"是<strong>改契约</strong>（新增版本概念），不是实现时顺手保留。
+   *
+   * <h3>★★ 四样东西必须一起清（少清一样就是"数据自相矛盾"）</h3>
+   *
+   * <ol>
+   *   <li><b>正文</b> —— 新答案还没写，留着旧正文会让"生成中"显示上一轮的答案；
+   *   <li><b>引用快照</b> —— 引用是"<b>这条答案</b>引了哪些分段"，答案换了它必然重算；
+   *   <li><b>失败原因 / 提示 / 耗时</b> —— 属于上一次生成；不清就会出现"新答案还在生成、 却带着上次的失败原因"；
+   *   <li>★★ <b>赞踩（{@code feedback}）</b> —— 本批（{@code V35}）<strong>新引入</strong>的一列，
+   *       也是最容易漏的一处：赞踩的语义是"用户对<b>这条回答</b>的评价"，回答被覆盖之后， 那条被评价的回答<strong>已经不存在了</strong>。★
+   *       不清的症状是「<b>新答案带着旧评价</b>」—— 用户赞过、重新生成、界面上仍是"已赞"，而那条新答案他根本没看过。
+   *       这比"少一个功能"严重：它是<strong>数据自相矛盾</strong>。
+   * </ol>
+   *
+   * <h3>★ 用量为什么清零</h3>
+   *
+   * <p>保留累加会让这条消息的用量<strong>同时算上两次生成</strong> ⇒ 「这条答案花了多少」是错的，而它正是成本读数的来源。 ★
+   * <strong>代价如实写</strong>：上一次的用量会<strong>丢</strong> （要留就得另存一列，{@code ROADMAP} 现在没有那个位）。这是有意的取舍，不是
+   * bug。
+   *
+   * @throws IllegalArgumentException 不是助手消息，或它<strong>还在生成中</strong>
+   */
+  public void restart() {
+    if (role != MessageRole.ASSISTANT) {
+      throw new IllegalArgumentException("只有助手的回答可以重新生成（这条消息是 " + role + "）");
+    }
+    if (status == MessageStatus.GENERATING) {
+      // ★ 与 rate 同一条守卫：还在跑的那一次先结束（或先停止），否则两个生成线程会抢同一行
+      throw new IllegalArgumentException("这一条还在生成中，等它结束或先停止再重新生成");
+    }
+    this.content = "";
+    this.references = null;
+    this.failReason = null;
+    this.failHint = null;
+    this.durationMs = null;
+    // ★★ 见 javadoc 第 4 条：赞踩指向的是**被覆盖掉的那条回答**，必须一起清
+    this.feedback = null;
+    // ★ 用量清零（有意的取舍，见 javadoc）
+    this.promptTokens = null;
+    this.completionTokens = null;
+    this.status = MessageStatus.GENERATING;
+  }
+
+  /**
    * 赞 / 踩 / 取消评价（S3 的「赞/取消赞刷新后仍在」）。
    *
    * <h3>★ 三条守卫，各对应一种"能写进去但语义不成立"的形状</h3>
