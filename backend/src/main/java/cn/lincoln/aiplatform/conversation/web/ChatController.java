@@ -6,12 +6,14 @@ import cn.lincoln.aiplatform.conversation.application.ChatMode;
 import cn.lincoln.aiplatform.conversation.application.ChatService;
 import cn.lincoln.aiplatform.conversation.application.ChatStopService;
 import cn.lincoln.aiplatform.conversation.application.ChatStreamAssembler;
+import cn.lincoln.aiplatform.conversation.application.ConversationFeedbackService;
 import cn.lincoln.aiplatform.conversation.application.ConversationListService;
 import cn.lincoln.aiplatform.conversation.application.PublicChatService;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
 import cn.lincoln.aiplatform.platform.web.PageResult;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -92,6 +94,7 @@ public class ChatController {
   private final ChatStopService chatStop;
   private final ChatHistoryService chatHistory;
   private final ConversationListService conversationList;
+  private final ConversationFeedbackService conversationFeedback;
 
   public ChatController(
       ChatService chatService,
@@ -99,13 +102,15 @@ public class ChatController {
       PublicChatService publicChat,
       ChatStopService chatStop,
       ChatHistoryService chatHistory,
-      ConversationListService conversationList) {
+      ConversationListService conversationList,
+      ConversationFeedbackService conversationFeedback) {
     this.chatService = chatService;
     this.assembler = assembler;
     this.publicChat = publicChat;
     this.chatStop = chatStop;
     this.chatHistory = chatHistory;
     this.conversationList = conversationList;
+    this.conversationFeedback = conversationFeedback;
   }
 
   /**
@@ -141,6 +146,46 @@ public class ChatController {
    *
    * <p>★ 与列表一起落：契约闸门要求「同路径上的方法单边变更会静默漂移」， 而页面的「新建会话」按钮调的就是它（真栈诊断逐字见过 `接口不存在：api/v1/conversations`）。
    */
+  /**
+   * 会话评分（设计册 `05 §6.2`：`POST /conversations/{id}/feedback`，body `{ score, comment? }`）。
+   *
+   * <p>★ 补的是 S3 的最后一条（`ROADMAP §2.1`「会话评分」）。★ 形状**不是猜的**：设计册 `05:602` 写了端点，`02:415`
+   * 写了聚合口径（`Feedback`：消息、会话、用户、赞踩、评分、评论）。 ★ 教训与 REGENERATE 那次相同：**先读契约与设计册，再问人**。
+   *
+   * <p>★ 再提交是**覆盖**（一人一场会话一条），不是追加 —— 设计册里只有「提交评分」。
+   */
+  @PostMapping("/{conversationId}/feedback")
+  @PreAuthorize("hasAuthority('conversation:view')")
+  public ApiResponse<ConversationFeedbackView> submitConversationFeedback(
+      @PathVariable UUID conversationId,
+      @RequestBody ConversationFeedbackBody body,
+      @AuthenticationPrincipal Jwt jwt) {
+    var saved =
+        conversationFeedback.submit(subjectOf(jwt), conversationId, body.score(), body.comment());
+    return ApiResponse.ok(
+        new ConversationFeedbackView(
+            saved.conversationId(),
+            saved.score(),
+            saved.comment(),
+            saved.createdAt(),
+            saved.updatedAt()));
+  }
+
+  /** 会话评分的请求体（契约 `submitConversationFeedback`）。 */
+  public record ConversationFeedbackBody(int score, String comment) {}
+
+  /**
+   * 会话评分的响应形状。
+   *
+   * @param conversationId 会话
+   * @param score 1–5
+   * @param comment 可选评论
+   * @param createdAt 首次提交时间
+   * @param updatedAt 最近一次提交时间（★ 覆盖提交时它会变，`createdAt` 不变）
+   */
+  public record ConversationFeedbackView(
+      UUID conversationId, int score, String comment, Instant createdAt, Instant updatedAt) {}
+
   @PostMapping
   @PreAuthorize("hasAuthority('conversation:view')")
   public ApiResponse<ConversationListService.ConversationListItem> createConversation(
