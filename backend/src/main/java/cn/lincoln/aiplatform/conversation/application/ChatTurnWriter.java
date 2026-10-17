@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.conversation.domain.Conversation;
 import cn.lincoln.aiplatform.conversation.domain.ConversationRepository;
 import cn.lincoln.aiplatform.conversation.domain.Message;
 import cn.lincoln.aiplatform.conversation.domain.MessageRepository;
+import cn.lincoln.aiplatform.conversation.domain.MessageRole;
 import cn.lincoln.aiplatform.conversation.domain.SourceRef;
 import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
 import cn.lincoln.aiplatform.conversation.domain.stream.StreamTerminationPath;
@@ -245,6 +246,113 @@ public class ChatTurnWriter implements ChatTurnStore {
   }
 
   // ────────────────────────── 内部 ──────────────────────────
+
+  /**
+   * ★★ 重新生成的一轮：**覆盖** {@code targetMessageId} 那条助手消息，不新增消息对。
+   *
+   * <h3>与 {@link #prepare} 的三处根本差别</h3>
+   *
+   * <ol>
+   *   <li><b>不新建任何消息</b> —— 契约「不新增消息对」；返回的 {@code assistantMessageId} 就是传进来的那个 id；
+   *   <li><b>问题从库里取</b> —— {@code REGENERATE} 不带新问句，取<strong>同会话里、 target <b>之前</b>最近的一条 {@code
+   *       USER} 消息</strong>；
+   *   <li><b>先重置那一行再返回</b> —— {@link Message#restart()}（它会清正文/引用/失败原因/赞踩/用量）。
+   * </ol>
+   *
+   * <h3>★★ 为什么问题必须取"之前最近的一条"</h3>
+   *
+   * <p>取错的两条路各自都<strong>不会被用户发现</strong>：
+   *
+   * <ul>
+   *   <li>取"会话第一条 USER" ⇒ 多轮里重新生成会答非所问；
+   *   <li>取"最后一条 USER" ⇒ 用户追问了下一句之后再重新生成上一轮，同样答非所问。
+   * </ul>
+   *
+   * <p>两种的症状都只是"重新生成答得不对"，而界面上它看起来只是"重生成了一次"。 ⇒ 判据必须造<strong>两轮对话</strong>（问 A、答 A′、问 B、答 B′），对
+   * {@code A′} 重新生成， 断言送进模型的问题是 <b>A</b> 而不是 B。
+   *
+   * @param targetMessageId 要覆盖的那条助手消息
+   * @param userId 当前登录用户（★ 归属判定用它，看不见 ⇒ 404）
+   * @return 这一轮 + <strong>从库里取出来的问题</strong>（调用方必须用它，不能用请求体里的 question）
+   */
+  public PreparedTurn prepareRegenerate(UUID targetMessageId, UUID userId) {
+    Message target =
+        messages
+            .findById(targetMessageId)
+            .orElseThrow(() -> notFound("消息不存在", "它可能已被删除，或者不在你的可见范围内"));
+    // ★ 归属的权威是**会话**（消息没有 userId），与 ChatHistoryService / MessageFeedbackService 逐字一致
+    Conversation conversation =
+        conversations
+            .findById(target.conversationId())
+            .filter(found -> found.userId().equals(userId))
+            .orElseThrow(() -> notFound("消息不存在", "它可能已被删除，或者不在你的可见范围内"));
+
+    // ★ 领域层会拒"不是助手"与"还在生成中"（两条都是 IllegalArgumentException ⇒ controller 转 400）
+    Message previous =
+        preceding(conversation.id(), target.id())
+            .orElseThrow(
+                () ->
+                    new BusinessException(
+                        ErrorCode.BAD_REQUEST, "这条回答前面没有用户提问，无法重新生成", "重新生成需要找到这一轮原来的问题"));
+    target.restart();
+    messages.save(target);
+
+    String traceId = "trace_" + target.id();
+    log.info(
+        "会话 {} 重新生成：覆盖助手消息 {}（trace {}，原问题取自前一条用户消息 {} 字）",
+        conversation.id(),
+        target.id(),
+        traceId,
+        previous.content() == null ? 0 : previous.content().length());
+    // ★ 重新生成沿用**会话绑的应用**（不跟请求体漂移）—— 它决定了检索范围
+    AppBindingPort.AppBinding app =
+        conversation.assistantId() == null ? null : requireVisibleApp(conversation.assistantId());
+    return new PreparedTurn(
+        conversation.id(),
+        target.id(),
+        // ★ 用户消息 id 仍是那条**原来的**（本轮没有新用户消息）—— 它的用途是"这一轮问的是什么"
+        previous.id(),
+        traceId,
+        target.modelId() == null ? "" : target.modelId().toString(),
+        target.modelId(),
+        app == null ? List.of() : app.kbIds());
+  }
+
+  /**
+   * "同会话里 target 之前最近的一条 USER 消息"<strong>唯一</strong>的实现。
+   *
+   * <p>★ 抽成一个方法而不是写两遍：问题与用户消息 id 必须命中<strong>同一条</strong>消息 —— 若两处各算一遍，"问的是 A、记的是 B"这种错会静默发生。
+   */
+  private Optional<Message> preceding(UUID conversationId, UUID targetId) {
+    List<Message> all = messages.listByConversation(conversationId);
+    Message userMessage = null;
+    for (Message current : all) {
+      if (current.id().equals(targetId)) {
+        return Optional.ofNullable(userMessage);
+      }
+      if (current.role() == MessageRole.USER) {
+        userMessage = current;
+      }
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * 取某条用户消息的正文（{@code REGENERATE} 用它把"这一轮问的是什么"读回来）。
+   *
+   * <p>★ 为什么需要它：{@link #prepareRegenerate} 的返回值是既有的 {@code PreparedTurn}
+   * （多处消费，改它会牵动所有调用点），而重新生成的问题是<strong>从库里取的</strong>， 调用方必须拿到它。★ 这一次读与 {@code prepareRegenerate}
+   * 内部取问题的判定<strong>同源</strong> （都指向"target 之前最近的一条 USER 消息"的 id），不会分叉。
+   *
+   * @param userMessageId 用户消息 id（可为 {@code null} ⇒ 返回空串）
+   * @return 那条消息的正文；取不到返回空串（★ 不抛：调用方已经过了归属与"有无前问"的校验）
+   */
+  public String questionOf(UUID userMessageId) {
+    if (userMessageId == null) {
+      return "";
+    }
+    return messages.findById(userMessageId).map(Message::content).orElse("");
+  }
 
   /**
    * 取会话或新建一个。

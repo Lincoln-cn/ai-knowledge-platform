@@ -270,6 +270,23 @@ class ChatRetrievalHeartbeatTest {
       finishCount++;
     }
 
+    /**
+     * ★ 本替身不走向重新生成那一路 ⇒ **抛**（与同族替身"没被用到的方法照旧抛"同一条纪律）。
+     *
+     * <p>★ 不写成 `return null` / `return ""`：那会让"这个替身其实不支持重生成" 在读数上消失（一个静默的空实现比一个明确的异常难查得多）。
+     */
+    @Override
+    public cn.lincoln.aiplatform.conversation.application.ChatTurnWriter.PreparedTurn
+        prepareRegenerate(java.util.UUID targetMessageId, java.util.UUID userId) {
+      throw new UnsupportedOperationException("本替身不走向重新生成那一侧");
+    }
+
+    /** 同上：不走向重生成 ⇒ 抛。 */
+    @Override
+    public String questionOf(java.util.UUID userMessageId) {
+      throw new UnsupportedOperationException("本替身不走向重新生成那一侧");
+    }
+
     private int finishCount() {
       return finishCount;
     }

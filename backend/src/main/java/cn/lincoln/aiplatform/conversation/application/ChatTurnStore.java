@@ -30,6 +30,26 @@ public interface ChatTurnStore {
       UUID conversationId, UUID appId, String question, UUID userId);
 
   /**
+   * 重新生成的一轮：<strong>覆盖</strong>目标助手消息，不新增消息对（契约「不新增消息对」）。
+   *
+   * <p>★ 声明在接口上而不是只在实现里：{@code ChatService} 依赖的是本接口 （{@code private final ChatTurnStore turns}）——
+   * 只加在实现类上，调用点编译不过 （本批实测：{@code 找不到符号: 方法 prepareRegenerate}）。
+   *
+   * @param targetMessageId 要覆盖的那条助手消息
+   * @param userId 归属判定用它（看不见 ⇒ 404）
+   * @return 这一轮读数（{@code assistantMessageId} = <strong>被覆盖的那条</strong>）
+   */
+  ChatTurnWriter.PreparedTurn prepareRegenerate(UUID targetMessageId, UUID userId);
+
+  /**
+   * 取某条用户消息的正文 —— {@code REGENERATE} 用它把"这一轮问的是什么"读回来。
+   *
+   * @param userMessageId 用户消息 id（可为 {@code null}）
+   * @return 正文；取不到返回空串
+   */
+  String questionOf(UUID userMessageId);
+
+  /**
    * 周期性 flush：把"还没落库的那一段"追加进去。
    *
    * @return 本次 flush 之后已落库的字符数

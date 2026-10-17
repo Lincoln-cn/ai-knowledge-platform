@@ -279,6 +279,46 @@ class PublicChatHttpTest {
   // ────────────────────────── ③ 四态：码与可读原因 ──────────────────────────
 
   /** ★★ 判据②：认不出的 token ⇒ {@code 40401}，且文案说清"链接本身不对、重试无意义"。 */
+  /**
+   * ★★ 公开面**显式拒绝**「重新生成」（`ChatMode.REGENERATE`）。
+   *
+   * <p>## 为什么必须有这条判据
+   *
+   * <p>契约的 `REGENERATE` 语义是「**覆盖** `targetMessageId` 对应的原答案（**不新增消息对**）」。 公开面若静默按 `NEW`
+   * 走，就会**新增一问一答** —— 与契约直接矛盾， 而界面上它看起来完全正常（用户点「重新生成」，多出来一条）。这正是本仓头号病 `silent-failure` 的形状。
+   *
+   * <p>## 断言分两半，缺一半都能骗过
+   *
+   * <p>① 响应是 **400**（不是 200 + 一条新消息）； ② ★★ **消息总数不变** —— 只断 400 的话，一个「先落库再拒绝」的实现会通过，
+   * 而它留下的是**一条永远生成不完的空消息**（比拒绝糟得多）。
+   */
+  @Test
+  void publicShareRejectsRegenerateInsteadOfSilentlyAddingAMessagePair() throws Exception {
+    int before = messageCount();
+
+    Response response =
+        postMessages(
+            fixture.token(),
+            "{\"question\":\"报销标准\",\"mode\":\"REGENERATE\",\"targetMessageId\":\""
+                + UUID.randomUUID()
+                + "\"}",
+            null);
+
+    assertThat(response.status())
+        .as("★ 公开面不支持重新生成 ⇒ 必须 400，不许静默当 NEW（那会新增一问一答，而界面看起来完全正常）")
+        .isEqualTo(400);
+    // ★ 访问器是 `body()`（`Response` 的 record 分量），不是 `raw()` —— 第一版写错，读到的永远是空串
+    assertThat(response.body()).as("★ 拒绝文案要说清「怎么办」，不能只说「不支持」").contains("公开链接不支持重新生成");
+    assertThat(messageCount())
+        .as("★★ 一条消息都不许新增 —— 只断 400 的话，一个「先落库再拒绝」的实现会通过，" + "而它留下的是「一条永远生成不完的空消息」")
+        .isEqualTo(before);
+  }
+
+  /** 消息总行数（★ 用纯 SQL：判据问的是「库里有没有多出来一行」）。 */
+  private int messageCount() {
+    return jdbc.queryForObject("select count(*) from cv_message", Integer.class);
+  }
+
   @Test
   void unknownTokenIsRejectedWith40401() throws Exception {
     HttpResponse<String> response = get("/api/v1/public/pk_live_totally-unknown-token-value", null);
