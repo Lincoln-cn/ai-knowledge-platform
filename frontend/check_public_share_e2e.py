@@ -44,6 +44,11 @@ PASSWORD = "admin"
 
 SOFTWARE_NAME = "S2 公开链接闸门"
 
+# ★ 问句必须与**库里的实际内容**对得上：问一个库里没有的词，"0 条引用"会被误读成
+#   "检索坏了"，而它其实是"这句话确实没命中"。`报销标准` 与 `check_classification_e2e.py`
+#   用的是同一个词（那份夹具上传的是同一批 fixture）。
+QUESTION = "报销标准"
+
 problems: list[str] = []
 
 
@@ -206,6 +211,29 @@ def sse_refs(payload: str) -> list[dict]:
     return []
 
 
+def sse_frame_kinds(payload: str) -> list[str]:
+    """把这一段 SSE 里的**帧类型**按顺序列出来（诊断用）。
+
+    ★ 为什么需要它：`refs` 为 0 条时有两种可能，读数上一样、处置完全不同 ——
+      ① **我的解析漏了**（帧在，但键名/结构不是我猜的那样）；
+      ② **真的没有检索到**（帧不在，说明检索那一步没给东西）。
+      打印帧类型一眼就能分开这两件事，比再猜一轮便宜得多。
+    """
+    kinds: list[str] = []
+    for line in payload.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        raw = line[len("data:") :].strip()
+        try:
+            frame = json.loads(raw)
+        except json.JSONDecodeError:
+            kinds.append(f"<非 JSON: {raw[:40]}>")
+            continue
+        kinds.append(str(frame.get("event") or frame.get("type") or f"<无类型键: {list(frame)[:4]}>"))
+    return kinds
+
+
 def main() -> int:
     print("== S2 真栈闸门：公开链接 → 未登录提问 → 撤销后失效 ==")
 
@@ -248,7 +276,7 @@ def main() -> int:
         "POST",
         "/conversations/chat",
         token=None,
-        body={"question": "报销标准是什么？", "appId": app_id},
+        body={"question": QUESTION, "appId": app_id},
         credential=credential,
         raw=True,
     )
@@ -262,6 +290,10 @@ def main() -> int:
             len(refs) > 0,
             f"② ★★ 答案必须**带引用**（S2 原文『得带引用答案』）—— 实得 {len(refs)} 条",
         )
+        if not refs:
+            # ★ 诊断（不是判据）：帧类型 + 所选库 + 问题 —— 用来分开"解析漏了"与"真的没检索到"
+            print(f"  [诊断] SSE 帧类型顺序：{sse_frame_kinds(payload)}")
+            print(f"  [诊断] 本轮用的知识库 {kb_id} · 问题「{QUESTION}」")
         check(
             "done" in payload,
             "② 流要收在 done 帧上（否则『答完了』这件事没有被确认）",
