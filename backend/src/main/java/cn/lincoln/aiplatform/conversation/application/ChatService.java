@@ -11,6 +11,7 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
+import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.retrieval.SourceLabels;
@@ -123,6 +124,13 @@ public class ChatService {
   private final ChatStreamProperties properties;
 
   /**
+   * 出站闸门（{@code #72}）—— ★ 它与 {@link AccessScopePort} 上的密级<strong>不是一回事</strong>：
+   * 后者回答"我能读哪些"（谁能看），本端口回答"读到的东西允许发到这个模型吗"（能发到哪）。 两者<strong>正交</strong>：一个高密级分段可以合法地被本地模型读，但不得被发去外部
+   * API。
+   */
+  private final ModelEgressPort modelEgress;
+
+  /**
    * 生产装配用的构造器。
    *
    * <p>★ 显式 {@code @Autowired}：本类有<strong>两个</strong>构造器（下面那个给脱离容器的测试用）， 而"两个构造器且都不标注"时 Spring
@@ -136,13 +144,15 @@ public class ChatService {
       AccessScopePort accessScope,
       ChatStreamPort chatStream,
       ChatStopSignal stopSignal,
-      ChatStreamProperties properties) {
+      ChatStreamProperties properties,
+      ModelEgressPort modelEgress) {
     this.turns = turns;
     this.segmentSearch = segmentSearch;
     this.accessScope = accessScope;
     this.chatStream = chatStream;
     this.stopSignal = stopSignal;
     this.properties = properties;
+    this.modelEgress = modelEgress;
   }
 
   /**
@@ -150,15 +160,26 @@ public class ChatService {
    *
    * <p>★ 给"脱离容器"的测试用：本类的判据里有两条<strong>不需要数据库</strong> （断开路径的两帧顺序、心跳与闲置超时的时序），而它们要的是一个真跑的 {@code
    * ChatService}， 不是一堆 mock。少一个参数就少一处要造的东西。
+   *
+   * <p>★★ 出站闸门的那一档（{@code #72}）在这里<strong>不能用"恒放行"兜底</strong> —— 那会让"闸门没接"与"闸门放行"读数一模一样（{@code
+   * silent-failure} 的形状）。所以本构造器 <strong>要求调用方显式给出</strong> {@link ModelEgressPort}：测试要么给一个明确的
+   * "都允许"（那是一次有意的声明），要么给一个具体的上限。
    */
   public ChatService(
       ChatTurnStore turns,
       SegmentSearchPort segmentSearch,
       AccessScopePort accessScope,
       ChatStreamPort chatStream,
-      ChatStopSignal stopSignal) {
+      ChatStopSignal stopSignal,
+      ModelEgressPort modelEgress) {
     this(
-        turns, segmentSearch, accessScope, chatStream, stopSignal, ChatStreamProperties.defaults());
+        turns,
+        segmentSearch,
+        accessScope,
+        chatStream,
+        stopSignal,
+        ChatStreamProperties.defaults(),
+        modelEgress);
   }
 
   /**
@@ -282,7 +303,7 @@ public class ChatService {
     //     "在检索期间就发现超时"还是"检索回来才发现"——两者收尾都是 IDLE_TIMEOUT，都拿不到模型的一个字。
     //     而"检索要不要有自己的预算"是另一件事（`error.reason` 今天仍借"生成超时"那句文案），见交付报告。
     Thread heartbeat = startHeartbeatThread(run);
-    List<SourceRef> refs = retrieve(question, turn.kbIds(), turn.conversationId());
+    List<SourceRef> refs = retrieve(question, turn.kbIds(), turn.conversationId(), turn.modelId());
     run.assembler.references(refs);
     run.bindRefs(refs);
     run.pump();
@@ -607,8 +628,10 @@ public class ChatService {
    * 正文里就会出现一个指向不存在引用的 {@code [N]}。
    */
   private List<SourceRef> retrieve(
-      String question, Collection<UUID> requestedKbIds, UUID conversationId) {
+      String question, Collection<UUID> requestedKbIds, UUID conversationId, UUID modelId) {
     List<UUID> ordered;
+    // ★ 出站上限在 try 之外声明：try 内取到、组装循环里用（catch 一律 return，故定值分析成立）
+    ClassificationLevel egressCeiling;
     Map<UUID, Double> scoreById;
     Map<UUID, SegmentSearchPort.Card> cards;
     try {
@@ -646,6 +669,19 @@ public class ChatService {
         log.warn("取不到身份（密级上限为 null），本轮按 fail-closed 处置：一条引用都不给");
         return List.of();
       }
+      // ★★ 出站闸门（#72）：**读得到**不等于**发得出**。
+      //   上面那条是"我能读多密"（身份侧的 ceiling）；这一条是"这个模型允许处理多密"（出口侧）。
+      //   ★ 两者必须分开取：一个 SECRET 分段可以合法地被本地模型读，但不得被发去外部 API。
+      //   ★ 取不到（null）按 fail-closed 处置 —— 与身份那条同一口径：认不出来就一条都不给，
+      //     绝不把 null 读成"没有限制"（那正是 silent-failure 的形状）。
+      egressCeiling = modelEgress.ceilingOf(modelId);
+      if (egressCeiling == null) {
+        log.warn(
+            "取不到模型 {} 的出站密级上限（#72），本轮按 fail-closed 处置：一条引用都不给。"
+                + "★ 这是异常形状（模型不存在/供应商取值不合法），不是『没有限制』",
+            modelId);
+        return List.of();
+      }
       List<SegmentSearchPort.Scored> hits =
           segmentSearch.fullText(
               new SegmentSearchPort.TextQuery(
@@ -681,6 +717,9 @@ public class ChatService {
     List<SourceRef> refs = new ArrayList<>(ordered.size());
     int skipped = 0;
     String firstSkipReason = null;
+    // ★★ 出站闸门挡掉的条数（#72）—— **单独计数**，不许并进 `skipped`：
+    //   "一条脏数据装不成"与"密级超出目标模型上限"是两件完全不同的事，读数混在一起就无法归因。
+    int egressBlocked = 0;
     int index = 1;
     for (UUID id : ordered) {
       SegmentSearchPort.Card card = cards.get(id);
@@ -690,6 +729,14 @@ public class ChatService {
         if (firstSkipReason == null) {
           firstSkipReason = "分段已被并发删除（取不到展示信息）";
         }
+        continue;
+      }
+      // ★★ 出站闸门（#72）：这一条的密级高过**目标模型**允许处理的上限 ⇒ 它不得进入本次上下文。
+      //   ★ 必须挡在 `refs.add` **之前**：这样 `[N]` 编号仍然逐条连续（不在编号里留空洞），
+      //     而"送出的 payload 里不含这一条"这件事才是可断言的（#72 判据 1 要的是断言 payload，不是结果看起来没泄漏）。
+      //   ★ 与身份侧的 ceiling 是两道**独立**的过滤：先"我能读吗"，再"发得出吗"。
+      if (!card.classification().within(egressCeiling)) {
+        egressBlocked++;
         continue;
       }
       try {
@@ -730,6 +777,19 @@ public class ChatService {
     if (skipped > 0) {
       // ★ 不许静默：降级必须留痕，且带着条数（"一条脏数据"与"整轮没引用"必须能分开）
       log.warn("本轮跳过 {} 条引用（其余 {} 条照常返回）：{}", skipped, refs.size(), firstSkipReason);
+    }
+    if (egressBlocked > 0) {
+      // ★★ 出站闸门（#72）的留痕：**必须单独一条**，不许并进上面那条 `skipped`。
+      //   ★ 为什么：这两件事的处置完全不同 —— "装不成"要修数据，而"密级超出模型上限"是**闸门在正常工作**。
+      //     读数混在一起，就分不出"检索变差了"与"数据被按策略拦住了"。
+      //   ★ 边界如实标注：现在只有日志、**没有审计留痕**（#72 判据 4 要的是 谁/哪个应用/最高密级/目标模型），
+      //     那一格尚未落地，别把这条日志读成"审计已做"。
+      log.warn(
+          "本轮有 {} 条引用因密级高于目标模型的出站上限被拦下（#72）：" + "模型 {} · 出口上限 {} ⇒ 这些分段未进入送往模型的上下文；其余 {} 条照常返回",
+          egressBlocked,
+          modelId,
+          egressCeiling,
+          refs.size());
     }
     log.info("本轮检索到 {} 条引用（上限 {}）", refs.size(), RETRIEVAL_LIMIT);
     return refs;

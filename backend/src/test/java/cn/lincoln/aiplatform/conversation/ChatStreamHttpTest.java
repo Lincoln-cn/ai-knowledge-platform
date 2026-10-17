@@ -16,6 +16,7 @@ import cn.lincoln.aiplatform.conversation.support.FakeChatStreamPorts;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
+import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
@@ -1012,6 +1013,7 @@ class ChatStreamHttpTest {
         ChatStreamPort chatStream,
         ChatStopSignal stopSignal,
         ChatStreamProperties properties,
+        ModelEgressPort modelEgress,
         AtomicInteger failAfterFrames,
         CountDownLatch writeFailureFired,
         List<String> attemptedFrames) {
@@ -1022,6 +1024,7 @@ class ChatStreamHttpTest {
           chatStream,
           stopSignal,
           properties,
+          modelEgress,
           failAfterFrames,
           writeFailureFired,
           attemptedFrames);
@@ -1046,10 +1049,11 @@ class ChatStreamHttpTest {
         ChatStreamPort chatStream,
         ChatStopSignal stopSignal,
         ChatStreamProperties properties,
+        ModelEgressPort modelEgress,
         AtomicInteger failAfterFrames,
         CountDownLatch writeFailureFired,
         List<String> attemptedFrames) {
-      super(turns, segmentSearch, accessScope, chatStream, stopSignal, properties);
+      super(turns, segmentSearch, accessScope, chatStream, stopSignal, properties, modelEgress);
       this.failAfterFrames = failAfterFrames;
       this.writeFailureFired = writeFailureFired;
       this.attemptedFrames = attemptedFrames;

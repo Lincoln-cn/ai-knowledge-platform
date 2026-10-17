@@ -20,7 +20,7 @@ import org.springframework.context.annotation.Configuration;
  * / tool +300）显式装配。 现在挂一个空的，只会让人误以为"advisor 已经配好了"。
  */
 @Configuration
-@EnableConfigurationProperties(ModelApiProperties.class)
+@EnableConfigurationProperties({ModelApiProperties.class, EgressProperties.class})
 public class AiModelConfig {
 
   @Bean

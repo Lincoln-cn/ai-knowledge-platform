@@ -18,6 +18,7 @@ import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
+import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.retrieval.SourceLabels;
@@ -68,6 +69,14 @@ import org.slf4j.LoggerFactory;
  * 用同一组数，便于两处读数互相印证；契约那两个数由 {@code ChatStreamTimingTest} 单独断言。
  */
 class ChatStreamEventRecordingTest {
+  /**
+   * 出站闸门（{@code #72}）的替身：**显式声明"都允许"**。
+   *
+   * <p>★ 为什么写成常量而不是"构造器少一个参数"：本类的判据是心跳/事件时序， 与出站密级无关；但**用"缺省放行"来表示这件事会让"闸门没接"与"闸门放行"读数一样** （{@code
+   * silent-failure} 的形状）。写成一个明确的替身，读代码的人一眼能看见"这一档被有意放开了"。
+   */
+  private static final ModelEgressPort UNRESTRICTED_EGRESS =
+      modelId -> ClassificationLevel.CONFIDENTIAL;
 
   /** 与同一条链路上 HTTP 层那份读数一致的时间压缩（契约值由 {@code ChatStreamTimingTest} 钉住）。 */
   private static final long HEARTBEAT_INTERVAL_MS = 300L;
@@ -676,7 +685,8 @@ class ChatStreamEventRecordingTest {
               (modelId, prompt, timeout, callback) ->
                   model.get().stream(modelId, prompt, timeout, callback),
               stopSignal,
-              PROPERTIES);
+              PROPERTIES,
+              UNRESTRICTED_EGRESS);
     }
 
     private ChatService chatService() {
