@@ -1,4 +1,13 @@
 spring:
+  # 上传体积上限（`FR-03-05-3`：单文件 100MB）。
+  # ★★ 不配的话 Boot 默认 **1MB** —— 实测 16 个语料里 ≥1368KB 的全部返回 500，
+  #   而设计书写的是 100MB（差了 100 倍，且 500 会让人误以为"服务端坏了"从而反复重试）。
+  # ★ 超限时的响应由 `GlobalExceptionHandler#onUploadTooLarge` 改写成 413 + 可读原因。
+  servlet:
+    multipart:
+      max-file-size: ${UPLOAD_MAX_FILE_SIZE:100MB}
+      max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:120MB}
+
   application:
     name: ai-knowledge-platform
 
