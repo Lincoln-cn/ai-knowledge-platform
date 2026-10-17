@@ -110,7 +110,19 @@ public class AssistantController {
   }
 
   /** 取一个应用（含检索参数与绑定）。 */
-  @GetMapping("/{id}")
+  /*
+   * ★★ #165：路径变量必须显式约束成 **UUID 形状**，否则未实现的子路径会被它吃掉。
+   *
+   * 实测（本机真 HTTP，改前）：GET /api/v1/assistants/tags ⇒ **400** ——
+   * 因为 {@code tags} 会匹配 {@code /{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}}，再转 UUID 失败 ⇒ MethodArgumentTypeMismatchException。
+   * ★ 而 400 的含义是"你的请求有问题"，事实是"这个端点还没实现" ⇒ 排查方向被带偏。
+   * ★ 而且其它未实现端点都是 404（/analytics/*、/prompts/*、/feedbacks/*）—— 只有这一条 400，
+   *   任何"按状态码分类未实现端点"的扫查都会漏掉它。
+   *
+   * ★ 用显式的 8-4-4-4-12，**不用 {@code {36}}** —— 后者里的花括号会被 URI 模板当成占位符。
+   * ★ 守门人 = AssistantUnknownSubPathTest（去掉这个约束它会红在 expected: 404 but was: 400）。
+   */
+  @GetMapping("/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}")
   @PreAuthorize("hasAuthority('assistant:view')")
   public ApiResponse<AssistantView> get(@PathVariable UUID id) {
     return ApiResponse.ok(assistants.get(id));
@@ -134,7 +146,7 @@ public class AssistantController {
    * <p>★ 请求体里的 {@code type} <strong>会被忽略</strong>（契约注释：更新时后端应忽略该字段）。 这里不是"读了再丢掉"：
    * 服务层的更新路径压根不读它（{@code AssistantService.update} 用 current.type()）。
    */
-  @PutMapping("/{id}")
+  @PutMapping("/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}")
   @PreAuthorize("hasAuthority('assistant:edit')")
   public ApiResponse<AssistantView> update(
       @PathVariable UUID id,
@@ -144,14 +156,16 @@ public class AssistantController {
   }
 
   /** 发布前校验（只读）。★ 前端在配置页就调它，把不通过项提前说清（{@code 05 §455}） —— 等点"发布"才报错，是把错误推到配置者最不方便改的时刻。 */
-  @GetMapping("/{id}/publish-check")
+  @GetMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/publish-check")
   @PreAuthorize("hasAuthority('assistant:view')")
   public ApiResponse<PublishCheckResult> publishCheck(@PathVariable UUID id) {
     return ApiResponse.ok(assistants.checkBeforePublish(id));
   }
 
   /** 发布 / 取消发布。★ 校验不过 ⇒ 6001，且应用状态不变。 */
-  @PatchMapping("/{id}/published")
+  @PatchMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/published")
   @PreAuthorize("hasAuthority('assistant:publish')")
   public ApiResponse<AssistantView> setPublished(
       @PathVariable UUID id, @RequestBody PublishedBody body, @AuthenticationPrincipal Jwt jwt) {
@@ -160,7 +174,8 @@ public class AssistantController {
   }
 
   /** 导出 JSON 包（配置 + 依赖清单）。★ {@code includeDocuments} 当前只回显，不影响包内容（见服务层注释）。 */
-  @GetMapping("/{id}/export")
+  @GetMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/export")
   @PreAuthorize("hasAuthority('assistant:view')")
   public ApiResponse<AssistantBundleView> export(
       @PathVariable UUID id, @RequestParam(defaultValue = "false") boolean includeDocuments) {
@@ -168,7 +183,8 @@ public class AssistantController {
   }
 
   /** 删除（软删）。★ 内置应用不可删（它是平台示范应用）。 */
-  @DeleteMapping("/{id}")
+  @DeleteMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}")
   @PreAuthorize("hasAuthority('assistant:edit')")
   public ApiResponse<Void> delete(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
     assistants.delete(id, UUID.fromString(jwt.getSubject()));
@@ -183,7 +199,8 @@ public class AssistantController {
    * <p>★ 含<strong>已撤销</strong>的：契约有 {@code revokedAt}，说明撤销是一条要被人看见的事实
    * （藏起来会让人以为"凭证丢了"，于是重新生成一条——而旧的那条其实还在别人手里，只是失效了）。
    */
-  @GetMapping("/{appId}/credentials")
+  @GetMapping(
+      "/{appId:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/credentials")
   @PreAuthorize("hasAuthority('assistant:view')")
   public ApiResponse<List<AccessCredentialView>> listCredentials(
       @PathVariable UUID appId, @AuthenticationPrincipal Jwt jwt) {
@@ -199,7 +216,8 @@ public class AssistantController {
    *
    * <p>★ 撤销是终态 ⇒ 这一条是"重新生成"的唯一入口（界面上按钮叫「重新生成」也是这个原因）。
    */
-  @PostMapping("/{appId}/credentials")
+  @PostMapping(
+      "/{appId:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/credentials")
   @PreAuthorize("hasAuthority('assistant:edit')")
   public ApiResponse<AccessCredentialView> createCredential(
       @PathVariable UUID appId,
@@ -215,7 +233,8 @@ public class AssistantController {
    * <p>★ 停用与撤销是两件事：停用可再启用、凭证保留；撤销是终态（再启用会得到 {@code 400} + 可读原因）。 两者混淆的后果是"管理员以为停用等于吊销"——
    * 而那条链接随时可以被他自己再打开。
    */
-  @PatchMapping("/{appId}/credentials/{id}/enabled")
+  @PatchMapping(
+      "/{appId:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/credentials/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/enabled")
   @PreAuthorize("hasAuthority('assistant:edit')")
   public ApiResponse<AccessCredentialView> setCredentialEnabled(
       @PathVariable UUID appId,
@@ -232,7 +251,8 @@ public class AssistantController {
    * <p>★★ 撤销之后<strong>同一个请求周期内</strong>那条链接即被拒（判据 ①）：服务层会立刻清掉按 token 的 解析缓存。做不到这一点就不该引那个缓存 ——
    * "撤销了还能用"不会有任何报错。
    */
-  @PostMapping("/{appId}/credentials/{id}/revoke")
+  @PostMapping(
+      "/{appId:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/credentials/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/revoke")
   @PreAuthorize("hasAuthority('assistant:edit')")
   public ApiResponse<AccessCredentialView> revokeCredential(
       @PathVariable UUID appId, @PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
