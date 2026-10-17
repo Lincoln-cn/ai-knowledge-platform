@@ -240,7 +240,11 @@ jobs:
                  check_multihop_e2e \
                    # ★ S2 的公开链接端到端（MVP · ROADMAP §2.1）：未登录解析 → 提问带引用 → 撤销后失效。
                    #   本条此前**完全缺读数** —— 公开链接那一链只有 mock 侧，而 mock 比真后端宽松。
-                   check_public_share_e2e)
+                   check_public_share_e2e \
+                   # ★ S3 的重新生成（MVP · ROADMAP §2.1）：必须接住 targetMessageId。
+                   #   修好之前这条链是**静默坏**的（后端无 mode 字段 ⇒ Jackson 忽略 ⇒ 按 NEW 走 ⇒
+                   #   点「重新生成」新增一问一答，而界面看起来完全正常）。
+                   check_regenerate_e2e)
           failed=()
           for g in "${gates[@]}"; do
             echo "::group::${g}.py"
