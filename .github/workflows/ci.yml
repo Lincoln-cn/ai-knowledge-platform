@@ -244,7 +244,12 @@ jobs:
                    # ★ S3 的重新生成（MVP · ROADMAP §2.1）：必须接住 targetMessageId。
                    #   修好之前这条链是**静默坏**的（后端无 mode 字段 ⇒ Jackson 忽略 ⇒ 按 NEW 走 ⇒
                    #   点「重新生成」新增一问一答，而界面看起来完全正常）。
-                   check_regenerate_e2e)
+                   check_regenerate_e2e \
+                   # ★ A2 的**浏览器侧**（MVP · ROADMAP §2.2）：刷新页面不重置。
+                   #   读侧已有 JUnit（ConversationStateSurvivesReloadTest）；这一条管的是
+                   #   「路由重建 → 重新拉历史 → 渲染」那两步 —— 它们坏了而服务层是对的时，
+                   #   用户看到的就是"刷新后对话空了"。
+                   check_reload_keeps_state_e2e)
           failed=()
           for g in "${gates[@]}"; do
             echo "::group::${g}.py"
