@@ -275,6 +275,12 @@ public class ChatTurnWriter implements ChatTurnStore {
    * @param userId 当前登录用户（★ 归属判定用它，看不见 ⇒ 404）
    * @return 这一轮 + <strong>从库里取出来的问题</strong>（调用方必须用它，不能用请求体里的 question）
    */
+  // ★★ @Transactional 不能漏：Assistant.kbIds 是**懒加载集合**，事务一关就抛
+  //   LazyInitializationException（实测：真栈上重新生成直接 500，堆栈逐字
+  //   Cannot lazily initialize collection of role '...Assistant.kbIds' at
+  // ChatTurnWriter.prepareRegenerate）。
+  //   ★ 同类的 prepare 有它 —— 这正是两条路径之间最容易漏的那一处差异。
+  @Transactional
   public PreparedTurn prepareRegenerate(UUID targetMessageId, UUID userId) {
     Message target =
         messages
