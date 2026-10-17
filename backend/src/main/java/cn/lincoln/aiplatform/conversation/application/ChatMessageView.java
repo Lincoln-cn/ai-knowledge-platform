@@ -27,9 +27,11 @@ import java.util.UUID;
  * <h3>★ 三个"今天恒为某个值"的字段，都写清了它们为什么是那个值</h3>
  *
  * <ul>
- *   <li>{@code feedback} —— <strong>恒为 {@code null}</strong>：赞踩是<strong>第 18 周</strong>（{@code
- *       0.5.0}） 的能力，契约里它是 {@code MessageFeedback | null}，{@code null} = 未评。★ 写 {@code null} 而不是
- *       省掉这一格：契约里它不是可选字段（{@code feedback: MessageFeedback | null}），省掉会让前端拿到 {@code undefined}；
+ *   <li>{@code feedback} —— ★ <strong>真读 {@code cv_message.feedback}</strong>（第 18 周 · {@code
+ *       0.5.0} 落地，列见 {@code V35}）：{@code "UP"} / {@code "DOWN"} / {@code null}，{@code null} = 未评价。
+ *       ★ 这一格此前<strong>恒为 {@code null}</strong>（那时赞踩还没做）；现在它是真值。 ★
+ *       仍然<strong>不许省掉这一格</strong>：契约里它不是可选字段（{@code feedback: MessageFeedback | null}）， 省掉会让前端拿到
+ *       {@code undefined}；
  *   <li>{@code suggestions} —— <strong>恒为空列表</strong>：{@code artifact}（推荐问题 / 图表 / 导图）是 V1.1， 契约里
  *       `suggestions: string[]` 必填 ⇒ 给空数组。★ 这一格是"今天没有产物"的读数，不是"忘了填"；
  *   <li>{@code attachments} —— <strong>不出现在线上</strong>：契约里它可缺省（{@code attachments?}）， 而 {@code POST
@@ -83,7 +85,7 @@ public record ChatMessageView(
         message.status(),
         refsOf(message.references()),
         List.of(),
-        null,
+        message.feedback() == null ? null : message.feedback().name(),
         usage == null ? 0 : usage.total(),
         duration == null ? 0L : duration,
         message.failReason(),
