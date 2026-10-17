@@ -1,15 +1,15 @@
 # 本地 ONNX 向量模型（`models/`）
 
-> ★ **这个目录里，只有 `README.md` 进 git。** 模型文件一律不进（体积大、许可证随模型而异）。
+> ★ **这个目录里，只有 `README.md` 进 git。** 模型文件一律不进（体积、许可证随模型而异）。
 > 规则在根 `.gitignore`（`models/*` + `!models/README.md`），与 `corpus/` 同一个模式。
 
 ---
 
 ## 一、为什么需要它
 
-向量化现在依赖**外部进程**（Ollama / 桩，`http://localhost:11434`）。这带来一个具体的开发痛点：
+向量化现在依赖**外部进程**（Ollama / 桩，`http://localhost:11434`）。带来一个具体的开发痛点：
 **只起后端时，文档解析完会永远停在 `PENDING_EMBEDDING`**，检索因此永远 0 命中 ——
-而健康检查一直是 `UP`（"进程活着"与"向量化可用"是两件事，见下）。
+而健康检查一直是 `UP`（"进程活着"与"向量化可用"是两件事）。
 
 本地 ONNX 让向量化**在同一个 JVM 里跑**：
 
@@ -19,83 +19,90 @@
 | 桩（`openai_stub.py`） | 假扮 chat **和** embeddings | 只需假扮 **chat** |
 | 密级 | `LOCAL_INFERENCE` 已算不出网 | 连 HTTP 都没有，**更强** |
 
-## 二、选了哪个模型，以及**为什么**是它
+## 二、当前用的模型：`bge-small-zh-v1.5`（int8 量化）
 
-**`Xenova/bge-base-zh-v1.5`**（BAAI `bge-base-zh-v1.5` 的 ONNX 转换版）
+| 项 | 值 |
+|---|---|
+| 文件 | `models/bge-small-zh-v1.5/model_quantized.onnx`（**23,448.1 KB**，sha256 `15B717C382BCB518…`） |
+| tokenizer | `models/bge-small-zh-v1.5/tokenizer.json`（428.8 KB，sha256 `48CEA5D44424912A…`） |
+| 维度 | **512** ⚠️ 与 `V16` 的 `vector(768)` **不同维**（影响见下） |
+| 窗口 | 512 token ⇒ 分段上限 **400 字** |
 
-选它的**唯一硬理由**是维度与窗口，而这两条都能在 `config.json` 里**本地核实**（不是抄网上的说法）：
+### ★★ 维度从 768 变成 512 —— 这不是问题，是设计内的
 
-```json
-"hidden_size": 768,                 // ⇒ 768 维，正好对上现有 knowledge_vec_embedding.vector(768)
-"max_position_embeddings": 512,     // ⇒ 512 token 窗口
-"architectures": ["BertModel"],
-"model_type": "bert"
-```
-
-★ `vector(N)` 是**列类型**，一张表只能装一个维度（`V16` 的注释写死了这条）。
-选 768 维模型 = **不用改表、不用新迁移**。这是"能不能低成本落地"的分水岭。
-
-## 三、★★ 512 token 窗口 ⇒ **分段上限强制 400 字**
-
-这是本次设计里最容易出错的一条，已写进设计册
-[`03-关键机制设计.md`](../../docs/系统设计方案/03-关键机制设计.md) 的「单分段字符上限」一节。
-
-- 分段的**字数上限**与模型的 **token 窗口**是两回事，不能混用；
-- BERT 系中文分词器里 **1 个汉字常常就是 1 个 token**，还要额外留 `[CLS]` / `[SEP]`；
-- 所以 `512` 窗口的安全字数约 **400**：`floor(512 × 0.78) = 399`；
-- ★ 超出的部分**不参与向量**，检索命中率下降，**但不报错**——属于静默劣化。
-
-⇒ 口径：`实际字数上限 = min(配置回落值, 模型安全字数预算)`。
-配置里写 1200，**本地 ONNX 也必须被压到 400**（不许"模型窗口覆盖配置"）。
-
-## 四、文件清单与完整性
-
-| 文件 | 大小（字节） | 来源 |
-|---|---|---|
-| `tokenizer.json` | 439,090 | `resolve/main/tokenizer.json` |
-| `config.json` | 913 | `resolve/main/config.json` |
-| `model_quantized.onnx` | **102,868,746** | `resolve/main/onnx/model_quantized.onnx` |
-
-### sha256（**必须核对**，HuggingFace 公布的 LFS oid）
+`V16` 那张表是 `vector(768)`，而 `vector(N)` 是**列类型**（一张表一个维度）。
+但 `vectorindex` 模块（`#5` 修过）**按维度路由 + 按需建表**：
 
 ```
-model_quantized.onnx  b665f3bba56c3119bc76ba131ebcc544d720a7408cb11581bdf354aaa0198d43
+VectorIndexPort.tableFor(dimension) → vec_embedding_<N>
+JdbcVectorIndex.ensureTable(dimension) → create table if not exists …
 ```
 
-核对命令：
+⇒ 512 维模型的数据会落到 `vec_embedding_512`，与 768 的互不影响。
+★ 这条正好是 `#5` 那个设计的**第一次真实使用**；如果它不成立，这里就是第一次红。
+
+> ⚠️ **维度还没有实测确认**：`512` 来自模型规格，不是本机跑出来的。
+> 接上之后必须有一条断言 **"产出向量长度 == 512"** —— 维度错了不会报错，
+> 只会让写入失败或写进错表。
+
+## 三、从哪里下的（★ 不是 HuggingFace）
+
+**HuggingFace 与 hf-mirror 在本机都不可达**（`curl` exit 28 连接超时），ModelScope 上的
+`BAAI/bge-base-zh-v1.5` **没有 ONNX**（只有 config + tokenizer）。
+
+最终来源：**Maven Central 上的 LangChain4j 打包工件**（模型 + tokenizer 都在 jar 里）：
+
+```
+dev.langchain4j:langchain4j-embeddings-bge-small-zh-v15-q:1.22.0-beta32
+  └─ bge-small-zh-v1.5-q.onnx              23.4 MB
+  └─ bge-small-zh-v1.5-q-tokenizer.json    428.8 KB
+```
+
+本机解出后的实测大小与 sha256（前 16 位）：
+
+```
+model_quantized.onnx  22.9 MB  15B717C382BCB518…
+tokenizer.json         0.42 MB  48CEA5D44424912A…
+```
+
+> ★★ **一处如实说明**：这两个哈希是**本机算的**，**没有**第三方公布的校验值可比对
+> （HF 的 LFS oid 拿不到，因为 HF 不可达）。⇒ 完整性靠"Maven Central 的 jar 本身可信 +
+> 解压无错 + 文件大小与 jar 内条目一致"。这比之前那次「下载中断留下半截文件」强得多，
+> 但**不等于**"与上游权重逐字节一致"。
+
+## 四、★★ 上一次踩过的坑（记在这里，别再犯）
+
+第一次尝试是 HF 的 `Xenova/bge-base-zh-v1.5` 量化版（目标 **102,868,746** 字节，sha256 `b665f3bb…`）。
+`Invoke-WebRequest` 下到 94,731,896 字节时中断，**但半截文件留在了磁盘上**。
+
+不比对 sha256 的话，会得到一个"能加载、但向量不可信"的模型 —— 而后续**没有任何读数能发现**
+（向量照常产出，只是错的）。
+
+⇒ 判据：**下完必比对 size + sha256**；拿不到上游校验值时，至少比对"文件大小 == jar 内条目大小"。
+
+## 五、怎么复现
 
 ```powershell
-(Get-FileHash models/bge-base-zh-v1.5/model_quantized.onnx -Algorithm SHA256).Hash.ToLower()
+$v  = '1.22.0-beta32'
+$jar = "https://repo.maven.apache.org/maven2/dev/langchain4j/langchain4j-embeddings-bge-small-zh-v15-q/$v/langchain4j-embeddings-bge-small-zh-v15-q-$v.jar"
+curl.exe -sS -L -o "$env:TEMP\bge-zh.jar" $jar
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::OpenRead("$env:TEMP\bge-zh.jar")
+# 解出 bge-small-zh-v1.5-q.onnx           → models/bge-small-zh-v1.5/model_quantized.onnx
+#     bge-small-zh-v1.5-q-tokenizer.json → models/bge-small-zh-v1.5/tokenizer.json
 ```
-
-> ★★ **实测踩过一次**：用 `Invoke-WebRequest` 下这个 98MB 文件时，传输中断（`unexpected EOF`），
-> 但**文件留在了磁盘上**（94,731,896 字节）。如果不比对 sha256，就会得到一个"能打开、但推理结果不可信"的模型 ——
-> 而这在后续是**没有任何读数能发现**的（向量照样产出，只是错的）。
-> ⇒ **判据：下完必比对 size + sha256，不比对不算下完。**
-
-## 五、怎么下（可复现）
-
-```powershell
-$base = 'https://huggingface.co/Xenova/bge-base-zh-v1.5/resolve/main'
-curl.exe -L --retry 8 --retry-delay 3 --retry-all-errors -C - `
-  --output models/bge-base-zh-v1.5/model_quantized.onnx `
-  "$base/onnx/model_quantized.onnx"
-# 再按上一节核对 sha256
-```
-
-★ 用 `curl -C -`（断点续传）而不是 `Invoke-WebRequest`：后者中断后**不会**续传，只会留半截文件。
 
 ## 六、许可
 
-`bge-base-zh-v1.5` 由 BAAI 发布，模型卡标注 **MIT**。
-★ 仅本地/内部使用；随产品分发前需再核一次模型卡的许可条款（本仓不把模型放入 git 就是为了这件事留出决定空间）。
+`bge-small-zh-v1.5` 由 BAAI 发布，模型卡标注 **MIT**；本目录用的是 LangChain4j 的 ONNX 转换件。
+★ 仅本地/内部使用；随产品分发前需再核一次模型卡与转换件的许可条款。
 
-## 七、还没做的事（避免误解）
+## 七、实现选型（已定，未接线）
 
-- **没有**接入任何 Java 代码 —— 本目录只放模型文件；
-- **没有**验证过推理输出（本机无 ONNX runtime 之前）；
-- 接入方案（`InProcessOnnxEmbeddingAdapter` + `OrtSession` 生命周期）见对应 Issue。
-
-★ 特别提醒 ONNX 生命周期的两条官方事实（会写进实现）：
-**一个 JVM 只能有一个 `OrtEnvironment`**，且它的 `close()` 自 ORT 1.11 起是 **no-op**
-⇒ 「卸载」只能发生在 `OrtSession` 层，`OrtEnvironment` 与进程同生共死。
+- 用 **官方 Spring AI** 的 `org.springframework.ai.transformers.TransformersEmbeddingModel`
+  （`spring-ai-transformers:2.0.1`，与本仓 Spring AI 同版本；Maven Central 可达）。
+  ⇒ 不引入第二个 AI 框架；模型文件走磁盘路径（`modelUri` / `tokenizerUri`）。
+- ★ 官方 ONNX 生命周期的两条事实（写进实现）：
+  **一个 JVM 只能有一个 `OrtEnvironment`**，且它的 `close()` 自 ORT 1.11 起是 **no-op**
+  ⇒ 「卸载」只能发生在 `OrtSession` 层。
+- ★ **不做**多个本地模型热切换：本地只留一个，多模型交给服务侧（HTTP）。
