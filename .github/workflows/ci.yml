@@ -249,7 +249,12 @@ jobs:
                    #   读侧已有 JUnit（ConversationStateSurvivesReloadTest）；这一条管的是
                    #   「路由重建 → 重新拉历史 → 渲染」那两步 —— 它们坏了而服务层是对的时，
                    #   用户看到的就是"刷新后对话空了"。
-                   check_reload_keeps_state_e2e)
+                   check_reload_keeps_state_e2e \
+                   # ★ A3 的**界面侧**（MVP · ROADMAP §2.2）：失败可见（可读原因 + 可重试）。
+                   #   ★ 用桩自己的注入口（`POST /__stub/config {fail_rate:1.0}`）造真实失败，
+                   #     不 mock 后端、不碰产品代码；★ 且**必须在 finally 里复原** ——
+                   #     本 job 的闸门是顺序跑的，泄漏的 fail_rate 会让后面每一条都红。
+                   check_failure_visible_e2e)
           failed=()
           for g in "${gates[@]}"; do
             echo "::group::${g}.py"

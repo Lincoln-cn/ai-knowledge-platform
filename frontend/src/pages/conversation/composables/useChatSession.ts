@@ -258,6 +258,30 @@ export interface ChatSessionOptions {
   onNeedConversation?: () => Promise<string | null>
 }
 
+/**
+ * 把「面向用户的失败原因」兜成人话（`#164`）。
+ *
+ * ★ 判据：界面上的失败文案**不许出现**内部 JS 错误标记 —— 那是实现细节，不是原因。
+ * ★ 原话不丢：打到 `console.error`，排查时仍能看到真东西。
+ *
+ * @param reason 上游/框架给的原始原因（可能是任意文本，包括异常消息）
+ * @returns 可以给用户看的那一句
+ */
+function guardUserFacingReason(reason: string): string {
+  const JS_ERROR_MARKERS = [
+    'is not a function',
+    'TypeError',
+    'Cannot read',
+    'undefined is not',
+    '[object Object]',
+    'Uncaught'
+  ]
+  const leaked = JS_ERROR_MARKERS.some((marker) => reason.includes(marker))
+  if (!leaked) return reason
+  console.error('[chat] 失败原因里出现了内部错误文本，已换成可读提示：', reason)
+  return '生成失败，请稍后重试'
+}
+
 export function useChatSession(options: ChatSessionOptions = {}) {
   const messages: Ref<ChatMessageEx[]> = ref([])
   const loadingHistory = ref(false)
@@ -484,7 +508,12 @@ export function useChatSession(options: ChatSessionOptions = {}) {
         assistant.id = meta.messageId || assistant.id
       },
       onRefs: (refs) => {
-        assistant.refs = refs.map(toRefEx)
+        // ★★ `#164`：服务端在失败/异常路径上可能发 `refs: null` 或干脆不带这个字段
+        //   ⇒ 裸调 `refs.map(...)` 会抛 `refs.map is not a function`，而那个异常随后被当成
+        //   **"失败原因"** 显示给用户（实测界面逐字：`生成失败：refs.map is not a function`）。
+        //   ★ 面向用户的原因只能来自后端的 `failReason` / `failHint`（它们是可读的中文），
+        //     前端**不许**把自己的类型错误拼进去。
+        assistant.refs = Array.isArray(refs) ? refs.map(toRefEx) : []
       },
       onDelta: (chunk) => {
         assistant.content += chunk
@@ -495,10 +524,15 @@ export function useChatSession(options: ChatSessionOptions = {}) {
         }
       },
       onError: (reason, hint) => {
-        // 失败必须说话：原因 + 下一步
-        streamError.value = { reason, hint }
+        // 失败必须说话：原因 + 下一步。
+        // ★★ `#164`：**兜底一道** —— 面向用户的原因只许是可读中文。
+        //   任何看起来像 JS 报错的文本一律换成人话，原话打到 console 供排查。
+        //   ★ 为什么需要兜底：`refs.map` 那处已加类型守卫，但"异常被当成原因"这个**通道**
+        //     只要还在，下一个类型错误就会以同样的形状出现在用户面前。
+        const readable = guardUserFacingReason(reason)
+        streamError.value = { reason: readable, hint }
         assistant.status = 'FAILED'
-        assistant.failReason = reason
+        assistant.failReason = readable
         assistant.failHint = hint ?? null
       },
       onDone: (result) => {
