@@ -11,6 +11,8 @@ export const PERM = {
   knowledgeManage: 'knowledge:manage',
   documentUpload: 'knowledge:document:upload',
   segmentEdit: 'knowledge:segment:edit',
+  /** 问答对的增删改（FR-03-12）。★ 不借用 segmentEdit：分段是自动切的、问答对是人工标的 */
+  qaEdit: 'knowledge:qa:edit',
   hitTest: 'knowledge:hittest',
 
   assistantView: 'assistant:view',

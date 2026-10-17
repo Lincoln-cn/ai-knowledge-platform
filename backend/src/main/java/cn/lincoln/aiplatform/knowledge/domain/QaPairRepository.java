@@ -31,6 +31,17 @@ public interface QaPairRepository {
   /** 批量保存（导入一次写一整批）。 */
   List<QaPair> saveAll(List<QaPair> pairs);
 
+  /**
+   * 保存单条（新建 / 改名 / 软删都走它）。
+   *
+   * <p>★ 与 {@link #saveAll} 并存而不是二选一：批量导入要「一批要么全进」， 单条改名/删除要的是一次写一行 —— 用 saveAll(List.of(x))
+   * 表达单条会让调用方 误以为这里也有批次语义。
+   *
+   * @param pair 问答对
+   * @return 落库后的那条
+   */
+  QaPair save(QaPair pair);
+
   Optional<QaPair> findById(UUID id);
 
   /**

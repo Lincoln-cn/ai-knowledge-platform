@@ -75,6 +75,7 @@ public class PermissionCatalog {
           new Item(Permissions.DOCUMENT_UPLOAD, "上传与加工文档", "知识"),
           new Item(Permissions.SEGMENT_EDIT, "治理分段", "知识"),
           new Item(Permissions.HIT_TEST, "命中测试", "检索"),
+          new Item(Permissions.QA_EDIT, "维护问答对", "知识"),
           new Item(Permissions.ASSISTANT_VIEW, "查看应用", "应用"),
           new Item(Permissions.ASSISTANT_EDIT, "配置应用", "应用"),
           new Item(Permissions.ASSISTANT_PUBLISH, "发布应用", "应用"),

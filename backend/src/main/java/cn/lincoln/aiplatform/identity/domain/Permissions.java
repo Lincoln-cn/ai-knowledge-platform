@@ -42,6 +42,15 @@ public final class Permissions {
   public static final String KNOWLEDGE_MANAGE = "knowledge:manage";
   public static final String DOCUMENT_UPLOAD = "knowledge:document:upload";
   public static final String SEGMENT_EDIT = "knowledge:segment:edit";
+
+  /**
+   * 问答对的增删改（`FR-03-12`）。
+   *
+   * <p>★ 为什么不复用 {@link #SEGMENT_EDIT}：分段是**自动切**出来的，问答对是**人工标定**的，
+   * 两者是不同的事。借用一个语义不相关的权限点，等于让"能改分段的人就能改问答对"这件事 变成一个说不清的口径（本仓既有教训）。
+   */
+  public static final String QA_EDIT = "knowledge:qa:edit";
+
   public static final String HIT_TEST = "knowledge:hittest";
 
   // ── 应用（3）──
@@ -74,6 +83,7 @@ public final class Permissions {
           KNOWLEDGE_MANAGE,
           DOCUMENT_UPLOAD,
           SEGMENT_EDIT,
+          QA_EDIT,
           HIT_TEST,
           ASSISTANT_VIEW,
           ASSISTANT_EDIT,
@@ -95,6 +105,7 @@ public final class Permissions {
           KNOWLEDGE_MANAGE,
           DOCUMENT_UPLOAD,
           SEGMENT_EDIT,
+          QA_EDIT,
           HIT_TEST,
           ASSISTANT_VIEW,
           CONVERSATION_VIEW,
@@ -131,6 +142,7 @@ public final class Permissions {
           KNOWLEDGE_MANAGE,
           DOCUMENT_UPLOAD,
           SEGMENT_EDIT,
+          QA_EDIT,
           HIT_TEST,
           ASSISTANT_VIEW,
           ASSISTANT_EDIT,

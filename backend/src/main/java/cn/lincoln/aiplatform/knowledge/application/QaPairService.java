@@ -187,6 +187,137 @@ public class QaPairService {
     return PageResult.of(found.stream().map(QaPairView::from).toList(), total, safePage, safeSize);
   }
 
+  // ────────────────────────── 建 / 改名 / 删（FR-03-12 的 web 入口）──────────────────────────
+
+  /**
+   * 新建一条问答对（需求 {@code FR-03-12-1} 的单条形态）。
+   *
+   * <p>与 {@link #importPairs} 的关系：<strong>同一条落库规则，不同的入口</strong> ——
+   * 批量导入的语义是"全进或全不进"，而这里就是一条，所以校验失败只有一条要解释。
+   *
+   * <p>★ 来源固定为 {@link QaPairOrigin#MANUAL}：从 web 手输的必然是人工导入。 会话沉淀（{@code CONVERSATION}）/
+   * 赞踩沉淀（{@code FEEDBACK}）由各自那条链写入， 让调用方传来源等于允许"人手写的一条自称来自会话" —— 那会让追溯失效。
+   *
+   * @param kbId 归属（不可见 ⇒ 404）
+   * @param question 问题 ★ 必填
+   * @param answer 答案 ★ 必填
+   * @param classification 密级 ★ 必填且不得高于库上限
+   * @param segmentId 出处（可空；有值时校验它属于 {@code kbId}）
+   * @param currentUserId 建档人（controller 从 JWT 取）
+   * @return 落库后的那条
+   */
+  @Transactional
+  public QaPairView create(
+      UUID kbId,
+      String question,
+      String answer,
+      ClassificationLevel classification,
+      UUID segmentId,
+      UUID currentUserId) {
+    KnowledgeBaseView base = knowledgeBases.get(kbId);
+    requireClassificationWithin(classification, base.maxClassification(), "问答对");
+    ImportPair item =
+        new ImportPair(question, answer, segmentId, classification, QaPairOrigin.MANUAL, null);
+    verifySegmentOwnership(List.of(item), kbId);
+    QaPair saved =
+        pairs.save(
+            new QaPair(
+                UUID.randomUUID(),
+                kbId,
+                item.question(),
+                item.answer(),
+                item.segmentId(),
+                item.classification(),
+                item.origin(),
+                item.sourceRef(),
+                currentUserId));
+    return QaPairView.from(saved);
+  }
+
+  /**
+   * 改问题（需求 {@code FR-03-12-2} 的行内改名）。
+   *
+   * @param pairId 问答对 id（不存在 / 已删 / 库不可见 ⇒ 404，同一段文案）
+   * @param newQuestion 新问题 ★ 空白 ⇒ 400
+   * @param currentUserId 操作人
+   * @return 落库后的那条
+   */
+  @Transactional
+  public QaPairView rename(UUID pairId, String newQuestion, UUID currentUserId) {
+    QaPair pair = requireVisible(pairId);
+    try {
+      pair.rename(newQuestion, currentUserId);
+    } catch (IllegalArgumentException invalid) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, invalid.getMessage(), "改成一个非空的问题再提交");
+    }
+    return QaPairView.from(pairs.save(pair));
+  }
+
+  /**
+   * 删除问答对（需求 {@code FR-03-12-3}）—— <strong>软删</strong>，且幂等。
+   *
+   * @param pairId 问答对 id（不存在 / 库不可见 ⇒ 404；已删 ⇒ 幂等返回）
+   * @param currentUserId 操作人
+   */
+  @Transactional
+  public void delete(UUID pairId, UUID currentUserId) {
+    // ★★ 这里**不能**用 requireVisible：它对"已软删"也抛 404，而删除必须**幂等**
+    //   （删两次不报错、且 deleted_at 不被刷新）。两者冲突 —— 本条判据
+    //   `deleteIsSoftAndIdempotent` 当场抓到：第二次 delete 抛了"问答对不存在"。
+    //   ⇒ 单独一条取数路径：只判「存在 + 库可见」，不判 deleted。
+    QaPair pair =
+        pairs
+            .findById(pairId)
+            .orElseThrow(
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "问答对不存在", "它可能已被删除，或者不在你的可见范围内"));
+    // ★ 归属的权威仍是**知识库**（问答对没有独立可见性，见 V31 注释）
+    knowledgeBases.get(pair.kbId());
+    if (pair.deleted()) {
+      return;
+    }
+    pair.softDelete(currentUserId);
+    pairs.save(pair);
+  }
+
+  /**
+   * 取一条可见的问答对。
+   *
+   * <p>★ "不存在"、"已软删"、"所属知识库不可见" 三者<strong>同一段文案</strong>： 与 {@code DocumentService} / {@code
+   * SegmentService} 逐字同一口径 —— 分辨它们等于确认了 id 的存在性。
+   */
+  private QaPair requireVisible(UUID pairId) {
+    QaPair pair =
+        pairs
+            .findById(pairId)
+            .orElseThrow(
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "问答对不存在", "它可能已被删除，或者不在你的可见范围内"));
+    if (pair.deleted()) {
+      throw new BusinessException(ErrorCode.NOT_FOUND, "问答对不存在", "它可能已被删除，或者不在你的可见范围内");
+    }
+    // ★ 归属的权威是**知识库**（问答对没有独立可见性，见 V31 注释）
+    knowledgeBases.get(pair.kbId());
+    return pair;
+  }
+
+  /**
+   * 密级不得高于知识库上限（`13 §6` 的 ceiling 口径）。
+   *
+   * <p>★ 抽成一个方法而不是在三个入口各写一遍：这是**同一条安全规则**， 复制三次之后必然有一处写漏，而写漏的那一处是静默的越权。
+   */
+  private void requireClassificationWithin(
+      ClassificationLevel classification, ClassificationLevel ceiling, String what) {
+    if (classification == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, what + "缺少密级", "问答对将来要进检索 ⇒ 密级是它的安全过滤依据，不能有默认值（13 §6.3）");
+    }
+    if (!classification.within(ceiling)) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          what + "的密级 " + classification + " 高于所属知识库的上限 " + ceiling,
+          "密级要跟随所属知识库的上限（13 §6）—— 请降低密级，或提高该库的密级上限");
+    }
+  }
+
   // ────────────────────────── 内部 ──────────────────────────
 
   /**
