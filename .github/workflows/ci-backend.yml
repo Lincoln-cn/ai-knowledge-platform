@@ -1,0 +1,204 @@
+name: 后端 · 回归 + 架构闸门
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  从 ci.yml 拆出来的第二个（也是最大的一块）
+#
+#  ★ 拆之前的读数：后端 job 15 分 42 秒，其中 **`mvn verify` 一步 871 秒**。
+#    那 871 秒里既有"单测 + 集成（Testcontainers 真 PG）+ 格式化"，也有**架构闸门**，
+#    而架构闸门**只要编译、不要数据库** —— 它被压在集成测试后面，是最没道理的一段。
+#
+#  ★★ 本 workflow 的拆法（刻意保守，理由写死在这里）：
+#    · **`mvn verify` 仍然整包跑，不按类清单拆档**。原因有两条，都可核对：
+#      ① `pom.xml` 的 surefire 配了 `<failIfNoSpecifiedTests>true</failIfNoSpecifiedTests>`
+#         —— 那是 Issue #50 落的（`-Dtest=A,B` 曾静默不跑却报成功）。于是"按类名列清单"
+#         一旦写错一个字，job 会**立刻红**；而 110 个测试类靠手抄清单，写错的概率不低。
+#      ② 拆档的风险是**漏类**（漏一个类 = 那一批回归在 CI 里静默失效，正是本项目头号病）。
+#      ⇒ 整包跑是"不丢东西"的保证；本批只在**它之外**另加一条"架构闸门先跑"的快车道。
+#    · 架构闸门单独成 job（`architecture`）：顶层那 9 个类里绝大多数只要编译，红的定位比混在整包里精确；
+#      ★ 但**并非全部** —— `ContractDriftTest` / `MigrationIntegrationTest` 要 Testcontainers 的 PG 镜像
+#      （本批真跑才发现的，逐字见该 job 的注释）。所以两个 job 都要先构建 PG 镜像。
+#
+#  ★ 判据：把 `ModuleBoundaryTest` 的边界弄坏 ⇒ 只有 `architecture` 红，`backend` 照常出读数；
+#    把某条集成测试弄坏 ⇒ 只有 `backend` 红。任一侧红都不遮蔽另一侧。
+#  ★★ 本批实测的收益（2026-10-17）：`architecture` 在 **2 分钟**内就报出了
+#    "两个类拉不到 PG 镜像"，而同一轮的整包 `backend` 跑到 **13 分钟**才结束 ——
+#    这正是拆分的意义（虽然那次红是我自己的假设错了，见该 job 的注释）。
+# ══════════════════════════════════════════════════════════════════════════════
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─────────────────────── ① 架构 / 口径闸门（先跑，比整包早十几分钟出结果）───────────────────────
+  #
+  #  ★★ 本批实测纠正了一个**我自己的错误假设**：第一版这个 job 的名字写的是"不要 DB"，
+  #    因为顶层的架构闸门（ModuleBoundary / PlatformPurity / TestNaming…）确实只要编译。
+  #    但真跑当场红了，逐字：
+  #        ContractDriftTest » ContainerFetch Can't get Docker image: ai-knowledge-platform-pg:dev
+  #        MigrationIntegrationTest » ContainerFetch Can't get Docker image: ai-knowledge-platform-pg:dev
+  #        Tests run: 17, Errors: 2
+  #    —— ★ **`ContractDriftTest` 与 `MigrationIntegrationTest` 要 Testcontainers 的 PG 镜像**。
+  #    ⇒ 本 job 必须与 `backend` job 一样先构建镜像。（本地能过我，是因为本机有那个镜像 —— 典型的环境差异。）
+  #  ★ 它仍然值得单独成 job：17 条里 15 条只要编译，红的定位比混在整包里精确得多，
+  #    而且**它 2 分钟就给出了答案**（整包 verify 要 15 分钟）。
+  architecture:
+    name: 架构 + 口径闸门
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # ★ 自制 PG 镜像（pgvector + zhparser）—— `ContractDriftTest` / `MigrationIntegrationTest`
+      #   通过 Testcontainers 拉 `ai-knowledge-platform-pg:dev`，缺它就直接 ContainerFetch 失败。
+      #   ★ 与 `backend` job 用**同一个 gha 缓存 scope**（`pg-zhparser`）⇒ 第二次起基本秒级命中。
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 构建 PG 镜像（自制：pgvector + zhparser）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/pg/Dockerfile
+          tags: ai-knowledge-platform-pg:dev
+          load: true
+          cache-from: type=gha,scope=pg-zhparser
+          cache-to: type=gha,scope=pg-zhparser,mode=max
+
+      # ★★ 两条通配符**各跑一次**，这是本仓的硬纪律：
+      #   `*` **不跨包** ⇒ `cn.lincoln.aiplatform.*Test` 只匹配顶层包那 9 个类，
+      #   而口径一族全在 `cn.lincoln.aiplatform.caliber`（2026-10-15 曾因此漏检一处真红）。
+      #   ★ 每次都是**单模式**调用（满足"绝不用 `-Dtest=A,B`"那条纪律）。
+      #   ★ 两条都靠 `<failIfNoSpecifiedTests>true</failIfNoSpecifiedTests>` 兜底：
+      #     通配符要是哪天一个类都匹配不上，这里会**红**而不是静默通过。
+      - name: 架构闸门（顶层包）
+        working-directory: backend
+        run: mvn -B test -Dtest='cn.lincoln.aiplatform.*Test'
+
+      - name: 口径闸门（caliber 子包）
+        working-directory: backend
+        run: mvn -B test -Dtest='cn.lincoln.aiplatform.caliber.*Test'
+
+      - name: 失败时留测试报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: architecture-surefire-reports
+          path: backend/target/surefire-reports/
+          if-no-files-found: ignore
+
+  # ─────────────────────── ② 全量回归（整包 mvn verify）───────────────────────
+  backend:
+    name: 后端 · 全量回归（整包 verify）
+    runs-on: ubuntu-latest
+    # ★ 实测 871 秒；给 40 分钟上限 —— 卡住时会**明确超时红**，
+    #   而不是占满 GitHub 默认的 6 小时（那才是"太重"最贵的形态）。
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # ★ 先起 OpenAI 桩服务，否则 OpenAiStubContractTest 会整体跳过 ——
+      #   那 6 条里有两条是"框架有没有把 reasoning_effort 发出去""base-url 打得对不对"
+      #   这类真证据，跳过它等于让这条回归在 CI 里静默失效。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 起 OpenAI 桩服务（供契约测试用）
+        working-directory: backend
+        run: |
+          python tools/openai_stub.py --port 11434 > /tmp/stub.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:11434/v1/models > /dev/null; then
+              echo "桩服务就绪"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "★ 桩服务起不来 —— 契约测试会因此被跳过。日志："
+          cat /tmp/stub.log
+          exit 1
+
+      # ★ OCR 引擎与语言包必须装，否则 OcrParserTest（5 条）与 OcrEngineTest 里
+      #   依赖真引擎的两条会**整体 assumeThat 跳过** —— CI 显示绿，而扫描件识别
+      #   **没有任何回归在守**（issue #2）。
+      # ★ 三个包都要列：官方 `tesseract-ocr` **只带 eng**，漏了 `tesseract-ocr-chi-sim`
+      #   会让中文退化成方块/乱码 —— 而且不报错、不影响启动，是部署期最不可见的一类漏装。
+      #   （`deploy/README.md` §三 的离线交付清单里，这三行与镜像是同源的。）
+      - name: 装 OCR 引擎与语言包
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
+          echo "已装："
+          tesseract --version | head -1
+          tesseract --list-langs
+
+      # ★ 自制 PG 镜像（pgvector + zhparser）—— 集成测试（Testcontainers）靠它。
+      #   设计册 `09 §10.2 #3` 的中文全文检索是 `to_tsvector('chinese_zh', …)`，
+      #   而 `chinese_zh` 的 parser 只能是 zhparser；实测 pgvector 官方镜像里没有它、
+      #   PGDG/Debian 也无现成包 ⇒ 只能自己编译（`deploy/pg/Dockerfile`）。
+      #   ★ 带 GHA 层缓存：SCWS + zhparser 的编译只在缓存失效时发生（首次约 3–4 分钟，
+      #     之后是命中缓存）。★ 这里放 buildx + build-push-action 而不是 `docker build`，
+      #     就是为了拿到这份跨运行的缓存。
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 构建 PG 镜像（自制：pgvector + zhparser）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/pg/Dockerfile
+          tags: ai-knowledge-platform-pg:dev
+          load: true
+          cache-from: type=gha,scope=pg-zhparser
+          cache-to: type=gha,scope=pg-zhparser,mode=max
+
+      # ★ 镜像自己的闸门（11 项）在"用镜像之前"跑：pgvector 真功能（建表/HNSW/余弦排序）、
+      #   zhparser 精确分词（`'合同':1 '违约金':2`）、`simple` 对照、已知上限金丝雀、
+      #   以及"交付镜像里没有 gcc/git"。镜像坏了必须在这里红，而不是伪装成"测试坏了"。
+      - name: PG 镜像自检
+        run: python deploy/verify_image_pg.py
+
+      # ★★ 四类闸门一次跑完：单测 / 集成（Testcontainers 真 PG）/ 架构（Modulith verify + 金丝雀）/ 格式化。
+      #   ★ 整包、不拆档（理由见文件头：`failIfNoSpecifiedTests` + 漏类风险）。
+      #   ★ GitHub 的 ubuntu runner 自带 Docker，Testcontainers 可直接用。
+      - name: mvn verify
+        working-directory: backend
+        run: mvn -B verify
+
+      # ★ 零用例闸门：`Tests run: 0` 一律按失败处理（Issue #53 判据 ① / #50 判据 ②）。
+      #   形态：`@BeforeAll` 里的 `assumeThat` 不成立 ⇒ JUnit **中止整个容器** ⇒ surefire 打出的正是
+      #   `Tests run: 0, Failures: 0, Errors: 0, Skipped: 0` + `BUILD SUCCESS` —— 不含 skip、不含失败、纯绿。
+      #   2026-10-11 实测：桩（11434）没起时 8 个依赖它的类全部以这种形态"绿"着（见 Issue #53）。
+      #   本 job 的桩在上面那一步已经起了（起不来会直接红），所以这些类**本该跑起来**：
+      #   真出现 `Tests run: 0` 就是真问题，不是环境噪声。
+      #   扫 surefire 报告目录（CI 每次全新 ⇒ 不存在"上一次留下的旧报告"）。
+      - name: 零用例闸门
+        run: python tools/check_zero_tests.py backend/target/surefire-reports
+
+      - name: 失败时留测试报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-surefire-reports
+          path: backend/target/surefire-reports/
+          if-no-files-found: ignore

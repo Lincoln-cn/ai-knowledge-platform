@@ -711,7 +711,12 @@ public class ChatService {
                 // ★★ kbId 是前端"知识库引用 vs 会话域引用"那条结构性判据的判据本身（缺失 = 会话域）：
                 //   此前恒传 null ⇒ 真栈上连库引用也没有它 ⇒ 每条库引用都被读成「来源：」。
                 //   ★ 会话域那一行本来就是 null（没有库行），所以这里**不许**兜底 —— 兜了就抹掉了判据。
-                card.kbId() == null ? null : card.kbId().toString()));
+                card.kbId() == null ? null : card.kbId().toString(),
+                // ★★ 密级（#27）：它是"会话累计密级"的唯一来源 —— 引用集合自带它之后，
+                //   "本轮引用集合的最高密级"才到得了会话落库那一刻（写入口见 ChatTurnWriter#finish）。
+                //   ★ 这里**不许**兜底：库里那一列是 V22 的非空列（真实的行必有值），
+                //   兜底成 PUBLIC 会让会话水位算低 = 静默降密。
+                card.classification()));
         // ★ 只有真的装成了一条才占号（见方法注释末条）
         index++;
       } catch (RuntimeException singleItemFailed) {
@@ -880,6 +885,11 @@ public class ChatService {
       this.lastBusinessFrameAtNanos = startedAtNanos;
       this.lastHeartbeatAtNanos = startedAtNanos;
       this.lastFlushAtNanos = startedAtNanos;
+      // ★★ 一轮开始就作废这条消息 id 上的**残留信号**（#143 后半）：收尾那一刻的 consume 漏掉了一种时序 ——
+      //   停止请求在"收尾路径最后一次 consume"之后才置上信号（用户点停止、生成恰好同一毫秒写完）
+      //   ⇒ 那个 id 会带着上一轮的停止活到下一轮。这一步把它变成显式机制，于是
+      //   "这一轮会不会被停"只看这一轮自己的请求（#143 判据：同 id 二次生成不受前一次停止影响）。
+      stopSignal.begin(messageId);
     }
 
     /**

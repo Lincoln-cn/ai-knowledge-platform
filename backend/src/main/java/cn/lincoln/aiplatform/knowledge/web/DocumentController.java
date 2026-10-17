@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.knowledge.application.DocumentService;
 import cn.lincoln.aiplatform.knowledge.application.DocumentView;
 import cn.lincoln.aiplatform.knowledge.application.IngestionProgressView;
 import cn.lincoln.aiplatform.knowledge.application.ReembedKbView;
+import cn.lincoln.aiplatform.knowledge.domain.OrgAssignment;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -16,6 +17,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -52,17 +54,50 @@ public class DocumentController {
   }
 
   /**
+   * ★★ 指定/变更文档的责任部门（契约 {@code assignDocumentOrg}；{@code #150}）。
+   *
+   * <p>★ 它是 {@code #56} 那一档（{@code ?orgAssignment=UNASSIGNED}）真正的出口：没有它， 用户按提示找到"待补归属"的文档之后无事可做 ——
+   * 只能删档重建，而重建会丢掉 {@code department_legacy} 那个存档值。
+   *
+   * <p>★ 权限点 {@code knowledge:document:upload}（与建档同一个）：改归属与建档属于同一类动作
+   * （"把文档放进这个库并说明它归谁"），而**不是**阅读动作。
+   *
+   * <p>★ 只改归属：密级 / 文种 / 分段 / 向量一概不动，{@code department_legacy} 是存档列也不许清 （理由见 {@code
+   * DocumentService#assignOrg} 的注释）。
+   */
+  @PatchMapping("/{kbId}/documents/{documentId}/org")
+  @PreAuthorize("hasAuthority('knowledge:document:upload')")
+  public ApiResponse<DocumentView> assignOrg(
+      @PathVariable UUID kbId,
+      @PathVariable UUID documentId,
+      @RequestBody(required = false) AssignOrgBody body) {
+    return ApiResponse.ok(
+        documentService.assignOrg(kbId, documentId, body == null ? null : body.orgId()));
+  }
+
+  /** 指定责任部门的请求体（{@code orgId} 必填 —— 见 {@code Document#assignOrg} 的第二条纪律）。 */
+  public record AssignOrgBody(UUID orgId) {}
+
+  /**
    * 按库分页列文档（契约 {@code listDocuments}）。
    *
    * <p>★ 库不可见 ⇒ 404（文档可见性继承库）。
+   *
+   * <p>★★ {@code orgAssignment} 查询参数（{@code #56} 的出口）：{@code ?orgAssignment=UNASSIGNED} 列出
+   * "回填责任部门时按名字匹配不上"的文档（{@code org_id} 为空、原值在 {@code department_legacy}）。 ★ 不传 = {@link
+   * OrgAssignment#ANY} = 加这一档之前的行为，**既有调用方一个字节都不用改**。
+   *
+   * <p>★ 为什么用**状态名**而不是 {@code ?unassigned=true}：这一档回答的是"这些文档处于哪种归属状态"， 而布尔参数在调用点上读不出意图（与 {@code
+   * OrgAssignment} 的类注释同一条）。
    */
   @GetMapping("/{kbId}/documents")
   @PreAuthorize("hasAuthority('knowledge:view')")
   public ApiResponse<PageResult<DocumentView>> list(
       @PathVariable UUID kbId,
       @RequestParam(required = false) Integer page,
-      @RequestParam(required = false) Integer size) {
-    return ApiResponse.ok(documentService.list(kbId, page, size));
+      @RequestParam(required = false) Integer size,
+      @RequestParam(required = false) OrgAssignment orgAssignment) {
+    return ApiResponse.ok(documentService.list(kbId, page, size, orgAssignment));
   }
 
   /**

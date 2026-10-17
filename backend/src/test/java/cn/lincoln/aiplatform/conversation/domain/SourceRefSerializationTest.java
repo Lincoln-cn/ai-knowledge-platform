@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.conversation.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
@@ -57,12 +58,16 @@ class SourceRefSerializationTest {
             "住宿费标准为每人每天 500 元。",
             "11111111-1111-4111-8111-111111111111",
             "22222222-2222-4222-8222-222222222222",
-            "33333333-3333-4333-8333-333333333333");
+            "33333333-3333-4333-8333-333333333333",
+            ClassificationLevel.SECRET);
 
     SourceRef restored = JSON.readValue(JSON.writeValueAsString(original), SourceRef.class);
 
-    assertThat(restored).as("★ 引用快照往返必须逐字段相等（含 index / score / 三个深链 id）").isEqualTo(original);
+    assertThat(restored).as("★ 引用快照往返必须逐字段相等（含 index / score / 三个深链 id / 密级）").isEqualTo(original);
     assertThat(restored.score()).as("score 是浮点，往返不许被取整").isEqualTo(0.9123);
+    assertThat(restored.classification())
+        .as("★ 密级必须原样往返 —— 它是会话累计密级的唯一来源，丢了会让水位算低")
+        .isEqualTo(ClassificationLevel.SECRET);
   }
 
   /**
@@ -73,12 +78,26 @@ class SourceRefSerializationTest {
    */
   @Test
   void jsonKeysAreExactlyTheContractFieldNames() throws Exception {
-    SourceRef ref = new SourceRef(1, "标题", "文档名", "知识库名", 0.5, 1, "全文", "seg-1", "doc-1", "kb-1");
+    SourceRef ref =
+        new SourceRef(
+            1,
+            "标题",
+            "文档名",
+            "知识库名",
+            0.5,
+            1,
+            "全文",
+            "seg-1",
+            "doc-1",
+            "kb-1",
+            ClassificationLevel.INTERNAL);
 
     JsonNode node = JSON.readTree(JSON.writeValueAsString(ref));
 
     assertThat(node.properties().stream().map(java.util.Map.Entry::getKey).toList())
-        .as("★ JSON 键名必须逐字等于契约 SourceRef 的 10 个字段名（写成 doc_name / documentName 都不会报错，只是前端读不到）")
+        .as(
+            "★ JSON 键名必须逐字等于契约 SourceRef 的 11 个字段名"
+                + "（写成 doc_name / documentName 都不会报错，只是前端读不到；classification 同理）")
         .containsExactly(
             "index",
             "title",
@@ -89,7 +108,8 @@ class SourceRefSerializationTest {
             "full",
             "segmentId",
             "documentId",
-            "kbId");
+            "kbId",
+            "classification");
   }
 
   // ────────────────────────── ② 可选字段：缺省就是缺省 ──────────────────────────
@@ -102,7 +122,9 @@ class SourceRefSerializationTest {
    */
   @Test
   void optionalFieldsStayNullInsteadOfEmptyString() throws Exception {
-    SourceRef ref = new SourceRef(1, "标题", "文档名", "知识库名", 0.5, null, null, null, null, null);
+    SourceRef ref =
+        new SourceRef(
+            1, "标题", "文档名", "知识库名", 0.5, null, null, null, null, null, ClassificationLevel.PUBLIC);
 
     JsonNode node = JSON.readTree(JSON.writeValueAsString(ref));
 
@@ -121,12 +143,17 @@ class SourceRefSerializationTest {
    */
   @Test
   void blankOptionalFieldsAreNormalisedToNull() {
-    SourceRef ref = new SourceRef(1, "标题", "文档名", "知识库名", 0.5, null, "  ", "", " ", "");
+    SourceRef ref =
+        new SourceRef(
+            1, "标题", "文档名", "知识库名", 0.5, null, "  ", "", " ", "", ClassificationLevel.CONFIDENTIAL);
 
     assertThat(ref.full()).isNull();
     assertThat(ref.segmentId()).isNull();
     assertThat(ref.documentId()).isNull();
     assertThat(ref.kbId()).isNull();
+    assertThat(ref.classification())
+        .as("★ 密级不是可选字段：空串规范化那一条只管那五个可空串，密级必须原样留下")
+        .isEqualTo(ClassificationLevel.CONFIDENTIAL);
   }
 
   // ────────────────────────── ③ 多条引用：数组往返 ──────────────────────────
@@ -141,10 +168,42 @@ class SourceRefSerializationTest {
   void referenceListRoundTripsInOrder() throws Exception {
     List<SourceRef> refs =
         List.of(
-            new SourceRef(1, "第一章 总则", "报销管理规定.pdf", "制度库", 0.91, 1, null, null, null, null),
-            new SourceRef(2, "第三章 报销标准", "报销管理规定.pdf", "制度库", 0.88, 3, null, null, null, null),
             new SourceRef(
-                3, "附件 A 住宿标准表", "报销管理规定.pdf", "制度库", 0.75, null, null, null, null, null));
+                1,
+                "第一章 总则",
+                "报销管理规定.pdf",
+                "制度库",
+                0.91,
+                1,
+                null,
+                null,
+                null,
+                null,
+                ClassificationLevel.INTERNAL),
+            new SourceRef(
+                2,
+                "第三章 报销标准",
+                "报销管理规定.pdf",
+                "制度库",
+                0.88,
+                3,
+                null,
+                null,
+                null,
+                null,
+                ClassificationLevel.PUBLIC),
+            new SourceRef(
+                3,
+                "附件 A 住宿标准表",
+                "报销管理规定.pdf",
+                "制度库",
+                0.75,
+                null,
+                null,
+                null,
+                null,
+                null,
+                ClassificationLevel.SECRET));
 
     String json = JSON.writeValueAsString(refs);
     List<SourceRef> restored =

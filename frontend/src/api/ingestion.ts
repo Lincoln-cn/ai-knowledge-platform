@@ -97,7 +97,21 @@ export interface Segment {
 
 export interface DocumentQuery extends PageQuery {
   status?: DocumentStatus
+  /**
+   * 按**责任部门归属状态**过滤（`#56`）。
+   *
+   * - `UNASSIGNED`：只列**待补归属**的文档 —— `V27` 把责任部门从自由字符串换成 `org_id` 时
+   *   按名字回填，**匹配不上的原值留在 `department_legacy`**（不可更新的存档列），而它们此前
+   *   **没有任何界面入口能列出来**（`#56`：开发库 112 篇里 3 篇）。指定归属后即从这一档消失。
+   * - `ASSIGNED`：只列已有归属的。不传：不过滤（既有行为）。
+   *
+   * ★ 用状态名而不是布尔（`?unassigned=true`）：调用点上要能读出意图。
+   */
+  orgAssignment?: OrgAssignment
 }
+
+/** 责任部门归属过滤的三态（与后端 `OrgAssignment` 同源，`07 §11.4 ③`） */
+export type OrgAssignment = 'ANY' | 'ASSIGNED' | 'UNASSIGNED'
 
 export interface SegmentQuery extends PageQuery {
   documentId?: string
@@ -225,8 +239,25 @@ export const listDocuments = (kbId: string, query: DocumentQuery = {}) =>
     query
   })
 
-/** 上传文档。走 multipart，与其它接口共用同一出口 */
-export const uploadDocuments = (
+/**
+ * ★★ 指定/变更某篇文档的**责任部门**（契约 `assignDocumentOrg`；`#150`）。
+ *
+ * 它是「待补归属」那一档（`listDocuments` 的 `orgAssignment: 'UNASSIGNED'`，`#56`）真正的出口：
+ * 在那之前责任部门**只能在导入向导里设**，建档之后没有修改入口 ⇒ 待补的文档列得出来却处理不掉
+ * （唯一的绕法是删档重建，而重建会丢掉 `department_legacy` 那个存档值）。
+ *
+ * ★ 只改归属：密级 / 文种 / 分段 / 向量一概不动，`department_legacy` 也不许清（它是"当初没匹配上"的证据）。
+ * ★ 部门不存在/已停用 ⇒ 400；文档不在这个库 ⇒ 404（不是 403 —— 那会确认 id 存在）。
+ */
+export const assignDocumentOrg = (kbId: string, documentId: string, orgId: string) =>
+  request<DocumentItem>({
+    method: 'PATCH',
+    url: '/knowledge-bases/:kbId/documents/:documentId/org',
+    path: { kbId, documentId },
+    body: { orgId }
+  })
+
+/** 上传文档。走 multipart，与其它接口共用同一出口 */export const uploadDocuments = (
   kbId: string,
   files: File[],
   meta?: { docType: string; orgId: string; classification: ClassificationLevel }

@@ -45,6 +45,12 @@ final class Caliber {
           "orgId: UUID",
           "departmentLegacy: String",
           "classification: ClassificationLevel",
+          // ★★ 2026-10-16（#25）：密级的**排序列**（V21 的生成列，`classificationRank` 由 `classification` 派生）。
+          //   ★ 为什么它不是"版本维度"、也不是"源系统授权依据"：它只是同一个密级字段的**可比较形式** ——
+          //     值恒等于 `classification.ordinal()`（`ClassificationRankTest` 钉住这条），
+          //     加它是为了让**列表/计数侧**能重用检索侧那条 `classification_rank <= ?` 的同源谓词。
+          //   ★ 与 `V34` 那三列同一条走法：红的第一问是"我加的是不是那个概念"，第二问才是"基线跟上了没有"。
+          "classificationRank: Short",
           "status: DocumentStatus",
           "failReason: String",
           "failHint: String",

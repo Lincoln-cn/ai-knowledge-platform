@@ -570,8 +570,12 @@ export const assistantRoutes: MockRoute[] = [
         if ((kind !== 'USER' && kind !== 'ROLE') || !id) {
           throw new ApiError(ErrorCode.BAD_REQUEST, '共享主体只支持账号（user）与角色（role）')
         }
+        // ★★ `#57`：`ROLE` 一律比 **code**，不是 id —— 与库列注释（`V12`）、平台值对象
+        //   `KnowledgeBaseGrant`、以及后端校验 `GrantSubjectAdapter`（`roles.findByCode(id)`）同一口径。
+        //   ★ 比 id 的症状是**静默不命中**：界面传 code 而这里比 id ⇒ 共享给角色永远匹配不上，
+        //     调用方看到的是 400「共享主体不存在」（比"静默"好一点，但同样是错的）。
         const exists =
-          kind === 'USER' ? users.some((u) => u.id === id) : roles.some((r) => r.id === id)
+          kind === 'USER' ? users.some((u) => u.id === id) : roles.some((r) => r.code === id)
         if (!exists) {
           throw new ApiError(ErrorCode.BAD_REQUEST, `共享主体不存在：${kind} ${id}`)
         }

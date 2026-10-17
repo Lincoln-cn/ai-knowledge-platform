@@ -29,6 +29,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -269,15 +271,31 @@ class ChatStreamEventRecordingTest {
    * error"—— 后者在 HTTP 层只读得到一条流，读不出"少了一条本不该有的帧"。
    */
   @Test
-  void aStopSignalEndsAsAbortWithoutAnErrorFrame() {
+  void aStopSignalEndsAsAbortWithoutAnErrorFrame() throws Exception {
     Fixture fixture = new Fixture();
-    fixture.model.set(new ScriptedModel(0L, 5L, 12, SHORT_ANSWER));
+    // ★★ 模型要**慢到跑得完一轮**：停止请求必须在 `Run` 构造**之后**才到（见下面的说明）。
+    fixture.model.set(new ScriptedModel(0L, 40L, 12, SHORT_ANSWER));
     ChatTurnWriter.PreparedTurn turn = fixture.prepare();
     RecordingSink sink = new RecordingSink();
-    // ★ 停止是独立于连接的显式信号（连接断开不算停止，见 ChatStopSignal 的类注释）
-    fixture.stopSignal.request(turn.assistantMessageId());
 
-    fixture.chatService().streamTurn(turn, QUESTION, sink);
+    // ★★ 时序必须与生产一致：**先开流、再置停止信号**。
+    //   为什么（本批实测踩到）：`ChatService.Run` 的构造里会调 `ChatStopSignal#begin`（#143 后半：
+    //   一轮开始清掉上一条同 id 的残留）—— 所以"先置信号、再开流"的写法会被那一次清理**当场抹掉**，
+    //   于是这一轮正常跑完（逐字读数：`agree ⇒ requested=true` / `begin ⇒ decided=true` /
+    //   `consume ⇒ decided=false` ⇒ `expected STOPPED but was GENERATED`）。
+    //   ★ 而生产链路正是"流已经开始、用户在界面上点了停止"⇒ 信号在 Run 之后到达。
+    Thread streaming = new Thread(() -> fixture.chatService().streamTurn(turn, QUESTION, sink));
+    streaming.start();
+
+    // 等这一轮真的开始（`begin` 已经跑过）再置信号 —— 用 JDK 自己的等待，不靠 sleep 猜。
+    sink.awaitFirstChunk();
+    fixture.stopSignal.request(turn.assistantMessageId());
+    assertThat(fixture.stopSignal.agree(turn.assistantMessageId()))
+        .as("前提：这一轮真的答应了停（否则下面的断言在验一条从没发生过的停止）")
+        .isTrue();
+
+    streaming.join(Duration.ofSeconds(10).toMillis());
+    assertThat(streaming.isAlive()).as("前提：这一轮必须在 10 秒内收尾（否则读数是在半路上取的）").isFalse();
 
     assertThat(sink.kinds())
         .as("★ 停止路径不许夹一条 error（否则界面上会出现一条「出错了请重试」的横幅，而用户只是按了停止）")
@@ -721,6 +739,9 @@ class ChatStreamEventRecordingTest {
 
     private final List<StreamEvent> events = new ArrayList<>();
 
+    /** ★ 第一个 {@code delta} 到达的信号 —— 用例靠它"等这一轮真的开始"（见 {@link #awaitFirstChunk()}）。 */
+    private final CountDownLatch firstDelta = new CountDownLatch(1);
+
     /** {@code > 0} = 收满这么多帧之后，下一次写抛一次"连接已断开"（{@code DISCONNECT} 的注入点）。 */
     private int failAfterFrames;
 
@@ -734,6 +755,17 @@ class ChatStreamEventRecordingTest {
         throw ChatStreamWriter.disconnected(new IOException("测试注入：写连接失败"));
       }
       events.add(event);
+      if (event.kind() == EventKind.DELTA) {
+        // ★ 让用例能"等这一轮真的开始"再置停止信号（停止信号必须在 Run 构造之后才到，见用例注释）
+        firstDelta.countDown();
+      }
+    }
+
+    /** 等第一个 {@code delta} 到达（= 这一轮真的开始吐字了，Run 早就构造完）。 */
+    private void awaitFirstChunk() throws InterruptedException {
+      if (!firstDelta.await(10, TimeUnit.SECONDS)) {
+        throw new AssertionError("10 秒内没有等到第一个 delta —— 这一轮没有开起来，下面的断言会验在半路上");
+      }
     }
 
     private List<EventKind> kinds() {
@@ -1082,11 +1114,19 @@ class ChatStreamEventRecordingTest {
                   "附件-合同.docx",
                   null,
                   CONVERSATION_DOCUMENT_ID,
-                  null));
+                  null,
+                  ClassificationLevel.INTERNAL));
         } else {
           cards.add(
               new Card(
-                  id, "差旅住宿标准章节", "差旅住宿标准为每人每天500元", "SSE 差旅制度文档", "SSE 夹具库", DOCUMENT_ID, KB_ID));
+                  id,
+                  "差旅住宿标准章节",
+                  "差旅住宿标准为每人每天500元",
+                  "SSE 差旅制度文档",
+                  "SSE 夹具库",
+                  DOCUMENT_ID,
+                  KB_ID,
+                  ClassificationLevel.SECRET));
         }
       }
       return cards;

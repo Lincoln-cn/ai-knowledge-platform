@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
@@ -318,7 +319,8 @@ class MultiHopTest {
                 "文档",
                 "库",
                 UUID.randomUUID(),
-                UUID.randomUUID()));
+                UUID.randomUUID(),
+                ClassificationLevel.INTERNAL));
       }
       return cards;
     }

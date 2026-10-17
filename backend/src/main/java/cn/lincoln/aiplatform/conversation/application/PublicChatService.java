@@ -1,5 +1,11 @@
 package cn.lincoln.aiplatform.conversation.application;
 
+import cn.lincoln.aiplatform.conversation.domain.Conversation;
+import cn.lincoln.aiplatform.conversation.domain.ConversationRepository;
+import cn.lincoln.aiplatform.conversation.domain.Message;
+import cn.lincoln.aiplatform.conversation.domain.MessageRepository;
+import cn.lincoln.aiplatform.conversation.domain.MessageRole;
+import cn.lincoln.aiplatform.conversation.domain.MessageStatus;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.PublicTokenResolver;
@@ -54,16 +60,25 @@ public class PublicChatService {
   private final PublicAppPort publicApps;
   private final AccessScopePort accessScope;
   private final ChatService chatService;
+  private final ConversationRepository conversations;
+  private final MessageRepository messages;
+  private final ChatStopSignal stopSignal;
 
   public PublicChatService(
       List<PublicTokenResolver> tokenResolvers,
       PublicAppPort publicApps,
       AccessScopePort accessScope,
-      ChatService chatService) {
+      ChatService chatService,
+      ConversationRepository conversations,
+      MessageRepository messages,
+      ChatStopSignal stopSignal) {
     this.tokenResolvers = tokenResolvers;
     this.publicApps = publicApps;
     this.accessScope = accessScope;
     this.chatService = chatService;
+    this.conversations = conversations;
+    this.messages = messages;
+    this.stopSignal = stopSignal;
   }
 
   /**
@@ -191,7 +206,148 @@ public class PublicChatService {
             });
   }
 
+  /**
+   * ★★ 公开面（免登录）的<strong>停止生成</strong>（{@code #143} 前半，用户 2026-10-16 拍板"做端点"）。
+   *
+   * <h3>为什么是<strong>按消息 id</strong>，而不是照抄登录面那条形状</h3>
+   *
+   * <p>三条都可核对：① 公开页的 {@code conversationId} 是<strong>合成串</strong>（{@code public:<token>}，{@code
+   * pages/conversation/public/Index.vue}）⇒ 打到登录面那条 {@code @PathVariable UUID conversationId} 上必
+   * 400；② 公开面<strong>每一轮都是新会话</strong> （{@link #startTurn} 不接收 {@code conversationId}）⇒ 请求体里没有可传的会话
+   * id； ③ 登录面的归属判定是"会话 {@code user_id} = 调用者"（{@code ChatStopService}），而公开面里"调用者"这个概念是
+   * <strong>链接</strong>。
+   *
+   * <p>⇒ 会话 id <strong>由服务端从消息行反解</strong>，端点只收消息 id。这同时消掉了"客户端指定这条链接能停哪个会话"那条越权 （请求体里根本没有那个字段可填）。
+   *
+   * <h3>★★ 为什么<strong>不</strong>包 {@code asSubject}（与 {@link #resolve} / {@link #startTurn} 刻意不同）
+   * </h3>
+   *
+   * <p>{@code asSubject} 管的是"<strong>看得见哪些数据</strong>"。而停止既不读内容、也不产出内容：它的全部效果是 {@link
+   * ChatStopSignal#request} 一个按消息 id 的一次性信号，而那个信号只对<strong>这一条消息</strong>生效。 把它包进 {@code asSubject}
+   * 会造出<strong>第二处看起来像"停止的权限判定"</strong>的东西 —— 下一个人会以为"不包就不安全"， 于是两处各写一半。★ 真正的边界由下面两条判定承担：令牌有效 +
+   * 消息属于链接归属人的会话。
+   *
+   * <h3>★ 与登录面同一条语义（已收尾的那条消息：{@code accepted=false} 且不置信号）</h3>
+   *
+   * <p>为一条已经收尾的消息置信号，那个 id 会永远留在 {@link ChatStopSignal} 里（它是"一次性事件"、只由 {@code consume} 取走） ——
+   * 那是一种没有症状的泄漏：直到某天有人重发同一个消息 id，它一上来就被停。这条口径与 {@code ChatStopService} 逐字相同。
+   *
+   * @param rawToken 链接里的令牌原文
+   * @param messageId 助手消息 id（契约 {@code meta} 帧给出）
+   * @param requesterId 发起请求的已登录用户；匿名时为 {@code null}（只用于收窄，绝不是正当性来源）
+   * @return 停止回执（与登录面同形状：{@code accepted} + 服务端此刻读到的状态）
+   * @throws BusinessException 令牌四态之一 · 消息不属于这条链接的会话（{@code 404}）· 该消息是用户消息（{@code 400}）
+   */
+  public StopReceipt stopTurn(String rawToken, UUID messageId, UUID requesterId) {
+    // ── ① 令牌：五道判定（四态码 + 链接当前可用）复用唯一那个解析入口，一行都不重写 ──
+    PublicTokenResolver.PublicAccess link = resolveCredential(rawToken, requesterId);
+    // ★★ "这条链接现在打得开吗"必须**装在链接的范围里**问 —— 与 resolve / startTurn 逐字同一条：
+    //   应用展示面的可见性判定读的是 `currentScope()`（`PublicAppAdapter#findVisibleById` → `canSee`），
+    //   而匿名访客**自己的**范围是 nobody() ⇒ 不装就永远空 ⇒ 每一次停止都返回「这条链接当前不可用」。
+    //   ★ 本类实测踩到过这个坑（判据①第一次跑红在 404），所以这里显式记一笔：**端口调用读范围，就得装范围**。
+    boolean linkUsable =
+        accessScope.asSubject(
+            link.subjectId(),
+            link.maxClassification(),
+            () -> publicApps.findVisibleById(link.assistantId()).isPresent());
+    if (!linkUsable) {
+      // ★ 与 resolve / startTurn 同一个出口、同一句话（主体被停用 / 角色没了 ⇒ 应用展示面读不出来）
+      throw linkUnavailable();
+    }
+    if (messageId == null) {
+      throw notFound("消息不存在", "缺少助手消息 id；它由问答流的 meta 帧给出");
+    }
+
+    // ── ② 消息：必须存在，且必须挂在**这条链接归属人的**会话上（先判会话，免得从消息的报错里漏出存在性）──
+    Message message =
+        messages.findById(messageId).orElseThrow(() -> notFound("消息不存在", "请刷新公开页后重试"));
+    Conversation conversation =
+        conversations
+            .findById(message.conversationId())
+            .filter(found -> found.userId().equals(link.subjectId()))
+            .orElseThrow(() -> notFound("消息不存在", "它不在这条链接的会话里"));
+
+    if (message.role() != MessageRole.ASSISTANT) {
+      // ★ 与登录面同一条：停止信号是按助手消息 id 查的，收下用户消息的 id 只会得到一个"谁都不看"的信号
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "只能停止助手回答", "用户消息没有生成过程，不需要停止");
+    }
+
+    // ── ③ 还能不能停：已经收尾 ⇒ 回执说清"没停成"，且**不置信号**（见类注释末条）──
+    if (message.status() != MessageStatus.GENERATING) {
+      log.info("公开面收到停止请求，但助手消息 {} 已经收尾（{}）⇒ accepted=false，不置信号", messageId, message.status());
+      return new StopReceipt(false, message.status());
+    }
+
+    // ── ④ 置上 → 登记：与登录面**同一个机制、同一条时序**（先 request 再 accept）──
+    //   ★ accept=false = 这一轮在这一瞬已经收尾 ⇒ 当场拒收，**不留残留**（#143 后半；理由见 ChatStopService 第 ④ 步）。
+    stopSignal.request(messageId);
+    if (!stopSignal.agree(messageId)) {
+      log.info("公开面停止请求晚到了：助手消息 {} 在这一瞬已经收尾 ⇒ 当场拒收（不留残留）", messageId);
+      return new StopReceipt(false, message.status());
+    }
+    log.info(
+        "公开面已认领停止信号：会话 {} 的助手消息 {} 将按 ABORT 收尾（STOPPED，保留已生成内容）", conversation.id(), messageId);
+    return new StopReceipt(true, message.status());
+  }
+
+  /**
+   * ★★ 公开面（免登录）的<strong>历史消息</strong>（契约 {@code listPublicMessages}；页面**已经在调**它： {@code
+   * useChatSession#loadHistory} 在有 {@code credentialToken} 时走这一条）。
+   *
+   * <h3>★★ 归属键 = {@code (链接归属人, 应用)} 的"会话链"（{@code 13 §5.2.1}，本批新增的口径）</h3>
+   *
+   * <p>端点**只收 token**（契约 {@code listPublicMessages(token)}），所以"读哪条会话"必须由服务端反解：
+   * 取<strong>归属人在这个应用下最近的一条会话</strong>，把它那一整串消息按 {@code created_at} 升序返回。
+   * 于是公开页<strong>刷新之后读得回历史</strong> —— 这既是 A2「状态真实性：刷新页面不重置」在公开面的那一半， 也是"同一台引擎换一个正当性入口"这句话的必然要求。
+   *
+   * <p>★ 它**不</strong>按"每次访问"或"每个访客"分桶：拿到链接的人本来就能看到归属人范围内的检索结果， 所以"看到同一条对话"**不放大**任何东西；真正约束它的仍是
+   * {@code 13 §5.2} 那两级过滤 （每次访问按**冻结值**实时再滤），见该节的表。
+   *
+   * <p>★ 今天<strong>没有分页</strong>（{@code MessageRepository#listByConversation} 就是"整条会话"这个最小形状）： 分页 /
+   * 窗口那一批属登录面的 {@code GET /conversations/:id/messages}，与 {@code page} / {@code around} 的优先级口径同批落 ——
+   * 在这里先发明一个分页形状会让两处口径分叉。
+   *
+   * @param rawToken 链接里的令牌原文
+   * @param requesterId 发起请求的已登录用户；匿名时为 {@code null}（只用于收窄，不是正当性来源）
+   * @return 该会话链上的全部消息（{@code created_at} 升序；**没有**则空列表）
+   * @throws BusinessException 令牌四态之一 · 链接当前不可用（{@code 404}）
+   */
+  public List<ChatMessageView> listMessages(String rawToken, UUID requesterId) {
+    PublicTokenResolver.PublicAccess link = resolveCredential(rawToken, requesterId);
+    // ★ 与 resolve / startTurn / stopTurn 逐字同一条：可见性判定读的是 `currentScope()`，
+    //   所以必须装在链接的范围里问（匿名访客自己的范围是 nobody() ⇒ 不装就永远"链接不可用"）。
+    boolean linkUsable =
+        accessScope.asSubject(
+            link.subjectId(),
+            link.maxClassification(),
+            () -> publicApps.findVisibleById(link.assistantId()).isPresent());
+    if (!linkUsable) {
+      throw linkUnavailable();
+    }
+    return conversations
+        .findLatestByUserAndAssistant(link.subjectId(), link.assistantId())
+        .map(
+            latest ->
+                messages.listByConversation(latest.id()).stream().map(ChatMessageView::of).toList())
+        // ★ 还没问过 ⇒ **空列表**而不是 404：链接是好的，"这个人还没发过言"是正常状态
+        //   （与"令牌无效 / 链接不可用"必须可分 —— 前者前端该显示空对话，后者该显示四态文案）
+        .orElseGet(List::of);
+  }
+
   // ────────────────────────── 内部 ──────────────────────────
+
+  /**
+   * 公开面停止的回执（与登录面的 {@code ChatStopService.Receipt} <strong>同形状</strong>，契约里就是同一个 {@code
+   * ChatStopReceipt}：{@code accepted} + 服务端此刻读到的状态）。
+   *
+   * <p>★ 有意<strong>不</strong>复用那一个 record：它是 {@code conversation.application} 里另一个用例的类型，
+   * 复用会把"公开面停止"耦合到"登录面停止"的实现上；而两者共享的只是<strong>契约形状</strong>。
+   */
+  public record StopReceipt(boolean accepted, MessageStatus status) {}
+
+  private static BusinessException notFound(String message, String hint) {
+    return new BusinessException(ErrorCode.NOT_FOUND, message, hint);
+  }
 
   /**
    * 解析令牌 —— ★ 公开面上<strong>唯一</strong>的解析入口（{@code 08 §4.2.3}）。

@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.caliber;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
@@ -74,7 +75,8 @@ class PromptAssemblyInjectionTest {
                     "制度.md",
                     "制度库",
                     UUID.randomUUID(),
-                    UUID.randomUUID())),
+                    UUID.randomUUID(),
+                    ClassificationLevel.INTERNAL)),
             1_000);
 
     assertThat(outcome.usable()).as("夹具前提：这一次判定必须是可用的，否则下面的断言是空跑").isTrue();
@@ -116,7 +118,8 @@ class PromptAssemblyInjectionTest {
                 "制度.md",
                 "制度库",
                 UUID.randomUUID(),
-                UUID.randomUUID())),
+                UUID.randomUUID(),
+                ClassificationLevel.INTERNAL)),
         1_000);
 
     String prompt = chat.prompts.get(0);

@@ -15,12 +15,43 @@
         <el-option label="全部状态" value="" />
         <el-option v-for="s in STATUSES" :key="s" :label="labelOf(DOCUMENT_STATUS_LABELS, s)" :value="s" />
       </el-select>
+      <!--
+        ★ `#56`：待补归属这一档。加它以前，回填时匹配不上责任部门的文档只能靠"那一列空着"被发现，
+        看起来像"还没填"，而不像"系统需要你处理"（`department_legacy` 是不可更新的存档列）。
+      -->
+      <el-select
+        v-model="query.orgAssignment"
+        size="small"
+        placeholder="全部归属"
+        style="width: 130px"
+        @change="onFilterChange"
+      >
+        <el-option label="全部归属" value="" />
+        <el-option label="待补归属" value="UNASSIGNED" />
+        <el-option label="已有归属" value="ASSIGNED" />
+      </el-select>
       <el-button size="small" :icon="Refresh" :loading="loading" @click="manualRefresh">刷新</el-button>
       <span class="grow" />
       <el-button v-if="canUpload" size="small" type="primary" @click="openUpload">+ 上传文档</el-button>
     </div>
 
     <GlobalProgress :progress="progress" :load-error="progressError" @retry="manualRefresh" />
+
+    <!--
+      ★★ `#56` 的可读提示：只把文档列出来还不够 —— 这一行必须说明"为什么它们在这里、你要做什么"。
+      没有它，用户看到的是"责任部门那一列空着"，读起来像"还没填"，而不像"系统需要你处理"
+      （那正是这条账被埋了两个月的原因）。
+
+      ★★ `#150` 落地之后这一段改成了**真正的操作指引**（改之前是刻意保守的措辞 ——
+      当时建档之后没有修改责任部门的入口，写"请指定"就是一句做不到的指引，会让用户找半天）。
+    -->
+    <div v-if="query.orgAssignment === 'UNASSIGNED'" class="notice info">
+      <div>
+        <b>待补归属：{{ total }} 篇。</b>
+        这些文档在导入时<strong>无法按责任部门名称自动匹配</strong>（原值已存档），因此归属为空。
+        请在「责任部门」那一列点<strong>指定</strong>逐一补上 —— 补完它们会从这一档消失。
+      </div>
+    </div>
 
     <div v-if="loadError" class="notice err">
       <div><b>加载失败：</b>{{ loadError.reason }}</div>
@@ -41,6 +72,25 @@
                 @click="openRename(row)"
               />
             </div>
+          </template>
+        </el-table-column>
+
+        <!--
+          ★★ `#150`：责任部门列。它此前**根本不显示** —— 于是「待补归属」那一档的文档
+          只能靠"别的列看起来正常"被发现，而归属为空在数据权限上是**谁也不可见**
+          （`07 §十一` 组织三消费位之一），所以这不是"少一列"，是"少一个能看出问题的面"。
+        -->
+        <el-table-column label="责任部门" width="180">
+          <template #default="{ row }">
+            <span v-if="row.orgId" class="ellipsis">{{ orgNames.get(row.orgId) || row.orgId }}</span>
+            <template v-else>
+              <span class="muted">未指定</span>
+              <el-button
+                v-if="canUpload"
+                link size="small" type="primary"
+                @click="openAssign(row)"
+              >指定</el-button>
+            </template>
           </template>
         </el-table-column>
 
@@ -150,6 +200,39 @@
 
     <UploadDialog ref="uploadRef" :kb-id="kbId" @uploaded="onUploaded" />
     <ParseResultDialog ref="parseResultRef" />
+
+    <!--
+      ★ `#150` 指定责任部门。用组织树选择器（与建档时同一个控件、同一份数据）——
+      ★ 不用自由文本：部门名可变、可重名，而它要进召回前缀（`07 §十一`），所以存的必须是 id。
+    -->
+    <el-dialog
+      :model-value="assigningFor !== null"
+      title="指定责任部门"
+      width="420px"
+      @update:model-value="(v: boolean) => { if (!v) assigningFor = null }"
+    >
+      <div class="assign-target">文档：{{ assigningFor?.name }}</div>
+      <el-tree-select
+        v-model="assignOrgId"
+        :data="orgTree"
+        node-key="id"
+        :props="{ label: 'name', children: 'children' }"
+        check-strictly
+        :render-after-expand="false"
+        default-expand-all
+        style="width: 100%"
+        placeholder="从组织树选责任部门"
+      />
+      <template #footer>
+        <el-button size="small" @click="assigningFor = null">取消</el-button>
+        <el-button
+          size="small" type="primary"
+          :loading="assigning"
+          :disabled="!assignOrgId"
+          @click="submitAssign"
+        >确定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -157,9 +240,10 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { EditPen, Loading, Refresh, Search } from '@element-plus/icons-vue'
-import { ingestionApi } from '@/api'
+import { ingestionApi, orgsApi } from '@/api'
 import { ApiError } from '@/api/types'
-import type { DocumentItem, DocumentStatus, IngestionProgress } from '@/api/ingestion'
+import type { DocumentItem, DocumentStatus, IngestionProgress, OrgAssignment } from '@/api/ingestion'
+import type { OrgNodeView } from '@/api/orgs'
 import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 import GlobalProgress from './GlobalProgress.vue'
@@ -220,6 +304,12 @@ const expandedFails = ref(new Set<string>())
 const query = reactive({
   keyword: '',
   status: '' as DocumentStatus | '',
+  /**
+   * ★ 责任部门归属筛选（`#56`）：`V27` 把责任部门从自由字符串换成 `org_id` 时按名字回填，
+   * **匹配不上的原值留在 `department_legacy`**，而它们此前没有任何界面入口能列出来。
+   * 选「待补归属」即列出这批文档 —— 指定归属后它们会从这一档消失。
+   */
+  orgAssignment: '' as OrgAssignment | '',
   page: 1
 })
 
@@ -233,6 +323,65 @@ const progress = ref<IngestionProgress>({
 })
 
 const failedRows = computed(() => list.value.filter((d) => isFailed(d.status)))
+
+/**
+ * ★★ 责任部门（`#150`）：列里显示的是**部门名**，而库里存的是 `orgId`。
+ *
+ * <p>`DocumentView` 的注释把这条口径写死了：「要给人看部门名就由前端拿 `orgId` 去组织树查」。
+ * 所以这里取一次组织树，建 id → name 的映射（★ 不是每个行各查一次 —— 那是 N+1，与
+ * `OrgDirectoryPort#findByIds` 存在的理由同一条）。
+ */
+const orgTree = ref<OrgNodeView[]>([])
+const orgNames = computed(() => {
+  const map = new Map<string, string>()
+  const walk = (nodes: OrgNodeView[]) => {
+    nodes.forEach((node) => {
+      map.set(node.id, node.name)
+      if (node.children?.length) walk(node.children)
+    })
+  }
+  walk(orgTree.value)
+  return map
+})
+
+const loadOrgTree = async () => {
+  try {
+    orgTree.value = await orgsApi.orgTree()
+  } catch {
+    // 组织树只是"把 id 显示成人能读的名字"—— 取不到就不显示名字（列里落回 —），
+    // ★ 不许因此让整个文档列表报错：列表本身是能用的。
+    orgTree.value = []
+  }
+}
+
+/** 指定归属的目标：非空即代表"正在改这一篇"。 */
+const assigningFor = ref<DocumentItem | null>(null)
+const assignOrgId = ref('')
+const assigning = ref(false)
+
+const openAssign = (row: DocumentItem) => {
+  assigningFor.value = row
+  assignOrgId.value = ''
+}
+
+const submitAssign = async () => {
+  const row = assigningFor.value
+  if (!row || !assignOrgId.value) return
+  assigning.value = true
+  try {
+    await ingestionApi.assignDocumentOrg(props.kbId, row.id, assignOrgId.value)
+    ElMessage.success('责任部门已指定')
+    assigningFor.value = null
+    assignOrgId.value = ''
+    // ★ 刷新：若当前正停在「待补归属」那一档，这一篇会当场从列表里消失（那就是这一档的判据）
+    await fetchList()
+  } catch (error) {
+    const { reason, hint } = errText(error, '指定责任部门失败')
+    ElMessage.error(hint ? `${reason}（${hint}）` : reason)
+  } finally {
+    assigning.value = false
+  }
+}
 
 const embedPercent = (row: DocumentItem) => {
   if (!row.segmentCount) return 0
@@ -252,6 +401,7 @@ const fetchList = async () => {
     const result = await ingestionApi.listDocuments(props.kbId, {
       keyword: query.keyword || undefined,
       status: query.status || undefined,
+      orgAssignment: query.orgAssignment || undefined,
       page: query.page,
       size: pageSize
     })
@@ -342,6 +492,8 @@ const onFilterChange = () => {
 onMounted(() => {
   document.addEventListener('visibilitychange', onVisibility)
   refreshAll().then(schedule)
+  // ★ `#150`：组织树只取一次（把 `orgId` 显示成人能读的部门名）。取不到不影响列表。
+  void loadOrgTree()
 })
 
 onBeforeUnmount(() => {

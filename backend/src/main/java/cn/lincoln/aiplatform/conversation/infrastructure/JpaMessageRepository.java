@@ -3,6 +3,8 @@ package cn.lincoln.aiplatform.conversation.infrastructure;
 import cn.lincoln.aiplatform.conversation.domain.Message;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 /**
@@ -20,7 +22,16 @@ public interface JpaMessageRepository extends JpaRepository<Message, UUID> {
    * <p>★ {@code CreatedAtAsc} 与 {@code V33} 的 {@code idx_msg_conv (conversation_id, created_at)}
    * <strong>同一个列序</strong>：这个索引就是为了这一条查询建的，列序反了它就白建。
    *
-   * <p>★ 同秒创建的两条消息（断言里为了快会把它们挤进同一毫秒）之间没有稳定顺序 —— 所以再按 {@code id} 兜一道， 让返回顺序在"时间相同"时也是确定的（否则测试会偶发地飘）。
+   * <p>★ 同秒创建的两条消息之间没有稳定顺序 —— 所以再按 {@code id} 兜一道，让返回顺序在"时间相同"时 也是确定的（否则测试会偶发地飘）。
    */
   List<Message> findByConversationIdOrderByCreatedAtAscIdAsc(UUID conversationId);
+
+  /**
+   * 分页读（登录面历史消息端点的常规档）。
+   *
+   * <p>★ 用 {@code Page} 一次拿到"内容 + 总数"：分两次问会出现"这中间又落了一条消息"的窗口 ⇒ {@code total} 与页内容不同口径。
+   *
+   * <p>★ 排序由调用方经 {@code Pageable} 给（{@code createdAt asc, id asc}）—— 与上面那条**同源**。
+   */
+  Page<Message> findByConversationId(UUID conversationId, Pageable pageable);
 }

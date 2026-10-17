@@ -73,4 +73,62 @@ public interface MessageRepository {
    * @return 该会话的消息，按 {@code created_at} 升序
    */
   List<Message> listByConversation(UUID conversationId);
+
+  /**
+   * ★★ 常规分页读（{@code page}/{@code size} 那一档；登录面历史消息端点）。
+   *
+   * <p>★ 为什么单开一条而不是"{@link #listByConversation} 取全部再在内存里切"：长会话（几百上千条）上
+   * 那是一次**全表读**，而这一档正是聊天窗口每次打开都会走的路。
+   *
+   * <p>★ 为什么返回领域自己的 {@link Slice} 而不是 Spring 的 {@code Page}：后者会把框架类型漏进领域层 （与 {@code
+   * ConversationRepository} 同一条既有判断）。
+   *
+   * @param conversationId 会话 id
+   * @param offset 从第几条开始（0 起）
+   * @param limit 取多少条
+   * @return 这一页（升序）与<strong>该会话的总条数</strong>（★ 总条数必须与内容同一份谓词）
+   */
+  Slice slice(UUID conversationId, int offset, int limit);
+
+  /**
+   * ★★ {@code around} 档的窗口读：以目标为中心前后各取若干条，<strong>目标必在结果里</strong>。
+   *
+   * <p>★★ <strong>两条"必须由实现保证"的语义</strong>（失效都不会报错）：
+   *
+   * <ol>
+   *   <li><strong>目标必须在结果里</strong> —— 只按 {@code createdAt} 切窗口时，同刻的多条消息会把目标挤出窗口，
+   *       于是"跳到某条消息"变成"跳到它附近"（用户看不出区别，但那一条不在）；
+   *   <li><strong>找不到目标要能表达"找不到"</strong> —— 用 {@link Optional#empty()}。契约逐字写着 "找不到该消息时应报
+   *       404，而不是静默回退到第一页"。
+   * </ol>
+   *
+   * <p>★★ <strong>为什么回的是 {@link Window} 而不是裸的列表</strong>（本批与 mock 对齐时发现的一处真漂移）： {@code total}
+   * 必须是<strong>会话总数</strong>，不是窗口条数 —— mock 那侧逐字回的是 {@code total: list.length}（整条会话），而前端拿 {@code
+   * Math.ceil(total / MSG_PAGE_SIZE)} 判断"窗口前还有没有更早的一页"。只回窗口条数 ⇒ 深链跳进来之后**"加载更早"消失**
+   * （用户回不到更早的内容，而页面上没有任何报错）。
+   *
+   * @param conversationId 会话 id（★ 目标必须属于它：只按消息 id 找会让调用方越过会话边界）
+   * @param targetMessageId 目标消息 id
+   * @param radius 前后各取多少条；{@code < 0} 视为 0
+   * @return 窗口（对话自然顺序升序）+ 会话总数；目标不在该会话里 ⇒ 空
+   */
+  Optional<Window> windowAround(UUID conversationId, UUID targetMessageId, int radius);
+
+  /**
+   * 一页消息 + 该会话的总条数。
+   *
+   * <p>★ 两个分量一起返回是刻意的：分两次问会出现"这中间又落了一条消息"的窗口 ⇒ {@code total} 与页内容不同口径，而那是没人会怀疑的读数。
+   *
+   * @param content 这一页的消息（按对话自然顺序升序）
+   * @param total 该会话的消息总条数
+   */
+  record Slice(List<Message> content, long total) {}
+
+  /**
+   * {@code around} 档的读数：窗口 + <strong>会话总数</strong>。
+   *
+   * @param messages 窗口里的消息（升序，含目标）
+   * @param total 该会话的消息总条数（★ 不是窗口条数 —— 理由见 {@link #windowAround} 的注释）
+   */
+  record Window(List<Message> messages, long total) {}
 }

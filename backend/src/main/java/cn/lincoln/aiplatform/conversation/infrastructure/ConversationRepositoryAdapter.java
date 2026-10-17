@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.conversation.domain.Conversation;
 import cn.lincoln.aiplatform.conversation.domain.ConversationRepository;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
@@ -84,5 +85,26 @@ public class ConversationRepositoryAdapter implements ConversationRepository {
   @Override
   public List<Conversation> listByUser(UUID userId) {
     return jpa.findByUserIdAndDeletedAtIsNullOrderByLastMessageAtDescCreatedAtDesc(userId);
+  }
+
+  /**
+   * ★★ 最近一条 {@code (归属人, 应用)} 的会话（{@code 13 §5.2.1}）。
+   *
+   * <p>★ <strong>复用既有那条查询、在内存里按 {@code assistantId} 收窄</strong>，而不是新加一条 JPQL： 那条 {@code
+   * find…OrderByLastMessageAtDescCreatedAtDesc} 的排序与 {@code V32} 的 partial 索引 （{@code where
+   * deleted_at is null}）是配套的；另写一条只差一个 {@code where} 的查询，等于让 "最近一条"的排序口径多出第二处实现 ——
+   * 而它漂了的症状是"公开页读到的是更旧那条对话"（不报错）。
+   *
+   * <p>★ {@code assistantId} 为空这一档**单独处理**：{@code null} 在 JPQL 里是 `is null` 而不是 `= null`，
+   * 直接用等号会静默匹配不到任何行（通用问答那一档的会话会"每条都新建"）。
+   */
+  @Override
+  public Optional<Conversation> findLatestByUserAndAssistant(UUID userId, UUID assistantId) {
+    if (userId == null) {
+      return Optional.empty();
+    }
+    return jpa.findByUserIdAndDeletedAtIsNullOrderByLastMessageAtDescCreatedAtDesc(userId).stream()
+        .filter(found -> Objects.equals(found.assistantId(), assistantId))
+        .findFirst();
   }
 }

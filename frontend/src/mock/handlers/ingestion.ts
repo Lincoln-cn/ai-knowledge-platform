@@ -14,6 +14,8 @@ import { paginate } from '../dispatch'
 import { documents, knowledgeBases, segments } from '../fixtures/knowledge'
 import { PERM } from '@/constants/permissions'
 import { currentSubjects, requireVisible, visibleTo, type SubjectSet } from '../policy'
+// ★ `#150`：指定责任部门时校验"这个部门真的存在"（与真后端同一条）。
+import { orgs as mockOrgs } from './orgs'
 
 /**
  * 文档 / 分段**没有自己的归属字段**（07 §8.1 的三类资源是知识库 / 应用 / 会话），
@@ -464,13 +466,50 @@ export const ingestionRoutes: MockRoute[] = [
       gateKb(kbId, token, PERM.knowledgeView, '知识库', kbId)
       const keyword = String(query.keyword ?? '')
       const status = query.status ? String(query.status) : ''
+      // ★ `#56`：归属三态筛选 —— ★ 必须与真后端同语义（真后端是同一条谓词同时决定列表与 total）
+      const orgAssignment = query.orgAssignment ? String(query.orgAssignment) : ''
 
       const list = documents
         .filter((d) => d.kbId === kbId)
         .filter((d) => !keyword || d.name.includes(keyword))
         .filter((d) => !status || d.status === status)
+        .filter((d) => {
+          if (orgAssignment === 'UNASSIGNED') return !d.orgId
+          if (orgAssignment === 'ASSIGNED') return !!d.orgId
+          return true
+        })
 
       return paginate(list, query)
+    }
+  ],
+
+  [
+    // ★★ `#150` 指定/变更责任部门 —— ★ mock 是契约的第二种实现，少了它 `VITE_USE_MOCK=true` 下
+    //   「指定」会变成一条**没人接的请求**（页面看起来点了、什么都没发生）。
+    //   ★ 校验与真后端同口径：部门不存在 ⇒ 400（不是静默写进去）；文档不在这个库 ⇒ 404。
+    'PATCH',
+    '/knowledge-bases/:kbId/documents/:documentId/org',
+    ({ path, body, token }) => {
+      const kbId = path.kbId
+      gateKb(kbId, token, PERM.documentUpload, '知识库', kbId)
+      const documentId = path.documentId
+      const target = documents.find((d) => d.id === documentId && d.kbId === kbId)
+      if (!target) {
+        throw new ApiError(ErrorCode.NOT_FOUND, '文档不存在', '它可能已被删除，或者不在这个知识库里')
+      }
+      const orgId = String((body as { orgId?: string } | null)?.orgId ?? '')
+      if (!orgId) {
+        throw new ApiError(ErrorCode.BAD_REQUEST, '责任部门必填', '请从组织树选责任部门')
+      }
+      if (!mockOrgs.some((o) => o.id === orgId)) {
+        throw new ApiError(
+          ErrorCode.BAD_REQUEST,
+          `责任部门不存在：${orgId}`,
+          '请从组织树重新选择 —— 它可能已被删除'
+        )
+      }
+      target.orgId = orgId
+      return target
     }
   ],
 

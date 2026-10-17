@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.retrieval;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
@@ -47,7 +48,8 @@ class MultiHopJudgeTest {
               "合同",
               "法务库",
               UUID.randomUUID(),
-              UUID.randomUUID()));
+              UUID.randomUUID(),
+              ClassificationLevel.INTERNAL));
 
   private final RecordingChat chat = new RecordingChat();
   private final MultiHopService service = new MultiHopService(chat);

@@ -9,6 +9,7 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import cn.lincoln.aiplatform.support.SecurityContexts;
 import java.util.List;
@@ -288,18 +289,8 @@ class AccessCredentialFilteringTest {
 
   private UUID insertDocumentAndSegment(
       UUID kbId, String name, ClassificationLevel level, String text) {
-    UUID docId = UUID.randomUUID();
-    jdbc.update(
-        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
-            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?, ?, 'KB', ?, ?, 'local', '制度', ?::uuid, ?, 'SUCCEEDED', 0, 1, true,"
-            + " now(), now())",
-        docId,
-        kbId,
-        kbId,
-        name,
-        ROOT_ORG,
-        level.name());
+    // ★ `#48`：裸 SQL 收进了 `DocumentFixture`（全仓唯一一处写 kb_document 的地方）。
+    UUID docId = DocumentFixture.insertSucceeded(jdbc, kbId.toString(), name, level.name());
 
     UUID segmentId = UUID.randomUUID();
     jdbc.update(

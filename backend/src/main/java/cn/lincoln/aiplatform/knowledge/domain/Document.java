@@ -103,7 +103,8 @@ public class Document {
    * V27 之前的自由字符串原值（存档列，只读）。
    *
    * <p>★ 为什么留着它：回填按 {@code name} 匹配，<strong>匹配不上的不许猜、不许静默丢</strong> —— 原值留在这里、{@code org_id}
-   * 置空，由巡检列出（{@code 07 §11.2}）。
+   * 置空，由<strong>文档列表的「待补归属」档</strong>列出（{@code 07 §11.2}；★ {@code #56} 落的那个出口，
+   * 此前这里写的是"由巡检列出"，而巡检当时并不存在）。
    *
    * <p>★ {@code updatable = false}：它是**历史事实**，任何时候都不该被写回一个"更正确的值" —— 那等于篡改回填的证据（也让"哪些没匹配上"变得无法复核）。
    */
@@ -114,6 +115,23 @@ public class Document {
   @Enumerated(EnumType.STRING)
   @Column(name = "classification", nullable = false, length = 16)
   private ClassificationLevel classification;
+
+  /**
+   * ★★ 密级的<strong>排序口径</strong>（{@code V21} 的生成列）—— 列表/计数侧密级谓词的载体（{@code #25}）。
+   *
+   * <p>★ 库层是 {@code generated always as (case classification … ) stored}（与 {@code V22} 的 {@code
+   * kb_segment.classification_rank}、{@code V31} 的 {@code kb_qa_pair.classification_rank}
+   * <strong>逐字同一个 CASE</strong>）⇒ 这里 {@code insertable = false, updatable = false}：它由库算，应用绝不写。
+   *
+   * <p>★★ 为什么要有这个 Java 字段：它是**密级谓词要用的那一列**。检索侧早就在用 （{@code JdbcSegmentSearchQuery} 的 {@code
+   * s.classification_rank <= ?}），而<strong>列表与计数侧</strong> 一直只有"软删 + 所属库"两个条件 ⇒ 低 clearance
+   * 的用户**能数出**自己看不到的文档（{@code #25} 记的 存在性侧信道：不仅数得出条数，还看得到标题与密级本身）。把它映射进来，列表侧才有一个与检索侧**同源**的比较轴。
+   *
+   * <p>★ 绑定值一律来自 {@link ClassificationLevel#ordinal()}（{@code 14 §2.1} 的机器码声明顺序）—— 不在这里、也不在任何 SQL
+   * 里写第二份密级次序。
+   */
+  @Column(name = "classification_rank", insertable = false, updatable = false)
+  private Short classificationRank;
 
   /** 加工状态。初值 {@link DocumentStatus#PENDING_PARSE}。 */
   @Enumerated(EnumType.STRING)
@@ -532,6 +550,37 @@ public class Document {
     this.updatedBy = by;
   }
 
+  /**
+   * ★★ 指定/变更<strong>责任部门</strong>（{@code #150}）—— 给"回填时匹配不上"的存量文档一个补归属的入口。
+   *
+   * <h3>为什么需要这个方法（而不只是在建档时能设）</h3>
+   *
+   * <p>{@code orgId} 此前<strong>只在建档那一刻</strong>可设（{@code UploadDialog} / {@code CreateWizard} 的表单），
+   * 而 {@code V27} 回填留下了一批 {@code org_id} 为空、原值在 {@link #departmentLegacy} 的文档 （开发库实测 112 篇里 3
+   * 篇）。{@code #56} 让它们<strong>能被列出来</strong>，但没有出口 —— 用户按提示找到那 3 篇之后，唯一能做的是**删档重建**，而重建会让 {@code
+   * departmentLegacy} 这个 存档值彻底消失。⇒ 列得出来却处理不掉，正是本项目头号病（{@code silent-failure}）的形状。
+   *
+   * <h3>★★ 两条纪律</h3>
+   *
+   * <ol>
+   *   <li><strong>只改 {@code orgId}</strong>：{@link #departmentLegacy} 是 {@code updatable = false} 的
+   *       <strong>历史证据</strong>（"当时按名字没匹配上"），这次补归属**不许**把它清掉或改写 ——
+   *       那等于篡改回填的凭据，也让"哪些当初没匹配上"变得无法复核（{@code #150} 判据 4）。
+   *   <li><strong>{@code orgId} 不能为 null</strong>：这个方法表达的是"指定一个部门"，不是"清空归属"。 契约那侧也把 {@code orgId}
+   *       定成必填 —— 一个"允许置空"的写入口会让文档重新掉进 "数据权限上谁也不可见、而列表上看起来只是没填"的那个状态。
+   * </ol>
+   *
+   * @param orgId 新的责任部门（组织树里的一个部门）；★ 存在性与范围校验由调用方（服务层）负责 —— 领域对象只保证形状，不查库（{@code OrgDirectoryPort}
+   *     是平台端口，领域层不该看见它）
+   * @throws IllegalArgumentException {@code orgId} 为 {@code null}
+   */
+  public void assignOrg(UUID orgId) {
+    if (orgId == null) {
+      throw new IllegalArgumentException("责任部门不能为空 —— 这个方法表达的是「指定一个部门」，不是「清空归属」");
+    }
+    this.orgId = orgId;
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {
@@ -580,6 +629,16 @@ public class Document {
 
   public ClassificationLevel classification() {
     return classification;
+  }
+
+  /**
+   * 密级的排序口径（{@code V21} 的生成列；{@code #25} 的列表谓词读它）。
+   *
+   * <p>★ 它是<strong>库算出来的</strong>，所以与 {@link #classification()} 的 {@code ordinal()} 必须相等 —— 这条口径由
+   * {@code ClassificationRankTest} 钉住（同一份 {@code CASE} 在 {@code V21}/{@code V22}/{@code V31} 三处）。
+   */
+  public Short classificationRank() {
+    return classificationRank;
   }
 
   public DocumentStatus status() {

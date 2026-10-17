@@ -103,7 +103,10 @@ export const segmentFullTexts: Record<string, string> = {
  */
 export function enrichRef(ref: SourceRef): SourceRef {
   if (ref.segmentId && ref.documentId && !ref.kbId) {
-    return { ...ref }
+    // ★ 密级（#27）：**会话域那一档单独给值** —— 真后端是从 kb_segment.classification 读出来的，
+    //   而会话临时附件同样是"一条真实的行"（那一列 NOT NULL），所以它也不该缺。
+    //   ★ 不给值不会报错（契约里 `classification?` 是可选的），只是"页面上永远看不到" = 等于没留缝。
+    return { ...ref, classification: ref.classification ?? 'SECRET' }
   }
   const key = ref.index === 1 ? 'seg3' : 'seg4'
   return {
@@ -111,7 +114,8 @@ export function enrichRef(ref: SourceRef): SourceRef {
     full: ref.full ?? segmentFullTexts[key],
     segmentId: ref.segmentId ?? key,
     documentId: ref.documentId ?? 'doc1',
-    kbId: ref.kbId ?? 'kb1'
+    kbId: ref.kbId ?? 'kb1',
+    classification: ref.classification ?? 'INTERNAL'
   }
 }
 

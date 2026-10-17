@@ -57,7 +57,7 @@
           </el-form-item>
           <el-form-item label="共享角色">
             <el-select
-              v-model="roleIds"
+              v-model="roleCodes"
               multiple
               collapse-tags
               collapse-tags-tooltip
@@ -66,7 +66,15 @@
               :loading="loadingSubjects"
               :disabled="saving"
             >
-              <el-option v-for="r in roleOptions" :key="r.id" :label="r.name" :value="r.id" />
+              <!--
+                ★★ `#57`：这里**必须传 `r.code`**，不能传 `r.id`。
+                共享授权的 `subject.id` 对 `ROLE` 一律是**角色 code**（`kind` 与 `id` 一起比）：
+                · 库列注释（`V12`）与平台值对象 `KnowledgeBaseGrant` 都写着 code；
+                · 后端校验 `GrantSubjectAdapter` 是 `roles.findByCode(id)`；
+                · 知识库契约（`api/knowledge.ts`）也写着 `ROLE` 的 `id` 是角色 **code**。
+                ★ 传 `id` 的症状是**静默不命中**：共享了，但那个角色的人看不到 —— 与"没共享过"一模一样。
+              -->
+              <el-option v-for="r in roleOptions" :key="r.id" :label="r.name" :value="r.code" />
             </el-select>
           </el-form-item>
           <p class="micro muted">
@@ -106,7 +114,7 @@ const saving = ref(false)
 const saveError = ref('')
 const mode = ref<ResourceVisibility>('PRIVATE')
 const userIds = ref<string[]>([])
-const roleIds = ref<string[]>([])
+const roleCodes = ref<string[]>([])
 const userOptions = ref<User[]>([])
 const roleOptions = ref<Role[]>([])
 const loadingSubjects = ref(false)
@@ -116,10 +124,10 @@ const target = ref<Assistant | null>(null)
 /** 从当前 assistant 的 grants 反填已选主体（kind 与 id 一起比对，部门「3」≠ 角色「3」） */
 const restoreFromGrants = (grants: Grant[] | undefined) => {
   userIds.value = []
-  roleIds.value = []
+  roleCodes.value = []
   for (const g of grants ?? []) {
     if (g.subject.kind === 'USER') userIds.value.push(g.subject.id)
-    if (g.subject.kind === 'ROLE') roleIds.value.push(g.subject.id)
+    if (g.subject.kind === 'ROLE') roleCodes.value.push(g.subject.id)
   }
 }
 
@@ -160,7 +168,7 @@ const buildGrants = (): Grant[] => {
   for (const id of userIds.value) {
     grants.push({ subject: { kind: 'USER' as SubjectKind, id }, actions: [...actions] })
   }
-  for (const id of roleIds.value) {
+  for (const id of roleCodes.value) {
     grants.push({ subject: { kind: 'ROLE' as SubjectKind, id }, actions: [...actions] })
   }
   return grants
@@ -171,7 +179,7 @@ const save = async () => {
   if (!a) return
   saveError.value = ''
 
-  if (mode.value === 'SHARED' && !userIds.value.length && !roleIds.value.length) {
+  if (mode.value === 'SHARED' && !userIds.value.length && !roleCodes.value.length) {
     saveError.value = '定向共享至少要选一个账号或角色'
     return
   }

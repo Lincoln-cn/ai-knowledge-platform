@@ -1,5 +1,7 @@
 package cn.lincoln.aiplatform.conversation.web;
 
+import cn.lincoln.aiplatform.conversation.application.ChatHistoryService;
+import cn.lincoln.aiplatform.conversation.application.ChatMessageView;
 import cn.lincoln.aiplatform.conversation.application.ChatService;
 import cn.lincoln.aiplatform.conversation.application.ChatStopService;
 import cn.lincoln.aiplatform.conversation.application.ChatStreamAssembler;
@@ -8,6 +10,7 @@ import cn.lincoln.aiplatform.conversation.application.PublicChatService;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
+import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -17,11 +20,13 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
@@ -84,16 +89,48 @@ public class ChatController {
   private final ChatStreamAssembler assembler;
   private final PublicChatService publicChat;
   private final ChatStopService chatStop;
+  private final ChatHistoryService chatHistory;
 
   public ChatController(
       ChatService chatService,
       ChatStreamAssembler assembler,
       PublicChatService publicChat,
-      ChatStopService chatStop) {
+      ChatStopService chatStop,
+      ChatHistoryService chatHistory) {
     this.chatService = chatService;
     this.assembler = assembler;
     this.publicChat = publicChat;
     this.chatStop = chatStop;
+    this.chatHistory = chatHistory;
+  }
+
+  /**
+   * ★★ 会话历史消息（契约 {@code listMessages}；登录面这一半 —— 页面**已在调**它： {@code useChatSession#loadHistory}
+   * 的非公开面分支）。
+   *
+   * <h3>两种取数方式（契约 {@code MessageQuery} 逐字）</h3>
+   *
+   * <ul>
+   *   <li>{@code page}/{@code size}：常规分页；★ <strong>{@code page=-1} = 最后一页</strong> （聊天窗口先看最近几条）；
+   *   <li>{@code around}：以某条消息为中心取窗口；<strong>传了它就忽略 {@code page}</strong>； {@code size}
+   *       在这里是<strong>窗口宽度</strong>；★ <strong>找不到该消息 ⇒ 404</strong>， 不是静默回退第一页。
+   * </ul>
+   *
+   * <p>★ 判定与读法全在 {@link ChatHistoryService#list}：会话看不见 ⇒ 404（与 {@code stop} 同一条口径）。
+   *
+   * <p>★ 权限点 {@code conversation:view}（与 {@code chat} / {@code stop} 同一个）：读历史是"用会话"这件事 的一部分。★
+   * 这是<strong>读</strong>端点，所以它不触发 {@code AuthorizationDeclarationTest} 的写端点规则； 但会话归属的判定仍然必须有 ——
+   * 少了它会变成"任何登录用户都能读别人的会话"。
+   */
+  @GetMapping("/{conversationId}/messages")
+  @PreAuthorize("hasAuthority('conversation:view')")
+  public ApiResponse<PageResult<ChatMessageView>> messages(
+      @PathVariable UUID conversationId,
+      @RequestParam(required = false) Integer page,
+      @RequestParam(required = false) Integer size,
+      @RequestParam(required = false) UUID around,
+      @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(chatHistory.list(conversationId, subjectOf(jwt), page, size, around));
   }
 
   /**

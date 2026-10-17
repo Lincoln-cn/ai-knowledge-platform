@@ -7,6 +7,7 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.vector.VectorIndexPort;
+import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import cn.lincoln.aiplatform.support.SecurityContexts;
 import java.net.URI;
@@ -337,21 +338,9 @@ class RetrievalSecurityTest {
   }
 
   private String insertDocument(String kbId, String name, String classification) {
-    String id = UUID.randomUUID().toString();
-    jdbc.update(
-        // ★ 责任部门已改成 org_id（UUID 外键，V27）。用 ROOT 的**确定性** id（V25 种子写死）：
-        //   org_id 是外键 ⇒ 不能塞随机 UUID。见 Issue #48。
-        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
-            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?::uuid, ?::uuid, 'KB', ?::uuid, ?, 'local', '制度',"
-            + " '00000000-0000-4000-8000-000000000001'::uuid, ?, 'PENDING_EMBEDDING', 0, 0, true,"
-            + " now(), now())",
-        id,
-        kbId,
-        kbId,
-        name,
-        classification);
-    return id;
+    // ★ `#48`：裸 SQL 收进了 `DocumentFixture`（全仓唯一一处写 kb_document 的地方）。
+    //   ★ 本类要造的正是"产品路径拒绝的形状"：文档密级高于库上限（越权夹具）。
+    return DocumentFixture.insertPending(jdbc, kbId, name, classification).toString();
   }
 
   private String insertSegment(String kbId, String docId, int ordinal, String searchText) {

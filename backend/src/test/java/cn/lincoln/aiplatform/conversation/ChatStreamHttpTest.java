@@ -17,6 +17,7 @@ import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -1348,17 +1349,8 @@ class ChatStreamHttpTest {
    *     为空的分段"是真实数据的形状，{@code #123} 判据①要造的就是它（而 {@code SourceRef} 把 title 当必填 ⇒ 这一条装不成、必须被逐条摘掉）
    */
   private UUID seedDocumentAndSegment(UUID kbId, String docName, String title, String text) {
-    UUID docId = UUID.randomUUID();
-    jdbc.update(
-        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, source, doc_type, org_id,"
-            + " classification, status, char_count, segment_count, enabled, created_at, updated_at)"
-            + " values (?, ?, 'KB', ?, ?, 'local', '制度', ?::uuid, 'INTERNAL', 'SUCCEEDED', 0, 1,"
-            + " true, now(), now())",
-        docId,
-        kbId,
-        kbId,
-        docName,
-        ROOT_ORG);
+    // ★ `#48`：裸 SQL 收进了 `DocumentFixture`（全仓唯一一处写 kb_document 的地方）。
+    UUID docId = DocumentFixture.insertSucceeded(jdbc, kbId.toString(), docName, "INTERNAL");
     UUID segmentId = UUID.randomUUID();
     jdbc.update(
         "insert into kb_segment (id, document_id, kb_id, scope_kind, scope_id, ordinal, title,"

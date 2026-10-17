@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.conversation.domain.stream;
 
 import cn.lincoln.aiplatform.conversation.domain.SourceRef;
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -33,11 +34,36 @@ final class StreamFixture {
    *
    * <p>★ 只填契约里<strong>有的</strong>字段：{@code 10 §8.2} 提过的 {@code subQuestion} / {@code round} /
    * {@code matchedQuery} <strong>不在</strong>冻结契约里，所以这里也不填（详见 {@code SourceRef} 的类注释）。
+   *
+   * <p>★ 密级（第 11 个分量，{@code #27}）给两档不同的值：这样"装配器只管搬运、不改引用内容"这条断言 在密级上也成立，且下游（会话累计密级）拿到的 max
+   * 是这两档里更高的那个。
    */
   static List<SourceRef> refs() {
     return List.of(
-        new SourceRef(1, "分段一", "文档一", "知识库", 0.83, 1, null, "seg-1", "doc-1", "kb-1"),
-        new SourceRef(2, "分段二", "文档二", "知识库", 0.71, 2, null, "seg-2", "doc-2", "kb-1"));
+        new SourceRef(
+            1,
+            "分段一",
+            "文档一",
+            "知识库",
+            0.83,
+            1,
+            null,
+            "seg-1",
+            "doc-1",
+            "kb-1",
+            ClassificationLevel.INTERNAL),
+        new SourceRef(
+            2,
+            "分段二",
+            "文档二",
+            "知识库",
+            0.71,
+            2,
+            null,
+            "seg-2",
+            "doc-2",
+            "kb-1",
+            ClassificationLevel.SECRET));
   }
 
   /**

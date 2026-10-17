@@ -1,8 +1,10 @@
 package cn.lincoln.aiplatform.conversation.web;
 
+import cn.lincoln.aiplatform.conversation.application.ChatMessageView;
 import cn.lincoln.aiplatform.conversation.application.PublicChatService;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -12,16 +14,17 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 免登录公开面上<strong>唯一</strong>的 HTTP 端点：{@code GET /api/v1/public/{token}} （契约 {@code
- * frontend/src/api/conversations.ts} 的 {@code resolvePublicContext}）。
+ * 公开面（免登录）的两个 HTTP 端点：{@code GET /api/v1/public/{token}}（应用上下文）与 {@code POST
+ * /api/v1/public/{token}/messages/{messageId}/stop}（停止生成）。
  *
- * <h3>★★ 为什么这里<strong>只有</strong>一个端点（第 17 周 · Lead 裁决 ①）</h3>
+ * <h3>★★ 为什么这里<strong>只有两条</strong>（第 17 周 · Lead 裁决 ① + {@code #143} 前半）</h3>
  *
- * <p>本批一度在这里加了第二个端点 {@code POST /public/{token}/messages}（公开问答流），<strong>已被删除</strong>。
+ * <p>本批一度在这里加了 {@code POST /public/{token}/messages}（公开问答流），<strong>已被删除</strong>。
  * 理由是真源在客户端那一侧：公开页的问答流走的是 <strong>{@code POST /api/v1/conversations/chat} + {@code
  * X-Access-Credential} 头</strong> —— 见 {@code frontend/src/lib/sse.ts}（{@code if
  * (options.credentialToken) headers['X-Access-Credential']} 与 {@code
@@ -32,6 +35,11 @@ import org.springframework.web.bind.annotation.RestController;
  * ChatController#chat}（{@code @PreAuthorize} 的两个条件 + 凭据头分支）， 而"这条链接是谁、能看多密"仍由 {@link
  * PublicChatService} 一处回答。 ★ 我们自造的那条路径会成为第二套公开面形状（前端永不调用、却要一直对账）——那正是要避免的东西。
  *
+ * <p>★ <strong>停止是那条裁决的例外，而且理由充分</strong>（2026-10-16 用户拍板）：它<strong>不能</strong>复用登录面那条端点 —— 公开页的
+ * {@code conversationId} 是合成串 {@code public:<token>}、公开面每一轮都是新会话（请求体里没有会话 id可传）、 而登录面的归属判定是"会话
+ * {@code user_id} = 调用者"。 所以 {@link #stop} 是唯一形状成立的落点：<strong>按消息 id</strong>， 会话由服务端从消息行反解。★ 判据见
+ * {@code PublicChatService#stopTurn} 的类注释；"公开面能不能停"这条口径也已在设计册落一节。
+ *
  * <h3>★★ 为什么它能匿名访问（安全配置的边界）</h3>
  *
  * <p>放行规则是既有的那一条：{@code SecurityConfig.apiFilterChain} 里的 {@code
@@ -39,17 +47,21 @@ import org.springframework.web.bind.annotation.RestController;
  * <strong>不是</strong>"证明你是你"（那要 JWT），而是"<strong>令牌本身有效</strong>" （存在 / 未撤销 / 未过期 / 未停用）—— 由 {@code
  * PublicTokenResolver} 在服务层回答 （{@code 08 §4.2.3} / §4.4.4 的"两个正当性入口"）。
  *
- * <p>★★ <strong>边界（三条，都不许放宽）</strong>：
+ * <p>★★ <strong>边界（四条，都不许放宽）</strong>：
  *
  * <ol>
- *   <li>只放行 {@code /api/v1/public/**} 与（流那一条）{@code POST /api/v1/conversations/chat} ——
- *       本类不再有写端点，所以这里没有新的放行面；
- *   <li>放行的是<strong>认证</strong>，不是<strong>授权</strong>：本方法<strong>不带</strong>
+ *   <li>只放行 {@code /api/v1/public/**} 与（流那一条）{@code POST /api/v1/conversations/chat} —— 本类的 {@link
+ *       #stop} 是<strong>写端点</strong>，所以它必须显式登记在 {@code AuthorizationDeclarationTest}
+ *       的白名单里（那条闸门判的是"忘写注解"，不是"公开面不许有写端点"）；
+ *   <li>放行的是<strong>认证</strong>，不是<strong>授权</strong>：本类的方法<strong>都不带</strong>
  *       {@code @PreAuthorize}（公开面上没有"动作权限点"可判，也不该借一个语义无关的权限点）， 而"能看到什么"由 {@code
- *       AccessScopePort#asSubject} 一处决定；
+ *       AccessScopePort#asSubject} 一处决定；★ {@link #stop} 刻意<strong>不</strong>包 {@code asSubject} ——
+ *       它不读内容、不产出内容，包了会造出第二处"看起来像停止的权限判定"（理由逐字见 {@code PublicChatService#stopTurn}）；
  *   <li>匿名只意味着"没有当前用户"，<strong>不</strong>意味着范围更宽：{@code asSubject} 给的是 「<strong>链接归属人</strong>的范围 ∩
  *       <strong>冻结密级</strong>」，且当请求<strong>带了</strong>登录身份时
- *       再压到<strong>不大于调用者自己</strong>那一份（登录用户拿同一条链接<strong>不放大</strong>，{@code 08 §4.4.4} 判据②）。
+ *       再压到<strong>不大于调用者自己</strong>那一份（登录用户拿同一条链接<strong>不放大</strong>，{@code 08 §4.4.4} 判据②）；
+ *   <li>★ {@link #stop} 的边界是"令牌有效 + 消息属于<strong>链接归属人</strong>的会话"两条，且它<strong>不收</strong> 请求体里的会话
+ *       id —— "客户端指定这条链接能停哪个会话"这条越权在形状上就不存在。
  * </ol>
  *
  * <h3>★★ 撤销 / 停用与解析是<strong>同一条</strong>链（{@code 13 §5.2} 判据①）</h3>
@@ -90,6 +102,66 @@ public class PublicChatController {
   public ApiResponse<PublicChatService.PublicContext> context(
       @PathVariable String token, @AuthenticationPrincipal Jwt jwt) {
     return ApiResponse.ok(publicChat.resolve(token, requesterId(jwt)));
+  }
+
+  /**
+   * ★★ 公开面（免登录）的<strong>历史消息</strong>（契约 {@code listPublicMessages}；公开页**已在调**它）。
+   *
+   * <h3>它补的是哪一个"页面在调、后端没有"</h3>
+   *
+   * <p>契约 {@code conversations.ts} 的 {@code listPublicMessages(token)} 与 {@code
+   * useChatSession#loadHistory} 的公开面分支一直在调这条路径，而本类此前<strong>只有</strong> {@code GET /{token}} 一个端点 ⇒
+   * 公开页刷新后读不回历史（{@code ROADMAP §11.2} 第 17 周"下一步" 第 3 条点名的那一格；也是 A2「刷新不重置」在公开面缺的那一半）。
+   *
+   * <h3>★ 形状：只收 token，会话由服务端反解（与 {@link #stop} 同一条理由）</h3>
+   *
+   * <p>公开页的 {@code conversationId} 是合成串 {@code public:<token>}，拿不出一个真的 UUID ⇒ 归属键只能是 {@code (链接归属人,
+   * 应用)} 的会话链（口径与判据见 {@code 13 §5.2.1}）。 判定与读取全在 {@link PublicChatService#listMessages}。
+   *
+   * @param token 链接里的令牌原文
+   * @param jwt ★ 可空：匿名访客没有它。有值时只用于收窄，绝不当作正当性来源
+   * @return 该会话链上的全部消息（{@code created_at} 升序；还没问过 ⇒ 空列表）
+   */
+  @GetMapping("/{token}/messages")
+  public ApiResponse<List<ChatMessageView>> messages(
+      @PathVariable String token, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(publicChat.listMessages(token, requesterId(jwt)));
+  }
+
+  /**
+   * ★★ 公开面（免登录）的<strong>停止生成</strong>（{@code #143} 前半，用户 2026-10-16 拍板"做端点"）。
+   *
+   * <h3>它补的是哪一个静默降级</h3>
+   *
+   * <p>在此之前公开页的"停止"走的是客户端 {@code abort()}（掐 fetch）⇒ 服务端只看到"连接没了" ⇒ 本轮按 {@code DISCONNECT} 收尾、库里落
+   * <strong>{@code FAILED}</strong>。 而契约给"用户停止"与"连接断开"定的是两个终态（{@code STOPPED} vs {@code FAILED}）⇒
+   * 用户点了停止，却得到一条失败记录，且<strong>不报错</strong>。
+   *
+   * <h3>★★ 形状：按消息 id，会话 id 由服务端反解（不照抄登录面那条）</h3>
+   *
+   * <p>公开页的 {@code conversationId} 是合成串 {@code public:<token>}，且公开面每一轮都是新会话 ⇒ 请求体里没有可传的会话 id。
+   * 端点的路径里<strong>只有令牌与消息 id</strong>，会话由服务端从消息行反解 —— 于是"客户端指定这条链接能停哪个会话"这条越权
+   * <strong>在形状上就不存在</strong>。判定与处置全在 {@link PublicChatService#stopTurn}。
+   *
+   * <h3>★ 为什么<strong>不</strong>带 {@code @PreAuthorize}</h3>
+   *
+   * <p>与 {@link #context} 同一条（本类 javadoc 的边界第 ②
+   * 条）：公开面上"放行的是<strong>认证</strong>，不是<strong>授权</strong>"，
+   * 这里没有"动作权限点"可判，也<strong>不该借一个语义无关的权限点</strong>。★ 它是写端点却没有注解这件事 <strong>必须显式登记</strong>在 {@code
+   * AuthorizationDeclarationTest} 的白名单里（那条闸门判的是"忘写注解"， 而不是"公开面不许有写端点"）—— 登记在那一处，加新端点时仍然各自要过那一关。
+   *
+   * <p>★ 错误响应的媒体类型仍由下面那个 {@link #onBusiness} 显式给出（公开页的 {@code Accept} 只允许 JSON， 交给全局处理器会被协商成 {@code
+   * HttpMediaTypeNotAcceptableException} ⇒ 500）。
+   *
+   * @param token 链接里的令牌原文
+   * @param messageId 助手消息 id（契约 {@code meta} 帧给出）
+   * @param jwt ★ 可空：匿名访客没有它。有值时只用于收窄，绝不当作正当性来源
+   * @return 停止回执（与登录面同形状：{@code accepted} + 服务端此刻读到的状态）
+   */
+  @PostMapping("/{token}/messages/{messageId}/stop")
+  public ApiResponse<PublicChatService.StopReceipt> stop(
+      @PathVariable String token, @PathVariable UUID messageId, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(publicChat.stopTurn(token, messageId, requesterId(jwt)));
   }
 
   /**

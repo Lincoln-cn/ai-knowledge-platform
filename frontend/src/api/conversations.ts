@@ -234,6 +234,41 @@ export const stopMessage = (conversationId: string, messageId: string): Promise<
   })
 
 /**
+ * ★★ 停止生成 —— **公开面（免登录）**的那一条（`#143` 前半，2026-10-16）。
+ *
+ * <h3>为什么不能复用上面那条 `stopMessage`</h3>
+ *
+ * 三条都可核对：
+ *
+ * | | 登录面 `stopMessage` | 公开面（本操作） |
+ * |---|---|---|
+ * | 路径参数 | `conversationId`（**UUID**） | `token`（链接原文） |
+ * | 会话 id 从哪来 | 客户端持有 | ★ **服务端从消息行反解** —— 公开页的 `conversationId` 是合成串 `public:<token>`，打到 UUID 路径变量上必 400 |
+ * | 正当性 | JWT 的 `conversation:view` | 令牌本身有效（`PublicTokenResolver`，四态码） |
+ *
+ * ⇒ 公开面**只发消息 id**：请求体里没有会话 id 可填，所以「客户端指定这条链接能停哪个会话」
+ * 这条越权在形状上就不存在。
+ *
+ * <h3>回执形状与登录面**同构**</h3>
+ *
+ * 同样是 `accepted` + 服务端此刻读到的状态（`status` 仍可能是 `GENERATING` —— 终态由生成线程落库，
+ * 与这次响应之间有一段正常的间隔）。`accepted = false` = 这一轮已经收尾（停止晚到了），**不是**错误。
+ *
+ * ★ 匿名访客调它时**没有** `Authorization`；带登录身份调它只是收窄，不是正当性来源
+ * （与 `resolvePublicContext` / 公开问答流同一条，见 `08 §4.4.4`）。
+ *
+ * @param token 链接里的令牌原文
+ * @param messageId 助手消息 id（`meta` 帧给出）
+ */
+export const stopPublicMessage = (token: string, messageId: string): Promise<ChatStopReceipt> =>
+  request<ChatStopReceipt>({
+    method: 'POST',
+    url: '/public/:token/messages/:messageId/stop',
+    path: { token, messageId },
+    skipAuthRetry: true
+  })
+
+/**
  * 按 id 取一条知识分段（引用回溯用）。
  * 跳转「分段管理」与抽屉里补全文都靠它；看不见一律 404（与单条取数同口径）。
  */

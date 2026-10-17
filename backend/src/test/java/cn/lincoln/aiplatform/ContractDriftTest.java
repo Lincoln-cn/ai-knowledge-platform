@@ -112,10 +112,19 @@ class ContractDriftTest {
           // 第 15 周 0.4.3 / M5.5：编排画布接契约（workflow draft/validate/publish/versions）
           "/workflow",
           // 第 17 周 0.4.5：SSE 问答链路（会话 CRUD 与消息流）
+          // ★ 2026-10-17 核过一遍（本批落了 GET /conversations/{id}/messages）：**前缀必须留** ——
+          //   它下面的 `POST /conversations`（建会话）、`PATCH`/`DELETE /{id}`、以及 `/conversations/chat`
+          //   （那条另有 KNOWN_EXCEPTIONS 的账）都还没实现，所以"零欠账就删"这条纪律**还没到触发点**。
+          //   ★ 顺带记一条形状：这一族的前缀是 `/conversations` 与 `/messages` **两条**
+          //   （契约里 `GET /{id}/messages` 挂在 /conversations 下，而消息自己的 CRUD 挂 /messages）
+          //   ⇒ 删前缀时要两条一起判，不能只看一条。
           "/conversations",
           "/messages",
-          // 第 16 周 0.4.4：公开凭证 + 分享冻结（/public/:token 链路）
-          "/public",
+          // ★ 第 16 周 0.4.4 的 `/public` 已于 2026-10-16 **从清单删除**：它下面的每一条契约路径
+          //   （GET /{token} · GET /{token}/messages · POST /{token}/messages/{messageId}/stop）
+          //   后端都已实现 ⇒ 留着它就成了"曾经欠过、现在早已实现"的噪音，而**防黑洞测试会当场红**
+          //   （`未实现清单里的域名必须仍然有欠账`）。★ 与上面 /documents、/segments、/retrieval
+          //   三次删除同一条纪律：清单靠"零欠账就删"保持可读。
           // 第 17 周随问答链路：附件上传（POST /files，multipart）
           "/files",
           // 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）

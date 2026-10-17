@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.knowledge.domain.ChunkSource;
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
+import cn.lincoln.aiplatform.knowledge.domain.OrgAssignment;
 import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
 import cn.lincoln.aiplatform.knowledge.domain.PlannedSegment;
 import cn.lincoln.aiplatform.knowledge.domain.SearchText;
@@ -117,20 +118,103 @@ public class DocumentService {
    * 按库分页列文档。★ 库不可见 ⇒ <strong>404</strong>（继承库的可见性，与批 1 同一判定）。
    *
    * <p>★ {@code total} 是本库过滤之后的数，与页内条数同口径。
+   *
+   * <p>★★ {@code orgAssignment}（{@code #56} 的出口）：传 {@link OrgAssignment#UNASSIGNED} 就把
+   * "回填责任部门时按名字匹配不上"的文档列出来 —— 它们 {@code org_id} 为空、原值留在 {@code
+   * department_legacy}（不可更新的存档列）。**列出来才处理得了**：在那之前界面只显示 "责任部门那一列空着"，看起来像"还没填"，而不像"系统需要你处理"。
+   *
+   * @param kbId 知识库 id
+   * @param page 页码（1 起）
+   * @param size 页大小
+   * @param orgAssignment 归属过滤；{@code null} 视为 {@link OrgAssignment#ANY}（不过滤 = 加这一档之前的行为）
    */
   @Transactional(readOnly = true)
-  public PageResult<DocumentView> list(UUID kbId, Integer page, Integer size) {
+  public PageResult<DocumentView> list(
+      UUID kbId, Integer page, Integer size, OrgAssignment orgAssignment) {
     // ★ 先做库的可见性判定：库不可见 ⇒ 其文档也不可见（读 404）
     knowledgeBases.get(kbId);
     int safeSize = size == null ? 20 : Math.min(Math.max(1, size), MAX_PAGE_SIZE);
     int safePage = page == null ? 1 : Math.max(1, page);
-    List<Document> found = documents.findByKbId(kbId, (safePage - 1) * safeSize, safeSize);
-    long total = documents.countByKbId(kbId);
+    OrgAssignment filter = orgAssignment == null ? OrgAssignment.ANY : orgAssignment;
+    // ★ 列表与 total 传**同一个** filter：两处各拼一遍必然漂移（08 §4.4.3 纪律 1）
+    List<Document> found = documents.findByKbId(kbId, (safePage - 1) * safeSize, safeSize, filter);
+    long total = documents.countByKbId(kbId, filter);
     return PageResult.of(
         found.stream().map(DocumentView::from).toList(), total, safePage, safeSize);
   }
 
   // ────────────────────────── 库级进度（第 8 周 · 0.3.0） ──────────────────────────
+
+  /**
+   * ★★ 指定/变更某篇文档的<strong>责任部门</strong>（契约 {@code assignDocumentOrg}；{@code #150}）。
+   *
+   * <h3>它补的是哪一格</h3>
+   *
+   * <p>{@code #56} 让"回填时按名字匹配不上"的文档<strong>能被列出来</strong>（ {@code
+   * ?orgAssignment=UNASSIGNED}），但建档之后**没有**修改责任部门的入口 ⇒ 列得出来却处理不掉。 这一条就是那个出口。
+   *
+   * <h3>★ 校验顺序（每一步各自的失败形态都不同，不许合并）</h3>
+   *
+   * <ol>
+   *   <li><strong>库可见</strong> ⇒ 否则 <strong>404</strong>（继承库的可见性，与列表同一条）；
+   *   <li><strong>文档存在、属于这个库、未被软删</strong> ⇒ 否则 <strong>404</strong>。 ★ 三种情况共用一个出口：告诉调用方"这个 id
+   *       存在但不在你的库里"等于送他一次探测 （{@code 07 §3.3} 纪律 2）；
+   *   <li><strong>部门存在且启用</strong> ⇒ 否则 <strong>400</strong> 带可读原因。 ★ 不校验就会让 {@code org_id}
+   *       指向一个不存在的 uuid ⇒ 外键报错变成一次 500（"我崩了"）， 而真正的原因却是"你传错了"（与建档路径 {@code #37} 同一条）。
+   * </ol>
+   *
+   * <p>★★ <strong>刻意不动的东西</strong>：{@code department_legacy}（存档列，历史证据）· 密级 · 文种 · 分段 · 向量 ——
+   * 这个方法只回答"这份文档归哪个部门"。
+   *
+   * @param kbId 知识库 id
+   * @param documentId 文档 id
+   * @param orgId 新的责任部门
+   * @return 更新后的文档视图
+   * @throws BusinessException 库/文档不可见（404）· 部门不存在或已停用（400）
+   */
+  @Transactional
+  public DocumentView assignOrg(UUID kbId, UUID documentId, UUID orgId) {
+    // ★ 1 · 库的可见性（写也 404）
+    knowledgeBases.get(kbId);
+
+    // ★ 2 · 文档必须属于这个库、且没被软删
+    if (documentId == null) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "文档 id 必填", "指定要改归属的那篇文档");
+    }
+    Document document =
+        documents
+            .findById(documentId)
+            .filter(found -> found.deletedAt() == null && kbId.equals(found.kbId()))
+            .orElseThrow(
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "文档不存在", "它可能已被删除，或者不在这个知识库里"));
+
+    // ★ 3 · 部门存在且启用
+    if (orgId == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "责任部门必填",
+          "请从组织树选责任部门 —— 它决定召回前缀里那段稳定标识（org code），不能有默认值（07 §11.2）");
+    }
+    OrgDirectoryPort.OrgBrief org =
+        orgDirectory
+            .findById(orgId)
+            .orElseThrow(
+                () ->
+                    new BusinessException(
+                        ErrorCode.BAD_REQUEST,
+                        "责任部门不存在：" + orgId,
+                        "请从组织树重新选择 —— 它可能已被删除，或你传的是一个不属于任何部门的 id"));
+    if (!org.enabled()) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "责任部门已停用：" + org.name(),
+          "选一个启用中的部门 —— 把文档归属到一个已停用的部门，它不会出现在任何人的组织视图里");
+    }
+
+    // ★ 4 · 只改归属（领域对象上那一个方法；departmentLegacy 等一概不动）
+    document.assignOrg(orgId);
+    return DocumentView.from(documents.save(document));
+  }
 
   /**
    * 库级入库进度（契约 {@code GET /knowledge-bases/:kbId/ingestion-progress}）。

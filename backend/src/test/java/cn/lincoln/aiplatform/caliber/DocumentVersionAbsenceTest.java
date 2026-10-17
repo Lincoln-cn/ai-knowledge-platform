@@ -111,10 +111,11 @@ class DocumentVersionAbsenceTest {
         .as(
             """
             ★ SegmentSearchPort.Card 的形状变了。它是引用组装的唯一素材来源，
-            今天给的是"标识（segmentId/documentId/kbId）+ 展示（title/content/docName/kbName）"——
-            其中后两项是**身份**（深链与"来源类型"），不是**版本**：它们回答"这条引用来自哪个库/哪篇文档"，
-            回答不了"来自哪一次上传"。若新增了版本维度（documentRevision / supersedesId / sourceVersion …），
-            同上去补口径：%s\
+            今天给的是"标识（segmentId/documentId/kbId）+ 展示（title/content/docName/kbName）+ 敏感度（classification）"——
+            其中 documentId/kbId 是**身份**（深链与"来源类型"）、classification 是**敏感度**（会话累计密级的来源），
+            都不是**版本**：它们回答"这条引用来自哪个库/哪篇文档/有多敏感"，回答不了"来自哪一次上传"。
+            若新增的是版本维度（documentRevision / supersedesId / sourceVersion …），
+            同上去补 12 的口径（旧引用按哪一版解析）：%s\
             """,
             CaliberShape.render(CaliberShape.instanceFields(card)))
         .containsExactlyInAnyOrderElementsOf(
@@ -125,6 +126,7 @@ class DocumentVersionAbsenceTest {
                 "docName: String",
                 "kbName: String",
                 "documentId: UUID",
-                "kbId: UUID"));
+                "kbId: UUID",
+                "classification: ClassificationLevel"));
   }
 }

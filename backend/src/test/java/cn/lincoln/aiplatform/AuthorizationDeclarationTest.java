@@ -47,7 +47,11 @@ class AuthorizationDeclarationTest {
           "AuthController.login",
           "AuthController.refresh",
           "AuthController.logout",
-          "UserController.changePassword");
+          "UserController.changePassword",
+          // ★ 公开面（免登录）的停止端点（#143 前半，2026-10-16）：白名单三类里的 `/public/**` ——
+          //   它的正当性不是"证明你是你"（那要 JWT），而是"令牌本身有效"，由 PublicTokenResolver 在服务层回答。
+          //   ★ 这一条必须显式登记（不能按类放过）：`PublicChatController` 将来若再加端点，也必须各自过这一关。
+          "PublicChatController.stop");
 
   @Test
   void 每个写端点都必须声明权限() {
