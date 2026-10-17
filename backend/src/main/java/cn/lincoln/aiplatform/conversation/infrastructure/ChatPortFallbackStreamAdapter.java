@@ -59,6 +59,37 @@ public class ChatPortFallbackStreamAdapter implements ChatStreamPort {
       callback.onEnd(End.FAILED, failure.getMessage());
       return;
     }
+    emitInChunks(text, callback);
+  }
+
+  /**
+   * 覆盖端口的默认实现（`#168`）：把历史按**消息数组**发给上游，而不是拼成一段文本。
+   *
+   * <p>★ 切块与收尾走同一个 {@link #emitInChunks} —— 两份实现若各写一遍， "单轮走一条路、多轮走另一条路"迟早会各自长歪。
+   */
+  @Override
+  public void streamConversation(
+      UUID modelId,
+      java.util.List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages,
+      Duration timeout,
+      Callback callback) {
+    String text;
+    try {
+      text = chat.completeConversation(modelId, messages, timeout);
+    } catch (RuntimeException failure) {
+      callback.onEnd(End.FAILED, failure.getMessage());
+      return;
+    }
+    emitInChunks(text, callback);
+  }
+
+  /**
+   * 把上游一次性返回的整段文本按 {@link #CHUNK_CHARS} 切块送出。
+   *
+   * @param text 上游返回（可能为 {@code null}/空 —— 那是"生成了 0 个字的答案"）
+   * @param callback 回调；★ 它可能抛（用户停止 / 闲置超时 / 连接已断）⇒ 让异常传出去并停止继续吐
+   */
+  private void emitInChunks(String text, Callback callback) {
     if (text == null || text.isEmpty()) {
       // 空回答：一个 delta 都不发（装配器拒绝空增量），直接以 COMPLETE 收 ——
       // 终态仍是 GENERATED，这正是"生成了 0 个字的答案"
@@ -67,7 +98,6 @@ public class ChatPortFallbackStreamAdapter implements ChatStreamPort {
     }
     log.debug("兜底流式实现：上游一次性返回 {} 字，按 {} 字切块送出（真流式实现属'接真模型'那一批）", text.length(), CHUNK_CHARS);
     for (int at = 0; at < text.length(); at += CHUNK_CHARS) {
-      // ★ 回调可能抛（用户停止 / 闲置超时 / 连接已断）—— 让它传出去，并停止继续吐
       callback.onChunk(text.substring(at, Math.min(text.length(), at + CHUNK_CHARS)));
     }
     callback.onEnd(End.COMPLETE, null);

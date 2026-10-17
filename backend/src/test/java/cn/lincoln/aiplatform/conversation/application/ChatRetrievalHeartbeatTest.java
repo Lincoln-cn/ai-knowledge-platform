@@ -234,6 +234,14 @@ class ChatRetrievalHeartbeatTest {
   /** 落库侧替身：只记"收尾落库了几次"（本类不需要数据库）。 */
   private static final class RecordingStore implements ChatTurnStore {
 
+    @Override
+    public java.util.List<cn.lincoln.aiplatform.platform.model.ChatMessage> historyBefore(
+        UUID conversationId, UUID userMessageId, int maxMessages) {
+      // ★ `#168`：本类不消费历史（多轮那一路由 ChatService 的多轮判据覆盖）。
+      //   ★ 抛而不是返回空/null —— 返回空会让"这里没测"伪装成"测过了且是对的"。
+      throw new UnsupportedOperationException("本替身不提供历史（#168）");
+    }
+
     private int finishCount;
 
     @Override
@@ -248,7 +256,8 @@ class ChatRetrievalHeartbeatTest {
           "trace_" + assistantMessageId,
           "fixture-model",
           UUID.randomUUID(),
-          List.of());
+          List.of(),
+          false);
     }
 
     @Override

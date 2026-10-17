@@ -46,6 +46,21 @@ public interface ChatStreamPort {
    */
   void stream(UUID modelId, String prompt, Duration timeout, Callback callback);
 
+  /**
+   * 带**角色边界**的多轮流式对话（`#168`）。
+   *
+   * <p>★ 默认实现把消息拼成一段文本交给 {@link #stream} —— **兼容兜底**，会丢 role 边界 （而丢了边界的多轮正是反向注入 `#84` 的形状）⇒
+   * **生产实现必须覆盖**。
+   */
+  default void streamConversation(
+      UUID modelId, java.util.List<ChatMessage> messages, Duration timeout, Callback callback) {
+    StringBuilder flattened = new StringBuilder();
+    for (ChatMessage message : messages) {
+      flattened.append(message.wireRole()).append(": ").append(message.content()).append('\n');
+    }
+    stream(modelId, flattened.toString(), timeout, callback);
+  }
+
   /** 逐块回调。★ 业务帧那几个方法都<strong>可能</strong>被调用方抛异常打断 —— 见 {@link Callback#onChunk}。 */
   interface Callback {
 

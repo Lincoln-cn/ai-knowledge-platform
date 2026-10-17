@@ -54,6 +54,17 @@ public interface ChatTurnStore {
    *
    * @return 本次 flush 之后已落库的字符数
    */
+  /**
+   * 某一轮提问之前的对话历史（`#168`）。
+   *
+   * @param conversationId 会话
+   * @param userMessageId 本轮用户消息（它的之前才算历史）
+   * @param maxMessages 最多几条
+   * @return 历史（时间正序）
+   */
+  java.util.List<cn.lincoln.aiplatform.platform.model.ChatMessage> historyBefore(
+      UUID conversationId, UUID userMessageId, int maxMessages);
+
   int flush(UUID messageId, String fullTextSoFar, int persistedChars);
 
   /** 终态回写（状态 + 已生成文本 + 引用快照 + tokens）；见 {@link ChatTurnWriter#finish}。 */

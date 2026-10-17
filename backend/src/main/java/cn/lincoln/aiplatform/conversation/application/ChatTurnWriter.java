@@ -104,7 +104,9 @@ public class ChatTurnWriter implements ChatTurnStore {
       String traceId,
       String modelLabel,
       UUID modelId,
-      List<UUID> kbIds) {}
+      List<UUID> kbIds,
+      // ★ `#168`：应用上的「多轮对话」开关。它此前是个**死开关**（`ChatService` 从不读）。
+      boolean multiTurn) {}
 
   /**
    * 建这一轮的两条消息（用户消息 + {@code GENERATING} 助手消息）并把模型定下来。
@@ -155,7 +157,56 @@ public class ChatTurnWriter implements ChatTurnStore {
         traceId,
         modelId.toString(),
         modelId,
-        app == null ? List.of() : app.kbIds());
+        app == null ? List.of() : app.kbIds(),
+        // ★ `#168`：把开关带进这一轮 —— 只有它能让 `ChatService` 决定要不要带历史
+        app != null && app.multiTurn());
+  }
+
+  /**
+   * 某一轮提问**之前**的对话历史（`#168`）。
+   *
+   * <p>★ 只取这条用户消息之前的、且**同一会话**的；按时间正序返回；`maxMessages` 是硬上限 （防"上下文无限长"把首字延迟拖垮 —— 窗口口径的最终定稿在
+   * `#65`，这里是保守实现）。
+   *
+   * <p>★★ 只返回**已经有正文**的助手消息：一条 `GENERATING`（空正文）或 `FAILED` 的助手消息 送进模型没有信息量，反而会让模型以为"上一轮它答了个空"。
+   *
+   * @param conversationId 会话
+   * @param userMessageId 本轮的用户消息（它的**之前**才算历史）
+   * @param maxMessages 最多取几条（含用户与助手，按时间正序取**最近的**）
+   * @return 历史消息；没有则空列表
+   */
+  @Transactional(readOnly = true)
+  public java.util.List<cn.lincoln.aiplatform.platform.model.ChatMessage> historyBefore(
+      UUID conversationId, UUID userMessageId, int maxMessages) {
+    // ★ 用领域端口的 `listByConversation`（时间正序）—— 它是这条读路径的既有口径
+    java.util.List<Message> all = messages.listByConversation(conversationId);
+    java.util.List<cn.lincoln.aiplatform.platform.model.ChatMessage> history =
+        new java.util.ArrayList<>();
+    for (Message message : all) {
+      if (message.id().equals(userMessageId)) {
+        break;
+      }
+      boolean usableAssistant =
+          message.role() == cn.lincoln.aiplatform.conversation.domain.MessageRole.ASSISTANT
+              && message.content() != null
+              && !message.content().isBlank();
+      if (message.role() == cn.lincoln.aiplatform.conversation.domain.MessageRole.USER
+          && message.content() != null
+          && !message.content().isBlank()) {
+        history.add(
+            new cn.lincoln.aiplatform.platform.model.ChatMessage(
+                cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER, message.content()));
+      } else if (usableAssistant) {
+        history.add(
+            new cn.lincoln.aiplatform.platform.model.ChatMessage(
+                cn.lincoln.aiplatform.platform.model.ChatMessage.Role.ASSISTANT,
+                message.content()));
+      }
+    }
+    if (history.size() > maxMessages) {
+      return history.subList(history.size() - maxMessages, history.size());
+    }
+    return history;
   }
 
   /**
@@ -321,7 +372,9 @@ public class ChatTurnWriter implements ChatTurnStore {
         traceId,
         target.modelId() == null ? "" : target.modelId().toString(),
         target.modelId(),
-        app == null ? List.of() : app.kbIds());
+        app == null ? List.of() : app.kbIds(),
+        // ★ `#168`：把开关带进这一轮 —— 只有它能让 `ChatService` 决定要不要带历史
+        app != null && app.multiTurn());
   }
 
   /**

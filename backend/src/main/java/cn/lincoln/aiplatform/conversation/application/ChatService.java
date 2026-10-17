@@ -131,6 +131,14 @@ public class ChatService {
   private final ModelEgressPort modelEgress;
 
   /**
+   * 多轮上下文的硬上限（条数，含用户与助手）。
+   *
+   * <p>★ 20 条 ≈ 10 轮问答，与 ROADMAP §2.2 A6 的「10 轮」对齐。 ★ 窗口口径的**最终定稿在 #65**（按轮数还是 token 预算）；这里是保守实现，
+   * 目的只是让"上下文无限长"不把首字延迟拖垮。定稿后应改成按 token 预算。
+   */
+  private static final int MAX_HISTORY_MESSAGES = 20;
+
+  /**
    * 生产装配用的构造器。
    *
    * <p>★ 显式 {@code @Autowired}：本类有<strong>两个</strong>构造器（下面那个给脱离容器的测试用）， 而"两个构造器且都不标注"时 Spring
@@ -411,15 +419,39 @@ public class ChatService {
    */
   private Thread startModelThread(
       ChatTurnWriter.PreparedTurn turn, String question, List<SourceRef> refs, Run run) {
+    // ★★ `#168`：历史在**本方法（调用方线程）**里读好再传进去。
+    //   理由与同文件检索那条注释逐字相同：访问范围是 ThreadLocal，新建的模型线程上它是空的。
+    //   读历史本身只按 conversationId 取（归属在 prepare 阶段已经判过），不依赖范围。
+    List<cn.lincoln.aiplatform.platform.model.ChatMessage> history = List.of();
+    if (turn.multiTurn()) {
+      List<cn.lincoln.aiplatform.platform.model.ChatMessage> previous =
+          turns.historyBefore(turn.conversationId(), turn.userMessageId(), MAX_HISTORY_MESSAGES);
+      if (!previous.isEmpty()) {
+        List<cn.lincoln.aiplatform.platform.model.ChatMessage> withCurrent =
+            new java.util.ArrayList<>(previous);
+        // ★ 本轮问题带上引用，与单轮那条路的 `promptOf` 逐字同源 —— 两条路不能各拼各的
+        withCurrent.add(
+            new cn.lincoln.aiplatform.platform.model.ChatMessage(
+                cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER,
+                promptOf(question, refs)));
+        history = List.copyOf(withCurrent);
+      }
+    }
+    final List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages = history;
     Thread thread =
         new Thread(
             () -> {
               try {
-                chatStream.stream(
-                    turn.modelId(),
-                    promptOf(question, refs),
-                    Duration.ofMillis(properties.idleTimeoutMs()),
-                    run);
+                if (messages.isEmpty()) {
+                  chatStream.stream(
+                      turn.modelId(),
+                      promptOf(question, refs),
+                      Duration.ofMillis(properties.idleTimeoutMs()),
+                      run);
+                } else {
+                  chatStream.streamConversation(
+                      turn.modelId(), messages, Duration.ofMillis(properties.idleTimeoutMs()), run);
+                }
               } catch (StopUpstream cancel) {
                 // 用户停止 / 已判超时：不是错，终态由收尾线程按标志决定
                 log.debug("上游已被打断（停止或超时），模型线程退出");

@@ -6,9 +6,11 @@ import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.model.ChatMessage;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.ai.converter.BeanOutputConverter;
@@ -60,6 +62,27 @@ public class ChatModelAdapter implements ChatPort {
   @Override
   public String complete(UUID modelId, String prompt, Duration timeout) {
     return chat(requireChatModel(modelId), prompt, timeout);
+  }
+
+  /**
+   * ★ **覆盖**端口的默认实现（`#168`）：走 `messages[]`，每条各带 role。
+   *
+   * <p>端口那个默认实现是把消息拼成一段文本 —— 那会丢掉 role 边界，而丢了边界的多轮 正是反向注入（{@code #84}）的形状。★ 生产路径必须走本方法。
+   */
+  @Override
+  public String completeConversation(UUID modelId, List<ChatMessage> messages, Duration timeout) {
+    Model model = requireChatModel(modelId);
+    List<Map<String, String>> history =
+        messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
+    try {
+      return gateway.chatCompletion(
+          model.baseModel(), model.apiBase(), decryptKey(model), history, timeout);
+    } catch (UpstreamGateway.UpstreamUnreachableException e) {
+      throw new BusinessException(
+          ErrorCode.UPSTREAM_UNAVAILABLE,
+          "调用对话模型失败：" + e.getMessage(),
+          "请确认对话模型服务可用（地址与密钥）；检索会退回原始问题继续，不会因此失败");
+    }
   }
 
   @Override

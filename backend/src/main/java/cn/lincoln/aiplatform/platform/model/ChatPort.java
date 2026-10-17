@@ -38,6 +38,27 @@ public interface ChatPort {
   Optional<UUID> pickChatModel();
 
   /**
+   * 带**角色边界**的多轮对话（`#168`）：messages 里每条各自成条，不拼接。
+   *
+   * <p>★ 默认实现把消息拼成一段文本后交给 {@link #complete} —— 这是**兼容兜底**， 只为让既有实现（含测试替身）不必立刻改。★ 但**它丢掉 role 边界**，
+   * 而丢了边界的多轮正是反向注入（`#84`）喜欢的形状 ⇒ **生产适配器必须覆盖本方法**。 ★ 判据 `ChatPortMultiTurnWiringTest`
+   * 断言的是**真适配器**这条路，不是兜底。
+   *
+   * @param modelId 模型
+   * @param messages 按时间正序的消息（最后一条通常是本轮问题）
+   * @param timeout 时间预算
+   * @return 模型输出的原文
+   */
+  default String completeConversation(
+      UUID modelId, java.util.List<ChatMessage> messages, Duration timeout) {
+    StringBuilder flattened = new StringBuilder();
+    for (ChatMessage message : messages) {
+      flattened.append(message.wireRole()).append(": ").append(message.content()).append('\n');
+    }
+    return complete(modelId, flattened.toString(), timeout);
+  }
+
+  /**
    * 发一次对话补全，返回模型输出的<strong>原文</strong>。
    *
    * <p>★ 为什么这一路返回原文而不是解析好的对象：它的调用点用的是<strong>简单分隔</strong>输出（查询理解按换行给多条查询， {@code 11 §2.2.1} 照抄官方
