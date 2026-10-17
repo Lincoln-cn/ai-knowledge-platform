@@ -83,7 +83,7 @@ class PermissionCatalogTest {
     catalog.sync();
 
     assertThat(countFor("ADMIN", null)).isEqualTo(Permissions.of("ADMIN").size());
-    assertThat(countFor("KB_OPERATOR", null)).isEqualTo(11);
+    assertThat(countFor("KB_OPERATOR", null)).isEqualTo(12);
     assertThat(countFor("APP_CONFIG", null)).isEqualTo(8);
     assertThat(countFor("USER", null)).isEqualTo(4);
     // 未定义的角色代码 ⇒ 空集合（而不是异常，见 Permissions.of 的注释）
