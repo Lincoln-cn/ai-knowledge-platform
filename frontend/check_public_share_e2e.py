@@ -204,10 +204,13 @@ def sse_refs(payload: str) -> list[dict]:
             frame = json.loads(line[len("data:") :].strip())
         except json.JSONDecodeError:
             continue
-        if frame.get("event") == "refs" or frame.get("type") == "refs":
-            refs = frame.get("refs") or frame.get("data") or []
-            if isinstance(refs, list):
-                return refs
+        # ★★ 帧的形状是**按内容命名的键**，不是 `event`/`type` 字段（实测四种帧）：
+        #   `{"messageId","traceId","model"}` · `{"refs":[…]}` · `{"text":…}` ·
+        #   `{"status","messageId","tokens","durationMs"}`
+        #   ⇒ 判"这是不是 refs 帧"要看**有没有 `refs` 键**。
+        #   ★ 第一版按 `event == "refs"` 找，永远不命中 —— 而它的症状与"产品不带引用"**一模一样**。
+        if "refs" in frame and isinstance(frame["refs"], list):
+            return frame["refs"]
     return []
 
 
@@ -230,7 +233,9 @@ def sse_frame_kinds(payload: str) -> list[str]:
         except json.JSONDecodeError:
             kinds.append(f"<非 JSON: {raw[:40]}>")
             continue
-        kinds.append(str(frame.get("event") or frame.get("type") or f"<无类型键: {list(frame)[:4]}>"))
+        # ★ 帧没有类型字段，类型就是**键名**（见 `sse_refs` 的注释）
+        keys = list(frame)
+        kinds.append("refs" if "refs" in keys else "text" if "text" in keys else "+".join(keys[:4]))
     return kinds
 
 
