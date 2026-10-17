@@ -152,7 +152,14 @@ def main() -> int:
         page.fill("input[autocomplete='username']", USER)
         page.fill("input[autocomplete='current-password']", PASSWORD)
         page.click("button:has-text('登录')")
-        page.wait_for_timeout(1800)
+        # ★ 与 `check_flow_walkthrough.py:302-303` 同一条稳法：等 2500ms 后**用 localStorage 确认**
+        #   登录真的成功了。
+        # ★★ 上一版只等 1800ms 且不确认 —— 若登录没成，页面就停在登录页，而 `body.innerText`
+        #   恰好只剩应用名 ⇒ 症状与"页面没渲染"一模一样（上一轮就是这么红的，而我没法定因）。
+        page.wait_for_timeout(2500)
+        token = page.evaluate("() => localStorage.getItem('access_token') || ''")
+        check(bool(token), "⓪ 登录真的成功了（localStorage 里有 access_token）")
+        print(f"  [诊断] 登录后 url = {page.url} · token 长度 = {len(token)}")
 
         # ── 打开会话页（★ 页面按 `appId` 载入该应用最近一条会话）──
         page.goto(BASE + f"/#/conversation?appId={app_id}", wait_until="networkidle")
@@ -162,6 +169,12 @@ def main() -> int:
             return page.inner_text("body")
 
         before = rendered()
+        # ★ 诊断（不是判据）：上一轮红在"页面片段只有应用名"，这三行能立刻分开
+        #   "没导航过去" / "导航了但没渲染" / "渲染了但内容空" 三种。
+        print(f"  [诊断] 会话页 url = {page.url}")
+        print(f"  [诊断] body 长度 = {len(before)}")
+        print(f"  [诊断] body 前 200 字 = {before[:200]!r}")
+
         check(
             expected in before,
             f"① 打开会话页 ⇒ 答案真的渲染出来了（找 {expected!r}）"
@@ -188,7 +201,19 @@ def main() -> int:
             f"（前 {before.count(expected)} 次，后 {after.count(expected)} 次）"
             f" —— 只断『还在』的话，一个『刷新后偷偷追加/重生成了一次』的实现也能绿",
         )
-        check(not errors, f"④ 全程无页面异常（实得 {errors[:2]}）")
+        # ★★ ④ 的口径（本版收窄过，理由写在这里）：
+        #   本闸门要验的是"**刷新不重置**"，不是"所有端点都实现了"。
+        #   而 `/analytics` **在 `ContractDriftTest` 的未实现清单里**（`:139`），前端正常调用它
+        #   ⇒ 必然抛 `PAGEERROR: 接口不存在：api/v1/analytics/...`。那不是本闸门该否决的东西
+        #   （它自己的账在 `#160`）。
+        #   ★ 但**只豁免这一个前缀**、且**必须逐条打印被豁免的** —— 不许"过滤掉所有 pageerror"
+        #     （那等于把 ④ 删掉）。
+        KNOWN_UNIMPLEMENTED = "接口不存在：api/v1/analytics"
+        surfaced = [e for e in errors if KNOWN_UNIMPLEMENTED not in e]
+        waived = [e for e in errors if KNOWN_UNIMPLEMENTED in e]
+        if waived:
+            print(f"  [豁免] 已登记未实现端点的页面错误 {len(waived)} 条（账在 #160）：{waived[:2]}")
+        check(not surfaced, f"④ ★ 除已登记的未实现端点外，无页面异常（实得 {surfaced[:2]}）")
 
         browser.close()
 
