@@ -237,7 +237,10 @@ jobs:
           gates=(check_knowledge_parse check_knowledge_form check_segmentation_e2e \
                  check_document_actions check_flow_walkthrough check_ocr_e2e \
                  check_classification_e2e check_query_understanding_e2e \
-                 check_multihop_e2e)
+                 check_multihop_e2e \
+                   # ★ S2 的公开链接端到端（MVP · ROADMAP §2.1）：未登录解析 → 提问带引用 → 撤销后失效。
+                   #   本条此前**完全缺读数** —— 公开链接那一链只有 mock 侧，而 mock 比真后端宽松。
+                   check_public_share_e2e)
           failed=()
           for g in "${gates[@]}"; do
             echo "::group::${g}.py"
