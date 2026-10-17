@@ -207,13 +207,30 @@ public class UpstreamGateway {
    */
   public String chatCompletion(
       String model, String apiBase, String apiKey, String prompt, Duration timeout) {
+    return chatCompletion(
+        model, apiBase, apiKey, List.of(Map.of("role", "user", "content", prompt)), timeout);
+  }
+
+  /**
+   * 带**角色边界**的多轮对话（`#168`）：`history` 里每条各自成条，不拼接。
+   *
+   * <p>★ 为什么单独一个入口、而不是把历史拼进 {@code prompt}：拼进去就丢了 role 边界， 模型分不清"用户上一轮问的"与"参考资料里写的"——那正是反向注入（{@code
+   * #84}）的形状。
+   *
+   * @param history 已按上游协议成形的消息（{@code {"role": …, "content": …}}）， <strong>最后一条必须是本轮用户问题</strong>
+   */
+  public String chatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout) {
     // ★★ 用序列化器拼请求体，**不要**手拼字符串 —— 真栈闸门实测抓到过：
     //   查询理解的提示词是**多行**的，而 escape() 只处理了反斜杠与引号，换行原样留在 JSON
     //   字符串里 ⇒ 上游按"请求体不是合法 JSON"直接 400。那是最难查的一类错：
     //   本地单测全绿，因为夹具里的提示词恰好是单行。
     //   映射成 Map 再序列化，控制字符的转义交给序列化器。
-    Map<String, Object> payload =
-        Map.of("model", model, "messages", List.of(Map.of("role", "user", "content", prompt)));
+    Map<String, Object> payload = Map.of("model", model, "messages", history);
     String body = post(resolve(apiBase, "/chat/completions"), writeJson(payload), apiKey, timeout);
     try {
       JsonNode content =

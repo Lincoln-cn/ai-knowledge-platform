@@ -51,7 +51,7 @@ public interface AppBindingPort {
    *     对话模型"，不是"没有模型"（见 {@code ChatPort#pickChatModel}）
    * @param kbIds 应用绑定的知识库（★ 顺序不承诺语义；空 = 没绑 —— 那是通用问答，不是"绑了一个空库"）
    */
-  record AppBinding(UUID appId, UUID modelId, List<UUID> kbIds) {}
+  record AppBinding(UUID appId, UUID modelId, List<UUID> kbIds, boolean multiTurn) {}
 
   /**
    * 取"当前身份可见的"那个应用的绑定。
