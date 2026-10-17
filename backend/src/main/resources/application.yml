@@ -74,6 +74,15 @@ app:
     #    生成自己的密钥：[Convert]::ToBase64String((1..32|%{Get-Random -Max 256}))
     api-key-secret: ${MODEL_API_KEY_SECRET:ZGV2LW9ubHktYXBpLWtleS1zZWNyZXQtMzJieXRlcyE=}
 
+  egress:
+    # ★★ 出站闸门（#72）：EXTERNAL_API 供应商的模型允许处理到的最高密级。
+    #   「密级」管"谁能读"，这一条管"读到的内容允许送到哪里" —— 两者正交（issue 原文的根因）。
+    #   ★ 默认 INTERNAL 是**刻意保守**的：SECRET / CONFIDENTIAL 一律不得发给外部 API。
+    #     反过来（默认最高档）会让"没配"与"允许发机密"读数一样 —— 那正是 silent-failure。
+    #   ★ LOCAL_INFERENCE 不受此限（它不出网，判据表见 ModelEgressAdapter）。
+    #   ★ 取值：PUBLIC / INTERNAL / SECRET / CONFIDENTIAL（13 §6.3 的 ceiling 口径）。
+    external-api-ceiling: ${EGRESS_EXTERNAL_API_CEILING:INTERNAL}
+
   segmentation:
     # 分块目标长度默认值。★ 与前端向导 CreateWizard.vue 的 segForm.segmentLength 默认值一致 ——
     #   否则用户在预览里看到的与入库得到的不同。

@@ -14,6 +14,7 @@ import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
+import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import java.util.ArrayList;
@@ -50,6 +51,14 @@ import org.junit.jupiter.api.Test;
  * 本用例第一条断言当场红（{@code kinds} 里一条 {@code HEARTBEAT} 都没有， 因为生成只要几毫秒、心跳线程还没来得及跑第一圈）。逐字读数见交付报告。
  */
 class ChatRetrievalHeartbeatTest {
+  /**
+   * 出站闸门（{@code #72}）的替身：**显式声明"都允许"**。
+   *
+   * <p>★ 为什么写成常量而不是"构造器少一个参数"：本类的判据是心跳/事件时序， 与出站密级无关；但**用"缺省放行"来表示这件事会让"闸门没接"与"闸门放行"读数一样** （{@code
+   * silent-failure} 的形状）。写成一个明确的替身，读代码的人一眼能看见"这一档被有意放开了"。
+   */
+  private static final ModelEgressPort UNRESTRICTED_EGRESS =
+      modelId -> ClassificationLevel.CONFIDENTIAL;
 
   /** 与两条真栈用例同一组压缩时间（契约那两个数由 {@code ChatStreamTimingTest} 单独钉住）。 */
   private static final long HEARTBEAT_INTERVAL_MS = 300L;
@@ -89,7 +98,8 @@ class ChatRetrievalHeartbeatTest {
               callback.onEnd(ChatStreamPort.End.COMPLETE, null);
             },
             new ChatStopSignal(),
-            PROPERTIES);
+            PROPERTIES,
+            UNRESTRICTED_EGRESS);
     RecordingSink sink = new RecordingSink();
 
     chatService.streamTurn(store.prepare(null, null, QUESTION, UUID.randomUUID()), QUESTION, sink);
