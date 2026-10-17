@@ -1,0 +1,3 @@
+{"id":"q-001","question":"出差住宿费一天最多报多少","expected_document":"示例-差旅报销制度.md","expected_snippet":"住宿费按城市分级限额，一线城市每晚上限 600 元","expected_topic":"差旅住宿费的限额标准","notes":"示例行（占位内容）：这行的作用是示范字段怎么填，不是真实业务数据"}
+{"id":"q-002","question":"发票丢了还能报销吗","expected_document":"示例-差旅报销制度.md","expected_snippet":"原始凭证遗失的，需提供情况说明并由部门负责人签字","expected_topic":"报销凭证缺失时的补充手续","notes":"示例行（占位内容）"}
+{"id":"q-003","question":"审批流程要几级","expected_document":"示例-差旅报销制度.md","expected_snippet":"单笔金额超过 5000 元的，须经分管领导审批"}
