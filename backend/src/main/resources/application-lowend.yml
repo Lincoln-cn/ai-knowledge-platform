@@ -1,3 +1,8 @@
+spring:
+  mvc:
+    async:
+      # ★ 必须 > app.chat.idle-timeout-ms(240s)，否则 async 先砍、idle 那套永远轮不到
+      request-timeout: ${SSE_ASYNC_TIMEOUT:300s}
 # 低配预设（`--spring.profiles.active=lowend`）—— 面向「CPU 推理 + 小模型」这一档。
 #
 # 适用画像（实测依据，2026-10-18）：
@@ -42,3 +47,20 @@ app:
 # ⑦ Ollama 侧的配套建议（不在本文件里生效，需要改 compose 或容器环境变量）：
 #    · OLLAMA_KEEP_ALIVE=24h  —— 避免每次首字节都要重新加载模型（加载本身 3–5s）
 #    · OLLAMA_NUM_PARALLEL=1  —— 低配机器上并发只会互相拖慢
+  # ⑧ ★★ SSE 的两道超时，必须按"CPU 生成慢"重排（实测根因，`#188`）
+  #
+  #   Spring MVC async（默认 30s）→ 项目自己的 idleTimeout（默认 60s）
+  #   ⇒ 两个都按"GPU 上秒级返回"设的，在 CPU + 1.5B 上长回答必然被砍。
+  #   实测：问"逐条列举劳动合同条款不少于 400 字"
+  #     · 30s 时**没有**被砍（说明 async 已调到 180s，这一层修好了）
+  #     · 但在 **60.2s 报「生成超时」** ⇒ 撞的是 idleTimeout
+  #   为什么 60s 内一个字节都没有：平台是**先完整生成再回放**（ChatPortFallbackStreamAdapter
+  #   用 complete() 模拟流式）⇒ 首字节 = 全量生成时间，期间没有任何 delta 可发。
+  #
+  #   ⇒ 顺序必须是：async > idle > heartbeat×3
+  #       async 300s > idle 240s > 20s×3=60s  ✔
+  #   ★ 这不是"把超时调大就完了"：真正的修法是让流式**真的边生成边发**
+  #     （Ollama 的 stream=true），那是一次独立改动；在那之前，长回答在这一档只能等更久。
+  chat:
+    heartbeat-interval-ms: ${CHAT_HEARTBEAT_MS:20000}
+    idle-timeout-ms: ${CHAT_IDLE_TIMEOUT_MS:240000}
