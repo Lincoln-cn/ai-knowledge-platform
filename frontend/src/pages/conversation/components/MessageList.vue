@@ -281,6 +281,12 @@ defineExpose({ scrollToBottom, scrollToMessage })
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
+  /* ★ 左右对话式：助手贴左、用户贴右（`05 §4.1` 的线框） */
+  align-items: flex-start;
+}
+
+.msg.USER {
+  align-items: flex-end;
 }
 
 /* 深链定位到的那条消息：滚动到视野内后短暂描边，让人看见「落在了哪一个」 */
@@ -297,6 +303,11 @@ defineExpose({ scrollToBottom, scrollToMessage })
   min-height: 20px;
 }
 
+/* 用户一侧：状态/操作栏贴右（气泡在右，标签也该在右） */
+.msg.USER .msg-head {
+  justify-content: flex-end;
+}
+
 .bot-name {
   max-width: 180px;
 }
@@ -307,8 +318,33 @@ defineExpose({ scrollToBottom, scrollToMessage })
   gap: var(--space-2xs);
 }
 
+/*
+ * 气泡（`05 §4.1` 线框：用户是浅蓝底圆角块贴右，助手是浅灰底贴左）。
+ *
+ * ★ 宽度上限按"可读行宽"给：助手回答可能很长，铺满 1180px 会很难读；
+ *   用户提问通常很短，用 `fit-content` 让它自然收缩成一块。
+ * ★ 圆角用工程里的 `--radius-lg`（8px）——与 `.panel` 同一档，不新造值。
+ */
 .msg-body {
-  max-width: 860px;
+  max-width: min(860px, 78%);
+  width: fit-content;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-lg);
+  background: var(--color-sunken);
+}
+
+.msg.USER .msg-body {
+  background: var(--color-accent-soft);
+}
+
+/* 助手一侧的"角"压在左上、用户一侧压在右上 —— 气泡贴住它那一侧的边 */
+.msg .msg-body {
+  border-top-left-radius: var(--radius-sm);
+}
+
+.msg.USER .msg-body {
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-sm);
 }
 
 /* 提问：墨色更重，像仪器输入读数 */
