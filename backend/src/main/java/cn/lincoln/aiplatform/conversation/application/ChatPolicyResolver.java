@@ -138,6 +138,41 @@ public class ChatPolicyResolver {
    *
    * @return 提示词；{@code null}/空白 = 不加前缀
    */
+  /**
+   * 通用问答是否走召回。
+   *
+   * <p>★★ 默认 {@code false}：不配置就不检索。这与前端空态文案一致 （「未挂知识库时回答只有模型自身知识，属正常现象」）， 也是本设置存在的直接原因 ——
+   * 之前通用问答在**静默做全库检索**。
+   *
+   * @return 是否召回
+   */
+  public boolean retrievalEnabled() {
+    return settings.get().retrievalEnabled();
+  }
+
+  /**
+   * 通用问答的召回范围。
+   *
+   * @return 知识库 id 列表；{@code null}/空 = 该用户可见的全部库
+   */
+  public java.util.List<java.util.UUID> retrievalKbIds() {
+    return settings.get().retrievalKbIds();
+  }
+
+  /**
+   * @return 相似度下限（0~1），低于它的命中丢弃
+   */
+  public double retrievalThreshold() {
+    return settings.get().retrievalThreshold();
+  }
+
+  /**
+   * @return 召回条数上限
+   */
+  public int retrievalTopN() {
+    return settings.get().retrievalTopN();
+  }
+
   public String systemPrompt() {
     String prompt = settings.get().systemPrompt();
     return prompt == null || prompt.isBlank() ? null : prompt.strip();

@@ -42,6 +42,19 @@ export interface ChatSettings {
    *   （叠加会变成「两条口径同时约束一个回答」，冲突时谁赢没人说得清）。
    */
   systemPrompt: string | null
+  /**
+   * 通用问答是否走召回。
+   *
+   * ★★ 默认 `false`：不配置就不检索。之前通用问答在**静默做全库检索**，
+   * 于是「问 java hello world、答 Vue 单文件组件」——那 5 条引用全是 0.25 分。
+   */
+  retrievalEnabled: boolean
+  /** 召回范围（知识库 id）；`null`/空 = 该用户可见的全部库（仅启用召回时生效） */
+  retrievalKbIds: string[] | null
+  /** 相似度下限（0~1），低于它的命中丢弃 */
+  retrievalThreshold: number
+  /** 召回条数上限 */
+  retrievalTopN: number
   /** 单轮最大输出 tokens；`null` = 不限制 */
   maxOutputTokens: number | null
   /** 最后修改时间（服务端写，界面用来确认"改上了"） */

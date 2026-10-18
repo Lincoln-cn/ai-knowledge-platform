@@ -733,6 +733,32 @@ public class ChatService {
    */
   private List<SourceRef> retrieve(
       String question, Collection<UUID> requestedKbIds, UUID conversationId, UUID modelId) {
+    // ★★ 召回开关（通用问答）：未启用 ⇒ 一条都不检索，直接返回空。
+    //
+    //   为什么要有这一条：`requestedKbIds` 为空时会走 `RetrievalScope.shared` 支
+    //   （= 用户可见的**全部**知识库），于是通用问答在**静默做全库检索**。
+    //   实测症状：问「编写一个 java 的 hello world」，却把 Vue 文档 / Gutenberg 电子书
+    //   以 0.25 分塞进 prompt，模型照着复述成「创建一个 Vue 单文件组件…」。
+    //
+    //   ★ 只在"调用方没指定库"（通用问答 / 应用未绑库）时看这个开关：
+    //     应用显式绑了库，那是用户自己配的范围，不该被通用问答的开关关掉。
+    if ((requestedKbIds == null || requestedKbIds.isEmpty())
+        && policyResolver != null
+        && !policyResolver.retrievalEnabled()) {
+      log.info("通用问答未启用召回（app.retrieval 的 retrieval_enabled=false）⇒ 本轮零引用");
+      return List.of();
+    }
+    // ★ 配置了范围且调用方没指定 ⇒ 用配置的范围（否则仍是"全部可见库"）
+    Collection<UUID> effectiveKbIds = requestedKbIds;
+    if ((effectiveKbIds == null || effectiveKbIds.isEmpty())
+        && policyResolver != null
+        && policyResolver.retrievalKbIds() != null
+        && !policyResolver.retrievalKbIds().isEmpty()) {
+      effectiveKbIds = policyResolver.retrievalKbIds();
+    }
+    int retrievalLimit = policyResolver == null ? RETRIEVAL_LIMIT : policyResolver.retrievalTopN();
+    double threshold = policyResolver == null ? 0.0 : policyResolver.retrievalThreshold();
+
     List<UUID> ordered;
     // ★ 出站上限在 try 之外声明：try 内取到、组装循环里用（catch 一律 return，故定值分析成立）
     ClassificationLevel egressCeiling;
@@ -745,7 +771,7 @@ public class ChatService {
       //   （旧的 `new TextQuery(问题, kbIds, limit)` 走的是 RetrievalScope.shared ⇒ 会话域那一支恒假）。
       // ★ 为什么用 retrievalScope 而不是 visibleKbIds：三支的绑定值来自三个不同的地方，其中 ownerId
       //   只能从当前范围取 —— 让装配点自己拼等于把"用谁的身份检索会话附件"变成一个可以填错的入参。
-      RetrievalScope scope = segmentSearch.retrievalScope(requestedKbIds, conversationId, false);
+      RetrievalScope scope = segmentSearch.retrievalScope(effectiveKbIds, conversationId, false);
       if (scope.isEmpty()) {
         // ★★ 这一条早退的留痕是补上的（第 17 周）：它此前**一条日志都没有** ⇒ 与"库里确实没有相关内容"
         //   在读数上完全一样。而它的成因有两个形状，处置相同、含义完全不同：
@@ -793,11 +819,19 @@ public class ChatService {
       if (hits.isEmpty()) {
         return List.of();
       }
-      ordered = new ArrayList<>(RETRIEVAL_LIMIT);
+      ordered = new ArrayList<>(retrievalLimit);
       scoreById = new LinkedHashMap<>();
       for (SegmentSearchPort.Scored hit : hits) {
-        if (ordered.size() >= RETRIEVAL_LIMIT) {
+        if (ordered.size() >= retrievalLimit) {
           break;
+        }
+        // ★★ 准确度阈值：低于下限的命中直接丢弃。
+        //
+        //   实测那个答非所问的案例里，5 条命中**全是 0.25 分** —— 那是"沾一点边就算命中"的分数，
+        //   而模型会把它们当事实复述。阈值是这里唯一的拦截点：它必须在**进 prompt 之前**生效，
+        //   否则"低分引用"仍会污染上下文（界面上的引用列表反而不是主要危害）。
+        if (hit.score() < threshold) {
+          continue;
         }
         // ★ 去重（同一分段可能被多个词元命中）
         if (!scoreById.containsKey(hit.segmentId())) {

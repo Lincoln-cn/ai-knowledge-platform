@@ -53,6 +53,10 @@ public class ChatSettingsService {
             command.heartbeatIntervalMs(),
             command.firstTokenBudgetMs(),
             command.systemPrompt(),
+            Boolean.TRUE.equals(command.retrievalEnabled()),
+            command.retrievalKbIds(),
+            command.retrievalThreshold() == null ? 0.3 : command.retrievalThreshold(),
+            command.retrievalTopN() == null ? 5 : command.retrievalTopN(),
             command.maxOutputTokens(),
             null);
     try {
@@ -94,5 +98,9 @@ public class ChatSettingsService {
       long heartbeatIntervalMs,
       long firstTokenBudgetMs,
       String systemPrompt,
+      Boolean retrievalEnabled,
+      java.util.List<UUID> retrievalKbIds,
+      Double retrievalThreshold,
+      Integer retrievalTopN,
       Integer maxOutputTokens) {}
 }

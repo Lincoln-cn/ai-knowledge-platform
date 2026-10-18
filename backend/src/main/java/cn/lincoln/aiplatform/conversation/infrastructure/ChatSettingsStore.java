@@ -42,7 +42,8 @@ public class ChatSettingsStore {
     List<ChatSettingsView> found =
         jdbc.query(
             "select default_model_id, stream_enabled, idle_timeout_ms, heartbeat_interval_ms,"
-                + " first_token_budget_ms, system_prompt, max_output_tokens, updated_at"
+                + " first_token_budget_ms, system_prompt, retrieval_enabled, retrieval_kb_ids,"
+                + " retrieval_threshold, retrieval_top_n, max_output_tokens, updated_at"
                 + " from cv_chat_settings where id = ?",
             (rs, rowNum) -> {
               UUID modelId = rs.getObject("default_model_id", UUID.class);
@@ -54,6 +55,10 @@ public class ChatSettingsStore {
                   rs.getLong("heartbeat_interval_ms"),
                   rs.getLong("first_token_budget_ms"),
                   rs.getString("system_prompt"),
+                  rs.getBoolean("retrieval_enabled"),
+                  toUuidList(rs.getArray("retrieval_kb_ids")),
+                  rs.getDouble("retrieval_threshold"),
+                  rs.getInt("retrieval_top_n"),
                   maxTokens,
                   rs.getObject("updated_at", java.time.OffsetDateTime.class) == null
                       ? null
@@ -81,7 +86,9 @@ public class ChatSettingsStore {
         jdbc.update(
             "update cv_chat_settings set default_model_id = ?, stream_enabled = ?,"
                 + " idle_timeout_ms = ?, heartbeat_interval_ms = ?, first_token_budget_ms = ?,"
-                + " system_prompt = ?, max_output_tokens = ?, updated_at = now(), updated_by = ?"
+                + " system_prompt = ?, retrieval_enabled = ?, retrieval_kb_ids = ?,"
+                + " retrieval_threshold = ?, retrieval_top_n = ?, max_output_tokens = ?,"
+                + " updated_at = now(), updated_by = ?"
                 + " where id = ?",
             settings.defaultModelId(),
             settings.streamEnabled(),
@@ -89,6 +96,12 @@ public class ChatSettingsStore {
             settings.heartbeatIntervalMs(),
             settings.firstTokenBudgetMs(),
             settings.systemPrompt(),
+            settings.retrievalEnabled(),
+            settings.retrievalKbIds() == null
+                ? null
+                : settings.retrievalKbIds().toArray(new UUID[0]),
+            settings.retrievalThreshold(),
+            settings.retrievalTopN(),
             settings.maxOutputTokens(),
             operator,
             SINGLETON);
@@ -96,6 +109,36 @@ public class ChatSettingsStore {
       throw new IllegalStateException("cv_chat_settings 没有那一行，无法更新 —— 请先跑迁移 V39");
     }
     return load();
+  }
+
+  /**
+   * 读 {@code uuid[]} 列。
+   *
+   * <p>★ JDBC 给的是 {@code java.sql.Array}，直接强转成 {@code UUID[]} 在部分驱动上会抛； 这里走 {@code getArray()} 拿
+   * {@code Object[]} 再逐项转。
+   *
+   * @param array 列值（可空）
+   * @return 列表；列为 {@code null} ⇒ 返回 {@code null}（★「未配置」与「配了空列表」不是一回事）
+   */
+  private static List<UUID> toUuidList(java.sql.Array array) {
+    if (array == null) {
+      return null;
+    }
+    try {
+      Object raw = array.getArray();
+      if (!(raw instanceof Object[] values)) {
+        return null;
+      }
+      List<UUID> out = new java.util.ArrayList<>(values.length);
+      for (Object value : values) {
+        if (value instanceof UUID uuid) {
+          out.add(uuid);
+        }
+      }
+      return out;
+    } catch (java.sql.SQLException unreadable) {
+      throw new IllegalStateException("读 retrieval_kb_ids 失败", unreadable);
+    }
   }
 
   /**

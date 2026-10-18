@@ -55,6 +55,63 @@
         </div>
       </el-form-item>
 
+      <el-divider content-position="left"><span class="micro">召回（通用问答是否挂知识库）</span></el-divider>
+
+      <div class="notice warn" style="margin-bottom: var(--space-sm)">
+        <b>默认不召回。</b>之前通用问答在<b>静默做全库检索</b> ——
+        问「java hello world」时把 Vue 文档、电子书等以 <b>0.25 分</b>塞进上下文，
+        模型就照着复述成「创建一个 Vue 单文件组件…」。<b>那是答非所问的直接原因。</b>
+      </div>
+
+      <el-form-item label="启用召回">
+        <el-switch v-model="form.retrievalEnabled" :disabled="!canEdit" />
+        <span class="micro muted" style="margin-left: var(--space-sm)">
+          关 = 只用模型自身知识（与「未挂知识库」的空态文案一致）
+        </span>
+      </el-form-item>
+
+      <el-form-item label="知识库范围">
+        <el-select
+          v-model="form.retrievalKbIds"
+          multiple
+          clearable
+          collapse-tags
+          collapse-tags-tooltip
+          placeholder="留空 = 我用可见的全部知识库"
+          :disabled="!canEdit || !form.retrievalEnabled"
+          style="width: 100%"
+        >
+          <el-option v-for="kb in kbOptions" :key="kb.id" :label="kb.name" :value="kb.id" />
+        </el-select>
+        <div class="micro muted">
+          ★ 留空时是「全部可见库」—— 这也是之前答非所问的放大器：语料库里什么都搜得到。
+        </div>
+      </el-form-item>
+
+      <el-form-item label="相似度下限">
+        <el-input-number
+          v-model="form.retrievalThreshold"
+          :min="0"
+          :max="1"
+          :step="0.05"
+          :precision="2"
+          :disabled="!canEdit || !form.retrievalEnabled"
+        />
+        <span class="micro muted" style="margin-left: var(--space-sm)">
+          低于它的命中直接丢弃。★ 实测 0.25 分的命中就是噪声，建议 0.35~0.5
+        </span>
+      </el-form-item>
+
+      <el-form-item label="召回条数">
+        <el-input-number
+          v-model="form.retrievalTopN"
+          :min="1"
+          :max="20"
+          :disabled="!canEdit || !form.retrievalEnabled"
+        />
+        <span class="micro muted" style="margin-left: var(--space-sm)">条</span>
+      </el-form-item>
+
       <el-divider content-position="left"><span class="micro">超时与心跳（单位：秒）</span></el-divider>
 
       <el-form-item label="空闲超时">
@@ -119,6 +176,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import { getChatSettings, saveChatSettings, type ChatSettings } from '@/api/chatSettings'
+import { listKnowledgeBases } from '@/api/knowledge'
 import { listModels } from '@/api/models'
 import { ApiError } from '@/api/types'
 import { PERM } from '@/constants/permissions'
@@ -132,6 +190,8 @@ const saving = ref(false)
 const loadError = ref<{ reason: string; hint?: string } | null>(null)
 const updatedAtText = ref('')
 const chatModels = ref<Array<{ id: string; name: string; baseModel: string }>>([])
+/** 召回范围的下拉选项（知识库） */
+const kbOptions = ref<Array<{ id: string; name: string }>>([])
 
 const form = reactive<ChatSettings>({
   defaultModelId: null,
@@ -140,6 +200,10 @@ const form = reactive<ChatSettings>({
   heartbeatIntervalMs: 20000,
   firstTokenBudgetMs: 10000,
   systemPrompt: null,
+  retrievalEnabled: false,
+  retrievalKbIds: null,
+  retrievalThreshold: 0.3,
+  retrievalTopN: 5,
   maxOutputTokens: null,
   updatedAt: null
 })
@@ -204,6 +268,10 @@ async function save() {
       heartbeatIntervalMs: form.heartbeatIntervalMs,
       firstTokenBudgetMs: form.firstTokenBudgetMs,
       systemPrompt: form.systemPrompt?.trim() ? form.systemPrompt.trim() : null,
+      retrievalEnabled: form.retrievalEnabled,
+      retrievalKbIds: form.retrievalKbIds?.length ? form.retrievalKbIds : null,
+      retrievalThreshold: form.retrievalThreshold,
+      retrievalTopN: form.retrievalTopN,
       maxOutputTokens: form.maxOutputTokens
     })
     Object.assign(form, saved)
@@ -217,9 +285,20 @@ async function save() {
   }
 }
 
+async function loadKnowledgeBases() {
+  try {
+    const page = await listKnowledgeBases({ size: 100 })
+    kbOptions.value = page.list.map((kb) => ({ id: kb.id, name: kb.name }))
+  } catch {
+    // ★ 取不到列表不影响"关掉召回"这件事（那是默认值）——静默降级成空下拉
+    kbOptions.value = []
+  }
+}
+
 onMounted(() => {
   load()
   loadModels()
+  loadKnowledgeBases()
 })
 </script>
 

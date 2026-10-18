@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.conversation.application;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -14,6 +15,10 @@ import java.util.UUID;
  * @param heartbeatIntervalMs 心跳间隔
  * @param firstTokenBudgetMs 首字延迟预算（B4：≤10s）
  * @param systemPrompt 通用问答的初始提示词（★ 空 = 不加前缀；应用会话不读它）
+ * @param retrievalEnabled 通用问答是否走召回（★ false = 一条引用都不检索）
+ * @param retrievalKbIds 召回范围（知识库 id）；★ 空 = 该用户可见的全部库
+ * @param retrievalThreshold 相似度下限，低于它的命中丢弃
+ * @param retrievalTopN 召回条数上限
  * @param maxOutputTokens 单轮最大输出 tokens；{@code null} = 不限
  * @param updatedAt 最后修改时间（界面显示"上次改动"，便于确认改没改上）
  */
@@ -24,6 +29,10 @@ public record ChatSettingsView(
     long heartbeatIntervalMs,
     long firstTokenBudgetMs,
     String systemPrompt,
+    boolean retrievalEnabled,
+    List<UUID> retrievalKbIds,
+    double retrievalThreshold,
+    int retrievalTopN,
     Integer maxOutputTokens,
     Instant updatedAt) {
 
