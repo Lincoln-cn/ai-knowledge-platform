@@ -260,6 +260,21 @@ watch(
   }
 )
 
+/**
+ * 推荐追问到达时再滚一次。
+ *
+ * ★ 为什么需要：追问是**回答完成之后**才拉回来的（`done` 后再请求一次，见 `useChatSession`），
+ * 那时上面那两个 watch 都已经跑完了 —— 于是"猜你想问"那一排会贴在消息区下沿、被输入框压住，
+ * 用户只看到半行标题。这不是样式问题，是**内容到达时机**问题。
+ */
+watch(
+  () => props.messages.reduce((n, m) => n + (m.suggestions?.length ?? 0), 0),
+  async () => {
+    await nextTick()
+    scrollToBottom()
+  }
+)
+
 defineExpose({ scrollToBottom, scrollToMessage })
 </script>
 

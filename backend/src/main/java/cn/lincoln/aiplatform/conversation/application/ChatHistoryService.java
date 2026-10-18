@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.conversation.application;
 
 import cn.lincoln.aiplatform.conversation.domain.Conversation;
 import cn.lincoln.aiplatform.conversation.domain.ConversationRepository;
+import cn.lincoln.aiplatform.conversation.domain.Message;
 import cn.lincoln.aiplatform.conversation.domain.MessageRepository;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -40,10 +41,34 @@ public class ChatHistoryService {
 
   private final ConversationRepository conversations;
   private final MessageRepository messages;
+  private final SuggestionService suggestions;
 
-  public ChatHistoryService(ConversationRepository conversations, MessageRepository messages) {
+  public ChatHistoryService(
+      ConversationRepository conversations,
+      MessageRepository messages,
+      SuggestionService suggestions) {
     this.conversations = conversations;
     this.messages = messages;
+    this.suggestions = suggestions;
+  }
+
+  /**
+   * 消息 ⇒ 视图，并**批量**填上推荐追问。
+   *
+   * <p>★ 为什么要在这里填，而不是让前端在打开会话时自己问： 那样"打开任何一条老会话"都会触发一次模型调用（{@code generate} 只在没有存量时生成）。
+   * 历史读是纯读路径，不该有生成副作用。
+   *
+   * <p>★ 一次 SQL 批量取（{@code storedFor}），不是逐条 —— 一页 20 条逐条查就是 20 次往返。
+   *
+   * @param page 这一页/窗口里的消息
+   * @return 视图列表（顺序与入参一致）
+   */
+  private java.util.List<ChatMessageView> views(java.util.List<Message> page) {
+    java.util.Map<java.util.UUID, java.util.List<String>> stored =
+        suggestions.storedFor(page.stream().map(Message::id).toList());
+    return page.stream()
+        .map(m -> ChatMessageView.of(m, stored.getOrDefault(m.id(), java.util.List.of())))
+        .toList();
   }
 
   /**
@@ -84,8 +109,7 @@ public class ChatHistoryService {
       //   给它一个确定值，而不是把请求里那个**被忽略**的 page 回声出去 —— 那会让调用方以为分页生效了
       // ★★ total 用**会话总数**（不是窗口条数）：前端拿它判断"窗口前还有没有更早的一页"，
       //   给窗口条数会让深链跳进来之后"加载更早"消失（与 mock 逐字对齐）
-      return PageResult.of(
-          found.messages().stream().map(ChatMessageView::of).toList(), found.total(), 1, safeSize);
+      return PageResult.of(views(found.messages()), found.total(), 1, safeSize);
     }
 
     // ── ③ 常规分页 ──
@@ -100,16 +124,11 @@ public class ChatHistoryService {
     //   空页会让"聊天窗口打开是空的"看起来像"这条会话没有消息"
     int safePage = requested == -1 ? lastPage : Math.min(Math.max(1, requested), lastPage);
     if (safePage == 1) {
-      return PageResult.of(
-          firstPage.content().stream().map(ChatMessageView::of).toList(), total, 1, safeSize);
+      return PageResult.of(views(firstPage.content()), total, 1, safeSize);
     }
     MessageRepository.Slice slice =
         messages.slice(conversation.id(), (safePage - 1) * safeSize, safeSize);
-    return PageResult.of(
-        slice.content().stream().map(ChatMessageView::of).toList(),
-        slice.total(),
-        safePage,
-        safeSize);
+    return PageResult.of(views(slice.content()), slice.total(), safePage, safeSize);
   }
 
   private static BusinessException notFound(String message, String hint) {

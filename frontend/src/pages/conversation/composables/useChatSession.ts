@@ -580,9 +580,40 @@ export function useChatSession(options: ChatSessionOptions = {}) {
         if (result.status === 'GENERATED' && !assistant.content.trim()) {
           assistant.failReason = '本次没有返回内容'
           assistant.failHint = '可以点「重新生成」再试一次，或换个问法'
+          return
         }
+        // ★ 推荐追问（「猜你想问」）：**回答完成之后**再拉一次。
+        //
+        //   为什么不塞进这一轮的 SSE：契约里 artifact 要落在 done 之前 ⇒ 那会拖慢"完成"本身
+        //   （1.5B 生成 3 个短问题要 10~20 秒）。用户已经在读答案了，这一步慢一点无所谓。
+        //   ★ 失败静默：追问生成不出来，界面上只是不显示 chips —— 不该在这里弹一个错误。
+        void loadSuggestions(assistant)
       }
     })
+  }
+
+  /**
+   * 拉这条回答的推荐追问（「猜你想问」）。
+   *
+   * <p>★ 失败的处置是**静默**：追问生成不出来，界面上只是不显示那排 chips。
+   * 用户刚拿到一条正常回答，不该因为"锦上添花的东西没生成出来"看到一个错误。
+   *
+   * <p>★ 只在 {@code GENERATED} 时拉：失败/停止的回答上没有"可以继续问什么"这回事。
+   *
+   * @param assistant 刚完成的那条助手消息（就地填 `suggestions`）
+   */
+  const loadSuggestions = async (assistant: ChatMessageEx) => {
+    if (assistant.status !== 'GENERATED' || !assistant.id) {
+      return
+    }
+    try {
+      const items = await conversationsApi.suggestForMessage(assistant.id)
+      if (Array.isArray(items) && items.length) {
+        assistant.suggestions = items
+      }
+    } catch {
+      // ★ 静默（理由见上）
+    }
   }
 
   /** 发送一条问题。conversationId 为空时由调用方先建会话 */

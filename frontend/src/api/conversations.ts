@@ -332,6 +332,25 @@ export const submitMessageFeedback = (messageId: string, type: MessageFeedback |
   })
 
 /**
+ * 为一条已生成完成的助手消息生成推荐追问（「猜你想问」）。
+ *
+ * ★ 这是**回答完成之后**的第二次请求，不是回答那一轮的一部分：
+ * 追问要随 SSE 发就得落在 `done` 之前，而那会拖慢"完成"本身（1.5B 要 10~20 秒）。
+ * 用户已经在读答案了，这一步慢一点无所谓。
+ *
+ * ★ 幂等：后端有存量就直返，不重复调模型。
+ *
+ * @param messageId 助手消息 id
+ * @returns 追问列表（生成失败 ⇒ 空数组）
+ */
+export const suggestForMessage = (messageId: string) =>
+  request<string[]>({
+    method: 'POST',
+    url: '/conversations/:messageId/suggestions',
+    path: { messageId }
+  })
+
+/**
  * 免登录：用访问凭证换应用上下文。
  * 校验三要素（启用 / 未过期 / 未撤销）由后端完成，失败时返回可读原因。
  */
