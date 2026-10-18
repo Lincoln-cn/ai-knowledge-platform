@@ -1,4 +1,5 @@
 import { API_PREFIX } from '@/config/env'
+import { refreshAccessToken } from '@/lib/http'
 import { clearTokens, getToken } from '@/lib/token'
 import type {
   Artifact,
@@ -107,6 +108,13 @@ export function chatStreamViaSse(options: ChatStreamOptions): StreamHandle {
   let messageId = ''
   /** 终态闸门：无论走哪条路径，onDone 恰好发一次 */
   let settled = false
+  /**
+   * 401 只自动续期重试一次。
+   *
+   * ★ 不设这个闸门会死循环：假如刷新接口一直"成功"返回一个同样被拒的令牌，
+   * 每次重试都 401 ⇒ 无限重发同一个问题。
+   */
+  let retriedAuth = false
   /** 是否已经把失败说出口（服务端 error 帧或本地收尾）—— 避免半途断流再补一条重复 error */
   let errorEmitted = false
 
@@ -177,24 +185,36 @@ export function chatStreamViaSse(options: ChatStreamOptions): StreamHandle {
     })
 
     if (!response.ok || !response.body) {
-      // ★★ 401 不是「生成失败」，是「登录过期」—— 必须与普通失败分开处理。
+      // ★★ 401 = 「令牌过期」，与普通失败分开处理；并且**先静默续期、成功就重试一次**。
       //
-      //   实测症状（用户截图）：token 过期后发消息，界面显示
-      //   「生成失败：服务端返回 401」+ 一条浮动的「生成中断：服务端返回 401」，
-      //   而**页面停在原地不跳登录**。用户的疑问正是：「401 不应该直接让页面导航到登录页吗？」
+      //   为什么能安全重试：401 发生在**开流之前**（HTTP 层就拒了），
+      //   此时一个 delta 都没发出去、服务端也没开始生成 ⇒ 重试不会让用户看到两遍问题、
+      //   也不会留下半截回答。这一点与"流已开始后断线"完全不同（那种情况只能收尾）。
       //
-      //   ★ 根因：`http.ts` 有完整的 401 处理（静默刷新一次 → 失败则 clearTokens，
-      //     交给路由守卫跳登录），但**本文件是独立实现**（自己用 fetch 读流，不走 http.ts），
-      //     那条处理在 SSE 这条链路上从来没生效过。
+      //   ★ 根因：`http.ts` 有完整的 401 处理（刷新一次 → 失败则 clearTokens + 守卫跳登录），
+      //     但**本文件是独立实现**（自己用 fetch 读流，不走 http.ts），
+      //     那条处理在 SSE 链路上从来没生效过 ⇒ 表现为
+      //     「生成失败：服务端返回 401」+ 页面停在原地（用户原话：「401 不应该跳登录页吗」）。
       //
-      //   ⇒ 这里只清登录态、交给路由守卫跳转（不自己 push，否则守卫会认为「还登录着」）。
-      if (response.status === 401) {
-        clearTokens()
-        failTerminal('登录已过期，请重新登录', '页面将跳转到登录页')
-        // ★ 用 hash 跳转：本文件在 lib 层拿不到 vue-router 实例；
-        //   项目用的是 hash 路由（createWebHashHistory），等价于 router.push('/login')。
-        window.location.hash = '#/login'
-        return
+      //   ⇒ 现在与普通接口同一口径：**先自动续期**（用户无感），
+      //     续期失败才清登录态、交给路由守卫跳登录。
+      if (response.status === 401 && !retriedAuth) {
+        retriedAuth = true
+        try {
+          const fresh = await refreshAccessToken()
+          headers.Authorization = `Bearer ${fresh}`
+          // ★ 重跑一次同一个请求（`run` 是闭包，headers 是它读的同一个对象）
+          return run()
+        } catch {
+          clearTokens()
+          failTerminal('登录已过期，请重新登录', '页面将跳转到登录页')
+          // ★ 用 hash 跳转：本文件在 lib 层拿不到 vue-router 实例；
+          //   项目用的是 hash 路由（createWebHashHistory），等价于 router.push('/login')。
+          //   ★ 只清 token、由**路由守卫**跳转 —— 自己 push 而 token 还在，
+          //     守卫会认为「还登录着」，来回弹。
+          window.location.hash = '#/login'
+          return
+        }
       }
       failTerminal(`服务端返回 ${response.status}`, '请稍后重试；若持续失败请联系管理员')
       return
