@@ -75,9 +75,21 @@ function emit(
       options.onMeta?.(meta)
       break
     }
-    case 'refs':
-      options.onRefs?.(payload as unknown as SourceRef[])
+    case 'refs': {
+      // ★★ 后端发的是**包络** `{"refs":[...]}`，不是裸数组。
+      //
+      //   实测症状（用户原话）：「SSE 之后 source 这个块没有跟着推送过来，
+      //   只有重新刷新会话才能看到这个 source 块」。
+      //   这里把整个 payload 当成 `SourceRef[]` 传下去，而消费方
+      //   `useChatSession.onRefs` 里是 `Array.isArray(refs) ? ... : []`
+      //   ⇒ 对包络判 false ⇒ 引用永远是空数组 ⇒ 界面不显示。
+      //   刷新后能显示，是因为那时走的是「从库里读 reference_snapshot」另一条路。
+      //
+      //   ★ 两种形状都接受：裸数组（mock / 早期实现）与包络（当前后端）。
+      const raw = payload as unknown as { refs?: SourceRef[] } | SourceRef[]
+      options.onRefs?.(Array.isArray(raw) ? raw : (raw?.refs ?? []))
       break
+    }
     case 'delta':
       options.onDelta?.(String(payload.text ?? ''))
       break
