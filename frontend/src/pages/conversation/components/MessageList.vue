@@ -94,7 +94,7 @@
           </div>
 
           <!-- 引用来源：空应用 / 无引用时不显示 -->
-          <div v-if="msg.role !== 'USER' && msg.refs.length" class="ref-block">
+          <div v-if="msg.role !== 'USER' && msg.refs?.length" class="ref-block">
             <div class="label">SOURCES</div>
             <div class="ref-chips">
               <button
@@ -152,7 +152,7 @@
           </div>
 
           <!-- 推荐问题 -->
-          <div v-if="msg.role !== 'USER' && msg.suggestions.length && isLast(msg)" class="suggestions">
+          <div v-if="msg.role !== 'USER' && msg.suggestions?.length && isLast(msg)" class="suggestions">
             <div class="label">猜你想问</div>
             <div class="chips">
               <button
@@ -245,7 +245,7 @@ const scrollToMessage = (id: string) => {
 }
 
 watch(
-  () => props.messages.map((m) => m.content.length + m.status).join('|'),
+  () => props.messages.map((m) => (m.content ?? '').length + m.status).join('|'),
   async () => {
     await nextTick()
     scrollToBottom(false)

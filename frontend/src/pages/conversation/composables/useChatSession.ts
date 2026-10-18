@@ -106,7 +106,26 @@ export function groupLabel(updatedAt: string): string {
  * 不会触发重渲染（onDelta/onRefs/onStatus 全都反映不到界面上）。
  */
 function toReactiveMessage(raw: ChatMessage): ChatMessage {
-  return reactive({ ...raw }) as ChatMessage
+  // ★★ 为什么这里要兜底（实测症状）：
+  //
+  //   某个会话的**用户消息**里 `refs` 是 `null`（后端有意为之，见下），
+  //   而 `MessageList` 的模板读的是 `msg.refs.length` ⇒ 抛
+  //   `Cannot read properties of null (reading 'length')`；
+  //   那个异常发生在 `.center` 的渲染过程中 ⇒ **整块消息列表都不渲染**，
+  //   页面上只剩 Composer，看起来就是「输入框跑到上方、没有内容区」。
+  //
+  //   ★★ 但 `refs` 的 `null` 是**有语义的**，不许在这里抹平：
+  //     `ChatMessageView` 的 javadoc：「`null` = 这一批引用从来没到过，`[]` = 明确的零命中 ——
+  //     两者不许糊成一个」。所以 `refs` 原样保留，**由模板用 `?.` 防御**。
+  //
+  //   ★ 其余三个字段没有这种区分（`content` 恒是串、`suggestions` 后端恒 `[]`、
+  //     `attachments` 没有就是没有）⇒ 在这里一次兜掉，免得每个模板各写一遍 `?? []`。
+  return reactive({
+    ...raw,
+    content: raw.content ?? '',
+    suggestions: raw.suggestions ?? [],
+    attachments: raw.attachments ?? []
+  }) as ChatMessage
 }
 
 /* ── 会话列表 ── */
