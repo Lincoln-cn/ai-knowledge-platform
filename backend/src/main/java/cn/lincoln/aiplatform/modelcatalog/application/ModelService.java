@@ -420,16 +420,29 @@ public class ModelService {
     return apiKeyCipher.decrypt(model.apiKeyCipher(), model.apiKeyIv());
   }
 
-  /** 从上游目录 best-effort 查 contextWindow。上游不可达时返回 null —— 不阻断注册。 */
+  /**
+   * 从上游目录 best-effort 查 contextWindow。上游不可达 / 返回的数据没有这个字段 ⇒ 返回 null，不阻断注册。
+   *
+   * <p>★★ <strong>`filter(Objects::nonNull)` 不是防御性编程，是必需的</strong>： {@code Stream.findFirst()} 遇到
+   * <b>null 元素</b>会抛 {@code NullPointerException} （`Optional` 不接受 null）。而 `contextWindow` 是
+   * `Integer`，且<b>多数上游根本不返回它</b> （实测：Ollama 的 `/v1/models` 只有 id / created / owned_by）⇒ 那个 null 顺着
+   * map 流下去， 在 findFirst 处炸成 500。
+   *
+   * <p>★ 真实症状很贵：**把任何 Ollama 模型注册进平台都 500** （`POST /api/v1/models` → 「服务内部错误」），而除了日志之外完全看不出原因。
+   *
+   * <p>★ 兜底异常从 `UpstreamUnreachableException` 放宽到 `RuntimeException`： 方法名与注释都写着
+   * best-effort（"不阻断注册"），而"上游返回异形 JSON"不是"不可达"、 却同样不该阻断注册。放宽后仍然 <b>WARN 留痕</b>，不是静默吞掉。
+   */
   private Integer lookupContextWindow(String baseModel, String apiBase) {
     try {
       return gateway.listModels(apiBase, null).stream()
           .filter(m -> baseModel.equals(m.id()))
           .map(UpstreamGateway.UpstreamModel::contextWindow)
+          .filter(java.util.Objects::nonNull)
           .findFirst()
           .orElse(null);
-    } catch (UpstreamGateway.UpstreamUnreachableException e) {
-      log.debug("拉取 contextWindow 失败（不阻断注册）：{}", e.getMessage());
+    } catch (RuntimeException e) {
+      log.warn("拉取 contextWindow 失败（不阻断注册）：{}", e.toString());
       return null;
     }
   }
