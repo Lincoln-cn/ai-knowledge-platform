@@ -173,6 +173,18 @@ public class ChatPolicyResolver {
     return settings.get().retrievalTopN();
   }
 
+  /**
+   * 多轮对话带多少条历史消息。
+   *
+   * <p>★ 它此前是 {@code ChatService.MAX_HISTORY_MESSAGES = 20} 的硬编码常量。 这个数决定三件事，都值得可配：上下文长度（小模型 window
+   * 会撑爆）、 推理成本与首字延迟（每条历史都要重新 prefill）、跨话题串味风险。
+   *
+   * @return 条数上限（user + assistant 各算一条，20 ≈ 10 轮；0 = 不带历史）
+   */
+  public int historyMaxMessages() {
+    return settings.get().historyMaxMessages();
+  }
+
   public String systemPrompt() {
     String prompt = settings.get().systemPrompt();
     return prompt == null || prompt.isBlank() ? null : prompt.strip();

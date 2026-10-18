@@ -439,9 +439,14 @@ public class ChatService {
     //   理由与同文件检索那条注释逐字相同：访问范围是 ThreadLocal，新建的模型线程上它是空的。
     //   读历史本身只按 conversationId 取（归属在 prepare 阶段已经判过），不依赖范围。
     List<cn.lincoln.aiplatform.platform.model.ChatMessage> history = List.of();
+    // ★ 历史条数上限来自「对话设置」（此前是硬编码常量 MAX_HISTORY_MESSAGES = 20）。
+    //   它决定上下文长度、推理成本与跨话题串味风险，应该能在页面上调。
+    //   ★ 读不到配置时退回常量默认值（与改造前逐字一致）。
+    final int historyLimit =
+        policyResolver == null ? MAX_HISTORY_MESSAGES : policyResolver.historyMaxMessages();
     if (turn.multiTurn()) {
       List<cn.lincoln.aiplatform.platform.model.ChatMessage> previous =
-          turns.historyBefore(turn.conversationId(), turn.userMessageId(), MAX_HISTORY_MESSAGES);
+          turns.historyBefore(turn.conversationId(), turn.userMessageId(), historyLimit);
       if (!previous.isEmpty()) {
         List<cn.lincoln.aiplatform.platform.model.ChatMessage> withCurrent =
             new java.util.ArrayList<>(previous);
@@ -458,7 +463,15 @@ public class ChatService {
     // ★ 每轮一行：这一轮到底带上了几条历史。
     //   ★ 它此前恒为 0 且**没有任何痕迹** ——「多轮不生效」在界面上只表现为
     //     "模型答非所问"，不查这条日志根本看不出是历史没带（这次就是靠它定位的）。
-    log.info("本轮带 {} 条历史消息（会话 {}）", messages.size(), turn.conversationId());
+    // ★ 措辞要写清"含本轮"：historyLimit 管的是**历史**条数，而 messages 里还有本轮问题，
+    //   直接打两个数会让人以为"上限 2 却带了 3 条"是 bug。
+    log.info(
+        "本轮带 {} 条消息（= 历史 {} + 本轮问题；历史上限 {}，会话 {}）",
+        messages.size(),
+        // ★ 第一轮走单轮路径：messages 为空（本轮问题不在里面），减 1 会打出"历史 -1"
+        Math.max(0, messages.size() - 1),
+        historyLimit,
+        turn.conversationId());
     Thread thread =
         new Thread(
             () -> {

@@ -19,6 +19,7 @@ import java.util.UUID;
  * @param retrievalKbIds 召回范围（知识库 id）；★ 空 = 该用户可见的全部库
  * @param retrievalThreshold 相似度下限，低于它的命中丢弃
  * @param retrievalTopN 召回条数上限
+ * @param historyMaxMessages 多轮带的历史消息条数上限（20 ≈ 10 轮；0 = 不带历史）
  * @param maxOutputTokens 单轮最大输出 tokens；{@code null} = 不限
  * @param updatedAt 最后修改时间（界面显示"上次改动"，便于确认改没改上）
  */
@@ -33,6 +34,7 @@ public record ChatSettingsView(
     List<UUID> retrievalKbIds,
     double retrievalThreshold,
     int retrievalTopN,
+    int historyMaxMessages,
     Integer maxOutputTokens,
     Instant updatedAt) {
 

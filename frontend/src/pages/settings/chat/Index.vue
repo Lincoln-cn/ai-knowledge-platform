@@ -177,6 +177,26 @@
           </div>
 
           <div class="field">
+            <label class="field-label">多轮历史</label>
+            <div class="input-suffix">
+              <el-input-number
+                v-model="form.historyMaxMessages"
+                :min="0"
+                :max="200"
+                :step="2"
+                :disabled="!canEdit"
+              />
+              <span class="micro muted">
+                条 · 约 {{ Math.floor(form.historyMaxMessages / 2) }} 轮
+              </span>
+            </div>
+            <div class="field-note micro muted">
+              同一个会话里往前带多少条消息（user/assistant 各算一条）。
+              <b>0 = 不带历史</b>（等价单轮）；带得越多越容易串话题、也越慢。
+            </div>
+          </div>
+
+          <div class="field">
             <label class="field-label">空闲超时</label>
             <div class="input-suffix">
               <el-input-number
@@ -316,6 +336,7 @@ const form = reactive<ChatSettings>({
   retrievalKbIds: null,
   retrievalThreshold: 0.3,
   retrievalTopN: 5,
+  historyMaxMessages: 20,
   maxOutputTokens: null,
   updatedAt: null
 })
@@ -351,6 +372,7 @@ function payload(): Omit<ChatSettings, 'updatedAt'> {
     retrievalKbIds: form.retrievalKbIds?.length ? form.retrievalKbIds : null,
     retrievalThreshold: form.retrievalThreshold,
     retrievalTopN: form.retrievalTopN,
+    historyMaxMessages: form.historyMaxMessages,
     maxOutputTokens: form.maxOutputTokens
   }
 }

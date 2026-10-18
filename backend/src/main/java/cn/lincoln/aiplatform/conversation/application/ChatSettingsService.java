@@ -57,6 +57,7 @@ public class ChatSettingsService {
             command.retrievalKbIds(),
             command.retrievalThreshold() == null ? 0.3 : command.retrievalThreshold(),
             command.retrievalTopN() == null ? 5 : command.retrievalTopN(),
+            command.historyMaxMessages() == null ? 20 : command.historyMaxMessages(),
             command.maxOutputTokens(),
             null);
     try {
@@ -102,5 +103,6 @@ public class ChatSettingsService {
       java.util.List<UUID> retrievalKbIds,
       Double retrievalThreshold,
       Integer retrievalTopN,
+      Integer historyMaxMessages,
       Integer maxOutputTokens) {}
 }

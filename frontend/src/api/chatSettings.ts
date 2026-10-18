@@ -55,6 +55,13 @@ export interface ChatSettings {
   retrievalThreshold: number
   /** 召回条数上限 */
   retrievalTopN: number
+  /**
+   * 多轮对话带多少条历史消息（user + assistant 各算一条，20 ≈ 10 轮；0 = 不带历史）。
+   *
+   * ★ 这个数决定上下文长度、推理成本与跨话题串味风险 —— 此前是后端硬编码常量
+   *   `ChatService.MAX_HISTORY_MESSAGES`。
+   */
+  historyMaxMessages: number
   /** 单轮最大输出 tokens；`null` = 不限制 */
   maxOutputTokens: number | null
   /** 最后修改时间（服务端写，界面用来确认"改上了"） */

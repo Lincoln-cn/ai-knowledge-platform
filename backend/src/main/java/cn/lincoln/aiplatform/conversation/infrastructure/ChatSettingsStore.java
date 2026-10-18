@@ -43,7 +43,8 @@ public class ChatSettingsStore {
         jdbc.query(
             "select default_model_id, stream_enabled, idle_timeout_ms, heartbeat_interval_ms,"
                 + " first_token_budget_ms, system_prompt, retrieval_enabled, retrieval_kb_ids,"
-                + " retrieval_threshold, retrieval_top_n, max_output_tokens, updated_at"
+                + " retrieval_threshold, retrieval_top_n, history_max_messages,"
+                + " max_output_tokens, updated_at"
                 + " from cv_chat_settings where id = ?",
             (rs, rowNum) -> {
               UUID modelId = rs.getObject("default_model_id", UUID.class);
@@ -59,6 +60,7 @@ public class ChatSettingsStore {
                   toUuidList(rs.getArray("retrieval_kb_ids")),
                   rs.getDouble("retrieval_threshold"),
                   rs.getInt("retrieval_top_n"),
+                  rs.getInt("history_max_messages"),
                   maxTokens,
                   rs.getObject("updated_at", java.time.OffsetDateTime.class) == null
                       ? null
@@ -87,8 +89,8 @@ public class ChatSettingsStore {
             "update cv_chat_settings set default_model_id = ?, stream_enabled = ?,"
                 + " idle_timeout_ms = ?, heartbeat_interval_ms = ?, first_token_budget_ms = ?,"
                 + " system_prompt = ?, retrieval_enabled = ?, retrieval_kb_ids = ?,"
-                + " retrieval_threshold = ?, retrieval_top_n = ?, max_output_tokens = ?,"
-                + " updated_at = now(), updated_by = ?"
+                + " retrieval_threshold = ?, retrieval_top_n = ?, history_max_messages = ?,"
+                + " max_output_tokens = ?, updated_at = now(), updated_by = ?"
                 + " where id = ?",
             settings.defaultModelId(),
             settings.streamEnabled(),
@@ -102,6 +104,7 @@ public class ChatSettingsStore {
                 : settings.retrievalKbIds().toArray(new UUID[0]),
             settings.retrievalThreshold(),
             settings.retrievalTopN(),
+            settings.historyMaxMessages(),
             settings.maxOutputTokens(),
             operator,
             SINGLETON);
