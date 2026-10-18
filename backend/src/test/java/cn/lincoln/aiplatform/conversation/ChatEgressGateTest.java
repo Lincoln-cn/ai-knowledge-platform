@@ -276,7 +276,9 @@ class ChatEgressGateTest {
           "fixture-model",
           MODEL_ID,
           List.of(),
-          false);
+          false,
+          null,
+          null);
     }
 
     @Override

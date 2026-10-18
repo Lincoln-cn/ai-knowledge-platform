@@ -99,7 +99,7 @@ const formRef = ref<FormInstance>()
 const chatModels = ref<ModelInfo[]>([])
 
 const form = reactive({
-  type: 'simple' as AssistantType,
+  type: 'SIMPLE' as AssistantType,
   name: '',
   icon: '🤖',
   description: '',

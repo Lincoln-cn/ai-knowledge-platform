@@ -257,7 +257,9 @@ class ChatRetrievalHeartbeatTest {
           "fixture-model",
           UUID.randomUUID(),
           List.of(),
-          false);
+          false,
+          null,
+          null);
     }
 
     @Override

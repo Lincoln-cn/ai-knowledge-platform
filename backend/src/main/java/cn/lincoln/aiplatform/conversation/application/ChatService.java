@@ -455,7 +455,7 @@ public class ChatService {
         withCurrent.add(
             new cn.lincoln.aiplatform.platform.model.ChatMessage(
                 cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER,
-                promptOf(question, refs, systemPromptOrNull())));
+                promptOf(question, refs, systemPromptOrNull(turn))));
         history = List.copyOf(withCurrent);
       }
     }
@@ -479,7 +479,7 @@ public class ChatService {
                 if (messages.isEmpty()) {
                   chatStream.stream(
                       turn.modelId(),
-                      promptOf(question, refs, systemPromptOrNull()),
+                      promptOf(question, refs, systemPromptOrNull(turn)),
                       Duration.ofMillis(properties.idleTimeoutMs()),
                       run);
                 } else {
@@ -1012,7 +1012,13 @@ public class ChatService {
    *
    * @return 提示词；{@code null} = 不加
    */
-  private String systemPromptOrNull() {
+  private String systemPromptOrNull(ChatTurnWriter.PreparedTurn turn) {
+    // ★★ 应用会话只读应用自己的 rolePrompt，**不回落**到平台通用提示词（#183）。
+    //   空角色 = 不加前缀，而不是"借用通用问答的口径"——两者混用会让应用的回答被平台口径污染。
+    if (turn.appId() != null) {
+      String role = turn.rolePrompt();
+      return role == null || role.isBlank() ? null : role.strip();
+    }
     if (policyResolver == null) {
       return null;
     }

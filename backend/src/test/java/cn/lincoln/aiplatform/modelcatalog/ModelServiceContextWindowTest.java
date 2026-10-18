@@ -61,6 +61,7 @@ class ModelServiceContextWindowTest {
         mock(ApiKeyCipher.class),
         mock(CapabilityProber.class),
         gateway,
+        mock(cn.lincoln.aiplatform.modelcatalog.infrastructure.LocalOnnxEmbedding.class),
         mock(PlatformTransactionManager.class));
   }
 
@@ -119,6 +120,38 @@ class ModelServiceContextWindowTest {
     assertThatCode(() -> service.create(chatCommand(), OPERATOR))
         .as("★ best-effort：查窗口失败不该阻断注册（放宽到 RuntimeException 之后才成立）")
         .doesNotThrowAnyException();
+  }
+
+  @Test
+  void localOnnxStatusSeparatesLazyFromReady() {
+    cn.lincoln.aiplatform.modelcatalog.infrastructure.LocalOnnxEmbedding local =
+        mock(cn.lincoln.aiplatform.modelcatalog.infrastructure.LocalOnnxEmbedding.class);
+    when(local.enabled()).thenReturn(true);
+    when(local.modelFilesPresent()).thenReturn(true);
+    when(local.servedModelName()).thenReturn("multilingual-e5-small");
+    when(local.modelPath()).thenReturn("models/multilingual-e5-small/model_quantized.onnx");
+    when(local.tokenizerPath()).thenReturn("models/multilingual-e5-small/tokenizer.json");
+    when(local.ready()).thenReturn(false);
+    when(local.loadFailure()).thenReturn(null);
+
+    ModelService service =
+        new ModelService(
+            mock(ModelRepository.class),
+            mock(ApiKeyCipher.class),
+            mock(CapabilityProber.class),
+            mock(UpstreamGateway.class),
+            local,
+            mock(PlatformTransactionManager.class));
+
+    ModelService.LocalOnnxStatus lazy = service.localOnnxStatus();
+    assertThat(lazy.ready()).isFalse();
+    assertThat(lazy.filesPresent()).isTrue();
+    assertThat(lazy.reason()).as("★ 文件在、还没用过 ⇒ 必须是「懒加载未触发」，不是「未加载」").isEqualTo("尚未使用过（懒加载未触发）");
+
+    when(local.ready()).thenReturn(true);
+    ModelService.LocalOnnxStatus ready = service.localOnnxStatus();
+    assertThat(ready.ready()).isTrue();
+    assertThat(ready.reason()).as("ready 时不能再给一个原因").isNull();
   }
 
   @Test

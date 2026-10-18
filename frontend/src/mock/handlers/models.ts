@@ -21,6 +21,19 @@ const allBaseModels = (): BaseModelOption[] => [...baseModels, ...externalBaseMo
 
 const findBaseModel = (name: string) => allBaseModels().find((b) => b.baseModel === name)
 
+/** 本地 ONNX（进程内）状态；warmup 后置 ready，供管理页联调 #191 */
+let localOnnxReady = false
+const localOnnxStatus = () => ({
+  enabled: true,
+  mode: 'local-onnx',
+  model: 'multilingual-e5-small',
+  modelPath: 'models/multilingual-e5-small/model_quantized.onnx',
+  tokenizerPath: 'models/multilingual-e5-small/tokenizer.json',
+  filesPresent: true,
+  ready: localOnnxReady,
+  reason: localOnnxReady ? null : '尚未使用过（懒加载未触发）'
+})
+
 export const modelRoutes: MockRoute[] = [
   [
     'GET',
@@ -36,6 +49,17 @@ export const modelRoutes: MockRoute[] = [
         .filter((m) => !status || m.status === status)
 
       return paginate(list, query)
+    }
+  ],
+
+  ['GET', '/models/local-onnx', () => localOnnxStatus()],
+
+  [
+    'POST',
+    '/models/local-onnx/warmup',
+    () => {
+      localOnnxReady = true
+      return localOnnxStatus()
     }
   ],
 

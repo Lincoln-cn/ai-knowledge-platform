@@ -88,6 +88,25 @@ public class ModelController {
         : ApiResponse.okWithHint(catalog.options(), catalog.hint());
   }
 
+  /**
+   * 本地 ONNX（进程内向量化）的真实状态。
+   *
+   * <p>★ `ai_model.status` 是上游加载生命周期，不能冒充它（`#191`）。模型管理页据此显示「就绪 / 尚未预热 / 文件缺失 /
+   * 加载失败」，而不是把进程内模型标成「未加载」。
+   */
+  @GetMapping("/local-onnx")
+  @PreAuthorize("hasAuthority('model:manage')")
+  public ApiResponse<ModelService.LocalOnnxStatus> localOnnxStatus() {
+    return ApiResponse.ok(modelService.localOnnxStatus());
+  }
+
+  /** 预热本地 ONNX（初始化 ONNX session）。★ 对进程内模型来说，这才是「加载」的正确含义。 */
+  @PostMapping("/local-onnx/warmup")
+  @PreAuthorize("hasAuthority('model:manage')")
+  public ApiResponse<ModelService.LocalOnnxStatus> warmUpLocalOnnx() {
+    return ApiResponse.ok(modelService.warmUpLocalOnnx());
+  }
+
   // ────────────────────────── 注册 CRUD ──────────────────────────
 
   @PostMapping

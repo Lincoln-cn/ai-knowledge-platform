@@ -41,23 +41,64 @@
       </span>
     </div>
 
+    <!--
+      本地 ONNX（进程内）状态条（#191）。
+      ★ 它显示的是 LocalOnnxEmbedding 的 ready/filesPresent，不是 ai_model.status；
+        ONNX 模型卡片的「未加载」不能代表它不能用。
+    -->
+    <div v-if="localOnnx" class="local-onnx panel">
+      <div class="lo-main">
+        <div class="lo-head">
+          <el-tag size="small" effect="plain" type="info">进程内 ONNX</el-tag>
+          <span class="status" :class="localOnnxStateClass">
+            <i class="dot" :class="localOnnx.ready ? 'ok' : localOnnx.filesPresent ? 'warn' : 'err'" />
+            {{ localOnnxStateLabel }}
+          </span>
+        </div>
+        <div class="lo-meta micro muted">
+          模型 <code>{{ localOnnx.model }}</code>
+          · 文件 {{ localOnnx.filesPresent ? '已就位' : '缺失' }}
+          · {{ localOnnx.ready ? '已预热' : localOnnx.reason || '未预热' }}
+        </div>
+        <div class="lo-path micro faint ellipsis" :title="localOnnx.modelPath">
+          {{ localOnnx.modelPath }}
+        </div>
+      </div>
+      <div class="lo-actions">
+        <el-button
+          v-if="localOnnx.enabled && !localOnnx.ready"
+          size="small"
+          type="primary"
+          :loading="warmingUp"
+          @click="warmUp"
+        >预热本地模型</el-button>
+        <span v-else-if="localOnnx.ready" class="micro muted">已就绪</span>
+        <span v-else class="micro muted">未启用（走上游）</span>
+      </div>
+    </div>
+
     <div v-loading="loading" class="grid">
       <el-card v-for="m in list" :key="m.id" shadow="never" class="model-card" :class="{ failed: m.status === 'LOAD_FAILED' }">
         <div class="mc-head">
           <span class="mc-name ellipsis">{{ m.name }}</span>
           <el-tag v-if="m.builtin" size="small" effect="plain" type="info">内置</el-tag>
           <span class="grow" />
-          <span class="status" :class="STATUS_CLASS[m.status]">
+          <span class="status" :class="statusClassOf(m)">
             <el-icon v-if="m.status === 'LOADING'" class="is-loading"><Loading /></el-icon>
-            <i v-else class="dot" :class="STATUS_DOT[m.status]" />
-            {{ labelOf(MODEL_STATUS_LABELS, m.status) }}
+            <i v-else class="dot" :class="statusDotOf(m)" />
+            {{ statusLabelOf(m) }}
           </span>
         </div>
 
         <dl class="mc-facts">
           <div class="fact">
             <dt class="label">类型</dt>
-            <dd>{{ KIND_LABEL[m.kind] }} · {{ labelOf(SUPPLIER_LABELS, m.supplier) }}</dd>
+            <dd>
+              {{ KIND_LABEL[m.kind] }} · {{ labelOf(SUPPLIER_LABELS, m.supplier) }}
+              <el-tag v-if="isLocalOnnx(m)" size="small" effect="plain" type="info" class="onnx-tag">
+                进程内 ONNX
+              </el-tag>
+            </dd>
           </div>
           <div class="fact">
             <dt class="label">基础模型</dt>
@@ -104,7 +145,7 @@
             v-if="m.status !== 'LOADING'"
             link size="small" type="primary"
             @click="reload(m)"
-          >{{ m.status === 'LOADED' ? '重新加载' : '加载' }}</el-button>
+          >{{ loadLabelOf(m) }}</el-button>
           <el-button v-else link size="small" disabled>加载中…</el-button>
 
           <el-button link size="small" type="primary" @click="openEdit(m)">编辑</el-button>
@@ -156,7 +197,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { modelsApi } from '@/api'
-import type { ModelInfo, ModelKind, ModelStatus } from '@/api/models'
+import type { LocalOnnxStatus, ModelInfo, ModelKind, ModelStatus } from '@/api/models'
 import { ApiError } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import ModelFormDialog from './components/ModelFormDialog.vue'
@@ -205,6 +246,15 @@ const total = ref(0)
 const loading = ref(false)
 const error = ref<string | null>(null)
 const pageSize = 12
+
+/**
+ * 本地 ONNX（进程内）状态。
+ *
+ * ★ 它与 `m.status` 是两套状态：ONNX 由进程内懒加载，不走上游 load 生命周期。
+ * 这里读后端 `/models/local-onnx`，不能拿 `NOT_LOADED` 冒充（#191）。
+ */
+const localOnnx = ref<LocalOnnxStatus | null>(null)
+const warmingUp = ref(false)
 
 /** 筛选/分页入 URL —— 刷新与直链不丢状态（一.2） */
 const query = reactive({
@@ -256,6 +306,73 @@ const fetchList = async () => {
 }
 
 /**
+ * 本地 ONNX 状态：后端 `/models/local-onnx`。
+ * ★ 失败时置 null（旧后端 / 未启用），页面退回普通模型列表，不制造额外错误态。
+ */
+const fetchLocalOnnx = async () => {
+  try {
+    localOnnx.value = await modelsApi.getLocalOnnxStatus()
+  } catch {
+    localOnnx.value = null
+  }
+}
+
+const isLocalOnnx = (m: ModelInfo) =>
+  Boolean(localOnnx.value?.enabled && m.baseModel === localOnnx.value.model)
+
+const localOnnxStateLabel = computed(() => {
+  const s = localOnnx.value
+  if (!s) return '未知'
+  if (!s.enabled) return '未启用（走上游）'
+  if (s.ready) return '已就绪'
+  if (!s.filesPresent) return '模型文件缺失'
+  if (s.reason && s.reason.includes('失败')) return '预热失败'
+  return '未预热'
+})
+
+const localOnnxStateClass = computed(() => {
+  const s = localOnnx.value
+  if (!s || !s.enabled) return 'st-idle'
+  if (s.ready) return 'st-ok'
+  if (!s.filesPresent || (s.reason && s.reason.includes('失败'))) return 'st-err'
+  return 'st-idle'
+})
+
+const statusLabelOf = (m: ModelInfo) =>
+  isLocalOnnx(m) ? localOnnxStateLabel.value : labelOf(MODEL_STATUS_LABELS, m.status)
+
+const statusClassOf = (m: ModelInfo) =>
+  isLocalOnnx(m) ? localOnnxStateClass.value : STATUS_CLASS[m.status]
+
+const statusDotOf = (m: ModelInfo) => {
+  if (!isLocalOnnx(m)) return STATUS_DOT[m.status]
+  const s = localOnnx.value
+  if (!s || !s.enabled) return ''
+  if (s.ready) return 'ok'
+  if (!s.filesPresent || (s.reason && s.reason.includes('失败'))) return 'err'
+  return 'warn'
+}
+
+/** 本地 ONNX 的「加载」应叫「预热」—— 它不是问上游，而是初始化进程内 session。 */
+const loadLabelOf = (m: ModelInfo) => {
+  if (isLocalOnnx(m)) return localOnnx.value?.ready ? '重新预热' : '预热'
+  return m.status === 'LOADED' ? '重新加载' : '加载'
+}
+
+const warmUp = async () => {
+  warmingUp.value = true
+  try {
+    localOnnx.value = await modelsApi.warmUpLocalOnnx()
+    ElMessage.success('本地 ONNX 已预热')
+    await fetchList()
+  } catch (e) {
+    ElMessage.error(e instanceof ApiError ? e.message : '预热本地 ONNX 失败')
+  } finally {
+    warmingUp.value = false
+  }
+}
+
+/**
  * 跨页刷新：轮询时另外查一次「全部加载中」的 total，保证第 2 页的
  * "加载中"也能被感知 —— 否则 loadingCount 只看当前页，翻页后轮询就停了。
  */
@@ -301,7 +418,7 @@ const schedule = () => {
   const interval = nextInterval()
   pollCount += 1
   timer = setTimeout(async () => {
-    await Promise.all([fetchList(), fetchGlobalLoadingCount()])
+    await Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()])
     schedule()
   }, interval)
 }
@@ -312,12 +429,12 @@ const onVisibility = () => {
     return
   }
   // 回到前台立即补一次，不等下一个周期
-  Promise.all([fetchList(), fetchGlobalLoadingCount()]).then(schedule)
+  Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()]).then(schedule)
 }
 
 onMounted(() => {
   document.addEventListener('visibilitychange', onVisibility)
-  Promise.all([fetchList(), fetchGlobalLoadingCount()]).then(schedule)
+  Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()]).then(schedule)
 })
 
 onBeforeUnmount(() => {
@@ -374,9 +491,14 @@ const onSaved = () => {
 
 const reload = async (model: ModelInfo) => {
   try {
+    const local = isLocalOnnx(model)
     await modelsApi.loadModel(model.id)
-    ElMessage.success(`已提交加载「${model.name}」，加载需要一点时间`)
-    await fetchList()
+    ElMessage.success(
+      local
+        ? `已提交预热「${model.name}」，本地 ONNX 需要一点时间初始化`
+        : `已提交加载「${model.name}」，加载需要一点时间`
+    )
+    await Promise.all([fetchList(), fetchLocalOnnx()])
     schedule()
   } catch (e) {
     ElMessage.error(e instanceof ApiError ? e.message : '提交加载失败')
@@ -416,6 +538,45 @@ const remove = async (model: ModelInfo) => {
 .live {
   color: var(--color-accent);
   font-weight: 500;
+}
+
+/* 本地 ONNX 状态条：它展示的是进程内懒加载状态，不是上游 load 生命周期 */
+.local-onnx {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border-left: 1px solid var(--color-accent-line);
+  background: var(--color-accent-soft);
+}
+
+.lo-main {
+  min-width: 0;
+}
+
+.lo-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.lo-meta {
+  margin-top: var(--space-2xs);
+}
+
+.lo-path {
+  margin-top: var(--space-3xs);
+  max-width: 720px;
+}
+
+.lo-actions {
+  flex-shrink: 0;
+}
+
+.onnx-tag {
+  margin-left: var(--space-2xs);
+  vertical-align: middle;
 }
 
 .grid {

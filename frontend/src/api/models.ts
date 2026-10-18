@@ -45,6 +45,25 @@ export interface BaseModelOption {
   dimension: number | null
 }
 
+/**
+ * 本地 ONNX（进程内向量化）状态。
+ *
+ * ★ 与 `ModelInfo.status` 是两套状态：后者是上游加载生命周期，前者是进程内懒加载。
+ * 模型管理页必须显示这一份，不能用 `NOT_LOADED` 冒充（#191）。
+ */
+export interface LocalOnnxStatus {
+  enabled: boolean
+  mode: 'local-onnx' | 'upstream' | string
+  /** 本地实现服务的 baseModel 名（路由按它分派） */
+  model: string
+  modelPath: string
+  tokenizerPath: string
+  filesPresent: boolean
+  ready: boolean
+  /** ready 时为 null；否则是「未启用 / 文件缺失 / 失败原因 / 尚未预热」 */
+  reason: string | null
+}
+
 /** 能力来源（2.4 补录）：探测 / 手工声明 */
 export type ModelCapabilitySource = 'PROBED' | 'MANUAL'
 
@@ -101,6 +120,14 @@ export interface UpsertModelBody {
 
 export const listModels = (query: ModelQuery = {}) =>
   request<PageResult<ModelInfo>>({ method: 'GET', url: '/models', query })
+
+/** 本地 ONNX（进程内）的真实状态 —— 模型管理页的 ONNX 卡片/状态条读它 */
+export const getLocalOnnxStatus = () =>
+  request<LocalOnnxStatus>({ method: 'GET', url: '/models/local-onnx' })
+
+/** 预热本地 ONNX（初始化 ONNX session，不是问上游） */
+export const warmUpLocalOnnx = () =>
+  request<LocalOnnxStatus>({ method: 'POST', url: '/models/local-onnx/warmup' })
 
 /**
  * 基础模型目录。★ 契约由 GET 改成 POST（密钥不能进查询串）；返回形状不变（BaseModelOption[]）。

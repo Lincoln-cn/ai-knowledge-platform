@@ -106,7 +106,11 @@ public class ChatTurnWriter implements ChatTurnStore {
       UUID modelId,
       List<UUID> kbIds,
       // ★ `#168`：应用上的「多轮对话」开关。它此前是个**死开关**（`ChatService` 从不读）。
-      boolean multiTurn) {}
+      boolean multiTurn,
+      // ★ 应用归属（null = 通用问答）与角色设定：提示词来源必须由这一轮的应用决定，
+      //   不能在 ChatService 里再猜一次（#183）。
+      UUID appId,
+      String rolePrompt) {}
 
   /**
    * 建这一轮的两条消息（用户消息 + {@code GENERATING} 助手消息）并把模型定下来。
@@ -127,8 +131,12 @@ public class ChatTurnWriter implements ChatTurnStore {
   @Override
   @Transactional
   public PreparedTurn prepare(UUID conversationId, UUID appId, String question, UUID userId) {
-    AppBindingPort.AppBinding app = appId == null ? null : requireVisibleApp(appId);
-    Conversation conversation = resolveOrCreate(conversationId, app, question, userId);
+    // ★ 请求体里的 appId 只在**新建会话**时生效；已有会话的应用以 conversation.assistantId 为准。
+    //   否则「会话 A + appId B」会用 B 的模型/知识库写进 A 的会话（#190）。
+    AppBindingPort.AppBinding requestedApp = appId == null ? null : requireVisibleApp(appId);
+    Conversation conversation = resolveOrCreate(conversationId, requestedApp, question, userId);
+    AppBindingPort.AppBinding app =
+        conversation.assistantId() == null ? null : requireVisibleApp(conversation.assistantId());
 
     // ★ 用户消息先落库：它是"这轮问了什么"的唯一痕迹（助手消息失败/停止都不影响它）
     Message userMessage = Message.user(UUID.randomUUID(), conversation.id(), question);
@@ -169,7 +177,9 @@ public class ChatTurnWriter implements ChatTurnStore {
         //   ★ "多轮"本质上是**会话**的属性（同一个 conversationId 内前后相关），
         //     不是应用的属性；把默认值翻成 true 是对这个错位的最小修正：
         //     应用那边仍尊重它自己的 `multi_turn` 开关，通用问答则总是带上历史。
-        app == null || app.multiTurn());
+        app == null || app.multiTurn(),
+        app == null ? null : app.appId(),
+        app == null ? null : app.rolePrompt());
   }
 
   /**
@@ -394,7 +404,9 @@ public class ChatTurnWriter implements ChatTurnStore {
         //   ★ "多轮"本质上是**会话**的属性（同一个 conversationId 内前后相关），
         //     不是应用的属性；把默认值翻成 true 是对这个错位的最小修正：
         //     应用那边仍尊重它自己的 `multi_turn` 开关，通用问答则总是带上历史。
-        app == null || app.multiTurn());
+        app == null || app.multiTurn(),
+        app == null ? null : app.appId(),
+        app == null ? null : app.rolePrompt());
   }
 
   /**

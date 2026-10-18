@@ -9,6 +9,7 @@ import cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode;
 import cn.lincoln.aiplatform.modelcatalog.domain.ToolsMode;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.ApiKeyCipher;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.CapabilityProber;
+import cn.lincoln.aiplatform.modelcatalog.infrastructure.LocalOnnxEmbedding;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.UpstreamGateway;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -68,6 +69,7 @@ public class ModelService {
   private final ApiKeyCipher apiKeyCipher;
   private final CapabilityProber prober;
   private final UpstreamGateway gateway;
+  private final LocalOnnxEmbedding localOnnx;
   private final TransactionTemplate transactionTemplate;
 
   public ModelService(
@@ -75,11 +77,13 @@ public class ModelService {
       ApiKeyCipher apiKeyCipher,
       CapabilityProber prober,
       UpstreamGateway gateway,
+      LocalOnnxEmbedding localOnnx,
       PlatformTransactionManager transactionManager) {
     this.models = models;
     this.apiKeyCipher = apiKeyCipher;
     this.prober = prober;
     this.gateway = gateway;
+    this.localOnnx = localOnnx;
     this.transactionTemplate = new TransactionTemplate(transactionManager);
   }
 
@@ -115,6 +119,68 @@ public class ModelService {
   public ModelView get(UUID id) {
     return ModelView.from(require(id));
   }
+
+  /**
+   * 本地 ONNX（进程内向量化）的真实状态。
+   *
+   * <p>★ 它与 {@code ai_model.status} 是**两套状态**：前者是上游加载生命周期，后者是进程内懒加载。模型管理页不能拿前者冒充后者（`#191`）。
+   */
+  public LocalOnnxStatus localOnnxStatus() {
+    boolean enabled = localOnnx.enabled();
+    boolean filesPresent = localOnnx.modelFilesPresent();
+    boolean ready = localOnnx.ready();
+    String failure = localOnnx.loadFailure();
+    String reason;
+    if (!enabled) {
+      reason = "本地 ONNX 未启用（走上游向量化）";
+    } else if (ready) {
+      reason = null;
+    } else if (failure != null) {
+      reason = failure;
+    } else if (!filesPresent) {
+      reason = "模型文件缺失";
+    } else {
+      reason = "尚未使用过（懒加载未触发）";
+    }
+    return new LocalOnnxStatus(
+        enabled,
+        enabled ? "local-onnx" : "upstream",
+        localOnnx.servedModelName(),
+        localOnnx.modelPath(),
+        localOnnx.tokenizerPath(),
+        filesPresent,
+        ready,
+        reason);
+  }
+
+  /**
+   * 预热本地 ONNX。★ 这是「加载」对进程内模型的正确语义：不是问上游，而是初始化本地 session。
+   *
+   * @throws BusinessException 未启用 / 文件缺失 / 初始化失败（都带可读原因）
+   */
+  public LocalOnnxStatus warmUpLocalOnnx() {
+    localOnnx.warmUp();
+    return localOnnxStatus();
+  }
+
+  /**
+   * 本地 ONNX 状态（`#191`）。
+   *
+   * @param mode 启用时为 {@code local-onnx}，否则 {@code upstream}
+   * @param model 本地实现服务的 baseModel 名（路由按它分派）
+   * @param filesPresent 模型文件与 tokenizer 是否都在
+   * @param ready 是否已初始化（懒加载或预热后为 true）
+   * @param reason ready 时为 null；否则是「未启用 / 文件缺失 / 失败原因 / 尚未预热」
+   */
+  public record LocalOnnxStatus(
+      boolean enabled,
+      String mode,
+      String model,
+      String modelPath,
+      String tokenizerPath,
+      boolean filesPresent,
+      boolean ready,
+      String reason) {}
 
   /**
    * 基础模型目录 —— 从上游 {@code GET /v1/models} 拉取并映射 kind。
@@ -349,6 +415,20 @@ public class ModelService {
         status -> {
           Model model =
               models.findById(id).orElseThrow(() -> new IllegalStateException("加载期间模型被删除：" + id));
+          // ★★ 进程内 ONNX：`加载` 的语义是初始化本地 session，不是问上游（#191）。
+          //   不先判这条，会把一个可用的本地模型标成「上游清单里没有它」—— 那是假故障。
+          if (localOnnx.serves(model.baseModel())) {
+            try {
+              localOnnx.warmUp();
+              model.markLoaded();
+              log.info("本地 ONNX 模型 {} 预热成功（{}）", model.name(), localOnnx.modelPath());
+            } catch (RuntimeException failure) {
+              model.markFailed(readableFailure(failure));
+              log.warn("本地 ONNX 模型 {} 预热失败：{}", model.name(), failure.getMessage());
+            }
+            models.save(model);
+            return;
+          }
           try {
             boolean available =
                 gateway.isModelAvailable(model.baseModel(), model.apiBase(), decryptKey(model));
@@ -418,6 +498,12 @@ public class ModelService {
       return null;
     }
     return apiKeyCipher.decrypt(model.apiKeyCipher(), model.apiKeyIv());
+  }
+
+  /** 把初始化异常转成能写进 `loadError` 的可读原因（状态机拒绝空值）。 */
+  private static String readableFailure(RuntimeException failure) {
+    String message = failure.getMessage();
+    return message == null || message.isBlank() ? failure.getClass().getSimpleName() : message;
   }
 
   /**

@@ -3,6 +3,8 @@ package cn.lincoln.aiplatform.conversation.application;
 import cn.lincoln.aiplatform.conversation.domain.Conversation;
 import cn.lincoln.aiplatform.conversation.domain.ConversationRepository;
 import cn.lincoln.aiplatform.platform.assistant.AppBindingPort;
+import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -77,6 +79,11 @@ public class ConversationListService {
    */
   @Transactional
   public ConversationListItem create(UUID userId, UUID appId) {
+    // ★ 应用必须存在且可见：只写一个 assistant_id 而不校验，会建出一条「幽灵会话」——
+    //   列表里带着一个看不见 / 不存在的应用，下一轮聊天才 404（#190 同族）。
+    if (appId != null && appBindings.findVisibleById(appId).isEmpty()) {
+      throw new BusinessException(ErrorCode.NOT_FOUND, "应用不存在", "它可能已被删除，或者不在你的可见范围内");
+    }
     // ★★ 幂等：已经有「同应用 + 一条消息都没有」的会话 ⇒ 直接复用它，不再新建。
     //
     //   为什么必须这样（实测症状）：用户每点一次「新建会话」就真建一行空会话，

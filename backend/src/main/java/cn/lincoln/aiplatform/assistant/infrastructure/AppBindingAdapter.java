@@ -49,6 +49,6 @@ public class AppBindingAdapter implements AppBindingPort {
   }
 
   private static AppBinding binding(Assistant app) {
-    return new AppBinding(app.id(), app.modelId(), app.kbIds(), app.multiTurn());
+    return new AppBinding(app.id(), app.modelId(), app.kbIds(), app.multiTurn(), app.rolePrompt());
   }
 }
