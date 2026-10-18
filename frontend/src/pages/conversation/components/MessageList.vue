@@ -159,9 +159,13 @@
             </span>
           </div>
 
-          <!-- 推荐问题 -->
+          <!-- 推荐问题（「猜你想问」） -->
           <div v-if="msg.role !== 'USER' && msg.suggestions?.length && isLast(msg)" class="suggestions">
-            <div class="label">猜你想问</div>
+            <div class="sug-head">
+              <span class="sug-label">猜你想问</span>
+              <span class="sug-rule" aria-hidden="true" />
+              <span class="sug-hint">点一下直接提问</span>
+            </div>
             <div class="chips">
               <button
                 v-for="s in msg.suggestions"
@@ -170,7 +174,8 @@
                 class="chip"
                 @click="emit('suggest', s)"
               >
-                {{ s }}
+                <span class="chip-text">{{ s }}</span>
+                <span class="chip-go" aria-hidden="true">→</span>
               </button>
             </div>
           </div>
@@ -587,37 +592,121 @@ defineExpose({ scrollToBottom, scrollToMessage })
   font-size: var(--text-2xs);
 }
 
-/* 推荐问题 */
+/*
+ * 推荐问题（「猜你想问」）
+ *
+ * ★ 设计取舍（Cobalt 是「圆角紧、像用尺子画的」，`--radius-pill` 明确只给头像与圆点）：
+ *   chips 不做成胶囊，用 `--radius`（6px）保持与按钮同一档；
+ *   视觉分量靠**发丝线标题行 + hover 反馈**给，不靠形状夸张。
+ *
+ * ★ 字号从 `--text-2xs` 提到 `--text-sm`(14px)：原先 12px 偏小，
+ *   而这一排是"要不要点"的决策点，读不清就等于没有。
+ */
 .suggestions {
   max-width: 860px;
   display: flex;
   flex-direction: column;
   gap: var(--space-2xs);
+  /* 与上面的操作栏拉开，形成"这是另一块东西"的分界 */
+  margin-top: var(--space-2xs);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--color-rule);
+}
+
+/* 标题行：标签 + 一条延伸到右侧的发丝线 + 一句操作提示 */
+.sug-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.sug-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink-2);
+  white-space: nowrap;
+}
+
+.sug-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--color-rule);
+}
+
+.sug-hint {
+  font-size: var(--text-2xs);
+  color: var(--color-muted);
+  white-space: nowrap;
 }
 
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-xs);
+  gap: var(--space-2xs);
 }
 
 .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  max-width: 100%;
   border: 1px solid var(--color-rule);
   background: var(--color-surface);
   color: var(--color-ink-2);
-  font-size: var(--text-2xs);
+  font-size: var(--text-sm);
   font-family: inherit;
   line-height: var(--leading-tight);
   padding: var(--space-2xs) var(--space-sm);
   border-radius: var(--radius);
   cursor: pointer;
+  text-align: left;
   transition:
     border-color var(--dur-micro) var(--ease-out),
-    color var(--dur-micro) var(--ease-out);
+    background var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out),
+    transform var(--dur-micro) var(--ease-out),
+    box-shadow var(--dur-micro) var(--ease-out);
+}
+
+/* 长问题折行时不把箭头挤走 */
+.chip-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * 箭头：默认是"这里可以走"的弱提示，hover 时才变强调并右移一点点。
+ * ★ 不用位移动画做"入场"，只用它做"可点"的反馈 —— `design.md` 禁的是滚动入场，不是 hover 反馈。
+ */
+.chip-go {
+  flex: none;
+  color: var(--color-muted);
+  transition:
+    color var(--dur-micro) var(--ease-out),
+    transform var(--dur-micro) var(--ease-out);
 }
 
 .chip:hover {
   border-color: var(--color-accent-line);
+  background: var(--color-accent-soft);
+  color: var(--color-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-whisper);
+}
+
+.chip:hover .chip-go {
   color: var(--color-accent);
+  transform: translateX(2px);
+}
+
+.chip:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+/* 键盘可达：焦点环要用强调色，别让 Tab 到这儿看不出来在哪 */
+.chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 </style>
