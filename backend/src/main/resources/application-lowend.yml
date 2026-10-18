@@ -1,0 +1,44 @@
+# 低配预设（`--spring.profiles.active=lowend`）—— 面向「CPU 推理 + 小模型」这一档。
+#
+# 适用画像（实测依据，2026-10-18）：
+#   · 模型：qwen2.5:1.5b（Q4_K_M，986MB，Ollama 容器，纯 CPU）
+#   · 单次对话调用 4.8s；查询理解要一问一答两次 ⇒ 7.9s
+#   · 默认 5000ms 总预算 ⇒ **第 0 路就耗尽**（日志：`检索预算 5000ms 已耗尽（已跑 0 路）`）
+#
+# ★★ 这一档的核心取舍：**慢而完整，还是快而没有改写**。
+#    下面的组合选的是"先把链路跑通、再把改写打开"，理由见每一项的注释。
+# ★ 这不是"降低质量"的 profile，而是"按硬件重新分配时间预算"的 profile。
+app:
+  retrieval:
+    # ① 单次改写给足时间：CPU 上一次 4–5s，给 12s 留出一次解析重试的余量
+    query-understanding-budget-ms: ${RETRIEVAL_QU_BUDGET_MS:12000}
+
+    # ② 总预算 20s：够"一次改写（≤12s）+ 一到两路检索（各 ≤1s）"
+    #    ★ 为什么不是 60s：B4 是「首字延迟 ≤10s」的硬指标，预算越大越容易超；
+    #      20s 是"能跑通"与"不太丑"之间的取舍，可按机器再调。
+    total-budget-ms: ${RETRIEVAL_TOTAL_BUDGET_MS:20000}
+
+    # ③ 多跳水位降到 0.5：低配上一轮多跳（再判定 + 再检索）几乎必然超预算，早点收手
+    hop-budget-ratio: ${RETRIEVAL_HOP_BUDGET_RATIO:0.5}
+
+    # ④ ★ 查询理解默认**关**。理由（实测，不是猜）：
+    #      qwen2.5:1.5b 的输出**格式不达标**（"既不是 json、也不是多行查询列表"），
+    #      即使把预算放宽到 12s，两次调用后仍然解析失败 ⇒ 花了 8–10s，换来的是
+    #      "和单路一样的结果"。这一档先用单路把链路跑顺，需要改写时再单独打开：
+    #        RETRIEVAL_QU_ENABLED=true
+    #    ★ 关掉时 degradeLevel 保持 0（主动单路），trace 里不会出现"降级"字样。
+    query-understanding-enabled: ${RETRIEVAL_QU_ENABLED:false}
+
+    # ⑤ 与 ④ 配套：关了理解就不存在"解析重试"。
+    #    ★ 两者不一致会被 RetrievalBudgetProperties 的构造校验**直接拒绝启动**
+    #      （"配置看起来生效、实际不会发生"是本仓最忌讳的静默失效）。
+    query-understanding-retry-on-parse-failure: ${RETRIEVAL_QU_RETRY:false}
+
+  # ⑥ 向量化：CPU 上 ONNX 推理比 GPU 慢，批次小一点能更早回写进度（进度来自库，不丢）
+  embedding:
+    local:
+      enabled: ${LOCAL_ONNX_ENABLED:true}
+
+# ⑦ Ollama 侧的配套建议（不在本文件里生效，需要改 compose 或容器环境变量）：
+#    · OLLAMA_KEEP_ALIVE=24h  —— 避免每次首字节都要重新加载模型（加载本身 3–5s）
+#    · OLLAMA_NUM_PARALLEL=1  —— 低配机器上并发只会互相拖慢

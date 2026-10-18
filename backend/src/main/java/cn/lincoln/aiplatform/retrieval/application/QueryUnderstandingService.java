@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.retrieval.application;
 
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
 import cn.lincoln.aiplatform.retrieval.domain.QueryUnderstanding;
 import cn.lincoln.aiplatform.retrieval.domain.QueryUnderstandingParser;
 import java.time.Duration;
@@ -40,8 +41,17 @@ public class QueryUnderstandingService {
 
   private final ChatPort chat;
 
-  public QueryUnderstandingService(ChatPort chat) {
+  /**
+   * 预算与低配开关（`app.retrieval.*`）。
+   *
+   * <p>★ 这里原来是一个写死的 {@code DEFAULT_BUDGET_MS = 5000}：在 GPU 上够用， 而在 <b>CPU + 小模型</b> 上一次改写就要 4–5s ⇒
+   * 预算在第 0 路就耗尽。
+   */
+  private final RetrievalBudgetProperties budget;
+
+  public QueryUnderstandingService(ChatPort chat, RetrievalBudgetProperties budget) {
     this.chat = chat;
+    this.budget = budget;
   }
 
   /**
@@ -100,7 +110,8 @@ public class QueryUnderstandingService {
     }
 
     String prompt = prompt(question, queryCount, maxSubQuestions);
-    long timeoutMs = budgetMs > 0 ? budgetMs : DEFAULT_BUDGET_MS;
+    // ★ 调用方传了预算就用它；没传才用配置（原来是写死的 DEFAULT_BUDGET_MS）
+    long timeoutMs = budgetMs > 0 ? budgetMs : budget.queryUnderstandingBudgetMs();
 
     String raw;
     try {
@@ -114,6 +125,12 @@ public class QueryUnderstandingService {
     QueryUnderstandingParser.Parsed parsed =
         QueryUnderstandingParser.parse(
             raw, question, queryCount, maxSubQuestions, decomposeEnabled);
+    // ★★ 重试开关（低配建议关掉）：CPU 上第二次调用再花 4–5s，只救「模型多说了句话」这一类问题。
+    //    关掉时**如实**置 parseFailed 并说明「已按配置关闭重试」，不假装尝试过。
+    if (!parsed.usable() && !budget.queryUnderstandingRetryOnParseFailure()) {
+      log.warn("查询理解解析失败，且已按配置关闭重试：{}", parsed.failure());
+      return fallback(question, startedAt, "解析模型输出失败（已按配置关闭重试）：" + parsed.failure(), true);
+    }
     if (!parsed.usable()) {
       // ★ 只对解析失败重试一次（理由见类注释）
       log.warn("查询理解解析失败，重试一次：{}", parsed.failure());

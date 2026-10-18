@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.retrieval.application;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
@@ -99,7 +100,8 @@ public class RetrievalService {
    * <p>★ 设计册说这是"唯一能兜住所有层的上限"：调用次数可以预估，单次调用多久预估不了。
    * 所以每一层在开始前检查余量，耗尽就<strong>用已经拿到的结果继续</strong>（不是失败）。
    */
-  private static final long RETRIEVAL_BUDGET_MS = 5_000;
+  // ★ 原 `RETRIEVAL_BUDGET_MS = 5000` 常量已改为配置 `app.retrieval.total-budget-ms`
+  //   （低配 CPU 上一次查询理解就要 4–5s，5s 总预算在第 0 路就耗尽）。见 RetrievalBudgetProperties。
 
   /**
    * 多跳的触发下限（{@code 10 §3.4.2}：命中数 &lt; 3 就认为"首轮不够"）。
@@ -114,22 +116,34 @@ public class RetrievalService {
    * <p>★ 为什么是"用掉 60% 就不再开新一轮"而不是"等花光"：多跳一轮要**再一次模型调用 + 再一次检索**， 等花光再停等于必然超预算 —— 那时首字延迟已经被吃掉，而 B4
    * 是硬指标。
    */
-  private static final double HOP_BUDGET_RATIO = 0.6;
+  // ★ 原 `HOP_BUDGET_RATIO = 0.6` 已改为配置 `app.retrieval.hop-budget-ratio`。
 
   private final SegmentSearchPort segmentSearch;
+
   private final EmbeddingPort embeddingPort;
   private final QueryUnderstandingService queryUnderstanding;
+
+  /**
+   * 预算与低配开关（`app.retrieval.*`）。
+   *
+   * <p>★ 这三个数原来是写死的常量（总预算 5000ms / 多跳水位 0.6）：在 CPU + 小模型上 一次查询理解就要 4–5s ⇒ 总预算在**第 0
+   * 路**就耗尽（实测日志：`检索预算 5000ms 已耗尽（已跑 0 路）`）。
+   */
+  private final RetrievalBudgetProperties budget;
+
   private final MultiHopService multiHop;
 
   public RetrievalService(
       SegmentSearchPort segmentSearch,
       EmbeddingPort embeddingPort,
       QueryUnderstandingService queryUnderstanding,
-      MultiHopService multiHop) {
+      MultiHopService multiHop,
+      RetrievalBudgetProperties budget) {
     this.segmentSearch = segmentSearch;
     this.embeddingPort = embeddingPort;
     this.queryUnderstanding = queryUnderstanding;
     this.multiHop = multiHop;
+    this.budget = budget;
   }
 
   @Transactional(readOnly = true)
@@ -154,14 +168,33 @@ public class RetrievalService {
               1, 1, 0, 0, "没有可检索的知识库", false, 0, false, 1, HopStop.NOT_TRIGGERED.describe(), 0));
     }
 
-    // ② 查询理解：★ 它自带兜底（不可用 ⇒ 原始问题单路），所以这里不需要 try/catch
-    QueryUnderstandingService.Outcome understood =
-        queryUnderstanding.understand(
-            request.question(),
-            request.queryCountOrDefault(),
-            request.decomposeEnabledOrDefault(),
-            request.maxSubQuestionsOrDefault(),
-            RETRIEVAL_BUDGET_MS);
+    // ② 查询理解
+    //
+    // ★★ 关闭时**不发调用、直接单路**，且 degradeLevel 保持 0：
+    //    「按配置关掉」与「模型不可用而失败」是两件事 —— 若都把 degradeLevel 写成 4，
+    //    看 trace 的人无法区分「我关了它」和「它坏了」。
+    QueryUnderstandingService.Outcome understood;
+    if (!budget.queryUnderstandingEnabled()) {
+      log.info("查询理解已按配置关闭（app.retrieval.query-understanding-enabled=false）⇒ 原始问题单路");
+      understood =
+          new QueryUnderstandingService.Outcome(
+              QueryUnderstanding.single(request.question()),
+              0,
+              null,
+              false,
+              false,
+              java.util.List.of("查询理解已按配置关闭"),
+              0L);
+    } else {
+      // ★ 它自带兜底（不可用 ⇒ 原始问题单路），所以这里不需要 try/catch
+      understood =
+          queryUnderstanding.understand(
+              request.question(),
+              request.queryCountOrDefault(),
+              request.decomposeEnabledOrDefault(),
+              request.maxSubQuestionsOrDefault(),
+              budget.queryUnderstandingBudgetMs());
+    }
 
     int candidateLimit = Math.min(request.topNOrDefault() * OVERFETCH, CANDIDATE_LIMIT_CAP);
     Map<UUID, Double> vectorScores = new HashMap<>();
@@ -181,9 +214,14 @@ public class RetrievalService {
       List<List<UUID>> perQuery = new ArrayList<>();
       for (String query : queries) {
         // ★ 每一路开始前检查余量（10 §6.2 第 6 项）—— 耗尽就用已拿到的结果继续，不是失败
-        if (elapsedMs(startedAt) > RETRIEVAL_BUDGET_MS) {
+        if (elapsedMs(startedAt) > budget.totalBudgetMs()) {
           budgetExhausted = true;
-          log.warn("检索预算 {}ms 已耗尽（已跑 {} 路），按已完成的查询继续", RETRIEVAL_BUDGET_MS, paths);
+          log.warn(
+              "检索预算 {}ms 已耗尽（已跑 {} 路），按已完成的查询继续。"
+                  + "★ 若这是低配环境（CPU / 小模型），把 app.retrieval.total-budget-ms 调大，"
+                  + "或关掉查询理解（app.retrieval.query-understanding-enabled=false）",
+              budget.totalBudgetMs(),
+              paths);
           break;
         }
         pathsAttempted++;
@@ -432,7 +470,7 @@ public class RetrievalService {
     int newSegments = 0;
     while (rounds < request.maxHopsOrDefault()) {
       long used = elapsedMs(startedAt);
-      if (used * 1.0 / RETRIEVAL_BUDGET_MS >= HOP_BUDGET_RATIO) {
+      if (used * 1.0 / budget.totalBudgetMs() >= budget.hopBudgetRatio()) {
         // §6.3 的 D1 触发点之一：预算用掉 60% ⇒ 去掉多跳（不是"等花光再停"）
         return new HopRun(
             true,
@@ -441,12 +479,12 @@ public class RetrievalService {
             lastRanking,
             newSegments,
             "检索阶段已用掉 %.0f%% 的时间预算（≥%.0f%%）⇒ 去掉多跳（D1）"
-                .formatted(used * 100.0 / RETRIEVAL_BUDGET_MS, HOP_BUDGET_RATIO * 100));
+                .formatted(used * 100.0 / budget.totalBudgetMs(), budget.hopBudgetRatio() * 100));
       }
 
       List<SegmentSearchPort.Card> cards = segmentSearch.load(List.copyOf(accumulated));
       MultiHopService.Outcome outcome =
-          multiHop.decide(request.question(), cards, RETRIEVAL_BUDGET_MS - used);
+          multiHop.decide(request.question(), cards, budget.totalBudgetMs() - used);
       if (!outcome.usable()) {
         // §3.4.6：判定失败 ⇒ 停止迭代、用已有结果生成（同时是 §6.3 的 D1 触发点之二）
         return new HopRun(

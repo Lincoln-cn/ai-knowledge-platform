@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -165,7 +166,8 @@ class QueryUnderstandingServiceTest {
   // ────────────────────────── 夹具 ──────────────────────────
 
   private static QueryUnderstandingService service(ChatPort port) {
-    return new QueryUnderstandingService(port);
+    return new QueryUnderstandingService(
+        port, new RetrievalBudgetProperties(5000, 5000, 0.6, true, true));
   }
 
   private static ChatPort ok(String response) {
@@ -188,7 +190,8 @@ class QueryUnderstandingServiceTest {
     }
 
     QueryUnderstandingService service() {
-      return new QueryUnderstandingService(this);
+      return new QueryUnderstandingService(
+          this, new RetrievalBudgetProperties(5000, 5000, 0.6, true, true));
     }
 
     @Override

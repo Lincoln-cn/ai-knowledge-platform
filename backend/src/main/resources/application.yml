@@ -69,6 +69,23 @@ app:
       #    知识库里登记的 `baseModel` 必须与它一致，否则那条模型会去连上游 11434。
       model-name: ${LOCAL_ONNX_MODEL_NAME:multilingual-e5-small}
 
+  # ─── 检索链路的时间预算与低配开关（`10 §6.2` 第 6 项）───
+  #
+  # ★★ 这两项原先是写死的 5s 常量：GPU + 7B 上够用，而 **CPU + 1.5B** 上一次查询理解
+  #    实测 4–5s（重试一次共 7.9s）⇒ 5s 总预算在**第 0 路**就耗尽，日志是
+  #    `检索预算 5000ms 已耗尽（已跑 0 路）`，随后整条链路降级成单路。
+  #    默认值**保持 5000**（不改变已有部署行为）；低配用 `--spring.profiles.active=lowend`。
+  retrieval:
+    # 单次"查询理解"（改写/拆子问题）调用的超时
+    query-understanding-budget-ms: ${RETRIEVAL_QU_BUDGET_MS:5000}
+    # 检索阶段总预算：每一路开始前检查余量，耗尽就用已拿到的结果继续
+    total-budget-ms: ${RETRIEVAL_TOTAL_BUDGET_MS:5000}
+    # 多跳的"该收手了"水位（0.6 = 用掉 60% 就不再开新一轮，10 §6.3）
+    hop-budget-ratio: ${RETRIEVAL_HOP_BUDGET_RATIO:0.6}
+    # ★ 低配可关：关掉则**主动单路**（degradeLevel 保持 0，不是"降级"）
+    query-understanding-enabled: ${RETRIEVAL_QU_ENABLED:true}
+    # ★ 低配可关：解析失败时不再调第二次模型（CPU 上省 4–5s）
+    query-understanding-retry-on-parse-failure: ${RETRIEVAL_QU_RETRY:true}
   security:
     jwt:
       # ★ 必须是 URL 形式，不能是 "ai-knowledge-platform" 这样的裸串 ——

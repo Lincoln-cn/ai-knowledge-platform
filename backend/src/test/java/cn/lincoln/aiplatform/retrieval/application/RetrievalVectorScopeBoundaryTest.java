@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import java.util.List;
 import java.util.UUID;
@@ -118,6 +119,7 @@ class RetrievalVectorScopeBoundaryTest {
    * vectorSearch}，不经过它们的公开入口 —— 于是这三条断言不需要任何模型桩、也不需要库。
    */
   private static RetrievalService service() {
-    return new RetrievalService(null, null, null, null);
+    return new RetrievalService(
+        null, null, null, null, new RetrievalBudgetProperties(5000, 5000, 0.6, true, true));
   }
 }

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
@@ -222,7 +223,12 @@ class MultiHopTest {
 
   private HitTestView run(boolean multiHop, int maxHops) {
     RetrievalService service =
-        new RetrievalService(search, new FakeEmbedding(), new FakeUnderstanding(), hop);
+        new RetrievalService(
+            search,
+            new FakeEmbedding(),
+            new FakeUnderstanding(),
+            hop,
+            new RetrievalBudgetProperties(5000, 5000, 0.6, true, true));
     HitTestQuery request =
         new HitTestQuery(
             RetrievalMode.FULLTEXT.name(),
@@ -330,7 +336,7 @@ class MultiHopTest {
   private static final class FakeUnderstanding extends QueryUnderstandingService {
 
     FakeUnderstanding() {
-      super(new FakeChat());
+      super(new FakeChat(), new RetrievalBudgetProperties(5000, 5000, 0.6, true, true));
     }
 
     @Override
