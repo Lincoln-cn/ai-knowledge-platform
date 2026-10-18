@@ -62,8 +62,17 @@ public class ChatStreamAssembler {
    * <p>2KB 是本机实测的可用量级（Tomcat 默认的响应缓冲是 8KB，但它对"已经 flush 过一次"的响应会立刻提交头部）。 ★ 它的前 6 个字符是 {@code open:
    * }：注释帧的内容对前端没有语义，但一个可读的前缀能让 "抓包看到的第一条注释帧"自己说明来意（而不是一串看起来像乱码的填充）。
    */
+  // ★★ 12KB，不是 2KB（实测：2KB 不够，原因是 Tomcat 的响应缓冲是 8KB）
+  //
+  //   症状（本轮实测）：后端确实按 400ms/块回放（日志「911 字 → 38 块 … 预计回放 14.8s」、
+  //   总时长 17.6s 也对得上），但**delta 全部在同一毫秒到达客户端** —— 因为
+  //   `: open`(2KB) + 正文(3.2KB) = 5.2KB **小于 8KB 缓冲** ⇒ 一直攒着，直到流结束才一起发。
+  //
+  //   ⇒ 首帧必须自己把缓冲写满、逼容器提交响应头。提交之后，chunked 模式下每次 flush
+  //     都会真的发出一个 chunk（那时 400ms/块才看得见）。
+  //   ★ 12KB = 8KB 缓冲 + 余量；它只在每条流开头发一次，占用的带宽可以忽略。
   private static final String OPEN_PADDING =
-      "open: " + "sse-response-header-commit-padding.".repeat(80);
+      "open: " + "sse-response-header-commit-padding.".repeat(480);
 
   private final ChatService chatService;
   private final ChatStreamWriter writer;
