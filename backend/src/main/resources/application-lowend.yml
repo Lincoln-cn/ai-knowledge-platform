@@ -2,7 +2,7 @@ spring:
   mvc:
     async:
       # ★ 必须 > app.chat.idle-timeout-ms(240s)，否则 async 先砍、idle 那套永远轮不到
-      request-timeout: ${SSE_ASYNC_TIMEOUT:300s}
+      request-timeout: ${SSE_ASYNC_TIMEOUT:-1}
 # 低配预设（`--spring.profiles.active=lowend`）—— 面向「CPU 推理 + 小模型」这一档。
 #
 # 适用画像（实测依据，2026-10-18）：

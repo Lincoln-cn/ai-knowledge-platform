@@ -1,16 +1,20 @@
 spring:
-  # ★★ SSE 的硬上限（`#188` 的根因）
+  # ★★ SSE 只保留**一个**权威上限：`app.chat.idle-timeout-ms`
   #
-  # 不配这一项 ⇒ Spring MVC 用默认 **30s**，而项目自己的 SSE 兜底是
-  # `idleTimeoutMs = 60s` + 20s 心跳 ⇒ **30 秒时先抛 AsyncRequestTimeoutException**，
-  # 那套「60s 没字节写出才算吊死」的逻辑**永远轮不到**。
-  # 实测症状（CPU + qwen2.5:1.5b）：问答在 30 秒整断流 —— 前端拿到 503，
-  # 后端日志是 `AsyncRequestTimeoutException at TimeoutCallableProcessingInterceptor`。
-  # ⇒ 这里配 180s：留足 CPU 推理的 prefill + 生成时间；真正的"吊死"由项目自己的
-  #   idleTimeout(60s) + 20s 心跳负责（它们本来就是为此设计的）。
+  # 原来这里有**两个**上限打架（`#181` 的根因）：
+  #   ① Spring MVC 的 async 默认 **30s**（本文件从未配置它）—— 它先砍；
+  #   ② 项目自己的 `ChatStreamProperties.idleTimeoutMs = 60s` + 20s 心跳 —— 永远轮不到。
+  # 实测（CPU + qwen2.5:1.5b）：问答在 **30 秒整**断流，前端拿到 503，
+  # 后端日志 `AsyncRequestTimeoutException at TimeoutCallableProcessingInterceptor`。
+  #
+  # ⇒ 这里设 **-1（不设限）**，让「多久没字节写出才判吊死」只由 idle 决定。
+  #   ★ 为什么不是"把 async 调得比 idle 大"：那仍然要求**两个数永远保持顺序**，
+  #     而 config 是可以分别改的 —— 这种"靠人记住两个数的关系"的约束，迟早会被改坏。
+  #   ★ 代价：async 层不再兜底。真正的兜底在 `ChatService` 的 idle 判定
+  #     （它按时钟判、且会把终态落库，比容器层的中断干净得多）。
   mvc:
     async:
-      request-timeout: ${SSE_ASYNC_TIMEOUT:180s}
+      request-timeout: ${SSE_ASYNC_TIMEOUT:-1}
   # 上传体积上限（`FR-03-05-3`：单文件 100MB）。
   # ★★ 不配的话 Boot 默认 **1MB** —— 实测 16 个语料里 ≥1368KB 的全部返回 500，
   #   而设计书写的是 100MB（差了 100 倍，且 500 会让人误以为"服务端坏了"从而反复重试）。
