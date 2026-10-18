@@ -217,7 +217,23 @@ function sendText(value: string) {
   submit()
 }
 
-defineExpose({ sendText, focus: () => inputEl.value?.focus() })
+/**
+ * 清空草稿（输入框正文 + 已选附件）。
+ *
+ * <p>★★ 为什么必须有它（用户原话：「提示词选中后，切换会话，不会清空对话框」）：
+ * 输入框里的是**这一条会话的草稿** —— 点「提示词」插进去的那段文字、以及待发的附件，
+ * 都属于当前会话。切换到另一条会话时如果还留着，用户会在**另一个会话**里发出
+ * 一条带着上一个会话意图的消息（而且很容易没注意到）。
+ *
+ * <p>★ 这也顺带修掉一个更隐蔽的：切会话后输入框里的旧文本会让"发送"按钮看起来可用，
+ * 用户以为是新会话的内容，实际是上一条会话残留的草稿。
+ */
+function reset() {
+  text.value = ''
+  attachments.value = []
+}
+
+defineExpose({ sendText, reset, focus: () => inputEl.value?.focus() })
 </script>
 
 <style scoped>

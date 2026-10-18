@@ -277,6 +277,10 @@ const openConversation = async (conv: ConversationEx, opts: { aroundMessageId?: 
   applyAppBrief(conv)
   activeMessage.value = null
   activeRefIndex.value = null
+  // ★★ 切换会话必须清空输入框草稿（用户报：「提示词选中后，切换会话，不会清空对话框」）。
+  //   输入框里的是**这一条会话**的草稿（含「提示词」插进去的那段文字与待发附件）——
+  //   带到另一条会话里，用户会在错误的上下文里发出去，而且很可能没注意到。
+  composerRef.value?.reset()
   await chat.loadHistory(conv.id, opts.aroundMessageId ? { around: opts.aroundMessageId } : {})
   // 深链定位：消息加载完再滚/高亮，否则目标节点还不存在
   if (opts.aroundMessageId) {
@@ -315,6 +319,8 @@ const onCreateConv = async () => {
     chat.messages.value = []
     activeMessage.value = null
     activeRefIndex.value = null
+    // ★ 新建会话同样清空草稿（草稿属于「上一条会话」）
+    composerRef.value?.reset()
     router.replace({
       path: '/conversation',
       query: {
