@@ -229,7 +229,18 @@ mq.addEventListener('change', syncWide)
 
 /* ── 会话 ── */
 
-const loadHistory = () => history.load(appId.value || undefined)
+const loadHistory = () => {
+  // ★★ 打开了具体会话时，历史面板显示**全部**会话，不按 appId 过滤。
+  //
+  //   实测症状（用户第二张图）：点开一个「属于某应用」的历史会话后，URL 变成
+  //   `?appId=…&conversationId=…`，列表被收窄成该应用的会话 ——
+  //   后端明明返回 3 条，界面上只剩 1 条，另外两条（通用问答）看起来「没了」。
+  //
+  //   ★ 应用模式下（只带 appId、没有 conversationId，即「进入某个应用准备开新对话」）
+  //     仍然按应用过滤：那时用户明确在某个应用里，只看该应用的会话是对的。
+  const scoped = route.query.conversationId ? undefined : appId.value || undefined
+  return history.load(scoped)
+}
 
 const applyAppBrief = (conv: ConversationEx | null, fallbackAppId?: string) => {
   const fromConv = readAppBrief(conv?.app)
