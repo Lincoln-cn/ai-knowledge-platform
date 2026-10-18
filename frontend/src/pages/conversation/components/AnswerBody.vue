@@ -1,6 +1,9 @@
 <template>
+  <!--
+    ★ 光标不在这里 —— 它由 `html` 计算属性注入到最后一行的内部（见 attachCursor）。
+      挂在这个 div 外面的话，因为 div 是块级，光标会永远另起一行。
+  -->
   <div class="answer" @click="onClick" v-html="html" />
-  <span v-if="streaming" class="cursor" aria-hidden="true" />
 </template>
 
 <script setup lang="ts">
@@ -75,6 +78,49 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
  */
 const CITE_PLACEHOLDER = '@@CITE'
 
+/** 流式光标。★ 它必须是一个**行内**元素，且要插在最后一段正文里面（见 {@link attachCursor}）。 */
+const CURSOR_HTML = '<span class="cursor" aria-hidden="true"></span>'
+
+/**
+ * 把光标插进**最后一块正文的内部**。
+ *
+ * <h3>★★ 为什么不能像以前那样挂在容器外面（用户报障：「生成时蓝色光标没有在生成字符的后面，而是永远在最后面一行」）</h3>
+ *
+ * 之前模板是：
+ *
+ * ```html
+ * <div class="answer" v-html="html" />
+ * <span v-if="streaming" class="cursor" />
+ * ```
+ *
+ * `<div>` 是**块级**元素 ⇒ 那个 span 永远另起一行。于是光标看起来"掉到下一行"，
+ * 而不是"跟在刚生成的那个字后面" —— 打字机效果的关键恰恰是这个"贴住"。
+ *
+ * <h3>怎么插</h3>
+ *
+ * markdown-it 的输出以块级标签收尾（`</p>` / `</li>` / `</h1>` …）。把光标插到
+ * **最后一个闭标签之前**，它就成为那一段的行内末尾 ⇒ 紧贴最后一个字。
+ *
+ * ★ 例外：最后一块是 `</pre>`（代码块）时**插在外面**。代码块里塞一个闪烁块既不像光标、
+ *   也会被 `overflow` 裁掉；而"代码块下方另起一行"本来就是代码结束该有的样子。
+ *
+ * @param rendered 已渲染的 HTML
+ * @returns 带光标的 HTML
+ */
+function attachCursor(rendered: string): string {
+  // 代码块收尾 ⇒ 光标放外面（另起一行是对的）
+  if (/<\/pre>\s*$/.test(rendered)) {
+    return rendered + CURSOR_HTML
+  }
+  // 否则插进最后一个块级闭标签之前（表格单元格也算：流式表格的光标该在最后一格末尾）
+  const match = rendered.match(/<\/(p|li|h[1-6]|td|th|blockquote|dd|dt)>(\s*)$/)
+  if (match && match.index !== undefined) {
+    return rendered.slice(0, match.index) + CURSOR_HTML + rendered.slice(match.index)
+  }
+  // 兜底：没有任何块级标签（极少见，比如只有一行行内内容）⇒ 直接接在末尾
+  return rendered + CURSOR_HTML
+}
+
 const html = computed(() => {
   const raw = (props.text || '').replace(
     /\[(\d+)\]/g,
@@ -86,7 +132,7 @@ const html = computed(() => {
     const active = Number(n) === props.activeIndex ? ' active' : ''
     return `<span class="cite${active}" data-ref="${n}" role="button" tabindex="0">[${n}]</span>`
   })
-  return rendered
+  return props.streaming ? attachCursor(rendered) : rendered
 })
 
 function onClick(e: MouseEvent) {
