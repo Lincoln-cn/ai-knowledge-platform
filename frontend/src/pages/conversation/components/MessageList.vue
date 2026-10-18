@@ -34,7 +34,15 @@
           :class="[msg.role, { focused: highlightId === msg.id }]"
           :data-message-id="msg.id"
         >
-          <!-- 角色：mono 小标签，不靠气泡左右/颜色区分 -->
+          <!--
+            ★ 助手头像圆圈（`05 §4.1` 的线框里就有：蓝色圆 + 「AI」）。
+
+            ★★ 用绝对定位而不是把消息内容包一层两列栅格：
+              这个组件里一条消息有 4 个平级块（head / body / suggestions / actions），
+              包一层会牵动全部选择器与间距；而头像只是"贴在左边的一个装饰"，
+              给 `.msg.ASSISTANT` 一个左内边距、把圆圈绝对定位进那块留白里就够。
+          -->
+          <span v-if="msg.role !== 'USER'" class="avatar" aria-hidden="true">AI</span>
           <header class="msg-head">
             <span class="label">{{ msg.role === 'USER' ? 'QUERY' : 'ANSWER' }}</span>
             <span v-if="msg.role !== 'USER' && botIcon" class="bot-name tiny muted ellipsis">{{ botIcon }}</span>
@@ -302,6 +310,40 @@ defineExpose({ scrollToBottom, scrollToMessage })
 
 .msg.USER {
   align-items: flex-end;
+}
+
+/*
+ * 助手头像（`05 §4.1` 线框里那个蓝色圆 + 「AI」）。
+ *
+ * ★ 绝对定位到左侧留白里 —— 见模板里的注释：包一层两列栅格会牵动这个组件里
+ *   全部四个平级块（head / body / suggestions / actions）的选择器与间距。
+ * ★ 直径 26px 与 `.msg-head` 的 20px 行高对齐：圆圈顶边压住标题行，视觉上"这是谁说的"。
+ */
+.msg.ASSISTANT {
+  position: relative;
+  padding-left: 38px;
+}
+
+.avatar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+/* 用户一侧没有头像，内边距归零（否则右侧气泡会莫名偏左 38px） */
+.msg.USER {
+  padding-left: 0;
 }
 
 /* 深链定位到的那条消息：滚动到视野内后短暂描边，让人看见「落在了哪一个」 */
