@@ -101,7 +101,7 @@ const confirmRename = () => {
 
 <style scoped>
 .history {
-  width: 220px;
+  width: var(--history-w, 220px);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
