@@ -1,5 +1,5 @@
 import { API_PREFIX } from '@/config/env'
-import { getToken } from '@/lib/token'
+import { clearTokens, getToken } from '@/lib/token'
 import type {
   Artifact,
   ChatStreamOptions,
@@ -177,6 +177,25 @@ export function chatStreamViaSse(options: ChatStreamOptions): StreamHandle {
     })
 
     if (!response.ok || !response.body) {
+      // ★★ 401 不是「生成失败」，是「登录过期」—— 必须与普通失败分开处理。
+      //
+      //   实测症状（用户截图）：token 过期后发消息，界面显示
+      //   「生成失败：服务端返回 401」+ 一条浮动的「生成中断：服务端返回 401」，
+      //   而**页面停在原地不跳登录**。用户的疑问正是：「401 不应该直接让页面导航到登录页吗？」
+      //
+      //   ★ 根因：`http.ts` 有完整的 401 处理（静默刷新一次 → 失败则 clearTokens，
+      //     交给路由守卫跳登录），但**本文件是独立实现**（自己用 fetch 读流，不走 http.ts），
+      //     那条处理在 SSE 这条链路上从来没生效过。
+      //
+      //   ⇒ 这里只清登录态、交给路由守卫跳转（不自己 push，否则守卫会认为「还登录着」）。
+      if (response.status === 401) {
+        clearTokens()
+        failTerminal('登录已过期，请重新登录', '页面将跳转到登录页')
+        // ★ 用 hash 跳转：本文件在 lib 层拿不到 vue-router 实例；
+        //   项目用的是 hash 路由（createWebHashHistory），等价于 router.push('/login')。
+        window.location.hash = '#/login'
+        return
+      }
       failTerminal(`服务端返回 ${response.status}`, '请稍后重试；若持续失败请联系管理员')
       return
     }

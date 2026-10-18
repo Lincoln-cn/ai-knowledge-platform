@@ -535,10 +535,16 @@ onBeforeUnmount(() => {
 }
 
 .stream-fail {
+  /* ★ 从「浮在输入框上方」改成「消息区顶部」。
+   *
+   *   原来 `bottom: var(--space-3xl)` 让它浮在 Composer 正上方，而同一件事在消息气泡里
+   *   已经显示过一次（「生成失败：…」+ 重新生成）⇒ 两处重复，且底部浮动条盖住输入框上沿，
+   *   看起来就是「异常提示位置不正确」。
+   *   放在 `.center` 顶部：错误属于这条消息流，视线第一时间落在那里。 */
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  bottom: var(--space-3xl);
+  top: var(--space-sm);
   z-index: var(--z-sticky);
   display: flex;
   align-items: center;
