@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -120,9 +121,9 @@ def upload(base: str, kb_id: str, token: str, path: pathlib.Path, meta: dict[str
         return -1, {"message": f"{type(e).__name__}: {e}"}
 
 
-MODEL_NAME = "bge-small-zh-v1.5"
-MODEL_DIMENSION = 512
-"""本机进程内 ONNX 模型（`models/bge-small-zh-v1.5/`）。
+MODEL_NAME = os.environ.get("CORPUS_MODEL_NAME", "bge-small-zh-v1.5")
+MODEL_DIMENSION = int(os.environ.get("CORPUS_MODEL_DIMENSION", "512"))
+"""本机进程内 ONNX 模型（可用环境变量覆盖，便于**同一条命令对比不同模型**）。
 
 ★★ 为什么必须是这个名字与维度：
   - 路由（`RoutingEmbeddingAdapter`）按 **baseModel 名**判"走进程内还是走上游"；

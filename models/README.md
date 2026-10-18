@@ -106,3 +106,58 @@ $zip = [System.IO.Compression.ZipFile]::OpenRead("$env:TEMP\bge-zh.jar")
   **一个 JVM 只能有一个 `OrtEnvironment`**，且它的 `close()` 自 ORT 1.11 起是 **no-op**
   ⇒ 「卸载」只能发生在 `OrtSession` 层。
 - ★ **不做**多个本地模型热切换：本地只留一个，多模型交给服务侧（HTTP）。
+
+## 八、模型对比：中英双语的代价（2026-10-18 实测）
+
+用户问的是「能不能中英双语、体量再小一点、更新一点」。**结论先说：双语能，体量小不了 —— 两者在现成 ONNX 里不可兼得。**
+
+### 候选与体积（`hf-mirror` 实测 content-length + 本地下载核对）
+
+| 模型 | 发布 | 参数 | 维度 | int8 体积 | 中 | 英 |
+|---|---|---|---|---|---|---|
+| `bge-small-zh-v1.5`（当前默认） | 2023-09 | 24M | 512 | **22.9 MB** | 强 | **弱** |
+| `multilingual-e5-small` | 2024-02 | 118M | 384 | **112.8 MB** | 强 | 强 |
+| `paraphrase-multilingual-MiniLM-L12-v2` | 2020 | 118M | 384 | **112.8 MB** | 中 | 中 |
+| `granite-embedding-107m-multilingual` | 2024-12 | 107M | 384 | 无 ONNX 镜像（要本地转换） | 强 | 强 |
+| `bge-m3` | 2024-01 | 568M | 1024 | ~570 MB | 最强 | 最强 |
+
+★★ **为什么小不下来**：多语模型最小也是 ~118M 参数，而词表 ~25 万 × 384 维的
+embedding 矩阵在 Xenova 的量化件里**仍然是 fp32**（约 100 MB 里的大头）⇒ int8 也只压到 112.8 MB。
+`bge-small-zh` 之所以只有 22.9 MB，是因为它**中文单语 + 小词表**。
+
+### ★★ 实测：拿同一套 16 份语料 + 12 条问答对，只换模型
+
+同一条命令（`scripts/parse_corpus.py`，`HYBRID` / `threshold=0` / `topN=5`），
+只改 `CORPUS_MODEL_NAME` / `CORPUS_MODEL_DIMENSION` 与后端那三个 `app.embedding.local.*`：
+
+| 模型 | 命中率 | 英文文档（`gpl-3.0` 3 条 + `full-markdown` 3 条） |
+|---|---|---|
+| `bge-small-zh-v1.5`（22.9 MB） | **6/12（50%）** | **1/6** |
+| `multilingual-e5-small`（112.8 MB） | **10/12（83%）** | **5/6** |
+
+★ 16/16 文档在两次实验里都 `SUCCEEDED`（384 维落到 `vec_embedding_384`，路由与建表按维度走，照常）。
+★ 还剩 2 条失败（`q-005` 刘易斯文本 · `q-012` markdown 示例），与语言无关，属检索策略层面。
+
+### ★ 一处**没有做**的事，会影响读数
+
+`multilingual-e5` 系列**建议给输入加前缀**：`query: …`（问题）与 `passage: …`（文档）。
+上面 10/12 是**完全没加前缀**的结果 —— 因为 `EmbeddingPort.embed(modelId, texts)` 今天
+**不区分"问题"与"文档"**，加前缀需要动接口语义（`RetrievalService` 与入库侧各传一种角色）。
+⇒ **加上前缀可能更高**，但那是一次真实的接口改造，不在本次范围内。
+
+### 怎么切换（三个配置 + 一次重灌）
+
+1. 把模型放到 `models/<name>/`（两个文件：`model_quantized.onnx` + `tokenizer.json`）；
+2. 后端三项：
+
+```
+app.embedding.local.model-path=models/multilingual-e5-small/model_quantized.onnx
+app.embedding.local.tokenizer-path=models/multilingual-e5-small/tokenizer.json
+app.embedding.local.model-name=multilingual-e5-small
+```
+
+3. 在模型目录里**登记同名 `baseModel`**（路由按名字分派！名字对不上就会去连上游 11434），
+   维度填 **384**；
+4. ★ **已有知识库的向量不能复用**：不同模型 = 不同向量空间 ⇒ 必须重新向量化
+   （`vec_embedding_384` 是新表，旧 512 表不会被读）。这也是"一个库不许中途换模型"那条口径的由来。
+
