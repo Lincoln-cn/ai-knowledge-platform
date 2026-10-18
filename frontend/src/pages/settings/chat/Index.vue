@@ -390,7 +390,22 @@ async function load() {
     updatedAtText.value = data.updatedAt ? new Date(data.updatedAt).toLocaleString() : ''
   } catch (e) {
     const err = e as ApiError
-    loadError.value = { reason: err.message || '未知错误', hint: err.hint }
+    // ★★ 403 的提示必须把「重新登录」放在第一条。
+    //
+    //   实测症状：管理员打开这个页面看到「读取失败：无权限 / 请联系管理员为你的角色勾选该权限点」——
+    //   而管理员**本来就有**这个权限点（数据库里有、新签发的 JWT 里也有）。
+    //   真相是：**JWT 里的 authorities 是签发那一刻固化的**，
+    //   权限点是在他上次登录之后才加的 ⇒ 旧 token 里没有 ⇒ 403。
+    //
+    //   ⇒ 提示里先给能立刻执行的动作（退出重登），再说"确实没勾"那种情形 ——
+    //     反过来写会让管理员去查一个根本没问题的配置。
+    const isForbidden = err.code === 403 || /无权限|forbidden|403/i.test(err.message || '')
+    loadError.value = isForbidden
+      ? {
+          reason: '当前登录态里没有「配置对话设置」权限',
+          hint: '若你确认自己的角色已有该权限，请**退出后重新登录**（权限在登录时生效）；否则请管理员在「角色管理」里勾选它。'
+        }
+      : { reason: err.message || '未知错误', hint: err.hint }
   } finally {
     loading.value = false
   }
