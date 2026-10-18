@@ -5,6 +5,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -248,6 +249,86 @@ public class UpstreamGateway {
   }
 
   // ────────────────────────── 思考三态 ──────────────────────────
+
+  /**
+   * ★★ 真流式：把上游 SSE 的每个 delta 立刻交给调用方（而不是等整段返回再切块）。
+   *
+   * <h3>为什么必须用它（实测）</h3>
+   *
+   * <p>{@link #chatCompletion} 是「一次性返回」的：CPU 上 qwen2.5:1.5b 生成 400 字要 <b>60~90 秒</b>，这期间下游一个字节都拿不到
+   * ⇒ 前端只能"转 90 秒，然后一次性出现全文" （用户原话：「回复是一次性展示的，并没有打字机效果」）。 而 Ollama 本身是逐 token 吐的 —— 中间那一层把它攒起来了。
+   *
+   * <h3>★ 实现上的两个关键选择</h3>
+   *
+   * <ol>
+   *   <li><b>用 {@code BodyHandlers.ofInputStream()} 而不是 {@code ofLines()}</b>： {@code ofLines()}
+   *       要等响应体<b>读完</b>才返回 {@code Stream}，那等于又攒了一次； 只有拿到 InputStream 才能"读到一行就交出去"。
+   *   <li><b>逐行解析 {@code data:} 帧、忽略 {@code [DONE]}</b>：这是 OpenAI 兼容协议 （Ollama 的 {@code
+   *       /v1/chat/completions} 同样遵守），delta 在 {@code choices[0].delta.content}。
+   * </ol>
+   *
+   * @param onDelta 每收到一段正文就回调一次（★ 它可能抛异常来中断，例如用户点了停止）
+   * @return 是否真的走了流式（{@code false} = 上游不支持，调用方应退回一次性路径）
+   */
+  public boolean streamChatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta) {
+    Map<String, Object> payload = Map.of("model", model, "messages", history, "stream", true);
+    String url = resolve(apiBase, "/chat/completions");
+    HttpRequest.Builder builder =
+        HttpRequest.newBuilder(URI.create(url))
+            .timeout(timeout)
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .POST(HttpRequest.BodyPublishers.ofString(writeJson(payload), StandardCharsets.UTF_8));
+    if (apiKey != null && !apiKey.isBlank()) {
+      builder.header("Authorization", "Bearer " + apiKey);
+    }
+    HttpRequest request = builder.build();
+    try {
+      HttpResponse<java.io.InputStream> response =
+          http.send(request, HttpResponse.BodyHandlers.ofInputStream());
+      if (response.statusCode() / 100 != 2) {
+        String text = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
+        throw new UpstreamUnreachableException(
+            "上游返回 HTTP " + response.statusCode() + "：连接 " + url + " 失败。响应片段：" + abbreviate(text));
+      }
+      boolean[] sawFrame = {false};
+      try (var reader =
+          new java.io.BufferedReader(
+              new java.io.InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+        String line;
+        while ((line = reader.readLine()) != null) {
+          if (!line.startsWith("data:")) {
+            continue; // 空行、事件名、注释帧一律跳过
+          }
+          String data = line.substring(5).trim();
+          if (data.isEmpty() || "[DONE]".equals(data)) {
+            continue;
+          }
+          sawFrame[0] = true;
+          JsonNode chunk = json.readTree(data);
+          JsonNode delta = chunk.path("choices").path(0).path("delta").path("content");
+          if (delta.isTextual() && !delta.asText().isEmpty()) {
+            onDelta.accept(delta.asText());
+          }
+        }
+      }
+      return sawFrame[0];
+    } catch (UpstreamUnreachableException rethrow) {
+      throw rethrow;
+    } catch (java.io.IOException | InterruptedException | JacksonException failure) {
+      if (failure instanceof InterruptedException) {
+        Thread.currentThread().interrupt();
+      }
+      throw new UpstreamUnreachableException(
+          "上游流式调用失败：" + failure.getMessage() + "（连接 " + url + "）", failure);
+    }
+  }
 
   /**
    * 发一次 chat 请求，返回响应体原文。

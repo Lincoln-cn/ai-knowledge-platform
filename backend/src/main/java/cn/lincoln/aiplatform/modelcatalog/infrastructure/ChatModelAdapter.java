@@ -85,6 +85,39 @@ public class ChatModelAdapter implements ChatPort {
     }
   }
 
+  /**
+   * ★★ 真流式：逐 token 交给调用方，而不是等整段返回再切块。
+   *
+   * <h3>为什么需要它（实测数据）</h3>
+   *
+   * <p>{@link #complete} / {@link #completeConversation} 都是「一次性返回」： CPU 上 qwen2.5:1.5b 生成 400 字要
+   * <b>60~90 秒</b>，这期间服务端一个字节都发不出去 ⇒ 用户看到「转 90 秒，然后一次性出现全文」。而 Ollama 本身逐 token 吐，
+   * 是中间这一层（`ChatPortFallbackStreamAdapter` 拿 {@code complete()} 再按 24 字切块） 把它攒住了。
+   *
+   * <p>★ 本方法只做"转发"，不决定终态、不落库 —— 那两件事仍由 {@code ChatService} 的收尾路径做。
+   *
+   * @param onDelta 每收到一段正文回调一次（★ 调用方抛异常即可中断，上游连接随之关闭）
+   * @return 上游是否真的按流式返回了数据
+   */
+  public boolean streamChat(
+      UUID modelId,
+      List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta) {
+    Model model = requireChatModel(modelId);
+    List<Map<String, String>> history =
+        messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
+    try {
+      return gateway.streamChatCompletion(
+          model.baseModel(), model.apiBase(), decryptKey(model), history, timeout, onDelta);
+    } catch (UpstreamGateway.UpstreamUnreachableException e) {
+      throw new BusinessException(
+          ErrorCode.UPSTREAM_UNAVAILABLE,
+          "调用对话模型失败：" + e.getMessage(),
+          "请确认对话模型服务可用（地址与密钥）；检索会退回原始问题继续，不会因此失败");
+    }
+  }
+
   @Override
   public <T> T completeAs(UUID modelId, String prompt, Class<T> type, Duration timeout) {
     Model model = requireChatModel(modelId);
