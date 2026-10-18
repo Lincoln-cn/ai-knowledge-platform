@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,9 +48,10 @@ public class ConversationListService {
   private static final int DEFAULT_PAGE_SIZE = 20;
 
   /** 新建会话的占位标题（★ 第一轮提问后会按问题更新，那是既有行为）。 */
-  private static final String PLACEHOLDER_TITLE = "新会话";
+  // ★ 占位标题已提升到 Conversation.PLACEHOLDER_TITLE：ChatTurnWriter 也要读它
 
   private final ConversationRepository conversations;
+
   private final AppBindingPort appBindings;
 
   public ConversationListService(ConversationRepository conversations, AppBindingPort appBindings) {
@@ -75,8 +77,27 @@ public class ConversationListService {
    */
   @Transactional
   public ConversationListItem create(UUID userId, UUID appId) {
+    // ★★ 幂等：已经有「同应用 + 一条消息都没有」的会话 ⇒ 直接复用它，不再新建。
+    //
+    //   为什么必须这样（实测症状）：用户每点一次「新建会话」就真建一行空会话，
+    //   点 5 次列表里就有 5 个同名的「新会话」（标题都是占位值），
+    //   于是用户看到的是「新会话没了」「像刷新了一下」—— 其实是同名项太多，认不出哪个是刚建的。
+    //
+    //   语义上也更对：用户点「新建会话」想要的是「一个可以开始问的空对话」，
+    //   而已经有一个空对话时就该把它打开，而不是再堆一个。
+    //
+    //   ★ 只复用「最近一条是空的」那种：若最近一条已有消息，说明用户真的在开新话题，
+    //     这时新建才对（不能去翻更早的空会话，那会让「新建」跳到很久以前的会话上）。
+    Optional<Conversation> reusable =
+        conversations
+            .findLatestByUserAndAssistant(userId, appId)
+            .filter(c -> c.messageCount() == 0);
+    if (reusable.isPresent()) {
+      return toItem(reusable.get());
+    }
     Conversation conversation =
-        conversations.save(new Conversation(UUID.randomUUID(), userId, appId, PLACEHOLDER_TITLE));
+        conversations.save(
+            new Conversation(UUID.randomUUID(), userId, appId, Conversation.PLACEHOLDER_TITLE));
     return toItem(conversation);
   }
 

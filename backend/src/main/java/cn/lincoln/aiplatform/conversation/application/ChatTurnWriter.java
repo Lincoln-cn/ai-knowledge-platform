@@ -433,8 +433,22 @@ public class ChatTurnWriter implements ChatTurnStore {
               .findById(conversationId)
               .orElseThrow(() -> notFound("会话不存在", "它可能已被删除，请刷新会话列表后重试"));
       if (!found.userId().equals(userId)) {
-        // ★ 与"不存在"同一个出口、同一段文案：403 会告诉对方"这个会话是存在的"
+        // ★ 与「不存在」同一个出口、同一段文案：403 会告诉对方「这个会话是存在的」
         throw notFound("会话不存在", "它可能已被删除，或者不在你的可见范围内");
+      }
+      // ★★ 占位标题 + 还没有任何消息 ⇒ 用**本次问题**作标题。
+      //
+      //   为什么需要这一步：前端「新建会话」会先调 `POST /conversations` 建一条空会话
+      //   （标题是占位「新会话」），随后发第一条消息时走的是「会话已存在」这条路 ——
+      //   原来这条路**不改标题**，于是标题永远停在占位值。
+      //   实测症状：会话有 2 条消息，标题仍是「新会话」，用户无法在列表里认出它。
+      //
+      //   ★ 只在 `messageCount == 0` 时改：标题一旦由首个问题定下，后续轮次不再覆盖
+      //     （否则每问一句标题就变一次，用户会找不到自己的会话）。
+      //   ★ 也只在「标题还是占位值」时改：用户手动改过名的会话不许被自动覆盖。
+      if (found.messageCount() == 0 && Conversation.PLACEHOLDER_TITLE.equals(found.title())) {
+        found.rename(titleOf(question));
+        return conversations.save(found);
       }
       return found;
     }
