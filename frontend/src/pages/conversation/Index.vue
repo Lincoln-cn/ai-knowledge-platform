@@ -161,7 +161,7 @@ const composerRef = ref<InstanceType<typeof Composer>>()
 const canShare = computed(() => session.can(PERM.conversationShare))
 
 /** 「对话设置」入口：读权限与页面本身一致（改配置需要 system:manage，在页面内再把一次） */
-const canViewSettings = computed(() => session.can(PERM.conversationView))
+const canViewSettings = computed(() => session.can(PERM.chatSettings))
 const shareConversationId = computed(() => activeConversation.value?.id ?? null)
 
 /* ── 顶栏 ── */

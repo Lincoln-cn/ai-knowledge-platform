@@ -41,7 +41,7 @@ public class ChatSettingsController {
    * @return 当前通用会话设置（界面显示"当前生效值"用）
    */
   @GetMapping
-  @PreAuthorize("hasAuthority('conversation:view')")
+  @PreAuthorize("hasAuthority('conversation:settings')")
   public ApiResponse<ChatSettingsView> get() {
     return ApiResponse.ok(settings.get());
   }
@@ -54,7 +54,7 @@ public class ChatSettingsController {
    * @return 落库后的设置
    */
   @PutMapping
-  @PreAuthorize("hasAuthority('system:manage')")
+  @PreAuthorize("hasAuthority('conversation:settings')")
   public ApiResponse<ChatSettingsView> update(
       @RequestBody ChatSettingsService.ChatSettingsCommand body, @AuthenticationPrincipal Jwt jwt) {
     return ApiResponse.ok(settings.update(body, UUID.fromString(jwt.getSubject())));

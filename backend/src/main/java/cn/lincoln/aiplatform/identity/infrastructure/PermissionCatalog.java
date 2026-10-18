@@ -69,6 +69,7 @@ public class PermissionCatalog {
    */
   public static final List<Item> ITEMS =
       List.of(
+          new Item(Permissions.CONVERSATION_SETTINGS, "配置对话设置", "对话"),
           new Item(Permissions.KNOWLEDGE_VIEW, "查看知识库", "知识"),
           new Item(Permissions.KNOWLEDGE_CREATE, "创建知识库", "知识"),
           new Item(Permissions.KNOWLEDGE_MANAGE, "编辑/删除知识库", "知识"),

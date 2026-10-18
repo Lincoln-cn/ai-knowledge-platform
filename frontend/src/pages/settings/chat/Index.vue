@@ -1,173 +1,297 @@
 <template>
-  <div class="page">
+  <div class="page settings-page">
     <PageHeader
       title="对话设置"
-      desc="通用问答（不挂应用、不带知识库的那条链路）的默认模型与流式行为 —— 这里改完对新会话立即生效"
-    />
+      desc="通用问答（不挂应用的那条链路）的模型、提示词、召回与流式行为 —— 改完对新会话立即生效"
+    >
+      <template #actions>
+        <span v-if="updatedAtText" class="micro muted">上次修改：{{ updatedAtText }}</span>
+      </template>
+    </PageHeader>
 
-    <div class="notice info">
-      <b>三层继承：应用配置 → 本页 → 全局默认（yaml 兜底）。</b>
-      <div class="micro">
-        ★ 逐项覆盖，不是「整层二选一」：某个应用只改了空闲超时，心跳仍跟随本页。
-        <br />
-        ★ <b>空闲超时</b>是 SSE 的<b>唯一</b>超时权威（Spring 的 async 上限已关闭）——
-        长回答被「生成超时」掐断时，先来调这个数。
+    <!-- ── 状态摘要：一眼看到「现在到底是什么行为」 ─────────────────── -->
+    <div class="summary">
+      <div class="stat">
+        <div class="stat-label label">默认模型</div>
+        <div class="stat-value">{{ currentModelName || '自动挑选' }}</div>
+        <div class="stat-note micro muted">通用问答用的对话模型</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label label">召回</div>
+        <div class="stat-value">
+          <span class="dot" :class="form.retrievalEnabled ? 'ok' : 'off'" />
+          {{ form.retrievalEnabled ? '启用' : '未启用' }}
+        </div>
+        <div class="stat-note micro muted">
+          {{
+            form.retrievalEnabled
+              ? `阈值 ${form.retrievalThreshold.toFixed(2)} · 取 ${form.retrievalTopN} 条`
+              : '只用模型自身知识，不查知识库'
+          }}
+        </div>
+      </div>
+      <div class="stat">
+        <div class="stat-label label">空闲超时</div>
+        <div class="stat-value">{{ idleSec }}s</div>
+        <div class="stat-note micro muted">超过即判「生成超时」</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label label">流式输出</div>
+        <div class="stat-value">
+          <span class="dot" :class="form.streamEnabled ? 'ok' : 'off'" />
+          {{ form.streamEnabled ? '逐字' : '一次性' }}
+        </div>
+        <div class="stat-note micro muted">心跳 {{ heartbeatSec }}s</div>
       </div>
     </div>
 
     <div v-if="loadError" class="notice err">
       <div><b>读取失败：</b>{{ loadError.reason }}</div>
       <div v-if="loadError.hint" class="micro">{{ loadError.hint }}</div>
-      <el-button size="small" style="margin-top: var(--space-xs)" @click="load">重试</el-button>
+      <el-button size="small" class="mt8" @click="load">重试</el-button>
     </div>
 
-    <el-form v-else v-loading="loading" label-width="140px" class="settings-form">
-      <el-form-item label="默认对话模型">
-        <el-select v-model="form.defaultModelId" clearable placeholder="留空 = 自动挑一个可用的" style="width: 320px">
-          <el-option v-for="m in chatModels" :key="m.id" :label="`${m.name}（${m.baseModel}）`" :value="m.id" />
-        </el-select>
-        <div class="micro muted">
-          留空时沿用旧行为（<code>pickChatModel()</code> 挑第一个可用的）—— 想固定用哪个就在这里选。
+    <template v-else>
+      <!-- ── ① 模型与提示词 ─────────────────────────────────────────── -->
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="card-title">模型与提示词</div>
+            <div class="micro muted">决定「谁来回答」和「以什么身份回答」</div>
+          </div>
         </div>
-      </el-form-item>
+        <div class="panel-body form-grid">
+          <div class="field">
+            <label class="field-label">默认对话模型</label>
+            <el-select
+              v-model="form.defaultModelId"
+              clearable
+              placeholder="自动挑选一个可用的"
+              :disabled="!canEdit"
+              class="field-control"
+            >
+              <el-option
+                v-for="m in chatModels"
+                :key="m.id"
+                :label="`${m.name}（${m.baseModel}）`"
+                :value="m.id"
+              />
+            </el-select>
+            <div class="field-note micro muted">
+              留空时沿用旧行为（<code>pickChatModel()</code> 挑第一个可用的）。想固定用哪个就在这里选。
+            </div>
+          </div>
 
-      <el-form-item label="流式输出">
-        <el-switch v-model="form.streamEnabled" :disabled="!canEdit" />
-        <span class="micro muted" style="margin-left: var(--space-sm)">
-          关掉 = 一次性返回全文（首字 = 全文，但不受空闲超时影响）
-        </span>
-      </el-form-item>
-
-      <el-form-item label="初始提示词">
-        <el-input
-          v-model="form.systemPrompt"
-          type="textarea"
-          :rows="4"
-          :disabled="!canEdit"
-          maxlength="4000"
-          show-word-limit
-          placeholder="例如：你是企业知识助理。回答简洁、先给结论；不确定时说明不确定，不要编造。"
-        />
-        <div class="micro muted">
-          拼在每轮问题之前（<code>ChatMessage.Role</code> 只有 user/assistant，
-          系统的口径在这个工程里由提示词承担）。★ 只对<b>通用问答</b>生效 ——
-          应用有自己的 <code>role_prompt</code>，两者不叠加。
+          <div class="field field-wide">
+            <label class="field-label">初始提示词</label>
+            <el-input
+              v-model="form.systemPrompt"
+              type="textarea"
+              :rows="4"
+              :disabled="!canEdit"
+              maxlength="4000"
+              show-word-limit
+              placeholder="例如：你是企业知识助理。回答简洁、先给结论；不确定时说明不确定，不要编造。"
+            />
+            <div class="field-note micro muted">
+              拼在每轮问题之前（<code>ChatMessage.Role</code> 只有 user/assistant，系统口径在工程里由提示词承担）。
+              <b>只对通用问答生效</b> —— 应用有自己的 <code>role_prompt</code>，两者不叠加。
+            </div>
+          </div>
         </div>
-      </el-form-item>
+      </section>
 
-      <el-divider content-position="left"><span class="micro">召回（通用问答是否挂知识库）</span></el-divider>
+      <!-- ── ② 召回 ───────────────────────────────────────────────── -->
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="card-title">
+              知识库召回
+              <span class="badge" :class="form.retrievalEnabled ? 'badge-ok' : 'badge-off'">
+                {{ form.retrievalEnabled ? '已启用' : '未启用' }}
+              </span>
+            </div>
+            <div class="micro muted">未启用时通用问答<b>不查任何知识库</b>，只用模型自身知识</div>
+          </div>
+          <el-switch v-model="form.retrievalEnabled" :disabled="!canEdit" />
+        </div>
+        <div class="panel-body">
+          <div v-if="!form.retrievalEnabled" class="notice warn">
+            之前通用问答在<b>静默做全库检索</b> —— 问「java hello world」时把 Vue 文档、电子书等以
+            <b>0.25 分</b>塞进上下文，模型就照着复述成「创建一个 Vue 单文件组件…」。
+            <b>那是答非所问的直接原因。</b>保持不启用是最安全的默认。
+          </div>
 
-      <div class="notice warn" style="margin-bottom: var(--space-sm)">
-        <b>默认不召回。</b>之前通用问答在<b>静默做全库检索</b> ——
-        问「java hello world」时把 Vue 文档、电子书等以 <b>0.25 分</b>塞进上下文，
-        模型就照着复述成「创建一个 Vue 单文件组件…」。<b>那是答非所问的直接原因。</b>
+          <div class="form-grid" :class="{ inert: !form.retrievalEnabled }">
+            <div class="field">
+              <label class="field-label">相似度下限</label>
+              <div class="range-row">
+                <el-slider
+                  v-model="form.retrievalThreshold"
+                  :min="0"
+                  :max="1"
+                  :step="0.05"
+                  :disabled="!canEdit || !form.retrievalEnabled"
+                  class="range"
+                />
+                <span class="range-value">{{ form.retrievalThreshold.toFixed(2) }}</span>
+              </div>
+              <div class="field-note micro muted">
+                低于它的命中直接丢弃。★ 实测 0.25 分就是噪声，建议 <b>0.35 ~ 0.5</b>。
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label">召回条数</label>
+              <el-input-number
+                v-model="form.retrievalTopN"
+                :min="1"
+                :max="20"
+                :disabled="!canEdit || !form.retrievalEnabled"
+                class="field-control narrow"
+              />
+              <div class="field-note micro muted">条。条数越多，噪声进上下文的概率越高。</div>
+            </div>
+
+            <div class="field field-wide">
+              <label class="field-label">知识库范围</label>
+              <el-select
+                v-model="form.retrievalKbIds"
+                multiple
+                clearable
+                collapse-tags
+                collapse-tags-tooltip
+                placeholder="留空 = 我可见的全部知识库"
+                :disabled="!canEdit || !form.retrievalEnabled"
+                class="field-control"
+              >
+                <el-option v-for="kb in kbOptions" :key="kb.id" :label="kb.name" :value="kb.id" />
+              </el-select>
+              <div class="field-note micro muted">
+                ★ 留空时是「全部可见库」—— 这也是之前答非所问的放大器：语料库里什么都搜得到。
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── ③ 流式与超时 ─────────────────────────────────────────── -->
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="card-title">流式与超时</div>
+            <div class="micro muted">
+              决定「回答怎么送到界面」和「多久算超时」 · 顺序：心跳 × 3 ≤ 空闲超时
+            </div>
+          </div>
+        </div>
+        <div class="panel-body form-grid">
+          <div class="field">
+            <label class="field-label">流式输出</label>
+            <div class="switch-row">
+              <el-switch v-model="form.streamEnabled" :disabled="!canEdit" />
+              <span class="micro muted">关掉 = 一次性返回全文</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">空闲超时</label>
+            <div class="input-suffix">
+              <el-input-number
+                v-model="idleSec"
+                :min="1"
+                :max="3600"
+                :step="10"
+                :disabled="!canEdit"
+              />
+              <span class="micro muted">秒</span>
+            </div>
+            <div class="field-note micro muted">
+              多少秒没有输出就判「生成超时」。★ 这是 SSE 的<b>唯一</b>超时权威（Spring 的 async 上限已关闭）。
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">心跳间隔</label>
+            <div class="input-suffix">
+              <el-input-number
+                v-model="heartbeatSec"
+                :min="1"
+                :max="600"
+                :step="5"
+                :disabled="!canEdit"
+              />
+              <span class="micro muted">秒</span>
+            </div>
+            <div class="field-note micro muted">
+              无输出时按它发 keep-alive。必须 ≤ 空闲超时 ÷ 3（连续丢 2 个心跳不该被误判）。
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">首字延迟预算</label>
+            <div class="input-suffix">
+              <el-input-number
+                v-model="firstTokenSec"
+                :min="1"
+                :max="600"
+                :step="1"
+                :disabled="!canEdit"
+              />
+              <span class="micro muted">秒</span>
+            </div>
+            <div class="field-note micro muted">超过它按降级处置（ROADMAP B4 要求 ≤ 10 秒）。</div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">单轮最大输出</label>
+            <div class="input-suffix">
+              <el-input-number
+                v-model="form.maxOutputTokens"
+                :min="1"
+                :max="32000"
+                :step="256"
+                :disabled="!canEdit"
+              />
+              <span class="micro muted">tokens</span>
+              <el-button link size="small" @click="form.maxOutputTokens = null">不限制</el-button>
+            </div>
+            <div class="field-note micro muted">留空 = 交给模型自身（可能被模型上下文截断）。</div>
+          </div>
+        </div>
+
+        <div v-if="heartbeatViolation" class="notice warn">
+          ⚠ 心跳 {{ heartbeatSec }}s × 3 = {{ heartbeatSec * 3 }}s，<b>超过</b>空闲超时
+          {{ idleSec }}s。 请把心跳调到 ≤ {{ Math.floor(idleSec / 3) }}s，或把空闲超时调到 ≥
+          {{ heartbeatSec * 3 }}s。
+          <div class="micro">否则心跳还没发出去就会被判吊死，而日志里只有一句「生成超时」。</div>
+        </div>
+      </section>
+
+      <!-- ── 保存栏 ───────────────────────────────────────────────── -->
+      <div class="save-bar panel">
+        <div class="save-state">
+          <span class="dot" :class="dirty ? 'warn' : 'ok'" />
+          <span class="micro">{{ dirty ? '有未保存的更改' : '已保存' }}</span>
+        </div>
+        <div class="save-actions">
+          <el-button :disabled="!dirty || saving" @click="load">放弃更改</el-button>
+          <el-button
+            type="primary"
+            :loading="saving"
+            :disabled="!canEdit || !!heartbeatViolation || !dirty"
+            @click="save"
+          >
+            保存
+          </el-button>
+        </div>
       </div>
 
-      <el-form-item label="启用召回">
-        <el-switch v-model="form.retrievalEnabled" :disabled="!canEdit" />
-        <span class="micro muted" style="margin-left: var(--space-sm)">
-          关 = 只用模型自身知识（与「未挂知识库」的空态文案一致）
-        </span>
-      </el-form-item>
-
-      <el-form-item label="知识库范围">
-        <el-select
-          v-model="form.retrievalKbIds"
-          multiple
-          clearable
-          collapse-tags
-          collapse-tags-tooltip
-          placeholder="留空 = 我用可见的全部知识库"
-          :disabled="!canEdit || !form.retrievalEnabled"
-          style="width: 100%"
-        >
-          <el-option v-for="kb in kbOptions" :key="kb.id" :label="kb.name" :value="kb.id" />
-        </el-select>
-        <div class="micro muted">
-          ★ 留空时是「全部可见库」—— 这也是之前答非所问的放大器：语料库里什么都搜得到。
-        </div>
-      </el-form-item>
-
-      <el-form-item label="相似度下限">
-        <el-input-number
-          v-model="form.retrievalThreshold"
-          :min="0"
-          :max="1"
-          :step="0.05"
-          :precision="2"
-          :disabled="!canEdit || !form.retrievalEnabled"
-        />
-        <span class="micro muted" style="margin-left: var(--space-sm)">
-          低于它的命中直接丢弃。★ 实测 0.25 分的命中就是噪声，建议 0.35~0.5
-        </span>
-      </el-form-item>
-
-      <el-form-item label="召回条数">
-        <el-input-number
-          v-model="form.retrievalTopN"
-          :min="1"
-          :max="20"
-          :disabled="!canEdit || !form.retrievalEnabled"
-        />
-        <span class="micro muted" style="margin-left: var(--space-sm)">条</span>
-      </el-form-item>
-
-      <el-divider content-position="left"><span class="micro">超时与心跳（单位：秒）</span></el-divider>
-
-      <el-form-item label="空闲超时">
-        <el-input-number v-model="idleSec" :min="1" :max="3600" :step="10" :disabled="!canEdit" />
-        <span class="micro muted" style="margin-left: var(--space-sm)">
-          多少秒没有输出就判「生成超时」。★ CPU + 小模型建议 240
-        </span>
-      </el-form-item>
-
-      <el-form-item label="心跳间隔">
-        <el-input-number v-model="heartbeatSec" :min="1" :max="600" :step="5" :disabled="!canEdit" />
-        <span class="micro muted" style="margin-left: var(--space-sm)">
-          无输出时按它发 keep-alive。★ 必须 ≤ 空闲超时 ÷ 3（连续丢 2 个心跳不该被误判）
-        </span>
-      </el-form-item>
-
-      <div v-if="heartbeatViolation" class="notice warn">
-        ⚠ 心跳 {{ heartbeatSec }}s × 3 = {{ heartbeatSec * 3 }}s，<b>超过</b>空闲超时 {{ idleSec }}s。
-        请把心跳调小（≤ {{ Math.floor(idleSec / 3) }}s）或把空闲超时调大（≥ {{ heartbeatSec * 3 }}s）。
-        <div class="micro">否则心跳还没发出去就会被判吊死，而日志里只有一句「生成超时」。</div>
+      <div v-if="!canEdit" class="notice info">
+        <b>只读。</b>修改对话设置需要「配置对话设置」权限（<code>conversation:settings</code>）——
+        它在角色管理里是一个<b>独立可勾选项</b>，默认只有管理员拥有。
       </div>
-
-      <el-form-item label="首字延迟预算">
-        <el-input-number v-model="firstTokenSec" :min="1" :max="600" :step="1" :disabled="!canEdit" />
-        <span class="micro muted" style="margin-left: var(--space-sm)">
-          超过这个时间才有第一个字，按降级处置（ROADMAP B4 要求 ≤ 10 秒）
-        </span>
-      </el-form-item>
-
-      <el-form-item label="单轮最大输出">
-        <el-input-number v-model="form.maxOutputTokens" :min="1" :max="32000" :step="256" :disabled="!canEdit" />
-        <el-button link size="small" style="margin-left: var(--space-sm)" @click="form.maxOutputTokens = null">
-          设为不限制
-        </el-button>
-        <div class="micro muted">tokens。留空 = 交给模型自身（可能被模型上下文截断）</div>
-      </el-form-item>
-
-      <el-form-item>
-        <el-button type="primary" :loading="saving" :disabled="!canEdit || !!heartbeatViolation" @click="save">
-          保存
-        </el-button>
-        <el-button :disabled="saving" @click="load">重新读取</el-button>
-        <span v-if="updatedAtText" class="micro muted" style="margin-left: var(--space-sm)">
-          上次修改：{{ updatedAtText }}
-        </span>
-      </el-form-item>
-
-      <el-alert
-        v-if="!canEdit"
-        type="info"
-        :closable="false"
-        show-icon
-        title="只读"
-        description="修改平台级对话设置需要「系统管理」权限（system:manage）—— 它能看当前生效值，但不该能改全局默认。"
-      />
-    </el-form>
+    </template>
   </div>
 </template>
 
@@ -183,14 +307,20 @@ import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 
 const session = useSessionStore()
-const canEdit = computed(() => session.can(PERM.systemManage))
+/**
+ * ★ 用专用权限点 `conversation:settings`（默认只有 ADMIN 拥有），不再用 `system:manage`。
+ *
+ * 早先的写法让「改一次召回阈值」必须交出整个系统管理权；单开一个权限点后，
+ * 它可以单独授给某个角色 —— 这也是用户这句话的落点：
+ * 「对话设置这个只有管理员能配置，设定权限」。
+ */
+const canEdit = computed(() => session.can(PERM.chatSettings))
 
 const loading = ref(false)
 const saving = ref(false)
 const loadError = ref<{ reason: string; hint?: string } | null>(null)
 const updatedAtText = ref('')
 const chatModels = ref<Array<{ id: string; name: string; baseModel: string }>>([])
-/** 召回范围的下拉选项（知识库） */
 const kbOptions = ref<Array<{ id: string; name: string }>>([])
 
 const form = reactive<ChatSettings>({
@@ -208,11 +338,9 @@ const form = reactive<ChatSettings>({
   updatedAt: null
 })
 
-/**
- * 界面上用**秒**，后端一律毫秒。
- * ★ 换算只在这三个 computed 里发生（回填用 getter、提交用 setter）——
- *   散落在模板里的 `* 1000` 迟早会漏一个，而差 1000 倍的超时**不会报错**。
- */
+/** 保存时的快照 —— 用来判断「有没有未保存的更改」 */
+const snapshot = ref('')
+
 const idleSec = computed({
   get: () => Math.round(form.idleTimeoutMs / 1000),
   set: (v: number) => (form.idleTimeoutMs = Math.round(v * 1000))
@@ -226,8 +354,31 @@ const firstTokenSec = computed({
   set: (v: number) => (form.firstTokenBudgetMs = Math.round(v * 1000))
 })
 
-/** 与前/后端同一条不变量：心跳 × 3 ≤ 空闲超时。 */
 const heartbeatViolation = computed(() => heartbeatSec.value * 3 > idleSec.value)
+
+/** 提交体（与 form 同形，去掉 updatedAt；空白提示词归一成 null） */
+function payload(): Omit<ChatSettings, 'updatedAt'> {
+  return {
+    defaultModelId: form.defaultModelId,
+    streamEnabled: form.streamEnabled,
+    idleTimeoutMs: form.idleTimeoutMs,
+    heartbeatIntervalMs: form.heartbeatIntervalMs,
+    firstTokenBudgetMs: form.firstTokenBudgetMs,
+    systemPrompt: form.systemPrompt?.trim() ? form.systemPrompt.trim() : null,
+    retrievalEnabled: form.retrievalEnabled,
+    retrievalKbIds: form.retrievalKbIds?.length ? form.retrievalKbIds : null,
+    retrievalThreshold: form.retrievalThreshold,
+    retrievalTopN: form.retrievalTopN,
+    maxOutputTokens: form.maxOutputTokens
+  }
+}
+
+const dirty = computed(() => JSON.stringify(payload()) !== snapshot.value)
+
+const currentModelName = computed(() => {
+  if (!form.defaultModelId) return ''
+  return chatModels.value.find((m) => m.id === form.defaultModelId)?.name ?? '（已选模型）'
+})
 
 async function load() {
   loading.value = true
@@ -235,6 +386,7 @@ async function load() {
   try {
     const data = await getChatSettings()
     Object.assign(form, data)
+    snapshot.value = JSON.stringify({ ...payload() })
     updatedAtText.value = data.updatedAt ? new Date(data.updatedAt).toLocaleString() : ''
   } catch (e) {
     const err = e as ApiError
@@ -249,8 +401,17 @@ async function loadModels() {
     const page = await listModels({ kind: 'CHAT', size: 100 })
     chatModels.value = page.list.map((m) => ({ id: m.id, name: m.name, baseModel: m.baseModel }))
   } catch {
-    // ★ 模型列表取不到不影响"看/改流式参数"——静默降级成空下拉，不弹错
+    // ★ 取不到模型列表不影响「看/改其它设置」—— 静默降级成空下拉
     chatModels.value = []
+  }
+}
+
+async function loadKnowledgeBases() {
+  try {
+    const page = await listKnowledgeBases({ size: 100 })
+    kbOptions.value = page.list.map((kb) => ({ id: kb.id, name: kb.name }))
+  } catch {
+    kbOptions.value = []
   }
 }
 
@@ -261,20 +422,9 @@ async function save() {
   }
   saving.value = true
   try {
-    const saved = await saveChatSettings({
-      defaultModelId: form.defaultModelId,
-      streamEnabled: form.streamEnabled,
-      idleTimeoutMs: form.idleTimeoutMs,
-      heartbeatIntervalMs: form.heartbeatIntervalMs,
-      firstTokenBudgetMs: form.firstTokenBudgetMs,
-      systemPrompt: form.systemPrompt?.trim() ? form.systemPrompt.trim() : null,
-      retrievalEnabled: form.retrievalEnabled,
-      retrievalKbIds: form.retrievalKbIds?.length ? form.retrievalKbIds : null,
-      retrievalThreshold: form.retrievalThreshold,
-      retrievalTopN: form.retrievalTopN,
-      maxOutputTokens: form.maxOutputTokens
-    })
+    const saved = await saveChatSettings(payload())
     Object.assign(form, saved)
+    snapshot.value = JSON.stringify({ ...payload() })
     updatedAtText.value = saved.updatedAt ? new Date(saved.updatedAt).toLocaleString() : ''
     ElMessage.success('已保存（对新会话生效）')
   } catch (e) {
@@ -282,16 +432,6 @@ async function save() {
     ElMessage.error(err.hint ? `${err.message}（${err.hint}）` : err.message)
   } finally {
     saving.value = false
-  }
-}
-
-async function loadKnowledgeBases() {
-  try {
-    const page = await listKnowledgeBases({ size: 100 })
-    kbOptions.value = page.list.map((kb) => ({ id: kb.id, name: kb.name }))
-  } catch {
-    // ★ 取不到列表不影响"关掉召回"这件事（那是默认值）——静默降级成空下拉
-    kbOptions.value = []
   }
 }
 
@@ -303,7 +443,171 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.settings-form {
-  max-width: 760px;
+.settings-page {
+  max-width: 1080px;
+}
+
+/* ── 状态摘要 ─────────────────────────────────────────────────────── */
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-sm);
+}
+
+.stat {
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+}
+
+.stat-label {
+  margin-bottom: var(--space-3xs);
+}
+
+.stat-value {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.stat-note {
+  margin-top: var(--space-3xs);
+}
+
+/* 状态方点：与全局 .notice 的口径一致（语气靠文字，不靠大色块） */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot.ok {
+  background: var(--color-success, #2f9e44);
+}
+
+.dot.off {
+  background: var(--color-muted);
+}
+
+.dot.warn {
+  background: var(--color-warning, #e8590c);
+}
+
+/* ── 卡片标题 ─────────────────────────────────────────────────────── */
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.badge {
+  padding: 0 var(--space-2xs);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-2xs);
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.badge-ok {
+  color: var(--color-success, #2f9e44);
+  background: color-mix(in srgb, var(--color-success, #2f9e44) 12%, transparent);
+}
+
+.badge-off {
+  color: var(--color-muted);
+  background: var(--color-sunken);
+}
+
+/* ── 表单栅格 ─────────────────────────────────────────────────────── */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-md);
+}
+
+.field-wide {
+  grid-column: 1 / -1;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: var(--space-2xs);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.field-control {
+  width: 100%;
+}
+
+.field-control.narrow {
+  width: 160px;
+}
+
+.field-note {
+  margin-top: var(--space-2xs);
+}
+
+.range-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.range {
+  flex: 1;
+}
+
+.range-value {
+  min-width: 42px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  text-align: right;
+}
+
+.switch-row,
+.input-suffix {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+/* 未启用召回时把下面的控件压暗（保持可读，避免「消失了」的错觉） */
+.inert {
+  opacity: 0.55;
+}
+
+/* ── 保存栏 ───────────────────────────────────────────────────────── */
+.save-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface-2);
+  z-index: var(--z-sticky);
+}
+
+.save-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.save-actions {
+  display: flex;
+  gap: var(--space-2xs);
 }
 </style>

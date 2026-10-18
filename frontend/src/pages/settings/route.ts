@@ -24,6 +24,6 @@ export default [
     path: 'settings/chat',
     name: 'settings-chat',
     component: () => import('./chat/Index.vue'),
-    meta: { title: '对话设置', permission: PERM.conversationView }
+    meta: { title: '对话设置', permission: PERM.chatSettings }
   }
 ] satisfies RouteRecordRaw[]
