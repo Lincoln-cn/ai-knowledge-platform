@@ -38,6 +38,23 @@
         </span>
       </el-form-item>
 
+      <el-form-item label="初始提示词">
+        <el-input
+          v-model="form.systemPrompt"
+          type="textarea"
+          :rows="4"
+          :disabled="!canEdit"
+          maxlength="4000"
+          show-word-limit
+          placeholder="例如：你是企业知识助理。回答简洁、先给结论；不确定时说明不确定，不要编造。"
+        />
+        <div class="micro muted">
+          拼在每轮问题之前（<code>ChatMessage.Role</code> 只有 user/assistant，
+          系统的口径在这个工程里由提示词承担）。★ 只对<b>通用问答</b>生效 ——
+          应用有自己的 <code>role_prompt</code>，两者不叠加。
+        </div>
+      </el-form-item>
+
       <el-divider content-position="left"><span class="micro">超时与心跳（单位：秒）</span></el-divider>
 
       <el-form-item label="空闲超时">
@@ -122,6 +139,7 @@ const form = reactive<ChatSettings>({
   idleTimeoutMs: 60000,
   heartbeatIntervalMs: 20000,
   firstTokenBudgetMs: 10000,
+  systemPrompt: null,
   maxOutputTokens: null,
   updatedAt: null
 })
@@ -185,6 +203,7 @@ async function save() {
       idleTimeoutMs: form.idleTimeoutMs,
       heartbeatIntervalMs: form.heartbeatIntervalMs,
       firstTokenBudgetMs: form.firstTokenBudgetMs,
+      systemPrompt: form.systemPrompt?.trim() ? form.systemPrompt.trim() : null,
       maxOutputTokens: form.maxOutputTokens
     })
     Object.assign(form, saved)

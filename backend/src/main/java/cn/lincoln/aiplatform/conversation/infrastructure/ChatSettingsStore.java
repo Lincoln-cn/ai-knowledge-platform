@@ -42,7 +42,7 @@ public class ChatSettingsStore {
     List<ChatSettingsView> found =
         jdbc.query(
             "select default_model_id, stream_enabled, idle_timeout_ms, heartbeat_interval_ms,"
-                + " first_token_budget_ms, max_output_tokens, updated_at"
+                + " first_token_budget_ms, system_prompt, max_output_tokens, updated_at"
                 + " from cv_chat_settings where id = ?",
             (rs, rowNum) -> {
               UUID modelId = rs.getObject("default_model_id", UUID.class);
@@ -53,6 +53,7 @@ public class ChatSettingsStore {
                   rs.getLong("idle_timeout_ms"),
                   rs.getLong("heartbeat_interval_ms"),
                   rs.getLong("first_token_budget_ms"),
+                  rs.getString("system_prompt"),
                   maxTokens,
                   rs.getObject("updated_at", java.time.OffsetDateTime.class) == null
                       ? null
@@ -80,13 +81,14 @@ public class ChatSettingsStore {
         jdbc.update(
             "update cv_chat_settings set default_model_id = ?, stream_enabled = ?,"
                 + " idle_timeout_ms = ?, heartbeat_interval_ms = ?, first_token_budget_ms = ?,"
-                + " max_output_tokens = ?, updated_at = now(), updated_by = ?"
+                + " system_prompt = ?, max_output_tokens = ?, updated_at = now(), updated_by = ?"
                 + " where id = ?",
             settings.defaultModelId(),
             settings.streamEnabled(),
             settings.idleTimeoutMs(),
             settings.heartbeatIntervalMs(),
             settings.firstTokenBudgetMs(),
+            settings.systemPrompt(),
             settings.maxOutputTokens(),
             operator,
             SINGLETON);

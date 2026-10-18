@@ -129,4 +129,17 @@ public class ChatPolicyResolver {
   public UUID defaultModelId() {
     return settings.get().defaultModelId();
   }
+
+  /**
+   * 通用问答的初始提示词。
+   *
+   * <p>★ 只对**通用问答**（{@code appId} 为空）生效：应用有自己的 {@code
+   * as_assistant.role_prompt}，两者叠加会变成「两条口径同时约束一个回答」， 冲突时谁赢没人说得清。
+   *
+   * @return 提示词；{@code null}/空白 = 不加前缀
+   */
+  public String systemPrompt() {
+    String prompt = settings.get().systemPrompt();
+    return prompt == null || prompt.isBlank() ? null : prompt.strip();
+  }
 }

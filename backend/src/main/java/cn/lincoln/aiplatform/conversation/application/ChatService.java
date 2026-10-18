@@ -124,6 +124,22 @@ public class ChatService {
   private final ChatStreamProperties properties;
 
   /**
+   * 通用会话设置（初始提示词）的读取口。
+   *
+   * <p>★ 用 <b>setter 可选注入</b>而不是构造器参数：本类有一个 7 参数的测试构造器被大量用例使用，
+   * 加必选构造参数会一次改穿所有测试；而这条依赖在测试环境里**确实可以没有** （没有 cv_chat_settings 那一行时行为等同于"不加提示词"，与改造前逐字一致）。
+   */
+  private ChatPolicyResolver policyResolver;
+
+  /**
+   * @param resolver 解析器（可空 = 不加系统提示词，测试环境即如此）
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setPolicyResolver(ChatPolicyResolver resolver) {
+    this.policyResolver = resolver;
+  }
+
+  /**
    * 出站闸门（{@code #72}）—— ★ 它与 {@link AccessScopePort} 上的密级<strong>不是一回事</strong>：
    * 后者回答"我能读哪些"（谁能看），本端口回答"读到的东西允许发到这个模型吗"（能发到哪）。 两者<strong>正交</strong>：一个高密级分段可以合法地被本地模型读，但不得被发去外部
    * API。
@@ -430,10 +446,11 @@ public class ChatService {
         List<cn.lincoln.aiplatform.platform.model.ChatMessage> withCurrent =
             new java.util.ArrayList<>(previous);
         // ★ 本轮问题带上引用，与单轮那条路的 `promptOf` 逐字同源 —— 两条路不能各拼各的
+        // ★ 初始提示词同样要带：否则「第 1 轮有口径、第 2 轮起消失」，模型行为会在中途变
         withCurrent.add(
             new cn.lincoln.aiplatform.platform.model.ChatMessage(
                 cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER,
-                promptOf(question, refs)));
+                promptOf(question, refs, systemPromptOrNull())));
         history = List.copyOf(withCurrent);
       }
     }
@@ -445,7 +462,7 @@ public class ChatService {
                 if (messages.isEmpty()) {
                   chatStream.stream(
                       turn.modelId(),
-                      promptOf(question, refs),
+                      promptOf(question, refs, systemPromptOrNull()),
                       Duration.ofMillis(properties.idleTimeoutMs()),
                       run);
                 } else {
@@ -937,11 +954,35 @@ public class ChatService {
    * <p>★ 本批<strong>不</strong>做提示词模板渲染（{@code as_assistant_prompt} 的绑定与模板引擎属另一批）： 这里给一个确定形状，让"引用编号
    * {@code [N]} 与 {@code refs} 的顺序"有唯一依据。
    */
-  private static String promptOf(String question, List<SourceRef> refs) {
-    if (refs.isEmpty()) {
-      return question;
+  /**
+   * 本轮要用的初始提示词。
+   *
+   * <p>★ 读失败一律降级为 {@code null}（不加前缀）而不是让整轮问答失败： 它是"锦上添花"的口径，不该比"能不能回答"优先级更高。
+   *
+   * @return 提示词；{@code null} = 不加
+   */
+  private String systemPromptOrNull() {
+    if (policyResolver == null) {
+      return null;
     }
-    StringBuilder prompt = new StringBuilder(question).append("\n\n参考资料：\n");
+    try {
+      return policyResolver.systemPrompt();
+    } catch (RuntimeException failure) {
+      log.warn("读通用会话设置失败，本轮不加初始提示词（对话行为与未配置时一致）", failure);
+      return null;
+    }
+  }
+
+  private static String promptOf(String question, List<SourceRef> refs, String systemPrompt) {
+    // ★ 初始提示词拼在**问题之前**，而不是作为一条 system 消息：
+    //   `ChatMessage.Role` 只有 USER/ASSISTANT（它的 javadoc 明确写「system 由提示词承担」），
+    //   所以"系统口径"在这个工程里本来就住在 prompt 文本里。
+    String prefix =
+        (systemPrompt == null || systemPrompt.isBlank()) ? "" : systemPrompt.strip() + "\n\n";
+    if (refs.isEmpty()) {
+      return prefix + question;
+    }
+    StringBuilder prompt = new StringBuilder(prefix).append(question).append("\n\n参考资料：\n");
     for (SourceRef ref : refs) {
       prompt
           .append('[')

@@ -13,6 +13,7 @@ import java.util.UUID;
  * @param idleTimeoutMs 多久没字节写出判吊死（★ SSE 唯一超时权威）
  * @param heartbeatIntervalMs 心跳间隔
  * @param firstTokenBudgetMs 首字延迟预算（B4：≤10s）
+ * @param systemPrompt 通用问答的初始提示词（★ 空 = 不加前缀；应用会话不读它）
  * @param maxOutputTokens 单轮最大输出 tokens；{@code null} = 不限
  * @param updatedAt 最后修改时间（界面显示"上次改动"，便于确认改没改上）
  */
@@ -22,6 +23,7 @@ public record ChatSettingsView(
     long idleTimeoutMs,
     long heartbeatIntervalMs,
     long firstTokenBudgetMs,
+    String systemPrompt,
     Integer maxOutputTokens,
     Instant updatedAt) {
 

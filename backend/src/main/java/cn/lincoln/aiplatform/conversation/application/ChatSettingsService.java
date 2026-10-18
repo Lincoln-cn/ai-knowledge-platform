@@ -52,6 +52,7 @@ public class ChatSettingsService {
             command.idleTimeoutMs(),
             command.heartbeatIntervalMs(),
             command.firstTokenBudgetMs(),
+            command.systemPrompt(),
             command.maxOutputTokens(),
             null);
     try {
@@ -83,6 +84,7 @@ public class ChatSettingsService {
    * @param idleTimeoutMs 空闲超时
    * @param heartbeatIntervalMs 心跳间隔
    * @param firstTokenBudgetMs 首字延迟预算
+   * @param systemPrompt 通用问答的初始提示词（可空 = 不加前缀）
    * @param maxOutputTokens 单轮最大输出（可空）
    */
   public record ChatSettingsCommand(
@@ -91,5 +93,6 @@ public class ChatSettingsService {
       long idleTimeoutMs,
       long heartbeatIntervalMs,
       long firstTokenBudgetMs,
+      String systemPrompt,
       Integer maxOutputTokens) {}
 }

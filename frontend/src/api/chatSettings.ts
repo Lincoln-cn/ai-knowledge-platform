@@ -35,6 +35,13 @@ export interface ChatSettings {
   heartbeatIntervalMs: number
   /** 首字延迟预算（毫秒，ROADMAP B4：≤10s） */
   firstTokenBudgetMs: number
+  /**
+   * 通用问答的**初始提示词**（系统提示词）；`null` / 空 = 不加前缀。
+   *
+   * ★ 只对通用问答生效：应用有自己的 `role_prompt`，两者不叠加
+   *   （叠加会变成「两条口径同时约束一个回答」，冲突时谁赢没人说得清）。
+   */
+  systemPrompt: string | null
   /** 单轮最大输出 tokens；`null` = 不限制 */
   maxOutputTokens: number | null
   /** 最后修改时间（服务端写，界面用来确认"改上了"） */
