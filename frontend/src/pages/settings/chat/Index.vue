@@ -5,45 +5,27 @@
       desc="通用问答（不挂应用的那条链路）的模型、提示词、召回与流式行为 —— 改完对新会话立即生效"
     >
       <template #actions>
-        <span v-if="updatedAtText" class="micro muted">上次修改：{{ updatedAtText }}</span>
+        <!--
+          ★ 状态摘要放在**页头的元信息行**，不另起四个卡片。
+
+          理由（`design.md` 的硬约束）：
+          · 「应用页 → Workbench：标题小而功能性，正文由**发丝线**分区，数据/界面本身是内容」；
+          · 结构禁令：「不许三列等宽『图标在上-标题-两行文案』的功能格子」——
+            四个「标签 + 大数值 + 一行说明」的等宽卡正是那个形状的变体；
+          · 仪器面板（签名 4）虽然就是"mono 读数"的形状，但它**每视口只许一个**，
+            且各页落点里**没有**这一页。
+          ⇒ 所以状态用一行 mono 元信息表达，页面里只留"发丝线分区"的正文。
+        -->
+        <span class="meta-line micro">
+          <span>召回 <b>{{ form.retrievalEnabled ? '启用' : '未启用' }}</b></span>
+          <span>空闲 <b>{{ idleSec }}s</b></span>
+          <span>心跳 <b>{{ heartbeatSec }}s</b></span>
+          <span>输出 <b>{{ form.streamEnabled ? '逐字' : '一次性' }}</b></span>
+          <span v-if="currentModelName">模型 <b>{{ currentModelName }}</b></span>
+          <span v-if="updatedAtText" class="muted">上次修改 {{ updatedAtText }}</span>
+        </span>
       </template>
     </PageHeader>
-
-    <!-- ── 状态摘要：一眼看到「现在到底是什么行为」 ─────────────────── -->
-    <div class="summary">
-      <div class="stat">
-        <div class="stat-label label">默认模型</div>
-        <div class="stat-value">{{ currentModelName || '自动挑选' }}</div>
-        <div class="stat-note micro muted">通用问答用的对话模型</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label label">召回</div>
-        <div class="stat-value">
-          <span class="dot" :class="form.retrievalEnabled ? 'ok' : 'off'" />
-          {{ form.retrievalEnabled ? '启用' : '未启用' }}
-        </div>
-        <div class="stat-note micro muted">
-          {{
-            form.retrievalEnabled
-              ? `阈值 ${form.retrievalThreshold.toFixed(2)} · 取 ${form.retrievalTopN} 条`
-              : '只用模型自身知识，不查知识库'
-          }}
-        </div>
-      </div>
-      <div class="stat">
-        <div class="stat-label label">空闲超时</div>
-        <div class="stat-value">{{ idleSec }}s</div>
-        <div class="stat-note micro muted">超过即判「生成超时」</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label label">流式输出</div>
-        <div class="stat-value">
-          <span class="dot" :class="form.streamEnabled ? 'ok' : 'off'" />
-          {{ form.streamEnabled ? '逐字' : '一次性' }}
-        </div>
-        <div class="stat-note micro muted">心跳 {{ heartbeatSec }}s</div>
-      </div>
-    </div>
 
     <div v-if="loadError" class="notice err">
       <div><b>读取失败：</b>{{ loadError.reason }}</div>
@@ -458,39 +440,21 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/*
+ * ★ 全宽 —— 不限宽、不居中。
+ *
+ * `design.md` 的 Macrostructure family 把应用页定为 **Workbench**：
+ * 「标题小而功能性，正文由**发丝线**分区，**数据/界面本身是内容**」。
+ * 本仓的知识库 / 应用管理 / 基础数据页都不设 `max-width`，这一页跟着走。
+ *
+ * ★ 曾经写过 `max-width: 1080px` 但没居中 ⇒ 整页贴左，1920 屏上右边空出一大片
+ *   （用户报：「为什么整体偏左？」）。随后又试过「限宽 + 居中」——
+ *   那是把 Web 文档的阅读宽度套到后台表单页上，与本页的 Workbench 形态不符，已撤。
+ *
+ * ★ 表单字段不会因此被拉成长条：`.form-grid` 用 `minmax(260px, 1fr)`，宽屏自动分多列。
+ */
 .settings-page {
-  max-width: 1080px;
-}
-
-/* ── 状态摘要 ─────────────────────────────────────────────────────── */
-.summary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: var(--space-sm);
-}
-
-.stat {
-  padding: var(--space-sm) var(--space-md);
-  background: var(--color-surface);
-  border: 1px solid var(--color-rule);
-  border-radius: var(--radius-lg);
-}
-
-.stat-label {
-  margin-bottom: var(--space-3xs);
-}
-
-.stat-value {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2xs);
-  font-size: var(--text-md);
-  font-weight: 600;
-  color: var(--color-ink);
-}
-
-.stat-note {
-  margin-top: var(--space-3xs);
+  width: 100%;
 }
 
 /* 状态方点：与全局 .notice 的口径一致（语气靠文字，不靠大色块） */
@@ -511,6 +475,22 @@ onMounted(() => {
 
 .dot.warn {
   background: var(--color-warning, #e8590c);
+}
+
+.meta-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: baseline;
+}
+
+.meta-line b {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.meta-line .muted {
+  color: var(--color-muted);
 }
 
 /* ── 卡片标题 ─────────────────────────────────────────────────────── */
