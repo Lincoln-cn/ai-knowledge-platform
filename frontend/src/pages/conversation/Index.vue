@@ -6,6 +6,7 @@
       :app-id="appBrief?.id ?? appId"
       :public-mode="false"
       :show-share="canShare"
+      :show-chat-settings="canViewSettings"
       @back="onBack"
       @share="openShare()"
     />
@@ -158,6 +159,9 @@ const composerRef = ref<InstanceType<typeof Composer>>()
 
 /** 分享入口按权限点显隐（03 权限点词汇：conversation:share） */
 const canShare = computed(() => session.can(PERM.conversationShare))
+
+/** 「对话设置」入口：读权限与页面本身一致（改配置需要 system:manage，在页面内再把一次） */
+const canViewSettings = computed(() => session.can(PERM.conversationView))
 const shareConversationId = computed(() => activeConversation.value?.id ?? null)
 
 /* ── 顶栏 ── */

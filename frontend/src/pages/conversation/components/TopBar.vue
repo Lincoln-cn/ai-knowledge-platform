@@ -16,6 +16,17 @@
       <router-link v-if="showKbLink" to="/knowledge" class="tlink">
         <el-icon><Collection /></el-icon><span>知识库</span>
       </router-link>
+      <!--
+        ★ 对话设置：从对话页直达配置（召回开关 / 阈值 / 提示词 / 超时）。
+
+        用户报「点击对话配置没有跳转」—— 此前这个入口**根本不存在**：
+        顶栏只有「返回 / 分享」，而「应用配置」只在有 appId 时出现，
+        通用问答（无 appId）的页面上没有任何通往配置的路。
+        ⇒ 不是"点了没反应"，是"那个按钮不存在"（两者在界面上很像，都不动）。
+      -->
+      <router-link v-if="showChatSettings" to="/settings/chat" class="tlink">
+        <el-icon><Timer /></el-icon><span>对话设置</span>
+      </router-link>
       <router-link v-if="showAppConfig" :to="appConfigTo" class="tlink">
         <el-icon><Setting /></el-icon><span>应用配置</span>
       </router-link>
@@ -27,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowLeft, Collection, Setting, Share } from '@element-plus/icons-vue'
+import { ArrowLeft, Collection, Setting, Share, Timer } from '@element-plus/icons-vue'
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -38,6 +49,8 @@ const props = defineProps<{
   showKbLink?: boolean
   /** 分享入口显隐由调用方按权限点决定（conversation:share） */
   showShare?: boolean
+  /** 「对话设置」入口（按 conversation:view；改配置需要 system:manage，在页面内再把一次） */
+  showChatSettings?: boolean
 }>()
 
 const emit = defineEmits<{
