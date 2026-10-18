@@ -51,6 +51,24 @@ spring:
       api-key: ${AI_API_KEY:ollama-local}
 
 app:
+  # ─── 进程内 ONNX 向量化（`#172`）───
+  #
+  # ★★ 默认模型 = `multilingual-e5-small`（**中英双语**，384 维，int8 112.8MB）。
+  #    选它的依据是实测，不是偏好：同一套 16 份语料 + 12 条问答对，只换模型
+  #      bge-small-zh-v1.5（22.9MB / 512 维）     → 命中 6/12（50%），英文文档 1/6
+  #      multilingual-e5-small（112.8MB / 384 维） → 命中 10/12（83%），英文文档 5/6
+  #    读数与复现步骤见 `models/README.md` 第八节。
+  # ★ 代价：体积是中文单语模型的 ~5 倍（多语模型的词表大，embedding 矩阵在量化件里仍是 fp32）。
+  # ★ 模型文件**不进仓库**（`models/*` 被 .gitignore 忽略），落盘步骤见 `models/README.md`。
+  embedding:
+    local:
+      enabled: ${LOCAL_ONNX_ENABLED:true}
+      model-path: ${LOCAL_ONNX_MODEL_PATH:models/multilingual-e5-small/model_quantized.onnx}
+      tokenizer-path: ${LOCAL_ONNX_TOKENIZER_PATH:models/multilingual-e5-small/tokenizer.json}
+      # ★★ 这个名字是**路由判据**（`RoutingEmbeddingAdapter` 按 baseModel 名分派）：
+      #    知识库里登记的 `baseModel` 必须与它一致，否则那条模型会去连上游 11434。
+      model-name: ${LOCAL_ONNX_MODEL_NAME:multilingual-e5-small}
+
   security:
     jwt:
       # ★ 必须是 URL 形式，不能是 "ai-knowledge-platform" 这样的裸串 ——

@@ -65,11 +65,11 @@ public class LocalOnnxEmbedding {
 
   public LocalOnnxEmbedding(
       @Value("${app.embedding.local.enabled:true}") boolean enabled,
-      @Value("${app.embedding.local.model-path:models/bge-small-zh-v1.5/model_quantized.onnx}")
+      @Value("${app.embedding.local.model-path:models/multilingual-e5-small/model_quantized.onnx}")
           String modelPath,
-      @Value("${app.embedding.local.tokenizer-path:models/bge-small-zh-v1.5/tokenizer.json}")
+      @Value("${app.embedding.local.tokenizer-path:models/multilingual-e5-small/tokenizer.json}")
           String tokenizerPath,
-      @Value("${app.embedding.local.model-name:bge-small-zh-v1.5}") String servedModelName) {
+      @Value("${app.embedding.local.model-name:multilingual-e5-small}") String servedModelName) {
     this.enabled = enabled;
     this.modelPath = modelPath;
     this.tokenizerPath = tokenizerPath;
