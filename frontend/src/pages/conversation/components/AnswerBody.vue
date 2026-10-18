@@ -1,45 +1,38 @@
 <template>
-  <div class="answer" @click="onClick">
-    <template v-for="(block, i) in blocks" :key="i">
-      <h3 v-if="block.type === 'h'" class="a-h" v-html="block.html" />
-      <pre v-else-if="block.type === 'code'" class="a-code"><code>{{ block.text }}</code></pre>
-      <hr v-else-if="block.type === 'hr'" class="a-hr" />
-      <blockquote v-else-if="block.type === 'quote'" class="a-quote" v-html="block.html" />
-      <p v-else-if="block.type === 'p'" class="a-p" v-html="block.html" />
-      <ul v-else-if="block.type === 'ul'" class="a-ul">
-        <li v-for="(item, j) in block.items" :key="j" v-html="item" />
-      </ul>
-      <ol v-else-if="block.type === 'ol'" class="a-ol">
-        <li v-for="(item, j) in block.items" :key="j" v-html="item" />
-      </ol>
-    </template>
-    <span v-if="streaming" class="cursor" aria-hidden="true" />
-  </div>
+  <div class="answer" @click="onClick" v-html="html" />
+  <span v-if="streaming" class="cursor" aria-hidden="true" />
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import MarkdownIt from 'markdown-it'
 
 /**
- * 轻量 Markdown 渲染。
+ * 回答正文渲染 —— 用成熟的 **markdown-it**，不再自己写解析器。
  *
- * 旧项目用 md-editor-v3；本工程**依赖白名单是封闭的**（`frontend/README.md` 只允许
- * element-plus / pinia / vue-router / axios / dayjs / lodash-es / mitt / echarts / logicflow 那几项），
- * 所以这里自己做「问答正文需要的那一子集」。
+ * <h3>★ 为什么换掉自研解析器（用户原话：「可以用成熟的 markdown 渲染组件，不要自己编写一个解析器嘛？」）</h3>
  *
- * <h3>★ 2026-10-18 补齐（用户：「markdown 格式似乎没有正确渲染」）</h3>
+ * 之前是一个手写的「行首优先级」小解析器，能覆盖段落/列表/粗体/行内代码，
+ * 但漏了标题、代码块、分隔线、引用块、斜体、链接、表格 —— 实测库里真的存在
+ * `### 劳动合同应当具备的条款` 这类输出，于是井号原样露在界面上。
+ * 手写解析器的本质问题是：**它是 CommonMark 的一个不断长大的子集**，
+ * 每漏一条就是一次"某个格式不渲染"的报障，而且边界（嵌套、转义、围栏）永远补不完。
  *
- * 之前只支持「段落 / 列表 / 粗体 / 行内代码 / 引用角标」，而模型的真实输出里还有
- * `### 标题`、代码块、`---` 分隔线、`> 引用`、`*斜体*`、`[文字](链接)` ——
- * 那些行会被当成**普通段落原样显示**（井号、星号、反引号都露在界面上）。
+ * <h3>★★ 安全：靠 `html: false`，而不是靠"先转义再拼"</h3>
  *
- * 现在按 CommonMark 的**行首优先级**解析：代码块 > 标题 > 分隔线 > 引用 > 列表 > 段落。
+ * 模型输出是**不可信输入**。这里刻意关掉 markdown-it 的 HTML 直通：
+ * 于是 `<script>`、`<img onerror=…>` 这类原始标签会被**转义成文本**，
+ * 渲染结果只包含 markdown-it 自己生成的标签 ⇒ **不需要再引 DOMPurify**，
+ * 也不会出现"忘了 sanitize"这一类漏洞。
  *
- * <h3>★ 安全</h3>
+ * ★ 代价：回答里内嵌 HTML 会显示成源码而不是生效 —— 对问答正文来说这是想要的行为。
  *
- * 一律**先转义 HTML 再拼标签**（与原实现同一条口径）：模型输出是不可信输入，
- * `v-html` 直接吃原文等于给它一个 XSS 入口。链接另加 scheme 白名单（只放行 http/https/mailto），
- * 于是 `javascript:` 这类链接不会变成可点的锚点。
+ * <h3>引用角标 `[N]`</h3>
+ *
+ * 它不是 markdown 语法，而是本平台的引用锚点。做法：**渲染前**把 `[N]` 换成不含
+ * HTML 特殊字符的占位符，**渲染后**再把占位符换回可点的 `<span class="cite">`。
+ * ★ 为什么不在渲染后的 HTML 上直接正则替换 `[N]`：那会连 `<a title="[1]">`
+ * 这类属性内容一起改坏；占位符方案里 HTML 已经生成完毕，替换只命中正文。
  */
 const props = defineProps<{
   text: string
@@ -52,179 +45,48 @@ const emit = defineEmits<{
   cite: [index: number]
 }>()
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+const md = new MarkdownIt({
+  // ★ 安全的总开关：不直通原始 HTML
+  html: false,
+  // 单个换行也当换行（问答正文里模型常用它分行，严格的 CommonMark 会并成一段）
+  breaks: true,
+  // 自动识别裸链接（`https://…` 不必写成 [文字](url)）
+  linkify: true,
+  typographer: false
+})
+
+// 外链统一新窗口 + noreferrer（与安全策略一致）
+const defaultLinkOpen =
+  md.renderer.rules.link_open ??
+  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
+md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  const token = tokens[idx]!
+  token.attrSet('target', '_blank')
+  token.attrSet('rel', 'noopener noreferrer')
+  return defaultLinkOpen(tokens, idx, options, env, self)
 }
 
-/** 行内元素：粗体 / 斜体 / 删除线 / 行内代码 / 链接 / 引用角标[1]。 */
-function renderInline(raw: string): string {
-  let html = escapeHtml(raw)
+/**
+ * `[3]` → 占位符。
+ *
+ * ★ 不能用 `\u0000` 这类控制字符：markdown-it 会把它规范化成 `�`（实测），
+ *   于是占位符再也换不回来，正文里直接露出乱码。
+ *   ★ 用 "@@CITE数字@@" 这种**不会出现在正常中文回答里**的可见串即可。
+ */
+const CITE_PLACEHOLDER = '@@CITE'
 
-  // ★ 行内代码先占位：它的内容不该再被粗体/斜体规则改写（`**a**` 里的星号是字面量）
-  const codes: string[] = []
-  html = html.replace(/`([^`]+)`/g, (_m, code: string) => {
-    codes.push(code)
-    return `\u0000CODE${codes.length - 1}\u0000`
-  })
-
-  // 链接：只放行安全的 scheme
-  html = html.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g,
-    (_m, label: string, href: string) =>
-      `<a class="a-link" href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`
-  )
-
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-  html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>')
-  html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>')
-  // ★ 斜体：`*x*` 与 `_x_`，且两侧不能紧贴字母（否则 `snake_case`、`2*3*4` 会被误伤）
-  html = html.replace(/(^|[\s（(【[])\*([^*\n]+)\*(?=[\s）)】\]。，,.;；:：!！?？]|$)/g, '$1<em>$2</em>')
-  html = html.replace(/(^|[\s（(【[])_([^_\n]+)_(?=[\s）)】\]。，,.;；:：!！?？]|$)/g, '$1<em>$2</em>')
-
-  html = html.replace(
+const html = computed(() => {
+  const raw = (props.text || '').replace(
     /\[(\d+)\]/g,
-    (_m, n: string) =>
-      `<span class="cite${Number(n) === props.activeIndex ? ' active' : ''}" data-ref="${n}" role="button" tabindex="0">[${n}]</span>`
+    (_m, n: string) => `${CITE_PLACEHOLDER}${n}@@`
   )
-
-  // 还原行内代码
-  html = html.replace(/\u0000CODE(\d+)\u0000/g, (_m, i: string) => {
-    const code = codes[Number(i)] ?? ''
-    return `<code>${code}</code>`
+  let rendered = md.render(raw)
+  // 占位符 → 可点角标（此时 HTML 已生成完毕，替换不会碰到属性）
+  rendered = rendered.replace(/@@CITE(\d+)@@/g, (_m, n: string) => {
+    const active = Number(n) === props.activeIndex ? ' active' : ''
+    return `<span class="cite${active}" data-ref="${n}" role="button" tabindex="0">[${n}]</span>`
   })
-  return html
-}
-
-type Block =
-  | { type: 'p'; html: string }
-  | { type: 'h'; html: string }
-  | { type: 'ul'; items: string[] }
-  | { type: 'ol'; items: string[] }
-  | { type: 'code'; text: string }
-  | { type: 'quote'; html: string }
-  | { type: 'hr' }
-
-const blocks = computed<Block[]>(() => {
-  const lines = (props.text || '').split(/\r?\n/)
-  const out: Block[] = []
-  let para: string[] = []
-  let ul: string[] = []
-  let ol: string[] = []
-  let quote: string[] = []
-  let fence: { text: string[] } | null = null
-
-  const flushPara = () => {
-    if (para.length) {
-      out.push({ type: 'p', html: renderInline(para.join(' ')) })
-      para = []
-    }
-  }
-  const flushUl = () => {
-    if (ul.length) {
-      out.push({ type: 'ul', items: ul.map(renderInline) })
-      ul = []
-    }
-  }
-  const flushOl = () => {
-    if (ol.length) {
-      out.push({ type: 'ol', items: ol.map(renderInline) })
-      ol = []
-    }
-  }
-  const flushQuote = () => {
-    if (quote.length) {
-      out.push({ type: 'quote', html: renderInline(quote.join(' ')) })
-      quote = []
-    }
-  }
-  const flushAll = () => {
-    flushPara()
-    flushUl()
-    flushOl()
-    flushQuote()
-  }
-
-  for (const line of lines) {
-    const trimmed = line.trim()
-
-    // ★ 代码块（``` 或 ~~~）：内容原样保留
-    if (fence) {
-      if (/^(```|~~~)/.test(trimmed)) {
-        out.push({ type: 'code', text: fence.text.join('\n') })
-        fence = null
-      } else {
-        fence.text.push(line)
-      }
-      continue
-    }
-    if (/^(```|~~~)/.test(trimmed)) {
-      flushAll()
-      fence = { text: [] }
-      continue
-    }
-
-    if (!trimmed) {
-      flushAll()
-      continue
-    }
-
-    // 标题：# ~ ######（统一渲染成 h3，字号由 CSS 控制 —— 正文里不该出现 h1/h2 抢层级）
-    const hMatch = /^(#{1,6})\s+(.*)$/.exec(trimmed)
-    if (hMatch) {
-      flushAll()
-      out.push({ type: 'h', html: renderInline(hMatch[2]!) })
-      continue
-    }
-
-    // 分隔线
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
-      flushAll()
-      out.push({ type: 'hr' })
-      continue
-    }
-
-    // 引用块
-    const qMatch = /^>\s?(.*)$/.exec(trimmed)
-    if (qMatch) {
-      flushPara()
-      flushUl()
-      flushOl()
-      quote.push(qMatch[1]!)
-      continue
-    }
-
-    const ulMatch = /^[-*+]\s+(.*)$/.exec(trimmed)
-    const olMatch = /^\d+[.)]\s+(.*)$/.exec(trimmed)
-    if (ulMatch) {
-      flushPara()
-      flushOl()
-      flushQuote()
-      ul.push(ulMatch[1]!)
-      continue
-    }
-    if (olMatch) {
-      flushPara()
-      flushUl()
-      flushQuote()
-      ol.push(olMatch[1]!)
-      continue
-    }
-    flushUl()
-    flushOl()
-    flushQuote()
-    para.push(trimmed)
-  }
-
-  // 未闭合的代码块（流式中途）也要显示出来，否则那段文字凭空消失
-  if (fence) {
-    out.push({ type: 'code', text: fence.text.join('\n') })
-  }
-  flushAll()
-  return out
+  return rendered
 })
 
 function onClick(e: MouseEvent) {
@@ -255,15 +117,21 @@ defineExpose({ scrollToCite })
   word-break: break-word;
 }
 
-.a-p {
+/* ── markdown-it 生成的标签：用 :deep 才作用得到 v-html 的内容 ── */
+.answer :deep(p) {
   margin: 0 0 var(--space-xs);
 }
 
-.a-p:last-child {
+.answer :deep(p:last-child) {
   margin-bottom: 0;
 }
 
-.a-h {
+.answer :deep(h1),
+.answer :deep(h2),
+.answer :deep(h3),
+.answer :deep(h4),
+.answer :deep(h5),
+.answer :deep(h6) {
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--color-ink);
@@ -271,53 +139,64 @@ defineExpose({ scrollToCite })
   letter-spacing: 0;
 }
 
-.a-h:first-child {
-  margin-top: 0;
-}
-
-.a-ul,
-.a-ol {
+.answer :deep(ul),
+.answer :deep(ol) {
   margin: 0 0 var(--space-xs);
   padding-left: var(--space-lg);
 }
 
-.a-ul :deep(li),
-.a-ol :deep(li) {
+.answer :deep(li) {
   margin: var(--space-3xs) 0;
 }
 
-.a-code {
+.answer :deep(pre) {
   margin: var(--space-xs) 0;
   padding: var(--space-sm) var(--space-md);
   background: var(--color-sunken);
   border-radius: var(--radius-sm);
   overflow-x: auto;
-  font-family: var(--font-mono);
   font-size: var(--text-2xs);
   line-height: 1.5;
-  white-space: pre;
 }
 
-.a-code :deep(code) {
+.answer :deep(pre code) {
   background: transparent;
   padding: 0;
   font-size: inherit;
 }
 
-.a-hr {
+.answer :deep(hr) {
   border: none;
   border-top: 1px solid var(--color-rule);
   margin: var(--space-sm) 0;
 }
 
-.a-quote {
+.answer :deep(blockquote) {
   margin: var(--space-xs) 0;
   padding: var(--space-2xs) var(--space-sm);
   border-left: 2px solid var(--color-rule);
   color: var(--color-muted);
 }
 
-.answer :deep(.a-link) {
+.answer :deep(table) {
+  border-collapse: collapse;
+  margin: var(--space-xs) 0;
+  font-size: var(--text-2xs);
+}
+
+.answer :deep(th),
+.answer :deep(td) {
+  border: 1px solid var(--color-rule);
+  padding: var(--space-2xs) var(--space-xs);
+  text-align: left;
+}
+
+.answer :deep(th) {
+  background: var(--color-sunken);
+  font-weight: 600;
+}
+
+.answer :deep(a) {
   color: var(--color-accent);
   text-decoration: none;
   border-bottom: 1px solid var(--color-accent-soft);
@@ -349,15 +228,6 @@ defineExpose({ scrollToCite })
 .answer :deep(strong) {
   font-weight: 600;
   color: var(--color-ink);
-}
-
-.answer :deep(em) {
-  font-style: italic;
-}
-
-.answer :deep(del) {
-  text-decoration: line-through;
-  color: var(--color-muted);
 }
 
 .cursor {

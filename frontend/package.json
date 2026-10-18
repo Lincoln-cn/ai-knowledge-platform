@@ -28,6 +28,7 @@
     "echarts": "^5.5.1",
     "element-plus": "^2.8.4",
     "lodash-es": "^4.17.21",
+    "markdown-it": "^14.3.3",
     "mitt": "^3.0.1",
     "pinia": "^2.2.4",
     "vue": "^3.5.12",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@types/lodash-es": "^4.17.12",
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^22.7.5",
     "@vitejs/plugin-vue": "^5.1.4",
     "sass": "^1.105.0",

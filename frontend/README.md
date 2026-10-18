@@ -4,7 +4,15 @@
 但 mock 与真实后端是**同一契约的两种实现**，切换只改一个环境变量。
 
 **依赖白名单**：`element-plus` · `@element-plus/icons-vue` · `pinia` · `vue-router` · `axios` ·
-`dayjs` · `lodash-es` · `mitt` · `echarts` · `@logicflow/*`（编排画布）· `@antv/layout`。
+`dayjs` · `lodash-es` · `mitt` · `echarts` · `@logicflow/*`（编排画布）· `@antv/layout` ·
+`markdown-it`（问答正文渲染，2026-10-18 新增）。
+
+★ `markdown-it` 入白名单的经过（不是随手加的）：此前回答正文用的是**手写解析器**，
+  漏掉标题/代码块/引用块/斜体/链接/表格；用户明确要求「可以用成熟的 markdown 渲染组件，
+  不要自己编写一个解析器嘛？」。选它的三个理由：**纯 ESM** · **零运行时依赖** ·
+  **`html: false` 就能关掉原始 HTML 直通**（于是不需要再引 DOMPurify —— 模型输出是不可信输入，
+  这条安全属性是硬要求）。
+
 **不用**任何商业基座框架及其 CRUD 模板产物，不用 `vuex`，不用 `moment`（冗余的日期库），
 不用非 ESM 版的 `lodash`。字体自托管（OFL-1.1），不引外部 CDN。
 
