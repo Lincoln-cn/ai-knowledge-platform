@@ -32,8 +32,11 @@ public class SuggestionService {
 
   private static final Logger log = LoggerFactory.getLogger(SuggestionService.class);
 
-  /** 生成几条。3 条是"刚好能选、又不会把人淹掉"的量。 */
-  private static final int WANT = 3;
+  /** 配置读不到时的默认条数（3 条是"刚好能选、又不会把人淹掉"的量）。 */
+  private static final int DEFAULT_COUNT = 3;
+
+  /** 条数上限。再多就不叫"推荐"、叫菜单了；也是 DB 约束那一档。 */
+  private static final int MAX_COUNT = 10;
 
   /** 单条追问的字数上限（超过的丢掉 —— 模型偶尔会写出一整段）。 */
   private static final int MAX_LEN = 40;
@@ -62,6 +65,13 @@ public class SuggestionService {
    */
   @Transactional
   public List<String> generate(UUID messageId) {
+    // ★ 0 = 关闭：不调模型、不落库、界面上不出现那一排。
+    //   用"一个数字"表达关闭，是为了不必为了这件事改代码 ——
+    //   有些团队就是反感"AI 替我猜我想问什么"。
+    int want = count();
+    if (want <= 0) {
+      return List.of();
+    }
     Row row = load(messageId);
     if (row == null) {
       return List.of();
@@ -76,11 +86,11 @@ public class SuggestionService {
     }
     List<String> generated;
     try {
-      String raw = chat.complete(modelId, prompt(row.question(), row.answer()), TIMEOUT);
+      String raw = chat.complete(modelId, prompt(row.question(), row.answer(), want), TIMEOUT);
       // ★ 原始输出记 debug：1.5B 的输出格式不稳定，遇到"chips 数量不对"时看这一行就能判断
       //   是模型没按格式写，还是我们的解析吃掉了。
       log.debug("追问原始输出（消息 {}）：{}", messageId, raw);
-      generated = parse(raw);
+      generated = parse(raw, want);
     } catch (RuntimeException failure) {
       // ★ 降级而不是报错：追问生成失败不该让用户在界面上看到一个"错误"，
       //   他刚刚拿到一条正常回答。
@@ -144,14 +154,20 @@ public class SuggestionService {
         continue; // 第一个匹配是键名
       }
       out.add(m.group(1).replace("\\\"", "\"").replace("\\\\", "\\"));
-      if (out.size() >= WANT) {
+      if (out.size() >= MAX_COUNT) {
         break;
       }
     }
     return out;
   }
 
-  private String prompt(String question, String answer) {
+  /** 当前配置的条数（夹到 0..MAX_COUNT；读不到 ⇒ 默认 3）。 */
+  private int count() {
+    int configured = policy == null ? DEFAULT_COUNT : policy.suggestionCount();
+    return Math.max(0, Math.min(MAX_COUNT, configured));
+  }
+
+  private String prompt(String question, String answer, int want) {
     String clipped = answer.length() > ANSWER_CLIP ? answer.substring(0, ANSWER_CLIP) : answer;
     String system = policy == null ? null : policy.systemPrompt();
     StringBuilder sb = new StringBuilder();
@@ -161,16 +177,17 @@ public class SuggestionService {
     // ★ 用**编号占位**而不是"请写 3 个"：实测 1.5B 对"写 3 个"经常只写 1 个，
     //   而给它 `1.` `2.` `3.` 三行开头，它会把三行都填上（模型对"续写"远比对"计数"可靠）。
     sb.append("根据下面这一轮问答，按编号写出 ")
-        .append(WANT)
+        .append(want)
         .append(" 个用户可能继续追问的问题，每个问题不超过 20 个字。")
-        .append("\n直接输出这三行，不要解释、不要引号、不要写「问：」：")
-        .append("\n1.")
-        .append("\n2.")
-        .append("\n3.")
-        .append("\n\n问：")
-        .append(question)
-        .append("\n答：")
-        .append(clipped);
+        .append("\n直接输出这 ")
+        .append(want)
+        .append(" 行，不要解释、不要引号、不要写「问：」：");
+    // ★ 用编号占位而不是"请写 N 个"：实测 1.5B 对"写 3 个"经常只写 1 个，
+    //   而给它每行编号开头，它会把每行都填上（模型对"续写"远比对"计数"可靠）。
+    for (int i = 1; i <= want; i++) {
+      sb.append("\n").append(i).append(".");
+    }
+    sb.append("\n\n问：").append(question).append("\n答：").append(clipped);
     return sb.toString();
   }
 
@@ -180,8 +197,8 @@ public class SuggestionService {
    * <p>★ 宽容解析：实测 1.5B 会干这三件事 —— 带「问：」前缀、把多个问题塞在**一行**里、 带编号或引号。逐行清洗只能解决前一种，所以这里先按行切、每条再按问号切，
    * 任何一条不合法就跳过，而不是"格式不对就整体丢弃"（那会让 chips 直接不出现）。
    */
-  static List<String> parse(String raw) {
-    List<String> out = new ArrayList<>(WANT);
+  static List<String> parse(String raw, int want) {
+    List<String> out = new ArrayList<>(want);
     if (raw == null) {
       return out;
     }
@@ -207,7 +224,7 @@ public class SuggestionService {
         if (!out.contains(s)) {
           out.add(s);
         }
-        if (out.size() >= WANT) {
+        if (out.size() >= want) {
           return out;
         }
       }
@@ -276,7 +293,9 @@ public class SuggestionService {
           continue; // 第一个匹配是键名 "suggestions"
         }
         out.add(m.group(1).replace("\\\"", "\"").replace("\\\\", "\\"));
-        if (out.size() >= WANT) {
+        // ★ 存量的条数由当初生成时决定，这里只按"业务上限"兜底，不再用配置值 ——
+        //   否则用户把条数从 5 调到 3 之后，老消息里的 5 条会被截成 3 条（改了历史）。
+        if (out.size() >= MAX_COUNT) {
           break;
         }
       }

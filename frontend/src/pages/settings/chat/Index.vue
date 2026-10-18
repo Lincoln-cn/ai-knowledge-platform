@@ -270,6 +270,46 @@
         </div>
       </section>
 
+      <!-- ── ④ 推荐追问 ───────────────────────────────────────────── -->
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="card-title">
+              推荐追问
+              <span class="badge" :class="form.suggestionCount > 0 ? 'badge-ok' : 'badge-off'">
+                {{ form.suggestionCount > 0 ? `${form.suggestionCount} 条` : '已关闭' }}
+              </span>
+            </div>
+            <div class="micro muted">
+              回答完成后，在下面列出几条「猜你想问」，点一下就发出去
+            </div>
+          </div>
+        </div>
+        <div class="panel-body form-grid">
+          <div class="field">
+            <label class="field-label">条数</label>
+            <el-input-number
+              v-model="form.suggestionCount"
+              :min="0"
+              :max="10"
+              :disabled="!canEdit"
+              class="field-control narrow"
+            />
+            <div class="field-note micro muted">
+              <b>0 = 关闭</b>（不生成、界面上不出现那一排）。默认 3；上限 10。
+              条数越多，生成越慢（1.5B 每条约 +1~2 秒）。
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-label">生成时机</label>
+            <div class="field-note micro muted">
+              在你读到回答**之后**才生成（<code>done</code> 之后另发一次请求）——
+              不占用回答本身的等待时间。生成不出来就只是不显示，不会报错。
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ── 保存栏 ───────────────────────────────────────────────── -->
       <div class="save-bar panel">
         <div class="save-state">
@@ -337,6 +377,7 @@ const form = reactive<ChatSettings>({
   retrievalThreshold: 0.3,
   retrievalTopN: 5,
   historyMaxMessages: 20,
+  suggestionCount: 3,
   maxOutputTokens: null,
   updatedAt: null
 })
@@ -373,6 +414,7 @@ function payload(): Omit<ChatSettings, 'updatedAt'> {
     retrievalThreshold: form.retrievalThreshold,
     retrievalTopN: form.retrievalTopN,
     historyMaxMessages: form.historyMaxMessages,
+    suggestionCount: form.suggestionCount,
     maxOutputTokens: form.maxOutputTokens
   }
 }

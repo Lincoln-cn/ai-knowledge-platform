@@ -43,7 +43,7 @@ public class ChatSettingsStore {
         jdbc.query(
             "select default_model_id, stream_enabled, idle_timeout_ms, heartbeat_interval_ms,"
                 + " first_token_budget_ms, system_prompt, retrieval_enabled, retrieval_kb_ids,"
-                + " retrieval_threshold, retrieval_top_n, history_max_messages,"
+                + " retrieval_threshold, retrieval_top_n, history_max_messages, suggestion_count,"
                 + " max_output_tokens, updated_at"
                 + " from cv_chat_settings where id = ?",
             (rs, rowNum) -> {
@@ -61,6 +61,7 @@ public class ChatSettingsStore {
                   rs.getDouble("retrieval_threshold"),
                   rs.getInt("retrieval_top_n"),
                   rs.getInt("history_max_messages"),
+                  rs.getInt("suggestion_count"),
                   maxTokens,
                   rs.getObject("updated_at", java.time.OffsetDateTime.class) == null
                       ? null
@@ -90,6 +91,7 @@ public class ChatSettingsStore {
                 + " idle_timeout_ms = ?, heartbeat_interval_ms = ?, first_token_budget_ms = ?,"
                 + " system_prompt = ?, retrieval_enabled = ?, retrieval_kb_ids = ?,"
                 + " retrieval_threshold = ?, retrieval_top_n = ?, history_max_messages = ?,"
+                + " suggestion_count = ?,"
                 + " max_output_tokens = ?, updated_at = now(), updated_by = ?"
                 + " where id = ?",
             settings.defaultModelId(),
@@ -105,6 +107,7 @@ public class ChatSettingsStore {
             settings.retrievalThreshold(),
             settings.retrievalTopN(),
             settings.historyMaxMessages(),
+            settings.suggestionCount(),
             settings.maxOutputTokens(),
             operator,
             SINGLETON);

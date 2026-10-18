@@ -185,6 +185,15 @@ public class ChatPolicyResolver {
     return settings.get().historyMaxMessages();
   }
 
+  /**
+   * 推荐追问条数。
+   *
+   * @return 条数（0 = 关闭；默认 3）
+   */
+  public int suggestionCount() {
+    return settings.get().suggestionCount();
+  }
+
   public String systemPrompt() {
     String prompt = settings.get().systemPrompt();
     return prompt == null || prompt.isBlank() ? null : prompt.strip();

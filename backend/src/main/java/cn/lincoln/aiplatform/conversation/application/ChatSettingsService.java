@@ -58,6 +58,7 @@ public class ChatSettingsService {
             command.retrievalThreshold() == null ? 0.3 : command.retrievalThreshold(),
             command.retrievalTopN() == null ? 5 : command.retrievalTopN(),
             command.historyMaxMessages() == null ? 20 : command.historyMaxMessages(),
+            command.suggestionCount() == null ? 3 : command.suggestionCount(),
             command.maxOutputTokens(),
             null);
     try {
@@ -104,5 +105,6 @@ public class ChatSettingsService {
       Double retrievalThreshold,
       Integer retrievalTopN,
       Integer historyMaxMessages,
+      Integer suggestionCount,
       Integer maxOutputTokens) {}
 }

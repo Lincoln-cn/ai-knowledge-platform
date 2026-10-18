@@ -62,6 +62,12 @@ export interface ChatSettings {
    *   `ChatService.MAX_HISTORY_MESSAGES`。
    */
   historyMaxMessages: number
+  /**
+   * 推荐追问条数（「猜你想问」）。
+   *
+   * ★ 0 = 关闭：后端不调模型、不落库，界面上不出现那一排。
+   */
+  suggestionCount: number
   /** 单轮最大输出 tokens；`null` = 不限制 */
   maxOutputTokens: number | null
   /** 最后修改时间（服务端写，界面用来确认"改上了"） */
