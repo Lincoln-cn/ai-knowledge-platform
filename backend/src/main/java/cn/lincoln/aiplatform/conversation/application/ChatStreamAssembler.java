@@ -3,7 +3,6 @@ package cn.lincoln.aiplatform.conversation.application;
 import cn.lincoln.aiplatform.conversation.domain.stream.StreamEvent;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.io.UncheckedIOException;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.function.Supplier;
@@ -132,6 +131,26 @@ public class ChatStreamAssembler {
    * @return SSE 响应体；媒体类型由调用方在 {@code ResponseEntity} 上<strong>显式</strong>给出
    */
   public StreamingResponseBody streamOf(AsyncTurn asyncTurn) {
+    return streamOf(asyncTurn, null);
+  }
+
+  /**
+   * ★★ 带 {@code HttpServletResponse} 的版本：每一帧写完调 {@code flushBuffer()}。
+   *
+   * <h3>为什么必须这么干（实测证据）</h3>
+   *
+   * <p>只用 {@code Writer.flush()} 时，原始 socket 抓到的 TCP chunk <b>全是 8192 字节</b> ——正好等于 Tomcat 的 {@code
+   * OutputBuffer} 容量。那说明： <b>容器只有在缓冲写满时才发 chunk，{@code Writer.flush()} 并不触发它</b>。
+   *
+   * <p>后果就是用户看到的「首字很快、然后一堆 token 一起蹦出来」： 88 个 delta 里 81 个被攒进同一个 8KB 缓冲，最后一次性发出。
+   *
+   * <p>{@code HttpServletResponse.flushBuffer()} 是唯一能"逼容器现在就把已写入的字节发出去" 的接口；{@code
+   * StreamingResponseBody} 只给 {@code OutputStream}，所以必须从控制器把 response 传进来。
+   *
+   * @param response 可空（测试/无 web 上下文时退化为只 flush Writer）
+   */
+  public StreamingResponseBody streamOf(
+      AsyncTurn asyncTurn, jakarta.servlet.http.HttpServletResponse response) {
     // ★ 在**当前（请求）线程**上捕获安全上下文：MVC 的异步执行在另一条线程上，
     //   而 SecurityContextHolder 默认是 ThreadLocal（项目没开它的策略配置）。
     //   ★ 不传播的症状极具误导性：检索侧的密级谓词读 currentScope() ⇒ 拿不到身份 ⇒
@@ -148,7 +167,12 @@ public class ChatStreamAssembler {
             () -> {
               beforeStream.run();
               chatService.streamTurn(
-                  asyncTurn.turn(), asyncTurn.question(), event -> write(event, out));
+                  asyncTurn.turn(),
+                  asyncTurn.question(),
+                  event -> {
+                    write(event, out);
+                    flushContainer(response);
+                  });
             };
         if (authorize == null) {
           turn.run();
@@ -184,6 +208,25 @@ public class ChatStreamAssembler {
   }
 
   /** 把一条领域事件写成 wire 帧；写失败以 {@link UncheckedIOException} 传出（{@code DISCONNECT} 的唯一依据）。 */
+  /**
+   * 逼容器把已写入的字节立刻发出去（chunked 模式下每调用一次就发一个 chunk）。
+   *
+   * <p>★ 失败不抛：客户端已断开时这里会抛 {@code IOException}，而那个信息 由 {@code write(...)} 的同一条路径已经报过（{@code
+   * DISCONNECT} 的唯一观测点）， 在这里再抛一次只会变成"同一件事报两遍"。
+   *
+   * @param response 可空
+   */
+  private static void flushContainer(jakarta.servlet.http.HttpServletResponse response) {
+    if (response == null) {
+      return;
+    }
+    try {
+      response.flushBuffer();
+    } catch (java.io.IOException disconnected) {
+      // 交给下一次 write(...) 以 UncheckedIOException 的形式统一上报
+    }
+  }
+
   private int write(StreamEvent event, Writer out) {
     try {
       return writer.write(event, out);
