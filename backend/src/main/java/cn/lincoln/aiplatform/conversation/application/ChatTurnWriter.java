@@ -159,7 +159,17 @@ public class ChatTurnWriter implements ChatTurnStore {
         modelId,
         app == null ? List.of() : app.kbIds(),
         // ★ `#168`：把开关带进这一轮 —— 只有它能让 `ChatService` 决定要不要带历史
-        app != null && app.multiTurn());
+        // ★★ 通用问答（app == null）**默认多轮**，而不是"没有应用所以单轮"。
+        //
+        //   这是个设计错位：`multiTurn` 被做成了**应用**的开关（`as_assistant.multi_turn`），
+        //   而通用问答根本没有应用 ⇒ 那个开关对它恒为 false ⇒ 历史永远不读。
+        //   实测症状（用户）：「Iberian colonialism」→「翻译一下」，模型答
+        //   「我需要先获取你要翻译的内容」—— 它**看不到上一轮**。
+        //
+        //   ★ "多轮"本质上是**会话**的属性（同一个 conversationId 内前后相关），
+        //     不是应用的属性；把默认值翻成 true 是对这个错位的最小修正：
+        //     应用那边仍尊重它自己的 `multi_turn` 开关，通用问答则总是带上历史。
+        app == null || app.multiTurn());
   }
 
   /**
@@ -374,7 +384,17 @@ public class ChatTurnWriter implements ChatTurnStore {
         target.modelId(),
         app == null ? List.of() : app.kbIds(),
         // ★ `#168`：把开关带进这一轮 —— 只有它能让 `ChatService` 决定要不要带历史
-        app != null && app.multiTurn());
+        // ★★ 通用问答（app == null）**默认多轮**，而不是"没有应用所以单轮"。
+        //
+        //   这是个设计错位：`multiTurn` 被做成了**应用**的开关（`as_assistant.multi_turn`），
+        //   而通用问答根本没有应用 ⇒ 那个开关对它恒为 false ⇒ 历史永远不读。
+        //   实测症状（用户）：「Iberian colonialism」→「翻译一下」，模型答
+        //   「我需要先获取你要翻译的内容」—— 它**看不到上一轮**。
+        //
+        //   ★ "多轮"本质上是**会话**的属性（同一个 conversationId 内前后相关），
+        //     不是应用的属性；把默认值翻成 true 是对这个错位的最小修正：
+        //     应用那边仍尊重它自己的 `multi_turn` 开关，通用问答则总是带上历史。
+        app == null || app.multiTurn());
   }
 
   /**

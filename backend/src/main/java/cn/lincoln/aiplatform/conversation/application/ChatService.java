@@ -455,6 +455,10 @@ public class ChatService {
       }
     }
     final List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages = history;
+    // ★ 每轮一行：这一轮到底带上了几条历史。
+    //   ★ 它此前恒为 0 且**没有任何痕迹** ——「多轮不生效」在界面上只表现为
+    //     "模型答非所问"，不查这条日志根本看不出是历史没带（这次就是靠它定位的）。
+    log.info("本轮带 {} 条历史消息（会话 {}）", messages.size(), turn.conversationId());
     Thread thread =
         new Thread(
             () -> {
