@@ -154,9 +154,14 @@ export function useHistoryPanel() {
     return [...map.entries()]
   })
 
-  const fetchPage = async (appId: string | undefined, p: number) => {
+  const fetchPage = async (
+    appId: string | undefined,
+    p: number,
+    genericOnly?: boolean
+  ) => {
     const result = await conversationsApi.listConversations({
       appId,
+      genericOnly,
       keyword: keyword.value.trim() || undefined,
       page: p,
       size: HISTORY_PAGE_SIZE
@@ -171,12 +176,12 @@ export function useHistoryPanel() {
       return ex
     })
 
-  const load = async (appId?: string) => {
+  const load = async (appId?: string, genericOnly?: boolean) => {
     loading.value = true
     loadError.value = null
     page = 1
     try {
-      const result = await fetchPage(appId, 1)
+      const result = await fetchPage(appId, 1, genericOnly)
       list.value = mapConvs(result.list)
       hasMore.value = result.total > list.value.length
     } catch (error) {
@@ -187,12 +192,12 @@ export function useHistoryPanel() {
   }
 
   /** 加载更早的一页并接在后面（历史列表按更新时间倒序，后面的更早） */
-  const loadMore = async (appId?: string) => {
+  const loadMore = async (appId?: string, genericOnly?: boolean) => {
     if (loadingMore.value || !hasMore.value) return
     loadingMore.value = true
     try {
       page += 1
-      const result = await fetchPage(appId, page)
+      const result = await fetchPage(appId, page, genericOnly)
       const seen = new Set(list.value.map((c) => c.id))
       list.value = [...list.value, ...mapConvs(result.list).filter((c) => !seen.has(c.id))]
       hasMore.value = result.total > list.value.length

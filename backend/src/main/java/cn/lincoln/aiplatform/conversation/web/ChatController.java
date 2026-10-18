@@ -202,11 +202,13 @@ public class ChatController {
   @PreAuthorize("hasAuthority('conversation:view')")
   public ApiResponse<PageResult<ConversationListService.ConversationListItem>> conversations(
       @RequestParam(required = false) UUID appId,
+      @RequestParam(required = false) Boolean genericOnly,
       @RequestParam(required = false) String keyword,
       @RequestParam(required = false) Integer page,
       @RequestParam(required = false) Integer size,
       @AuthenticationPrincipal Jwt jwt) {
-    return ApiResponse.ok(conversationList.list(subjectOf(jwt), appId, keyword, page, size));
+    return ApiResponse.ok(
+        conversationList.list(subjectOf(jwt), appId, genericOnly, keyword, page, size));
   }
 
   @GetMapping("/{conversationId}/messages")

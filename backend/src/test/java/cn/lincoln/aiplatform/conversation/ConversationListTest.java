@@ -79,7 +79,7 @@ class ConversationListTest {
     seedConversation(UUID.randomUUID(), "别人的会话");
 
     PageResult<ConversationListService.ConversationListItem> page =
-        list.list(owner, null, null, 1, 20);
+        list.list(owner, null, null, null, 1, 20);
 
     assertThat(page.list())
         .as("★★ 会话是**私人对话** ⇒ 列表只能有我的。放宽成『按数据范围给全部可见』" + "会让别人的对话出现在我的侧栏 —— 那比『看不到』严重得多")
@@ -97,7 +97,7 @@ class ConversationListTest {
     messages.save(Message.user(UUID.randomUUID(), newer, "刚刚问的"));
 
     PageResult<ConversationListService.ConversationListItem> page =
-        list.list(owner, null, null, 1, 20);
+        list.list(owner, null, null, null, 1, 20);
 
     assertThat(page.list().get(0).id()).as("★ 侧栏默认就该『我刚聊过的在最上面』，否则用户要在列表里翻").isEqualTo(newer);
     assertThat(page.list())
@@ -115,10 +115,46 @@ class ConversationListTest {
     assertThat(conversations.findById(created.id()))
         .as("★ 必须真的落库（『新建会话』按钮的落点，不能只在返回值里存在）")
         .isPresent();
-    assertThat(list.list(owner, null, null, 1, 20).list())
+    assertThat(list.list(owner, null, null, null, 1, 20).list())
         .as("★ 而且建完立刻出现在列表里（否则用户点完看不出发生了什么）")
         .extracting(ConversationListService.ConversationListItem::id)
         .contains(created.id());
+  }
+
+  @Test
+  void genericOnlyExcludesApplicationConversations() {
+    // ★★ 用户原话：「应用的对话是不是不应该出现在这里」——「这里」= 通用问答页。
+    //
+    //   实测症状：通用页列出「法务专家」的会话，点它之后 URL 带上该应用的 appId，
+    //   历史列表随即被收窄，用户看到「新会话和第三个会话也没了」。
+    //   ⇒ 通用页一开始就不该有应用会话。
+    UUID owner = newOwner();
+    UUID app = UUID.randomUUID();
+    UUID generic = list.create(owner, null).id();
+    UUID appScoped = list.create(owner, app).id();
+
+    var page = list.list(owner, null, true, null, 1, 50);
+
+    assertThat(page.list().stream().map(item -> item.id()))
+        .as("★ genericOnly=true 时只返回 assistantId 为 null 的会话（应用会话一条都不许有）")
+        .contains(generic)
+        .doesNotContain(appScoped);
+  }
+
+  @Test
+  void withoutGenericOnlyTheListStillCoversAllDomains() {
+    // ★ 反向：不传 genericOnly 仍是「全部」——工作台「最近会话」靠这条语义
+    //   （它要的是跨应用的"最近在忙什么"，不是某一个域）。
+    UUID owner = newOwner();
+    UUID app = UUID.randomUUID();
+    UUID generic = list.create(owner, null).id();
+    UUID appScoped = list.create(owner, app).id();
+
+    var page = list.list(owner, null, null, null, 1, 50);
+
+    assertThat(page.list().stream().map(item -> item.id()))
+        .as("不传 genericOnly ⇒ 通用与应用都要出现")
+        .contains(generic, appScoped);
   }
 
   @Test
@@ -129,7 +165,7 @@ class ConversationListTest {
     }
 
     PageResult<ConversationListService.ConversationListItem> last =
-        list.list(owner, null, null, -1, 2);
+        list.list(owner, null, null, null, -1, 2);
 
     assertThat(last.page())
         .as("★ 5 条 / 每页 2 ⇒ 最后一页是第 3 页（与历史消息 `page=-1` 同一条约定，不另立一套）")

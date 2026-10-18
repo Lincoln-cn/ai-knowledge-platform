@@ -113,12 +113,22 @@ public class ConversationListService {
    */
   @Transactional(readOnly = true)
   public PageResult<ConversationListItem> list(
-      UUID userId, UUID appId, String keyword, Integer page, Integer size) {
+      UUID userId, UUID appId, Boolean genericOnly, String keyword, Integer page, Integer size) {
     int safeSize = size == null ? DEFAULT_PAGE_SIZE : Math.min(Math.max(1, size), MAX_PAGE_SIZE);
 
     List<Conversation> all = new ArrayList<>(conversations.listByUser(userId));
     if (appId != null) {
       all.removeIf(conversation -> !appId.equals(conversation.assistantId()));
+    } else if (Boolean.TRUE.equals(genericOnly)) {
+      // ★★ 「通用问答」页只要通用问答的会话（`assistant_id is null`）。
+      //
+      //   为什么必须单开这一档：三个调用点要的东西不同 ——
+      //     会话页（通用问答） ⇒ 只要通用问答
+      //     会话页（某应用）   ⇒ 只要该应用
+      //     工作台「最近会话」 ⇒ **全部**（跨应用，那正是它的用途）
+      //   一个 `appId` 表达不了三种；★ 也不能把「不传 = 只要通用」改掉 ——
+      //   那会让工作台的「最近会话」只剩通用问答，而它是用户看「最近在忙什么」的入口。
+      all.removeIf(conversation -> conversation.assistantId() != null);
     }
     if (keyword != null && !keyword.isBlank()) {
       String needle = keyword.strip().toLowerCase(Locale.ROOT);

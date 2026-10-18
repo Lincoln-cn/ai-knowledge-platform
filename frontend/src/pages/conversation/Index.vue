@@ -230,16 +230,18 @@ mq.addEventListener('change', syncWide)
 /* ── 会话 ── */
 
 const loadHistory = () => {
-  // ★★ 打开了具体会话时，历史面板显示**全部**会话，不按 appId 过滤。
+  // ★★ 历史面板**永远按域过滤**，域由"这两个页面是哪一种"决定：
   //
-  //   实测症状（用户第二张图）：点开一个「属于某应用」的历史会话后，URL 变成
-  //   `?appId=…&conversationId=…`，列表被收窄成该应用的会话 ——
-  //   后端明明返回 3 条，界面上只剩 1 条，另外两条（通用问答）看起来「没了」。
+  //   通用问答页（无 appId）  ⇒ 只要通用问答的会话（`genericOnly`）
+  //   应用页（有 appId）      ⇒ 只要该应用的会话
   //
-  //   ★ 应用模式下（只带 appId、没有 conversationId，即「进入某个应用准备开新对话」）
-  //     仍然按应用过滤：那时用户明确在某个应用里，只看该应用的会话是对的。
-  const scoped = route.query.conversationId ? undefined : appId.value || undefined
-  return history.load(scoped)
+  //   ★ 为什么通用页要 `genericOnly` 而不能靠"不传 appId"：不传 = **全部**，
+  //     于是通用页会列出「法务专家」的会话 —— 用户原话「应用的对话是不是不应该出现在这里」。
+  //   ★ 也曾经反过来试过"有 conversationId 就不过滤"（想在点开会话时显示全部），
+  //     那会把应用会话又混进通用页，方向不对，已撤。
+  return appId.value
+    ? history.load(appId.value)
+    : history.load(undefined, true)
 }
 
 const applyAppBrief = (conv: ConversationEx | null, fallbackAppId?: string) => {

@@ -56,6 +56,14 @@ export interface Conversation {
 
 export interface ConversationQuery extends PageQuery {
   appId?: string
+  /**
+   * 只要**通用问答**的会话（`assistant_id is null`）。
+   *
+   * ★ 与 `appId` 互斥、且必须有这一档：不传 appId 的旧语义是「全部」，
+   * 而三个调用点要的东西不同 —— 会话页（通用）要通用会话、会话页（应用）要该应用、
+   * 工作台「最近会话」要**全部**。一个 `appId` 表达不了三种。
+   */
+  genericOnly?: boolean
   /** 只看自己名下的（07 §六 阶段 1）。不传 = 按数据范围给全部可见的 */
   mine?: boolean
   /** 按标题 / 应用名模糊搜索（PageQuery 已有该字段，这里显式声明语义） */
