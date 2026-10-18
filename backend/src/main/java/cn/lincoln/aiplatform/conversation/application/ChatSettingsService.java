@@ -58,6 +58,8 @@ public class ChatSettingsService {
             command.retrievalThreshold() == null ? 0.3 : command.retrievalThreshold(),
             command.retrievalTopN() == null ? 5 : command.retrievalTopN(),
             command.historyMaxMessages() == null ? 20 : command.historyMaxMessages(),
+            // ★ 开关默认 true（与 DB 默认一致）：没传这个字段的老调用方保持「开着」
+            command.suggestionEnabled() == null || command.suggestionEnabled(),
             command.suggestionCount() == null ? 3 : command.suggestionCount(),
             command.maxOutputTokens(),
             null);
@@ -105,6 +107,7 @@ public class ChatSettingsService {
       Double retrievalThreshold,
       Integer retrievalTopN,
       Integer historyMaxMessages,
+      Boolean suggestionEnabled,
       Integer suggestionCount,
       Integer maxOutputTokens) {}
 }

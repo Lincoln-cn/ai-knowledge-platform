@@ -186,9 +186,20 @@ public class ChatPolicyResolver {
   }
 
   /**
-   * 推荐追问条数。
+   * 是否生成推荐追问。
    *
-   * @return 条数（0 = 关闭；默认 3）
+   * <p>★ 与条数分开：开关是「要不要这件东西」，条数是「要几条」。用条数 0 表示关闭， 会把关闭藏进一个数字里，界面上看不出状态。
+   *
+   * @return true = 生成
+   */
+  public boolean suggestionEnabled() {
+    return settings.get().suggestionEnabled();
+  }
+
+  /**
+   * 推荐追问条数（仅当 {@link #suggestionEnabled()} 为 true 时有意义）。
+   *
+   * @return 条数（1~10，默认 3）
    */
   public int suggestionCount() {
     return settings.get().suggestionCount();

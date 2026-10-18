@@ -20,7 +20,8 @@ import java.util.UUID;
  * @param retrievalThreshold 相似度下限，低于它的命中丢弃
  * @param retrievalTopN 召回条数上限
  * @param historyMaxMessages 多轮带的历史消息条数上限（20 ≈ 10 轮；0 = 不带历史）
- * @param suggestionCount 推荐追问条数（0 = 关闭；默认 3）
+ * @param suggestionEnabled 是否生成推荐追问（关掉 ⇒ 不调模型、不落库、界面不出现）
+ * @param suggestionCount 推荐追问条数（1~10；仅当 enabled 时有意义）
  * @param maxOutputTokens 单轮最大输出 tokens；{@code null} = 不限
  * @param updatedAt 最后修改时间（界面显示"上次改动"，便于确认改没改上）
  */
@@ -36,6 +37,7 @@ public record ChatSettingsView(
     double retrievalThreshold,
     int retrievalTopN,
     int historyMaxMessages,
+    boolean suggestionEnabled,
     int suggestionCount,
     Integer maxOutputTokens,
     Instant updatedAt) {

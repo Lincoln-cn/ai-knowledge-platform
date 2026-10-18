@@ -41,8 +41,12 @@ public class SuggestionService {
   /** 单条追问的字数上限（超过的丢掉 —— 模型偶尔会写出一整段）。 */
   private static final int MAX_LEN = 40;
 
-  /** 回答只取前这么多字进 prompt：1.5B 的 window 很小，塞整篇会挤掉指令。 */
-  private static final int ANSWER_CLIP = 800;
+  /**
+   * 回答只取前这么多字进 prompt。
+   *
+   * <p>★ 从 800 降到 400（2026-10-18 实测）：喂太长的回答时 1.5B 会只写 1 条就「满足」了， 而追问需要的是「这段在讲什么」，不是全文。
+   */
+  private static final int ANSWER_CLIP = 400;
 
   /** 生成超时。它是一次"小任务"，不该占用主链路的时间预算。 */
   private static final Duration TIMEOUT = Duration.ofSeconds(60);
@@ -65,9 +69,8 @@ public class SuggestionService {
    */
   @Transactional
   public List<String> generate(UUID messageId) {
-    // ★ 0 = 关闭：不调模型、不落库、界面上不出现那一排。
-    //   用"一个数字"表达关闭，是为了不必为了这件事改代码 ——
-    //   有些团队就是反感"AI 替我猜我想问什么"。
+    // ★ 开关关掉 ⇒ 不调模型、不落库、界面上不出现那一排。
+    //   `count()` 返回 0 就是这个信号（见它的 javadoc）。
     int want = count();
     if (want <= 0) {
       return List.of();
@@ -84,13 +87,28 @@ public class SuggestionService {
     if (modelId == null) {
       return List.of();
     }
-    List<String> generated;
+    List<String> generated = new ArrayList<>();
     try {
       String raw = chat.complete(modelId, prompt(row.question(), row.answer(), want), TIMEOUT);
       // ★ 原始输出记 debug：1.5B 的输出格式不稳定，遇到"chips 数量不对"时看这一行就能判断
       //   是模型没按格式写，还是我们的解析吃掉了。
       log.debug("追问原始输出（消息 {}）：{}", messageId, raw);
-      generated = parse(raw, want);
+      generated.addAll(parse(raw, want));
+      // ★★ 补齐：1.5B 经常只写 1 条（同一个 prompt 时好时坏）。
+      //   差几条就再要一次，并把它已经写过的告诉它别重复 —— 最多补一次，
+      //   所以最坏情况是两次模型调用，不会变成 N 次。
+      if (generated.size() < want) {
+        int missing = want - generated.size();
+        String more =
+            chat.complete(
+                modelId, topUpPrompt(row.question(), row.answer(), missing, generated), TIMEOUT);
+        log.debug("追问补齐原始输出（消息 {}）：{}", messageId, more);
+        for (String extra : parse(more, missing)) {
+          if (!generated.contains(extra)) {
+            generated.add(extra);
+          }
+        }
+      }
     } catch (RuntimeException failure) {
       // ★ 降级而不是报错：追问生成失败不该让用户在界面上看到一个"错误"，
       //   他刚刚拿到一条正常回答。
@@ -161,32 +179,108 @@ public class SuggestionService {
     return out;
   }
 
-  /** 当前配置的条数（夹到 0..MAX_COUNT；读不到 ⇒ 默认 3）。 */
+  /**
+   * 「补齐」用的 prompt：只要差的那几条，并明确告诉它已有的别重复。
+   *
+   * <p>★ 为什么不复用 {@link #prompt}：复用会让模型**重新写一遍全部**，然后我们再剔除重复 —— 既慢又容易和已有的撞车。把「已经写过什么」直接写进 prompt
+   * 是这类补齐调用里最省事的做法。
+   *
+   * @param question 本轮问题
+   * @param answer 本轮回答
+   * @param missing 还差几条
+   * @param existing 已经生成的
+   * @return prompt
+   */
+  private String topUpPrompt(String question, String answer, int missing, List<String> existing) {
+    String clipped = stripCode(answer);
+    if (clipped.length() > ANSWER_CLIP) {
+      clipped = clipped.substring(0, ANSWER_CLIP);
+    }
+    StringBuilder sb = new StringBuilder();
+    String system = policy == null ? null : policy.systemPrompt();
+    if (system != null) {
+      sb.append(system).append("\n\n");
+    }
+    sb.append("下面这一轮问答已经生成过这些问题：\n");
+    for (String s : existing) {
+      sb.append("- ").append(s).append('\n');
+    }
+    sb.append("请再写出 ")
+        .append(missing)
+        .append(" 个**不同**的、用户可能继续追问的问题。")
+        .append("\n要求：每个问题不超过 20 个字；用 1. 2. 3. 这样的编号开头；")
+        .append("每个问题单独一行；不要和上面重复；不要解释。")
+        .append("\n\n问：")
+        .append(question)
+        .append("\n答：")
+        .append(clipped)
+        .append("\n\n请输出这 ")
+        .append(missing)
+        .append(" 个问题：");
+    return sb.toString();
+  }
+
+  /**
+   * 当前配置的条数。
+   *
+   * <p>★ 开关与条数是两件事：开关关掉时**不调模型**（而不是"调了模型再丢掉"）， 所以这里返回 0 是给 {@link #generate} 当"别干活"的信号。
+   *
+   * @return 0 = 关闭；否则 1..MAX_COUNT（读不到配置 ⇒ DEFAULT_COUNT）
+   */
   private int count() {
+    if (policy != null && !policy.suggestionEnabled()) {
+      return 0;
+    }
     int configured = policy == null ? DEFAULT_COUNT : policy.suggestionCount();
-    return Math.max(0, Math.min(MAX_COUNT, configured));
+    // ★ 下限是 1 不是 0：开了开关却配出 0 条是没有意义的组合（DB 约束也是 1..10）
+    return Math.max(1, Math.min(MAX_COUNT, configured));
+  }
+
+  /**
+   * 切掉回答里的代码块，再截断。
+   *
+   * <p>★ 实测（2026-10-18）：回答里有一大段 CSS/SFC 代码时，1.5B 会把代码片段本身当追问吐出来 —— 实际拿到的是 {@code 圆角边框: 5px;} /
+   * {@code </style>} / {@code <script type="text/plain">}。 那段代码对"下一步想问什么"毫无信息量，只会把模型带偏 ⇒ 干脆不给它。
+   *
+   * @param answer 回答全文
+   * @return 去掉围栏代码块后的文本（找不到围栏 ⇒ 原样返回）
+   */
+  private static String stripCode(String answer) {
+    String out = answer.replaceAll("(?s)```.*?```", " ");
+    // 还留着行内代码块（`x`）不切 —— 它常常是关键词（比如 `computed`），对生成追问有用
+    return out.strip();
   }
 
   private String prompt(String question, String answer, int want) {
-    String clipped = answer.length() > ANSWER_CLIP ? answer.substring(0, ANSWER_CLIP) : answer;
+    String clipped = stripCode(answer);
+    if (clipped.length() > ANSWER_CLIP) {
+      clipped = clipped.substring(0, ANSWER_CLIP);
+    }
     String system = policy == null ? null : policy.systemPrompt();
     StringBuilder sb = new StringBuilder();
     if (system != null) {
       sb.append(system).append("\n\n");
     }
-    // ★ 用**编号占位**而不是"请写 3 个"：实测 1.5B 对"写 3 个"经常只写 1 个，
-    //   而给它 `1.` `2.` `3.` 三行开头，它会把三行都填上（模型对"续写"远比对"计数"可靠）。
-    sb.append("根据下面这一轮问答，按编号写出 ")
+    // ★★★ 格式选择的实测依据（2026-10-18，同一轮问答，走平台的 chat 端点）：
+    //
+    //   ① 把「1. / 2. / 3.」当**占位符放在 prompt 尾部** ⇒ 模型把它理解成「已经写到 3 了，
+    //      我接着写 4」，输出被污染成「答：单文件组件如何使用？」这种，且条数不够。
+    //   ② 用「1. <问题>」模板占位 ⇒ 4 行干净。
+    //   ③ **把编号写进指令、不占位** ⇒ 4 行干净 ← 现在用这个。
+    //
+    //   ★ 判据：给模型的"格式示范"如果长得像**已完成的内容**，小模型会去续写它而不是填它。
+    sb.append("你是问答助手。请根据下面这一轮问答，写出 ")
         .append(want)
-        .append(" 个用户可能继续追问的问题，每个问题不超过 20 个字。")
-        .append("\n直接输出这 ")
+        .append(" 个用户可能继续追问的问题。")
+        .append("\n要求：每个问题不超过 20 个字；用 1. 2. 3. 这样的编号开头；")
+        .append("每个问题单独一行；不要解释、不要引号、不要写「问：」「答：」。")
+        .append("\n\n问：")
+        .append(question)
+        .append("\n答：")
+        .append(clipped)
+        .append("\n\n请输出这 ")
         .append(want)
-        .append(" 行，不要解释、不要引号、不要写「问：」：");
-    // ★ 用编号占位而不是"请写 N 个"：实测 1.5B 对"写 3 个"经常只写 1 个，
-    //   而给它每行编号开头，它会把每行都填上（模型对"续写"远比对"计数"可靠）。
-    for (int i = 1; i <= want; i++) {
-      sb.append("\n").append(i).append(".");
-    }
+        .append(" 个问题：");
     sb.append("\n\n问：").append(question).append("\n答：").append(clipped);
     return sb.toString();
   }
@@ -211,7 +305,7 @@ public class SuggestionService {
         // 去掉行首编号：1. / 1、 / - / * / • / ①
         s = s.replaceFirst("^[\\d一二三四五六]+[.、)．]\\s*", "");
         s = s.replaceFirst("^[-*•·①-⑳]\\s*", "");
-        s = s.replaceFirst("^(?:追问|问题|问)\\s*[：:]\\s*", "");
+        s = s.replaceFirst("^(?:追问|问题|问|答|回答|A|Q)\\s*[：:]\\s*", "");
         // 去掉包裹的引号/书名号
         s = s.replaceAll("^[\"“'『「]+|[\"”'」』]+$", "").strip();
         if (s.isEmpty() || s.length() > MAX_LEN) {
@@ -219,6 +313,13 @@ public class SuggestionService {
         }
         // 明显不是问题的（"以下是…"、"希望…"）跳过
         if (s.startsWith("以下") || s.startsWith("希望") || s.endsWith("：")) {
+          continue;
+        }
+        // ★★ 只收"像问题"的行。
+        //   实测 1.5B 会混进代码残片（`圆角边框: 5px;` / `}` / `</style>`），
+        //   它们长度合法、前缀也不命中任何规则 ⇒ 光靠前缀清洗挡不住。
+        //   判据：以问号结尾，或以疑问词开头。宁可少一条，也不要一排看不懂的碎片。
+        if (!looksLikeQuestion(s)) {
           continue;
         }
         if (!out.contains(s)) {
@@ -230,6 +331,29 @@ public class SuggestionService {
       }
     }
     return out;
+  }
+
+  /** 疑问词开头四种语言习惯各取一个，覆盖中文提问的主要写法。 */
+  private static final String[] INTERROGATIVES = {
+    "如何", "怎么", "怎样", "什么", "为什么", "为何", "是否", "能否", "可以", "哪些", "哪个", "多少", "有没有"
+  };
+
+  /**
+   * 这一行像不像一个"用户会问的问题"。
+   *
+   * @param s 已清洗过的候选行
+   * @return true = 收
+   */
+  private static boolean looksLikeQuestion(String s) {
+    if (s.endsWith("？") || s.endsWith("?")) {
+      return true;
+    }
+    for (String word : INTERROGATIVES) {
+      if (s.startsWith(word)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   @SuppressWarnings("unchecked")

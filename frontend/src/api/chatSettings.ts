@@ -67,6 +67,13 @@ export interface ChatSettings {
    *
    * ★ 0 = 关闭：后端不调模型、不落库，界面上不出现那一排。
    */
+  /**
+   * 是否生成推荐追问（「猜你想问」）。
+   *
+   * ★ 与条数分开：开关是「要不要这件东西」，条数是「要几条」。
+   */
+  suggestionEnabled: boolean
+  /** 推荐追问条数（仅当 enabled 时有意义；1~10） */
   suggestionCount: number
   /** 单轮最大输出 tokens；`null` = 不限制 */
   maxOutputTokens: number | null

@@ -276,34 +276,35 @@
           <div>
             <div class="card-title">
               推荐追问
-              <span class="badge" :class="form.suggestionCount > 0 ? 'badge-ok' : 'badge-off'">
-                {{ form.suggestionCount > 0 ? `${form.suggestionCount} 条` : '已关闭' }}
+              <span class="badge" :class="form.suggestionEnabled ? 'badge-ok' : 'badge-off'">
+                {{ form.suggestionEnabled ? `${form.suggestionCount} 条` : '已关闭' }}
               </span>
             </div>
             <div class="micro muted">
               回答完成后，在下面列出几条「猜你想问」，点一下就发出去
             </div>
           </div>
+          <el-switch v-model="form.suggestionEnabled" :disabled="!canEdit" />
         </div>
         <div class="panel-body form-grid">
           <div class="field">
             <label class="field-label">条数</label>
             <el-input-number
               v-model="form.suggestionCount"
-              :min="0"
+              :min="1"
               :max="10"
-              :disabled="!canEdit"
+              :disabled="!canEdit || !form.suggestionEnabled"
               class="field-control narrow"
             />
             <div class="field-note micro muted">
-              <b>0 = 关闭</b>（不生成、界面上不出现那一排）。默认 3；上限 10。
-              条数越多，生成越慢（1.5B 每条约 +1~2 秒）。
+              默认 3，上限 10。条数越多，生成越慢（1.5B 每条约 +1~2 秒）。
+              <b>想关掉请用上面的开关</b> —— 条数填 0 不再是"关闭"的写法。
             </div>
           </div>
           <div class="field">
             <label class="field-label">生成时机</label>
             <div class="field-note micro muted">
-              在你读到回答**之后**才生成（<code>done</code> 之后另发一次请求）——
+              在你读到回答<b>之后</b>才生成（<code>done</code> 之后另发一次请求）——
               不占用回答本身的等待时间。生成不出来就只是不显示，不会报错。
             </div>
           </div>
@@ -377,6 +378,7 @@ const form = reactive<ChatSettings>({
   retrievalThreshold: 0.3,
   retrievalTopN: 5,
   historyMaxMessages: 20,
+  suggestionEnabled: true,
   suggestionCount: 3,
   maxOutputTokens: null,
   updatedAt: null
@@ -414,6 +416,7 @@ function payload(): Omit<ChatSettings, 'updatedAt'> {
     retrievalThreshold: form.retrievalThreshold,
     retrievalTopN: form.retrievalTopN,
     historyMaxMessages: form.historyMaxMessages,
+    suggestionEnabled: form.suggestionEnabled,
     suggestionCount: form.suggestionCount,
     maxOutputTokens: form.maxOutputTokens
   }
@@ -449,7 +452,7 @@ async function load() {
     loadError.value = isForbidden
       ? {
           reason: '当前登录态里没有「配置对话设置」权限',
-          hint: '若你确认自己的角色已有该权限，请**退出后重新登录**（权限在登录时生效）；否则请管理员在「角色管理」里勾选它。'
+          hint: '若你确认自己的角色已有该权限，请退出后重新登录（权限在登录时生效）；否则请管理员在「角色管理」里勾选它。'
         }
       : { reason: err.message || '未知错误', hint: err.hint }
   } finally {
