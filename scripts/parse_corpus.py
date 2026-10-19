@@ -139,9 +139,13 @@ def ensure_embedding_model(base: str, token: str) -> str:
     rows = (payload.get("data") or {}).get("list") or []
     # ★ 先找**名字对得上**的：随便挑一个 EMBEDDING 模型会走到上游去（见 MODEL_NAME 的注释）
     for row in rows:
+        # ★★ 只要 baseModel 对得上就复用，**不看 status**。
+        #    向量模型是懒加载的：`NOT_LOADED` 只表示"还没被用过"，不代表不可用。
+        #    第一版要求 `status == "LOADED"` ⇒ 永远找不到 ⇒ 每跑一次就新建一个模型
+        #    ⇒ 实测在模型列表里堆了 45 个 `本地ONNX向量-<时间戳>` 残留
+        #      （页面被淹没，而"找第一个 LOADED 向量模型"的逻辑还会挑到旧模型）。
         if (
             row.get("kind") == "EMBEDDING"
-            and row.get("status") == "LOADED"
             and (row.get("baseModel") or "").strip().lower() == MODEL_NAME
         ):
             return row["id"]
