@@ -107,7 +107,7 @@
       </div>
     </section>
 
-    <div v-loading="loading" class="grid">
+    <div ref="gridEl" v-loading="loading" class="grid">
       <el-card v-for="m in list" :key="m.id" shadow="never" class="model-card" :class="{ failed: m.status === 'LOAD_FAILED' }">
         <div class="mc-head">
           <span class="mc-name ellipsis">{{ m.name }}</span>
@@ -296,7 +296,44 @@ const list = ref<ModelInfo[]>([])
 const total = ref(0)
 const loading = ref(false)
 const error = ref<string | null>(null)
-const pageSize = 12
+const pageSize = ref(12)
+
+/**
+ * 每页条数不能写死。
+ *
+ * ★ 卡片网格是 `auto-fill + minmax(340px, 1fr)`：列数随可用宽度变（常见 3～6 列）。
+ * 写死 12 在 5 列时是「2 行 + 2 张」，第三行只坐 2 张，看起来像少了一页。
+ * 这里按实际列数 × 固定行数算每页条数，保证除最后一页外每页都排满。
+ */
+const GRID_MIN_CARD_PX = 340
+const GRID_ROWS = 3
+const gridEl = ref<HTMLElement | null>(null)
+let gridObserver: ResizeObserver | null = null
+let resizeTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 从网格的实际列宽反推列数；间距必须读 computed，不能假设 token 值 */
+const measurePageSize = () => {
+  const el = gridEl.value
+  if (!el || !el.clientWidth) return pageSize.value
+  const gap = Number.parseFloat(getComputedStyle(el).columnGap) || 0
+  const columns = Math.max(1, Math.floor((el.clientWidth + gap) / (GRID_MIN_CARD_PX + gap)))
+  return columns * GRID_ROWS
+}
+
+/** 宽度变化时只在列数真的变了才重拉，避免拖窗口时连打接口 */
+const applyResponsivePageSize = () => {
+  const next = measurePageSize()
+  if (next === pageSize.value) return
+  pageSize.value = next
+  const maxPage = Math.max(1, Math.ceil(total.value / next))
+  if (query.page > maxPage) query.page = maxPage
+  fetchList().then(schedule)
+}
+
+const onGridResize = () => {
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(applyResponsivePageSize, 120)
+}
 
 /**
  * 本地 ONNX（进程内）状态。
@@ -343,10 +380,16 @@ const fetchList = async () => {
       kind: query.kind || undefined,
       status: query.status || undefined,
       page: query.page,
-      size: pageSize
+      size: pageSize.value
     })
     list.value = result.list
     total.value = result.total
+    // 页长改成响应式后，旧 URL 里的页码可能已经越界（例如 5 页变 4 页）——夹回最后一页
+    const lastPage = Math.max(1, Math.ceil(result.total / pageSize.value))
+    if (query.page > lastPage) {
+      query.page = lastPage
+      await fetchList()
+    }
   } catch (e) {
     // 错误态 ≠ 空态：请求失败不能伪装成「暂无模型」（一.1）
     error.value = e instanceof ApiError ? e.message : '加载模型列表失败，请检查网络后重试'
@@ -500,12 +543,22 @@ const onVisibility = () => {
 
 onMounted(() => {
   document.addEventListener('visibilitychange', onVisibility)
+  // 首次渲染就按当前列数定页长，避免先按 12 拉一次再改成 15（会闪一下）
+  pageSize.value = measurePageSize()
+  if (gridEl.value) {
+    gridObserver = new ResizeObserver(onGridResize)
+    gridObserver.observe(gridEl.value)
+  }
   Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()]).then(schedule)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
   clearTimer()
+  gridObserver?.disconnect()
+  gridObserver = null
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = null
 })
 
 /* ── 筛选切换时重置 page（否则停在空页）+ 同步 URL ── */
