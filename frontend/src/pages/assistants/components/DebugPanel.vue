@@ -13,7 +13,8 @@
         <div class="a">
           <p class="a-text">{{ turn.answer }}</p>
           <div class="a-meta micro muted">
-            引用分段 {{ turn.refs.length }} · 耗时 {{ (turn.elapsedMs / 1000).toFixed(1) }}s · 消耗 {{ turn.tokens }} token
+            引用分段 {{ turn.refs.length }} · 耗时 {{ (turn.elapsedMs / 1000).toFixed(1) }}s ·
+            消耗 {{ turn.tokens === null ? '未上报' : `${turn.tokens} token` }}
           </div>
           <div v-if="turn.refs.length" class="a-refs">
             <div v-for="(r, i) in turn.refs" :key="i" class="ref micro">
@@ -41,6 +42,13 @@
 
     <p class="dbg-note micro muted">调试使用当前草稿配置，<b>不产生正式会话记录</b></p>
 
+    <!-- ★ 错误态必须留在面板里（#184）：此前只有一条几秒后消失的 toast，
+         用户会以为「点了没反应」，也无从判断是端点不存在还是模型失败。 -->
+    <div v-if="error" class="notice err dbg-error">
+      <span><b>调试失败：</b>{{ error }}</span>
+      <el-button link size="small" @click="error = null">知道了</el-button>
+    </div>
+
     <div v-if="warnings.length" class="notice warn">
       <div v-for="(w, i) in warnings" :key="i">⚠ 发布前校验：{{ w }}</div>
     </div>
@@ -63,7 +71,8 @@ interface DebugTurn {
   answer: string
   refs: DebugRef[]
   elapsedMs: number
-  tokens: number
+  /** ★ `null` = 上游没有上报用量（不是 0）；见 #142 */
+  tokens: number | null
 }
 
 const props = defineProps<{
@@ -74,13 +83,15 @@ const props = defineProps<{
 
 const question = ref('')
 const sending = ref(false)
+const error = ref<string | null>(null)
 const turns = ref<DebugTurn[]>([])
 const listEl = ref<HTMLElement>()
 
 const send = async () => {
   const q = question.value.trim()
-  if (!q || !props.appId) return
+  if (!q || !props.appId || sending.value) return
   sending.value = true
+  error.value = null
   try {
     const result = await assistantsApi.debugAssistant(props.appId, q)
     turns.value.push({
@@ -93,8 +104,10 @@ const send = async () => {
     question.value = ''
     await nextTick()
     listEl.value?.scrollTo({ top: listEl.value.scrollHeight })
-  } catch (error) {
-    const message = error instanceof ApiError ? error.message : '调试失败'
+  } catch (failure) {
+    const message = failure instanceof ApiError ? failure.message : '调试失败'
+    // ★ 面板内留一条可读错误；toast 仍然给，但它会消失，不能是唯一痕迹
+    error.value = message
     ElMessage.error(message)
   } finally {
     sending.value = false
@@ -104,6 +117,7 @@ const send = async () => {
 const reset = () => {
   turns.value = []
   question.value = ''
+  error.value = null
 }
 
 defineExpose({ reset })

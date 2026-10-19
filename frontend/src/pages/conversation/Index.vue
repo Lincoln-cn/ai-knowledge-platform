@@ -217,9 +217,13 @@ const composerPlaceholder = computed(
   () => '输入问题，Enter 发送 / Shift+Enter 换行'
 )
 
-const showThinkingToggle = computed(
-  () => !!appBrief.value?.thinkingEnabled && !!appBrief.value?.modelName
-)
+/**
+ * 思考模式开关（★ `#185`：暂不展示）。
+ *
+ * <p>问答链路的 `ChatStreamPort` 没有 thinking 参数、上游请求体也没有对应字段 ⇒ 这个开关此前是死控件。
+ * 在 `#185` 的 thinking 子任务（端口形状 + 适配器映射）落地之前，不展示它；`thinking` 仍固定为 false。
+ */
+const showThinkingToggle = computed(() => false)
 
 /* ── 引用 ── */
 

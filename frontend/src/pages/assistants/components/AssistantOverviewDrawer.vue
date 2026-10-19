@@ -222,14 +222,14 @@ const publishRows = computed<InstrumentRow[]>(() => {
     {
       label: '应用类型',
       value: workflow ? '编排' : '简单',
-      hint: workflow ? '创建后不可更改' : `${a.retrieval.mode} · Top${a.retrieval.topN}`
+      hint: workflow ? '创建后不可更改' : `全文检索 · Top${a.retrieval.topN} · 阈值 ${a.retrieval.threshold}`
     },
     {
       label: '模型',
       value: workflow ? '见流程' : (a.modelName ?? '—'),
       hint: workflow
         ? (a.workflow ? `流程共 ${a.workflow.nodeCount} 个节点` : undefined)
-        : `${a.multiTurn ? '多轮' : '单轮'}上下文 · 思考模式${a.thinkingEnabled ? '开' : '关'}`
+        : `${a.multiTurn ? '多轮' : '单轮'}上下文 · 思考模式未接入（#185）`
     },
     {
       label: '知识库',
