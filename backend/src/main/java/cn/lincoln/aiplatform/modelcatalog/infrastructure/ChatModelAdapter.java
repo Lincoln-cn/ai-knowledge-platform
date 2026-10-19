@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
+import cn.lincoln.aiplatform.modelcatalog.domain.ResolvedUpstream;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatMessage;
@@ -42,13 +43,13 @@ import org.springframework.stereotype.Component;
 public class ChatModelAdapter implements ChatPort {
 
   private final ModelRepository models;
-  private final ApiKeyCipher apiKeyCipher;
+  private final ModelUpstreamResolver upstream;
   private final UpstreamGateway gateway;
 
   public ChatModelAdapter(
-      ModelRepository models, ApiKeyCipher apiKeyCipher, UpstreamGateway gateway) {
+      ModelRepository models, ModelUpstreamResolver upstream, UpstreamGateway gateway) {
     this.models = models;
-    this.apiKeyCipher = apiKeyCipher;
+    this.upstream = upstream;
     this.gateway = gateway;
   }
 
@@ -56,7 +57,11 @@ public class ChatModelAdapter implements ChatPort {
   public Optional<UUID> pickChatModel() {
     List<Model> candidates =
         models.search(null, ModelKind.CHAT, ModelStatus.LOADED, 0, MAX_CANDIDATES_SCAN);
-    return candidates.stream().map(Model::id).findFirst();
+    // ★ 服务商停用 ⇒ 这个模型不可用（与 resolve 的 fail-closed 同一口径），不能挑到它。
+    return candidates.stream()
+        .filter(model -> upstream.egressOf(model).isPresent())
+        .map(Model::id)
+        .findFirst();
   }
 
   @Override
@@ -75,8 +80,14 @@ public class ChatModelAdapter implements ChatPort {
     List<Map<String, String>> history =
         messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
     try {
+      ResolvedUpstream target = upstream.resolve(model);
       return gateway.chatCompletion(
-          model.baseModel(), model.apiBase(), decryptKey(model), history, timeout);
+          model.baseModel(),
+          target.apiBase(),
+          target.apiKey(),
+          history,
+          timeout,
+          target.authStyle());
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.UPSTREAM_UNAVAILABLE,
@@ -108,8 +119,15 @@ public class ChatModelAdapter implements ChatPort {
     List<Map<String, String>> history =
         messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
     try {
+      ResolvedUpstream target = upstream.resolve(model);
       return gateway.streamChatCompletion(
-          model.baseModel(), model.apiBase(), decryptKey(model), history, timeout, onDelta);
+          model.baseModel(),
+          target.apiBase(),
+          target.apiKey(),
+          history,
+          timeout,
+          onDelta,
+          target.authStyle());
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.UPSTREAM_UNAVAILABLE,
@@ -157,8 +175,14 @@ public class ChatModelAdapter implements ChatPort {
 
   private String chat(Model model, String prompt, Duration timeout) {
     try {
+      ResolvedUpstream target = upstream.resolve(model);
       return gateway.chatCompletion(
-          model.baseModel(), model.apiBase(), decryptKey(model), prompt, timeout);
+          model.baseModel(),
+          target.apiBase(),
+          target.apiKey(),
+          prompt,
+          timeout,
+          target.authStyle());
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.UPSTREAM_UNAVAILABLE,
@@ -179,12 +203,4 @@ public class ChatModelAdapter implements ChatPort {
 
   /** 扫多少个已加载的对话模型就够 —— 现在只取第一个，给一个上限免得把整张表拉进内存。 */
   private static final int MAX_CANDIDATES_SCAN = 10;
-
-  /** 解密模型的 API key（没存 key 时返回 null，由 {@link UpstreamGateway} 用默认 key）。 */
-  private String decryptKey(Model model) {
-    if (model.apiKeyCipher() == null || model.apiKeyIv() == null) {
-      return null;
-    }
-    return apiKeyCipher.decrypt(model.apiKeyCipher(), model.apiKeyIv());
-  }
 }

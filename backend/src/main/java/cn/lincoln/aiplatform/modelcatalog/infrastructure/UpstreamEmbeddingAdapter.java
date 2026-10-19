@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
+import cn.lincoln.aiplatform.modelcatalog.domain.ResolvedUpstream;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
@@ -22,13 +23,13 @@ import org.springframework.stereotype.Component;
 public class UpstreamEmbeddingAdapter implements EmbeddingPort {
 
   private final ModelRepository models;
-  private final ApiKeyCipher apiKeyCipher;
+  private final ModelUpstreamResolver upstream;
   private final UpstreamGateway gateway;
 
   public UpstreamEmbeddingAdapter(
-      ModelRepository models, ApiKeyCipher apiKeyCipher, UpstreamGateway gateway) {
+      ModelRepository models, ModelUpstreamResolver upstream, UpstreamGateway gateway) {
     this.models = models;
-    this.apiKeyCipher = apiKeyCipher;
+    this.upstream = upstream;
     this.gateway = gateway;
   }
 
@@ -51,18 +52,12 @@ public class UpstreamEmbeddingAdapter implements EmbeddingPort {
     }
 
     try {
-      return gateway.embed(model.baseModel(), texts, model.apiBase(), decryptKey(model));
+      ResolvedUpstream target = upstream.resolve(model);
+      return gateway.embed(
+          model.baseModel(), texts, target.apiBase(), target.apiKey(), target.authStyle());
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.UPSTREAM_UNAVAILABLE, "向量化失败：" + e.getMessage(), "请确认模型服务可用（地址与密钥），或稍后重试");
     }
-  }
-
-  /** 解密模型的 API key（没存 key 时返回 null，由 {@link UpstreamGateway} 用默认 key）。 */
-  private String decryptKey(Model model) {
-    if (model.apiKeyCipher() == null || model.apiKeyIv() == null) {
-      return null;
-    }
-    return apiKeyCipher.decrypt(model.apiKeyCipher(), model.apiKeyIv());
   }
 }

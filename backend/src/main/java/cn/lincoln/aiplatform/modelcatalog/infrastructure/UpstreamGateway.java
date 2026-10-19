@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
+import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -75,7 +76,12 @@ public class UpstreamGateway {
    * @param apiBase 为 null 时用默认上游
    */
   public List<UpstreamModel> listModels(String apiBase, String apiKey) {
-    String body = get(resolve(apiBase, "/models"), apiKey);
+    return listModels(apiBase, apiKey, AuthStyle.BEARER);
+  }
+
+  /** 带认证方式的重载：JAiRouter 用 {@code X-API-Key}，OpenAI 兼容用 Bearer。 */
+  public List<UpstreamModel> listModels(String apiBase, String apiKey, AuthStyle authStyle) {
+    String body = get(resolve(apiBase, "/models"), apiKey, authStyle);
     List<UpstreamModel> result = new ArrayList<>();
     try {
       JsonNode data = json.readTree(body).path("data");
@@ -98,7 +104,12 @@ public class UpstreamGateway {
 
   /** 该基础模型是否在上游清单里（load 的可用性校验）。 */
   public boolean isModelAvailable(String baseModel, String apiBase, String apiKey) {
-    return listModels(apiBase, apiKey).stream().anyMatch(m -> baseModel.equals(m.id()));
+    return isModelAvailable(baseModel, apiBase, apiKey, AuthStyle.BEARER);
+  }
+
+  public boolean isModelAvailable(
+      String baseModel, String apiBase, String apiKey, AuthStyle authStyle) {
+    return listModels(apiBase, apiKey, authStyle).stream().anyMatch(m -> baseModel.equals(m.id()));
   }
 
   // ────────────────────────── 向量维度 ──────────────────────────
@@ -110,8 +121,13 @@ public class UpstreamGateway {
    * 维"这类只能在检索时才暴露的静默错位。
    */
   public int probeEmbeddingDimension(String model, String apiBase, String apiKey) {
+    return probeEmbeddingDimension(model, apiBase, apiKey, AuthStyle.BEARER);
+  }
+
+  public int probeEmbeddingDimension(
+      String model, String apiBase, String apiKey, AuthStyle authStyle) {
     String payload = "{\"model\":\"" + escape(model) + "\",\"input\":\"dimension-probe\"}";
-    String body = post(resolve(apiBase, "/embeddings"), payload, apiKey);
+    String body = post(resolve(apiBase, "/embeddings"), payload, apiKey, authStyle);
     try {
       JsonNode embedding = json.readTree(body).path("data").path(0).path("embedding");
       if (!embedding.isArray() || embedding.isEmpty()) {
@@ -138,6 +154,11 @@ public class UpstreamGateway {
    * @throws UpstreamUnreachableException 上游不可达、响应不合规、或条数/index 对不上
    */
   public List<float[]> embed(String model, List<String> texts, String apiBase, String apiKey) {
+    return embed(model, texts, apiBase, apiKey, AuthStyle.BEARER);
+  }
+
+  public List<float[]> embed(
+      String model, List<String> texts, String apiBase, String apiKey, AuthStyle authStyle) {
     if (texts == null || texts.isEmpty()) {
       return List.of();
     }
@@ -149,7 +170,7 @@ public class UpstreamGateway {
     //   而这里要的是**确定的合法 JSON**（Jackson 3 下没有再对 toString() 的格式作承诺）
     String payload = json.writeValueAsString(Map.of("model", model, "input", texts));
 
-    String body = post(resolve(apiBase, "/embeddings"), payload, apiKey);
+    String body = post(resolve(apiBase, "/embeddings"), payload, apiKey, authStyle);
     try {
       JsonNode data = json.readTree(body).path("data");
       if (!data.isArray() || data.size() != texts.size()) {
@@ -208,8 +229,23 @@ public class UpstreamGateway {
    */
   public String chatCompletion(
       String model, String apiBase, String apiKey, String prompt, Duration timeout) {
+    return chatCompletion(model, apiBase, apiKey, prompt, timeout, AuthStyle.BEARER);
+  }
+
+  public String chatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      String prompt,
+      Duration timeout,
+      AuthStyle authStyle) {
     return chatCompletion(
-        model, apiBase, apiKey, List.of(Map.of("role", "user", "content", prompt)), timeout);
+        model,
+        apiBase,
+        apiKey,
+        List.of(Map.of("role", "user", "content", prompt)),
+        timeout,
+        authStyle);
   }
 
   /**
@@ -226,13 +262,24 @@ public class UpstreamGateway {
       String apiKey,
       List<Map<String, String>> history,
       Duration timeout) {
+    return chatCompletion(model, apiBase, apiKey, history, timeout, AuthStyle.BEARER);
+  }
+
+  public String chatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      AuthStyle authStyle) {
     // ★★ 用序列化器拼请求体，**不要**手拼字符串 —— 真栈闸门实测抓到过：
     //   查询理解的提示词是**多行**的，而 escape() 只处理了反斜杠与引号，换行原样留在 JSON
     //   字符串里 ⇒ 上游按"请求体不是合法 JSON"直接 400。那是最难查的一类错：
     //   本地单测全绿，因为夹具里的提示词恰好是单行。
     //   映射成 Map 再序列化，控制字符的转义交给序列化器。
     Map<String, Object> payload = Map.of("model", model, "messages", history);
-    String body = post(resolve(apiBase, "/chat/completions"), writeJson(payload), apiKey, timeout);
+    String body =
+        post(resolve(apiBase, "/chat/completions"), writeJson(payload), apiKey, authStyle, timeout);
     try {
       JsonNode content =
           json.readTree(body).path("choices").path(0).path("message").path("content");
@@ -277,6 +324,18 @@ public class UpstreamGateway {
       List<Map<String, String>> history,
       Duration timeout,
       java.util.function.Consumer<String> onDelta) {
+    return streamChatCompletion(
+        model, apiBase, apiKey, history, timeout, onDelta, AuthStyle.BEARER);
+  }
+
+  public boolean streamChatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta,
+      AuthStyle authStyle) {
     Map<String, Object> payload = Map.of("model", model, "messages", history, "stream", true);
     String url = resolve(apiBase, "/chat/completions");
     HttpRequest.Builder builder =
@@ -285,8 +344,8 @@ public class UpstreamGateway {
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .POST(HttpRequest.BodyPublishers.ofString(writeJson(payload), StandardCharsets.UTF_8));
-    if (apiKey != null && !apiKey.isBlank()) {
-      builder.header("Authorization", "Bearer " + apiKey);
+    if (apiKey != null && !apiKey.isBlank() && authStyle.headerName() != null) {
+      builder.header(authStyle.headerName(), authStyle.prefix() + apiKey);
     }
     HttpRequest request = builder.build();
     try {
@@ -336,6 +395,11 @@ public class UpstreamGateway {
    * @param reasoningEffort 为 null 表示不带 {@code reasoning_effort} 字段
    */
   public String chat(String model, String reasoningEffort, String apiBase, String apiKey) {
+    return chat(model, reasoningEffort, apiBase, apiKey, AuthStyle.BEARER);
+  }
+
+  public String chat(
+      String model, String reasoningEffort, String apiBase, String apiKey, AuthStyle authStyle) {
     String effort =
         reasoningEffort == null ? "" : ",\"reasoning_effort\":\"" + escape(reasoningEffort) + "\"";
     String payload =
@@ -344,7 +408,7 @@ public class UpstreamGateway {
             + "\",\"messages\":[{\"role\":\"user\",\"content\":\"1+1=?只答数字\"}]"
             + effort
             + "}";
-    return post(resolve(apiBase, "/chat/completions"), payload, apiKey);
+    return post(resolve(apiBase, "/chat/completions"), payload, apiKey, authStyle);
   }
 
   /** 响应体里是否出现了思考内容（OpenAI 兼容协议里的 {@code reasoning_content} / {@code reasoning}）。 */
@@ -361,18 +425,32 @@ public class UpstreamGateway {
     return base + path;
   }
 
-  private String effectiveKey(String apiKey) {
-    return (apiKey == null || apiKey.isBlank()) ? defaultApiKey : apiKey;
+  private String effectiveKey(String apiKey, AuthStyle authStyle) {
+    if (apiKey != null && !apiKey.isBlank()) {
+      return apiKey;
+    }
+    // ★ 只有默认的 Bearer 上游（Ollama / JAiRouter 的 JWT 面）才回落到配置里的默认 key。
+    //   X-API-Key / NONE 上回落会把一个“没配 key”的服务商悄悄拿默认 key 去试，症状是 401。
+    return authStyle == AuthStyle.BEARER ? defaultApiKey : null;
+  }
+
+  private void applyAuth(HttpRequest.Builder builder, String apiKey, AuthStyle authStyle) {
+    String key = effectiveKey(apiKey, authStyle);
+    if (key != null && authStyle.headerName() != null) {
+      builder.header(authStyle.headerName(), authStyle.prefix() + key);
+    }
   }
 
   private String get(String url, String apiKey) {
+    return get(url, apiKey, AuthStyle.BEARER);
+  }
+
+  private String get(String url, String apiKey, AuthStyle authStyle) {
     try {
-      HttpRequest request =
-          HttpRequest.newBuilder(URI.create(url))
-              .timeout(Duration.ofSeconds(10))
-              .header("Authorization", "Bearer " + effectiveKey(apiKey))
-              .GET()
-              .build();
+      HttpRequest.Builder builder =
+          HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10));
+      applyAuth(builder, apiKey, authStyle);
+      HttpRequest request = builder.GET().build();
       HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
       if (response.statusCode() >= 400) {
         throw new UpstreamUnreachableException(
@@ -397,18 +475,22 @@ public class UpstreamGateway {
   }
 
   private String post(String url, String payload, String apiKey) {
-    return post(url, payload, apiKey, DEFAULT_POST_TIMEOUT);
+    return post(url, payload, apiKey, AuthStyle.BEARER, DEFAULT_POST_TIMEOUT);
   }
 
-  private String post(String url, String payload, String apiKey, Duration timeout) {
+  private String post(String url, String payload, String apiKey, AuthStyle authStyle) {
+    return post(url, payload, apiKey, authStyle, DEFAULT_POST_TIMEOUT);
+  }
+
+  private String post(
+      String url, String payload, String apiKey, AuthStyle authStyle, Duration timeout) {
     try {
-      HttpRequest request =
+      HttpRequest.Builder builder =
           HttpRequest.newBuilder(URI.create(url))
               .timeout(timeout)
-              .header("Content-Type", "application/json")
-              .header("Authorization", "Bearer " + effectiveKey(apiKey))
-              .POST(HttpRequest.BodyPublishers.ofString(payload))
-              .build();
+              .header("Content-Type", "application/json");
+      applyAuth(builder, apiKey, authStyle);
+      HttpRequest request = builder.POST(HttpRequest.BodyPublishers.ofString(payload)).build();
       HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
       if (response.statusCode() >= 400) {
         throw new UpstreamUnreachableException(

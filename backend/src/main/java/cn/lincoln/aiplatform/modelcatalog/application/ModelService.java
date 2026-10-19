@@ -1,15 +1,20 @@
 package cn.lincoln.aiplatform.modelcatalog.application;
 
+import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
+import cn.lincoln.aiplatform.modelcatalog.domain.ModelProvider;
+import cn.lincoln.aiplatform.modelcatalog.domain.ModelProviderRepository;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
+import cn.lincoln.aiplatform.modelcatalog.domain.ResolvedUpstream;
 import cn.lincoln.aiplatform.modelcatalog.domain.Supplier;
 import cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode;
 import cn.lincoln.aiplatform.modelcatalog.domain.ToolsMode;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.ApiKeyCipher;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.CapabilityProber;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.LocalOnnxEmbedding;
+import cn.lincoln.aiplatform.modelcatalog.infrastructure.ModelUpstreamResolver;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.UpstreamGateway;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -17,6 +22,7 @@ import cn.lincoln.aiplatform.platform.web.PageResult;
 import jakarta.annotation.PreDestroy;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -66,6 +72,8 @@ public class ModelService {
           });
 
   private final ModelRepository models;
+  private final ModelProviderRepository providers;
+  private final ModelUpstreamResolver upstream;
   private final ApiKeyCipher apiKeyCipher;
   private final CapabilityProber prober;
   private final UpstreamGateway gateway;
@@ -74,12 +82,16 @@ public class ModelService {
 
   public ModelService(
       ModelRepository models,
+      ModelProviderRepository providers,
+      ModelUpstreamResolver upstream,
       ApiKeyCipher apiKeyCipher,
       CapabilityProber prober,
       UpstreamGateway gateway,
       LocalOnnxEmbedding localOnnx,
       PlatformTransactionManager transactionManager) {
     this.models = models;
+    this.providers = providers;
+    this.upstream = upstream;
     this.apiKeyCipher = apiKeyCipher;
     this.prober = prober;
     this.gateway = gateway;
@@ -112,12 +124,22 @@ public class ModelService {
     List<Model> found =
         models.search(safeKeyword, kind, status, (safePage - 1) * safeSize, safeSize);
     long total = models.countSearch(safeKeyword, kind, status);
-    return PageResult.of(found.stream().map(ModelView::from).toList(), total, safePage, safeSize);
+    Map<UUID, ModelProvider> providerById =
+        providers.findAll().stream()
+            .collect(java.util.stream.Collectors.toMap(ModelProvider::id, p -> p));
+    return PageResult.of(
+        found.stream()
+            .map(model -> ModelView.from(model, providerById.get(model.providerId())))
+            .toList(),
+        total,
+        safePage,
+        safeSize);
   }
 
   @Transactional(readOnly = true)
   public ModelView get(UUID id) {
-    return ModelView.from(require(id));
+    Model model = require(id);
+    return view(model);
   }
 
   /**
@@ -193,13 +215,38 @@ public class ModelService {
    */
   @Transactional(readOnly = true)
   public BaseModelCatalog baseModels(
-      String supplierRaw, String kindRaw, String apiBase, String apiKey) {
-    Supplier supplier = supplierRaw == null ? null : parseSupplier(supplierRaw);
+      String supplierRaw, String kindRaw, UUID providerId, String apiBase, String apiKey) {
+    Supplier requestedSupplier = supplierRaw == null ? null : parseSupplier(supplierRaw);
     ModelKind kind = kindRaw == null ? null : parseKind(kindRaw);
+
+    String effectiveBase = apiBase;
+    String effectiveKey = apiKey;
+    AuthStyle authStyle = AuthStyle.BEARER;
+    Supplier supplier = requestedSupplier;
+    if (providerId != null) {
+      ModelProvider provider =
+          providers
+              .findById(providerId)
+              .orElseThrow(
+                  () ->
+                      new BusinessException(
+                          ErrorCode.BAD_REQUEST, "服务商不存在", "它可能已被删除；请刷新服务商列表后重新选择"));
+      if (!provider.enabled()) {
+        return BaseModelCatalog.empty("服务商「" + provider.name() + "」已停用：请先在「服务商配置」里启用它");
+      }
+      if (!provider.kind().supportsModelList()) {
+        return BaseModelCatalog.empty("服务商「" + provider.name() + "」不支持模型目录：请在右侧手动填写基础模型");
+      }
+      ResolvedUpstream target = upstream.resolve(provider);
+      effectiveBase = target.apiBase();
+      effectiveKey = target.apiKey();
+      authStyle = target.authStyle();
+      supplier = ModelUpstreamResolver.supplierOf(provider.egress());
+    }
 
     List<UpstreamGateway.UpstreamModel> catalog;
     try {
-      catalog = gateway.listModels(apiBase, apiKey);
+      catalog = gateway.listModels(effectiveBase, effectiveKey, authStyle);
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       log.warn("拉取上游模型目录失败：{}", e.getMessage());
       // ★ 空列表 + 可读 hint，不是 500 —— 上游挂了不应该让管理页崩掉
@@ -210,11 +257,12 @@ public class ModelService {
       return BaseModelCatalog.empty("上游返回了空的模型清单：请确认服务上已部署模型");
     }
 
+    Supplier resolvedSupplier = supplier;
     List<BaseModelOption> options =
         catalog.stream()
-            .map(m -> toBaseOption(m, supplier))
+            .map(m -> toBaseOption(m, resolvedSupplier))
             .filter(o -> kind == null || o.kind() == kind)
-            .filter(o -> supplier == null || o.supplier() == supplier)
+            .filter(o -> resolvedSupplier == null || o.supplier() == resolvedSupplier)
             .toList();
     return new BaseModelCatalog(options, null);
   }
@@ -238,18 +286,36 @@ public class ModelService {
     }
     // ★ 与 update 同口径：能力声明只对对话模型有意义，传了就 400，不静默改写
     validateCapabilityFields(command.kind(), command.thinking(), command.tools());
-    validateSupplier(command.supplier(), command.apiBase());
+
+    ModelProvider provider = requireProvider(command.providerId());
+    if (provider != null && (hasText(command.apiBase()) || hasText(command.apiKey()))) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "使用服务商时不要再传 apiBase / apiKey",
+          "地址与密钥只保留在服务商上；模型只引用 providerId，避免同一个连接出现两份真相");
+    }
+    Supplier supplier =
+        provider != null
+            ? ModelUpstreamResolver.supplierOf(provider.egress())
+            : (command.supplier() == null ? Supplier.LOCAL_INFERENCE : command.supplier());
+    if (provider == null) {
+      validateSupplier(supplier, command.apiBase());
+    }
+    if (provider == null && hasText(command.apiBase()) && hasText(command.apiKey())) {
+      log.info("创建旧式直连模型 {}（未绑定服务商）；建议改为先在服务商配置里建连接，再让模型引用它", command.name());
+    }
 
     // ★ contextWindow 不在契约的 UpsertModelBody 里 —— 它从上游目录的元数据派生（best-effort）。
     //   上游不可达时留 null，不让"拉不到元数据"阻断注册（探测失败不阻断，同一条立场）。
     Integer contextWindow = command.contextWindow();
     if (command.kind() == ModelKind.CHAT && contextWindow == null) {
-      contextWindow = lookupContextWindow(command.baseModel(), command.apiBase());
+      contextWindow =
+          lookupContextWindow(command.baseModel(), command.providerId(), command.apiBase());
     }
 
     String cipher = null;
     String iv = null;
-    if (command.apiKey() != null && !command.apiKey().isBlank()) {
+    if (provider == null && command.apiKey() != null && !command.apiKey().isBlank()) {
       ApiKeyCipher.Sealed sealed = apiKeyCipher.encrypt(command.apiKey().trim());
       cipher = sealed.cipherBase64();
       iv = sealed.ivBase64();
@@ -260,9 +326,9 @@ public class ModelService {
             UUID.randomUUID(),
             command.name().trim(),
             command.kind(),
-            command.supplier(),
+            supplier,
             command.baseModel().trim(),
-            command.apiBase(),
+            provider == null ? command.apiBase() : null,
             cipher,
             iv,
             command.kind() == ModelKind.CHAT ? contextWindow : null,
@@ -272,8 +338,9 @@ public class ModelService {
             false,
             command.remark(),
             operatorId);
+    model.bindProvider(provider == null ? null : provider.id());
     models.save(model);
-    return ModelView.from(model);
+    return view(model);
   }
 
   @Transactional
@@ -329,17 +396,35 @@ public class ModelService {
         && model.status() != ModelStatus.LOADED) {
       model.dimension(command.dimension());
     }
-    // apiBase / apiKey 可以更新（换了供应商凭证是日常运维动作）
-    if (command.apiBase() != null) {
-      model.apiBase(command.apiBase());
-    }
-    if (command.apiKey() != null && !command.apiKey().isBlank()) {
-      ApiKeyCipher.Sealed sealed = apiKeyCipher.encrypt(command.apiKey().trim());
-      model.apiKey(sealed.cipherBase64(), sealed.ivBase64());
+    // apiBase / apiKey 只在旧式直连模型上可改；绑定服务商后它们必须为空，否则同一个连接有两份真相。
+    if (command.providerId() != null) {
+      ModelProvider provider = requireProvider(command.providerId());
+      if (hasText(command.apiBase()) || hasText(command.apiKey())) {
+        throw new BusinessException(
+            ErrorCode.BAD_REQUEST, "使用服务商时不要再传 apiBase / apiKey", "地址与密钥只保留在服务商上；模型只引用 providerId");
+      }
+      model.bindProvider(provider.id());
+      model.supplier(ModelUpstreamResolver.supplierOf(provider.egress()));
+      model.apiBase(null);
+      model.clearApiKey();
+    } else if (model.providerId() == null) {
+      // 旧式直连：保留原来的 apiBase/key 更新能力，直到用户把它绑定到服务商。
+      if (command.apiBase() != null) {
+        model.apiBase(command.apiBase());
+      }
+      if (command.apiKey() != null && !command.apiKey().isBlank()) {
+        ApiKeyCipher.Sealed sealed = apiKeyCipher.encrypt(command.apiKey().trim());
+        model.apiKey(sealed.cipherBase64(), sealed.ivBase64());
+      }
+    } else if (hasText(command.apiBase()) || hasText(command.apiKey())) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "这个模型已绑定服务商，不能单独改 apiBase / apiKey",
+          "请到「服务商配置」里改该服务商的地址或密钥，所有引用它的模型会一起生效");
     }
     model.updatedBy(operatorId);
     models.save(model);
-    return ModelView.from(model);
+    return view(model);
   }
 
   /**
@@ -402,7 +487,7 @@ public class ModelService {
           }
         });
 
-    return ModelView.from(model);
+    return view(model);
   }
 
   /**
@@ -430,17 +515,23 @@ public class ModelService {
             return;
           }
           try {
+            ResolvedUpstream target = upstream.resolve(model);
             boolean available =
-                gateway.isModelAvailable(model.baseModel(), model.apiBase(), decryptKey(model));
+                gateway.isModelAvailable(
+                    model.baseModel(), target.apiBase(), target.apiKey(), target.authStyle());
             if (available) {
               model.markLoaded();
               log.info("模型 {} 加载成功（上游清单里有 {}）", model.name(), model.baseModel());
             } else {
               model.markFailed(
-                  "上游清单里没有这个基础模型：" + model.baseModel() + "。请确认模型已在上游部署，并检查 apiBase 是否指向了正确的服务");
+                  "上游清单里没有这个基础模型：" + model.baseModel() + "。请确认模型已在上游部署，并检查服务商地址是否指向了正确的服务");
               log.warn("模型 {} 加载失败：上游清单里没有 {}", model.name(), model.baseModel());
             }
           } catch (UpstreamGateway.UpstreamUnreachableException e) {
+            model.markFailed(e.getMessage());
+            log.warn("模型 {} 加载失败：{}", model.name(), e.getMessage());
+          } catch (BusinessException e) {
+            // 服务商停用 / 不存在 / 密钥解不开 —— 同样落成可读的 LOAD_FAILED，而不是 500。
             model.markFailed(e.getMessage());
             log.warn("模型 {} 加载失败：{}", model.name(), e.getMessage());
           } catch (Exception e) {
@@ -460,9 +551,21 @@ public class ModelService {
    * <p>★ 探测失败不阻断：抛 {@link BusinessException} 带可读原因与 hint， 用户可手工声明（{@code UpsertModelBody} 的
    * thinking / tools / dimension）。
    */
-  public ModelCapability probeBaseModel(String baseModel, Supplier supplier, ModelKind kind) {
+  public ModelCapability probeBaseModel(
+      String baseModel, Supplier supplier, UUID providerId, ModelKind kind) {
     try {
-      return prober.probe(baseModel, kind, null, null);
+      if (providerId == null) {
+        return prober.probe(baseModel, kind, null, null);
+      }
+      ModelProvider provider =
+          providers
+              .findById(providerId)
+              .orElseThrow(
+                  () ->
+                      new BusinessException(
+                          ErrorCode.BAD_REQUEST, "服务商不存在", "它可能已被删除；请刷新服务商列表后重新选择"));
+      ResolvedUpstream target = upstream.resolve(provider);
+      return prober.probe(baseModel, kind, target.apiBase(), target.apiKey(), target.authStyle());
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST,
@@ -471,11 +574,13 @@ public class ModelService {
     }
   }
 
-  /** 按已存模型的 id 探测能力（用该模型的 apiBase / apiKey）。 */
+  /** 按已存模型的 id 探测能力（用解析后的服务商 / 旧式凭据）。 */
   public ModelCapability probeById(UUID id) {
     Model model = require(id);
     try {
-      return prober.probe(model.baseModel(), model.kind(), model.apiBase(), decryptKey(model));
+      ResolvedUpstream target = upstream.resolve(model);
+      return prober.probe(
+          model.baseModel(), model.kind(), target.apiBase(), target.apiKey(), target.authStyle());
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST,
@@ -492,12 +597,38 @@ public class ModelService {
         .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "模型不存在"));
   }
 
-  /** 解密模型的 API key（没有存 key 时返回 null，由 {@link UpstreamGateway} 用默认 key）。 */
-  private String decryptKey(Model model) {
-    if (model.apiKeyCipher() == null || model.apiKeyIv() == null) {
+  /**
+   * 解析并校验服务商：不存在 / 已停用都明确拒绝，不静默当“未绑定”。
+   *
+   * @param providerId {@code null} = 旧式直连 / 默认上游
+   */
+  private ModelProvider requireProvider(UUID providerId) {
+    if (providerId == null) {
       return null;
     }
-    return apiKeyCipher.decrypt(model.apiKeyCipher(), model.apiKeyIv());
+    ModelProvider provider =
+        providers
+            .findById(providerId)
+            .orElseThrow(
+                () ->
+                    new BusinessException(
+                        ErrorCode.BAD_REQUEST, "服务商不存在", "它可能已被删除；请刷新服务商列表后重新选择"));
+    if (!provider.enabled()) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "服务商「" + provider.name() + "」已停用", "请先在「服务商配置」里启用它，或换一个服务商");
+    }
+    return provider;
+  }
+
+  private static boolean hasText(String value) {
+    return value != null && !value.isBlank();
+  }
+
+  /** 视图 = 模型 + 它绑定的服务商（名称/类型/出网边界）。 */
+  private ModelView view(Model model) {
+    ModelProvider provider =
+        model.providerId() == null ? null : providers.findById(model.providerId()).orElse(null);
+    return ModelView.from(model, provider);
   }
 
   /** 把初始化异常转成能写进 `loadError` 的可读原因（状态机拒绝空值）。 */
@@ -519,9 +650,22 @@ public class ModelService {
    * <p>★ 兜底异常从 `UpstreamUnreachableException` 放宽到 `RuntimeException`： 方法名与注释都写着
    * best-effort（"不阻断注册"），而"上游返回异形 JSON"不是"不可达"、 却同样不该阻断注册。放宽后仍然 <b>WARN 留痕</b>，不是静默吞掉。
    */
-  private Integer lookupContextWindow(String baseModel, String apiBase) {
+  private Integer lookupContextWindow(String baseModel, UUID providerId, String apiBase) {
     try {
-      return gateway.listModels(apiBase, null).stream()
+      String effectiveBase = apiBase;
+      String effectiveKey = null;
+      AuthStyle authStyle = AuthStyle.BEARER;
+      if (providerId != null) {
+        ModelProvider provider = providers.findById(providerId).orElse(null);
+        if (provider == null) {
+          return null;
+        }
+        ResolvedUpstream target = upstream.resolve(provider);
+        effectiveBase = target.apiBase();
+        effectiveKey = target.apiKey();
+        authStyle = target.authStyle();
+      }
+      return gateway.listModels(effectiveBase, effectiveKey, authStyle).stream()
           .filter(m -> baseModel.equals(m.id()))
           .map(UpstreamGateway.UpstreamModel::contextWindow)
           .filter(java.util.Objects::nonNull)
@@ -625,6 +769,7 @@ public class ModelService {
       ModelKind kind,
       Supplier supplier,
       String baseModel,
+      UUID providerId,
       String apiBase,
       String apiKey,
       Integer dimension,

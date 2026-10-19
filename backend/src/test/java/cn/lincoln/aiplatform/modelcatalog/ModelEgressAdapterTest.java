@@ -76,7 +76,7 @@ class ModelEgressAdapterTest {
     // ★ 最危险的一个方向：把"没设供应商"当成 LOCAL_INFERENCE ⇒ **静默放宽**。
     //   库列是非空的（V11 的 chk_ai_model_supplier），真读到 null 就是数据坏了，
     //   那时 fail-closed 比"猜一个安全的值"安全得多。
-    assertThat(ModelEgressAdapter.ceilingFor(null, props()))
+    assertThat(ModelEgressAdapter.ceilingFor((Supplier) null, props()))
         .as("★ 未知/空供应商必须返回 null（fail-closed），不许被当作本地推理放行")
         .isNull();
   }

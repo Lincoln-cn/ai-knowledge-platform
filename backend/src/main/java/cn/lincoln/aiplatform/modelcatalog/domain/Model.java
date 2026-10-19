@@ -58,6 +58,15 @@ public class Model {
   @Column(name = "base_model", nullable = false, length = 128)
   private String baseModel;
 
+  /**
+   * 绑定的服务商（{@code ai_model_provider.id}）；{@code null} = 旧式直连 / 默认上游。
+   *
+   * <p>★ 有值时，运行时的 {@code apiBase / apiKey / 出网边界} 以服务商为准；本行的 {@code api_base / api_key_*} 只作为
+   * legacy 回退保留。
+   */
+  @Column(name = "provider_id")
+  private UUID providerId;
+
   @Column(name = "api_base", length = 512)
   private String apiBase;
 
@@ -276,6 +285,26 @@ public class Model {
     this.apiBase = apiBase;
   }
 
+  /**
+   * 绑定 / 解绑服务商。
+   *
+   * <p>★ 解绑（{@code null}）是合法操作：它让这一行回到“旧式直连 / 默认上游”。但**不会**把服务商的 key 复制回来 —— 那会把一条凭据悄悄变成两条。
+   */
+  public void bindProvider(UUID providerId) {
+    this.providerId = providerId;
+  }
+
+  /** 供应商分类（旧字段，仍要非空；provider 绑定时由服务商 egress 派生）。 */
+  public void supplier(Supplier supplier) {
+    this.supplier = supplier;
+  }
+
+  /** 清掉旧式直连的 key（绑定服务商后不再使用；留着只会让“到底用哪把 key”多一个候选）。 */
+  public void clearApiKey() {
+    this.apiKeyCipher = null;
+    this.apiKeyIv = null;
+  }
+
   /** 更新 API key 的密文与 IV。★ 明文永远不进这个方法 —— 调用方先加密。 */
   public void apiKey(String cipher, String iv) {
     this.apiKeyCipher = cipher;
@@ -346,6 +375,10 @@ public class Model {
 
   public String apiBase() {
     return apiBase;
+  }
+
+  public UUID providerId() {
+    return providerId;
   }
 
   public String apiKeyCipher() {

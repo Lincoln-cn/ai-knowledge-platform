@@ -58,6 +58,8 @@ class ModelServiceContextWindowTest {
   private ModelService serviceWith(UpstreamGateway gateway) {
     return new ModelService(
         mock(ModelRepository.class),
+        mock(cn.lincoln.aiplatform.modelcatalog.domain.ModelProviderRepository.class),
+        mock(cn.lincoln.aiplatform.modelcatalog.infrastructure.ModelUpstreamResolver.class),
         mock(ApiKeyCipher.class),
         mock(CapabilityProber.class),
         gateway,
@@ -71,6 +73,7 @@ class ModelServiceContextWindowTest {
         ModelKind.CHAT,
         Supplier.LOCAL_INFERENCE,
         "qwen2.5:1.5b",
+        null,
         "http://127.0.0.1:11434/v1",
         null,
         null,
@@ -83,7 +86,7 @@ class ModelServiceContextWindowTest {
   @Test
   void chatModelWithoutContextWindowInUpstreamListStillRegisters() {
     UpstreamGateway gateway = mock(UpstreamGateway.class);
-    when(gateway.listModels(any(), any()))
+    when(gateway.listModels(any(), any(), any()))
         .thenReturn(List.of(new UpstreamGateway.UpstreamModel("qwen2.5:1.5b", null, null, null)));
 
     ModelService service = serviceWith(gateway);
@@ -98,7 +101,7 @@ class ModelServiceContextWindowTest {
   @Test
   void contextWindowIsAdoptedWhenUpstreamProvidesIt() {
     UpstreamGateway gateway = mock(UpstreamGateway.class);
-    when(gateway.listModels(any(), any()))
+    when(gateway.listModels(any(), any(), any()))
         .thenReturn(List.of(new UpstreamGateway.UpstreamModel("qwen2.5:1.5b", 32768, null, null)));
 
     ModelService service = serviceWith(gateway);
@@ -113,7 +116,7 @@ class ModelServiceContextWindowTest {
     // ★ 上游返回"异形数据"不是"不可达" —— 但同样不该阻断注册（方法语义就是 best-effort）
     // ★ 只 stub 一次：`any(), any()` 已覆盖全部参数；再 stub 一次会在**打桩时**就抛出异常
     //   （Mockito 执行第二个 when(...) 时会真的调一次 mock）
-    when(gateway.listModels(any(), any())).thenThrow(new IllegalStateException("上游清单形状不认识"));
+    when(gateway.listModels(any(), any(), any())).thenThrow(new IllegalStateException("上游清单形状不认识"));
 
     ModelService service = serviceWith(gateway);
 
@@ -137,6 +140,8 @@ class ModelServiceContextWindowTest {
     ModelService service =
         new ModelService(
             mock(ModelRepository.class),
+            mock(cn.lincoln.aiplatform.modelcatalog.domain.ModelProviderRepository.class),
+            mock(cn.lincoln.aiplatform.modelcatalog.infrastructure.ModelUpstreamResolver.class),
             mock(ApiKeyCipher.class),
             mock(CapabilityProber.class),
             mock(UpstreamGateway.class),
@@ -157,7 +162,7 @@ class ModelServiceContextWindowTest {
   @Test
   void viewDoesNotClaimAContextWindowItDoesNotKnow() {
     UpstreamGateway gateway = mock(UpstreamGateway.class);
-    when(gateway.listModels(any(), any()))
+    when(gateway.listModels(any(), any(), any()))
         .thenReturn(List.of(new UpstreamGateway.UpstreamModel("qwen2.5:1.5b", null, null, null)));
 
     ModelView view = serviceWith(gateway).create(chatCommand(), OPERATOR);

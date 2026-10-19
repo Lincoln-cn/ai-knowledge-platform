@@ -2,13 +2,19 @@ package cn.lincoln.aiplatform.modelcatalog;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
+import cn.lincoln.aiplatform.modelcatalog.domain.ProviderEgress;
+import cn.lincoln.aiplatform.modelcatalog.domain.ResolvedUpstream;
 import cn.lincoln.aiplatform.modelcatalog.domain.Supplier;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.ChatModelAdapter;
+import cn.lincoln.aiplatform.modelcatalog.infrastructure.ModelUpstreamResolver;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.UpstreamGateway;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import java.time.Duration;
@@ -41,6 +47,7 @@ class ChatModelAdapterTest {
   record Sample(Boolean sufficient, String nextQuery) {}
 
   private final RecordingGateway gateway = new RecordingGateway();
+  private final ModelUpstreamResolver upstream = mock(ModelUpstreamResolver.class);
 
   @Test
   void appendsOfficialFormatToThePrompt() {
@@ -104,7 +111,10 @@ class ChatModelAdapterTest {
    * apiKeyCipher == null} 时直接返回 null，压根不会用到它。
    */
   private ChatModelAdapter adapter(Model model) {
-    return new ChatModelAdapter(new FakeModels(model), null, gateway);
+    when(upstream.resolve(model))
+        .thenReturn(ResolvedUpstream.legacy(model.apiBase(), null, ProviderEgress.LOCAL));
+    when(upstream.egressOf(model)).thenReturn(java.util.Optional.of(ProviderEgress.LOCAL));
+    return new ChatModelAdapter(new FakeModels(model), upstream, gateway);
   }
 
   private static Model chatModel(UUID id) {
@@ -151,6 +161,17 @@ class ChatModelAdapterTest {
     @Override
     public String chatCompletion(
         String model, String apiBase, String apiKey, String prompt, Duration timeout) {
+      return chatCompletion(model, apiBase, apiKey, prompt, timeout, AuthStyle.BEARER);
+    }
+
+    @Override
+    public String chatCompletion(
+        String model,
+        String apiBase,
+        String apiKey,
+        String prompt,
+        Duration timeout,
+        AuthStyle authStyle) {
       this.prompt = prompt;
       return response;
     }
@@ -188,6 +209,11 @@ class ChatModelAdapterTest {
 
     @Override
     public long countSearch(String keyword, ModelKind kind, ModelStatus status) {
+      return 0;
+    }
+
+    @Override
+    public long countByProviderId(UUID providerId) {
       return 0;
     }
   }

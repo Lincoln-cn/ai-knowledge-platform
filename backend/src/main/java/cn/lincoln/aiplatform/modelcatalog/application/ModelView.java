@@ -2,7 +2,10 @@ package cn.lincoln.aiplatform.modelcatalog.application;
 
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
+import cn.lincoln.aiplatform.modelcatalog.domain.ModelProvider;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
+import cn.lincoln.aiplatform.modelcatalog.domain.ProviderEgress;
+import cn.lincoln.aiplatform.modelcatalog.domain.ProviderKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.Supplier;
 import cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode;
 import cn.lincoln.aiplatform.modelcatalog.domain.ToolsMode;
@@ -34,10 +37,21 @@ public record ModelView(
     ToolsMode tools,
     boolean builtin,
     String remark,
-    @JsonInclude(JsonInclude.Include.NON_NULL) String loadError) {
+    @JsonInclude(JsonInclude.Include.NON_NULL) String loadError,
+    /** 绑定的服务商；null = 旧式直连 / 默认上游。 */
+    @JsonInclude(JsonInclude.Include.NON_NULL) UUID providerId,
+    @JsonInclude(JsonInclude.Include.NON_NULL) String providerName,
+    @JsonInclude(JsonInclude.Include.NON_NULL) ProviderKind providerKind,
+    @JsonInclude(JsonInclude.Include.NON_NULL) ProviderEgress egress,
+    /** 旧式直连（没有 providerId）：界面要标出来，避免把“未绑定”读成“没配”。 */
+    boolean legacyDirect) {
 
   /** 从聚合映射成视图。★ 不拷贝 apiKeyCipher / apiKeyIv —— 它们永远不出网。 */
   public static ModelView from(Model model) {
+    return from(model, null);
+  }
+
+  public static ModelView from(Model model, ModelProvider provider) {
     return new ModelView(
         model.id(),
         model.name(),
@@ -51,6 +65,11 @@ public record ModelView(
         model.tools(),
         model.builtin(),
         model.remark(),
-        model.loadError());
+        model.loadError(),
+        model.providerId(),
+        provider == null ? null : provider.name(),
+        provider == null ? null : provider.kind(),
+        provider == null ? null : provider.egress(),
+        model.providerId() == null);
   }
 }
