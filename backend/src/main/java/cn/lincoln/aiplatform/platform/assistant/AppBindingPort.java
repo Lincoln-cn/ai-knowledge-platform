@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.platform.assistant;
 
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -37,7 +38,7 @@ import java.util.UUID;
  *       调用方<strong>没有机会</strong>忘记。
  * </ul>
  *
- * <p>★ 端口<strong>只读且只带问答那一轮真正要用的最小事实</strong>：模型 / 知识库 / 多轮 / 角色设定。 应用的名称、检索参数、发布状态、调用计数都不在这里 ——
+ * <p>★ 端口<strong>只读且只带问答那一轮真正要用的最小事实</strong>：模型 / 知识库 / 多轮 / 角色设定 / 检索参数。 应用的名称、发布状态、调用计数都不在这里 ——
  * 那些是 {@code assistant} 自己的用例面 （{@code AssistantService}）， 别的模块不该"认识一个应用的全部"。★ 角色设定是唯一的例外：它直接进入
  * prompt，是"这一轮怎么答"的一部分， 不能让 conversation 再读一次应用实体（那会绕开模块边界，也会让两条提示词来源分叉）。
  */
@@ -52,9 +53,15 @@ public interface AppBindingPort {
    *     对话模型"，不是"没有模型"（见 {@code ChatPort#pickChatModel}）
    * @param kbIds 应用绑定的知识库（★ 顺序不承诺语义；空 = 没绑 —— 那是通用问答，不是"绑了一个空库"）
    * @param rolePrompt 应用的角色设定；★ 空串 = 应用没有设定（**不回落**到平台通用提示词）
+   * @param retrieval 应用级检索参数（{@code #185}）。★ 它此前不在这份事实里，于是配置页的阈值 / TopN / 无引用策略 全是死控件；问答链路只能读平台设置
    */
   record AppBinding(
-      UUID appId, UUID modelId, List<UUID> kbIds, boolean multiTurn, String rolePrompt) {}
+      UUID appId,
+      UUID modelId,
+      List<UUID> kbIds,
+      boolean multiTurn,
+      String rolePrompt,
+      RetrievalParams retrieval) {}
 
   /**
    * 取"当前身份可见的"那个应用的绑定。

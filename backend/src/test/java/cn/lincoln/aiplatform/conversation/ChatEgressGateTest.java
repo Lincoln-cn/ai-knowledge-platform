@@ -278,6 +278,7 @@ class ChatEgressGateTest {
           List.of(),
           false,
           null,
+          null,
           null);
     }
 

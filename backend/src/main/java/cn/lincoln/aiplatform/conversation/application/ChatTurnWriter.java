@@ -13,6 +13,7 @@ import cn.lincoln.aiplatform.platform.assistant.AppBindingPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -110,7 +111,9 @@ public class ChatTurnWriter implements ChatTurnStore {
       // ★ 应用归属（null = 通用问答）与角色设定：提示词来源必须由这一轮的应用决定，
       //   不能在 ChatService 里再猜一次（#183）。
       UUID appId,
-      String rolePrompt) {}
+      String rolePrompt,
+      // ★ `#185`：应用级检索参数。通用问答（app == null）时是 null ⇒ 由 ChatService 回落到平台设置。
+      RetrievalParams retrieval) {}
 
   /**
    * 建这一轮的两条消息（用户消息 + {@code GENERATING} 助手消息）并把模型定下来。
@@ -179,7 +182,40 @@ public class ChatTurnWriter implements ChatTurnStore {
         //     应用那边仍尊重它自己的 `multi_turn` 开关，通用问答则总是带上历史。
         app == null || app.multiTurn(),
         app == null ? null : app.appId(),
-        app == null ? null : app.rolePrompt());
+        app == null ? null : app.rolePrompt(),
+        // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）
+        app == null ? null : app.retrieval());
+  }
+
+  /**
+   * 调试的一轮（{@code #184}）：<strong>只读应用绑定，不建会话 / 消息，不落库</strong>。
+   *
+   * <p>★★ 与 {@link #prepare} 的唯一差别是"不落库"：应用映射、模型选取、检索参数全部走同一段代码 —— 否则调试通过、 线上仍不一致（{@code BR-02-08}
+   * 要防的正是这个）。
+   *
+   * <p>★ {@code conversationId} 是 {@code null}：调试没有会话，因此检索域里没有会话附件那一支（那是正确语义， 不是"漏了一支"）；{@code
+   * userId} 也不需要 —— 可见性判定在 {@link AppBindingPort#findVisibleById} 里用当前范围。
+   */
+  @Override
+  @Transactional(readOnly = true)
+  public PreparedTurn prepareDebug(UUID appId, String question) {
+    AppBindingPort.AppBinding app = requireVisibleApp(appId);
+    UUID modelId = pickModelId(app);
+    UUID assistantMessageId = UUID.randomUUID();
+    return new PreparedTurn(
+        // ★ 调试不属于任何会话：null ⇒ 检索域里没有会话附件那一支（正确语义）
+        null,
+        assistantMessageId,
+        UUID.randomUUID(),
+        "debug_" + assistantMessageId,
+        modelId.toString(),
+        modelId,
+        app.kbIds(),
+        // ★ 调试不带历史：没有会话可带
+        false,
+        app.appId(),
+        app.rolePrompt(),
+        app.retrieval());
   }
 
   /**
@@ -406,7 +442,9 @@ public class ChatTurnWriter implements ChatTurnStore {
         //     应用那边仍尊重它自己的 `multi_turn` 开关，通用问答则总是带上历史。
         app == null || app.multiTurn(),
         app == null ? null : app.appId(),
-        app == null ? null : app.rolePrompt());
+        app == null ? null : app.rolePrompt(),
+        // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）
+        app == null ? null : app.retrieval());
   }
 
   /**

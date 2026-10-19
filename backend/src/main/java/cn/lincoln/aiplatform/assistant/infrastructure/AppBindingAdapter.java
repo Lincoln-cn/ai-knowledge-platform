@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.assistant.domain.Assistant;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.assistant.AppBindingPort;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
@@ -49,6 +50,18 @@ public class AppBindingAdapter implements AppBindingPort {
   }
 
   private static AppBinding binding(Assistant app) {
-    return new AppBinding(app.id(), app.modelId(), app.kbIds(), app.multiTurn(), app.rolePrompt());
+    return new AppBinding(
+        app.id(),
+        app.modelId(),
+        app.kbIds(),
+        app.multiTurn(),
+        app.rolePrompt(),
+        // ★ `#185`：应用级检索参数随绑定一起进问答链路。此前它们只存在于实体 / 视图 / 导出里，
+        //   `ChatService` 读的是平台设置 ⇒ 配置页那几个控件全是装饰。
+        new RetrievalParams(
+            app.retrievalMode(),
+            app.retrievalThreshold().doubleValue(),
+            app.retrievalTopN(),
+            app.retrievalNoRefStrategy()));
   }
 }

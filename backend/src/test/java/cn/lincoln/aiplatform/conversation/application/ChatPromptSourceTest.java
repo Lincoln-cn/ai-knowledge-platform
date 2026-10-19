@@ -170,7 +170,8 @@ class ChatPromptSourceTest {
               List.of(),
               false,
               appId,
-              rolePrompt);
+              rolePrompt,
+              null);
       return turn;
     }
 

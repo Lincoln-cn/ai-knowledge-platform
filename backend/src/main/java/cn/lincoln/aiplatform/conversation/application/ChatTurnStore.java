@@ -30,6 +30,23 @@ public interface ChatTurnStore {
       UUID conversationId, UUID appId, String question, UUID userId);
 
   /**
+   * 调试的一轮（{@code #184}）：<strong>只读应用绑定、不建会话、不建消息、不落库</strong>。
+   *
+   * <p>★★ 它是"调试与正式问答使用同一套配置"（{@code BR-02-08}）的落点：应用 → 模型 / 知识库 / 角色设定 / 检索参数 的映射仍然只在 {@link
+   * ChatTurnWriter} 里做一次，{@code ChatService} 拿到的是与正式轮完全同形的 {@code PreparedTurn}。
+   *
+   * <p>默认实现<strong>抛</strong>而不是返回空：测试替身若没显式支持调试，应当红在"这个替身不支持调试"，而不是安静地 拿到一个 null /
+   * 空轮次（那会让"没测"伪装成"测过了"）。
+   *
+   * @param appId 应用 id（看不见 ⇒ 404）
+   * @param question 调试问题（非空）
+   * @return 这一轮读数；{@code conversationId} 为 {@code null}（调试不属于任何会话）
+   */
+  default ChatTurnWriter.PreparedTurn prepareDebug(UUID appId, String question) {
+    throw new UnsupportedOperationException("这个 ChatTurnStore 实现不支持应用调试（#184）");
+  }
+
+  /**
    * 重新生成的一轮：<strong>覆盖</strong>目标助手消息，不新增消息对（契约「不新增消息对」）。
    *
    * <p>★ 声明在接口上而不是只在实现里：{@code ChatService} 依赖的是本接口 （{@code private final ChatTurnStore turns}）——
