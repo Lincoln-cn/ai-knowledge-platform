@@ -34,7 +34,8 @@
         <el-option v-for="s in STATUSES" :key="s" :label="labelOf(MODEL_STATUS_LABELS, s)" :value="s" />
       </el-select>
       <span class="micro muted">
-        共 {{ total }} 个
+        共 {{ total }} 个注册模型
+        <template v-if="localOnnx?.enabled"> · 另有 1 个进程内 ONNX 向量模型</template>
         <template v-if="loadingCount">
           · <span class="live">{{ loadingCount }} 个加载中，自动刷新</span>
         </template>
@@ -42,40 +43,68 @@
     </div>
 
     <!--
-      本地 ONNX（进程内）状态条（#191）。
-      ★ 它显示的是 LocalOnnxEmbedding 的 ready/filesPresent，不是 ai_model.status；
-        ONNX 模型卡片的「未加载」不能代表它不能用。
+      本地 ONNX（进程内）向量模型（#191 的说明补齐）。
+      ★ 它不是 `ai_model` 里的一行：进程内懒加载，没有上游 load 生命周期。
+        所以它不放进模型卡片网格（那张卡片的高度会把整行模型卡都撑高），
+        改成网格上方一条紧凑的「运行时模型」条：状态、文件、路径、动作一行看完。
     -->
-    <div v-if="localOnnx" class="local-onnx panel">
-      <div class="lo-main">
-        <div class="lo-head">
+    <section v-loading="loading" class="onnx-runtime panel">
+      <div class="onnx-main">
+        <div class="onnx-head">
+          <span class="onnx-title ellipsis" :title="localOnnx?.model || '本地 ONNX 向量模型'">
+            {{ localOnnx?.model || '本地 ONNX 向量模型' }}
+          </span>
           <el-tag size="small" effect="plain" type="info">进程内 ONNX</el-tag>
           <span class="status" :class="localOnnxStateClass">
-            <i class="dot" :class="localOnnx.ready ? 'ok' : localOnnx.filesPresent ? 'warn' : 'err'" />
+            <i class="dot" :class="localOnnxDot" />
             {{ localOnnxStateLabel }}
           </span>
         </div>
-        <div class="lo-meta micro muted">
-          模型 <code>{{ localOnnx.model }}</code>
-          · 文件 {{ localOnnx.filesPresent ? '已就位' : '缺失' }}
-          · {{ localOnnx.ready ? '已预热' : localOnnx.reason || '未预热' }}
+
+        <p class="onnx-desc micro muted">
+          进程内向量化，不依赖 Ollama / 11434。第一次使用时懒加载 ONNX session；
+          「未预热」表示文件在、还没用过。它不参与下方模型列表的「加载 / 卸载」生命周期。
+        </p>
+
+        <div class="onnx-facts micro">
+          <span><span class="onnx-key">类型</span>向量 · 进程内推理</span>
+          <span>
+            <span class="onnx-key">文件</span>
+            {{ localOnnx ? (localOnnx.filesPresent ? '已就位' : '缺失') : '未知' }}
+          </span>
+          <span class="onnx-path" :title="localOnnx?.modelPath">
+            <span class="onnx-key">模型</span>
+            <code>{{ localOnnx?.modelPath || '读取中…' }}</code>
+          </span>
+          <span v-if="localOnnx" class="onnx-path" :title="localOnnx.tokenizerPath">
+            <span class="onnx-key">tokenizer</span>
+            <code>{{ localOnnx.tokenizerPath }}</code>
+          </span>
         </div>
-        <div class="lo-path micro faint ellipsis" :title="localOnnx.modelPath">
-          {{ localOnnx.modelPath }}
+
+        <div v-if="localOnnx?.reason" class="onnx-note micro">
+          {{ localOnnx.reason }}
+        </div>
+        <div v-if="localOnnxError" class="onnx-note err micro">
+          <b>状态读取失败：</b>{{ localOnnxError }}
+          <el-button link size="small" @click="fetchLocalOnnx">重试</el-button>
         </div>
       </div>
-      <div class="lo-actions">
+
+      <div class="onnx-actions">
         <el-button
-          v-if="localOnnx.enabled && !localOnnx.ready"
+          v-if="localOnnx?.enabled && !localOnnx.ready"
           size="small"
           type="primary"
           :loading="warmingUp"
           @click="warmUp"
         >预热本地模型</el-button>
-        <span v-else-if="localOnnx.ready" class="micro muted">已就绪</span>
-        <span v-else class="micro muted">未启用（走上游）</span>
+        <span v-else-if="localOnnx?.ready" class="micro muted">已就绪</span>
+        <span v-else class="micro muted">
+          {{ localOnnx ? '未启用（走上游）' : '等待状态接口' }}
+        </span>
       </div>
-    </div>
+    </section>
 
     <div v-loading="loading" class="grid">
       <el-card v-for="m in list" :key="m.id" shadow="never" class="model-card" :class="{ failed: m.status === 'LOAD_FAILED' }">
@@ -111,7 +140,12 @@
                 <span class="num">{{ m.dimension }}</span> 维
                 <span class="micro muted">（与向量表绑定）</span>
               </template>
-              <template v-else><span class="num">{{ m.contextWindow?.toLocaleString() }}</span> tokens</template>
+              <template v-else>
+                <template v-if="m.contextWindow">
+                  <span class="num">{{ m.contextWindow.toLocaleString() }}</span> tokens
+                </template>
+                <span v-else class="micro muted">未探测</span>
+              </template>
             </dd>
           </div>
           <div v-if="m.kind === 'CHAT'" class="fact">
@@ -254,6 +288,7 @@ const pageSize = 12
  * 这里读后端 `/models/local-onnx`，不能拿 `NOT_LOADED` 冒充（#191）。
  */
 const localOnnx = ref<LocalOnnxStatus | null>(null)
+const localOnnxError = ref<string | null>(null)
 const warmingUp = ref(false)
 
 /** 筛选/分页入 URL —— 刷新与直链不丢状态（一.2） */
@@ -307,13 +342,17 @@ const fetchList = async () => {
 
 /**
  * 本地 ONNX 状态：后端 `/models/local-onnx`。
- * ★ 失败时置 null（旧后端 / 未启用），页面退回普通模型列表，不制造额外错误态。
+ * ★ 失败时置 null，但**不隐藏整块**（#191 的说明补齐）：错误写进 `localOnnxError`，
+ * 卡片照常显示「状态未知 + 原因 + 重试」。整块消失会让"接口 404 / 403"看起来像"这台机器没有 ONNX"。
  */
 const fetchLocalOnnx = async () => {
   try {
     localOnnx.value = await modelsApi.getLocalOnnxStatus()
-  } catch {
+    localOnnxError.value = null
+  } catch (e) {
     localOnnx.value = null
+    localOnnxError.value =
+      e instanceof ApiError ? e.message : '读取本地 ONNX 状态失败（接口不可达）'
   }
 }
 
@@ -322,7 +361,7 @@ const isLocalOnnx = (m: ModelInfo) =>
 
 const localOnnxStateLabel = computed(() => {
   const s = localOnnx.value
-  if (!s) return '未知'
+  if (!s) return localOnnxError.value ? '状态未知（读取失败）' : '读取中…'
   if (!s.enabled) return '未启用（走上游）'
   if (s.ready) return '已就绪'
   if (!s.filesPresent) return '模型文件缺失'
@@ -332,10 +371,20 @@ const localOnnxStateLabel = computed(() => {
 
 const localOnnxStateClass = computed(() => {
   const s = localOnnx.value
-  if (!s || !s.enabled) return 'st-idle'
+  if (!s) return localOnnxError.value ? 'st-err' : 'st-idle'
+  if (!s.enabled) return 'st-idle'
   if (s.ready) return 'st-ok'
   if (!s.filesPresent || (s.reason && s.reason.includes('失败'))) return 'st-err'
   return 'st-idle'
+})
+
+const localOnnxDot = computed(() => {
+  const s = localOnnx.value
+  if (!s) return localOnnxError.value ? 'err' : ''
+  if (!s.enabled) return ''
+  if (s.ready) return 'ok'
+  if (!s.filesPresent || (s.reason && s.reason.includes('失败'))) return 'err'
+  return 'warn'
 })
 
 const statusLabelOf = (m: ModelInfo) =>
@@ -540,38 +589,92 @@ const remove = async (model: ModelInfo) => {
   font-weight: 500;
 }
 
-/* 本地 ONNX 状态条：它展示的是进程内懒加载状态，不是上游 load 生命周期 */
-.local-onnx {
+/* 本地 ONNX：网格上方的一条「运行时模型」，不参与模型卡片的行高 */
+.onnx-runtime {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-md);
+  margin-bottom: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  border-left: 1px solid var(--color-accent-line);
+  border-left: 3px solid var(--color-accent-line);
   background: var(--color-accent-soft);
 }
 
-.lo-main {
+.onnx-main {
   min-width: 0;
+  flex: 1;
 }
 
-.lo-head {
+.onnx-head {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
+  min-width: 0;
 }
 
-.lo-meta {
+.onnx-title {
+  max-width: 320px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.onnx-desc {
+  margin: var(--space-2xs) 0 0;
+  line-height: var(--leading-body);
+}
+
+.onnx-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3xs) var(--space-md);
   margin-top: var(--space-2xs);
+  color: var(--color-ink-2);
 }
 
-.lo-path {
-  margin-top: var(--space-3xs);
-  max-width: 720px;
+.onnx-facts > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2xs);
+  min-width: 0;
 }
 
-.lo-actions {
+.onnx-key {
+  color: var(--color-muted);
+}
+
+.onnx-path {
+  max-width: 420px;
+}
+
+.onnx-path code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-2xs);
+}
+
+.onnx-note {
+  margin-top: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink-2);
+}
+
+.onnx-note.err {
+  color: var(--color-danger);
+}
+
+.onnx-actions {
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
+  padding-top: var(--space-3xs);
 }
 
 .onnx-tag {
@@ -620,8 +723,10 @@ const remove = async (model: ModelInfo) => {
 .status {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: var(--space-2xs);
   font-size: var(--text-2xs);
+  white-space: nowrap;
 }
 
 .st-idle {
