@@ -3,6 +3,7 @@
     <PageHeader title="模型管理" desc="模型是对话与向量化的底座。能力三态决定界面上开关怎么呈现，不是可选项">
       <template #actions>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchList">刷新</el-button>
+        <el-button size="small" :icon="Connection" @click="openProviders">服务商</el-button>
         <el-button size="small" type="primary" @click="openCreate">添加模型</el-button>
       </template>
     </PageHeader>
@@ -133,6 +134,19 @@
             <dt class="label">基础模型</dt>
             <dd class="ellipsis">{{ m.baseModel }}</dd>
           </div>
+          <div v-if="m.providerName || m.legacyDirect" class="fact">
+            <dt class="label">服务商</dt>
+            <dd class="ellipsis">
+              <template v-if="m.providerName">
+                {{ m.providerName }}
+                <el-tag v-if="m.egress === 'LOCAL'" size="small" effect="plain" type="success">不出网</el-tag>
+                <el-tag v-else-if="m.egress" size="small" effect="plain" type="warning">出网</el-tag>
+              </template>
+              <template v-else>
+                <span class="micro muted">旧式直连（未绑定服务商）</span>
+              </template>
+            </dd>
+          </div>
           <div class="fact">
             <dt class="label">{{ m.kind === 'EMBEDDING' ? '向量维度' : '上下文窗口' }}</dt>
             <dd>
@@ -222,6 +236,8 @@
       :model="editing"
       @saved="onSaved"
     />
+
+    <ProviderDrawer ref="providerRef" @changed="onProvidersChanged" />
   </div>
 </template>
 
@@ -229,12 +245,13 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Refresh, WarningFilled } from '@element-plus/icons-vue'
+import { Connection, Loading, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { modelsApi } from '@/api'
 import type { LocalOnnxStatus, ModelInfo, ModelKind, ModelStatus } from '@/api/models'
 import { ApiError } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import ModelFormDialog from './components/ModelFormDialog.vue'
+import ProviderDrawer from './components/ProviderDrawer.vue'
 import { MODEL_STATUS_LABELS, SUPPLIER_LABELS, labelOf } from '@/constants/labels'
 
 const STATUSES: ModelStatus[] = ['NOT_LOADED', 'LOADING', 'LOADED', 'LOAD_FAILED']
@@ -522,7 +539,10 @@ watch(
 
 /* ── 操作 ── */
 const formRef = ref<InstanceType<typeof ModelFormDialog>>()
+const providerRef = ref<InstanceType<typeof ProviderDrawer>>()
 const editing = ref<ModelInfo | null>(null)
+
+const openProviders = () => providerRef.value?.open()
 
 const openCreate = () => {
   editing.value = null
@@ -535,6 +555,11 @@ const openEdit = (model: ModelInfo) => {
 }
 
 const onSaved = () => {
+  fetchList().then(schedule)
+}
+
+/** 服务商增删改之后：模型卡上的服务商名/出网标记要跟着变 */
+const onProvidersChanged = () => {
   fetchList().then(schedule)
 }
 

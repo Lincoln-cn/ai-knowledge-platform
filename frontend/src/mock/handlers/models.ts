@@ -21,6 +21,10 @@ const allBaseModels = (): BaseModelOption[] => [...baseModels, ...externalBaseMo
 
 const findBaseModel = (name: string) => allBaseModels().find((b) => b.baseModel === name)
 
+/** mock 侧只认识预置的 JAiRouter；新建服务商后模型卡片显示 id 兜底 */
+const providerNameOf = (id: string) =>
+  id === 'provider-jairouter' ? 'JAiRouter（本机）' : id
+
 /** 本地 ONNX（进程内）状态；warmup 后置 ready，供管理页联调 #191 */
 let localOnnxReady = false
 const localOnnxStatus = () => ({
@@ -147,8 +151,8 @@ export const modelRoutes: MockRoute[] = [
         throw new ApiError(ErrorCode.BAD_REQUEST, `模型名称「${input.name}」已存在`)
       }
 
-      // 外部 API 必须带 apiBase —— 与后端 validateSupplier 同口径，前端校验被绕过时也拦得住
-      if (input.supplier === 'EXTERNAL_API' && !input.apiBase?.trim()) {
+      // 外部 API 必须带 apiBase —— 绑定服务商时由服务商持有地址，不再要求表单填
+      if (input.supplier === 'EXTERNAL_API' && !input.providerId && !input.apiBase?.trim()) {
         throw new ApiError(
           ErrorCode.BAD_REQUEST,
           '外部 API 模型必须提供 apiBase',
@@ -186,7 +190,10 @@ export const modelRoutes: MockRoute[] = [
         thinking: input.kind === 'CHAT' ? (input.thinking ?? 'NONE') : 'NONE',
         tools: input.kind === 'CHAT' ? (input.tools ?? 'UNSUPPORTED') : 'UNSUPPORTED',
         builtin: false,
-        remark: input.remark
+        remark: input.remark,
+        providerId: input.providerId ?? null,
+        providerName: input.providerId ? providerNameOf(input.providerId) : undefined,
+        legacyDirect: !input.providerId
       }
       models.unshift(created)
       return created
@@ -223,6 +230,11 @@ export const modelRoutes: MockRoute[] = [
 
       if (input.name) model.name = input.name
       if (input.remark !== undefined) model.remark = input.remark
+      if (input.providerId !== undefined) {
+        model.providerId = input.providerId || null
+        model.providerName = input.providerId ? providerNameOf(input.providerId) : undefined
+        model.legacyDirect = !input.providerId
+      }
       if (model.kind === 'CHAT') {
         if (input.thinking) model.thinking = input.thinking
         if (input.tools) model.tools = input.tools

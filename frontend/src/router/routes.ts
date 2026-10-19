@@ -77,6 +77,7 @@ export const navGroups: NavGroup[] = [
       // 与「账号与权限」同属管理员那一档，所以并排放在「管理」下
       { path: '/basedata', label: '基础数据', icon: 'Tickets' },
       { path: '/settings/chat', label: '对话设置', icon: 'Timer' },
+      { path: '/settings/providers', label: '服务商配置', icon: 'Connection' },
       // ★ 组织机构独立成一个菜单项（用户口径）：它是**数据权限的载体**（共享给部门、按部门筛文档），
       //   与"账号/角色/权限点"不是一件事，也不该再往系统管理里堆 tab
       { path: '/org', label: '组织机构', icon: 'OfficeBuilding' },

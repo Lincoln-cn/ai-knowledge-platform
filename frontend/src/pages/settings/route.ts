@@ -25,5 +25,11 @@ export default [
     name: 'settings-chat',
     component: () => import('./chat/Index.vue'),
     meta: { title: '对话设置', permission: PERM.chatSettings }
+  },
+  {
+    path: 'settings/providers',
+    name: 'settings-providers',
+    component: () => import('./providers/Index.vue'),
+    meta: { title: '服务商配置', permission: PERM.modelManage }
   }
 ] satisfies RouteRecordRaw[]
