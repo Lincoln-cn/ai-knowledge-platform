@@ -14,6 +14,7 @@ import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
+import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
 import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
@@ -47,6 +48,8 @@ class AppRetrievalParamsTest {
   private static final UUID APP_ID = UUID.fromString("0a000000-0000-4000-8000-0000000000a1");
   private static final UUID MODEL_ID = UUID.fromString("0a000000-0000-4000-8000-0000000000a2");
   private static final UUID KB_ID = UUID.fromString("0a000000-0000-4000-8000-0000000000a3");
+  private static final UUID MODEL_ID_2 = UUID.fromString("0a000000-0000-4000-8000-0000000000a5");
+  private static final UUID KB_ID_2 = UUID.fromString("0a000000-0000-4000-8000-0000000000a4");
   private static final UUID SEGMENT_1 = UUID.fromString("0a000000-0000-4000-8000-0000000000b1");
   private static final UUID SEGMENT_2 = UUID.fromString("0a000000-0000-4000-8000-0000000000b2");
   private static final UUID SEGMENT_3 = UUID.fromString("0a000000-0000-4000-8000-0000000000b3");
@@ -119,14 +122,170 @@ class AppRetrievalParamsTest {
     assertThat(run.sink.deltas()).containsExactly("假模型答案");
   }
 
+  // ──────────────── #185：检索模式 VECTOR / FULLTEXT / HYBRID ────────────────
+
+  @Test
+  void vectorModeEmbedsQuestionAndUsesVectorSearch() {
+    RetrievalParams vector =
+        new RetrievalParams(RetrievalMode.VECTOR, 0.0, 5, NoRefStrategy.FREE_ANSWER);
+    Run run =
+        run(
+            vector,
+            new FixedSearchPort(List.of(), List.of(hit(SEGMENT_1, 0.90))),
+            List.of(0.1f, 0.2f));
+
+    assertThat(run.embeddingCalls.get())
+        .as("★ VECTOR：问题必须真的被向量化一次 —— 不调 embed 它就变成 0")
+        .isEqualTo(1);
+    assertThat(run.search.fullTextCalls.get()).as("★ VECTOR：不得走全文那一路").isZero();
+    assertThat(run.refs())
+        .as("向量一路返回 SEGMENT_1 ⇒ refs 必须含它")
+        .extracting(SourceRef::segmentId)
+        .contains(SEGMENT_1.toString());
+  }
+
+  @Test
+  void fullTextModeDoesNotEmbed() {
+    RetrievalParams fullText =
+        new RetrievalParams(RetrievalMode.FULLTEXT, 0.0, 5, NoRefStrategy.FREE_ANSWER);
+    Run run =
+        run(fullText, new FixedSearchPort(List.of(hit(SEGMENT_1, 0.90)), List.of()), List.of());
+
+    assertThat(run.embeddingCalls.get())
+        .as("★ FULLTEXT：不得向量化 —— 一旦它变成 1，说明 FULLTEXT 被误改走向量")
+        .isZero();
+    assertThat(run.search.vectorSearchCalls.get()).as("★ FULLTEXT：不得调用向量检索").isZero();
+    assertThat(run.refs()).extracting(SourceRef::segmentId).contains(SEGMENT_1.toString());
+  }
+
+  @Test
+  void hybridModeUsesBothRoutesAndFuses() {
+    RetrievalParams hybrid =
+        new RetrievalParams(RetrievalMode.HYBRID, 0.0, 5, NoRefStrategy.FREE_ANSWER);
+    Run run =
+        run(
+            hybrid,
+            new FixedSearchPort(List.of(hit(SEGMENT_1, 0.20)), List.of(hit(SEGMENT_2, 0.90))),
+            List.of(0.1f, 0.2f));
+
+    assertThat(run.search.fullTextCalls.get()).as("★ HYBRID：全文那一路必须跑").isEqualTo(1);
+    assertThat(run.embeddingCalls.get()).as("★ HYBRID：向量那一路也必须跑").isEqualTo(1);
+    assertThat(run.search.vectorSearchCalls.get()).isEqualTo(1);
+    assertThat(run.refs())
+        .as("★ HYBRID：两路都参与 ⇒ refs 必须同时含两路各自的分段（融合后去重但两路都留）")
+        .extracting(SourceRef::segmentId)
+        .contains(SEGMENT_1.toString(), SEGMENT_2.toString());
+  }
+
+  @Test
+  void hybridModeFallsBackToFullTextWhenVectorFails() {
+    RetrievalParams hybrid =
+        new RetrievalParams(RetrievalMode.HYBRID, 0.0, 5, NoRefStrategy.FREE_ANSWER);
+    Run run =
+        run(
+            hybrid,
+            new FixedSearchPort(List.of(hit(SEGMENT_1, 0.80)), List.of(hit(SEGMENT_2, 0.90))),
+            List.of(0.1f, 0.2f),
+            true,
+            MODEL_ID);
+
+    assertThat(run.search.fullTextCalls.get()).as("★ 全文那一路仍然要跑").isEqualTo(1);
+    assertThat(run.embeddingCalls.get()).as("向量那一路确实尝试过").isEqualTo(1);
+    assertThat(run.search.vectorSearchCalls.get()).as("向量化失败就不再查向量").isZero();
+    assertThat(run.refs())
+        .as("★★ 向量失败时只保留全文那一路；不许把整轮打成零引用")
+        .extracting(SourceRef::segmentId)
+        .containsExactly(SEGMENT_1.toString());
+  }
+
+  @Test
+  void vectorModeKeepsHealthyModelGroupsWhenOneGroupFails() {
+    RetrievalParams vector =
+        new RetrievalParams(RetrievalMode.VECTOR, 0.0, 5, NoRefStrategy.FREE_ANSWER);
+    FixedSearchPort search =
+        new FixedSearchPort(
+            List.of(),
+            List.of(),
+            false,
+            List.of(KB_ID, KB_ID_2),
+            Map.of(KB_ID, MODEL_ID, KB_ID_2, MODEL_ID_2),
+            Map.of(KB_ID, List.of(hit(SEGMENT_1, 0.90)), KB_ID_2, List.of(hit(SEGMENT_2, 0.90))));
+    Run run = run(vector, search, List.of(0.1f, 0.2f), true, MODEL_ID_2);
+
+    assertThat(run.search.vectorSearchCalls.get()).as("★ 坏掉一个向量模型，另一个模型组仍要检索").isEqualTo(1);
+    assertThat(run.refs())
+        .as("★★ 分组隔离：坏组的失败不许让好组也零引用")
+        .extracting(SourceRef::segmentId)
+        .containsExactly(SEGMENT_1.toString());
+  }
+
+  @Test
+  void vectorModeDoesNotQueryConversationScopeWithTheKnowledgeBaseVector() {
+    RetrievalParams vector =
+        new RetrievalParams(RetrievalMode.VECTOR, 0.0, 5, NoRefStrategy.FREE_ANSWER);
+    FixedSearchPort search = new FixedSearchPort(List.of(), List.of(hit(SEGMENT_1, 0.90)), true);
+
+    Run run = run(vector, search, List.of(0.1f, 0.2f));
+
+    assertThat(run.refs()).as("知识库那一路仍然要返回引用").isNotEmpty();
+    assertThat(search.lastVectorScope).as("向量查询必须真的发生").isNotNull();
+    assertThat(search.lastVectorScope.hasConversationScope())
+        .as("★★ 向量查询不得带会话域 —— 会话分段没有库行，会拿错向量模型/维度表")
+        .isFalse();
+    assertThat(search.lastVectorScope.sharedKbIds()).as("摘会话域时不许把知识库也一起摘掉").containsExactly(KB_ID);
+  }
+
+  @Test
+  void vectorModeWithoutEmbeddingPortReturnsNoRefsAndDoesNotFallBackToFullText() {
+    RetrievalParams vector =
+        new RetrievalParams(RetrievalMode.VECTOR, 0.0, 5, NoRefStrategy.FREE_ANSWER);
+    Run run =
+        run(
+            vector,
+            new FixedSearchPort(List.of(hit(SEGMENT_1, 0.90)), List.of(hit(SEGMENT_1, 0.90))),
+            List.of(),
+            false);
+
+    assertThat(run.refs()).as("★ 未装配 EmbeddingPort ⇒ 零引用，绝不静默退回全文").isEmpty();
+    assertThat(run.search.fullTextCalls.get())
+        .as("★★ 向量失败不得退回全文那一路 —— fullText 一旦非 0，就说明发生了'静默降级'")
+        .isZero();
+    assertThat(run.embeddingCalls.get()).isZero();
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
 
-  private record Run(List<SourceRef> refs, RecordingSink sink, AtomicInteger modelCalls) {}
+  private record Run(
+      List<SourceRef> refs,
+      RecordingSink sink,
+      AtomicInteger modelCalls,
+      AtomicInteger embeddingCalls,
+      FixedSearchPort search) {}
 
   private static Run run(RetrievalParams params, List<SegmentSearchPort.Scored> hits) {
+    return run(params, new FixedSearchPort(hits, List.of()), List.of(), true);
+  }
+
+  private static Run run(RetrievalParams params, FixedSearchPort search, List<Float> vector) {
+    return run(params, search, vector, true, null);
+  }
+
+  private static Run run(
+      RetrievalParams params,
+      FixedSearchPort search,
+      List<Float> vector,
+      boolean wireEmbeddingPort) {
+    return run(params, search, vector, wireEmbeddingPort, null);
+  }
+
+  private static Run run(
+      RetrievalParams params,
+      FixedSearchPort search,
+      List<Float> vector,
+      boolean wireEmbeddingPort,
+      UUID failingEmbeddingModel) {
     List<SourceRef> captured = new ArrayList<>();
     RecordingStore store = new RecordingStore(params);
-    SegmentSearchPort search = new FixedSearchPort(hits);
     AtomicInteger modelCalls = new AtomicInteger();
     ChatStreamPort model =
         (modelId, prompt, timeout, callback) -> {
@@ -144,39 +303,104 @@ class AppRetrievalParamsTest {
             new ChatStopSignal(),
             ChatStreamProperties.defaults(),
             UNRESTRICTED_EGRESS);
+    AtomicInteger embeddingCalls = new AtomicInteger();
+    if (wireEmbeddingPort) {
+      service.setEmbeddingPort(
+          new EmbeddingPort() {
+            @Override
+            public List<float[]> embed(UUID modelId, List<String> texts) {
+              embeddingCalls.incrementAndGet();
+              if (failingEmbeddingModel != null && failingEmbeddingModel.equals(modelId)) {
+                throw new IllegalStateException("测试注入：向量模型未加载");
+              }
+              float[] v = new float[vector.size()];
+              for (int i = 0; i < vector.size(); i++) {
+                v[i] = vector.get(i);
+              }
+              return List.of(v);
+            }
+          });
+    }
     RecordingSink sink = new RecordingSink();
     service.streamTurn(store.prepare(null, APP_ID, QUESTION, UUID.randomUUID()), QUESTION, sink);
     captured.addAll(sink.refs());
-    return new Run(captured, sink, modelCalls);
+    return new Run(captured, sink, modelCalls, embeddingCalls, search);
   }
 
   private static SegmentSearchPort.Scored hit(UUID id, double score) {
     return new SegmentSearchPort.Scored(id, score);
   }
 
-  /** 检索端口：固定返回给定命中；`load` 给每条命中一个可组装的 Card。 */
+  /**
+   * 检索端口：固定返回给定命中；`load` 给每条命中一个可组装的 Card。
+   *
+   * <p>★ 同时支持两路：fullText 返回 fullTextHits、vectorSearch 返回 vectorHits，各带一个调用计数器， 供 VECTOR / FULLTEXT
+   * / HYBRID 三种模式断言"哪一路真的被跑了"。
+   */
   private static final class FixedSearchPort implements SegmentSearchPort {
 
-    private final List<Scored> hits;
+    private final List<Scored> fullTextHits;
+    private final List<Scored> vectorHits;
+    private final boolean conversationScope;
+    private final List<UUID> kbIds;
+    private final Map<UUID, UUID> embeddingModels;
+    private final Map<UUID, List<Scored>> vectorHitsByKb;
+    private RetrievalScope lastVectorScope;
+    final AtomicInteger fullTextCalls = new AtomicInteger();
+    final AtomicInteger vectorSearchCalls = new AtomicInteger();
 
-    private FixedSearchPort(List<Scored> hits) {
-      this.hits = hits;
+    private FixedSearchPort(List<Scored> fullTextHits, List<Scored> vectorHits) {
+      this(fullTextHits, vectorHits, false);
+    }
+
+    private FixedSearchPort(
+        List<Scored> fullTextHits, List<Scored> vectorHits, boolean conversationScope) {
+      this(
+          fullTextHits,
+          vectorHits,
+          conversationScope,
+          List.of(KB_ID),
+          Map.of(KB_ID, MODEL_ID),
+          Map.of(KB_ID, vectorHits));
+    }
+
+    private FixedSearchPort(
+        List<Scored> fullTextHits,
+        List<Scored> vectorHits,
+        boolean conversationScope,
+        List<UUID> kbIds,
+        Map<UUID, UUID> embeddingModels,
+        Map<UUID, List<Scored>> vectorHitsByKb) {
+      this.fullTextHits = fullTextHits;
+      this.vectorHits = vectorHits;
+      this.conversationScope = conversationScope;
+      this.kbIds = kbIds;
+      this.embeddingModels = embeddingModels;
+      this.vectorHitsByKb = vectorHitsByKb;
     }
 
     @Override
     public RetrievalScope retrievalScope(
         Collection<UUID> requested, UUID conversationId, boolean includePersonal) {
-      return RetrievalScope.shared(List.of(KB_ID));
+      if (conversationScope) {
+        return new RetrievalScope(
+            kbIds,
+            null,
+            UUID.fromString("0a000000-0000-4000-8000-0000000000d1"),
+            UUID.fromString("0a000000-0000-4000-8000-0000000000d2"));
+      }
+      return RetrievalScope.shared(kbIds);
     }
 
     @Override
     public List<UUID> visibleKbIds(Collection<UUID> requested) {
-      return List.of(KB_ID);
+      return kbIds;
     }
 
     @Override
     public List<Scored> fullText(TextQuery query) {
-      return hits;
+      fullTextCalls.incrementAndGet();
+      return fullTextHits;
     }
 
     @Override
@@ -198,12 +422,15 @@ class AppRetrievalParamsTest {
 
     @Override
     public Map<UUID, UUID> embeddingModelByKb(Collection<UUID> kbIds) {
-      throw new UnsupportedOperationException("本类只读全文那一路");
+      return embeddingModels;
     }
 
     @Override
     public List<Scored> vectorSearch(VectorQuery query) {
-      throw new UnsupportedOperationException("本类只读全文那一路");
+      lastVectorScope = query.scope();
+      vectorSearchCalls.incrementAndGet();
+      UUID kbId = query.scope().sharedKbIds().getFirst();
+      return vectorHitsByKb.getOrDefault(kbId, vectorHits);
     }
   }
 

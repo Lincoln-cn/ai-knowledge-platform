@@ -12,10 +12,11 @@ package cn.lincoln.aiplatform.platform.retrieval;
  * <h3>★★ 它刻意不带 {@code queryCount / decomposeEnabled / maxSubQuestions}</h3>
  *
  * <p>那三个是「查询理解」的参数，只有 {@code RetrievalService.hitTest} 那条链消费它们；问答链路今天不做查询理解 （{@code #185} 的拆分：先把阈值
- * / TopN / 无引用策略接线，模式与思考另行处理）。把它们放进本对象会让"应用配了 3 条查询" 看起来已经生效 —— 那正是 {@code #185} 要消灭的那种假象。
+ * / TopN / 无引用策略与检索模式接线，思考另行处理）。把它们放进本对象会让"应用配了 3 条查询" 看起来已经生效 —— 那正是 {@code #185} 要消灭的那种假象。
  *
- * @param mode 检索模式。★ 问答链路今天只实现全文一路；非 {@code FULLTEXT} 会按全文执行并在日志里留痕（不是静默降级）
- * @param threshold 相似度 / 词覆盖率下限（0–1）。低于它的命中不进上下文
+ * @param mode 检索模式。★ 三种取值都已接线：FULLTEXT 全文、VECTOR 向量、HYBRID 两路 RRF 融合； VECTOR/HYBRID 需要装配 {@code
+ *     EmbeddingPort} 且知识库已绑定向量模型，缺依赖时本轮零引用（不静默降级）
+ * @param threshold 相似度 / 词覆盖率下限（0–1）。低于它的命中不进上下文。★ 向量模式是余弦相似度；混合模式取两路中该分段的<strong>最大原始分</strong>
  * @param topN 引用条数上限
  * @param noRefStrategy 零引用时的策略；{@code REFUSE} ⇒ 不调用模型，直接回固定拒答文案
  */

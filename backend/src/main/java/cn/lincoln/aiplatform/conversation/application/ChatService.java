@@ -11,6 +11,7 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
+import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
 import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
@@ -146,6 +147,23 @@ public class ChatService {
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   void setPolicyResolver(ChatPolicyResolver resolver) {
     this.policyResolver = resolver;
+  }
+
+  /**
+   * 向量化端口（{@code #185} 的 VECTOR / HYBRID 检索）。
+   *
+   * <p>★ 与 {@link #setPolicyResolver} 同一形状的 <b>setter 可选注入</b>：本类的两个构造器被大量测试依赖，
+   * 不改构造器参数列表；而这条依赖在测试环境里<strong>确实可以没有</strong>（不设时 VECTOR 模式按"未装配" 抛 {@link
+   * IllegalStateException} ⇒ 零引用，绝不静默退回全文）。
+   */
+  private EmbeddingPort embeddingPort;
+
+  /**
+   * @param embeddingPort 向量化端口（可空 = 未装配向量模型，VECTOR 检索不可用）
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setEmbeddingPort(EmbeddingPort embeddingPort) {
+    this.embeddingPort = embeddingPort;
   }
 
   /**
@@ -916,16 +934,9 @@ public class ChatService {
     }
     // ★★ `#185`：应用级参数优先于平台设置 —— 这一处是**唯一**的"谁赢"判定。
     //   通用问答（app == null）的 retrieval 是 null ⇒ 回落平台设置；应用有绑定 ⇒ 用它自己的。
-    //   ★ 模式今天只实现全文：非 FULLTEXT 会按全文执行，并且在日志里**明说**（不是静默降级）。
+    //   ★ 模式三路都已接线（VECTOR / FULLTEXT / HYBRID）：VECTOR 走向量检索，HYBRID 两路 RRF 融合。
     int retrievalLimit = retrieval.topN();
     double threshold = retrieval.threshold();
-    if (retrieval.mode() != RetrievalMode.FULLTEXT) {
-      log.info(
-          "检索模式配置为 {}，但问答链路当前只实现全文检索（#185 拆分）⇒ 本轮按 FULLTEXT 执行；" + "阈值 {} / TopN {} 仍然按配置生效",
-          retrieval.mode(),
-          threshold,
-          retrievalLimit);
-    }
 
     List<UUID> ordered;
     // ★ 出站上限在 try 之外声明：try 内取到、组装循环里用（catch 一律 return，故定值分析成立）
@@ -980,10 +991,33 @@ public class ChatService {
             modelId);
         return List.of();
       }
-      List<SegmentSearchPort.Scored> hits =
-          segmentSearch.fullText(
-              new SegmentSearchPort.TextQuery(
-                  question, scope, retrievalLimit * RETRIEVAL_OVERFETCH));
+      List<SegmentSearchPort.Scored> hits;
+      int fetchLimit = retrievalLimit * RETRIEVAL_OVERFETCH;
+      switch (retrieval.mode()) {
+        case VECTOR -> {
+          hits = vectorHits(question, scope, fetchLimit);
+        }
+        case HYBRID -> {
+          // ★ 两路并跑：全文那一路仍是主干，向量那一路只作补充。
+          //   向量路失败（RuntimeException）⇒ log.warn 后回退全文那一路，不许把整轮打死；
+          //   全文路失败仍走外层 catch ⇒ 零引用（VECTOR 模式的失败同理）。
+          List<SegmentSearchPort.Scored> fullTextHits =
+              segmentSearch.fullText(new SegmentSearchPort.TextQuery(question, scope, fetchLimit));
+          List<SegmentSearchPort.Scored> vectorHitsList;
+          try {
+            vectorHitsList = vectorHits(question, scope, fetchLimit);
+          } catch (RuntimeException vectorFailure) {
+            log.warn("混合检索的向量一路失败，本轮只用全文那一路继续：{}", vectorFailure.getMessage());
+            vectorHitsList = List.of();
+          }
+          hits = vectorHitsList.isEmpty() ? fullTextHits : fuseHybrid(fullTextHits, vectorHitsList);
+        }
+        case FULLTEXT -> {
+          hits =
+              segmentSearch.fullText(new SegmentSearchPort.TextQuery(question, scope, fetchLimit));
+        }
+        default -> throw new IllegalArgumentException("未知的检索模式：" + retrieval.mode());
+      }
       if (hits.isEmpty()) {
         return List.of();
       }
@@ -1099,6 +1133,101 @@ public class ChatService {
     }
     log.info("本轮检索到 {} 条引用（上限 {}）", refs.size(), retrievalLimit);
     return refs;
+  }
+
+  /**
+   * 向量检索一路（{@code #185}）：把问题按知识库各自的向量模型分组向量化，再逐组向量检索、RRF 融合。
+   *
+   * @param question 用户问题
+   * @param scope 检索范围（会话附件部分不参与向量检索，见方法内说明）
+   * @param limit 每组的召回上限
+   * @return 按融合顺序排列的命中（display score = 该分段在各模型下的最大相似度）
+   */
+  private List<SegmentSearchPort.Scored> vectorHits(
+      String question, RetrievalScope scope, int limit) {
+    if (embeddingPort == null) {
+      // ★ 不静默退回全文：模式是 VECTOR 就必须走向量，缺依赖要让外层 catch 走零引用并留日志。
+      throw new IllegalStateException("检索模式为 VECTOR，但 EmbeddingPort 未装配");
+    }
+    if (scope.hasConversationScope()) {
+      // ★ 问答链路的 conversationId 每轮都有值（不代表有附件）。向量查询只能按知识库的模型/维度表走，
+      //   把 CONVERSATION 分段混进来会拿错模型；这里显式收窄并在下面留痕，不静默。
+      //   混合模式的会话附件仍由全文一路覆盖；纯向量模式只检索知识库 —— 界面说明与这里同口径。
+      log.info("向量检索只查知识库：本轮会话附件不参与向量一路");
+    }
+    RetrievalScope vectorScope = scope.withoutConversation();
+    Map<UUID, UUID> modelByKb = segmentSearch.embeddingModelByKb(vectorScope.kbIdsWithModelRows());
+    if (modelByKb.isEmpty()) {
+      throw new IllegalStateException("这些知识库没有可用的向量模型");
+    }
+    // 按向量模型分组：同一模型的库共用一次向量化 + 一次检索。
+    Map<UUID, List<UUID>> kbIdsByModel = new LinkedHashMap<>();
+    modelByKb.forEach(
+        (kbId, modelId) -> kbIdsByModel.computeIfAbsent(modelId, k -> new ArrayList<>()).add(kbId));
+    List<List<SegmentSearchPort.Scored>> rankedPerModel = new ArrayList<>(kbIdsByModel.size());
+    for (Map.Entry<UUID, List<UUID>> group : kbIdsByModel.entrySet()) {
+      UUID modelId = group.getKey();
+      // ★ 按模型分组隔离失败：一个向量模型没加载不该让其它模型的库也一起零引用。
+      //   失败组 log.warn 后跳过；全部失败才抛，由外层统一落成"零引用 + 可读日志"。
+      try {
+        List<float[]> embedded = embeddingPort.embed(modelId, List.of(question));
+        if (embedded == null || embedded.isEmpty()) {
+          throw new IllegalStateException("向量模型未返回问题的向量：" + modelId);
+        }
+        float[] vector = embedded.getFirst();
+        if (vector == null || vector.length == 0) {
+          throw new IllegalStateException("向量模型返回了空向量：" + modelId);
+        }
+        rankedPerModel.add(
+            segmentSearch.vectorSearch(
+                new SegmentSearchPort.VectorQuery(
+                    vector.length, vector, vectorScope.withinShared(group.getValue()), limit)));
+      } catch (RuntimeException groupFailure) {
+        log.warn("向量模型 {} 的分组检索失败，跳过该组：{}", modelId, groupFailure.getMessage());
+      }
+    }
+    if (rankedPerModel.isEmpty()) {
+      throw new IllegalStateException("所有向量模型分组都检索失败");
+    }
+    if (rankedPerModel.size() == 1) {
+      // 单组保持该组顺序。
+      return rankedPerModel.getFirst();
+    }
+    return fuseHybrid(rankedPerModel);
+  }
+
+  /**
+   * 两路（或多组）命中的本地 RRF 融合（{@code #185}）。
+   *
+   * <p>★ 刻意<b>不</b> import {@code retrieval} 模块的 {@code Rrf}：那是平台内部参考实现，问答链路与它 不该产生模块耦合。公式：{@code
+   * score(d) = Σ 1 / (k + rank_i(d))}，k=60，rank 从 1 起。
+   *
+   * <p>★ 融合后的 {@code score} 取该分段在各路中的<strong>最大原始分</strong>（用于阈值判定与界面展示）， 顺序按 RRF 分数。
+   */
+  private static List<SegmentSearchPort.Scored> fuseHybrid(
+      List<SegmentSearchPort.Scored> routeA, List<SegmentSearchPort.Scored> routeB) {
+    return fuseHybrid(List.of(routeA, routeB));
+  }
+
+  private static List<SegmentSearchPort.Scored> fuseHybrid(
+      List<List<SegmentSearchPort.Scored>> routes) {
+    final int k = 60;
+    Map<UUID, Double> rrfScore = new LinkedHashMap<>();
+    Map<UUID, Double> displayScore = new LinkedHashMap<>();
+    for (List<SegmentSearchPort.Scored> route : routes) {
+      int rank = 1;
+      for (SegmentSearchPort.Scored hit : route) {
+        rrfScore.merge(hit.segmentId(), 1.0 / (k + rank), Double::sum);
+        displayScore.merge(hit.segmentId(), hit.score(), Math::max);
+        rank++;
+      }
+    }
+    List<SegmentSearchPort.Scored> fused = new ArrayList<>(rrfScore.size());
+    rrfScore.entrySet().stream()
+        .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+        .forEach(
+            e -> fused.add(new SegmentSearchPort.Scored(e.getKey(), displayScore.get(e.getKey()))));
+    return fused;
   }
 
   /**

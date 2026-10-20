@@ -124,14 +124,17 @@
           </el-select>
         </el-form-item>
 
-        <!-- 检索模式：★ 问答链路当前只实现全文一路（#185 拆分）。
-             保留一个不生效的三选一，就是在告诉用户"选了向量就会按向量检索"——那是错误陈述。
-             向量 / 混合模式接入后把这一项恢复，并同时补"模式真的进了链路"的判据。 -->
+        <!-- 检索模式：机器码（契约 RetrievalMode） -->
         <el-form-item label="检索模式">
-          <span class="hint micro">
-            当前问答链路只做<b>全文检索</b>：向量 / 混合模式尚未接入，因此不提供模式选择。
-            阈值与 TopN 仍然按下面两项生效。
-          </span>
+          <el-radio-group v-model="form.retrieval.mode">
+            <el-radio-button value="FULLTEXT">全文</el-radio-button>
+            <el-radio-button value="VECTOR">向量</el-radio-button>
+            <el-radio-button value="HYBRID">混合</el-radio-button>
+          </el-radio-group>
+          <div class="hint micro">
+            向量/混合要求知识库已绑定并加载向量模型。向量模式只检索知识库，不含会话附件；
+            混合模式的会话附件仍由全文一路覆盖。向量模式缺依赖时本轮零引用，混合模式向量失败时只用全文并留痕。
+          </div>
         </el-form-item>
 
         <el-form-item label="相似度阈值">

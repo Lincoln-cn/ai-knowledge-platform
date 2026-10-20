@@ -110,6 +110,23 @@ class RetrievalVectorScopeBoundaryTest {
         .isFalse();
   }
 
+  /**
+   * ★ 问答链路专用：{@code withoutConversation()} 必须只摘会话域，不动共用库。
+   *
+   * <p>它防的是"为了走向量而把整个范围清空"——那会让知识库也一起搜不到，读数看起来只是"零命中"。
+   */
+  @Test
+  void withoutConversationKeepsTheKnowledgeBaseDomain() {
+    RetrievalScope scope = new RetrievalScope(List.of(SHARED_KB), null, CONVERSATION, ME);
+
+    RetrievalScope vectorScope = scope.withoutConversation();
+
+    assertThat(vectorScope.hasConversationScope()).as("会话域必须被摘掉").isFalse();
+    assertThat(vectorScope.sharedKbIds()).as("共用库一支必须原样保留").containsExactly(SHARED_KB);
+    assertThat(vectorScope.conversationId()).isNull();
+    assertThat(vectorScope.ownerId()).isNull();
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
 
   /**
