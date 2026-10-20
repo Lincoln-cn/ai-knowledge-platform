@@ -37,8 +37,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * <ol>
  *   <li><strong>后端有、契约没有</strong> ⇒ 直接失败。这是最危险的一类：后端偷偷加了端点没登记，前端永远不知道， 而它很可能是没配权限的洞（{@code
  *       AuthorizationDeclarationTest} 管"忘写注解"，这里管"忘登记"——两者都属于静默失效）。
- *   <li><strong>契约有、后端没有</strong> ⇒ 必须出现在 {@link #UNIMPLEMENTED_PREFIXES} 里，否则失败。 前端已经跑在后端前面（{@code
- *       ROADMAP §3.1}），契约上百个端点、后端目前只落了身份域 —— 不能要求后端立刻把它们都实现；
+ *   <li><strong>契约有、后端没有</strong> ⇒ 必须<strong>逐条</strong>登记在 {@link #KNOWN_MISSING}（method + path
+ *       的欠账台账）里，否则失败。 前端已经跑在后端前面（{@code ROADMAP §3.1}），契约上百个端点、后端目前只落了身份域 —— 不能要求后端立刻把它们都实现；
  *       但清单必须<strong>显式、可审阅</strong>，否则它会变成一个永久的黑洞。
  * </ol>
  *
@@ -72,76 +72,116 @@ class ContractDriftTest {
   @Autowired ApplicationContext applicationContext;
 
   /**
-   * 未实现清单：契约有、后端还没有的<strong>域名前缀</strong>。
+   * 未实现清单：契约有、后端还没有的<strong>逐条</strong>端点（method + path 的欠账台账）。
    *
-   * <p>★ 按域名前缀列（不是逐条 URL）：同一个域下的几十条端点会一起落地，逐条登记会把清单变成第二份契约。
+   * <p>★ 逐条登记（{@link MissingEndpoint}：method + path + issue + week），<strong>不是按域名前缀</strong>。
+   * 按前缀登记的旧形状有个致命漏洞：前缀下<strong>新增</strong>一条缺失端点时，它仍落在已有前缀下，闸门<strong>不会红</strong> —— 欠账无声地长大。
+   * 逐条登记后，"契约有、后端没有、又不在台账里"的每一条都会被规则 2 当场抓住。
    *
-   * <p>★ 理由写在这里，而不是散落在失败信息里：前端已经跑在后端前面（{@code ROADMAP §3.1}）—— ★ 契约 **128** 个 「方法 +
-   * 路径」端点（2026-10-13 实测；此前这里写"约 115"**是过期数字**）， 后端目前已落 70 个。
-   * 不能要求后端立刻把它们都实现，但<strong>每一项都要能回答"计划落在哪一周"</strong>（见 {@code docs/ROADMAP.md §4.7.3}）。
-   * 清单一旦失去可审阅性，它就变成永久黑洞 —— 那正是这条规则要防的。
+   * <p>★ 每条都要能回答两件事：<strong>欠的是哪个 issue</strong>（{@code issue}）与<strong>计划落在哪一周</strong>（{@code
+   * week}）。 这两栏是欠账台账的账目，<strong>不允许留空白</strong> —— 留白的欠账等于没人认领的欠账，最终会变成永久黑洞（那正是这条规则要防的）。
+   *
+   * <p>★ 理由写在这里，而不是散落在失败信息里：前端已经跑在后端前面（{@code ROADMAP §3.1}）—— 后端还没落的端点不能要求它立刻实现，
+   * 但<strong>每一项都要能回答"欠哪个 issue、排在哪一周"</strong>（见 {@code docs/ROADMAP.md §4.7.3}）。
+   * 台账一旦失去可审阅性，它就变成永久黑洞 —— 那正是这条规则要防的。
    */
-  private static final Set<String> UNIMPLEMENTED_PREFIXES =
-      Set.of(
-          // ★ 建档 7 个端点已于第 5 周 0.2.0 批 1 落地；documents 子资源的建档
-          //   （POST/GET /knowledge-bases/{*}/documents）已于批 2 落地。
-          //   本前缀下仍欠账两条（都在 api/ingestion.ts，属 P1）：
-          //   · POST /knowledge-bases/{*}/uploads（暂存上传：向导已改成"上传即建档"，不再需要它）
-          //   · GET  /knowledge-bases/{*}/upload-policy（上传前的大小/数量/扩展名策略，
-          //     界面已有前端常量兜底，故至今没挡住任何流程）
-          //   ★ /knowledge-bases/{*}/reembed 已于 0.3.1 落地（库级重新向量化），从本条注释撤下。
-          "/knowledge-bases",
-          // ★ /documents 已于 0.3.1 全部落地（改名 PATCH /{id}、启停 PATCH /{id}/enabled、
-          //   删除 DELETE /{id}，加上原有的 embedding/retry/reembed）⇒ 从清单删除。
-          //   删除是被"防黑洞"测试逼出来的：留着它就成了"曾经欠过、现在早已实现"的噪音。
-          // ★ /segments 也于 0.3.1 全部落地（PATCH /{*}/enabled 启停、POST /{*}/embedding 逐段重向量、
-          //   DELETE /batch 批量删、POST /batch-move 跨文档搬移）⇒ 一并从清单删除。
-          // 第 15 周 0.4.3：应用配置 + 发布校验（§3.1 记 M4）；含 import/export/credentials/api-keys
-          // ★ 0.4.3 已落地其中 7 个：GET /assistants（列表）· POST /assistants · GET/PUT /{id} ·
-          //   GET /{id}/publish-check · PATCH /{id}/published · GET /{id}/export。★ DELETE /{id} 也在。
-          // ★ 第 16 周 0.4.4 再落 4 个（公开凭证）：GET/POST /{appId}/credentials ·
-          //   PATCH /{appId}/credentials/{id}/enabled · POST /{appId}/credentials/{id}/revoke。
-          // ★ 前缀仍留在清单里：剩下的（市场筛选 / 收藏 / 标签 / API Key / 共享写 / 导入）
-          //   确实还没实现，按"前缀登记"允许缺失 —— 而"曾经欠过、现在早已实现"的噪音要靠人在这行更新。
-          //   ★ 2026-10-13 逐条核过一遍：这条注释此前把"列表与市场筛选"整体算作欠账，而 `GET /assistants`
-          //     那时**已经落地**（`AssistantController` 的 `@GetMapping`）—— 一行注释的滞后果然会长成噪音。
-          "/assistants",
-          // §3.1 M4：提示词管理页（pages/assistants/prompts/）—— 前端已存在，后端随 assistant 域
-          "/prompt-types",
-          "/prompt-configs",
-          // 第 15 周 0.4.3 / M5.5：编排画布接契约（workflow draft/validate/publish/versions）
-          "/workflow",
-          // 第 17 周 0.4.5：SSE 问答链路（会话 CRUD 与消息流）
-          // ★ 2026-10-17 核过一遍（本批落了 GET /conversations/{id}/messages）：**前缀必须留** ——
-          //   它下面的 `POST /conversations`（建会话）、`PATCH`/`DELETE /{id}`、以及 `/conversations/chat`
-          //   （那条另有 KNOWN_EXCEPTIONS 的账）都还没实现，所以"零欠账就删"这条纪律**还没到触发点**。
-          //   ★ 顺带记一条形状：这一族的前缀是 `/conversations` 与 `/messages` **两条**
-          //   （契约里 `GET /{id}/messages` 挂在 /conversations 下，而消息自己的 CRUD 挂 /messages）
-          //   ⇒ 删前缀时要两条一起判，不能只看一条。
-          "/conversations",
-          // ★ 第 18 周 0.5.0 的 `/messages` 已于 2026-10-17 **从清单删除**：它下面唯一的契约路径
-          //   （`POST /messages/{messageId}/feedback`，赞踩）已实现 ⇒ 零欠账。
-          //   ★ 删它是**防黑洞测试逼出来的**（`未实现清单里的域名必须仍然有欠账` 当场红，
-          //   逐字「[未实现清单里的 /messages 在契约中已无欠账 … ⇒ 请从清单删除，否则它会变成没人再看的黑洞]」）——
-          //   与本文件里 /documents、/segments、/retrieval、/public 那几次删除同一条纪律。
-          //   ★ 注意 `/conversations` **必须留着**：它自己的 `POST`（建会话）、`PATCH`/`DELETE /{id}`
-          //   以及 `/conversations/chat`（那条另有 KNOWN_EXCEPTIONS 的账）都还没实现 ⇒ 还没到触发点。
-          // ★ 第 16 周 0.4.4 的 `/public` 已于 2026-10-16 **从清单删除**：它下面的每一条契约路径
-          //   （GET /{token} · GET /{token}/messages · POST /{token}/messages/{messageId}/stop）
-          //   后端都已实现 ⇒ 留着它就成了"曾经欠过、现在早已实现"的噪音，而**防黑洞测试会当场红**
-          //   （`未实现清单里的域名必须仍然有欠账`）。★ 与上面 /documents、/segments、/retrieval
-          //   三次删除同一条纪律：清单靠"零欠账就删"保持可读。
-          // 第 17 周随问答链路：附件上传（POST /files，multipart）
-          "/files",
-          // 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）
-          "/feedbacks",
-          // §3.1「工作台」：4 项指标来自 analytics 域（随 0.4.x 之后）
-          "/analytics"
-          // ★ /retrieval 已于 0.3.2 落地（POST /retrieval/test 三模式 + RRF；两个参数端点
-          //   挂在 /knowledge-bases/{*}/retrieval 下）⇒ 从清单删除。
-          //   与上面 /documents、/segments 两次一样，删除是被这条"防黑洞"规则逼出来的：
-          //   留着它就成了"曾经欠过、现在早已实现"的噪音。
-          );
+  private static final List<MissingEndpoint> KNOWN_MISSING =
+      List.of(
+          // ★ analytics（5）—— §3.1「工作台」4 项指标来自 analytics 域（随 0.4.x 之后）
+          missing("GET", "/analytics/assistants", "#160", "0.5.0 后"),
+          missing("GET", "/analytics/me/summary", "#160", "0.5.0 后"),
+          missing("GET", "/analytics/overview", "#160", "0.5.0 后"),
+          missing("GET", "/analytics/quality", "#160", "0.5.0 后"),
+          missing("GET", "/analytics/trend", "#160", "0.5.0 后"),
+          // ★ assistants（19）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置 + 发布校验余下的市场筛选/收藏/标签/API Key/共享写/导入
+          missing("POST", "/assistants/import", "#160", "15–18 周"),
+          missing("POST", "/assistants/import/check", "#160", "15–18 周"),
+          missing("GET", "/assistants/tags", "#160", "15–18 周"),
+          missing("GET", "/assistants/{*}/api-keys", "#160", "15–18 周"),
+          missing("POST", "/assistants/{*}/api-keys", "#160", "15–18 周"),
+          missing("PATCH", "/assistants/{*}/api-keys/{*}/enabled", "#160", "15–18 周"),
+          missing("DELETE", "/assistants/{*}/favorite", "#160", "15–18 周"),
+          missing("POST", "/assistants/{*}/favorite", "#160", "15–18 周"),
+          missing("PUT", "/assistants/{*}/grants", "#160", "15–18 周"),
+          missing("PATCH", "/assistants/{*}/visibility", "#160", "15–18 周"),
+          missing("POST", "/assistants/{*}/workflow/debug", "#160", "15–18 周"),
+          missing("GET", "/assistants/{*}/workflow/draft", "#160", "15–18 周"),
+          missing("PUT", "/assistants/{*}/workflow/draft", "#160", "15–18 周"),
+          missing("POST", "/assistants/{*}/workflow/publish", "#160", "15–18 周"),
+          missing("GET", "/assistants/{*}/workflow/records", "#160", "15–18 周"),
+          missing("POST", "/assistants/{*}/workflow/validate", "#160", "15–18 周"),
+          missing("GET", "/assistants/{*}/workflow/versions", "#160", "15–18 周"),
+          missing("GET", "/assistants/{*}/workflow/versions/{*}", "#160", "15–18 周"),
+          missing("POST", "/assistants/{*}/workflow/versions/{*}/rollback", "#160", "15–18 周"),
+          // ★ conversations（6）—— 第 17 周 0.4.5：SSE 问答链路（会话 CRUD 与消息流）
+          missing("DELETE", "/conversations/{*}", "#187", "17 周"),
+          missing("GET", "/conversations/{*}", "#187", "17 周"),
+          missing("PATCH", "/conversations/{*}", "#187", "17 周"),
+          missing("GET", "/conversations/{*}/shares", "#187", "17 周"),
+          missing("POST", "/conversations/{*}/shares", "#187", "17 周"),
+          missing("DELETE", "/conversations/{*}/shares/{*}", "#187", "17 周"),
+          // ★ feedbacks（6）—— 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）
+          missing("GET", "/feedbacks", "#160", "18 周"),
+          missing("PATCH", "/feedbacks/batch", "#160", "18 周"),
+          missing("GET", "/feedbacks/stats", "#160", "18 周"),
+          missing("GET", "/feedbacks/{*}", "#160", "18 周"),
+          missing("PATCH", "/feedbacks/{*}", "#160", "18 周"),
+          missing("POST", "/feedbacks/{*}/reopen", "#160", "18 周"),
+          // ★ files（1）—— 第 17 周随问答链路：附件上传（multipart）
+          missing("POST", "/files", "#187", "17 周"),
+          // ★ knowledge-bases（2）—— 建档/文档已落地；余下暂存上传与上传策略两条，属 P1
+          missing("GET", "/knowledge-bases/{*}/upload-policy", "#160", "P1（未排周次）"),
+          missing("POST", "/knowledge-bases/{*}/uploads", "#160", "P1（未排周次）"),
+          // ★ prompt-configs（4）—— §3.1 M4：提示词管理页（pages/assistants/prompts/），后端随 assistant 域
+          missing("GET", "/prompt-configs", "#160", "随 assistant 域"),
+          missing("POST", "/prompt-configs", "#160", "随 assistant 域"),
+          missing("DELETE", "/prompt-configs/{*}", "#160", "随 assistant 域"),
+          missing("PUT", "/prompt-configs/{*}", "#160", "随 assistant 域"),
+          // ★ prompt-types（4）—— 同上，随 assistant 域
+          missing("GET", "/prompt-types", "#160", "随 assistant 域"),
+          missing("POST", "/prompt-types", "#160", "随 assistant 域"),
+          missing("DELETE", "/prompt-types/{*}", "#160", "随 assistant 域"),
+          missing("PUT", "/prompt-types/{*}", "#160", "随 assistant 域"),
+          // ★ workflow（1）—— 第 15 周 0.4.3 / M5.5：编排画布接契约的节点类型查询
+          missing("GET", "/workflow/node-types", "#160", "15–16 周"));
+
+  /**
+   * 未实现清单的一条：欠账台账的<strong>逐条</strong>登记项。
+   *
+   * <p>★ 四栏都要有值：{@code method} + {@code path} 定位端点，{@code issue} 记欠账挂的 issue，{@code week} 记计划周次。
+   * 后两栏是欠账的账目，<strong>不允许留空白</strong>。
+   *
+   * @param method HTTP 方法（统一大写）
+   * @param path 归一化后的契约路径（必须以 {@code /} 开头，占位符统一为 {@code {*}})
+   * @param issue 欠账挂的 issue（如 {@code #160}）
+   * @param week 计划落在哪一周（如 {@code "17 周"} / {@code "P1（未排周次）"}）
+   */
+  private record MissingEndpoint(String method, String path, String issue, String week) {
+    /** 紧凑构造器：四栏非空、path 以 {@code /} 开头、method 统一大写。 */
+    MissingEndpoint {
+      if (method == null || method.isBlank()) {
+        throw new IllegalArgumentException("MissingEndpoint.method 不允许为空");
+      }
+      if (path == null || path.isBlank()) {
+        throw new IllegalArgumentException("MissingEndpoint.path 不允许为空");
+      }
+      if (issue == null || issue.isBlank()) {
+        throw new IllegalArgumentException("MissingEndpoint.issue 不允许为空（欠账台账必须写清挂哪个 issue）");
+      }
+      if (week == null || week.isBlank()) {
+        throw new IllegalArgumentException("MissingEndpoint.week 不允许为空（欠账台账必须写清计划周次）");
+      }
+      if (!path.startsWith("/")) {
+        throw new IllegalArgumentException("MissingEndpoint.path 必须以 / 开头：" + path);
+      }
+      method = method.toUpperCase(Locale.ROOT);
+    }
+  }
+
+  /** 登记一条未实现端点（{@link MissingEndpoint} 的工厂方法）。 */
+  private static MissingEndpoint missing(String method, String path, String issue, String week) {
+    return new MissingEndpoint(method, path, issue, week);
+  }
 
   /**
    * 已知例外：双向都不比对的<strong>精确路径</strong>，每项必须写清理由。
@@ -182,7 +222,7 @@ class ContractDriftTest {
           // ★ mock 专用端点（ROADMAP §3.4 已裁决后端**不实现**：它们是"故意违法样例图"的载体，
           //   只服务于校验演示）。目前只在 mock/handlers/workflow.ts 里，不在 api/*.ts 契约中；
           //   若将来误入契约，靠此例外明确"后端永不实现"，而不是被未实现清单吸收成永久欠账。
-          //   删除条件：它们被写进 api/*.ts 之后（那时"后端不实现"由**已经登记在册的 /workflow 前缀**
+          //   删除条件：它们被写进 api/*.ts 之后（那时"后端不实现"由**逐条登记的 KNOWN_MISSING**
           //   表达，而"双向都不比对"这一条就只剩噪音了）。
           "/workflow/demo/invalid-graph",
           "/workflow/demo/valid-graph");
@@ -222,43 +262,35 @@ class ContractDriftTest {
     assertThat(backend).as("后端映射为空 ⇒ RequestMappingHandlerMapping 没拿到，这条闸门在空跑").isNotEmpty();
     assertThat(contract).as("契约解析为空 ⇒ request 选项对象解析失效或 api 目录读错，这条闸门在空跑").isNotEmpty();
 
-    assertNoDrift(backend, contract, UNIMPLEMENTED_PREFIXES, KNOWN_EXCEPTIONS);
+    assertNoDrift(backend, contract, KNOWN_MISSING, KNOWN_EXCEPTIONS);
   }
 
   /**
-   * ★ 未实现清单不得变成黑洞：某前缀已经<strong>全部</strong>落地时，必须从清单里删掉。
+   * ★ 未实现台账不得变成黑洞：基线里的每一条端点必须<strong>仍然</strong>是欠账。
    *
-   * <p>否则清单会慢慢堆积"曾经欠过、现在早已实现"的项，审阅者再也分不清哪些是真欠账。
+   * <p>否则台账会慢慢堆积"曾经欠过、现在早已实现"的项，审阅者再也分不清哪些是真欠账。
    *
-   * <p>★ 仍按<strong>路径</strong>维度查欠账（与清单语义一致）：方法差异由主闸门的方法约束单独盯。
+   * <p>★ 逐条登记后，防黑洞由 {@link #assertNoDrift} 的反黑洞两条承担（基线端点已实现 / 已不在契约都要红）， 本测试只需把真实数据跑一遍同一套判据。
    */
   @Test
-  void 未实现清单里的域名必须仍然有欠账() {
+  void 未实现台账里的端点必须仍然有欠账() {
     Map<String, Set<String>> backend = backendEndpoints();
     Map<String, Set<String>> contract = contractEndpoints();
 
-    for (String prefix : UNIMPLEMENTED_PREFIXES) {
-      Set<String> stillMissing =
-          contract.keySet().stream()
-              .filter(p -> underPrefix(p, prefix))
-              .filter(p -> !backend.containsKey(p))
-              .collect(Collectors.toCollection(TreeSet::new));
-      assertThat(stillMissing)
-          .as("未实现清单里的 %s 在契约中已无欠账（后端全实现了，或契约里根本没这个域）⇒ 请从清单删除，" + "否则它会变成没人再看的黑洞", prefix)
-          .isNotEmpty();
-    }
+    // 真实数据下跑一遍 assertNoDrift：反黑洞两条会把"台账里的端点已实现 / 已不在契约"判红
+    assertNoDrift(backend, contract, KNOWN_MISSING, KNOWN_EXCEPTIONS);
   }
 
   /**
    * ★ 已知例外清单不得变成黑洞：某条例外一旦<strong>进了契约</strong>，它就不再是例外，必须从清单里删掉。
    *
-   * <h3>★★ 为什么必须有这一条（它与 {@link #未实现清单里的域名必须仍然有欠账()} 是同一条纪律）</h3>
+   * <h3>★★ 为什么必须有这一条（它与 {@link #未实现台账里的端点必须仍然有欠账()} 是同一条纪律）</h3>
    *
    * <p>例外清单的语义是"这条路径<strong>双向都不比对</strong>"。于是它天然有一个危险方向： 一旦某条路径两侧都有了（例如有人把 SSE 端点补登记进了 {@code
    * api/**}）， <strong>主闸门永远不会再检查它</strong> —— 后端后来把方法从 {@code POST} 改成 {@code GET}、
    * 或把路径挪走，全都不会红。例外就成了一个"这条路径不必再对账"的后门。
    *
-   * <p>★ 与未实现清单的"防黑洞"是同一件事的两种形态：那边防"清单里留着早已实现的"， 这边防"例外里留着早已进契约的"。两者都在维护"清单还能不能被审阅者信任"。
+   * <p>★ 与未实现清单的"防黑洞"是同一件事的两种形态：那边防"台账里留着早已实现的"， 这边防"例外里留着早已进契约的"。两者都在维护"清单还能不能被审阅者信任"。
    */
   @Test
   void 例外清单不得变成黑洞() {
@@ -268,7 +300,7 @@ class ContractDriftTest {
   // ────────────────────────── 金丝雀 ──────────────────────────
 
   /**
-   * 金丝雀（规则 2）：契约里有、后端没有、又不在未实现清单里的路径，必须被抓住。
+   * 金丝雀（规则 2）：契约里有、后端没有、又不在未实现台账里的路径，必须被抓住。
    *
    * <p>★ 与 {@code AuthorizationDeclarationTest} 同构 —— 同一条 {@link #assertNoDrift} 跑两组数据：
    * 真实契约必须过、坏样本必须不过。
@@ -280,9 +312,9 @@ class ContractDriftTest {
                 assertNoDrift(
                     // 后端：一条常规端点
                     endpoints("GET", "/users", "GET", "/users/{*}"),
-                    // 契约：多出一条后端没有的 /ghost —— 且未实现清单/例外都是空的
+                    // 契约：多出一条后端没有的 /ghost —— 且未实现台账/例外都是空的
                     endpoints("GET", "/users", "GET", "/users/{*}", "GET", "/ghost"),
-                    Set.of(),
+                    List.of(),
                     Set.of()))
         .as("坏样本没被拦下 ⇒ 这条闸门已经失效，主代码的绿说明不了任何事")
         .isInstanceOf(AssertionError.class);
@@ -302,7 +334,7 @@ class ContractDriftTest {
                     endpoints("GET", "/users", "POST", "/secret-endpoint"),
                     // 契约：只登记了 /users
                     endpoints("GET", "/users"),
-                    Set.of(),
+                    List.of(),
                     Set.of()))
         .as("坏样本没被拦下 ⇒ 这条闸门已经失效，主代码的绿说明不了任何事")
         .isInstanceOf(AssertionError.class);
@@ -321,7 +353,7 @@ class ContractDriftTest {
                     endpoints("GET", "/users/{*}", "POST", "/auth/login"),
                     // 多一条 /ghost，且缺了 /auth/login
                     endpoints("GET", "/users/{*}", "GET", "/ghost"),
-                    Set.of(),
+                    List.of(),
                     Set.of()))
         .as("双向坏样本没被拦下 ⇒ 这条闸门已经失效")
         .isInstanceOf(AssertionError.class);
@@ -341,7 +373,7 @@ class ContractDriftTest {
                     endpoints("POST", "/models/base-models"),
                     // 契约却声明 GET —— 路径相同、方法不同
                     endpoints("GET", "/models/base-models"),
-                    Set.of(),
+                    List.of(),
                     Set.of()))
         .as("契约 GET / 后端 POST 的单边变更没被拦下 ⇒ 方法维度的闸门已经失效")
         .isInstanceOf(AssertionError.class);
@@ -353,7 +385,7 @@ class ContractDriftTest {
                     endpoints("GET", "/models/base-models"),
                     // 契约却声明 POST
                     endpoints("POST", "/models/base-models"),
-                    Set.of(),
+                    List.of(),
                     Set.of()))
         .as("契约 POST / 后端 GET 的单边变更没被拦下 ⇒ 方法维度的闸门已经失效")
         .isInstanceOf(AssertionError.class);
@@ -370,7 +402,7 @@ class ContractDriftTest {
     assertNoDrift(
         Map.of("/models/base-models", ANY_METHODS),
         endpoints("GET", "/models/base-models", "POST", "/models/base-models"),
-        Set.of(),
+        List.of(),
         Set.of());
   }
 
@@ -390,6 +422,131 @@ class ContractDriftTest {
                     Set.of("/conversations/chat")))
         .as("坏样本没被拦下 ⇒ 例外清单的防黑洞规则已经失效，主代码的绿说明不了任何事")
         .isInstanceOf(AssertionError.class);
+  }
+
+  /**
+   * 金丝雀（反黑洞 1）：基线里的端点<strong>已经实现</strong>、却还留在 {@link #KNOWN_MISSING} 里 ⇒ 必须被抓到。
+   *
+   * <p>★ 这条防的是"台账里留着早已实现的"：留着它就成了"曾经欠过、现在早已实现"的噪音， 久而久之台账没人再看。
+   */
+  @Test
+  void 金丝雀_基线端点已实现却没删必须被抓到() {
+    assertThatThrownBy(
+            () ->
+                assertNoDrift(
+                    // 后端已实现 GET /users
+                    endpoints("GET", "/users"),
+                    // 契约也有 GET /users
+                    endpoints("GET", "/users"),
+                    // 台账里却还留着它
+                    List.of(missing("GET", "/users", "#0", "占位")),
+                    Set.of()))
+        .as("坏样本没被拦下 ⇒ 反黑洞 1 已经失效，台账里的旧欠账不会被清理")
+        .isInstanceOf(AssertionError.class);
+  }
+
+  /**
+   * 金丝雀（反黑洞 2）：基线里的端点<strong>已不在契约</strong>、却还留在 {@link #KNOWN_MISSING} 里 ⇒ 必须被抓到。
+   *
+   * <p>★ 这条防的是"台账里留着契约已经不要的"：契约撤了这条端点，台账还挂着账，同样是黑洞。
+   */
+  @Test
+  void 金丝雀_基线端点已不在契约必须被抓到() {
+    assertThatThrownBy(
+            () ->
+                assertNoDrift(
+                    // 后端只有 GET /users
+                    endpoints("GET", "/users"),
+                    // 契约也只有 GET /users —— 没有 /ghost
+                    endpoints("GET", "/users"),
+                    // 台账里却挂着 /ghost
+                    List.of(missing("GET", "/ghost", "#0", "占位")),
+                    Set.of()))
+        .as("坏样本没被拦下 ⇒ 反黑洞 2 已经失效，台账里的失效欠账不会被清理")
+        .isInstanceOf(AssertionError.class);
+  }
+
+  /**
+   * 反金丝雀（基线可豁免单方法缺失）：同路径上契约多一个方法、且该方法在 {@link #KNOWN_MISSING} 里 ⇒ 必须通过。
+   *
+   * <p>★ 基线允许"单方法缺失"：路径两边都有、方法集合不一致时，落在台账里的那个方法不算漂移。 这是逐条登记（method + path）相对按前缀登记的额外能力 ——
+   * 按前缀时无法表达"这条路径的 GET 缺、POST 在"。
+   */
+  @Test
+  void 金丝雀_基线可豁免单方法缺失() {
+    // 不抛异常即通过：后端只有 POST /users，契约 GET+POST /users，台账里登记了 GET /users
+    assertNoDrift(
+        endpoints("POST", "/users"),
+        endpoints("GET", "/users", "POST", "/users"),
+        List.of(missing("GET", "/users", "#0", "占位")),
+        Set.of());
+  }
+
+  /**
+   * 金丝雀（从台账删掉一条仍缺失的端点）：有登记时绿，删掉登记立即红。
+   *
+   * <p>★ 这是 issue #188 判据 2 的直译：删掉一条基线、而它仍然 404 ⇒ 测试立刻红。 没有这一条，"逐条登记"可能被读成"只要 KNOWN_MISSING 非空就行"。
+   */
+  @Test
+  void 金丝雀_基线删掉仍缺失必须被抓到() {
+    // 先证明有登记时这条缺失是合法的
+    assertNoDrift(
+        endpoints("GET", "/users"),
+        endpoints("GET", "/users", "GET", "/ghost"),
+        List.of(missing("GET", "/ghost", "#0", "占位")),
+        Set.of());
+
+    // 再把登记删掉：同一条 /ghost 仍缺失，必须红
+    assertThatThrownBy(
+            () ->
+                assertNoDrift(
+                    endpoints("GET", "/users"),
+                    endpoints("GET", "/users", "GET", "/ghost"),
+                    List.of(),
+                    Set.of()))
+        .as("删掉基线后仍缺失的端点没被拦下 ⇒ 规则 2 已经失效")
+        .isInstanceOf(AssertionError.class);
+  }
+
+  /**
+   * 反证（真实台账）：从真实 {@link #KNOWN_MISSING} 删掉任意一条、而它仍然缺失 ⇒ 主闸门必须红。
+   *
+   * <p>★ 与上一条假样本互补：上一条证明规则 2 本身活着，这一条证明<strong>当前这份真实台账</strong>确实在承担拦截职责， 不是一份"删了也不会有人发现"的装饰。
+   */
+  @Test
+  void 删掉真实基线的一条仍缺失必须红() {
+    MissingEndpoint victim = KNOWN_MISSING.getFirst();
+    List<MissingEndpoint> withoutVictim =
+        KNOWN_MISSING.stream().filter(entry -> !entry.equals(victim)).toList();
+
+    assertThatThrownBy(
+            () ->
+                assertNoDrift(
+                    backendEndpoints(), contractEndpoints(), withoutVictim, KNOWN_EXCEPTIONS))
+        .as("从真实台账删掉 %s 后，闸门仍然绿 ⇒ 这份台账没有被规则 2 消费", victim)
+        .isInstanceOf(AssertionError.class)
+        .hasMessageContaining(victim.method() + " " + victim.path());
+  }
+
+  /**
+   * 金丝雀（台账去重）：{@link #KNOWN_MISSING} 里出现两条相同的 method + path ⇒ 必须失败。
+   *
+   * <p>★ 重复的基线项本身就是台账噪音 —— 同一条欠账登记两次，审阅者会以为是两笔账。 由 {@link #assertNoDrift} 的重复 key 检查直接抛 {@link
+   * IllegalArgumentException}。
+   */
+  @Test
+  void 金丝雀_重复基线必须失败() {
+    assertThatThrownBy(
+            () ->
+                assertNoDrift(
+                    endpoints("GET", "/users"),
+                    endpoints("GET", "/users"),
+                    // 两条相同的 GET /users
+                    List.of(
+                        missing("GET", "/users", "#0", "占位"), missing("GET", "/users", "#1", "占位")),
+                    Set.of()))
+        .as("坏样本没被拦下 ⇒ 台账的重复 key 检查已经失效")
+        .isInstanceOf(RuntimeException.class);
   }
 
   // ────────────────────────── 规则本体 ──────────────────────────
@@ -423,14 +580,23 @@ class ContractDriftTest {
    *
    * @param backendEndpoints 后端端点：归一化路径 → 方法集合（空集 = 任意方法）
    * @param contractEndpoints 契约端点：归一化路径 → 方法集合（省略 method 时默认 GET）
-   * @param unimplementedPrefixes 未实现清单（域名前缀；契约有、后端没有时必须落在这里）
+   * @param knownMissing 未实现台账（逐条 method + path；契约有、后端没有时必须逐条落在这里）
    * @param knownExceptions 已知例外（精确路径，双向都不比对）
    */
   private static void assertNoDrift(
       Map<String, Set<String>> backendEndpoints,
       Map<String, Set<String>> contractEndpoints,
-      Set<String> unimplementedPrefixes,
+      List<MissingEndpoint> knownMissing,
       Set<String> knownExceptions) {
+
+    // 台账索引：key = method + " " + path；重复 key 直接抛（重复的基线项是台账噪音）
+    Map<String, MissingEndpoint> missingByKey = new TreeMap<>();
+    for (MissingEndpoint entry : knownMissing) {
+      String key = entry.method() + " " + entry.path();
+      if (missingByKey.put(key, entry) != null) {
+        throw new IllegalArgumentException("KNOWN_MISSING 出现重复条目：" + key);
+      }
+    }
 
     Set<String> backend = new TreeSet<>(backendEndpoints.keySet());
     Set<String> contract = new TreeSet<>(contractEndpoints.keySet());
@@ -448,23 +614,64 @@ class ContractDriftTest {
                 + "还可能是没配权限的洞")
         .isEmpty();
 
-    // ── 规则 2：契约有、后端没有 ⇒ 必须出现在未实现清单里 ──
-    Set<String> contractOnly =
-        contract.stream()
-            .filter(p -> !backend.contains(p))
-            .filter(p -> !knownExceptions.contains(p))
-            .filter(p -> unimplementedPrefixes.stream().noneMatch(prefix -> underPrefix(p, prefix)))
-            .collect(Collectors.toCollection(TreeSet::new));
-    assertThat(contractOnly)
+    // ── 规则 2：契约有、后端没有 ⇒ 必须逐条登记在 KNOWN_MISSING 里 ──
+    // ★ 逐条判（method + path），不是按前缀：前缀下新增一条缺失端点不会红，逐条登记才会。
+    Set<String> unregistered = new TreeSet<>();
+    for (Map.Entry<String, Set<String>> contractEntry : contractEndpoints.entrySet()) {
+      String path = contractEntry.getKey();
+      for (String method : contractEntry.getValue()) {
+        // 后端覆盖该 method（后端路径存在且方法集为空 = ANY，或方法集含该 method）⇒ 不缺，跳过
+        Set<String> backendMethods = backendEndpoints.get(path);
+        if (backendMethods != null
+            && (backendMethods.isEmpty() || backendMethods.contains(method))) {
+          continue;
+        }
+        // 已知例外（双向跳过）⇒ 跳过
+        if (knownExceptions.contains(path)) {
+          continue;
+        }
+        // 台账里有该 method + path ⇒ 豁免，跳过
+        if (missingByKey.containsKey(method + " " + path)) {
+          continue;
+        }
+        unregistered.add(method + " " + path);
+      }
+    }
+    assertThat(unregistered)
         .as(
-            "契约有、后端没有、又不在未实现清单里的端点（规则 2）⇒ 要么实现它，"
-                + "要么把它的域名前缀加进 UNIMPLEMENTED_PREFIXES 并注明计划周次。"
-                + "清单必须显式可审阅，否则会变成永久黑洞")
+            "契约有、后端没有、又不在 KNOWN_MISSING 里的端点（规则 2）⇒ 要么实现它，"
+                + "要么把它的 method + path 逐条加进 KNOWN_MISSING 并注明 issue 与周次。"
+                + "台账必须显式可审阅，否则会变成永久黑洞")
+        .isEmpty();
+
+    // ── 反黑洞 1：台账里的端点，后端已覆盖 ⇒ 基线该删 ──
+    Set<String> alreadyImplemented = new TreeSet<>();
+    for (MissingEndpoint entry : knownMissing) {
+      Set<String> backendMethods = backendEndpoints.get(entry.path());
+      if (backendMethods != null
+          && (backendMethods.isEmpty() || backendMethods.contains(entry.method()))) {
+        alreadyImplemented.add(entry.method() + " " + entry.path());
+      }
+    }
+    assertThat(alreadyImplemented)
+        .as("基线端点已实现，请从 KNOWN_MISSING 删除 —— 留着它就成了'曾经欠过、现在早已实现'的噪音，" + "台账会慢慢没人再看")
+        .isEmpty();
+
+    // ── 反黑洞 2：台账里的端点，契约已没有该 path/method ⇒ 基线该删 ──
+    Set<String> goneFromContract = new TreeSet<>();
+    for (MissingEndpoint entry : knownMissing) {
+      Set<String> contractMethods = contractEndpoints.get(entry.path());
+      if (contractMethods == null || !contractMethods.contains(entry.method())) {
+        goneFromContract.add(entry.method() + " " + entry.path());
+      }
+    }
+    assertThat(goneFromContract)
+        .as("基线端点已不在契约，请从 KNOWN_MISSING 删除 —— 契约撤了这条端点，台账还挂着账，同样是黑洞")
         .isEmpty();
 
     // ── 方法维度（叠加约束）：路径两边都有时，方法集合必须一致 ──
     // ★ 路径对得上、方法对不上，是只对路径的闸门看不见的漂移（listBaseModels 的 GET→POST 真漏过）。
-    // ★ 未实现清单只豁免"整条路径后端还没有"；路径已在后端落了却方法不对，必须红。
+    // ★ 台账只豁免"该 method + path 没实现"这一条；路径已在后端落了却方法不对，必须红。
     // ★ 已知例外双向都不比对 —— 连同方法一起跳过。
     for (String path : backend) {
       if (!contract.contains(path) || knownExceptions.contains(path)) {
@@ -487,23 +694,21 @@ class ContractDriftTest {
                   + "只对路径不对方法时，同路径的方法单边变更会静默漂移",
               path)
           .isEmpty();
+      // ★ 契约多的方法：排除"该 method + path 在 KNOWN_MISSING 里"的项（基线允许单方法缺失），其余仍失败。
       Set<String> contractOnlyMethods =
           contractMethods.stream()
               .filter(m -> !backendMethods.contains(m))
+              .filter(m -> !missingByKey.containsKey(m + " " + path))
               .collect(Collectors.toCollection(TreeSet::new));
       assertThat(contractOnlyMethods)
           .as(
               "同路径 %s 上，契约有、后端没有的 HTTP 方法（规则 2 的方法维度）⇒ "
-                  + "要么把后端方法改对，要么改契约里的 method。"
+                  + "要么把后端方法改对，要么改契约里的 method，"
+                  + "要么把该 method + path 逐条加进 KNOWN_MISSING（基线允许单方法缺失）。"
                   + "只对路径不对方法时，同路径的方法单边变更会静默漂移",
               path)
           .isEmpty();
     }
-  }
-
-  /** 路径是否落在某个域名前缀下：{@code /knowledge-bases/{*}/documents} 落在 {@code /knowledge-bases} 下。 */
-  private static boolean underPrefix(String normalizedPath, String prefix) {
-    return normalizedPath.equals(prefix) || normalizedPath.startsWith(prefix + "/");
   }
 
   /**
