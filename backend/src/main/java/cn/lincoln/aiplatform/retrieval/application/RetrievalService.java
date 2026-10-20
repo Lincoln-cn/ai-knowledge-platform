@@ -744,7 +744,8 @@ public class RetrievalService {
     // ★ 域随模型分组收窄（`withinShared`）：这一组的库 + 属于这一组的个人库，
     //   会话域照搬（它没有库行，本批在这条路上明确拒绝，见上面的守卫）。
     return segmentSearch.vectorSearch(
-        new SegmentSearchPort.VectorQuery(vector.length, vector, scope.withinShared(kbIds), limit));
+        new SegmentSearchPort.VectorQuery(
+            vector.length, vector, scope.withinShared(kbIds), limit, modelId));
   }
 
   /** 单路直接用它的次序 —— 保留给"没有查询理解"的路径（模式内的融合在 {@link #retrieveOneQuery} 里做）。 */

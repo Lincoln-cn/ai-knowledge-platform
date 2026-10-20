@@ -198,12 +198,26 @@ public interface SegmentSearchPort {
    * @param scope ★ 检索域（已由 {@link #retrievalScope} 解析过）。★ 向量路按模型分组时用 {@link
    *     RetrievalScope#withinShared} 收窄共用库那一支，其余两域照搬
    * @param limit 候选上限
+   * @param embeddingModelId ★ 生成这条查询向量的嵌入模型 id。生产调用方必须传 —— 向量表按维度分表，同一维度可能混入其它模型写入的旧向量， 不按 model_id
+   *     过滤就会把它们混进来（issue #192）。null 表示"不过滤"，只给旧测试用；生产调用方不得传 null。
    */
-  record VectorQuery(int dimension, float[] vector, RetrievalScope scope, int limit) {
+  record VectorQuery(
+      int dimension, float[] vector, RetrievalScope scope, int limit, UUID embeddingModelId) {
 
     /** 只带共用库域的重载（语义同上）。 */
     public VectorQuery(int dimension, float[] vector, List<UUID> kbIds, int limit) {
       this(dimension, vector, RetrievalScope.shared(kbIds), limit);
+    }
+
+    /** 只带共用库域 + 嵌入模型 id 的重载（语义同上）。 */
+    public VectorQuery(
+        int dimension, float[] vector, List<UUID> kbIds, int limit, UUID embeddingModelId) {
+      this(dimension, vector, RetrievalScope.shared(kbIds), limit, embeddingModelId);
+    }
+
+    /** 旧 4 参签名（不带嵌入模型 id）—— 兼容旧测试；生产调用方用 5 参版传 modelId。 */
+    public VectorQuery(int dimension, float[] vector, RetrievalScope scope, int limit) {
+      this(dimension, vector, scope, limit, null);
     }
 
     /** 共用库那一支的库 id（既有读法的兼容入口）。 */

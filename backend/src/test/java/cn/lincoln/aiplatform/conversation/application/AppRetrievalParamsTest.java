@@ -138,6 +138,9 @@ class AppRetrievalParamsTest {
         .as("★ VECTOR：问题必须真的被向量化一次 —— 不调 embed 它就变成 0")
         .isEqualTo(1);
     assertThat(run.search.fullTextCalls.get()).as("★ VECTOR：不得走全文那一路").isZero();
+    assertThat(run.search.lastVectorModelId)
+        .as("★ 向量查询必须带上发起检索的 embedding 模型 id（#192：否则别的模型写的同维度旧向量会被混进来）")
+        .isEqualTo(MODEL_ID);
     assertThat(run.refs())
         .as("向量一路返回 SEGMENT_1 ⇒ refs 必须含它")
         .extracting(SourceRef::segmentId)
@@ -346,6 +349,7 @@ class AppRetrievalParamsTest {
     private final Map<UUID, UUID> embeddingModels;
     private final Map<UUID, List<Scored>> vectorHitsByKb;
     private RetrievalScope lastVectorScope;
+    private UUID lastVectorModelId;
     final AtomicInteger fullTextCalls = new AtomicInteger();
     final AtomicInteger vectorSearchCalls = new AtomicInteger();
 
@@ -428,6 +432,7 @@ class AppRetrievalParamsTest {
     @Override
     public List<Scored> vectorSearch(VectorQuery query) {
       lastVectorScope = query.scope();
+      lastVectorModelId = query.embeddingModelId();
       vectorSearchCalls.incrementAndGet();
       UUID kbId = query.scope().sharedKbIds().getFirst();
       return vectorHitsByKb.getOrDefault(kbId, vectorHits);

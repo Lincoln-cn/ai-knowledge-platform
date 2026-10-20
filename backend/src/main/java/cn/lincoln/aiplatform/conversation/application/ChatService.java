@@ -1202,7 +1202,11 @@ public class ChatService {
         rankedPerModel.add(
             segmentSearch.vectorSearch(
                 new SegmentSearchPort.VectorQuery(
-                    vector.length, vector, vectorScope.withinShared(group.getValue()), limit)));
+                    vector.length,
+                    vector,
+                    vectorScope.withinShared(group.getValue()),
+                    limit,
+                    modelId)));
       } catch (RuntimeException groupFailure) {
         log.warn("向量模型 {} 的分组检索失败，跳过该组：{}", modelId, groupFailure.getMessage());
       }
