@@ -8,6 +8,9 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +41,30 @@ class UpstreamGatewayAuthTest {
           exchange.getResponseHeaders().add("Content-Type", "application/json");
           exchange.sendResponseHeaders(200, body.length);
           exchange.getResponseBody().write(body);
+          exchange.close();
+        });
+    server.createContext(
+        "/v1/chat/completions",
+        exchange -> {
+          xApiKey.set(exchange.getRequestHeaders().getFirst("X-API-Key"));
+          authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+          String requestBody =
+              new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+          if (requestBody.contains("\"stream\":true")) {
+            byte[] body =
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+          } else {
+            byte[] body =
+                "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+          }
           exchange.close();
         });
     server.start();
@@ -76,6 +103,41 @@ class UpstreamGatewayAuthTest {
     gateway.listModels(baseUrl, "should-not-be-sent", AuthStyle.NONE);
 
     assertThat(xApiKey.get()).isNull();
+    assertThat(authorization.get()).isNull();
+  }
+
+  @Test
+  void streamBearerStyleFallsBackToConfiguredDefaultKey() {
+    UpstreamGateway gateway = new UpstreamGateway(baseUrl, "default-key");
+
+    gateway.streamChatCompletion(
+        "m1",
+        baseUrl,
+        null,
+        List.of(Map.of("role", "user", "content", "hi")),
+        Duration.ofSeconds(5),
+        delta -> {},
+        AuthStyle.BEARER);
+
+    // ★ 修复前这条是 null：stream 内联拼头，绕过了 effectiveKey；非流式却会带默认 key。
+    assertThat(authorization.get()).isEqualTo("Bearer default-key");
+    assertThat(xApiKey.get()).isNull();
+  }
+
+  @Test
+  void streamXApiKeyStyleDoesNotFallBackToBearer() {
+    UpstreamGateway gateway = new UpstreamGateway(baseUrl, "default-key");
+
+    gateway.streamChatCompletion(
+        "m1",
+        baseUrl,
+        "gateway-secret",
+        List.of(Map.of("role", "user", "content", "hi")),
+        Duration.ofSeconds(5),
+        delta -> {},
+        AuthStyle.X_API_KEY);
+
+    assertThat(xApiKey.get()).isEqualTo("gateway-secret");
     assertThat(authorization.get()).isNull();
   }
 }

@@ -102,6 +102,16 @@ class ChatModelAdapterTest {
         .hasMessageContaining("不是对话模型");
   }
 
+  @Test
+  void doesNotPickChatModelWhoseProviderIsDisabled() {
+    Model model = chatModel(UUID.randomUUID());
+    when(upstream.egressOf(model)).thenReturn(java.util.Optional.empty());
+
+    ChatModelAdapter adapter = new ChatModelAdapter(new FakeModels(model), upstream, gateway);
+
+    assertThat(adapter.pickChatModel()).as("★ 服务商停用后，这个模型不能被“自动挑一个对话模型”选中").isEmpty();
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
 
   /**

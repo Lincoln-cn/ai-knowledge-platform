@@ -344,9 +344,10 @@ public class UpstreamGateway {
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .POST(HttpRequest.BodyPublishers.ofString(writeJson(payload), StandardCharsets.UTF_8));
-    if (apiKey != null && !apiKey.isBlank() && authStyle.headerName() != null) {
-      builder.header(authStyle.headerName(), authStyle.prefix() + apiKey);
-    }
+    // ★ 认证必须走同一处：这里曾内联拼头，绕过了 effectiveKey ⇒ 默认 Bearer 上游在“没配 key”时
+    //   发送不带 Authorization 的请求，而 chatCompletion 会回落到配置里的默认 key。两条对话路径
+    //   对同一份配置表现不同，症状是“流式 401 / 非流式正常”。
+    applyAuth(builder, apiKey, authStyle);
     HttpRequest request = builder.build();
     try {
       HttpResponse<java.io.InputStream> response =

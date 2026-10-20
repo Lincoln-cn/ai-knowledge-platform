@@ -13,10 +13,13 @@ import cn.lincoln.aiplatform.modelcatalog.infrastructure.ModelUpstreamResolver;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.UpstreamGateway;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import java.net.URI;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -153,7 +156,15 @@ public class ModelProviderService {
           "服务商「" + provider.name() + "」下还有 " + count + " 个模型，无法删除",
           "请先把这些模型改绑到其它服务商，或删除它们后再删服务商");
     }
-    providers.delete(provider);
+    try {
+      providers.delete(provider);
+    } catch (DataIntegrityViolationException race) {
+      // ★ count 与 delete 之间可能有并发：另一个请求刚把模型绑到这个服务商。数据库的
+      //   ON DELETE RESTRICT 是最后一道守卫，但它抛的是 500 形状的异常；这里翻译成同一条
+      //   可操作提示，避免用户看到“服务器内部错误”而不知道是还有模型引用。
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "服务商「" + provider.name() + "」仍被模型引用，无法删除", "请刷新模型列表，把引用它的模型改绑后再删");
+    }
     log.info("删除服务商 {}（{}）", provider.name(), provider.id());
   }
 
@@ -200,7 +211,8 @@ public class ModelProviderService {
               operatorId);
     } else {
       provider = existing;
-      provider.enabled(true, operatorId);
+      // ★ 复用已存在的服务商时不替用户改启用状态：用户停用它是有意为之，快速绑定只负责
+      //   更新地址/密钥，不该把“停用”悄悄变成“启用”。需要启用请走 PATCH /enabled。
     }
     if (hasText(apiKey)) {
       seal(provider, apiKey);
@@ -301,11 +313,41 @@ public class ModelProviderService {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST, "服务地址必填", "这个类型没有预设地址（MiMo / GLM 等以厂商文档为准），请手动填写完整地址");
     }
-    String normalized = raw.trim();
+    String normalized = normalizeBase(raw.trim());
     if (useJairouterDefaults && !normalized.endsWith("/v1")) {
-      normalized = normalized + "/v1";
+      normalized = normalizeBase(normalized + "/v1");
     }
-    return normalized.endsWith("/") ? normalized.substring(0, normalized.length() - 1) : normalized;
+    return normalized;
+  }
+
+  /**
+   * 地址归一：去掉尾斜杠，并把 scheme / host 统一成小写、去掉默认端口。
+   *
+   * <p>★ 这不是“好看”，而是让快速绑定的幂等键（{@code kind + apiBase}）真的幂等： {@code HTTP://LOCALHOST:8080/v1/} 与
+   * {@code http://localhost:8080/v1} 是同一台上游， 不归一就会建出两条服务商，之后轮换密钥只改了其中一条。
+   */
+  private static String normalizeBase(String value) {
+    String result = value;
+    while (result.length() > 1 && result.endsWith("/")) {
+      result = result.substring(0, result.length() - 1);
+    }
+    try {
+      URI uri = URI.create(result);
+      if (uri.getScheme() == null || uri.getHost() == null) {
+        return result;
+      }
+      String scheme = uri.getScheme().toLowerCase(Locale.ROOT);
+      String host = uri.getHost().toLowerCase(Locale.ROOT);
+      int port = uri.getPort();
+      if (("http".equals(scheme) && port == 80) || ("https".equals(scheme) && port == 443)) {
+        port = -1;
+      }
+      String path = uri.getRawPath() == null ? "" : uri.getRawPath();
+      return scheme + "://" + host + (port < 0 ? "" : ":" + port) + path;
+    } catch (IllegalArgumentException malformed) {
+      // 交给 ModelProvider.requireApiBase 的 http(s) 校验给出可读错误；这里只做尽力归一。
+      return result;
+    }
   }
 
   private void seal(ModelProvider provider, String plaintext) {
