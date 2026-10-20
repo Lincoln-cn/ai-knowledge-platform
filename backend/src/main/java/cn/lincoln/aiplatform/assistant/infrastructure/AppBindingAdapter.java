@@ -55,6 +55,8 @@ public class AppBindingAdapter implements AppBindingPort {
         app.modelId(),
         app.kbIds(),
         app.multiTurn(),
+        // ★ `#185`：思考开关随绑定进链路；是否真的发 reasoning_effort 由模型三态决定
+        app.thinkingEnabled(),
         app.rolePrompt(),
         // ★ `#185`：应用级检索参数随绑定一起进问答链路。此前它们只存在于实体 / 视图 / 导出里，
         //   `ChatService` 读的是平台设置 ⇒ 配置页那几个控件全是装饰。

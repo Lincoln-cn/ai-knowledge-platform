@@ -115,9 +115,29 @@ public class ChatModelAdapter implements ChatPort {
       List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages,
       Duration timeout,
       java.util.function.Consumer<String> onDelta) {
+    return streamChat(modelId, messages, false, timeout, onDelta);
+  }
+
+  /**
+   * 带应用思考开关的流式调用（{@code #185}）。
+   *
+   * <p>★★ 这里只做<strong>能力映射</strong>，不替用户决定：{@code TOGGLEABLE} 才发送 {@code reasoning_effort}（开 =
+   * {@code high}，关 = {@code none}）；{@code ALWAYS_ON} 与 {@code NONE} 都不发送 ——
+   * 对前者"关"物理上做不到，对后者"开"没有意义。把 {@code none} 发给一个始终思考的模型， 只会得到一个被忽略的字段，却让日志看起来"已经关了"。
+   */
+  public boolean streamChat(
+      UUID modelId,
+      List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages,
+      boolean thinking,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta) {
     Model model = requireChatModel(modelId);
     List<Map<String, String>> history =
         messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
+    String reasoningEffort =
+        model.thinking() == cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode.TOGGLEABLE
+            ? (thinking ? "high" : "none")
+            : null;
     try {
       ResolvedUpstream target = upstream.resolve(model);
       return gateway.streamChatCompletion(
@@ -127,7 +147,8 @@ public class ChatModelAdapter implements ChatPort {
           history,
           timeout,
           onDelta,
-          target.authStyle());
+          target.authStyle(),
+          reasoningEffort);
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.UPSTREAM_UNAVAILABLE,

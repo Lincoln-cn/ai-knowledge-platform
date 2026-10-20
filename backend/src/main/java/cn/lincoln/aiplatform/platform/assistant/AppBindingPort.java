@@ -53,6 +53,8 @@ public interface AppBindingPort {
    *     对话模型"，不是"没有模型"（见 {@code ChatPort#pickChatModel}）
    * @param kbIds 应用绑定的知识库（★ 顺序不承诺语义；空 = 没绑 —— 那是通用问答，不是"绑了一个空库"）
    * @param rolePrompt 应用的角色设定；★ 空串 = 应用没有设定（**不回落**到平台通用提示词）
+   * @param thinkingEnabled 应用的思考开关（{@code #185}）。★ 它只表达"用户想不想思考"；能不能关由模型能力声明 {@code ThinkingMode}
+   *     决定 —— 适配器按模型三态决定是否发送 {@code reasoning_effort}，这里不替模型做主
    * @param retrieval 应用级检索参数（{@code #185}）。★ 它此前不在这份事实里，于是配置页的阈值 / TopN / 无引用策略 全是死控件；问答链路只能读平台设置
    */
   record AppBinding(
@@ -60,6 +62,7 @@ public interface AppBindingPort {
       UUID modelId,
       List<UUID> kbIds,
       boolean multiTurn,
+      boolean thinkingEnabled,
       String rolePrompt,
       RetrievalParams retrieval) {}
 

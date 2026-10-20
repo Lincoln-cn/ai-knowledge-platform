@@ -112,6 +112,51 @@ class ChatModelAdapterTest {
     assertThat(adapter.pickChatModel()).as("★ 服务商停用后，这个模型不能被“自动挑一个对话模型”选中").isEmpty();
   }
 
+  /** `#185`：可开关模型 + 应用打开思考 ⇒ 请求体带 high；关掉 ⇒ none。 */
+  @Test
+  void mapsThinkingToggleToReasoningEffort() {
+    Model model = chatModel(UUID.randomUUID());
+    model.thinking(cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode.TOGGLEABLE);
+    ChatModelAdapter adapter = adapter(model);
+
+    adapter.streamChat(
+        model.id(),
+        List.of(
+            new cn.lincoln.aiplatform.platform.model.ChatMessage(
+                cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER, "hi")),
+        true,
+        Duration.ofSeconds(5),
+        chunk -> {});
+    assertThat(gateway.reasoningEffort).as("★ 打开思考必须真的进上游请求体").isEqualTo("high");
+
+    adapter.streamChat(
+        model.id(),
+        List.of(
+            new cn.lincoln.aiplatform.platform.model.ChatMessage(
+                cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER, "hi")),
+        false,
+        Duration.ofSeconds(5),
+        chunk -> {});
+    assertThat(gateway.reasoningEffort).as("★ 关掉思考必须发 none，不能什么都不发").isEqualTo("none");
+  }
+
+  /** `#185`：始终思考 / 不支持思考的模型不发送 reasoning_effort（"关不掉"不能伪装成"已关闭"）。 */
+  @Test
+  void neverPretendsToDisableAlwaysOnThinking() {
+    Model alwaysOn = chatModel(UUID.randomUUID());
+    alwaysOn.thinking(cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode.ALWAYS_ON);
+    ChatModelAdapter adapter = adapter(alwaysOn);
+    adapter.streamChat(
+        alwaysOn.id(),
+        List.of(
+            new cn.lincoln.aiplatform.platform.model.ChatMessage(
+                cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER, "hi")),
+        false,
+        Duration.ofSeconds(5),
+        chunk -> {});
+    assertThat(gateway.reasoningEffort).as("★ ALWAYS_ON 不接受关闭，不能发 none").isNull();
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
 
   /**
@@ -162,6 +207,7 @@ class ChatModelAdapterTest {
   private static final class RecordingGateway extends UpstreamGateway {
 
     String prompt;
+    String reasoningEffort;
     String response = "{\"sufficient\": true, \"nextQuery\": null}";
 
     RecordingGateway() {
@@ -184,6 +230,20 @@ class ChatModelAdapterTest {
         AuthStyle authStyle) {
       this.prompt = prompt;
       return response;
+    }
+
+    @Override
+    public boolean streamChatCompletion(
+        String model,
+        String apiBase,
+        String apiKey,
+        List<java.util.Map<String, String>> history,
+        Duration timeout,
+        java.util.function.Consumer<String> onDelta,
+        AuthStyle authStyle,
+        String reasoningEffort) {
+      this.reasoningEffort = reasoningEffort;
+      return true;
     }
   }
 

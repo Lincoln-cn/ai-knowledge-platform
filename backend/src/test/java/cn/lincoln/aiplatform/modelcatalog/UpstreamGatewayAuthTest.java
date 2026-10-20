@@ -28,6 +28,7 @@ class UpstreamGatewayAuthTest {
   private String baseUrl;
   private final AtomicReference<String> xApiKey = new AtomicReference<>();
   private final AtomicReference<String> authorization = new AtomicReference<>();
+  private final AtomicReference<String> requestBody = new AtomicReference<>();
 
   @BeforeEach
   void startStub() throws IOException {
@@ -50,6 +51,7 @@ class UpstreamGatewayAuthTest {
           authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
           String requestBody =
               new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+          this.requestBody.set(requestBody);
           if (requestBody.contains("\"stream\":true")) {
             byte[] body =
                 "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"
@@ -139,5 +141,33 @@ class UpstreamGatewayAuthTest {
 
     assertThat(xApiKey.get()).isEqualTo("gateway-secret");
     assertThat(authorization.get()).isNull();
+  }
+
+  /** `#185`：思考开关必须真的进请求体；不带时字段必须不出现（不能只写进数据库）。 */
+  @Test
+  void streamCarriesReasoningEffortOnlyWhenPresent() {
+    UpstreamGateway gateway = new UpstreamGateway(baseUrl, "default-key");
+
+    gateway.streamChatCompletion(
+        "m1",
+        baseUrl,
+        null,
+        List.of(Map.of("role", "user", "content", "hi")),
+        Duration.ofSeconds(5),
+        delta -> {},
+        AuthStyle.BEARER,
+        "high");
+    assertThat(requestBody.get()).contains("\"reasoning_effort\":\"high\"");
+
+    gateway.streamChatCompletion(
+        "m1",
+        baseUrl,
+        null,
+        List.of(Map.of("role", "user", "content", "hi")),
+        Duration.ofSeconds(5),
+        delta -> {},
+        AuthStyle.BEARER,
+        null);
+    assertThat(requestBody.get()).doesNotContain("reasoning_effort");
   }
 }

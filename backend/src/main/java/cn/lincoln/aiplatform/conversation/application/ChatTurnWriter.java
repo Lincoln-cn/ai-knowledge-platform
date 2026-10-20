@@ -108,6 +108,8 @@ public class ChatTurnWriter implements ChatTurnStore {
       List<UUID> kbIds,
       // ★ `#168`：应用上的「多轮对话」开关。它此前是个**死开关**（`ChatService` 从不读）。
       boolean multiTurn,
+      // ★ `#185`：应用的思考开关。通用问答为 false；应用只表达"想不想"，模型能力决定能不能
+      boolean thinkingEnabled,
       // ★ 应用归属（null = 通用问答）与角色设定：提示词来源必须由这一轮的应用决定，
       //   不能在 ChatService 里再猜一次（#183）。
       UUID appId,
@@ -181,6 +183,8 @@ public class ChatTurnWriter implements ChatTurnStore {
         //     不是应用的属性；把默认值翻成 true 是对这个错位的最小修正：
         //     应用那边仍尊重它自己的 `multi_turn` 开关，通用问答则总是带上历史。
         app == null || app.multiTurn(),
+        // ★ `#185`：通用问答没有应用 ⇒ 不思考；应用则尊重它自己的开关
+        app != null && app.thinkingEnabled(),
         app == null ? null : app.appId(),
         app == null ? null : app.rolePrompt(),
         // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）
@@ -213,6 +217,7 @@ public class ChatTurnWriter implements ChatTurnStore {
         app.kbIds(),
         // ★ 调试不带历史：没有会话可带
         false,
+        app.thinkingEnabled(),
         app.appId(),
         app.rolePrompt(),
         app.retrieval());
@@ -441,6 +446,8 @@ public class ChatTurnWriter implements ChatTurnStore {
         //     不是应用的属性；把默认值翻成 true 是对这个错位的最小修正：
         //     应用那边仍尊重它自己的 `multi_turn` 开关，通用问答则总是带上历史。
         app == null || app.multiTurn(),
+        // ★ `#185`：通用问答没有应用 ⇒ 不思考；应用则尊重它自己的开关
+        app != null && app.thinkingEnabled(),
         app == null ? null : app.appId(),
         app == null ? null : app.rolePrompt(),
         // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）

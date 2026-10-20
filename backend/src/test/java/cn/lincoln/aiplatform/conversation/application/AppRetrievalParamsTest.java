@@ -246,6 +246,7 @@ class AppRetrievalParamsTest {
           MODEL_ID,
           List.of(KB_ID),
           false,
+          false,
           APP_ID,
           "你是法务助手",
           params);

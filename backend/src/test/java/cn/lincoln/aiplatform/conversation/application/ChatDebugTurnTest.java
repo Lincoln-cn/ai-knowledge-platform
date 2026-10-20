@@ -107,6 +107,20 @@ class ChatDebugTurnTest {
     assertThat(modelCalls.get()).as("★ REFUSE 时调试也不调用模型（与正式轮同一判定）").isZero();
   }
 
+  /** `#185`：应用打开思考时，ChatService 必须把 true 交给端口（删掉这一参，本测试立刻红）。 */
+  @Test
+  void debugPassesApplicationThinkingToTheStreamPort() {
+    RecordingStore store =
+        new RecordingStore(
+            new RetrievalParams(RetrievalMode.FULLTEXT, 0.01, 5, NoRefStrategy.FREE_ANSWER), true);
+    RecordingThinkingPort port = new RecordingThinkingPort();
+
+    service(store, List.of(new SegmentSearchPort.Scored(SEGMENT_ID, 0.90)), port)
+        .debugTurn(APP_ID, QUESTION);
+
+    assertThat(port.thinking).as("★ 应用 thinkingEnabled=true 必须一路传到模型端口").isTrue();
+  }
+
   private static ChatService service(
       RecordingStore store, List<SegmentSearchPort.Scored> hits, ChatStreamPort model) {
     return new ChatService(
@@ -117,6 +131,28 @@ class ChatDebugTurnTest {
         new ChatStopSignal(),
         ChatStreamProperties.defaults(),
         UNRESTRICTED_EGRESS);
+  }
+
+  private static final class RecordingThinkingPort implements ChatStreamPort {
+
+    private boolean thinking;
+
+    @Override
+    public void stream(UUID modelId, String prompt, java.time.Duration timeout, Callback callback) {
+      throw new AssertionError("应走带 thinking 的重载");
+    }
+
+    @Override
+    public void stream(
+        UUID modelId,
+        String prompt,
+        boolean thinking,
+        java.time.Duration timeout,
+        Callback callback) {
+      this.thinking = thinking;
+      callback.onChunk("调试答案");
+      callback.onEnd(End.COMPLETE, null);
+    }
   }
 
   private static final class FixedSearchPort implements SegmentSearchPort {
@@ -194,12 +230,18 @@ class ChatDebugTurnTest {
   private static final class RecordingStore implements ChatTurnStore {
 
     private final RetrievalParams params;
+    private final boolean thinkingEnabled;
 
     private int flushCalls;
     private int finishCalls;
 
     private RecordingStore(RetrievalParams params) {
+      this(params, false);
+    }
+
+    private RecordingStore(RetrievalParams params, boolean thinkingEnabled) {
       this.params = params;
+      this.thinkingEnabled = thinkingEnabled;
     }
 
     @Override
@@ -221,6 +263,7 @@ class ChatDebugTurnTest {
           MODEL_ID,
           List.of(KB_ID),
           false,
+          thinkingEnabled,
           APP_ID,
           "你是法务助手",
           params);

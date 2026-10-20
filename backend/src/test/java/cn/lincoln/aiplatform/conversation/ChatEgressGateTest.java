@@ -277,6 +277,7 @@ class ChatEgressGateTest {
           MODEL_ID,
           List.of(),
           false,
+          false,
           null,
           null,
           null);

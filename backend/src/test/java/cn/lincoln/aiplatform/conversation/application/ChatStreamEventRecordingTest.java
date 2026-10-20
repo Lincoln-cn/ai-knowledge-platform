@@ -868,6 +868,7 @@ class ChatStreamEventRecordingTest {
           UUID.randomUUID(),
           List.of(),
           false,
+          false,
           null,
           null,
           null);

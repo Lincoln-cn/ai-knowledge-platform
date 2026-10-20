@@ -49,15 +49,35 @@ public class UpstreamStreamingChatAdapter implements ChatStreamPort {
 
   @Override
   public void stream(UUID modelId, String prompt, Duration timeout, Callback callback) {
+    stream(modelId, prompt, false, timeout, callback);
+  }
+
+  @Override
+  public void stream(
+      UUID modelId, String prompt, boolean thinking, Duration timeout, Callback callback) {
     streamConversation(
-        modelId, List.of(new ChatMessage(ChatMessage.Role.USER, prompt)), timeout, callback);
+        modelId,
+        List.of(new ChatMessage(ChatMessage.Role.USER, prompt)),
+        thinking,
+        timeout,
+        callback);
   }
 
   @Override
   public void streamConversation(
       UUID modelId, List<ChatMessage> messages, Duration timeout, Callback callback) {
+    streamConversation(modelId, messages, false, timeout, callback);
+  }
+
+  @Override
+  public void streamConversation(
+      UUID modelId,
+      List<ChatMessage> messages,
+      boolean thinking,
+      Duration timeout,
+      Callback callback) {
     try {
-      boolean streamed = chat.streamChat(modelId, messages, timeout, callback::onChunk);
+      boolean streamed = chat.streamChat(modelId, messages, thinking, timeout, callback::onChunk);
       if (!streamed) {
         // ★ 上游 200 但一个 data 帧都没有：这是"它不支持 stream:true"或"回了空"。
         //   明确报失败而不是当成功收尾 —— 否则界面会显示"生成了 0 个字的答案"。

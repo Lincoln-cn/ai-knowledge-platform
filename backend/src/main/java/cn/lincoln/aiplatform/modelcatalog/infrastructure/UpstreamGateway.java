@@ -336,7 +336,32 @@ public class UpstreamGateway {
       Duration timeout,
       java.util.function.Consumer<String> onDelta,
       AuthStyle authStyle) {
-    Map<String, Object> payload = Map.of("model", model, "messages", history, "stream", true);
+    return streamChatCompletion(model, apiBase, apiKey, history, timeout, onDelta, authStyle, null);
+  }
+
+  /**
+   * 带思考参数的流式补全（{@code #185}）。
+   *
+   * @param reasoningEffort {@code null} = 请求体里<strong>不出现</strong>该字段；由模型能力映射决定（见 {@code
+   *     ChatModelAdapter#streamChat}）
+   */
+  public boolean streamChatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta,
+      AuthStyle authStyle,
+      String reasoningEffort) {
+    Map<String, Object> payload = new java.util.LinkedHashMap<>();
+    payload.put("model", model);
+    payload.put("messages", history);
+    payload.put("stream", true);
+    if (reasoningEffort != null) {
+      // ★ 只在能力允许时才带：ALWAYS_ON / NONE 不带，避免把"关不掉"伪装成"已关闭"
+      payload.put("reasoning_effort", reasoningEffort);
+    }
     String url = resolve(apiBase, "/chat/completions");
     HttpRequest.Builder builder =
         HttpRequest.newBuilder(URI.create(url))

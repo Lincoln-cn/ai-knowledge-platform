@@ -169,6 +169,7 @@ class ChatPromptSourceTest {
               MODEL_ID,
               List.of(),
               false,
+              false,
               appId,
               rolePrompt,
               null);

@@ -356,7 +356,11 @@ public class ChatService {
     DebugCollector collector = new DebugCollector();
     try {
       chatStream.stream(
-          turn.modelId(), prompt, Duration.ofMillis(properties.idleTimeoutMs()), collector);
+          turn.modelId(),
+          prompt,
+          turn.thinkingEnabled(),
+          Duration.ofMillis(properties.idleTimeoutMs()),
+          collector);
     } catch (RuntimeException failure) {
       throw new BusinessException(
           ErrorCode.UPSTREAM_UNAVAILABLE,
@@ -608,11 +612,16 @@ public class ChatService {
                   chatStream.stream(
                       turn.modelId(),
                       promptOf(question, refs, systemPromptOrNull(turn)),
+                      turn.thinkingEnabled(),
                       Duration.ofMillis(properties.idleTimeoutMs()),
                       run);
                 } else {
                   chatStream.streamConversation(
-                      turn.modelId(), messages, Duration.ofMillis(properties.idleTimeoutMs()), run);
+                      turn.modelId(),
+                      messages,
+                      turn.thinkingEnabled(),
+                      Duration.ofMillis(properties.idleTimeoutMs()),
+                      run);
                 }
               } catch (StopUpstream cancel) {
                 // 用户停止 / 已判超时：不是错，终态由收尾线程按标志决定

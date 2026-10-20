@@ -258,6 +258,7 @@ class ChatRetrievalHeartbeatTest {
           UUID.randomUUID(),
           List.of(),
           false,
+          false,
           null,
           null,
           null);

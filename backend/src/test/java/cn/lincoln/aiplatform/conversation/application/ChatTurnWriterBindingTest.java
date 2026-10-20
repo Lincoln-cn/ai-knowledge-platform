@@ -39,11 +39,13 @@ class ChatTurnWriterBindingTest {
     when(appBindings.findVisibleById(APP_A))
         .thenReturn(
             Optional.of(
-                new AppBindingPort.AppBinding(APP_A, MODEL_A, List.of(), true, "A 角色", null)));
+                new AppBindingPort.AppBinding(
+                    APP_A, MODEL_A, List.of(), true, false, "A 角色", null)));
     when(appBindings.findVisibleById(APP_B))
         .thenReturn(
             Optional.of(
-                new AppBindingPort.AppBinding(APP_B, MODEL_B, List.of(), true, "B 角色", null)));
+                new AppBindingPort.AppBinding(
+                    APP_B, MODEL_B, List.of(), true, false, "B 角色", null)));
 
     ChatTurnWriter writer =
         new ChatTurnWriter(conversations, messages, appBindings, mock(ChatPort.class));
