@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.conversation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.doAnswer;
 
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
@@ -93,13 +94,13 @@ class AssistantDebugHttpTest {
         invocation -> {
           promptSeen.set(invocation.getArgument(1));
           modelCalls.incrementAndGet();
-          ChatStreamPort.Callback callback = invocation.getArgument(3);
+          ChatStreamPort.Callback callback = invocation.getArgument(4);
           callback.onChunk("调试答案：差旅住宿标准为每人每天500元。");
           callback.onEnd(ChatStreamPort.End.COMPLETE, null);
           return null;
         })
         .when(chatStream)
-        .stream(any(), any(), any(), any());
+        .stream(any(), any(), anyBoolean(), any(), any());
   }
 
   @Test
