@@ -45,8 +45,10 @@ import java.util.Objects;
  *
  * <h3>★ 线程与生命周期</h3>
  *
- * <p>刻意<strong>不做线程安全</strong>：一次问答一个实例，只在处理该请求的那个（虚拟）线程上被调用。加锁会掩盖真正的
- * 设计问题（多个线程同时往一条流里写事件），而那件事一旦发生，症状是<strong>乱序</strong>而不是"慢"。
+ * <p>传输层有<strong>两个写者</strong>：模型线程（{@link #delta} 等）与心跳线程（{@link #heartbeat}）会并发调用同一个实例 （GitHub
+ * issue #146）。本类用<strong>监视器（{@code synchronized}）串行化所有状态读写</strong> —— 公开方法全部持锁，
+ * 私有方法只在这些入口持锁时被调用。★ 但这只保证"事件不丢、不并发扩容异常"；<strong>sink 的写出顺序仍由 {@code ChatService} 的 {@code
+ * writeLock} 保证</strong> —— 本类不替代那把锁。
  *
  * <p>★ 本类<strong>没有</strong>领域事件、没有仓储：它不落库。落库（{@code cv_message}、周期性 flush、状态机）是第 17 周 传输层与用例层的事 ——
  * 本批刻意不预支（判据是"六条数值与形状可断言"，不是"链路能跑"）。
@@ -115,7 +117,7 @@ public final class StreamAssembler {
    * 这种前端没有分支处理、但也不会报错的序列（{@code meta} 分支仍然会执行， 只是 {@code messageId}
    * 晚到，"停止"按钮的可用时机就错了）。这里直接抛，把顺序错误在第一个调用点上打出来。
    */
-  public void begin() {
+  public synchronized void begin() {
     requireNotSettled("begin");
     if (refsEmitted || deltaEmitted) {
       throw new IllegalStateException(
@@ -136,7 +138,7 @@ public final class StreamAssembler {
    *
    * @param refs 检索结果（可以为空列表 = 零命中；见 {@link StreamEvent.References}）
    */
-  public void references(List<SourceRef> refs) {
+  public synchronized void references(List<SourceRef> refs) {
     requireNotSettled("references");
     if (refsEmitted) {
       return;
@@ -169,7 +171,7 @@ public final class StreamAssembler {
    *
    * @param chunk 增量文本（非空；空增量见 {@link StreamEvent.Delta}）
    */
-  public void delta(String chunk) {
+  public synchronized void delta(String chunk) {
     requireNotSettled("delta");
     flushPendingBeforeFirstDelta();
     emit(new StreamEvent.Delta(chunk));
@@ -184,7 +186,7 @@ public final class StreamAssembler {
    *
    * @param usage 本次调用的用量（可空）
    */
-  public void addUsage(TokenUsage usage) {
+  public synchronized void addUsage(TokenUsage usage) {
     requireNotSettled("addUsage");
     this.tokens = this.tokens.plus(usage);
   }
@@ -201,7 +203,7 @@ public final class StreamAssembler {
    *
    * @return 刚产出的事件对象（便于调用方直接写出去）
    */
-  public StreamEvent heartbeat() {
+  public synchronized StreamEvent heartbeat() {
     requireNotSettled("heartbeat");
     StreamEvent.Heartbeat beat = new StreamEvent.Heartbeat(HEARTBEAT_PAYLOAD);
     emit(beat);
@@ -228,7 +230,7 @@ public final class StreamAssembler {
    * @param durationMs 耗时（毫秒，非负）
    * @return 本次调用是否产出了 {@code done}（{@code false} = 已经收过尾了）
    */
-  public boolean finish(StreamTerminationPath path, long durationMs) {
+  public synchronized boolean finish(StreamTerminationPath path, long durationMs) {
     Objects.requireNonNull(path, "path");
     if (durationMs < 0) {
       throw new IllegalArgumentException("durationMs 不能为负：" + durationMs);
@@ -257,27 +259,27 @@ public final class StreamAssembler {
    *
    * @return 不可变快照
    */
-  public List<StreamEvent> events() {
+  public synchronized List<StreamEvent> events() {
     return List.copyOf(emitted);
   }
 
   /** 已产出的 {@code done}（还没收尾时是 {@code null}）。 */
-  public StreamEvent.StreamDoneEvent done() {
+  public synchronized StreamEvent.StreamDoneEvent done() {
     return done;
   }
 
   /** 是否已经收尾（收尾之后装配器不再产出任何事件）。 */
-  public boolean settled() {
+  public synchronized boolean settled() {
     return settled;
   }
 
   /** 已累计的 token 用量（还没有任何调用时是 {@link TokenUsage#zero()}，不是 {@code null}）。 */
-  public TokenUsage tokens() {
+  public synchronized TokenUsage tokens() {
     return tokens;
   }
 
   /** 到目前为止累计的正文（所有 {@code delta} 拼接；★ 停止/失败路径上它<strong>保留</strong>，不清空）。 */
-  public String text() {
+  public synchronized String text() {
     return text.toString();
   }
 
