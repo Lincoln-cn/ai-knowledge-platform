@@ -47,13 +47,17 @@
           <div class="hint micro">{{ thinkingModeHint }}</div>
         </el-form-item>
 
-        <!-- 思考模式：★ 问答链路尚未接入上游思考参数（#185）⇒ 不再展示一个不生效的开关。
-             模型有能力声明时给一句可读说明，而不是让用户以为"这个模型没有思考模式"。 -->
-        <el-form-item v-if="thinkingMode !== 'NONE'" label="思考模式">
-          <span class="hint micro">
-            该模型声明了「{{ THINKING_MODE_LABEL[thinkingMode] }}」思考能力，但当前问答链路尚未接入上游思考参数（#185），
-            因此暂不提供开关；已保存的配置原样保留，不会因本页操作被改写。
-          </span>
+        <!-- 思考模式：★ `#185` 已把开关接进 ChatService → ChatStreamPort → 适配器；
+             但只有 TOGGLEABLE 的模型能被开关，ALWAYS_ON 只读说明，NONE 不出现。 -->
+        <el-form-item v-if="thinkingMode === 'TOGGLEABLE'" label="思考模式">
+          <el-switch v-model="form.thinkingEnabled" />
+          <div class="hint micro">
+            开启时上游收到 <code>reasoning_effort=high</code>，关闭时收到 <code>none</code>；只对当前模型生效。
+          </div>
+        </el-form-item>
+
+        <el-form-item v-else-if="thinkingMode === 'ALWAYS_ON'" label="思考模式">
+          <span class="hint micro">该模型始终思考，无法关闭；本应用不会发送 <code>reasoning_effort</code>。</span>
         </el-form-item>
 
         <el-form-item label="角色设定" prop="rolePrompt">
@@ -249,7 +253,7 @@ const thinkingMode = computed<ThinkingMode>(() => {
   return model?.thinking ?? 'NONE'
 })
 
-/** 只用于"模型声明了什么"的说明文案（开关本身尚未接入，见模板）。 */
+/** 模型声明的思考能力 → 配置页文案；开关只在 TOGGLEABLE 时出现。 */
 const THINKING_MODE_LABEL: Record<ThinkingMode, string> = {
   NONE: '无',
   TOGGLEABLE: '可开关',
@@ -259,8 +263,9 @@ const THINKING_MODE_LABEL: Record<ThinkingMode, string> = {
 const thinkingModeHint = computed(() => {
   const model = chatModels.value.find((m) => m.id === form.modelId)
   if (!model) return '选择模型后按其思考能力呈现说明'
-  if (model.thinking === 'NONE') return '该模型未声明思考能力'
-  return `该模型声明思考模式为「${THINKING_MODE_LABEL[model.thinking]}」；问答链路尚未接入该参数（#185）`
+  if (model.thinking === 'NONE') return '该模型未声明思考能力，本应用不会发送 reasoning_effort'
+  if (model.thinking === 'ALWAYS_ON') return '该模型始终思考、无法关闭，本应用不会发送 reasoning_effort'
+  return `该模型可开关思考（${THINKING_MODE_LABEL[model.thinking]}）：开启发 high，关闭发 none`
 })
 
 const pickedKbs = computed(() =>
@@ -333,7 +338,7 @@ const toBody = () => ({
   promptIds: form.promptIds,
   retrieval: { ...form.retrieval },
   multiTurn: form.multiTurn,
-  // ★ `#185`：思考开关尚未接入 ⇒ 原样回写已保存值，不在保存时改写它
+  // ★ `#185`：思考开关已接入；这里原样回写用户的选择，模型是否接受由模板的 TOGGLEABLE 判定
   thinkingEnabled: form.thinkingEnabled,
   prologue: form.prologue,
   quickQuestions: form.quickQuestions.filter((q) => q.trim())

@@ -218,10 +218,11 @@ const composerPlaceholder = computed(
 )
 
 /**
- * 思考模式开关（★ `#185`：暂不展示）。
+ * 思考模式开关（★ `#185`：会话页不再展示）。
  *
- * <p>问答链路的 `ChatStreamPort` 没有 thinking 参数、上游请求体也没有对应字段 ⇒ 这个开关此前是死控件。
- * 在 `#185` 的 thinking 子任务（端口形状 + 适配器映射）落地之前，不展示它；`thinking` 仍固定为 false。
+ * <p>思考已改为应用级配置：配置页按模型能力决定是否给开关，`ChatTurnWriter` 把
+ * {@code app.thinkingEnabled} 带进每一轮，`/chat/stream` 的 {@code thinking} 字段仍只是形状兼容、不消费。
+ * 会话页再放一个临时开关，只会让用户以为它能覆盖应用配置 —— 实际不会。
  */
 const showThinkingToggle = computed(() => false)
 

@@ -229,7 +229,7 @@ const publishRows = computed<InstrumentRow[]>(() => {
       value: workflow ? '见流程' : (a.modelName ?? '—'),
       hint: workflow
         ? (a.workflow ? `流程共 ${a.workflow.nodeCount} 个节点` : undefined)
-        : `${a.multiTurn ? '多轮' : '单轮'}上下文 · 思考模式未接入（#185）`
+        : `${a.multiTurn ? '多轮' : '单轮'}上下文 · 思考${a.thinkingEnabled ? '开' : '关'}`
     },
     {
       label: '知识库',
