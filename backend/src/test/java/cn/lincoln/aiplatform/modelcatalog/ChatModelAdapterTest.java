@@ -241,7 +241,8 @@ class ChatModelAdapterTest {
         Duration timeout,
         java.util.function.Consumer<String> onDelta,
         AuthStyle authStyle,
-        String reasoningEffort) {
+        String reasoningEffort,
+        java.util.function.BiConsumer<Integer, Integer> onUsage) {
       this.reasoningEffort = reasoningEffort;
       return true;
     }

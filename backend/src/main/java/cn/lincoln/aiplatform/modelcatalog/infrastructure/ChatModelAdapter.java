@@ -131,6 +131,21 @@ public class ChatModelAdapter implements ChatPort {
       boolean thinking,
       Duration timeout,
       java.util.function.Consumer<String> onDelta) {
+    return streamChat(modelId, messages, thinking, timeout, onDelta, null);
+  }
+
+  /**
+   * 带用量回调的流式调用（{@code #142}）：把上游 {@code usage} 两个分量原样转给端口层。
+   *
+   * @param onUsage {@code null} = 调用方不关心用量
+   */
+  public boolean streamChat(
+      UUID modelId,
+      List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages,
+      boolean thinking,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta,
+      java.util.function.BiConsumer<Integer, Integer> onUsage) {
     Model model = requireChatModel(modelId);
     List<Map<String, String>> history =
         messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
@@ -148,7 +163,8 @@ public class ChatModelAdapter implements ChatPort {
           timeout,
           onDelta,
           target.authStyle(),
-          reasoningEffort);
+          reasoningEffort,
+          onUsage);
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.UPSTREAM_UNAVAILABLE,

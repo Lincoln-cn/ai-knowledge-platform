@@ -77,7 +77,9 @@ public class UpstreamStreamingChatAdapter implements ChatStreamPort {
       Duration timeout,
       Callback callback) {
     try {
-      boolean streamed = chat.streamChat(modelId, messages, thinking, timeout, callback::onChunk);
+      boolean streamed =
+          chat.streamChat(
+              modelId, messages, thinking, timeout, callback::onChunk, callback::onUsage);
       if (!streamed) {
         // ★ 上游 200 但一个 data 帧都没有：这是"它不支持 stream:true"或"回了空"。
         //   明确报失败而不是当成功收尾 —— 否则界面会显示"生成了 0 个字的答案"。

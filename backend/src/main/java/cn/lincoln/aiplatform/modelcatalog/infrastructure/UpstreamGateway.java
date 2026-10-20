@@ -354,10 +354,34 @@ public class UpstreamGateway {
       java.util.function.Consumer<String> onDelta,
       AuthStyle authStyle,
       String reasoningEffort) {
+    return streamChatCompletion(
+        model, apiBase, apiKey, history, timeout, onDelta, authStyle, reasoningEffort, null);
+  }
+
+  /**
+   * 带用量回调的流式补全（{@code #142}）。
+   *
+   * <p>★ 兼容 OpenAI 的流式实现只在最后一个块里给 {@code usage}（需要请求体带 {@code stream_options.include_usage=true}）。
+   * 这里不攒正文，只在读到 {@code usage} 时把两个分量交给回调；装配器负责把多段用量相加。
+   *
+   * @param onUsage {@code null} = 调用方不关心用量；非 null 时每个带 {@code usage} 的帧回调一次
+   */
+  public boolean streamChatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta,
+      AuthStyle authStyle,
+      String reasoningEffort,
+      java.util.function.BiConsumer<Integer, Integer> onUsage) {
     Map<String, Object> payload = new java.util.LinkedHashMap<>();
     payload.put("model", model);
     payload.put("messages", history);
     payload.put("stream", true);
+    // ★ OpenAI 只有显式要求才在流末尾回 usage；不带这个字段时 done.tokens 仍会是 0（#142）。
+    payload.put("stream_options", Map.of("include_usage", true));
     if (reasoningEffort != null) {
       // ★ 只在能力允许时才带：ALWAYS_ON / NONE 不带，避免把"关不掉"伪装成"已关闭"
       payload.put("reasoning_effort", reasoningEffort);
@@ -400,6 +424,14 @@ public class UpstreamGateway {
           JsonNode delta = chunk.path("choices").path(0).path("delta").path("content");
           if (delta.isTextual() && !delta.asText().isEmpty()) {
             onDelta.accept(delta.asText());
+          }
+          JsonNode usage = chunk.path("usage");
+          if (onUsage != null && usage.isObject()) {
+            JsonNode prompt = usage.path("prompt_tokens");
+            JsonNode completion = usage.path("completion_tokens");
+            if (prompt.isNumber() && completion.isNumber()) {
+              onUsage.accept(prompt.asInt(), completion.asInt());
+            }
           }
         }
       }
