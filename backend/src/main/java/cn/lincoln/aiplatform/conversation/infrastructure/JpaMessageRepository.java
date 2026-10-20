@@ -1,11 +1,16 @@
 package cn.lincoln.aiplatform.conversation.infrastructure;
 
 import cn.lincoln.aiplatform.conversation.domain.Message;
+import jakarta.persistence.LockModeType;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 /**
  * Spring Data 的消息仓储。
@@ -34,4 +39,13 @@ public interface JpaMessageRepository extends JpaRepository<Message, UUID> {
    * <p>★ 排序由调用方经 {@code Pageable} 给（{@code createdAt asc, id asc}）—— 与上面那条**同源**。
    */
   Page<Message> findByConversationId(UUID conversationId, Pageable pageable);
+
+  /**
+   * ★ 行锁读：读时收敛陈旧 {@code GENERATING} 前先锁住这一行，避免把并发收尾刚写好的答案覆盖成 {@code FAILED}（{@code #182}）。
+   *
+   * <p>★ 锁的是 {@code cv_message} 的单行；收尾线程与读历史都走同一条行，后到者会等待并看到先到者写的终态。
+   */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("select m from Message m where m.id = :id")
+  Optional<Message> findByIdForUpdate(@Param("id") UUID id);
 }

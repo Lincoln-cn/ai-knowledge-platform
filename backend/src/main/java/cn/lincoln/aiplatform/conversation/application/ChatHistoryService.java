@@ -60,10 +60,14 @@ public class ChatHistoryService {
    *
    * <p>★ 一次 SQL 批量取（{@code storedFor}），不是逐条 —— 一页 20 条逐条查就是 20 次往返。
    *
+   * <p>★ 组装之前先 {@link StaleGeneratingReconciler#reconcile} 收敛陈旧的 {@code GENERATING} —— 视图里的 {@code
+   * status} 必须是收敛之后的值，否则前端读到的还是"生成中"。
+   *
    * @param page 这一页/窗口里的消息
    * @return 视图列表（顺序与入参一致）
    */
   private java.util.List<ChatMessageView> views(java.util.List<Message> page) {
+    StaleGeneratingReconciler.reconcile(messages, page);
     java.util.Map<java.util.UUID, java.util.List<String>> stored =
         suggestions.storedFor(page.stream().map(Message::id).toList());
     return page.stream()
@@ -82,7 +86,8 @@ public class ChatHistoryService {
    * @return 分页结果（{@code page} 回执的是**真正生效**的那一页）
    * @throws BusinessException 会话不存在 / 不属于当前用户（404）· {@code around} 目标不在该会话里（404）
    */
-  @Transactional(readOnly = true)
+  // ★ 不是 readOnly：读历史时会把陈旧的 GENERATING 就地收敛成 FAILED（Issue #182 根因 1）⇒ 要写库
+  @Transactional
   public PageResult<ChatMessageView> list(
       UUID conversationId, UUID userId, Integer page, Integer size, UUID around) {
     // ── ① 会话：看不见 ⇒ 404（与 ChatStopService 同一条）──

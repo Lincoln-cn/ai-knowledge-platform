@@ -818,6 +818,57 @@ class ChatStreamEventRecordingTest {
     }
   }
 
+  /**
+   * ★ Issue #182 根因 2：收尾线程被中断后仍要把终态落库。
+   *
+   * <p>形状：DONE 那一帧把当前线程的中断标志置上（模拟"收尾被打断过一次"），紧接着 {@code streamTurn} 的 finally 就要走 {@code
+   * persistTerminal} 落终态。修复前 {@code persistTerminal} 不清标志 ⇒ Hikari/JDBC 在拿连接或执行时抛 {@code
+   * InterruptedIOException} ⇒ 终态没写成，消息永久停在 GENERATING。修复后：入口先 {@code Thread.interrupted()}
+   * 清标志再落终态（落完在 finally 里把标志还回去）。
+   *
+   * <p>★ 读数是 {@link RecordingStore#finishSawInterrupt}：落库那一刻线程的中断标志必须是 {@code false}（修复前 {@code
+   * true}）。
+   */
+  @Test
+  void anInterruptedFinishingThreadStillPersistsTheTerminalState() {
+    Fixture fixture = new Fixture();
+    fixture.model.set(new ScriptedModel(0L, 0L, 6, SHORT_ANSWER));
+    ChatTurnWriter.PreparedTurn turn = fixture.prepare();
+    RecordingSink sink = new RecordingSink();
+    ChatService.EventSink interruptOnDone = new DoneInterruptingSink(sink);
+    try {
+      fixture.chatService().streamTurn(turn, QUESTION, interruptOnDone);
+    } finally {
+      // ★ 测试结束必须清掉中断标志，别污染 JUnit 的复用线程。
+      Thread.interrupted();
+    }
+
+    TerminalPersisted persisted = fixture.store.finishOf(turn.assistantMessageId());
+    assertThat(persisted).as("★ 收尾线程被中断也必须落终态（Issue #182 根因 2）：否则消息永久停在 GENERATING").isNotNull();
+    assertThat(fixture.store.finishSawInterrupt)
+        .as("★ 落终态时线程的中断标志必须已被清掉（修复前 true）：否则 Hikari/JDBC 抛 InterruptedIOException，终态根本没写成")
+        .isFalse();
+    assertThat(persisted.path()).isEqualTo(StreamTerminationPath.COMPLETE);
+  }
+
+  /** 最小 EventSink 委托：只拦 DONE，其余原样转发（不改生产接口）。 */
+  private static final class DoneInterruptingSink implements ChatService.EventSink {
+    private final ChatService.EventSink delegate;
+
+    DoneInterruptingSink(ChatService.EventSink delegate) {
+      this.delegate = delegate;
+    }
+
+    @Override
+    public void onEvent(StreamEvent event) {
+      delegate.onEvent(event);
+      if (event.kind() == EventKind.DONE) {
+        // ★ 模拟"收尾被打断过一次"：置上中断标志，随后 finally 里的 persistTerminal 就带着标志进场。
+        Thread.currentThread().interrupt();
+      }
+    }
+  }
+
   /** 会在收到终态那一帧时<strong>再走一次收尾</strong>的出口 —— 即"第二个收尾入口被调用"。 */
   private static final class ReentrantTerminalSink implements ChatService.EventSink {
 
@@ -853,6 +904,14 @@ class ChatStreamEventRecordingTest {
     }
 
     private final List<TerminalPersisted> terminals = new ArrayList<>();
+
+    /**
+     * ★ Issue #182 根因 2 的读数：收尾落库那一刻，线程的中断标志是什么。
+     *
+     * <p>修复前：收尾线程被中断后带着标志进 {@code persistTerminal} ⇒ 落库时 {@code true}。修复后：{@code persistTerminal}
+     * 入口先 {@code Thread.interrupted()} 清标志再落终态 ⇒ 落库时 {@code false}。
+     */
+    private volatile boolean finishSawInterrupt;
 
     @Override
     public ChatTurnWriter.PreparedTurn prepare(
@@ -890,6 +949,7 @@ class ChatStreamEventRecordingTest {
         long durationMs,
         String failReason,
         String failHint) {
+      finishSawInterrupt = Thread.currentThread().isInterrupted();
       terminals.add(
           new TerminalPersisted(
               messageId, path, fullTextSoFar, usage, durationMs, failReason, failHint));

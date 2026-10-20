@@ -205,6 +205,55 @@ class ChatHistoryHttpTest {
         .isEqualTo(404);
   }
 
+  /** ★ 边界：1 分钟前还在更新的 GENERATING 不能被误收敛 —— 收敛判据是「超过 10 分钟」，不是「只要是 GENERATING」。 */
+  @Test
+  void freshGeneratingMessageIsNotReconciled() throws Exception {
+    UUID conversationId = seedConversation(ADMIN_ID, "fresh generating fixture");
+    UUID fresh = seedMessageAt(conversationId, "ASSISTANT", "刚生成到一半", "GENERATING", 1);
+
+    String token = login("admin", "admin");
+    HttpResponse<String> response =
+        get("/api/v1/conversations/" + conversationId + "/messages", token);
+
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(response.body())
+        .as("★ 1 分钟前的 GENERATING 仍应保持 GENERATING，不能被误收敛")
+        .containsPattern("\"status\"\\s*:\\s*\"GENERATING\"");
+    assertThat(statusInDb(fresh)).as("★ 未超时的消息不得被写库").isEqualTo("GENERATING");
+  }
+
+  /**
+   * ★ Issue #182 根因 1：读到「超过 10 分钟没被收尾」的 GENERATING 消息时，就地收敛成 FAILED。
+   *
+   * <p>这条判据在修复前必红：读路径只把 status 原样映射进视图，消息会永久停在「生成中」。
+   */
+  @Test
+  void staleGeneratingMessageIsReconciledToFailedOnRead() throws Exception {
+    UUID conversationId = seedConversation(ADMIN_ID, "stale generating fixture");
+    String partialContent = "已经生成到一半的正文，收尾线程被中断了。";
+    UUID stale = seedMessageAt(conversationId, "ASSISTANT", partialContent, "GENERATING", 20);
+
+    String token = login("admin", "admin");
+    HttpResponse<String> response =
+        get("/api/v1/conversations/" + conversationId + "/messages", token);
+
+    assertThat(response.statusCode()).isEqualTo(200);
+    String body = response.body();
+
+    assertThat(body)
+        .as("★ 陈旧 GENERATING 必须在读取时收敛成 FAILED（Issue #182 根因 1）")
+        .containsPattern("\"status\"\\s*:\\s*\"FAILED\"");
+    assertThat(body)
+        .as("★ failReason 必须写清「生成中断」与「超过 10 分钟未收尾」")
+        .contains("生成中断")
+        .contains("超过 10 分钟未收尾");
+    assertThat(body).as("★ 已生成的部分正文必须保留").contains(partialContent);
+
+    assertThat(statusInDb(stale)).as("★ 收敛必须落库，不能只在视图里撒谎").isEqualTo("FAILED");
+    assertThat(failReasonInDb(stale)).as("★ failReason 必须落库").contains("生成中断");
+    assertThat(contentInDb(stale)).as("★ fail() 不得清空已生成正文").isEqualTo(partialContent);
+  }
+
   // ---------------------------- fixtures and readings ----------------------------
 
   private UUID seedConversation(UUID userId, String title) {
@@ -237,6 +286,44 @@ class ChatHistoryHttpTest {
         content,
         stepSeconds);
     return id;
+  }
+
+  /**
+   * Seed a message with an explicit status and updated_at（#182 的陈旧 GENERATING）。
+   *
+   * @param status cv_message.status 字面量
+   * @param updatedAtMinutesAgo updated_at = now() - N 分钟
+   */
+  private UUID seedMessageAt(
+      UUID conversationId, String role, String content, String status, int updatedAtMinutesAgo) {
+    UUID id = UUID.randomUUID();
+    jdbc.update(
+        "insert into cv_message (id, conversation_id, role, content, status, created_at,"
+            + " updated_at) values (?, ?, ?, ?, ?, now() - (? * interval '1 minute'),"
+            + " now() - (? * interval '1 minute'))",
+        id,
+        conversationId,
+        role,
+        content,
+        status,
+        updatedAtMinutesAgo,
+        updatedAtMinutesAgo);
+    return id;
+  }
+
+  private String statusInDb(UUID messageId) {
+    return jdbc.queryForObject(
+        "select status from cv_message where id = ?", String.class, messageId);
+  }
+
+  private String failReasonInDb(UUID messageId) {
+    return jdbc.queryForObject(
+        "select fail_reason from cv_message where id = ?", String.class, messageId);
+  }
+
+  private String contentInDb(UUID messageId) {
+    return jdbc.queryForObject(
+        "select content from cv_message where id = ?", String.class, messageId);
   }
 
   private String login(String username, String password) throws Exception {

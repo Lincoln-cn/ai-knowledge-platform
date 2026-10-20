@@ -18,6 +18,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 公开面（免登录）问答的<strong>编排入口</strong>（第 17 周 · 0.4.5）—— "同一台引擎换一个正当性入口"。
@@ -331,6 +332,7 @@ public class PublicChatService {
    * @return 该会话链上的全部消息（{@code created_at} 升序；**没有**则空列表）
    * @throws BusinessException 令牌四态之一 · 链接当前不可用（{@code 404}）
    */
+  @Transactional
   public List<ChatMessageView> listMessages(String rawToken, UUID requesterId) {
     PublicTokenResolver.PublicAccess link = resolveCredential(rawToken, requesterId);
     // ★ 与 resolve / startTurn / stopTurn 逐字同一条：可见性判定读的是 `currentScope()`，
@@ -346,8 +348,12 @@ public class PublicChatService {
     return conversations
         .findLatestByUserAndAssistant(link.subjectId(), link.assistantId())
         .map(
-            latest ->
-                messages.listByConversation(latest.id()).stream().map(ChatMessageView::of).toList())
+            latest -> {
+              List<Message> history = messages.listByConversation(latest.id());
+              // ★ 与登录面同一条读时收敛：公开页刷新同样不能永久停在“生成中”（#182）
+              StaleGeneratingReconciler.reconcile(messages, history);
+              return history.stream().map(ChatMessageView::of).toList();
+            })
         // ★ 还没问过 ⇒ **空列表**而不是 404：链接是好的，"这个人还没发过言"是正常状态
         //   （与"令牌无效 / 链接不可用"必须可分 —— 前者前端该显示空对话，后者该显示四态文案）
         .orElseGet(List::of);

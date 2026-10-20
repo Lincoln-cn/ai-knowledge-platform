@@ -781,36 +781,57 @@ public class ChatService {
     }
   }
 
-  /** 落库终态（状态 + 已生成文本 + 引用快照 + tokens）。 */
+  /**
+   * 落库终态（状态 + 已生成文本 + 引用快照 + tokens）。
+   *
+   * <p>★★ Issue #182 根因 2：收尾线程若带着<strong>中断标志</strong>进到这里（收尾被打断过一次）， Hikari/JDBC 会在拿连接或执行时抛 {@code
+   * InterruptedIOException} ⇒ <strong>终态根本没写成</strong>， 消息永久停在 {@code GENERATING}。所以：<b>入口先 {@link
+   * Thread#interrupted()} 清标志</b>， 落完终态后在 {@code finally} 里把标志恢复回去（异常路径也恢复）。
+   */
   private void persistTerminal(
       ChatTurnWriter.PreparedTurn turn,
       Run run,
       StreamTerminationPath path,
       long durationMs,
       boolean upstreamFailed) {
-    StreamEvent.StreamDoneEvent done = run.assembler.done();
-    if (done == null) {
-      // 理论上到不了（finish 一定产出 done）；真到了说明终态出口被绕过了 —— 留痕而不是静默
-      throw new IllegalStateException("收尾时没有 done 事件 —— 终态出口只能有一个（StreamAssembler#finish）");
+    // ★ 先清中断标志再落终态，否则消息会永远停在 GENERATING（Hikari/JDBC 见中断位就抛 InterruptedIOException）
+    boolean interrupted = Thread.interrupted();
+    if (interrupted) {
+      log.warn(
+          "收尾线程被中断，先清标志再落终态，否则消息会永远停在 GENERATING（会话 {} / 消息 {}）",
+          turn.conversationId(),
+          turn.assistantMessageId());
     }
-    turns.finish(
-        turn.assistantMessageId(),
-        path,
-        run.assembler.text(),
-        run.persistedChars,
-        run.refsBound ? run.refs : null,
-        done.tokens(),
-        durationMs,
-        failReasonFor(path, upstreamFailed ? run.lastFailReason : null),
-        failHintFor(path));
-    log.info(
-        "会话 {} 的助手消息 {} 收尾：{}（正文 {} 字，tokens {}，耗时 {}ms）",
-        turn.conversationId(),
-        turn.assistantMessageId(),
-        done.status(),
-        run.assembler.text().length(),
-        done.tokens().total(),
-        durationMs);
+    try {
+      StreamEvent.StreamDoneEvent done = run.assembler.done();
+      if (done == null) {
+        // 理论上到不了（finish 一定产出 done）；真到了说明终态出口被绕过了 —— 留痕而不是静默
+        throw new IllegalStateException("收尾时没有 done 事件 —— 终态出口只能有一个（StreamAssembler#finish）");
+      }
+      turns.finish(
+          turn.assistantMessageId(),
+          path,
+          run.assembler.text(),
+          run.persistedChars,
+          run.refsBound ? run.refs : null,
+          done.tokens(),
+          durationMs,
+          failReasonFor(path, upstreamFailed ? run.lastFailReason : null),
+          failHintFor(path));
+      log.info(
+          "会话 {} 的助手消息 {} 收尾：{}（正文 {} 字，tokens {}，耗时 {}ms）",
+          turn.conversationId(),
+          turn.assistantMessageId(),
+          done.status(),
+          run.assembler.text().length(),
+          done.tokens().total(),
+          durationMs);
+    } finally {
+      if (interrupted) {
+        // ★ 恢复中断位放在最末：异常路径也必须恢复，否则打断方（停止 / 超时）丢失自己的语义
+        Thread.currentThread().interrupt();
+      }
+    }
   }
 
   /** 失败原因：★ 与装配器发出去的 {@code error.reason} 同源（由它按路径合成）。 */
