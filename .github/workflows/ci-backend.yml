@@ -185,15 +185,21 @@ jobs:
         working-directory: backend
         run: mvn -B verify
 
-      # ★ 零用例闸门：`Tests run: 0` 一律按失败处理（Issue #53 判据 ① / #50 判据 ②）。
-      #   形态：`@BeforeAll` 里的 `assumeThat` 不成立 ⇒ JUnit **中止整个容器** ⇒ surefire 打出的正是
-      #   `Tests run: 0, Failures: 0, Errors: 0, Skipped: 0` + `BUILD SUCCESS` —— 不含 skip、不含失败、纯绿。
-      #   2026-10-11 实测：桩（11434）没起时 8 个依赖它的类全部以这种形态"绿"着（见 Issue #53）。
+      # ★ 零用例闸门：`Tests run: 0` 与「没有 `Tests run:` 行」一律按失败处理（Issue #53 / #50）。
+      #   `Tests run: 0` 的形态：`@BeforeAll` 里的 `assumeThat` 不成立 ⇒ JUnit **中止整个容器** ⇒
+      #   surefire 打出的正是 `Tests run: 0, Failures: 0, Errors: 0, Skipped: 0` + `BUILD SUCCESS`。
+      #   没有 `Tests run:` 行的形态（Issue #50）：`-Dtest=A,B` 没匹配到任何类，控制台零读数却 BUILD SUCCESS。
+      #   2026-10-11 实测：桩（11434）没起时 8 个依赖它的类全部以 `Tests run: 0` 形态"绿"着（见 Issue #53）。
       #   本 job 的桩在上面那一步已经起了（起不来会直接红），所以这些类**本该跑起来**：
       #   真出现 `Tests run: 0` 就是真问题，不是环境噪声。
       #   扫 surefire 报告目录（CI 每次全新 ⇒ 不存在"上一次留下的旧报告"）。
       - name: 零用例闸门
         run: python tools/check_zero_tests.py backend/target/surefire-reports
+
+      # ★ 闸门自己的反证：空目录 / 无 `Tests run:` / `Tests run: 0` 必须红，真读数必须绿。
+      #   没有这一步，"闸门能红"只是口头声明（Issue #50 判据 ①）。
+      - name: 零用例闸门自测（必须能红）
+        run: python tools/test_check_zero_tests.py
 
       - name: 失败时留测试报告
         if: failure()
