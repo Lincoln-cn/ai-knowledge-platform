@@ -1,6 +1,9 @@
 package cn.lincoln.aiplatform.conversation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.doAnswer;
 
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -43,7 +46,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -53,6 +55,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -172,6 +175,72 @@ class ChatStreamHttpTest {
 
   /** 每个用例自己装一个假模型（见 {@link FakeChatStreamPorts}）；{@code null} = 用兜底实现。 */
   @Autowired AtomicReference<ChatStreamPort> fakeModel;
+
+  /** 替换生产 {@code ChatStreamPort}（含 @Primary 的 UpstreamStreamingChatAdapter），避免两个 @Primary 冲突。 */
+  @MockitoBean ChatStreamPort chatStreamPort;
+
+  /** 测试端口分发：有假模型用假的；没有就报错（本类所有用例都会先 set）。 */
+  @org.junit.jupiter.api.BeforeEach
+  void wireChatStreamPort() {
+    doAnswer(
+        invocation -> {
+          ChatStreamPort port = requireFakeModel();
+          port.stream(
+              invocation.getArgument(0),
+              invocation.getArgument(1),
+              invocation.getArgument(2),
+              invocation.getArgument(3));
+          return null;
+        })
+        .when(chatStreamPort)
+        .stream(any(), any(), any(Duration.class), any());
+    doAnswer(
+        invocation -> {
+          ChatStreamPort port = requireFakeModel();
+          port.stream(
+              invocation.getArgument(0),
+              invocation.getArgument(1),
+              invocation.getArgument(2),
+              invocation.getArgument(3),
+              invocation.getArgument(4));
+          return null;
+        })
+        .when(chatStreamPort)
+        .stream(any(), any(), anyBoolean(), any(Duration.class), any());
+    doAnswer(
+            invocation -> {
+              ChatStreamPort port = requireFakeModel();
+              port.streamConversation(
+                  invocation.getArgument(0),
+                  invocation.getArgument(1),
+                  invocation.getArgument(2),
+                  invocation.getArgument(3));
+              return null;
+            })
+        .when(chatStreamPort)
+        .streamConversation(any(), any(), any(Duration.class), any());
+    doAnswer(
+            invocation -> {
+              ChatStreamPort port = requireFakeModel();
+              port.streamConversation(
+                  invocation.getArgument(0),
+                  invocation.getArgument(1),
+                  invocation.getArgument(2),
+                  invocation.getArgument(3),
+                  invocation.getArgument(4));
+              return null;
+            })
+        .when(chatStreamPort)
+        .streamConversation(any(), any(), anyBoolean(), any(Duration.class), any());
+  }
+
+  private ChatStreamPort requireFakeModel() {
+    ChatStreamPort port = fakeModel.get();
+    if (port == null) {
+      throw new IllegalStateException("测试没有装假模型：请在用例里先 fakeModel.set(...)");
+    }
+    return port;
+  }
 
   /**
    * 写失败的注入开关：{@code > 0} 时"写满这么多帧之后断一次"。
@@ -403,8 +472,8 @@ class ChatStreamHttpTest {
         .contains("\"index\":2")
         .doesNotContain("\"index\":3");
     assertThat(logMessagesOf(chatServiceLog))
-        .as("★ 兜底成功时**不是**一次降级：这一轮不许记『跳过 N 条』（否则日志会把合法数据读成脏数据）")
-        .noneMatch(message -> message.contains("跳过"));
+        .as("★ 兜底成功时**不是**一次降级：这一轮不许记『跳过 N 条引用』（否则日志会把合法数据读成脏数据）")
+        .noneMatch(message -> message.contains("本轮跳过") && message.contains("条引用"));
 
     String messageId = messageIdOf(response.frames());
     assertThat(refsInDb(messageId))
@@ -1419,51 +1488,6 @@ class ChatStreamHttpTest {
     @Bean
     AtomicReference<ChatStreamPort> fakeChatStreamPortHolder() {
       return new AtomicReference<>();
-    }
-
-    /**
-     * 真正被装配进 {@code ChatService} 的那一个：有假模型就用假的，没有就用真实的兜底实现。
-     *
-     * <p>★ {@code @Primary} 覆盖 {@code ChatPortFallbackStreamAdapter} 的
-     * {@code @ConditionalOnMissingBean} —— 于是"测试用假的、生产用真的"由容器装配决定， 业务代码里没有一行 if。
-     */
-    @Bean
-    @Primary
-    SwappableChatStreamPort swappableChatStreamPort(
-        AtomicReference<ChatStreamPort> holder, ObjectProvider<ChatStreamPort> allPorts) {
-      return new SwappableChatStreamPort(holder, allPorts);
-    }
-  }
-
-  /**
-   * 可替换的分发器（★ 具名类而不是 lambda：兜底实现要从"所有 {@code ChatStreamPort} bean"里挑出来，
-   * 而那个集合里<strong>包含它自己</strong> —— 按具名类型排除掉，否则就是无限递归）。
-   */
-  static final class SwappableChatStreamPort implements ChatStreamPort {
-
-    private final AtomicReference<ChatStreamPort> holder;
-    private final ObjectProvider<ChatStreamPort> allPorts;
-
-    SwappableChatStreamPort(
-        AtomicReference<ChatStreamPort> holder, ObjectProvider<ChatStreamPort> allPorts) {
-      this.holder = holder;
-      this.allPorts = allPorts;
-    }
-
-    @Override
-    public void stream(UUID modelId, String prompt, Duration timeout, Callback callback) {
-      ChatStreamPort port = holder.get();
-      if (port == null) {
-        port =
-            allPorts.stream()
-                .filter(candidate -> !(candidate instanceof SwappableChatStreamPort))
-                .findFirst()
-                .orElseThrow(
-                    () ->
-                        new IllegalStateException(
-                            "测试既没装假模型，兜底实现也不在容器里（ChatPortFallbackStreamAdapter 没被装配）"));
-      }
-      port.stream(modelId, prompt, timeout, callback);
     }
   }
 }

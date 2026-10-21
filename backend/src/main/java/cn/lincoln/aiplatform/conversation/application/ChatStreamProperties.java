@@ -12,11 +12,11 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *
  * <pre>
  *   HEARTBEAT_INTERVAL_MS = 20_000   // 心跳间隔
- *   IDLE_TIMEOUT_MS       = 60_000   // 前端闲置超时（一帧都没收到即判吊死）
+ *   IDLE_TIMEOUT_MS       = 300_000  // 前端闲置超时（一帧都没收到即判吊死；#181 从 60s 调大）
  *   ⇒ HEARTBEAT_INTERVAL_MS × 3 ≤ IDLE_TIMEOUT_MS（连续丢 2 个心跳仍不会被误判）
  * </pre>
  *
- * <p>★ 前端那 60s 是<strong>它自己的</strong>定时器；本类管的是<strong>服务端这一侧</strong>的同名两件事：
+ * <p>★ 前端那 300s 是<strong>它自己的</strong>定时器；本类管的是<strong>服务端这一侧</strong>的同名两件事：
  * 服务端也要有自己的"多久没写出东西就判这一轮生成完了/吊死了"（{@code 03 §1.5} 的 {@code IDLE_TIMEOUT} 是一条<strong>终止路径</strong>，
  * 不是只有前端才有的概念）。两侧取同一个数，是为了让"用户看到的超时"与"服务端收尾的时间"对得上 —— 差太多会出现 "界面已经报超时、后端还在往库里写"。
  *
@@ -30,7 +30,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *
  * <h3>★ 为什么允许被覆盖（而默认值等于契约值）</h3>
  *
- * <p>心跳 20s / 超时 60s 在人工盯着界面时是对的，但在自动化测试里"等 20 秒看一个注释帧"不可接受。
+ * <p>心跳 20s / 超时 300s 是生产契约值，但在自动化测试里"等 20 秒看一个注释帧"不可接受。
  * 覆盖是给测试与联调用的（{@code @TestPropertySource}），<strong>不是</strong>给生产随意调参 ——
  * 生产要改这两个数，等于同时要改契约里的两个常量，那是一次有意的契约变更。
  *
@@ -42,7 +42,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 @ConfigurationProperties(prefix = "app.chat")
 public record ChatStreamProperties(
     @DefaultValue("20000") long heartbeatIntervalMs,
-    @DefaultValue("60000") long idleTimeoutMs,
+    @DefaultValue("300000") long idleTimeoutMs,
     @DefaultValue("500") long flushIntervalMs,
     @DefaultValue("200") int flushChars) {
 

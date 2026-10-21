@@ -19,13 +19,14 @@ class UpstreamStreamingChatAdapterTest {
   void forwardsThinkingFlagToTheModelAdapter() {
     ChatModelAdapter chat = mock(ChatModelAdapter.class);
     UUID modelId = UUID.randomUUID();
-    when(chat.streamChat(eq(modelId), anyList(), eq(true), any(), any())).thenReturn(true);
+    when(chat.streamChat(eq(modelId), anyList(), eq(true), any(), any(), any())).thenReturn(true);
     ChatStreamPort.Callback callback = mock(ChatStreamPort.Callback.class);
 
     new UpstreamStreamingChatAdapter(chat)
         .stream(modelId, "问题", true, Duration.ofSeconds(5), callback);
 
-    verify(chat).streamChat(eq(modelId), anyList(), eq(true), eq(Duration.ofSeconds(5)), any());
+    verify(chat)
+        .streamChat(eq(modelId), anyList(), eq(true), eq(Duration.ofSeconds(5)), any(), any());
     verify(callback).onEnd(ChatStreamPort.End.COMPLETE, null);
   }
 }

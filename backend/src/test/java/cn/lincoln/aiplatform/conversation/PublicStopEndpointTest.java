@@ -1,6 +1,9 @@
 package cn.lincoln.aiplatform.conversation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.doAnswer;
 
 import cn.lincoln.aiplatform.conversation.support.AssistantGeneratedTextWait;
 import cn.lincoln.aiplatform.conversation.support.FakeChatStreamPorts;
@@ -28,9 +31,9 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -95,6 +98,77 @@ class PublicStopEndpointTest {
   /** 每个用例自己装一个假模型（见下面的配置类）。 */
   @Autowired AtomicReference<ChatStreamPort> fakeModel;
 
+  /** 替换生产 ChatStreamPort，避免测试 @Primary 与 UpstreamStreamingChatAdapter 的 @Primary 冲突。 */
+  @MockitoBean ChatStreamPort chatStreamPort;
+
+  @BeforeEach
+  void wireChatStreamPort() {
+    doAnswer(
+        invocation -> {
+          ChatStreamPort port = fakeModel.get();
+          if (port == null) {
+            throw new IllegalStateException("本用例没有装假模型（fixture 缺失）");
+          }
+          port.stream(
+              invocation.getArgument(0),
+              invocation.getArgument(1),
+              invocation.getArgument(2),
+              invocation.getArgument(3));
+          return null;
+        })
+        .when(chatStreamPort)
+        .stream(any(), any(), any(Duration.class), any());
+    doAnswer(
+        invocation -> {
+          ChatStreamPort port = fakeModel.get();
+          if (port == null) {
+            throw new IllegalStateException("本用例没有装假模型（fixture 缺失）");
+          }
+          port.stream(
+              invocation.getArgument(0),
+              invocation.getArgument(1),
+              invocation.getArgument(2),
+              invocation.getArgument(3),
+              invocation.getArgument(4));
+          return null;
+        })
+        .when(chatStreamPort)
+        .stream(any(), any(), anyBoolean(), any(Duration.class), any());
+    doAnswer(
+            invocation -> {
+              ChatStreamPort port = requireFakeModel();
+              port.streamConversation(
+                  invocation.getArgument(0),
+                  invocation.getArgument(1),
+                  invocation.getArgument(2),
+                  invocation.getArgument(3));
+              return null;
+            })
+        .when(chatStreamPort)
+        .streamConversation(any(), any(), any(Duration.class), any());
+    doAnswer(
+            invocation -> {
+              ChatStreamPort port = requireFakeModel();
+              port.streamConversation(
+                  invocation.getArgument(0),
+                  invocation.getArgument(1),
+                  invocation.getArgument(2),
+                  invocation.getArgument(3),
+                  invocation.getArgument(4));
+              return null;
+            })
+        .when(chatStreamPort)
+        .streamConversation(any(), any(), anyBoolean(), any(Duration.class), any());
+  }
+
+  private ChatStreamPort requireFakeModel() {
+    ChatStreamPort port = fakeModel.get();
+    if (port == null) {
+      throw new IllegalStateException("本用例没有装假模型（fixture 缺失）");
+    }
+    return port;
+  }
+
   /** ★ 直接观测信号残留（成因层读数）—— 不必绕真栈去猜"下一轮为什么被停"。 */
   @Autowired cn.lincoln.aiplatform.conversation.application.ChatStopSignal stopSignal;
 
@@ -135,9 +209,10 @@ class PublicStopEndpointTest {
     appId = UUID.randomUUID();
     jdbc.update(
         "insert into as_assistant (id, name, icon, description, type, model_id, owner_id,"
-            + " visibility, published, prologue, quick_questions, created_at, updated_at)"
+            + " visibility, published, retrieval_mode, retrieval_threshold, prologue,"
+            + " quick_questions, created_at, updated_at)"
             + " values (?, ?, '🤖', '公开停止夹具应用', 'SIMPLE', ?, ?, 'PRIVATE', true,"
-            + " '你好', array[]::text[], now(), now())",
+            + " 'FULLTEXT', 0.00, '你好', array[]::text[], now(), now())",
         appId,
         FIXTURE_PREFIX + "应用",
         chatModelId,
@@ -395,18 +470,6 @@ class PublicStopEndpointTest {
     @Bean
     AtomicReference<ChatStreamPort> fakeModel() {
       return new AtomicReference<>();
-    }
-
-    @Bean
-    @Primary
-    ChatStreamPort replaceableChatStreamPort(AtomicReference<ChatStreamPort> holder) {
-      return (modelId, prompt, timeout, callback) -> {
-        ChatStreamPort current = holder.get();
-        if (current == null) {
-          throw new IllegalStateException("本用例没有装假模型（fixture 缺失）");
-        }
-        current.stream(modelId, prompt, timeout, callback);
-      };
     }
   }
 

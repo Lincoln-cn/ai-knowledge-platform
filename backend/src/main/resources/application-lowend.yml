@@ -1,7 +1,7 @@
 spring:
   mvc:
     async:
-      # ★ 必须 > app.chat.idle-timeout-ms(240s)，否则 async 先砍、idle 那套永远轮不到
+      # ★ async 不设限（-1），是否吊死只由 app.chat.idle-timeout-ms(300s) 判定
       request-timeout: ${SSE_ASYNC_TIMEOUT:-1}
 # 低配预设（`--spring.profiles.active=lowend`）—— 面向「CPU 推理 + 小模型」这一档。
 #
@@ -57,10 +57,10 @@ app:
   #   为什么 60s 内一个字节都没有：平台是**先完整生成再回放**（ChatPortFallbackStreamAdapter
   #   用 complete() 模拟流式）⇒ 首字节 = 全量生成时间，期间没有任何 delta 可发。
   #
-  #   ⇒ 顺序必须是：async > idle > heartbeat×3
-  #       async 300s > idle 240s > 20s×3=60s  ✔
+  #   ⇒ 顺序必须是：async 不设限 > idle > heartbeat×3
+  #       async -1 > idle 300s > 20s×3=60s  ✔
   #   ★ 这不是"把超时调大就完了"：真正的修法是让流式**真的边生成边发**
   #     （Ollama 的 stream=true），那是一次独立改动；在那之前，长回答在这一档只能等更久。
   chat:
     heartbeat-interval-ms: ${CHAT_HEARTBEAT_MS:20000}
-    idle-timeout-ms: ${CHAT_IDLE_TIMEOUT_MS:240000}
+    idle-timeout-ms: ${CHAT_IDLE_TIMEOUT_MS:300000}

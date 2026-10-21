@@ -3,7 +3,7 @@ spring:
   #
   # 原来这里有**两个**上限打架（`#181` 的根因）：
   #   ① Spring MVC 的 async 默认 **30s**（本文件从未配置它）—— 它先砍；
-  #   ② 项目自己的 `ChatStreamProperties.idleTimeoutMs = 60s` + 20s 心跳 —— 永远轮不到。
+  #   ② 项目自己的 `ChatStreamProperties.idleTimeoutMs = 300s` + 20s 心跳 —— 永远轮不到。
   # 实测（CPU + qwen2.5:1.5b）：问答在 **30 秒整**断流，前端拿到 503，
   # 后端日志 `AsyncRequestTimeoutException at TimeoutCallableProcessingInterceptor`。
   #

@@ -1,6 +1,9 @@
 package cn.lincoln.aiplatform.conversation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.doAnswer;
 
 import cn.lincoln.aiplatform.conversation.application.ChatStreamWriter;
 import cn.lincoln.aiplatform.conversation.support.AssistantGeneratedTextWait;
@@ -25,17 +28,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -121,6 +124,75 @@ class ConversationStopEndpointTest {
 
   /** 每个用例自己装一个假模型；{@code null} = 用兜底实现（本类不用它）。 */
   @Autowired AtomicReference<ChatStreamPort> fakeModel;
+
+  /** 替换生产 ChatStreamPort，避免测试 @Primary 与 UpstreamStreamingChatAdapter 的 @Primary 冲突。 */
+  @MockitoBean ChatStreamPort chatStreamPort;
+
+  @BeforeEach
+  void wireChatStreamPort() {
+    doAnswer(
+        invocation -> {
+          ChatStreamPort port = fakeModel.get();
+          if (port == null) {
+            throw new IllegalStateException("测试没有装假模型");
+          }
+          port.stream(
+              invocation.getArgument(0),
+              invocation.getArgument(1),
+              invocation.getArgument(2),
+              invocation.getArgument(3));
+          return null;
+        })
+        .when(chatStreamPort)
+        .stream(any(), any(), any(Duration.class), any());
+    doAnswer(
+        invocation -> {
+          ChatStreamPort port = fakeModel.get();
+          if (port == null) {
+            throw new IllegalStateException("测试没有装假模型");
+          }
+          port.stream(
+              invocation.getArgument(0),
+              invocation.getArgument(1),
+              invocation.getArgument(2),
+              invocation.getArgument(3),
+              invocation.getArgument(4));
+          return null;
+        })
+        .when(chatStreamPort)
+        .stream(any(), any(), anyBoolean(), any(Duration.class), any());
+    doAnswer(
+            invocation -> {
+              ChatStreamPort port = fakeModel.get();
+              if (port == null) {
+                throw new IllegalStateException("测试没有装假模型");
+              }
+              port.streamConversation(
+                  invocation.getArgument(0),
+                  invocation.getArgument(1),
+                  invocation.getArgument(2),
+                  invocation.getArgument(3));
+              return null;
+            })
+        .when(chatStreamPort)
+        .streamConversation(any(), any(), any(Duration.class), any());
+    doAnswer(
+            invocation -> {
+              ChatStreamPort port = fakeModel.get();
+              if (port == null) {
+                throw new IllegalStateException("测试没有装假模型");
+              }
+              port.streamConversation(
+                  invocation.getArgument(0),
+                  invocation.getArgument(1),
+                  invocation.getArgument(2),
+                  invocation.getArgument(3),
+                  invocation.getArgument(4));
+              return null;
+            })
+        .when(chatStreamPort)
+        .streamConversation(any(), any(), anyBoolean(), any(Duration.class), any());
+  }
 
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -427,46 +499,13 @@ class ConversationStopEndpointTest {
     }
   }
 
-  /** 可替换的假模型（与 {@code ChatStreamHttpTest} 同一手法：依赖替换，生产代码一行不改）。 */
+  /** 可替换的假模型持有者。 */
   @TestConfiguration
   static class FakeModelConfig {
 
     @Bean
     AtomicReference<ChatStreamPort> fakeChatStreamPortHolder() {
       return new AtomicReference<>();
-    }
-
-    @Bean
-    @Primary
-    SwappableChatStreamPort swappableChatStreamPort(
-        AtomicReference<ChatStreamPort> holder, ObjectProvider<ChatStreamPort> allPorts) {
-      return new SwappableChatStreamPort(holder, allPorts);
-    }
-  }
-
-  /** ★ 具名类而不是 lambda：兜底实现要从"所有 {@code ChatStreamPort} bean"里挑，而那个集合里有它自己。 */
-  static final class SwappableChatStreamPort implements ChatStreamPort {
-
-    private final AtomicReference<ChatStreamPort> holder;
-    private final ObjectProvider<ChatStreamPort> allPorts;
-
-    SwappableChatStreamPort(
-        AtomicReference<ChatStreamPort> holder, ObjectProvider<ChatStreamPort> allPorts) {
-      this.holder = holder;
-      this.allPorts = allPorts;
-    }
-
-    @Override
-    public void stream(UUID modelId, String prompt, Duration timeout, Callback callback) {
-      ChatStreamPort port = holder.get();
-      if (port == null) {
-        port =
-            allPorts.stream()
-                .filter(candidate -> !(candidate instanceof SwappableChatStreamPort))
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("测试既没装假模型，兜底实现也不在容器里"));
-      }
-      port.stream(modelId, prompt, timeout, callback);
     }
   }
 
