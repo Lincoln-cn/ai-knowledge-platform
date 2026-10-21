@@ -122,7 +122,7 @@ class ConversationStopEndpointTest {
 
   @Autowired JdbcTemplate jdbc;
 
-  /** 每个用例自己装一个假模型；{@code null} = 用兜底实现（本类不用它）。 */
+  /** 每个用例自己装一个假模型；本类每个用例都必须先 set。 */
   @Autowired AtomicReference<ChatStreamPort> fakeModel;
 
   /** 替换生产 ChatStreamPort，避免测试 @Primary 与 UpstreamStreamingChatAdapter 的 @Primary 冲突。 */

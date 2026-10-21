@@ -173,7 +173,7 @@ class ChatStreamHttpTest {
 
   @Autowired ChatStopSignal stopSignal;
 
-  /** 每个用例自己装一个假模型（见 {@link FakeChatStreamPorts}）；{@code null} = 用兜底实现。 */
+  /** 每个用例自己装一个假模型（见 {@link FakeChatStreamPorts}）；本类每个用例都必须先 set。 */
   @Autowired AtomicReference<ChatStreamPort> fakeModel;
 
   /** 替换生产 {@code ChatStreamPort}（含 @Primary 的 UpstreamStreamingChatAdapter），避免两个 @Primary 冲突。 */

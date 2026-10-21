@@ -459,10 +459,10 @@ class PublicStopEndpointTest {
   // ────────────────────────── 假模型配置 ──────────────────────────
 
   /**
-   * 把"可替换的假模型"装成容器里那个 {@link ChatStreamPort}（与 {@code PublicChatHttpTest} 同一手法）。
+   * 只提供"当前用例的假模型"持有者；真正的 {@link ChatStreamPort} 由类上的 {@code @MockitoBean} 替换。
    *
-   * <p>★ {@code @Primary} 覆盖生产的兜底实现 {@code ChatPortFallbackStreamAdapter}：**业务代码里没有一行 if**
-   * ——"测试用假的、生产用真的"仍由容器装配决定。
+   * <p>★ 不能再注册一个 {@code @Primary ChatStreamPort}：生产侧 {@code UpstreamStreamingChatAdapter} 已经是
+   * {@code @Primary}，两个 primary 会让上下文起不来（{@code #200}）。测试选哪个实现由 {@code @MockitoBean} 决定。
    */
   @TestConfiguration
   static class ReplaceableFakeModelConfig {
