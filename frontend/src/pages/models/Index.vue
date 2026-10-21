@@ -675,7 +675,8 @@ const remove = async (model: ModelInfo) => {
   gap: var(--space-md);
   margin-bottom: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  border-left: 3px solid var(--color-accent-line);
+  border: 1px solid var(--color-accent-line);
+  border-radius: var(--radius-md);
   background: var(--color-accent-soft);
 }
 

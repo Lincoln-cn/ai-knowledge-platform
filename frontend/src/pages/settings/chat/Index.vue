@@ -533,7 +533,7 @@ onMounted(() => {
 }
 
 .dot.ok {
-  background: var(--color-success, #2f9e44);
+  background: var(--color-ok);
 }
 
 .dot.off {
@@ -541,7 +541,7 @@ onMounted(() => {
 }
 
 .dot.warn {
-  background: var(--color-warning, #e8590c);
+  background: var(--color-warn);
 }
 
 .meta-line {
@@ -579,8 +579,8 @@ onMounted(() => {
 }
 
 .badge-ok {
-  color: var(--color-success, #2f9e44);
-  background: color-mix(in srgb, var(--color-success, #2f9e44) 12%, transparent);
+  color: var(--color-ok);
+  background: color-mix(in srgb, var(--color-ok) 12%, transparent);
 }
 
 .badge-off {

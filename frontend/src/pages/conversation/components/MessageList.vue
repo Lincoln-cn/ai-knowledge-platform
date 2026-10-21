@@ -339,7 +339,7 @@ defineExpose({ scrollToBottom, scrollToMessage })
   place-items: center;
   border-radius: 50%;
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-accent-ink);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   letter-spacing: 0.02em;
