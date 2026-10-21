@@ -10,12 +10,13 @@ name: 前端 · 浏览器闸门
 #    ⇒ 拆完：静态/类型错 **1 分钟内**红；浏览器闸门红 **2 分钟内**出结果；
 #      而"构建 + dist 冒烟"不再拖累前两者。
 #
-#  ★ 本 workflow 只做一件事：**起 mock 模式的 dev server，跑 11 个确定性浏览器闸门**。
-#    ★ 刻意**不**放进来的两个（原 ci.yml 就有明确理由，照抄在这里）：
-#      · `verify_permissions.py` —— 仍有约 1/8 偶发（登录后不跳转），
-#        没弄清之前不接：随机红比不红更坏（会有人去改本来没错的东西）。跟踪 issue #14。
-#      · `check_flow_walkthrough.py` / `check_*.e2e` 那些 —— 它们要**真栈**，
-#        归 `ci-realstack.yml`。
+#  ★ 本 workflow 只做一件事：**起 mock 模式的 dev server，跑 12 个确定性浏览器闸门**。
+#    ★ `verify_permissions.py` 2026-10-21 起并入（issue #14）：登录等待改成
+#      「URL 离开 /login + `.shell` 挂上 + 工作台 h1 出现」三个信号，且登录失败
+#      立即跳出该账号，不再把 1 条登录问题放大成整片红。它必须用 `--base` 跑，
+#      因为接口层写门禁要 `import('/src/api/*.ts')`，dist 里没有 `/src/*`。
+#    ★ 仍然不放进来的：`check_flow_walkthrough.py` / `check_*.e2e` —— 它们要**真栈**，
+#      归 `ci-realstack.yml`。
 # ══════════════════════════════════════════════════════════════════════════════
 
 on:
@@ -30,9 +31,9 @@ concurrency:
 
 jobs:
   browser-gates:
-    name: 前端 · 11 个确定性闸门
+    name: 前端 · 12 个确定性闸门
     runs-on: ubuntu-latest
-    # ★ 实测 ~5 分钟（含装 playwright 34 秒、11 门 193 秒）。给 20 分钟上限：
+    # ★ 实测 ~5 分钟（含装 playwright 34 秒、12 门 193 秒）。给 20 分钟上限：
     #   超时会**明确红**而不是占满 6 小时。
     timeout-minutes: 20
     steps:
@@ -55,7 +56,7 @@ jobs:
         run: npm ci
 
       # ★ 实测结论（2026-09，本机两遍）：这 19 个 .py 里有 16 个 import playwright，
-      #   其中 14 个（3 个纯静态 + 11 个浏览器）两遍结果**完全一致**，可以当确定性闸门用；
+      #   其中 15 个（3 个纯静态 + 12 个浏览器）两遍结果**完全一致**，可以当确定性闸门用；
       #   另外 3 个当前 flaky，**故意不放在这里**。
       - name: 装 playwright 浏览器（Python 侧）
         run: |
@@ -90,20 +91,26 @@ jobs:
       # ★★ 逐条跑完并记账，**不让第一个失败遮蔽其余**（issue #19）。
       #
       #   这些闸门是互相独立的信号。用 shell 的 `set -e`（GHA 默认）串起来，等于
-      #   "第一个坏了就再也看不到后面 10 条" —— 实测代价：2026-09-28 起 `check_nodeconfig.py`
+      #   "第一个坏了就再也看不到后面 11 条" —— 实测代价：2026-09-28 起 `check_nodeconfig.py`
       #   超时，于是 check_node_menu / check_canvas / … 共 9 条**连续一周多从没在 CI 里执行过**，
-      #   工作流里却写着"11 个确定性闸门"。那也是一种"看起来在做、实际没生效"。
+      #   工作流里却写着"12 个确定性闸门"。那也是一种"看起来在做、实际没生效"。
       #
       #   ★ 判据没有弱化：任一条红，这一步最后照样 exit 1。变的是"红的时候能不能看见全貌"。
-      - name: 浏览器闸门（11 个确定性闸门）
+      - name: 浏览器闸门（12 个确定性闸门）
         working-directory: frontend
         run: |
           failed=()
           for g in check_theme check_nodeconfig check_node_menu check_canvas check_collapse \
                    check_history check_palette check_pickers check_assistants check_singleton \
-                   check_publish; do
+                   check_publish verify_permissions; do
             echo "::group::${g}.py"
-            if python "${g}.py"; then
+            # verify_permissions 必须跑 dev server：接口层写门禁要 import /src/api/*.ts
+            if [ "${g}" = "verify_permissions" ]; then
+              cmd=(python "${g}.py" --base http://localhost:5280/)
+            else
+              cmd=(python "${g}.py")
+            fi
+            if "${cmd[@]}"; then
               echo "✓ ${g}.py 通过"
             else
               echo "::error::${g}.py 失败"
@@ -112,10 +119,10 @@ jobs:
             echo "::endgroup::"
           done
           if [ ${#failed[@]} -gt 0 ]; then
-            echo "★ 失败 ${#failed[@]}/11：${failed[*]}"
+            echo "★ 失败 ${#failed[@]}/12：${failed[*]}"
             exit 1
           fi
-          echo "11 个浏览器闸门全部通过"
+          echo "12 个浏览器闸门全部通过"
 
       # ★ 失败时留现场：这些闸门出错时会往 `frontend/screenshots/` 写截图，
       #   没有它就得让人去猜"当时页面长什么样"。
