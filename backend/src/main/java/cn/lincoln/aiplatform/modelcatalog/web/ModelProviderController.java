@@ -56,18 +56,21 @@ public class ModelProviderController {
   }
 
   @PostMapping
+  @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<ModelProviderView> create(
       @RequestBody ProviderBody body, @AuthenticationPrincipal Jwt jwt) {
     return ApiResponse.ok(providers.create(body.toDraft(), UUID.fromString(jwt.getSubject())));
   }
 
   @PutMapping("/{id}")
+  @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<ModelProviderView> update(
       @PathVariable UUID id, @RequestBody ProviderBody body, @AuthenticationPrincipal Jwt jwt) {
     return ApiResponse.ok(providers.update(id, body.toDraft(), UUID.fromString(jwt.getSubject())));
   }
 
   @PatchMapping("/{id}/enabled")
+  @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<ModelProviderView> setEnabled(
       @PathVariable UUID id, @RequestBody EnabledBody body, @AuthenticationPrincipal Jwt jwt) {
     return ApiResponse.ok(
@@ -75,12 +78,14 @@ public class ModelProviderController {
   }
 
   @PostMapping("/{id}/key")
+  @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<ModelProviderView> setKey(
       @PathVariable UUID id, @RequestBody KeyBody body, @AuthenticationPrincipal Jwt jwt) {
     return ApiResponse.ok(providers.setKey(id, body.apiKey(), UUID.fromString(jwt.getSubject())));
   }
 
   @DeleteMapping("/{id}/key")
+  @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<ModelProviderView> clearKey(
       @PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
     return ApiResponse.ok(providers.clearKey(id, UUID.fromString(jwt.getSubject())));
@@ -88,12 +93,14 @@ public class ModelProviderController {
 
   /** 测试已保存的服务商（只读探测，不写库）。 */
   @PostMapping("/{id}/test")
+  @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<ProviderTestResult> test(@PathVariable UUID id) {
     return ApiResponse.ok(providers.test(id));
   }
 
   /** 一键绑定 JAiRouter：先探再写；探不通不落库。 */
   @PostMapping("/quick-bind")
+  @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<ModelProviderService.QuickBindResult> quickBind(
       @RequestBody(required = false) QuickBindBody body, @AuthenticationPrincipal Jwt jwt) {
     String apiBase = body == null ? null : body.apiBase();
@@ -102,6 +109,7 @@ public class ModelProviderController {
   }
 
   @DeleteMapping("/{id}")
+  @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<Void> delete(@PathVariable UUID id) {
     providers.delete(id);
     return ApiResponse.ok();
