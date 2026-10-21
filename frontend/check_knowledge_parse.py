@@ -12,6 +12,10 @@
     真栈后端若尚未在 DocumentView 出网 parsedContent，结构断言会给出可定位的差异信息
     （而不是静默跳过）。
 
+★ 真栈夹具上传后**必须轮询到解析终态**再进 UI（Issue #170）：解析是异步的，固定 sleep 会让
+  `structured.docx` 偶尔还没出 `parsedContent`，闸门就红在「解析结果为空」——时好时坏比常红更坏。
+  这里轮询的是**状态**（`SUCCEEDED` / 两个失败态），不是固定时长；轮询有上限，超时仍按失败处理。
+
 用法：python check_knowledge_parse.py [base]
 """
 from __future__ import annotations
@@ -89,6 +93,35 @@ def api_multipart(path: str, token: str, fields: dict[str, str], file) -> dict:
         return {"code": -1, "message": str(e)}
 
 
+def wait_document(
+    kb_id: str,
+    doc_id: str,
+    token: str,
+    expect_success: bool,
+    timeout: float = 90.0,
+) -> dict:
+    """轮询文档解析终态，不用固定 sleep（Issue #170）。
+
+    ★ 解析是异步的：上传接口返回时文档通常还在 `PENDING_PARSE`。判据必须是
+    「状态到终态」而不是「等了几秒」；超时返回最后一次读数，让调用方把 status 写进失败信息。
+    """
+    deadline = time.monotonic() + timeout
+    last: dict = {}
+    while time.monotonic() < deadline:
+        docs = api_json("GET", f"/knowledge-bases/{kb_id}/documents?page=1&size=50", token)
+        rows = (docs.get("data") or {}).get("list") or []
+        last = next((d for d in rows if d.get("id") == doc_id), {}) or last
+        status = last.get("status")
+        if status == "SUCCEEDED":
+            return last
+        if not expect_success and status in ("SEGMENT_FAILED", "EMBEDDING_FAILED"):
+            # 终态已到；失败原因可能在同一事务里刚写，最多再多等一轮
+            if last.get("failReason") and last.get("failHint"):
+                return last
+        time.sleep(0.5)
+    return last
+
+
 def main() -> int:
     ok: list[tuple[bool, str]] = []
 
@@ -99,6 +132,8 @@ def main() -> int:
     token = ""
     fixture_kb_id: str | None = None
     fixture_model_id: str | None = None
+    fixture_doc_id: str | None = None
+    fixture_bad_id: str | None = None
     try:
         with sync_playwright() as pw:
             b = pw.chromium.launch(channel="chrome")
@@ -180,6 +215,25 @@ def main() -> int:
                     )
                     fixture_bad_id = ((bad_doc.get("data") or [{}])[0]).get("id")
                     print(f"   夹具：上传 empty.docx（预期解析失败）→ doc={fixture_bad_id}")
+
+                    # ★ 异步解析必须等到终态（Issue #170）；超时仍按失败处理，不能靠固定 sleep
+                    if fixture_doc_id:
+                        structured_state = wait_document(fixture_kb_id, fixture_doc_id, token, True)
+                        check(
+                            structured_state.get("status") == "SUCCEEDED",
+                            "结构化样张解析到终态"
+                            f"（status={structured_state.get('status')!r},"
+                            f" chars={len(structured_state.get('parsedContent') or '')}）",
+                        )
+                    if fixture_bad_id:
+                        bad_state = wait_document(fixture_kb_id, fixture_bad_id, token, False)
+                        check(
+                            bad_state.get("status") in ("SEGMENT_FAILED", "EMBEDDING_FAILED")
+                            and bool(bad_state.get("failReason"))
+                            and bool(bad_state.get("failHint")),
+                            "空文档解析到失败终态且原因可读"
+                            f"（status={bad_state.get('status')!r}）",
+                        )
 
             # ────────────── 进入知识库 → 文档面板 ──────────────
             page.goto(f"{BASE}/#/knowledge", wait_until="networkidle")
