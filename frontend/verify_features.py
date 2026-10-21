@@ -85,15 +85,47 @@ def main() -> int:
             page.fill("input[autocomplete='username']", "admin")
             page.fill("input[autocomplete='current-password']", "admin")
             page.click("button:has-text('登录')")
+            # ★ #54：等登录后的**壳**真的挂上，而不是固定 800ms。
+            #   路由跳转 + 首屏 chunk 未完成时就去 `#/knowledge`，会与正在进行的
+            #   router.push 抢同一个导航，偶尔落到「壳没挂上/列表没请求」的状态，
+            #   后面所有依赖 mock 数据的页面一起红。等 `.shell` 是等信号。
+            page.wait_for_url(lambda url: "#/login" not in url, timeout=15000)
+            page.wait_for_selector(".shell", timeout=15000)
+            # 壳挂上 ≠ 落地页子路由已挂上；首屏 h1 是「工作台」这一页独有的锚点。
+            page.locator("h1", has_text="工作台").first.wait_for(timeout=15000)
             settle(800)
 
             def goto(path, wait=1600):
                 page.goto(BASE + "#" + path, wait_until="networkidle")
                 settle(wait)
                 return page.inner_text("body")
+
+            def wait_list_terminal(timeout=15000):
+                """等列表进入「有内容 / 空态 / 错误态」三者之一，且 loading 已消失。
+
+                ★ #54：本机偶发「知识库 0 项」时，旧写法只等固定时长/网络静默；
+                  路由组件还没挂载时页面上没有 loading 遮罩，也会被当成「空列表」。
+                  这里等的是**终态信号**，超时就直接说明「没进入终态」，不冒充空数据。
+                """
+                page.wait_for_function(
+                    """() => {
+                        const cards = document.querySelectorAll('.el-card, tbody tr').length;
+                        const terminal = document.querySelector('.empty, .error-state');
+                        const loading = document.querySelector('.el-loading-mask');
+                        return (cards > 0 || terminal) && !loading;
+                    }""",
+                    timeout=timeout,
+                )
+
             # ── 知识库：四步向导 ──
             def kb_list():
-                body = goto("/knowledge")
+                goto("/knowledge")
+                try:
+                    wait_list_terminal()
+                except Exception as exc:  # noqa: BLE001
+                    check(False, "知识库：列表进入终态", f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]}")
+                    return
+                body = page.inner_text("body")
                 check("知识库" in body, "知识库：页面渲染", "")
                 check(page.locator(".el-card, tbody tr").count() > 0, "知识库：有列表内容",
                       f"{page.locator('.el-card, tbody tr').count()} 项")
