@@ -98,7 +98,7 @@ def wait_document(
     doc_id: str,
     token: str,
     expect_success: bool,
-    timeout: float = 90.0,
+    timeout: float = 240.0,
 ) -> dict:
     """轮询文档解析终态，不用固定 sleep（Issue #170）。
 

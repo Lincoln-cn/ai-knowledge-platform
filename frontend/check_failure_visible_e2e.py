@@ -125,7 +125,7 @@ def seed_app() -> str:
             "kbIds": [kb_id] if kb_id else [],
             "rolePrompt": "你是知识助理，请基于参考资料回答。",
             "promptIds": [],
-            "retrieval": {"mode": "HYBRID", "topK": 5, "scoreThreshold": 0},
+            "retrieval": {"mode": "HYBRID", "topK": 5, "threshold": 0},
             "multiTurn": True,
             "thinkingEnabled": False,
             "prologue": "",
