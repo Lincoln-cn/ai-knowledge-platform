@@ -1,6 +1,8 @@
 package cn.lincoln.aiplatform.conversation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 import cn.lincoln.aiplatform.conversation.application.ChatService;
 import cn.lincoln.aiplatform.conversation.application.ConversationListService;
@@ -9,15 +11,21 @@ import cn.lincoln.aiplatform.conversation.domain.ConversationRepository;
 import cn.lincoln.aiplatform.conversation.domain.Message;
 import cn.lincoln.aiplatform.conversation.domain.MessageRepository;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.platform.assistant.AppBindingPort;
+import cn.lincoln.aiplatform.platform.assistant.AppBindingPort.AppBinding;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import cn.lincoln.aiplatform.support.SecurityContexts;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -71,6 +79,30 @@ class ConversationListTest {
   @Autowired ConversationRepository conversations;
 
   @Autowired MessageRepository messages;
+
+  @MockitoBean AppBindingPort appBindings;
+
+  /**
+   * 本类验“列表只给我自己的 / 按域分离 / 新建落库”，不验应用可见性。
+   *
+   * <p>★ 应用夹具是随机 UUID，库里没有 {@code as_assistant} 行；生产实现会按“不存在或看不见”返回空并抛“应用不存在”。 这里替换端口，让任意 appId
+   * 都返回一个绑定。
+   */
+  @BeforeEach
+  void allowAnyAppIsVisible() {
+    when(appBindings.findVisibleById(any()))
+        .thenAnswer(
+            invocation ->
+                Optional.of(
+                    new AppBinding(
+                        invocation.getArgument(0),
+                        null,
+                        List.of(),
+                        false,
+                        false,
+                        "",
+                        RetrievalParams.platformDefaults())));
+  }
 
   @Test
   void listReturnsOnlyMyOwnConversations() {
