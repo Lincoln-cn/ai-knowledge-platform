@@ -255,6 +255,9 @@ class MessageContractCrossCheckTest {
    * <p>★★ 2026-10-17（{@code #143} 同批）：只读口从两个长到四个 —— {@code listByConversation}（整条会话）· {@code
    * slice}（常规分页档）· {@code windowAround}（{@code around} 档） 都是登录面历史消息端点要用的读法。★ 写入口**仍然只有一个** {@code
    * save}， 这条断言守的那件事（状态机判断在领域对象里、不在 SQL 里）一个字都没变。
+   *
+   * <p>★ 2026-10-21（{@code #182}）：加 {@code findByIdForUpdate} —— 读时收敛陈旧 GENERATING 要对单行加写锁，
+   * 它是只读口（行锁不是状态写入），写入口仍只有 {@code save}。
    */
   @Test
   void repositoryPortKeepsASingleWritePath() {
@@ -263,6 +266,6 @@ class MessageContractCrossCheckTest {
         .filteredOn(m -> !m.isSynthetic())
         .extracting(java.lang.reflect.Method::getName)
         .containsExactlyInAnyOrder(
-            "save", "findById", "listByConversation", "slice", "windowAround");
+            "save", "findById", "findByIdForUpdate", "listByConversation", "slice", "windowAround");
   }
 }

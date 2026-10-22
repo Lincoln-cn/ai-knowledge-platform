@@ -63,6 +63,16 @@ public final class Permissions {
   public static final String CONVERSATION_SHARE = "conversation:share";
   public static final String CONVERSATION_MANAGE = "conversation:manage";
 
+  /**
+   * 配置「对话设置」（默认模型 / 初始提示词 / 召回开关与阈值 / 流式超时）。
+   *
+   * <p>★ 单开一个权限点而不是复用 {@code system:manage}： 后者是「整个系统管理」的开关（组织、角色、字典、系统参数全在里面），
+   * 而「允许某人调召回阈值」是一件**比系统管理窄得多**的事 —— 复用会把管理员权限切成两半（要么全给、要么不给），于是只能再找一个管理员。
+   *
+   * <p>★ 默认只有 ADMIN 拥有（见下方的 ADMIN 集合）；其它角色需要在角色管理里显式勾选。
+   */
+  public static final String CONVERSATION_SETTINGS = "conversation:settings";
+
   // ── 模型（1）· 运营（2）· 系统（1）──
   public static final String MODEL_MANAGE = "model:manage";
   public static final String DASHBOARD_VIEW = "dashboard:view";
@@ -91,6 +101,7 @@ public final class Permissions {
           CONVERSATION_VIEW,
           CONVERSATION_SHARE,
           CONVERSATION_MANAGE,
+          CONVERSATION_SETTINGS,
           MODEL_MANAGE,
           DASHBOARD_VIEW,
           FEEDBACK_HANDLE,

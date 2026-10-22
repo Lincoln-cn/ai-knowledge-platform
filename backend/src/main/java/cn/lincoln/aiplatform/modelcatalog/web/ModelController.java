@@ -82,10 +82,34 @@ public class ModelController {
   @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<List<BaseModelOption>> baseModels(@RequestBody BaseModelsBody body) {
     ModelService.BaseModelCatalog catalog =
-        modelService.baseModels(body.supplier(), body.kind(), body.apiBase(), body.apiKey());
+        modelService.baseModels(
+            body.supplier(),
+            body.kind(),
+            uuidOrNull(body.providerId(), "服务商"),
+            body.apiBase(),
+            body.apiKey());
     return catalog.hint() == null
         ? ApiResponse.ok(catalog.options())
         : ApiResponse.okWithHint(catalog.options(), catalog.hint());
+  }
+
+  /**
+   * 本地 ONNX（进程内向量化）的真实状态。
+   *
+   * <p>★ `ai_model.status` 是上游加载生命周期，不能冒充它（`#191`）。模型管理页据此显示「就绪 / 尚未预热 / 文件缺失 /
+   * 加载失败」，而不是把进程内模型标成「未加载」。
+   */
+  @GetMapping("/local-onnx")
+  @PreAuthorize("hasAuthority('model:manage')")
+  public ApiResponse<ModelService.LocalOnnxStatus> localOnnxStatus() {
+    return ApiResponse.ok(modelService.localOnnxStatus());
+  }
+
+  /** 预热本地 ONNX（初始化 ONNX session）。★ 对进程内模型来说，这才是「加载」的正确含义。 */
+  @PostMapping("/local-onnx/warmup")
+  @PreAuthorize("hasAuthority('model:manage')")
+  public ApiResponse<ModelService.LocalOnnxStatus> warmUpLocalOnnx() {
+    return ApiResponse.ok(modelService.warmUpLocalOnnx());
   }
 
   // ────────────────────────── 注册 CRUD ──────────────────────────
@@ -148,7 +172,8 @@ public class ModelController {
   @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<ModelCapability> probeBaseModel(@RequestBody ProbeBaseModelBody body) {
     return ApiResponse.ok(
-        modelService.probeBaseModel(body.baseModel(), body.supplier(), body.kind()));
+        modelService.probeBaseModel(
+            body.baseModel(), body.supplier(), uuidOrNull(body.providerId(), "服务商"), body.kind()));
   }
 
   // ────────────────────────── 请求体 ──────────────────────────
@@ -165,6 +190,7 @@ public class ModelController {
       ModelKind kind,
       Supplier supplier,
       @NotBlank String baseModel,
+      String providerId,
       String apiBase,
       String apiKey,
       Integer dimension,
@@ -174,13 +200,24 @@ public class ModelController {
 
     ModelService.UpsertCommand toCommand() {
       return new ModelService.UpsertCommand(
-          name, kind, supplier, baseModel, apiBase, apiKey, dimension, null, thinking, tools,
+          name,
+          kind,
+          supplier,
+          baseModel,
+          uuidOrNull(providerId, "服务商"),
+          apiBase,
+          apiKey,
+          dimension,
+          null,
+          thinking,
+          tools,
           remark);
     }
   }
 
   /** 探测能力的请求体（契约 {@code ProbeBaseModelBody}）。 */
-  record ProbeBaseModelBody(@NotBlank String baseModel, Supplier supplier, ModelKind kind) {}
+  record ProbeBaseModelBody(
+      @NotBlank String baseModel, Supplier supplier, String providerId, ModelKind kind) {}
 
   /**
    * 基础模型目录的请求体（契约 {@code listBaseModels} 入参）。
@@ -190,5 +227,21 @@ public class ModelController {
    * @param apiBase 指定上游服务地址；为空走默认上游
    * @param apiKey 上游 API key；为空用默认 key
    */
-  record BaseModelsBody(String supplier, String kind, String apiBase, String apiKey) {}
+  record BaseModelsBody(
+      String supplier, String kind, String providerId, String apiBase, String apiKey) {}
+
+  /** 契约里的 id 是字符串；空串当“没传”，非法值给可读 400（而不是 Jackson 的开发者消息）。 */
+  private static UUID uuidOrNull(String raw, String field) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return UUID.fromString(raw.trim());
+    } catch (IllegalArgumentException e) {
+      throw new cn.lincoln.aiplatform.platform.domain.BusinessException(
+          cn.lincoln.aiplatform.platform.domain.ErrorCode.BAD_REQUEST,
+          field + "的 id 不是合法 UUID，收到：" + raw,
+          "请从服务商列表里重新选择");
+    }
+  }
 }

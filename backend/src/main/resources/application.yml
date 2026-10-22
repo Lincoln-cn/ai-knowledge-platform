@@ -1,4 +1,20 @@
 spring:
+  # ★★ SSE 只保留**一个**权威上限：`app.chat.idle-timeout-ms`
+  #
+  # 原来这里有**两个**上限打架（`#181` 的根因）：
+  #   ① Spring MVC 的 async 默认 **30s**（本文件从未配置它）—— 它先砍；
+  #   ② 项目自己的 `ChatStreamProperties.idleTimeoutMs = 300s` + 20s 心跳 —— 永远轮不到。
+  # 实测（CPU + qwen2.5:1.5b）：问答在 **30 秒整**断流，前端拿到 503，
+  # 后端日志 `AsyncRequestTimeoutException at TimeoutCallableProcessingInterceptor`。
+  #
+  # ⇒ 这里设 **-1（不设限）**，让「多久没字节写出才判吊死」只由 idle 决定。
+  #   ★ 为什么不是"把 async 调得比 idle 大"：那仍然要求**两个数永远保持顺序**，
+  #     而 config 是可以分别改的 —— 这种"靠人记住两个数的关系"的约束，迟早会被改坏。
+  #   ★ 代价：async 层不再兜底。真正的兜底在 `ChatService` 的 idle 判定
+  #     （它按时钟判、且会把终态落库，比容器层的中断干净得多）。
+  mvc:
+    async:
+      request-timeout: ${SSE_ASYNC_TIMEOUT:-1}
   # 上传体积上限（`FR-03-05-3`：单文件 100MB）。
   # ★★ 不配的话 Boot 默认 **1MB** —— 实测 16 个语料里 ≥1368KB 的全部返回 500，
   #   而设计书写的是 100MB（差了 100 倍，且 500 会让人误以为"服务端坏了"从而反复重试）。
@@ -51,6 +67,41 @@ spring:
       api-key: ${AI_API_KEY:ollama-local}
 
 app:
+  # ─── 进程内 ONNX 向量化（`#172`）───
+  #
+  # ★★ 默认模型 = `multilingual-e5-small`（**中英双语**，384 维，int8 112.8MB）。
+  #    选它的依据是实测，不是偏好：同一套 16 份语料 + 12 条问答对，只换模型
+  #      bge-small-zh-v1.5（22.9MB / 512 维）     → 命中 6/12（50%），英文文档 1/6
+  #      multilingual-e5-small（112.8MB / 384 维） → 命中 10/12（83%），英文文档 5/6
+  #    读数与复现步骤见 `models/README.md` 第八节。
+  # ★ 代价：体积是中文单语模型的 ~5 倍（多语模型的词表大，embedding 矩阵在量化件里仍是 fp32）。
+  # ★ 模型文件**不进仓库**（`models/*` 被 .gitignore 忽略），落盘步骤见 `models/README.md`。
+  embedding:
+    local:
+      enabled: ${LOCAL_ONNX_ENABLED:true}
+      model-path: ${LOCAL_ONNX_MODEL_PATH:models/multilingual-e5-small/model_quantized.onnx}
+      tokenizer-path: ${LOCAL_ONNX_TOKENIZER_PATH:models/multilingual-e5-small/tokenizer.json}
+      # ★★ 这个名字是**路由判据**（`RoutingEmbeddingAdapter` 按 baseModel 名分派）：
+      #    知识库里登记的 `baseModel` 必须与它一致，否则那条模型会去连上游 11434。
+      model-name: ${LOCAL_ONNX_MODEL_NAME:multilingual-e5-small}
+
+  # ─── 检索链路的时间预算与低配开关（`10 §6.2` 第 6 项）───
+  #
+  # ★★ 这两项原先是写死的 5s 常量：GPU + 7B 上够用，而 **CPU + 1.5B** 上一次查询理解
+  #    实测 4–5s（重试一次共 7.9s）⇒ 5s 总预算在**第 0 路**就耗尽，日志是
+  #    `检索预算 5000ms 已耗尽（已跑 0 路）`，随后整条链路降级成单路。
+  #    默认值**保持 5000**（不改变已有部署行为）；低配用 `--spring.profiles.active=lowend`。
+  retrieval:
+    # 单次"查询理解"（改写/拆子问题）调用的超时
+    query-understanding-budget-ms: ${RETRIEVAL_QU_BUDGET_MS:5000}
+    # 检索阶段总预算：每一路开始前检查余量，耗尽就用已拿到的结果继续
+    total-budget-ms: ${RETRIEVAL_TOTAL_BUDGET_MS:5000}
+    # 多跳的"该收手了"水位（0.6 = 用掉 60% 就不再开新一轮，10 §6.3）
+    hop-budget-ratio: ${RETRIEVAL_HOP_BUDGET_RATIO:0.6}
+    # ★ 低配可关：关掉则**主动单路**（degradeLevel 保持 0，不是"降级"）
+    query-understanding-enabled: ${RETRIEVAL_QU_ENABLED:true}
+    # ★ 低配可关：解析失败时不再调第二次模型（CPU 上省 4–5s）
+    query-understanding-retry-on-parse-failure: ${RETRIEVAL_QU_RETRY:true}
   security:
     jwt:
       # ★ 必须是 URL 形式，不能是 "ai-knowledge-platform" 这样的裸串 ——

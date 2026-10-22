@@ -2,13 +2,19 @@ package cn.lincoln.aiplatform.modelcatalog;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
+import cn.lincoln.aiplatform.modelcatalog.domain.ProviderEgress;
+import cn.lincoln.aiplatform.modelcatalog.domain.ResolvedUpstream;
 import cn.lincoln.aiplatform.modelcatalog.domain.Supplier;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.ChatModelAdapter;
+import cn.lincoln.aiplatform.modelcatalog.infrastructure.ModelUpstreamResolver;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.UpstreamGateway;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import java.time.Duration;
@@ -41,6 +47,7 @@ class ChatModelAdapterTest {
   record Sample(Boolean sufficient, String nextQuery) {}
 
   private final RecordingGateway gateway = new RecordingGateway();
+  private final ModelUpstreamResolver upstream = mock(ModelUpstreamResolver.class);
 
   @Test
   void appendsOfficialFormatToThePrompt() {
@@ -95,6 +102,61 @@ class ChatModelAdapterTest {
         .hasMessageContaining("不是对话模型");
   }
 
+  @Test
+  void doesNotPickChatModelWhoseProviderIsDisabled() {
+    Model model = chatModel(UUID.randomUUID());
+    when(upstream.egressOf(model)).thenReturn(java.util.Optional.empty());
+
+    ChatModelAdapter adapter = new ChatModelAdapter(new FakeModels(model), upstream, gateway);
+
+    assertThat(adapter.pickChatModel()).as("★ 服务商停用后，这个模型不能被“自动挑一个对话模型”选中").isEmpty();
+  }
+
+  /** `#185`：可开关模型 + 应用打开思考 ⇒ 请求体带 high；关掉 ⇒ none。 */
+  @Test
+  void mapsThinkingToggleToReasoningEffort() {
+    Model model = chatModel(UUID.randomUUID());
+    model.thinking(cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode.TOGGLEABLE);
+    ChatModelAdapter adapter = adapter(model);
+
+    adapter.streamChat(
+        model.id(),
+        List.of(
+            new cn.lincoln.aiplatform.platform.model.ChatMessage(
+                cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER, "hi")),
+        true,
+        Duration.ofSeconds(5),
+        chunk -> {});
+    assertThat(gateway.reasoningEffort).as("★ 打开思考必须真的进上游请求体").isEqualTo("high");
+
+    adapter.streamChat(
+        model.id(),
+        List.of(
+            new cn.lincoln.aiplatform.platform.model.ChatMessage(
+                cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER, "hi")),
+        false,
+        Duration.ofSeconds(5),
+        chunk -> {});
+    assertThat(gateway.reasoningEffort).as("★ 关掉思考必须发 none，不能什么都不发").isEqualTo("none");
+  }
+
+  /** `#185`：始终思考 / 不支持思考的模型不发送 reasoning_effort（"关不掉"不能伪装成"已关闭"）。 */
+  @Test
+  void neverPretendsToDisableAlwaysOnThinking() {
+    Model alwaysOn = chatModel(UUID.randomUUID());
+    alwaysOn.thinking(cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode.ALWAYS_ON);
+    ChatModelAdapter adapter = adapter(alwaysOn);
+    adapter.streamChat(
+        alwaysOn.id(),
+        List.of(
+            new cn.lincoln.aiplatform.platform.model.ChatMessage(
+                cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER, "hi")),
+        false,
+        Duration.ofSeconds(5),
+        chunk -> {});
+    assertThat(gateway.reasoningEffort).as("★ ALWAYS_ON 不接受关闭，不能发 none").isNull();
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
 
   /**
@@ -104,7 +166,10 @@ class ChatModelAdapterTest {
    * apiKeyCipher == null} 时直接返回 null，压根不会用到它。
    */
   private ChatModelAdapter adapter(Model model) {
-    return new ChatModelAdapter(new FakeModels(model), null, gateway);
+    when(upstream.resolve(model))
+        .thenReturn(ResolvedUpstream.legacy(model.apiBase(), null, ProviderEgress.LOCAL));
+    when(upstream.egressOf(model)).thenReturn(java.util.Optional.of(ProviderEgress.LOCAL));
+    return new ChatModelAdapter(new FakeModels(model), upstream, gateway);
   }
 
   private static Model chatModel(UUID id) {
@@ -142,6 +207,7 @@ class ChatModelAdapterTest {
   private static final class RecordingGateway extends UpstreamGateway {
 
     String prompt;
+    String reasoningEffort;
     String response = "{\"sufficient\": true, \"nextQuery\": null}";
 
     RecordingGateway() {
@@ -151,8 +217,34 @@ class ChatModelAdapterTest {
     @Override
     public String chatCompletion(
         String model, String apiBase, String apiKey, String prompt, Duration timeout) {
+      return chatCompletion(model, apiBase, apiKey, prompt, timeout, AuthStyle.BEARER);
+    }
+
+    @Override
+    public String chatCompletion(
+        String model,
+        String apiBase,
+        String apiKey,
+        String prompt,
+        Duration timeout,
+        AuthStyle authStyle) {
       this.prompt = prompt;
       return response;
+    }
+
+    @Override
+    public boolean streamChatCompletion(
+        String model,
+        String apiBase,
+        String apiKey,
+        List<java.util.Map<String, String>> history,
+        Duration timeout,
+        java.util.function.Consumer<String> onDelta,
+        AuthStyle authStyle,
+        String reasoningEffort,
+        java.util.function.BiConsumer<Integer, Integer> onUsage) {
+      this.reasoningEffort = reasoningEffort;
+      return true;
     }
   }
 
@@ -188,6 +280,11 @@ class ChatModelAdapterTest {
 
     @Override
     public long countSearch(String keyword, ModelKind kind, ModelStatus status) {
+      return 0;
+    }
+
+    @Override
+    public long countByProviderId(UUID providerId) {
       return 0;
     }
   }

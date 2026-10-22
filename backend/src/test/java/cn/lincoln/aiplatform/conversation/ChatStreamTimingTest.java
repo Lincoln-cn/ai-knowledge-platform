@@ -57,7 +57,7 @@ class ChatStreamTimingTest {
   /** 契约里那两条时间常量在 Java 侧的镜像 —— ★ 本类<strong>刻意不</strong>用它们当裁判（裁判是契约文件）， 它们只作为"被比对的另一侧"出现在断言里。 */
   private static final long EXPECTED_HEARTBEAT_INTERVAL_MS = 20_000L;
 
-  private static final long EXPECTED_IDLE_TIMEOUT_MS = 60_000L;
+  private static final long EXPECTED_IDLE_TIMEOUT_MS = 300_000L;
 
   /** 契约里那条数值关系里的乘数（契约原文 {@code HEARTBEAT_INTERVAL_MS × 3 ≤ IDLE_TIMEOUT_MS}）。 */
   private static final long HEARTBEATS_TOLERATED_MS = 3L;

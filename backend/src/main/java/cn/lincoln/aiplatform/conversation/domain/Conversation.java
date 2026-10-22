@@ -71,6 +71,20 @@ public class Conversation {
   /** 标题列宽（{@code V32} 的 {@code varchar(256)}）。 */
   private static final int MAX_TITLE_LENGTH = 256;
 
+  /**
+   * 新建会话时的占位标题。
+   *
+   * <p>★ 它从用例层搬到这里，理由是「谁改它、谁读它」：
+   *
+   * <ul>
+   *   <li>创建时写入它（{@code ConversationListService.create}）；
+   *   <li><b>首个问题到来时判断「标题还是不是占位」并替换它</b>（{@code ChatTurnWriter}）。
+   * </ul>
+   *
+   * 两处各写一份字面量，改了一处就会变成「判断永远不成立、标题永远是占位值」—— 那正是本改动之前真实存在的症状（会话有 2 条消息，标题却还是「新会话」）。
+   */
+  public static final String PLACEHOLDER_TITLE = "新会话";
+
   @Id
   @Column(name = "id", nullable = false)
   private UUID id;

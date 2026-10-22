@@ -28,6 +28,13 @@ export interface ModelInfo {
   /** 是否内置（硬编码不可删） */
   builtin: boolean
   remark?: string
+  /** 绑定的服务商；null/缺省 = 旧式直连 / 默认上游 */
+  providerId?: string | null
+  providerName?: string
+  providerKind?: import('./providers').ProviderKind
+  egress?: import('./providers').ProviderEgress
+  /** 旧式直连（没有 providerId）：界面要标出来，提示绑定服务商 */
+  legacyDirect?: boolean
   /**
    * 加载失败的可读排查原因。
    * 仅 `LOAD_FAILED` 时有值，是能照着排查的那句话（不是「加载失败」四个字）；
@@ -43,6 +50,25 @@ export interface BaseModelOption {
   supplier: Supplier
   contextWindow: number | null
   dimension: number | null
+}
+
+/**
+ * 本地 ONNX（进程内向量化）状态。
+ *
+ * ★ 与 `ModelInfo.status` 是两套状态：后者是上游加载生命周期，前者是进程内懒加载。
+ * 模型管理页必须显示这一份，不能用 `NOT_LOADED` 冒充（#191）。
+ */
+export interface LocalOnnxStatus {
+  enabled: boolean
+  mode: 'local-onnx' | 'upstream' | string
+  /** 本地实现服务的 baseModel 名（路由按它分派） */
+  model: string
+  modelPath: string
+  tokenizerPath: string
+  filesPresent: boolean
+  ready: boolean
+  /** ready 时为 null；否则是「未启用 / 文件缺失 / 失败原因 / 尚未预热」 */
+  reason: string | null
 }
 
 /** 能力来源（2.4 补录）：探测 / 手工声明 */
@@ -61,6 +87,8 @@ export interface ProbeBaseModelBody {
   baseModel: string
   supplier: Supplier
   kind: ModelKind
+  /** 指定服务商（可选）：给了就用它的地址与密钥 */
+  providerId?: string
 }
 
 /**
@@ -76,6 +104,8 @@ export interface BaseModelsQuery {
   apiBase?: string
   /** 上游 API key；只进 body，绝不进 URL */
   apiKey?: string
+  /** 指定服务商（可选）：给了就用它的地址与密钥 */
+  providerId?: string
 }
 
 export interface ModelQuery extends PageQuery {
@@ -90,6 +120,8 @@ export interface UpsertModelBody {
   baseModel: string
   apiBase?: string
   apiKey?: string
+  /** 绑定的服务商；不给 = 旧式直连 / 默认上游；显式 null = 解绑 */
+  providerId?: string | null
   /** 向量维度必须显式下发 */
   dimension?: number | null
   thinking?: ThinkingMode
@@ -101,6 +133,14 @@ export interface UpsertModelBody {
 
 export const listModels = (query: ModelQuery = {}) =>
   request<PageResult<ModelInfo>>({ method: 'GET', url: '/models', query })
+
+/** 本地 ONNX（进程内）的真实状态 —— 模型管理页的 ONNX 卡片/状态条读它 */
+export const getLocalOnnxStatus = () =>
+  request<LocalOnnxStatus>({ method: 'GET', url: '/models/local-onnx' })
+
+/** 预热本地 ONNX（初始化 ONNX session，不是问上游） */
+export const warmUpLocalOnnx = () =>
+  request<LocalOnnxStatus>({ method: 'POST', url: '/models/local-onnx/warmup' })
 
 /**
  * 基础模型目录。★ 契约由 GET 改成 POST（密钥不能进查询串）；返回形状不变（BaseModelOption[]）。
@@ -136,6 +176,7 @@ export const probeBaseModelCapability = (body: {
   baseModel: string
   supplier: Supplier
   kind: ModelKind
+  providerId?: string
 }) =>
   request<ModelCapability>({
     method: 'POST',

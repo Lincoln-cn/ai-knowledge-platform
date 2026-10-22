@@ -1,13 +1,19 @@
 package cn.lincoln.aiplatform.caliber;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
+import cn.lincoln.aiplatform.modelcatalog.domain.ProviderEgress;
+import cn.lincoln.aiplatform.modelcatalog.domain.ResolvedUpstream;
 import cn.lincoln.aiplatform.modelcatalog.domain.Supplier;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.ChatModelAdapter;
+import cn.lincoln.aiplatform.modelcatalog.infrastructure.ModelUpstreamResolver;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.UpstreamEmbeddingAdapter;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.UpstreamGateway;
 import java.time.Duration;
@@ -46,12 +52,27 @@ class OutboundPiiPassthroughTest {
   /** 上游真正收到的消息内容（不是我们以为发出去的内容）。 */
   private final RecordingGateway gateway = new RecordingGateway();
 
+  private final ModelUpstreamResolver upstream = mock(ModelUpstreamResolver.class);
+
+  private ChatModelAdapter chatAdapter(Model model) {
+    when(upstream.resolve(model))
+        .thenReturn(ResolvedUpstream.legacy(model.apiBase(), null, ProviderEgress.LOCAL));
+    when(upstream.egressOf(model)).thenReturn(Optional.of(ProviderEgress.LOCAL));
+    return new ChatModelAdapter(new FakeModels(model), upstream, gateway);
+  }
+
+  private UpstreamEmbeddingAdapter embeddingAdapter(Model model) {
+    when(upstream.resolve(model))
+        .thenReturn(ResolvedUpstream.legacy(model.apiBase(), null, ProviderEgress.LOCAL));
+    return new UpstreamEmbeddingAdapter(new FakeModels(model), upstream, gateway);
+  }
+
   @Test
   void assertOutboundBodyIsSentWithoutPiiRedaction() {
     // ① 先跑一遍**对话**出口（今天生产上用得最多的那一路）
     UUID chatId = UUID.randomUUID();
     Model chat = chatModel(chatId);
-    ChatModelAdapter chatAdapter = new ChatModelAdapter(new FakeModels(chat), null, gateway);
+    ChatModelAdapter chatAdapter = chatAdapter(chat);
     gateway.response = "收到";
 
     chatAdapter.complete(chatId, PII_TEXT, Duration.ofSeconds(5));
@@ -75,8 +96,7 @@ class OutboundPiiPassthroughTest {
     // ② 顺带钉住第二个出口：**向量化**那条路走的是同一份文本（同一段正文，同一条边界）
     UUID embeddingId = UUID.randomUUID();
     Model embedding = embeddingModel(embeddingId);
-    UpstreamEmbeddingAdapter embeddingAdapter =
-        new UpstreamEmbeddingAdapter(new FakeModels(embedding), null, gateway);
+    UpstreamEmbeddingAdapter embeddingAdapter = embeddingAdapter(embedding);
     gateway.response = "{\"data\":[{\"index\":0,\"embedding\":[0.1,0.2]}]}";
 
     embeddingAdapter.embed(embeddingId, List.of(PII_TEXT));
@@ -110,6 +130,17 @@ class OutboundPiiPassthroughTest {
     @Override
     public String chatCompletion(
         String model, String apiBase, String apiKey, String prompt, Duration timeout) {
+      return chatCompletion(model, apiBase, apiKey, prompt, timeout, AuthStyle.BEARER);
+    }
+
+    @Override
+    public String chatCompletion(
+        String model,
+        String apiBase,
+        String apiKey,
+        String prompt,
+        Duration timeout,
+        AuthStyle authStyle) {
       // ★ 复刻生产网关构造请求体的那一步（UpstreamGateway.chatCompletion 用的是同一个 Map 形状 +
       //   同一个序列化器）。★ 必须走序列化器而不是手拼字符串：手拼出来的"JSON"在含引号/换行时
       //   根本不是合法 JSON，那样读到的就不是上游会收到的东西。
@@ -126,6 +157,12 @@ class OutboundPiiPassthroughTest {
 
     @Override
     public List<float[]> embed(String model, List<String> texts, String apiBase, String apiKey) {
+      return embed(model, texts, apiBase, apiKey, AuthStyle.BEARER);
+    }
+
+    @Override
+    public List<float[]> embed(
+        String model, List<String> texts, String apiBase, String apiKey, AuthStyle authStyle) {
       payload = json.writeValueAsString(java.util.Map.of("model", model, "input", texts));
       sentUpstream = true;
       return List.of(new float[] {0.1f, 0.2f});
@@ -168,6 +205,11 @@ class OutboundPiiPassthroughTest {
 
     @Override
     public long countSearch(String keyword, ModelKind kind, ModelStatus status) {
+      return 0;
+    }
+
+    @Override
+    public long countByProviderId(UUID providerId) {
       return 0;
     }
   }

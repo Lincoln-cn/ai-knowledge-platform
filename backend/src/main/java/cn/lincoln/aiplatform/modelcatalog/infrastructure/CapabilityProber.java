@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
 import cn.lincoln.aiplatform.modelcatalog.application.ModelCapability;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelCapabilitySource;
+import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode;
 import cn.lincoln.aiplatform.modelcatalog.domain.ToolsMode;
@@ -54,12 +55,17 @@ public class CapabilityProber {
    * @throws UpstreamGateway.UpstreamUnreachableException 上游完全不可达时（message 是可读原因）
    */
   public ModelCapability probe(String baseModel, ModelKind kind, String apiBase, String apiKey) {
+    return probe(baseModel, kind, apiBase, apiKey, AuthStyle.BEARER);
+  }
+
+  public ModelCapability probe(
+      String baseModel, ModelKind kind, String apiBase, String apiKey, AuthStyle authStyle) {
 
     // ── 1. 元数据优先：从 /v1/models 拉能力元数据 ──
     Integer metaContextWindow = null;
     Integer metaDimension = null;
     String metaTools = null;
-    List<UpstreamGateway.UpstreamModel> catalog = gateway.listModels(apiBase, apiKey);
+    List<UpstreamGateway.UpstreamModel> catalog = gateway.listModels(apiBase, apiKey, authStyle);
     for (UpstreamGateway.UpstreamModel m : catalog) {
       if (baseModel.equals(m.id())) {
         metaContextWindow = m.contextWindow();
@@ -71,7 +77,7 @@ public class CapabilityProber {
 
     if (kind == ModelKind.EMBEDDING) {
       // ── 2a. 向量模型：实测维度（元数据只是提示，必须实测）──
-      int dimension = gateway.probeEmbeddingDimension(baseModel, apiBase, apiKey);
+      int dimension = gateway.probeEmbeddingDimension(baseModel, apiBase, apiKey, authStyle);
       return ModelCapability.of(
           ModelKind.EMBEDDING,
           ThinkingMode.NONE,
@@ -82,7 +88,7 @@ public class CapabilityProber {
     }
 
     // ── 2b. 对话模型：行为探针测思考三态 ──
-    ThinkingMode thinking = probeThinking(baseModel, apiBase, apiKey);
+    ThinkingMode thinking = probeThinking(baseModel, apiBase, apiKey, authStyle);
     ToolsMode tools = parseTools(metaTools);
     return ModelCapability.of(
         ModelKind.CHAT, thinking, tools, metaContextWindow, null, ModelCapabilitySource.PROBED);
@@ -93,9 +99,10 @@ public class CapabilityProber {
    *
    * <p>★ 不看元数据的 thinking 字段 —— 三态的定义就是"行为上能不能关掉思考"， 只有发请求看响应才知道。元数据说是 ALWAYS_ON 但行为上关得掉，那是元数据在撒谎。
    */
-  private ThinkingMode probeThinking(String baseModel, String apiBase, String apiKey) {
-    String byDefault = gateway.chat(baseModel, null, apiBase, apiKey);
-    String thinkingOff = gateway.chat(baseModel, "none", apiBase, apiKey);
+  private ThinkingMode probeThinking(
+      String baseModel, String apiBase, String apiKey, AuthStyle authStyle) {
+    String byDefault = gateway.chat(baseModel, null, apiBase, apiKey, authStyle);
+    String thinkingOff = gateway.chat(baseModel, "none", apiBase, apiKey, authStyle);
 
     boolean sawDefault = UpstreamGateway.sawReasoning(byDefault);
     boolean sawOff = UpstreamGateway.sawReasoning(thinkingOff);

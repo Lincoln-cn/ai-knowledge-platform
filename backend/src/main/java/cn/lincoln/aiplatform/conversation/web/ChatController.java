@@ -202,11 +202,13 @@ public class ChatController {
   @PreAuthorize("hasAuthority('conversation:view')")
   public ApiResponse<PageResult<ConversationListService.ConversationListItem>> conversations(
       @RequestParam(required = false) UUID appId,
+      @RequestParam(required = false) Boolean genericOnly,
       @RequestParam(required = false) String keyword,
       @RequestParam(required = false) Integer page,
       @RequestParam(required = false) Integer size,
       @AuthenticationPrincipal Jwt jwt) {
-    return ApiResponse.ok(conversationList.list(subjectOf(jwt), appId, keyword, page, size));
+    return ApiResponse.ok(
+        conversationList.list(subjectOf(jwt), appId, genericOnly, keyword, page, size));
   }
 
   @GetMapping("/{conversationId}/messages")
@@ -249,7 +251,10 @@ public class ChatController {
   public ResponseEntity<StreamingResponseBody> chat(
       @RequestBody ChatStreamBody body,
       @AuthenticationPrincipal Jwt jwt,
-      @RequestHeader(value = "X-Access-Credential", required = false) String credentialToken) {
+      @RequestHeader(value = "X-Access-Credential", required = false) String credentialToken,
+      // ★ 必须传进 streamOf：`Writer.flush()` 不会让容器发 chunk（实测 chunk 全是 8192 字节），
+      //   只有 `response.flushBuffer()` 才会 ⇒ 每帧到达浏览器而不是攒满 8KB 才发。
+      jakarta.servlet.http.HttpServletResponse httpResponse) {
     // ★ 凭据头优先 —— ★ 这一条**刻意**与"有 JWT 走登录面"的字面顺序不同，理由如下：
     //   ① 带链接的请求是"关于这条链接"的请求，而 asSubject 保证生效范围只会**收窄**、绝不放大
     //      （密级取两者更低的、其余分量照抄调用者）⇒ 这条分支不可能让它看到更多；
@@ -269,10 +274,8 @@ public class ChatController {
           .body(
               assembler.streamOf(
                   new ChatStreamAssembler.AsyncTurn(
-                      turn.prepared(),
-                      body.question().strip(),
-                      null,
-                      publicChat.streamTurn(turn))));
+                      turn.prepared(), body.question().strip(), null, publicChat.streamTurn(turn)),
+                  httpResponse));
     }
     UUID userId = subjectOf(jwt);
     // ★ 落库与归属判定走服务层（看不见 ⇒ 404）；它在写流之前发生，所以错误还能用包络返回
@@ -288,7 +291,8 @@ public class ChatController {
         .contentType(MediaType.TEXT_EVENT_STREAM)
         .body(
             assembler.streamOf(
-                new ChatStreamAssembler.AsyncTurn(started.turn(), started.question())));
+                new ChatStreamAssembler.AsyncTurn(started.turn(), started.question()),
+                httpResponse));
   }
 
   /**

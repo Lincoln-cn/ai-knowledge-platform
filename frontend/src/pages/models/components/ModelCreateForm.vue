@@ -2,8 +2,40 @@
   <div class="body">
     <!-- 左：表单 -->
     <el-form ref="formRef" :model="form" :rules="rules" label-width="88px" class="form">
+      <!-- ★ 服务商是“从哪来”的登记处；绑定后地址/密钥由服务商持有，表单不再重复问 -->
+      <el-form-item label="服务商" prop="providerId">
+        <el-select
+          v-model="form.providerId"
+          clearable
+          placeholder="不绑定（旧式直连 / 默认上游）"
+          style="width: 100%"
+          @change="onProviderChange"
+        >
+          <el-option label="不绑定（旧式直连 / 默认上游）" value="" />
+          <el-option
+            v-for="p in enabledProviders"
+            :key="p.id"
+            :label="`${p.name} · ${KIND_LABEL[p.kind]} · ${p.egress === 'LOCAL' ? '不出网' : '出网'}`"
+            :value="p.id"
+          />
+        </el-select>
+        <div class="hint micro">
+          绑定服务商后，服务地址与密钥由「模型管理 → 服务商」统一维护；这里不再重复填。
+        </div>
+      </el-form-item>
+
+      <div v-if="selectedProvider" class="provider-summary micro">
+        <span><b>{{ selectedProvider.name }}</b></span>
+        <span class="muted">{{ KIND_LABEL[selectedProvider.kind] }}</span>
+        <span class="muted"><code>{{ selectedProvider.apiBase || '（默认上游）' }}</code></span>
+        <el-tag size="small" effect="plain" :type="selectedProvider.egress === 'LOCAL' ? 'success' : 'warning'">
+          {{ selectedProvider.egress === 'LOCAL' ? '不出网' : '出网' }}
+        </el-tag>
+        <span class="muted">{{ selectedProvider.hasApiKey ? '密钥已配置' : '未配置密钥' }}</span>
+      </div>
+
       <!-- ★ 先定连哪个服务，再谈选哪个模型 —— 顺序反了就变成「先选基础模型才谈供应商」 -->
-      <el-form-item label="供应商" prop="supplier">
+      <el-form-item v-if="!form.providerId" label="供应商" prop="supplier">
         <el-radio-group v-model="form.supplier" :disabled="supplierLocked" @change="onUpstreamChange">
           <el-radio-button
             v-for="s in SUPPLIER_VALUES" :key="s"
@@ -17,7 +49,7 @@
         </div>
       </el-form-item>
 
-      <el-form-item label="服务地址" prop="apiBase">
+      <el-form-item v-if="!form.providerId" label="服务地址" prop="apiBase">
         <el-input
           v-model="form.apiBase" clearable
           :placeholder="form.supplier === 'EXTERNAL_API' ? '必填，例如 https://api.openai.com/v1' : '选填'"
@@ -30,7 +62,7 @@
         </div>
       </el-form-item>
 
-      <el-form-item label="密钥" prop="apiKey">
+      <el-form-item v-if="!form.providerId" label="密钥" prop="apiKey">
         <el-input
           v-model="form.apiKey" type="password" show-password clearable
           placeholder="留空则不修改"
@@ -219,7 +251,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { MagicStick, Search } from '@element-plus/icons-vue'
-import { modelsApi } from '@/api'
+import { modelsApi, providersApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type {
   BaseModelOption,
@@ -230,6 +262,7 @@ import type {
   ToolsMode,
   UpsertModelBody
 } from '@/api/models'
+import type { ModelProviderInfo, ProviderKind } from '@/api/providers'
 import {
   MODEL_CAPABILITY_SOURCE_LABELS,
   MODEL_KIND_LABELS,
@@ -263,12 +296,24 @@ const TOOLS_OPTIONS: Array<{ value: ToolsMode; label: string }> = [
   { value: 'PARALLEL', label: '支持并行工具调用' }
 ]
 
+const KIND_LABEL: Record<ProviderKind, string> = {
+  OPENAI: 'OpenAI',
+  DEEPSEEK: 'DeepSeek',
+  MIMO: 'MiMo',
+  GLM: '智谱 GLM',
+  OLLAMA: 'Ollama',
+  GATEWAY: '网关',
+  OPENAI_COMPATIBLE: 'OpenAI 兼容'
+}
+
 const saving = ref(false)
 const probing = ref(false)
 const formRef = ref<FormInstance>()
 const baseKeyword = ref('')
 const loadingBase = ref(false)
 const baseList = ref<BaseModelOption[]>([])
+/** 可用服务商（停用的不出现：后端会拒绝绑定到停用服务商） */
+const providers = ref<ModelProviderInfo[]>([])
 /** 包络 hint：上游不可达/为空时后端给的可读排查提示 */
 const catalogHint = ref('')
 const capSource = ref<'PROBED' | 'MANUAL'>('MANUAL')
@@ -283,9 +328,15 @@ const dimText = ref('')
 const isEdit = computed(() => !!props.model)
 /** 编排画布已预选供应商时不许改，否则预筛会被用户改穿 */
 const supplierLocked = computed(() => !!props.supplier)
+const enabledProviders = computed(() => providers.value.filter((p) => p.enabled))
+const selectedProvider = computed(
+  () => providers.value.find((p) => p.id === form.providerId) ?? null
+)
 
 const form = reactive({
   kind: 'CHAT' as ModelKind,
+  /** 绑定的服务商；'' = 旧式直连 / 默认上游 */
+  providerId: '',
   supplier: 'LOCAL_INFERENCE' as Supplier,
   /** 外部 API 必填；本地推理可留空 = 默认服务 */
   apiBase: '',
@@ -330,6 +381,11 @@ const rules: FormRules = {
   apiBase: [
     {
       validator: (_rule, value, callback) => {
+        // 绑定了服务商：地址由服务商持有，表单不填也不校验
+        if (form.providerId) {
+          callback()
+          return
+        }
         if (form.supplier === 'EXTERNAL_API' && !String(value ?? '').trim()) {
           callback(new Error('外部API 必须填写服务地址'))
         } else {
@@ -359,6 +415,27 @@ const thinkingHint = computed(
   () => THINKING_OPTIONS.find((o) => o.value === form.thinking)?.hint ?? ''
 )
 
+const loadProviders = async () => {
+  try {
+    providers.value = await providersApi.listProviders()
+  } catch {
+    // 服务商列表拉不到不阻断模型表单：退化为旧式直连
+    providers.value = []
+  }
+}
+
+/** 换服务商：供应商由它的 egress 决定，地址/密钥交给服务商，目录重拉 */
+const onProviderChange = () => {
+  const p = selectedProvider.value
+  if (p) {
+    form.supplier = p.egress === 'LOCAL' ? 'LOCAL_INFERENCE' : 'EXTERNAL_API'
+    form.apiBase = ''
+    form.apiKey = ''
+  }
+  if (!isEdit.value) clearBase()
+  loadBaseModels()
+}
+
 const loadBaseModels = async () => {
   loadingBase.value = true
   catalogHint.value = ''
@@ -367,6 +444,7 @@ const loadBaseModels = async () => {
       {
         kind: form.kind,
         supplier: form.supplier,
+        ...(form.providerId ? { providerId: form.providerId } : {}),
         // ★ 把当前表单的上游地址/密钥传进去 —— 目录跟着所连服务走
         ...(form.apiBase.trim() ? { apiBase: form.apiBase.trim() } : {}),
         ...(form.apiKey ? { apiKey: form.apiKey } : {}),
@@ -502,7 +580,8 @@ const probe = async () => {
     const capability = await modelsApi.probeBaseModelCapability({
       baseModel: form.baseModel,
       supplier: form.supplier,
-      kind: form.kind
+      kind: form.kind,
+      ...(form.providerId ? { providerId: form.providerId } : {})
     })
     form.thinking = capability.thinking
     form.tools = capability.tools
@@ -527,6 +606,7 @@ const probe = async () => {
 const reset = () => {
   formRef.value?.clearValidate()
   form.kind = 'CHAT'
+  form.providerId = ''
   form.supplier = props.supplier ?? 'LOCAL_INFERENCE'
   form.apiBase = ''
   // 密钥永不回显 —— 连编辑态也不回填
@@ -549,10 +629,12 @@ const reset = () => {
 
 const load = async () => {
   reset()
+  await loadProviders()
   if (props.model) {
     const m = props.model
-    // 先落定 kind/供应商再拉目录 —— 否则目录按新建默认的 CHAT 拉，编辑向量模型时右侧全空
+    // 先落定 kind/供应商/服务商再拉目录 —— 否则目录按新建默认的 CHAT 拉，编辑向量模型时右侧全空
     form.kind = m.kind
+    form.providerId = m.providerId ?? ''
     form.supplier = m.supplier
     form.baseModel = m.baseModel
     form.name = m.name
@@ -589,6 +671,7 @@ const submit = async (): Promise<boolean> => {
         thinking: form.thinking,
         tools: form.tools,
         remark: form.remark,
+        providerId: form.providerId || null,
         ...upstream
       })
       ElMessage.success('已保存')
@@ -605,6 +688,7 @@ const submit = async (): Promise<boolean> => {
         kind: form.kind,
         supplier: form.supplier,
         baseModel: form.baseModel,
+        providerId: form.providerId || null,
         dimension,
         remark: form.remark,
         // ★ 向量模型不接受 thinking/tools（后端 400）—— 只在对话模型时下发
@@ -647,6 +731,23 @@ defineExpose({ load, submit, reset })
   color: var(--color-muted);
   line-height: var(--leading-body);
   margin-left: 0;
+}
+
+.provider-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+  margin: calc(-1 * var(--space-2xs)) 0 var(--space-sm) 88px;
+  padding: var(--space-2xs) var(--space-sm);
+  background: var(--color-sunken);
+  border-radius: var(--radius);
+  min-width: 0;
+}
+
+.provider-summary code {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
 }
 
 .opt-hint {

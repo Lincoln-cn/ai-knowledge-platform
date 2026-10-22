@@ -134,6 +134,23 @@ public record RetrievalScope(
   }
 
   /**
+   * 去掉会话域的同域副本（向量那一路专用）。
+   *
+   * <p>★ 为什么需要它：问答链路里 {@code conversationId} 对<strong>每一轮</strong>都有值，即便这一轮没有附件 —— 所以 {@link
+   * #hasConversationScope()} 在这里不能读成"有附件"。而向量查询必须按知识库的模型与维度表走， 不能把 {@code CONVERSATION}
+   * 分段混进来（它们的模型继承平台默认，那一格今天无处解析）。
+   *
+   * <p>★ 这不是"悄悄摘掉"：调用方（{@code ChatService.vectorHits}）在摘之前会留一条日志，
+   * 且向量模式只检索知识库这一点写进了界面说明；混合模式的会话附件仍由全文一路覆盖。
+   */
+  public RetrievalScope withoutConversation() {
+    if (conversationId == null) {
+      return this;
+    }
+    return new RetrievalScope(sharedKbIds, personalKbId, null, null);
+  }
+
+  /**
    * 换一组共用库（向量路按向量模型分组，每组各查各的表），其余两域照搬。
    *
    * <p>★ 为什么个人库要**只留在它自己那个组**里：个人库的向量模型就是它自己那一行声明的模型 （{@code 13 §11.2}：继承平台默认，但落在一个真实的库行上）⇒

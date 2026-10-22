@@ -17,6 +17,7 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import cn.lincoln.aiplatform.platform.model.ChatMessage;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
@@ -682,8 +683,7 @@ class ChatStreamEventRecordingTest {
               store,
               search,
               scope,
-              (modelId, prompt, timeout, callback) ->
-                  model.get().stream(modelId, prompt, timeout, callback),
+              new StreamDispatcher(model),
               stopSignal,
               PROPERTIES,
               UNRESTRICTED_EGRESS);
@@ -707,6 +707,13 @@ class ChatStreamEventRecordingTest {
      */
     private ChatTurnWriter.PreparedTurn prepare(UUID conversationId) {
       return store.prepare(conversationId, null, QUESTION, UUID.randomUUID());
+    }
+
+    /** 造一轮「多轮开着、历史是给定几条」的读数（{@code #168}）。 */
+    private ChatTurnWriter.PreparedTurn prepareMultiTurn(List<ChatMessage> history) {
+      store.multiTurn = true;
+      store.history = history;
+      return prepare();
     }
   }
 
@@ -818,6 +825,102 @@ class ChatStreamEventRecordingTest {
     }
   }
 
+  /**
+   * ★★ {@code #168}：多轮开关必须把历史按 role 边界送进上游，而不是拼成一段字符串。
+   *
+   * <p>形状：历史 = 一轮用户问 + 一轮助手答，本轮再问「它呢」。断言三件事：
+   *
+   * <ol>
+   *   <li>走的是 {@code streamConversation}（不是单轮的 {@code stream}）；
+   *   <li>消息顺序与 role 边界保留（USER / ASSISTANT / USER），不是一段拼接文本；
+   *   <li>最后一条是本轮问题（零引用时只含问题本身） —— 与单轮路径的 {@code promptOf} 同源。
+   * </ol>
+   *
+   * <p>★ 能红：把 {@code ChatService#startModelThread} 里的 {@code turn.multiTurn()} 分支去掉（或把本用例的 {@code
+   * multiTurn} 设为 false），模型只会收到单轮 prompt，断言当场红。
+   */
+  @Test
+  void multiTurnSendsRoleSeparatedHistoryIncludingCurrentQuestion() {
+    Fixture fixture = new Fixture();
+    HistoryCapturingModel model = new HistoryCapturingModel();
+    fixture.model.set(model);
+    List<ChatMessage> history =
+        List.of(
+            new ChatMessage(ChatMessage.Role.USER, "第一轮问题"),
+            new ChatMessage(ChatMessage.Role.ASSISTANT, "第一轮回答"));
+    ChatTurnWriter.PreparedTurn turn = fixture.prepareMultiTurn(history);
+    RecordingSink sink = new RecordingSink();
+
+    fixture.chatService().streamTurn(turn, "它呢", sink);
+
+    assertThat(model.conversation)
+        .as("★★ 多轮必须走 streamConversation，且历史按消息数组送进去（拼接会丢 role 边界）")
+        .isNotNull()
+        .hasSize(3);
+    assertThat(model.conversation)
+        .extracting(ChatMessage::role)
+        .as("★ role 边界必须保留：user / assistant / 本轮 user")
+        .containsExactly(ChatMessage.Role.USER, ChatMessage.Role.ASSISTANT, ChatMessage.Role.USER);
+    assertThat(model.conversation.get(0).content()).isEqualTo("第一轮问题");
+    assertThat(model.conversation.get(1).content()).isEqualTo("第一轮回答");
+    assertThat(model.conversation.get(2).content())
+        .as("★ 本轮问题必须排在最后（与单轮 promptOf 同源；零引用时 prompt 只含问题本身）")
+        .contains("它呢");
+    assertThat(model.singleTurnPrompt).as("★ 多轮路径不许退回单轮 stream").isNull();
+    assertThat(sink.done().status()).isEqualTo(StreamStatus.GENERATED);
+  }
+
+  /**
+   * ★ Issue #182 根因 2：收尾线程被中断后仍要把终态落库。
+   *
+   * <p>形状：DONE 那一帧把当前线程的中断标志置上（模拟"收尾被打断过一次"），紧接着 {@code streamTurn} 的 finally 就要走 {@code
+   * persistTerminal} 落终态。修复前 {@code persistTerminal} 不清标志 ⇒ Hikari/JDBC 在拿连接或执行时抛 {@code
+   * InterruptedIOException} ⇒ 终态没写成，消息永久停在 GENERATING。修复后：入口先 {@code Thread.interrupted()}
+   * 清标志再落终态（落完在 finally 里把标志还回去）。
+   *
+   * <p>★ 读数是 {@link RecordingStore#finishSawInterrupt}：落库那一刻线程的中断标志必须是 {@code false}（修复前 {@code
+   * true}）。
+   */
+  @Test
+  void anInterruptedFinishingThreadStillPersistsTheTerminalState() {
+    Fixture fixture = new Fixture();
+    fixture.model.set(new ScriptedModel(0L, 0L, 6, SHORT_ANSWER));
+    ChatTurnWriter.PreparedTurn turn = fixture.prepare();
+    RecordingSink sink = new RecordingSink();
+    ChatService.EventSink interruptOnDone = new DoneInterruptingSink(sink);
+    try {
+      fixture.chatService().streamTurn(turn, QUESTION, interruptOnDone);
+    } finally {
+      // ★ 测试结束必须清掉中断标志，别污染 JUnit 的复用线程。
+      Thread.interrupted();
+    }
+
+    TerminalPersisted persisted = fixture.store.finishOf(turn.assistantMessageId());
+    assertThat(persisted).as("★ 收尾线程被中断也必须落终态（Issue #182 根因 2）：否则消息永久停在 GENERATING").isNotNull();
+    assertThat(fixture.store.finishSawInterrupt)
+        .as("★ 落终态时线程的中断标志必须已被清掉（修复前 true）：否则 Hikari/JDBC 抛 InterruptedIOException，终态根本没写成")
+        .isFalse();
+    assertThat(persisted.path()).isEqualTo(StreamTerminationPath.COMPLETE);
+  }
+
+  /** 最小 EventSink 委托：只拦 DONE，其余原样转发（不改生产接口）。 */
+  private static final class DoneInterruptingSink implements ChatService.EventSink {
+    private final ChatService.EventSink delegate;
+
+    DoneInterruptingSink(ChatService.EventSink delegate) {
+      this.delegate = delegate;
+    }
+
+    @Override
+    public void onEvent(StreamEvent event) {
+      delegate.onEvent(event);
+      if (event.kind() == EventKind.DONE) {
+        // ★ 模拟"收尾被打断过一次"：置上中断标志，随后 finally 里的 persistTerminal 就带着标志进场。
+        Thread.currentThread().interrupt();
+      }
+    }
+  }
+
   /** 会在收到终态那一帧时<strong>再走一次收尾</strong>的出口 —— 即"第二个收尾入口被调用"。 */
   private static final class ReentrantTerminalSink implements ChatService.EventSink {
 
@@ -844,15 +947,31 @@ class ChatStreamEventRecordingTest {
   /** 落库侧替身：只记"收尾落库了几次、落的是什么"。 */
   private static final class RecordingStore implements ChatTurnStore {
 
+    /** {@code #168}：本用例要读的"本轮之前的历史"；null = 本类不提供历史（防御性抛）。 */
+    private List<ChatMessage> history;
+
+    /** 这一轮的多轮开关；默认 false（与既有用例的单轮形状一致）。 */
+    private boolean multiTurn;
+
     @Override
     public java.util.List<cn.lincoln.aiplatform.platform.model.ChatMessage> historyBefore(
         UUID conversationId, UUID userMessageId, int maxMessages) {
-      // ★ `#168`：本类不消费历史（多轮那一路由 ChatService 的多轮判据覆盖）。
-      //   ★ 抛而不是返回空/null —— 返回空会让"这里没测"伪装成"测过了且是对的"。
-      throw new UnsupportedOperationException("本替身不提供历史（#168）");
+      // ★ `#168`：只有显式给了历史的用例才允许读；其余用例仍然是"本替身不提供历史"。
+      if (history == null) {
+        throw new UnsupportedOperationException("本替身不提供历史（#168）");
+      }
+      return history;
     }
 
     private final List<TerminalPersisted> terminals = new ArrayList<>();
+
+    /**
+     * ★ Issue #182 根因 2 的读数：收尾落库那一刻，线程的中断标志是什么。
+     *
+     * <p>修复前：收尾线程被中断后带着标志进 {@code persistTerminal} ⇒ 落库时 {@code true}。修复后：{@code persistTerminal}
+     * 入口先 {@code Thread.interrupted()} 清标志再落终态 ⇒ 落库时 {@code false}。
+     */
+    private volatile boolean finishSawInterrupt;
 
     @Override
     public ChatTurnWriter.PreparedTurn prepare(
@@ -867,7 +986,11 @@ class ChatStreamEventRecordingTest {
           "fixture-model",
           UUID.randomUUID(),
           List.of(),
-          false);
+          multiTurn,
+          false,
+          null,
+          null,
+          null);
     }
 
     @Override
@@ -886,6 +1009,7 @@ class ChatStreamEventRecordingTest {
         long durationMs,
         String failReason,
         String failHint) {
+      finishSawInterrupt = Thread.currentThread().isInterrupted();
       terminals.add(
           new TerminalPersisted(
               messageId, path, fullTextSoFar, usage, durationMs, failReason, failHint));
@@ -983,6 +1107,60 @@ class ChatStreamEventRecordingTest {
       if (millis > 0) {
         Thread.sleep(millis);
       }
+    }
+  }
+
+  /**
+   * ★ 把 {@link Fixture} 里"可换的假模型"转成一个真正的 {@link ChatStreamPort}。
+   *
+   * <p>为什么不能直接用 lambda：{@code ChatStreamPort} 的多轮入口是 <strong>default 方法</strong>，lambda 会继承"把消息拼成一段
+   * prompt"的兜底 —— 那条兜底正是 {@code #168} 要防的丢 role 边界形状。测试若用 lambda， 模型永远只会被单轮 {@code stream}
+   * 调到，多轮判据会假红/假绿。
+   */
+  private static final class StreamDispatcher implements ChatStreamPort {
+
+    private final AtomicReference<ChatStreamPort> model;
+
+    StreamDispatcher(AtomicReference<ChatStreamPort> model) {
+      this.model = model;
+    }
+
+    @Override
+    public void stream(UUID modelId, String prompt, Duration timeout, Callback callback) {
+      model.get().stream(modelId, prompt, timeout, callback);
+    }
+
+    @Override
+    public void streamConversation(
+        UUID modelId, List<ChatMessage> messages, Duration timeout, Callback callback) {
+      model.get().streamConversation(modelId, messages, timeout, callback);
+    }
+  }
+
+  /**
+   * {@code #168} 的读数模型：单轮与多轮两个入口都记下来，用例据此判断走了哪条路。
+   *
+   * <p>★ 不继承 {@link ScriptedModel}：本类要读的是"消息数组里有什么"，而不是吐字节奏。
+   */
+  private static final class HistoryCapturingModel implements ChatStreamPort {
+
+    private volatile List<ChatMessage> conversation;
+
+    private volatile String singleTurnPrompt;
+
+    @Override
+    public void stream(UUID modelId, String prompt, Duration timeout, Callback callback) {
+      singleTurnPrompt = prompt;
+      callback.onChunk("单轮");
+      callback.onEnd(End.COMPLETE, null);
+    }
+
+    @Override
+    public void streamConversation(
+        UUID modelId, List<ChatMessage> messages, Duration timeout, Callback callback) {
+      conversation = List.copyOf(messages);
+      callback.onChunk("多轮");
+      callback.onEnd(End.COMPLETE, null);
     }
   }
 

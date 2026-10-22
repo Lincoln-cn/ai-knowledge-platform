@@ -31,4 +31,7 @@ public interface ModelRepository {
 
   /** 与 {@link #search} 同条件的<strong>总数</strong>。★ 它必须是过滤后的数，不能是表行数。 */
   long countSearch(String keyword, ModelKind kind, ModelStatus status);
+
+  /** 某个服务商下还有多少个模型 —— 删除服务商前的守卫读它。 */
+  long countByProviderId(UUID providerId);
 }

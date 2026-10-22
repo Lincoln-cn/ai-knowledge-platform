@@ -297,13 +297,19 @@ def completion_body(model: str, content: str, reasoning: str | None) -> str:
     )
 
 
-def sse_chunks(model: str, content: str, reasoning: str | None) -> list[str]:
+def sse_chunks(
+    model: str,
+    content: str,
+    reasoning: str | None,
+    usage: tuple[int, int] | None = None,
+) -> list[str]:
     """
     把一次回答切成 SSE 帧。
 
-    顺序刻意与真实服务一致：先 role 帧 → 思考帧 → 正文分片 → 带 finish_reason 的收尾帧 → [DONE]。
-    ★ 之所以要照这个顺序，是因为 M4b 的 `refs 必须先于第一个 delta` 那条时序约束，
+    顺序刻意与真实服务一致：先 role 帧 → 思考帧 → 正文分片 → 带 finish_reason 的收尾帧 → usage 帧 → [DONE]。
+    ★ 之后要照这个顺序，是因为 M4b 的 `refs 必须先于第一个 delta` 那条时序约束，
     需要有一个"会分片吐 delta"的上游才能被真正测出来。
+    ★ usage 帧只在请求了 `stream_options.include_usage` 时追加（OpenAI 的形状：choices 为空数组）。
     """
     base = {
         "id": f"chatcmpl-stub-{int(time.time() * 1000)}",
@@ -324,6 +330,16 @@ def sse_chunks(model: str, content: str, reasoning: str | None) -> list[str]:
     for i in range(0, len(content), 4):
         frames.append(frame({"content": content[i : i + 4]}))
     frames.append(frame({}, finish="stop"))
+    if usage:
+        prompt_tokens, completion_tokens = usage
+        payload = dict(base)
+        payload["choices"] = []
+        payload["usage"] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+        frames.append("data: " + json.dumps(payload, ensure_ascii=False) + "\n\n")
     frames.append("data: [DONE]\n\n")
     return frames
 
@@ -543,7 +559,17 @@ class StubHandler(BaseHTTPRequestHandler):
 
         content, reasoning = self._answer_text(body)
         if body.get("stream"):
-            self._send_sse(sse_chunks(model, content, reasoning))
+            # 只有显式要求才回 usage（与 OpenAI 的 stream_options.include_usage 同形）；
+            # 这样应用侧 #142 的 onUsage 解析才能被真栈读数验证。
+            usage = None
+            if (body.get("stream_options") or {}).get("include_usage"):
+                messages = body.get("messages") or []
+                prompt_chars = sum(len(str(m.get("content", ""))) for m in messages)
+                usage = (
+                    max(1, prompt_chars // _CHARS_PER_TOKEN),
+                    max(1, len(content) // _CHARS_PER_TOKEN),
+                )
+            self._send_sse(sse_chunks(model, content, reasoning, usage))
         else:
             self._send_json(200, json.loads(completion_body(model, content, reasoning)))
 

@@ -6,6 +6,7 @@
  */
 export * as identityApi from './identity'
 export * as modelsApi from './models'
+export * as providersApi from './providers'
 export * as knowledgeApi from './knowledge'
 export * as ingestionApi from './ingestion'
 export * as retrievalApi from './retrieval'

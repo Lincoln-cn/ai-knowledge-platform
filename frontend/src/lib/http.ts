@@ -53,7 +53,21 @@ client.interceptors.request.use((config) => {
 /** 刷新令牌只允许并发一次，其余请求排队等结果 —— 避免刷新风暴 */
 let refreshing: Promise<string> | null = null
 
-async function refreshAccessToken(): Promise<string> {
+/**
+
+ * 刷新访问令牌（并发去重：同一时刻只发一次刷新，其余调用等结果）。
+
+ *
+
+ * <p>★ 从「仅供本文件内部使用」改为导出，是因为 **SSE 那条链路是独立实现**
+
+ * （`lib/sse.ts` 自己用 fetch 读流，不走本文件的 axios 实例），它也有 401
+
+ * ⇒ 两处必须共用同一份刷新逻辑，否则会出现「普通接口自动续期、对话却让人重登」的分裂。
+
+ */
+
+export async function refreshAccessToken(): Promise<string> {
   if (!refreshing) {
     refreshing = axios
       .post<ApiResult<{ accessToken: string; refreshToken: string }>>(

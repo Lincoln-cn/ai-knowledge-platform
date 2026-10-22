@@ -1,10 +1,12 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
+import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -74,7 +76,12 @@ public class UpstreamGateway {
    * @param apiBase 为 null 时用默认上游
    */
   public List<UpstreamModel> listModels(String apiBase, String apiKey) {
-    String body = get(resolve(apiBase, "/models"), apiKey);
+    return listModels(apiBase, apiKey, AuthStyle.BEARER);
+  }
+
+  /** 带认证方式的重载：JAiRouter 用 {@code X-API-Key}，OpenAI 兼容用 Bearer。 */
+  public List<UpstreamModel> listModels(String apiBase, String apiKey, AuthStyle authStyle) {
+    String body = get(resolve(apiBase, "/models"), apiKey, authStyle);
     List<UpstreamModel> result = new ArrayList<>();
     try {
       JsonNode data = json.readTree(body).path("data");
@@ -97,7 +104,12 @@ public class UpstreamGateway {
 
   /** 该基础模型是否在上游清单里（load 的可用性校验）。 */
   public boolean isModelAvailable(String baseModel, String apiBase, String apiKey) {
-    return listModels(apiBase, apiKey).stream().anyMatch(m -> baseModel.equals(m.id()));
+    return isModelAvailable(baseModel, apiBase, apiKey, AuthStyle.BEARER);
+  }
+
+  public boolean isModelAvailable(
+      String baseModel, String apiBase, String apiKey, AuthStyle authStyle) {
+    return listModels(apiBase, apiKey, authStyle).stream().anyMatch(m -> baseModel.equals(m.id()));
   }
 
   // ────────────────────────── 向量维度 ──────────────────────────
@@ -109,8 +121,13 @@ public class UpstreamGateway {
    * 维"这类只能在检索时才暴露的静默错位。
    */
   public int probeEmbeddingDimension(String model, String apiBase, String apiKey) {
+    return probeEmbeddingDimension(model, apiBase, apiKey, AuthStyle.BEARER);
+  }
+
+  public int probeEmbeddingDimension(
+      String model, String apiBase, String apiKey, AuthStyle authStyle) {
     String payload = "{\"model\":\"" + escape(model) + "\",\"input\":\"dimension-probe\"}";
-    String body = post(resolve(apiBase, "/embeddings"), payload, apiKey);
+    String body = post(resolve(apiBase, "/embeddings"), payload, apiKey, authStyle);
     try {
       JsonNode embedding = json.readTree(body).path("data").path(0).path("embedding");
       if (!embedding.isArray() || embedding.isEmpty()) {
@@ -137,6 +154,11 @@ public class UpstreamGateway {
    * @throws UpstreamUnreachableException 上游不可达、响应不合规、或条数/index 对不上
    */
   public List<float[]> embed(String model, List<String> texts, String apiBase, String apiKey) {
+    return embed(model, texts, apiBase, apiKey, AuthStyle.BEARER);
+  }
+
+  public List<float[]> embed(
+      String model, List<String> texts, String apiBase, String apiKey, AuthStyle authStyle) {
     if (texts == null || texts.isEmpty()) {
       return List.of();
     }
@@ -148,7 +170,7 @@ public class UpstreamGateway {
     //   而这里要的是**确定的合法 JSON**（Jackson 3 下没有再对 toString() 的格式作承诺）
     String payload = json.writeValueAsString(Map.of("model", model, "input", texts));
 
-    String body = post(resolve(apiBase, "/embeddings"), payload, apiKey);
+    String body = post(resolve(apiBase, "/embeddings"), payload, apiKey, authStyle);
     try {
       JsonNode data = json.readTree(body).path("data");
       if (!data.isArray() || data.size() != texts.size()) {
@@ -207,8 +229,23 @@ public class UpstreamGateway {
    */
   public String chatCompletion(
       String model, String apiBase, String apiKey, String prompt, Duration timeout) {
+    return chatCompletion(model, apiBase, apiKey, prompt, timeout, AuthStyle.BEARER);
+  }
+
+  public String chatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      String prompt,
+      Duration timeout,
+      AuthStyle authStyle) {
     return chatCompletion(
-        model, apiBase, apiKey, List.of(Map.of("role", "user", "content", prompt)), timeout);
+        model,
+        apiBase,
+        apiKey,
+        List.of(Map.of("role", "user", "content", prompt)),
+        timeout,
+        authStyle);
   }
 
   /**
@@ -225,13 +262,24 @@ public class UpstreamGateway {
       String apiKey,
       List<Map<String, String>> history,
       Duration timeout) {
+    return chatCompletion(model, apiBase, apiKey, history, timeout, AuthStyle.BEARER);
+  }
+
+  public String chatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      AuthStyle authStyle) {
     // ★★ 用序列化器拼请求体，**不要**手拼字符串 —— 真栈闸门实测抓到过：
     //   查询理解的提示词是**多行**的，而 escape() 只处理了反斜杠与引号，换行原样留在 JSON
     //   字符串里 ⇒ 上游按"请求体不是合法 JSON"直接 400。那是最难查的一类错：
     //   本地单测全绿，因为夹具里的提示词恰好是单行。
     //   映射成 Map 再序列化，控制字符的转义交给序列化器。
     Map<String, Object> payload = Map.of("model", model, "messages", history);
-    String body = post(resolve(apiBase, "/chat/completions"), writeJson(payload), apiKey, timeout);
+    String body =
+        post(resolve(apiBase, "/chat/completions"), writeJson(payload), apiKey, authStyle, timeout);
     try {
       JsonNode content =
           json.readTree(body).path("choices").path(0).path("message").path("content");
@@ -250,11 +298,166 @@ public class UpstreamGateway {
   // ────────────────────────── 思考三态 ──────────────────────────
 
   /**
+   * ★★ 真流式：把上游 SSE 的每个 delta 立刻交给调用方（而不是等整段返回再切块）。
+   *
+   * <h3>为什么必须用它（实测）</h3>
+   *
+   * <p>{@link #chatCompletion} 是「一次性返回」的：CPU 上 qwen2.5:1.5b 生成 400 字要 <b>60~90 秒</b>，这期间下游一个字节都拿不到
+   * ⇒ 前端只能"转 90 秒，然后一次性出现全文" （用户原话：「回复是一次性展示的，并没有打字机效果」）。 而 Ollama 本身是逐 token 吐的 —— 中间那一层把它攒起来了。
+   *
+   * <h3>★ 实现上的两个关键选择</h3>
+   *
+   * <ol>
+   *   <li><b>用 {@code BodyHandlers.ofInputStream()} 而不是 {@code ofLines()}</b>： {@code ofLines()}
+   *       要等响应体<b>读完</b>才返回 {@code Stream}，那等于又攒了一次； 只有拿到 InputStream 才能"读到一行就交出去"。
+   *   <li><b>逐行解析 {@code data:} 帧、忽略 {@code [DONE]}</b>：这是 OpenAI 兼容协议 （Ollama 的 {@code
+   *       /v1/chat/completions} 同样遵守），delta 在 {@code choices[0].delta.content}。
+   * </ol>
+   *
+   * @param onDelta 每收到一段正文就回调一次（★ 它可能抛异常来中断，例如用户点了停止）
+   * @return 是否真的走了流式（{@code false} = 上游不支持，调用方应退回一次性路径）
+   */
+  public boolean streamChatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta) {
+    return streamChatCompletion(
+        model, apiBase, apiKey, history, timeout, onDelta, AuthStyle.BEARER);
+  }
+
+  public boolean streamChatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta,
+      AuthStyle authStyle) {
+    return streamChatCompletion(model, apiBase, apiKey, history, timeout, onDelta, authStyle, null);
+  }
+
+  /**
+   * 带思考参数的流式补全（{@code #185}）。
+   *
+   * @param reasoningEffort {@code null} = 请求体里<strong>不出现</strong>该字段；由模型能力映射决定（见 {@code
+   *     ChatModelAdapter#streamChat}）
+   */
+  public boolean streamChatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta,
+      AuthStyle authStyle,
+      String reasoningEffort) {
+    return streamChatCompletion(
+        model, apiBase, apiKey, history, timeout, onDelta, authStyle, reasoningEffort, null);
+  }
+
+  /**
+   * 带用量回调的流式补全（{@code #142}）。
+   *
+   * <p>★ 兼容 OpenAI 的流式实现只在最后一个块里给 {@code usage}（需要请求体带 {@code stream_options.include_usage=true}）。
+   * 这里不攒正文，只在读到 {@code usage} 时把两个分量交给回调；装配器负责把多段用量相加。
+   *
+   * @param onUsage {@code null} = 调用方不关心用量；非 null 时每个带 {@code usage} 的帧回调一次
+   */
+  public boolean streamChatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta,
+      AuthStyle authStyle,
+      String reasoningEffort,
+      java.util.function.BiConsumer<Integer, Integer> onUsage) {
+    Map<String, Object> payload = new java.util.LinkedHashMap<>();
+    payload.put("model", model);
+    payload.put("messages", history);
+    payload.put("stream", true);
+    // ★ OpenAI 只有显式要求才在流末尾回 usage；不带这个字段时 done.tokens 仍会是 0（#142）。
+    payload.put("stream_options", Map.of("include_usage", true));
+    if (reasoningEffort != null) {
+      // ★ 只在能力允许时才带：ALWAYS_ON / NONE 不带，避免把"关不掉"伪装成"已关闭"
+      payload.put("reasoning_effort", reasoningEffort);
+    }
+    String url = resolve(apiBase, "/chat/completions");
+    HttpRequest.Builder builder =
+        HttpRequest.newBuilder(URI.create(url))
+            .timeout(timeout)
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .POST(HttpRequest.BodyPublishers.ofString(writeJson(payload), StandardCharsets.UTF_8));
+    // ★ 认证必须走同一处：这里曾内联拼头，绕过了 effectiveKey ⇒ 默认 Bearer 上游在“没配 key”时
+    //   发送不带 Authorization 的请求，而 chatCompletion 会回落到配置里的默认 key。两条对话路径
+    //   对同一份配置表现不同，症状是“流式 401 / 非流式正常”。
+    applyAuth(builder, apiKey, authStyle);
+    HttpRequest request = builder.build();
+    try {
+      HttpResponse<java.io.InputStream> response =
+          http.send(request, HttpResponse.BodyHandlers.ofInputStream());
+      if (response.statusCode() / 100 != 2) {
+        String text = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
+        throw new UpstreamUnreachableException(
+            "上游返回 HTTP " + response.statusCode() + "：连接 " + url + " 失败。响应片段：" + abbreviate(text));
+      }
+      boolean[] sawFrame = {false};
+      try (var reader =
+          new java.io.BufferedReader(
+              new java.io.InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+        String line;
+        while ((line = reader.readLine()) != null) {
+          if (!line.startsWith("data:")) {
+            continue; // 空行、事件名、注释帧一律跳过
+          }
+          String data = line.substring(5).trim();
+          if (data.isEmpty() || "[DONE]".equals(data)) {
+            continue;
+          }
+          sawFrame[0] = true;
+          JsonNode chunk = json.readTree(data);
+          JsonNode delta = chunk.path("choices").path(0).path("delta").path("content");
+          if (delta.isTextual() && !delta.asText().isEmpty()) {
+            onDelta.accept(delta.asText());
+          }
+          JsonNode usage = chunk.path("usage");
+          if (onUsage != null && usage.isObject()) {
+            JsonNode prompt = usage.path("prompt_tokens");
+            JsonNode completion = usage.path("completion_tokens");
+            if (prompt.isNumber() && completion.isNumber()) {
+              onUsage.accept(prompt.asInt(), completion.asInt());
+            }
+          }
+        }
+      }
+      return sawFrame[0];
+    } catch (UpstreamUnreachableException rethrow) {
+      throw rethrow;
+    } catch (java.io.IOException | InterruptedException | JacksonException failure) {
+      if (failure instanceof InterruptedException) {
+        Thread.currentThread().interrupt();
+      }
+      throw new UpstreamUnreachableException(
+          "上游流式调用失败：" + failure.getMessage() + "（连接 " + url + "）", failure);
+    }
+  }
+
+  /**
    * 发一次 chat 请求，返回响应体原文。
    *
    * @param reasoningEffort 为 null 表示不带 {@code reasoning_effort} 字段
    */
   public String chat(String model, String reasoningEffort, String apiBase, String apiKey) {
+    return chat(model, reasoningEffort, apiBase, apiKey, AuthStyle.BEARER);
+  }
+
+  public String chat(
+      String model, String reasoningEffort, String apiBase, String apiKey, AuthStyle authStyle) {
     String effort =
         reasoningEffort == null ? "" : ",\"reasoning_effort\":\"" + escape(reasoningEffort) + "\"";
     String payload =
@@ -263,7 +466,7 @@ public class UpstreamGateway {
             + "\",\"messages\":[{\"role\":\"user\",\"content\":\"1+1=?只答数字\"}]"
             + effort
             + "}";
-    return post(resolve(apiBase, "/chat/completions"), payload, apiKey);
+    return post(resolve(apiBase, "/chat/completions"), payload, apiKey, authStyle);
   }
 
   /** 响应体里是否出现了思考内容（OpenAI 兼容协议里的 {@code reasoning_content} / {@code reasoning}）。 */
@@ -280,18 +483,32 @@ public class UpstreamGateway {
     return base + path;
   }
 
-  private String effectiveKey(String apiKey) {
-    return (apiKey == null || apiKey.isBlank()) ? defaultApiKey : apiKey;
+  private String effectiveKey(String apiKey, AuthStyle authStyle) {
+    if (apiKey != null && !apiKey.isBlank()) {
+      return apiKey;
+    }
+    // ★ 只有默认的 Bearer 上游（Ollama / JAiRouter 的 JWT 面）才回落到配置里的默认 key。
+    //   X-API-Key / NONE 上回落会把一个“没配 key”的服务商悄悄拿默认 key 去试，症状是 401。
+    return authStyle == AuthStyle.BEARER ? defaultApiKey : null;
+  }
+
+  private void applyAuth(HttpRequest.Builder builder, String apiKey, AuthStyle authStyle) {
+    String key = effectiveKey(apiKey, authStyle);
+    if (key != null && authStyle.headerName() != null) {
+      builder.header(authStyle.headerName(), authStyle.prefix() + key);
+    }
   }
 
   private String get(String url, String apiKey) {
+    return get(url, apiKey, AuthStyle.BEARER);
+  }
+
+  private String get(String url, String apiKey, AuthStyle authStyle) {
     try {
-      HttpRequest request =
-          HttpRequest.newBuilder(URI.create(url))
-              .timeout(Duration.ofSeconds(10))
-              .header("Authorization", "Bearer " + effectiveKey(apiKey))
-              .GET()
-              .build();
+      HttpRequest.Builder builder =
+          HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10));
+      applyAuth(builder, apiKey, authStyle);
+      HttpRequest request = builder.GET().build();
       HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
       if (response.statusCode() >= 400) {
         throw new UpstreamUnreachableException(
@@ -316,18 +533,22 @@ public class UpstreamGateway {
   }
 
   private String post(String url, String payload, String apiKey) {
-    return post(url, payload, apiKey, DEFAULT_POST_TIMEOUT);
+    return post(url, payload, apiKey, AuthStyle.BEARER, DEFAULT_POST_TIMEOUT);
   }
 
-  private String post(String url, String payload, String apiKey, Duration timeout) {
+  private String post(String url, String payload, String apiKey, AuthStyle authStyle) {
+    return post(url, payload, apiKey, authStyle, DEFAULT_POST_TIMEOUT);
+  }
+
+  private String post(
+      String url, String payload, String apiKey, AuthStyle authStyle, Duration timeout) {
     try {
-      HttpRequest request =
+      HttpRequest.Builder builder =
           HttpRequest.newBuilder(URI.create(url))
               .timeout(timeout)
-              .header("Content-Type", "application/json")
-              .header("Authorization", "Bearer " + effectiveKey(apiKey))
-              .POST(HttpRequest.BodyPublishers.ofString(payload))
-              .build();
+              .header("Content-Type", "application/json");
+      applyAuth(builder, apiKey, authStyle);
+      HttpRequest request = builder.POST(HttpRequest.BodyPublishers.ofString(payload)).build();
       HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
       if (response.statusCode() >= 400) {
         throw new UpstreamUnreachableException(

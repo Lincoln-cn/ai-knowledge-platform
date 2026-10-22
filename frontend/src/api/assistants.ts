@@ -247,7 +247,13 @@ export const setAssistantPublished = (id: string, published: boolean) =>
 
 /** 调试问答不产生正式会话记录，故走独立接口 */
 export const debugAssistant = (id: string, question: string) =>
-  request<{ answer: string; refs: unknown[]; elapsedMs: number; tokens: number }>({
+  request<{
+    answer: string
+    refs: unknown[]
+    elapsedMs: number
+    /** ★ `null` = 上游没有上报用量（不是 0；见 #142） */
+    tokens: number | null
+  }>({
     method: 'POST',
     url: '/assistants/:id/debug',
     path: { id },

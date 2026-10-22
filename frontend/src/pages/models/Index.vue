@@ -3,6 +3,7 @@
     <PageHeader title="模型管理" desc="模型是对话与向量化的底座。能力三态决定界面上开关怎么呈现，不是可选项">
       <template #actions>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchList">刷新</el-button>
+        <el-button size="small" :icon="Connection" @click="openProviders">服务商</el-button>
         <el-button size="small" type="primary" @click="openCreate">添加模型</el-button>
       </template>
     </PageHeader>
@@ -34,34 +35,117 @@
         <el-option v-for="s in STATUSES" :key="s" :label="labelOf(MODEL_STATUS_LABELS, s)" :value="s" />
       </el-select>
       <span class="micro muted">
-        共 {{ total }} 个
+        共 {{ total }} 个注册模型
+        <template v-if="localOnnx?.enabled"> · 另有 1 个进程内 ONNX 向量模型</template>
         <template v-if="loadingCount">
           · <span class="live">{{ loadingCount }} 个加载中，自动刷新</span>
         </template>
       </span>
     </div>
 
-    <div v-loading="loading" class="grid">
+    <!--
+      本地 ONNX（进程内）向量模型（#191 的说明补齐）。
+      ★ 它不是 `ai_model` 里的一行：进程内懒加载，没有上游 load 生命周期。
+        所以它不放进模型卡片网格（那张卡片的高度会把整行模型卡都撑高），
+        改成网格上方一条紧凑的「运行时模型」条：状态、文件、路径、动作一行看完。
+    -->
+    <section v-loading="loading" class="onnx-runtime panel">
+      <div class="onnx-main">
+        <div class="onnx-head">
+          <span class="onnx-title ellipsis" :title="localOnnx?.model || '本地 ONNX 向量模型'">
+            {{ localOnnx?.model || '本地 ONNX 向量模型' }}
+          </span>
+          <el-tag size="small" effect="plain" type="info">进程内 ONNX</el-tag>
+          <span class="status" :class="localOnnxStateClass">
+            <i class="dot" :class="localOnnxDot" />
+            {{ localOnnxStateLabel }}
+          </span>
+        </div>
+
+        <p class="onnx-desc micro muted">
+          进程内向量化，不依赖 Ollama / 11434。第一次使用时懒加载 ONNX session；
+          「未预热」表示文件在、还没用过。它不参与下方模型列表的「加载 / 卸载」生命周期。
+        </p>
+
+        <div class="onnx-facts micro">
+          <span><span class="onnx-key">类型</span>向量 · 进程内推理</span>
+          <span>
+            <span class="onnx-key">文件</span>
+            {{ localOnnx ? (localOnnx.filesPresent ? '已就位' : '缺失') : '未知' }}
+          </span>
+          <span class="onnx-path" :title="localOnnx?.modelPath">
+            <span class="onnx-key">模型</span>
+            <code>{{ localOnnx?.modelPath || '读取中…' }}</code>
+          </span>
+          <span v-if="localOnnx" class="onnx-path" :title="localOnnx.tokenizerPath">
+            <span class="onnx-key">tokenizer</span>
+            <code>{{ localOnnx.tokenizerPath }}</code>
+          </span>
+        </div>
+
+        <div v-if="localOnnx?.reason" class="onnx-note micro">
+          {{ localOnnx.reason }}
+        </div>
+        <div v-if="localOnnxError" class="onnx-note err micro">
+          <b>状态读取失败：</b>{{ localOnnxError }}
+          <el-button link size="small" @click="fetchLocalOnnx">重试</el-button>
+        </div>
+      </div>
+
+      <div class="onnx-actions">
+        <el-button
+          v-if="localOnnx?.enabled && !localOnnx.ready"
+          size="small"
+          type="primary"
+          :loading="warmingUp"
+          @click="warmUp"
+        >预热本地模型</el-button>
+        <span v-else-if="localOnnx?.ready" class="micro muted">已就绪</span>
+        <span v-else class="micro muted">
+          {{ localOnnx ? '未启用（走上游）' : '等待状态接口' }}
+        </span>
+      </div>
+    </section>
+
+    <div ref="gridEl" v-loading="loading" class="grid">
       <el-card v-for="m in list" :key="m.id" shadow="never" class="model-card" :class="{ failed: m.status === 'LOAD_FAILED' }">
         <div class="mc-head">
           <span class="mc-name ellipsis">{{ m.name }}</span>
           <el-tag v-if="m.builtin" size="small" effect="plain" type="info">内置</el-tag>
           <span class="grow" />
-          <span class="status" :class="STATUS_CLASS[m.status]">
+          <span class="status" :class="statusClassOf(m)">
             <el-icon v-if="m.status === 'LOADING'" class="is-loading"><Loading /></el-icon>
-            <i v-else class="dot" :class="STATUS_DOT[m.status]" />
-            {{ labelOf(MODEL_STATUS_LABELS, m.status) }}
+            <i v-else class="dot" :class="statusDotOf(m)" />
+            {{ statusLabelOf(m) }}
           </span>
         </div>
 
         <dl class="mc-facts">
           <div class="fact">
             <dt class="label">类型</dt>
-            <dd>{{ KIND_LABEL[m.kind] }} · {{ labelOf(SUPPLIER_LABELS, m.supplier) }}</dd>
+            <dd>
+              {{ KIND_LABEL[m.kind] }} · {{ labelOf(SUPPLIER_LABELS, m.supplier) }}
+              <el-tag v-if="isLocalOnnx(m)" size="small" effect="plain" type="info" class="onnx-tag">
+                进程内 ONNX
+              </el-tag>
+            </dd>
           </div>
           <div class="fact">
             <dt class="label">基础模型</dt>
             <dd class="ellipsis">{{ m.baseModel }}</dd>
+          </div>
+          <div v-if="m.providerName || m.legacyDirect" class="fact">
+            <dt class="label">服务商</dt>
+            <dd class="ellipsis">
+              <template v-if="m.providerName">
+                {{ m.providerName }}
+                <el-tag v-if="m.egress === 'LOCAL'" size="small" effect="plain" type="success">不出网</el-tag>
+                <el-tag v-else-if="m.egress" size="small" effect="plain" type="warning">出网</el-tag>
+              </template>
+              <template v-else>
+                <span class="micro muted">旧式直连（未绑定服务商）</span>
+              </template>
+            </dd>
           </div>
           <div class="fact">
             <dt class="label">{{ m.kind === 'EMBEDDING' ? '向量维度' : '上下文窗口' }}</dt>
@@ -70,7 +154,12 @@
                 <span class="num">{{ m.dimension }}</span> 维
                 <span class="micro muted">（与向量表绑定）</span>
               </template>
-              <template v-else><span class="num">{{ m.contextWindow?.toLocaleString() }}</span> tokens</template>
+              <template v-else>
+                <template v-if="m.contextWindow">
+                  <span class="num">{{ m.contextWindow.toLocaleString() }}</span> tokens
+                </template>
+                <span v-else class="micro muted">未探测</span>
+              </template>
             </dd>
           </div>
           <div v-if="m.kind === 'CHAT'" class="fact">
@@ -104,7 +193,7 @@
             v-if="m.status !== 'LOADING'"
             link size="small" type="primary"
             @click="reload(m)"
-          >{{ m.status === 'LOADED' ? '重新加载' : '加载' }}</el-button>
+          >{{ loadLabelOf(m) }}</el-button>
           <el-button v-else link size="small" disabled>加载中…</el-button>
 
           <el-button link size="small" type="primary" @click="openEdit(m)">编辑</el-button>
@@ -147,6 +236,8 @@
       :model="editing"
       @saved="onSaved"
     />
+
+    <ProviderDrawer ref="providerRef" @changed="onProvidersChanged" />
   </div>
 </template>
 
@@ -154,12 +245,13 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Refresh, WarningFilled } from '@element-plus/icons-vue'
+import { Connection, Loading, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { modelsApi } from '@/api'
-import type { ModelInfo, ModelKind, ModelStatus } from '@/api/models'
+import type { LocalOnnxStatus, ModelInfo, ModelKind, ModelStatus } from '@/api/models'
 import { ApiError } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import ModelFormDialog from './components/ModelFormDialog.vue'
+import ProviderDrawer from './components/ProviderDrawer.vue'
 import { MODEL_STATUS_LABELS, SUPPLIER_LABELS, labelOf } from '@/constants/labels'
 
 const STATUSES: ModelStatus[] = ['NOT_LOADED', 'LOADING', 'LOADED', 'LOAD_FAILED']
@@ -204,7 +296,54 @@ const list = ref<ModelInfo[]>([])
 const total = ref(0)
 const loading = ref(false)
 const error = ref<string | null>(null)
-const pageSize = 12
+const pageSize = ref(12)
+
+/**
+ * 每页条数不能写死。
+ *
+ * ★ 卡片网格是 `auto-fill + minmax(340px, 1fr)`：列数随可用宽度变（常见 3～6 列）。
+ * 写死 12 在 5 列时是「2 行 + 2 张」，第三行只坐 2 张，看起来像少了一页。
+ * 这里按实际列数 × 固定行数算每页条数，保证除最后一页外每页都排满。
+ */
+const GRID_MIN_CARD_PX = 340
+const GRID_ROWS = 3
+const gridEl = ref<HTMLElement | null>(null)
+let gridObserver: ResizeObserver | null = null
+let resizeTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 从网格的实际列宽反推列数；间距必须读 computed，不能假设 token 值 */
+const measurePageSize = () => {
+  const el = gridEl.value
+  if (!el || !el.clientWidth) return pageSize.value
+  const gap = Number.parseFloat(getComputedStyle(el).columnGap) || 0
+  const columns = Math.max(1, Math.floor((el.clientWidth + gap) / (GRID_MIN_CARD_PX + gap)))
+  return columns * GRID_ROWS
+}
+
+/** 宽度变化时只在列数真的变了才重拉，避免拖窗口时连打接口 */
+const applyResponsivePageSize = () => {
+  const next = measurePageSize()
+  if (next === pageSize.value) return
+  pageSize.value = next
+  const maxPage = Math.max(1, Math.ceil(total.value / next))
+  if (query.page > maxPage) query.page = maxPage
+  fetchList().then(schedule)
+}
+
+const onGridResize = () => {
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(applyResponsivePageSize, 120)
+}
+
+/**
+ * 本地 ONNX（进程内）状态。
+ *
+ * ★ 它与 `m.status` 是两套状态：ONNX 由进程内懒加载，不走上游 load 生命周期。
+ * 这里读后端 `/models/local-onnx`，不能拿 `NOT_LOADED` 冒充（#191）。
+ */
+const localOnnx = ref<LocalOnnxStatus | null>(null)
+const localOnnxError = ref<string | null>(null)
+const warmingUp = ref(false)
 
 /** 筛选/分页入 URL —— 刷新与直链不丢状态（一.2） */
 const query = reactive({
@@ -241,10 +380,16 @@ const fetchList = async () => {
       kind: query.kind || undefined,
       status: query.status || undefined,
       page: query.page,
-      size: pageSize
+      size: pageSize.value
     })
     list.value = result.list
     total.value = result.total
+    // 页长改成响应式后，旧 URL 里的页码可能已经越界（例如 5 页变 4 页）——夹回最后一页
+    const lastPage = Math.max(1, Math.ceil(result.total / pageSize.value))
+    if (query.page > lastPage) {
+      query.page = lastPage
+      await fetchList()
+    }
   } catch (e) {
     // 错误态 ≠ 空态：请求失败不能伪装成「暂无模型」（一.1）
     error.value = e instanceof ApiError ? e.message : '加载模型列表失败，请检查网络后重试'
@@ -252,6 +397,87 @@ const fetchList = async () => {
     total.value = 0
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * 本地 ONNX 状态：后端 `/models/local-onnx`。
+ * ★ 失败时置 null，但**不隐藏整块**（#191 的说明补齐）：错误写进 `localOnnxError`，
+ * 卡片照常显示「状态未知 + 原因 + 重试」。整块消失会让"接口 404 / 403"看起来像"这台机器没有 ONNX"。
+ */
+const fetchLocalOnnx = async () => {
+  try {
+    localOnnx.value = await modelsApi.getLocalOnnxStatus()
+    localOnnxError.value = null
+  } catch (e) {
+    localOnnx.value = null
+    localOnnxError.value =
+      e instanceof ApiError ? e.message : '读取本地 ONNX 状态失败（接口不可达）'
+  }
+}
+
+const isLocalOnnx = (m: ModelInfo) =>
+  Boolean(localOnnx.value?.enabled && m.baseModel === localOnnx.value.model)
+
+const localOnnxStateLabel = computed(() => {
+  const s = localOnnx.value
+  if (!s) return localOnnxError.value ? '状态未知（读取失败）' : '读取中…'
+  if (!s.enabled) return '未启用（走上游）'
+  if (s.ready) return '已就绪'
+  if (!s.filesPresent) return '模型文件缺失'
+  if (s.reason && s.reason.includes('失败')) return '预热失败'
+  return '未预热'
+})
+
+const localOnnxStateClass = computed(() => {
+  const s = localOnnx.value
+  if (!s) return localOnnxError.value ? 'st-err' : 'st-idle'
+  if (!s.enabled) return 'st-idle'
+  if (s.ready) return 'st-ok'
+  if (!s.filesPresent || (s.reason && s.reason.includes('失败'))) return 'st-err'
+  return 'st-idle'
+})
+
+const localOnnxDot = computed(() => {
+  const s = localOnnx.value
+  if (!s) return localOnnxError.value ? 'err' : ''
+  if (!s.enabled) return ''
+  if (s.ready) return 'ok'
+  if (!s.filesPresent || (s.reason && s.reason.includes('失败'))) return 'err'
+  return 'warn'
+})
+
+const statusLabelOf = (m: ModelInfo) =>
+  isLocalOnnx(m) ? localOnnxStateLabel.value : labelOf(MODEL_STATUS_LABELS, m.status)
+
+const statusClassOf = (m: ModelInfo) =>
+  isLocalOnnx(m) ? localOnnxStateClass.value : STATUS_CLASS[m.status]
+
+const statusDotOf = (m: ModelInfo) => {
+  if (!isLocalOnnx(m)) return STATUS_DOT[m.status]
+  const s = localOnnx.value
+  if (!s || !s.enabled) return ''
+  if (s.ready) return 'ok'
+  if (!s.filesPresent || (s.reason && s.reason.includes('失败'))) return 'err'
+  return 'warn'
+}
+
+/** 本地 ONNX 的「加载」应叫「预热」—— 它不是问上游，而是初始化进程内 session。 */
+const loadLabelOf = (m: ModelInfo) => {
+  if (isLocalOnnx(m)) return localOnnx.value?.ready ? '重新预热' : '预热'
+  return m.status === 'LOADED' ? '重新加载' : '加载'
+}
+
+const warmUp = async () => {
+  warmingUp.value = true
+  try {
+    localOnnx.value = await modelsApi.warmUpLocalOnnx()
+    ElMessage.success('本地 ONNX 已预热')
+    await fetchList()
+  } catch (e) {
+    ElMessage.error(e instanceof ApiError ? e.message : '预热本地 ONNX 失败')
+  } finally {
+    warmingUp.value = false
   }
 }
 
@@ -301,7 +527,7 @@ const schedule = () => {
   const interval = nextInterval()
   pollCount += 1
   timer = setTimeout(async () => {
-    await Promise.all([fetchList(), fetchGlobalLoadingCount()])
+    await Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()])
     schedule()
   }, interval)
 }
@@ -312,17 +538,27 @@ const onVisibility = () => {
     return
   }
   // 回到前台立即补一次，不等下一个周期
-  Promise.all([fetchList(), fetchGlobalLoadingCount()]).then(schedule)
+  Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()]).then(schedule)
 }
 
 onMounted(() => {
   document.addEventListener('visibilitychange', onVisibility)
-  Promise.all([fetchList(), fetchGlobalLoadingCount()]).then(schedule)
+  // 首次渲染就按当前列数定页长，避免先按 12 拉一次再改成 15（会闪一下）
+  pageSize.value = measurePageSize()
+  if (gridEl.value) {
+    gridObserver = new ResizeObserver(onGridResize)
+    gridObserver.observe(gridEl.value)
+  }
+  Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()]).then(schedule)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
   clearTimer()
+  gridObserver?.disconnect()
+  gridObserver = null
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = null
 })
 
 /* ── 筛选切换时重置 page（否则停在空页）+ 同步 URL ── */
@@ -356,7 +592,10 @@ watch(
 
 /* ── 操作 ── */
 const formRef = ref<InstanceType<typeof ModelFormDialog>>()
+const providerRef = ref<InstanceType<typeof ProviderDrawer>>()
 const editing = ref<ModelInfo | null>(null)
+
+const openProviders = () => providerRef.value?.open()
 
 const openCreate = () => {
   editing.value = null
@@ -372,11 +611,21 @@ const onSaved = () => {
   fetchList().then(schedule)
 }
 
+/** 服务商增删改之后：模型卡上的服务商名/出网标记要跟着变 */
+const onProvidersChanged = () => {
+  fetchList().then(schedule)
+}
+
 const reload = async (model: ModelInfo) => {
   try {
+    const local = isLocalOnnx(model)
     await modelsApi.loadModel(model.id)
-    ElMessage.success(`已提交加载「${model.name}」，加载需要一点时间`)
-    await fetchList()
+    ElMessage.success(
+      local
+        ? `已提交预热「${model.name}」，本地 ONNX 需要一点时间初始化`
+        : `已提交加载「${model.name}」，加载需要一点时间`
+    )
+    await Promise.all([fetchList(), fetchLocalOnnx()])
     schedule()
   } catch (e) {
     ElMessage.error(e instanceof ApiError ? e.message : '提交加载失败')
@@ -416,6 +665,100 @@ const remove = async (model: ModelInfo) => {
 .live {
   color: var(--color-accent);
   font-weight: 500;
+}
+
+/* 本地 ONNX：网格上方的一条「运行时模型」，不参与模型卡片的行高 */
+.onnx-runtime {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-accent-line);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+}
+
+.onnx-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.onnx-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.onnx-title {
+  max-width: 320px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.onnx-desc {
+  margin: var(--space-2xs) 0 0;
+  line-height: var(--leading-body);
+}
+
+.onnx-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3xs) var(--space-md);
+  margin-top: var(--space-2xs);
+  color: var(--color-ink-2);
+}
+
+.onnx-facts > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2xs);
+  min-width: 0;
+}
+
+.onnx-key {
+  color: var(--color-muted);
+}
+
+.onnx-path {
+  max-width: 420px;
+}
+
+.onnx-path code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-2xs);
+}
+
+.onnx-note {
+  margin-top: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink-2);
+}
+
+.onnx-note.err {
+  color: var(--color-danger);
+}
+
+.onnx-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding-top: var(--space-3xs);
+}
+
+.onnx-tag {
+  margin-left: var(--space-2xs);
+  vertical-align: middle;
 }
 
 .grid {
@@ -459,8 +802,10 @@ const remove = async (model: ModelInfo) => {
 .status {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: var(--space-2xs);
   font-size: var(--text-2xs);
+  white-space: nowrap;
 }
 
 .st-idle {

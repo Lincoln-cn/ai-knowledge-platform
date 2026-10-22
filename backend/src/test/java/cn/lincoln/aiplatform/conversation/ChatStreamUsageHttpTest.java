@@ -1,6 +1,9 @@
 package cn.lincoln.aiplatform.conversation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.doAnswer;
 
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.support.PostgresImage;
@@ -12,16 +15,15 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -92,6 +94,24 @@ class ChatStreamUsageHttpTest {
 
   @Autowired JdbcTemplate jdbc;
 
+  /** 替换容器里那个 ChatStreamPort（真流式/兜底都不参与本用例）。 */
+  @MockitoBean ChatStreamPort usageReportingChatStreamPort;
+
+  @BeforeEach
+  void stubUsageReportingModel() {
+    doAnswer(
+        invocation -> {
+          ChatStreamPort.Callback callback = invocation.getArgument(4);
+          callback.onChunk(ANSWER);
+          // ★ 假模型上报的两段（#142 ④）：一路喂到装配器，最终进 done.tokens 与 cv_message 的两列
+          callback.onUsage(REPORTED_PROMPT_TOKENS, REPORTED_COMPLETION_TOKENS);
+          callback.onEnd(ChatStreamPort.End.COMPLETE, null);
+          return null;
+        })
+        .when(usageReportingChatStreamPort)
+        .stream(any(), any(), anyBoolean(), any(), any());
+  }
+
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
@@ -139,42 +159,6 @@ class ChatStreamUsageHttpTest {
     assertThat(statusInDb(messageId))
         .as("★ 这一轮正常收尾（tokens 的读数不是从一条失败路径上读来的）")
         .isEqualTo("GENERATED");
-  }
-
-  // ────────────────────────── 假模型（测试里唯一的那份上报点）──────────────────────────
-
-  /**
-   * 把"上报用量的假模型"装成容器里那个 {@link ChatStreamPort}。
-   *
-   * <p>★ {@code @Primary} 覆盖生产的兜底实现 {@code ChatPortFallbackStreamAdapter} ——
-   * "测试用假的、生产用真的"仍由容器装配决定，业务代码里没有一行 if（与 {@code ChatStreamHttpTest} 同一条口径）。
-   * 本类只有一个假模型，所以不需要那套"可替换分发器"。
-   */
-  @TestConfiguration
-  static class UsageReportingModelConfig {
-
-    @Bean
-    @Primary
-    ChatStreamPort usageReportingChatStreamPort() {
-      return new UsageReportingChatStreamPort();
-    }
-  }
-
-  /**
-   * 上报用量的假模型：吐一段正文 → 上报用量 → 报终态。
-   *
-   * <p>★ 用量放在 {@code onEnd} <strong>之前</strong>那一刻，是<strong>真实现也会有的形状</strong>： 兼容 OpenAI
-   * 的流式实现在最后一个块里给 usage（{@code stream_options.include_usage}）。 于是"用量与终态同源、但前者先到"这条时序在本用例里被真的走了一遍。
-   */
-  static final class UsageReportingChatStreamPort implements ChatStreamPort {
-
-    @Override
-    public void stream(UUID modelId, String prompt, Duration timeout, Callback callback) {
-      callback.onChunk(ANSWER);
-      // ★ 假模型上报的两段（#142 ④）：一路喂到装配器，最终进 done.tokens 与 cv_message 的两列
-      callback.onUsage(REPORTED_PROMPT_TOKENS, REPORTED_COMPLETION_TOKENS);
-      callback.onEnd(End.COMPLETE, null);
-    }
   }
 
   // ────────────────────────── HTTP 与库读数 ──────────────────────────

@@ -28,6 +28,14 @@ export const PERM = {
   dashboardView: 'dashboard:view',
   feedbackHandle: 'feedback:handle',
 
+  /**
+   * 配置「对话设置」（默认模型 / 初始提示词 / 召回开关与阈值 / 流式超时）。
+   *
+   * ★ 与 `systemManage` 分开：后者是「整个系统管理」的开关，
+   * 而「让人调召回阈值」比它窄得多 —— 复用会把权限切成两半（全给或全不给）。
+   * ★ 默认只有 ADMIN 拥有，其它角色需在角色管理里显式勾选。
+   */
+  chatSettings: 'conversation:settings',
   systemManage: 'system:manage',
 
   // 管理菜单下的两块基础数据（07 §十 / 08 §十）

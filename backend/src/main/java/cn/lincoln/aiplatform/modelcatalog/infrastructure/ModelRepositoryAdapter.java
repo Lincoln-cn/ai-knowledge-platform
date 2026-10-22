@@ -62,6 +62,11 @@ public class ModelRepositoryAdapter implements ModelRepository {
     return jpa.count(filter(keyword, kind, status));
   }
 
+  @Override
+  public long countByProviderId(UUID providerId) {
+    return jpa.count((root, query, cb) -> cb.equal(root.get("providerId"), providerId));
+  }
+
   // ────────────────────────── 内部 ──────────────────────────
 
   private static Sort sort() {

@@ -335,6 +335,42 @@ class RetrievalDomainScopeTest {
         .isEmpty();
   }
 
+  /**
+   * ★ `#192`：向量检索过去只按维度选表（`vec_embedding_<dim>`），不认 embedding 模型 ——
+   * 同维度下别的模型写的旧向量会被一起捞进结果。这条断言钉住：查询带 `embeddingModelId` 时， 结果里只许出现该模型写入的向量。
+   */
+  @Test
+  void vectorSearchOnlyUsesVectorsWrittenByTheQueryModel() {
+    UUID modelA = UUID.randomUUID();
+    UUID modelB = UUID.randomUUID();
+    UUID segA = insertKbSegment(sharedKb, "违约金上限：模型 A 写的向量");
+    UUID segB = insertKbSegment(sharedKb, "违约金上限：模型 B 写的向量");
+    upsertVector(segA, sharedKb, 1.0f, modelA);
+    upsertVector(segB, sharedKb, 1.0f, modelB);
+
+    float[] query = {1f, 0f, 0f, 0f};
+    List<UUID> hits =
+        SecurityContexts.asUser(
+                me,
+                ClassificationLevel.CONFIDENTIAL,
+                () ->
+                    segmentSearch.vectorSearch(
+                        new SegmentSearchPort.VectorQuery(
+                            4,
+                            query,
+                            new RetrievalScope(List.of(sharedKb), null, null, null),
+                            LIMIT,
+                            modelA)))
+            .stream()
+            .map(SegmentSearchPort.Scored::segmentId)
+            .toList();
+
+    assertThat(hits)
+        .as("★ 只许返回查询模型（modelA）写的向量；同维度下 modelB 写的那条必须被过滤掉")
+        .contains(segA)
+        .doesNotContain(segB);
+  }
+
   // ────────────────────────── 夹具（纯 SQL） ──────────────────────────
 
   /** 某条分段所属的文档 id（★ 从库里读，不由夹具自己记一个期望值 —— 那会让读数变成自证）。 */
@@ -374,17 +410,17 @@ class RetrievalDomainScopeTest {
    * @param similarity 余弦相似度的大致档位（4 维基向量，越大越靠前）
    */
   private void upsertVector(UUID segmentId, UUID kbId, float similarity) {
+    upsertVector(segmentId, kbId, similarity, UUID.randomUUID());
+  }
+
+  /** 同上，但模型 id 由调用方指定 —— 向量表的 metadata 里记的就是它（Issue {@code #192}）。 */
+  private void upsertVector(UUID segmentId, UUID kbId, float similarity, UUID modelId) {
     UUID documentId =
         jdbc.queryForObject(
             "select document_id from kb_segment where id = ?", UUID.class, segmentId);
     vectorIndex.upsert(
         new VectorIndexPort.Entry(
-            segmentId,
-            kbId,
-            documentId,
-            UUID.randomUUID(),
-            "向量夹具",
-            new float[] {similarity, 0f, 0f, 0f}));
+            segmentId, kbId, documentId, modelId, "向量夹具", new float[] {similarity, 0f, 0f, 0f}));
   }
 
   private UUID insertKb(String name, String kind, UUID owner, String visibility) {

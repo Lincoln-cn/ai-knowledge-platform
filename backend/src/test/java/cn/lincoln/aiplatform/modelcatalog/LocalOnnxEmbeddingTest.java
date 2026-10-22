@@ -44,9 +44,9 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @TestPropertySource(
     properties = {
       "app.embedding.local.enabled=true",
-      "app.embedding.local.model-path=models/bge-small-zh-v1.5/model_quantized.onnx",
-      "app.embedding.local.tokenizer-path=models/bge-small-zh-v1.5/tokenizer.json",
-      "app.embedding.local.model-name=bge-small-zh-v1.5"
+      "app.embedding.local.model-path=models/multilingual-e5-small/model_quantized.onnx",
+      "app.embedding.local.tokenizer-path=models/multilingual-e5-small/tokenizer.json",
+      "app.embedding.local.model-name=multilingual-e5-small"
     })
 class LocalOnnxEmbeddingTest {
 
@@ -62,9 +62,9 @@ class LocalOnnxEmbeddingTest {
       Path.of("models").toFile().isDirectory() ? Path.of(".") : Path.of("..");
 
   private static final Path MODEL =
-      REPO_ROOT.resolve("models/bge-small-zh-v1.5/model_quantized.onnx");
+      REPO_ROOT.resolve("models/multilingual-e5-small/model_quantized.onnx");
   private static final Path TOKENIZER =
-      REPO_ROOT.resolve("models/bge-small-zh-v1.5/tokenizer.json");
+      REPO_ROOT.resolve("models/multilingual-e5-small/tokenizer.json");
 
   @Autowired LocalOnnxEmbedding local;
 
@@ -76,7 +76,7 @@ class LocalOnnxEmbeddingTest {
   }
 
   @Test
-  void vectorLengthIs512() {
+  void vectorLengthIs384() {
     assumeModelPresent();
 
     List<float[]> vectors = local.embed(List.of("出差住宿费一天最多报多少"));
@@ -84,9 +84,9 @@ class LocalOnnxEmbeddingTest {
     assertThat(vectors).hasSize(1);
     assertThat(vectors.get(0).length)
         .as(
-            "★★ 必须是 512 —— `bge-small-zh-v1.5` 是 512 维，而本机 `vector(768)` 是另一维。"
+            "★★ 必须是 384 —— 默认模型 `multilingual-e5-small` 是 384 维，而库里既有的向量表是 512 / 768。"
                 + "维度错了**不会报错**：要么写进错表，要么写入失败。所以这里直接断言长度")
-        .isEqualTo(512);
+        .isEqualTo(384);
     assertThat(local.ready()).as("★ 加载成功后 must be ready（健康指示与它同一来源）").isTrue();
     assertThat(local.loadFailure()).as("★ 没有失败原因").isNull();
   }
@@ -135,7 +135,10 @@ class LocalOnnxEmbeddingTest {
     // ★ 这条**不**跳过：它要在没有模型文件的环境里也能验
     LocalOnnxEmbedding broken =
         new LocalOnnxEmbedding(
-            true, "models/does-not-exist.onnx", "models/does-not-exist.json", "bge-small-zh-v1.5");
+            true,
+            "models/does-not-exist.onnx",
+            "models/does-not-exist.json",
+            "multilingual-e5-small");
 
     BusinessException error =
         catchThrowableOfType(() -> broken.embed(List.of("随便")), BusinessException.class);

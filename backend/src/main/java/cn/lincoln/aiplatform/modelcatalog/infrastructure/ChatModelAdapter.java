@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
+import cn.lincoln.aiplatform.modelcatalog.domain.ResolvedUpstream;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatMessage;
@@ -42,13 +43,13 @@ import org.springframework.stereotype.Component;
 public class ChatModelAdapter implements ChatPort {
 
   private final ModelRepository models;
-  private final ApiKeyCipher apiKeyCipher;
+  private final ModelUpstreamResolver upstream;
   private final UpstreamGateway gateway;
 
   public ChatModelAdapter(
-      ModelRepository models, ApiKeyCipher apiKeyCipher, UpstreamGateway gateway) {
+      ModelRepository models, ModelUpstreamResolver upstream, UpstreamGateway gateway) {
     this.models = models;
-    this.apiKeyCipher = apiKeyCipher;
+    this.upstream = upstream;
     this.gateway = gateway;
   }
 
@@ -56,7 +57,11 @@ public class ChatModelAdapter implements ChatPort {
   public Optional<UUID> pickChatModel() {
     List<Model> candidates =
         models.search(null, ModelKind.CHAT, ModelStatus.LOADED, 0, MAX_CANDIDATES_SCAN);
-    return candidates.stream().map(Model::id).findFirst();
+    // ★ 服务商停用 ⇒ 这个模型不可用（与 resolve 的 fail-closed 同一口径），不能挑到它。
+    return candidates.stream()
+        .filter(model -> upstream.egressOf(model).isPresent())
+        .map(Model::id)
+        .findFirst();
   }
 
   @Override
@@ -75,8 +80,91 @@ public class ChatModelAdapter implements ChatPort {
     List<Map<String, String>> history =
         messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
     try {
+      ResolvedUpstream target = upstream.resolve(model);
       return gateway.chatCompletion(
-          model.baseModel(), model.apiBase(), decryptKey(model), history, timeout);
+          model.baseModel(),
+          target.apiBase(),
+          target.apiKey(),
+          history,
+          timeout,
+          target.authStyle());
+    } catch (UpstreamGateway.UpstreamUnreachableException e) {
+      throw new BusinessException(
+          ErrorCode.UPSTREAM_UNAVAILABLE,
+          "调用对话模型失败：" + e.getMessage(),
+          "请确认对话模型服务可用（地址与密钥）；检索会退回原始问题继续，不会因此失败");
+    }
+  }
+
+  /**
+   * ★★ 真流式：逐 token 交给调用方，而不是等整段返回再切块。
+   *
+   * <h3>为什么需要它（实测数据）</h3>
+   *
+   * <p>{@link #complete} / {@link #completeConversation} 都是「一次性返回」： CPU 上 qwen2.5:1.5b 生成 400 字要
+   * <b>60~90 秒</b>，这期间服务端一个字节都发不出去 ⇒ 用户看到「转 90 秒，然后一次性出现全文」。而 Ollama 本身逐 token 吐，
+   * 是中间这一层（`ChatPortFallbackStreamAdapter` 拿 {@code complete()} 再按 24 字切块） 把它攒住了。
+   *
+   * <p>★ 本方法只做"转发"，不决定终态、不落库 —— 那两件事仍由 {@code ChatService} 的收尾路径做。
+   *
+   * @param onDelta 每收到一段正文回调一次（★ 调用方抛异常即可中断，上游连接随之关闭）
+   * @return 上游是否真的按流式返回了数据
+   */
+  public boolean streamChat(
+      UUID modelId,
+      List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta) {
+    return streamChat(modelId, messages, false, timeout, onDelta);
+  }
+
+  /**
+   * 带应用思考开关的流式调用（{@code #185}）。
+   *
+   * <p>★★ 这里只做<strong>能力映射</strong>，不替用户决定：{@code TOGGLEABLE} 才发送 {@code reasoning_effort}（开 =
+   * {@code high}，关 = {@code none}）；{@code ALWAYS_ON} 与 {@code NONE} 都不发送 ——
+   * 对前者"关"物理上做不到，对后者"开"没有意义。把 {@code none} 发给一个始终思考的模型， 只会得到一个被忽略的字段，却让日志看起来"已经关了"。
+   */
+  public boolean streamChat(
+      UUID modelId,
+      List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages,
+      boolean thinking,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta) {
+    return streamChat(modelId, messages, thinking, timeout, onDelta, null);
+  }
+
+  /**
+   * 带用量回调的流式调用（{@code #142}）：把上游 {@code usage} 两个分量原样转给端口层。
+   *
+   * @param onUsage {@code null} = 调用方不关心用量
+   */
+  public boolean streamChat(
+      UUID modelId,
+      List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages,
+      boolean thinking,
+      Duration timeout,
+      java.util.function.Consumer<String> onDelta,
+      java.util.function.BiConsumer<Integer, Integer> onUsage) {
+    Model model = requireChatModel(modelId);
+    List<Map<String, String>> history =
+        messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
+    String reasoningEffort =
+        model.thinking() == cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode.TOGGLEABLE
+            ? (thinking ? "high" : "none")
+            : null;
+    try {
+      ResolvedUpstream target = upstream.resolve(model);
+      return gateway.streamChatCompletion(
+          model.baseModel(),
+          target.apiBase(),
+          target.apiKey(),
+          history,
+          timeout,
+          onDelta,
+          target.authStyle(),
+          reasoningEffort,
+          onUsage);
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.UPSTREAM_UNAVAILABLE,
@@ -124,8 +212,14 @@ public class ChatModelAdapter implements ChatPort {
 
   private String chat(Model model, String prompt, Duration timeout) {
     try {
+      ResolvedUpstream target = upstream.resolve(model);
       return gateway.chatCompletion(
-          model.baseModel(), model.apiBase(), decryptKey(model), prompt, timeout);
+          model.baseModel(),
+          target.apiBase(),
+          target.apiKey(),
+          prompt,
+          timeout,
+          target.authStyle());
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.UPSTREAM_UNAVAILABLE,
@@ -146,12 +240,4 @@ public class ChatModelAdapter implements ChatPort {
 
   /** 扫多少个已加载的对话模型就够 —— 现在只取第一个，给一个上限免得把整张表拉进内存。 */
   private static final int MAX_CANDIDATES_SCAN = 10;
-
-  /** 解密模型的 API key（没存 key 时返回 null，由 {@link UpstreamGateway} 用默认 key）。 */
-  private String decryptKey(Model model) {
-    if (model.apiKeyCipher() == null || model.apiKeyIv() == null) {
-      return null;
-    }
-    return apiKeyCipher.decrypt(model.apiKeyCipher(), model.apiKeyIv());
-  }
 }

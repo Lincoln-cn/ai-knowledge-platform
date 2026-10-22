@@ -13,6 +13,7 @@ import cn.lincoln.aiplatform.platform.assistant.AppBindingPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -106,7 +107,15 @@ public class ChatTurnWriter implements ChatTurnStore {
       UUID modelId,
       List<UUID> kbIds,
       // ★ `#168`：应用上的「多轮对话」开关。它此前是个**死开关**（`ChatService` 从不读）。
-      boolean multiTurn) {}
+      boolean multiTurn,
+      // ★ `#185`：应用的思考开关。通用问答为 false；应用只表达"想不想"，模型能力决定能不能
+      boolean thinkingEnabled,
+      // ★ 应用归属（null = 通用问答）与角色设定：提示词来源必须由这一轮的应用决定，
+      //   不能在 ChatService 里再猜一次（#183）。
+      UUID appId,
+      String rolePrompt,
+      // ★ `#185`：应用级检索参数。通用问答（app == null）时是 null ⇒ 由 ChatService 回落到平台设置。
+      RetrievalParams retrieval) {}
 
   /**
    * 建这一轮的两条消息（用户消息 + {@code GENERATING} 助手消息）并把模型定下来。
@@ -127,8 +136,12 @@ public class ChatTurnWriter implements ChatTurnStore {
   @Override
   @Transactional
   public PreparedTurn prepare(UUID conversationId, UUID appId, String question, UUID userId) {
-    AppBindingPort.AppBinding app = appId == null ? null : requireVisibleApp(appId);
-    Conversation conversation = resolveOrCreate(conversationId, app, question, userId);
+    // ★ 请求体里的 appId 只在**新建会话**时生效；已有会话的应用以 conversation.assistantId 为准。
+    //   否则「会话 A + appId B」会用 B 的模型/知识库写进 A 的会话（#190）。
+    AppBindingPort.AppBinding requestedApp = appId == null ? null : requireVisibleApp(appId);
+    Conversation conversation = resolveOrCreate(conversationId, requestedApp, question, userId);
+    AppBindingPort.AppBinding app =
+        conversation.assistantId() == null ? null : requireVisibleApp(conversation.assistantId());
 
     // ★ 用户消息先落库：它是"这轮问了什么"的唯一痕迹（助手消息失败/停止都不影响它）
     Message userMessage = Message.user(UUID.randomUUID(), conversation.id(), question);
@@ -159,7 +172,55 @@ public class ChatTurnWriter implements ChatTurnStore {
         modelId,
         app == null ? List.of() : app.kbIds(),
         // ★ `#168`：把开关带进这一轮 —— 只有它能让 `ChatService` 决定要不要带历史
-        app != null && app.multiTurn());
+        // ★★ 通用问答（app == null）**默认多轮**，而不是"没有应用所以单轮"。
+        //
+        //   这是个设计错位：`multiTurn` 被做成了**应用**的开关（`as_assistant.multi_turn`），
+        //   而通用问答根本没有应用 ⇒ 那个开关对它恒为 false ⇒ 历史永远不读。
+        //   实测症状（用户）：「Iberian colonialism」→「翻译一下」，模型答
+        //   「我需要先获取你要翻译的内容」—— 它**看不到上一轮**。
+        //
+        //   ★ "多轮"本质上是**会话**的属性（同一个 conversationId 内前后相关），
+        //     不是应用的属性；把默认值翻成 true 是对这个错位的最小修正：
+        //     应用那边仍尊重它自己的 `multi_turn` 开关，通用问答则总是带上历史。
+        app == null || app.multiTurn(),
+        // ★ `#185`：通用问答没有应用 ⇒ 不思考；应用则尊重它自己的开关
+        app != null && app.thinkingEnabled(),
+        app == null ? null : app.appId(),
+        app == null ? null : app.rolePrompt(),
+        // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）
+        app == null ? null : app.retrieval());
+  }
+
+  /**
+   * 调试的一轮（{@code #184}）：<strong>只读应用绑定，不建会话 / 消息，不落库</strong>。
+   *
+   * <p>★★ 与 {@link #prepare} 的唯一差别是"不落库"：应用映射、模型选取、检索参数全部走同一段代码 —— 否则调试通过、 线上仍不一致（{@code BR-02-08}
+   * 要防的正是这个）。
+   *
+   * <p>★ {@code conversationId} 是 {@code null}：调试没有会话，因此检索域里没有会话附件那一支（那是正确语义， 不是"漏了一支"）；{@code
+   * userId} 也不需要 —— 可见性判定在 {@link AppBindingPort#findVisibleById} 里用当前范围。
+   */
+  @Override
+  @Transactional(readOnly = true)
+  public PreparedTurn prepareDebug(UUID appId, String question) {
+    AppBindingPort.AppBinding app = requireVisibleApp(appId);
+    UUID modelId = pickModelId(app);
+    UUID assistantMessageId = UUID.randomUUID();
+    return new PreparedTurn(
+        // ★ 调试不属于任何会话：null ⇒ 检索域里没有会话附件那一支（正确语义）
+        null,
+        assistantMessageId,
+        UUID.randomUUID(),
+        "debug_" + assistantMessageId,
+        modelId.toString(),
+        modelId,
+        app.kbIds(),
+        // ★ 调试不带历史：没有会话可带
+        false,
+        app.thinkingEnabled(),
+        app.appId(),
+        app.rolePrompt(),
+        app.retrieval());
   }
 
   /**
@@ -374,7 +435,23 @@ public class ChatTurnWriter implements ChatTurnStore {
         target.modelId(),
         app == null ? List.of() : app.kbIds(),
         // ★ `#168`：把开关带进这一轮 —— 只有它能让 `ChatService` 决定要不要带历史
-        app != null && app.multiTurn());
+        // ★★ 通用问答（app == null）**默认多轮**，而不是"没有应用所以单轮"。
+        //
+        //   这是个设计错位：`multiTurn` 被做成了**应用**的开关（`as_assistant.multi_turn`），
+        //   而通用问答根本没有应用 ⇒ 那个开关对它恒为 false ⇒ 历史永远不读。
+        //   实测症状（用户）：「Iberian colonialism」→「翻译一下」，模型答
+        //   「我需要先获取你要翻译的内容」—— 它**看不到上一轮**。
+        //
+        //   ★ "多轮"本质上是**会话**的属性（同一个 conversationId 内前后相关），
+        //     不是应用的属性；把默认值翻成 true 是对这个错位的最小修正：
+        //     应用那边仍尊重它自己的 `multi_turn` 开关，通用问答则总是带上历史。
+        app == null || app.multiTurn(),
+        // ★ `#185`：通用问答没有应用 ⇒ 不思考；应用则尊重它自己的开关
+        app != null && app.thinkingEnabled(),
+        app == null ? null : app.appId(),
+        app == null ? null : app.rolePrompt(),
+        // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）
+        app == null ? null : app.retrieval());
   }
 
   /**
@@ -433,8 +510,22 @@ public class ChatTurnWriter implements ChatTurnStore {
               .findById(conversationId)
               .orElseThrow(() -> notFound("会话不存在", "它可能已被删除，请刷新会话列表后重试"));
       if (!found.userId().equals(userId)) {
-        // ★ 与"不存在"同一个出口、同一段文案：403 会告诉对方"这个会话是存在的"
+        // ★ 与「不存在」同一个出口、同一段文案：403 会告诉对方「这个会话是存在的」
         throw notFound("会话不存在", "它可能已被删除，或者不在你的可见范围内");
+      }
+      // ★★ 占位标题 + 还没有任何消息 ⇒ 用**本次问题**作标题。
+      //
+      //   为什么需要这一步：前端「新建会话」会先调 `POST /conversations` 建一条空会话
+      //   （标题是占位「新会话」），随后发第一条消息时走的是「会话已存在」这条路 ——
+      //   原来这条路**不改标题**，于是标题永远停在占位值。
+      //   实测症状：会话有 2 条消息，标题仍是「新会话」，用户无法在列表里认出它。
+      //
+      //   ★ 只在 `messageCount == 0` 时改：标题一旦由首个问题定下，后续轮次不再覆盖
+      //     （否则每问一句标题就变一次，用户会找不到自己的会话）。
+      //   ★ 也只在「标题还是占位值」时改：用户手动改过名的会话不许被自动覆盖。
+      if (found.messageCount() == 0 && Conversation.PLACEHOLDER_TITLE.equals(found.title())) {
+        found.rename(titleOf(question));
+        return conversations.save(found);
       }
       return found;
     }

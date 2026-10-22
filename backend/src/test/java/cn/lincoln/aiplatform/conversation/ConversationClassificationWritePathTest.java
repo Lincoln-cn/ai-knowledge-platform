@@ -142,6 +142,10 @@ class ConversationClassificationWritePathTest {
   @Test
   void productionQuestionRaisesTheConversationToTheSecretOfItsReferences() throws Exception {
     seedChatModel();
+    // ★ 通用问答默认 retrieval_enabled=false（防「通用问答静默全库检索」，见 ChatService#retrieve
+    //   的开关）；本类验的是「引用密级到落库」，不是这个开关，所以先把召回打开。
+    //   不打开时 ChatService 在检索前就早退回空引用，本判据会误报成「refs 映射少字段」。
+    jdbc.update("update cv_chat_settings set retrieval_enabled = true");
     String token = login();
 
     HttpResponse<String> response =

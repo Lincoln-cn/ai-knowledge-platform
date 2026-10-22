@@ -36,7 +36,7 @@
         :disabled="assistant?.builtin"
       >
         <el-form-item label="对话模型" prop="modelId">
-          <el-select v-model="form.modelId" placeholder="仅列出已加载的对话模型" style="width: 100%" @change="onModelChange">
+          <el-select v-model="form.modelId" placeholder="仅列出已加载的对话模型" style="width: 100%">
             <el-option
               v-for="m in chatModels"
               :key="m.id"
@@ -47,12 +47,18 @@
           <div class="hint micro">{{ thinkingModeHint }}</div>
         </el-form-item>
 
-        <!-- 思考模式：NONE 整项不渲染 / TOGGLEABLE 默认关 / ALWAYS_ON 置开禁用 -->
-        <ThinkingSwitch
-          v-if="thinkingMode !== 'NONE'"
-          :mode="thinkingMode"
-          v-model="form.thinkingEnabled"
-        />
+        <!-- 思考模式：★ `#185` 已把开关接进 ChatService → ChatStreamPort → 适配器；
+             但只有 TOGGLEABLE 的模型能被开关，ALWAYS_ON 只读说明，NONE 不出现。 -->
+        <el-form-item v-if="thinkingMode === 'TOGGLEABLE'" label="思考模式">
+          <el-switch v-model="form.thinkingEnabled" />
+          <div class="hint micro">
+            开启时上游收到 <code>reasoning_effort=high</code>，关闭时收到 <code>none</code>；只对当前模型生效。
+          </div>
+        </el-form-item>
+
+        <el-form-item v-else-if="thinkingMode === 'ALWAYS_ON'" label="思考模式">
+          <span class="hint micro">该模型始终思考，无法关闭；本应用不会发送 <code>reasoning_effort</code>。</span>
+        </el-form-item>
 
         <el-form-item label="角色设定" prop="rolePrompt">
           <el-input
@@ -65,9 +71,14 @@
             placeholder="定义助手的身份、语气与边界"
           />
           <div class="row gap-8" style="width: 100%; margin-top: var(--space-2xs)">
-            <el-button size="small" @click="openPromptPicker">从提示词选用</el-button>
+            <!-- ★ `#184`：/prompt-configs 与 /prompt-types 后端未实现（真栈 404）⇒ 不再保留一个
+                 "弹窗打开但永远空"的入口。显式禁用 + 写明原因，等提示词域落地后再恢复。 -->
+            <el-button size="small" disabled title="提示词模板尚未接入（/prompt-configs 未实现）">
+              从提示词选用
+            </el-button>
             <el-button size="small" @click="form.rolePrompt = ''">清空</el-button>
           </div>
+          <div class="hint micro">提示词模板管理尚未接入（后端 /prompt-configs 未实现），当前请直接编辑角色设定</div>
         </el-form-item>
 
         <el-form-item label="提示词">
@@ -113,15 +124,17 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item label="检索模式" prop="retrievalMode">
+        <!-- 检索模式：机器码（契约 RetrievalMode） -->
+        <el-form-item label="检索模式">
           <el-radio-group v-model="form.retrieval.mode">
-            <!-- ★ value 必须是机器码（契约 RetrievalMode）—— 这里原来写的是中文标签，
-                 与命中测试页/设置页同一处错法（#28）：TS 抓不到（radio 的 v-model 宽到 string|number|boolean），
-                 而它一旦进了请求体，"检索模式只支持 VECTOR / FULLTEXT / HYBRID" 那条 400 就来了。 -->
-            <el-radio-button value="VECTOR">向量检索</el-radio-button>
-            <el-radio-button value="FULLTEXT">全文检索</el-radio-button>
-            <el-radio-button value="HYBRID">混合检索</el-radio-button>
+            <el-radio-button value="FULLTEXT">全文</el-radio-button>
+            <el-radio-button value="VECTOR">向量</el-radio-button>
+            <el-radio-button value="HYBRID">混合</el-radio-button>
           </el-radio-group>
+          <div class="hint micro">
+            向量/混合要求知识库已绑定并加载向量模型。向量模式只检索知识库，不含会话附件；
+            混合模式的会话附件仍由全文一路覆盖。向量模式缺依赖时本轮零引用，混合模式向量失败时只用全文并留痕。
+          </div>
         </el-form-item>
 
         <el-form-item label="相似度阈值">
@@ -185,12 +198,6 @@
         />
       </div>
     </div>
-
-    <PromptPickerDialog
-      ref="pickerRef"
-      v-model="form.promptIds"
-      @picked="onPromptsPicked"
-    />
   </el-drawer>
 </template>
 
@@ -204,9 +211,7 @@ import type { RetrievalMode, RetrievalParams } from '@/api/retrieval'
 import type { ModelInfo, ThinkingMode } from '@/api/models'
 import type { KnowledgeBase } from '@/api/knowledge'
 import type { PromptConfig } from '@/api/prompts'
-import ThinkingSwitch from './ThinkingSwitch.vue'
 import DebugPanel from './DebugPanel.vue'
-import PromptPickerDialog from './PromptPickerDialog.vue'
 
 const props = defineProps<{ assistant: Assistant | null }>()
 const emit = defineEmits<{ saved: []; published: [] }>()
@@ -251,12 +256,19 @@ const thinkingMode = computed<ThinkingMode>(() => {
   return model?.thinking ?? 'NONE'
 })
 
+/** 模型声明的思考能力 → 配置页文案；开关只在 TOGGLEABLE 时出现。 */
+const THINKING_MODE_LABEL: Record<ThinkingMode, string> = {
+  NONE: '无',
+  TOGGLEABLE: '可开关',
+  ALWAYS_ON: '强制开启'
+}
+
 const thinkingModeHint = computed(() => {
   const model = chatModels.value.find((m) => m.id === form.modelId)
-  if (!model) return '选择模型后按其思考能力呈现开关'
-  if (model.thinking === 'NONE') return '该模型无思考模式，界面上不提供开关'
-  if (model.thinking === 'ALWAYS_ON') return '该模型思考模式关不掉，开关已强制置开'
-  return '该模型可开关思考模式，默认关闭'
+  if (!model) return '选择模型后按其思考能力呈现说明'
+  if (model.thinking === 'NONE') return '该模型未声明思考能力，本应用不会发送 reasoning_effort'
+  if (model.thinking === 'ALWAYS_ON') return '该模型始终思考、无法关闭，本应用不会发送 reasoning_effort'
+  return `该模型可开关思考（${THINKING_MODE_LABEL[model.thinking]}）：开启发 high，关闭发 none`
 })
 
 const pickedKbs = computed(() =>
@@ -266,32 +278,6 @@ const pickedKbs = computed(() =>
 )
 
 const availableKbs = computed(() => allKbs.value.filter((k) => !form.kbIds.includes(k.id)))
-
-const onModelChange = (modelId: string) => {
-  const model = chatModels.value.find((m) => m.id === modelId)
-  // 换模型时即时按能力重新校验（M-I3～M-I6）
-  if (model?.thinking === 'ALWAYS_ON') form.thinkingEnabled = true
-  else if (model?.thinking === 'NONE') form.thinkingEnabled = false
-  else form.thinkingEnabled = false
-}
-
-const pickerRef = ref<InstanceType<typeof PromptPickerDialog>>()
-
-const openPromptPicker = () => {
-  pickerRef.value?.open()
-}
-
-const onPromptsPicked = (rows: PromptConfig[]) => {
-  // 选用提示词时把 callWord 写入角色设定（可再微调）
-  for (const p of rows) {
-    if (p.callWord && !form.rolePrompt.includes(p.callWord.slice(0, 12))) {
-      form.rolePrompt = form.rolePrompt
-        ? `${form.rolePrompt}\n\n${p.callWord}`
-        : p.callWord
-    }
-  }
-  pickedPrompts.value = rows
-}
 
 const removePrompt = (id: string) => {
   form.promptIds = form.promptIds.filter((x) => x !== id)
@@ -328,11 +314,6 @@ const fillForm = (a: Assistant) => {
   form.multiTurn = a.multiTurn
   form.thinkingEnabled = a.thinkingEnabled
   form.quickQuestions = [...a.quickQuestions]
-  onModelChange(form.modelId)
-  onModelChange(form.modelId)
-  if (thinkingMode.value === 'ALWAYS_ON') form.thinkingEnabled = true
-  if (thinkingMode.value === 'NONE') form.thinkingEnabled = false
-  if (thinkingMode.value === 'TOGGLEABLE') form.thinkingEnabled = a.thinkingEnabled
 }
 
 const loadPublishWarnings = async () => {
@@ -360,7 +341,8 @@ const toBody = () => ({
   promptIds: form.promptIds,
   retrieval: { ...form.retrieval },
   multiTurn: form.multiTurn,
-  thinkingEnabled: thinkingMode.value === 'ALWAYS_ON' ? true : thinkingMode.value === 'NONE' ? false : form.thinkingEnabled,
+  // ★ `#185`：思考开关已接入；这里原样回写用户的选择，模型是否接受由模板的 TOGGLEABLE 判定
+  thinkingEnabled: form.thinkingEnabled,
   prologue: form.prologue,
   quickQuestions: form.quickQuestions.filter((q) => q.trim())
 })

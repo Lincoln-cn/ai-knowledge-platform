@@ -9,7 +9,7 @@ package cn.lincoln.aiplatform.conversation.application;
  *   <tr><th>常量</th><th>值</th><th>出处</th></tr>
  *   <tr><td>{@link #HEARTBEAT_INTERVAL_MS}</td><td>20 000</td>
  *       <td>冻结契约 {@code frontend/src/api/stream-types.ts} 的 {@code HEARTBEAT_INTERVAL_MS}</td></tr>
- *   <tr><td>{@link #IDLE_TIMEOUT_MS}</td><td>60 000</td>
+ *   <tr><td>{@link #IDLE_TIMEOUT_MS}</td><td>300 000</td>
  *       <td>同上，{@code IDLE_TIMEOUT_MS}；{@code 03 §1.5} 把它定为一条<strong>终止路径</strong></td></tr>
  *   <tr><td>{@link #FLUSH_INTERVAL_MS} / {@link #FLUSH_CHARS}</td><td>500 / 200</td>
  *       <td>{@code 03 §1.4}：生成过程中的周期性 flush —— <strong>500ms 或 200 字，先到者</strong></td></tr>
@@ -30,8 +30,13 @@ public final class ChatStreamTransport {
   /** 心跳间隔（毫秒）—— 契约 {@code HEARTBEAT_INTERVAL_MS}。无业务帧时按它发 {@code : keep-alive}。 */
   public static final long HEARTBEAT_INTERVAL_MS = 20_000L;
 
-  /** 闲置超时（毫秒）—— 契约 {@code IDLE_TIMEOUT_MS}（两侧同值），也是服务端的 {@code IDLE_TIMEOUT} 收尾点。 */
-  public static final long IDLE_TIMEOUT_MS = 60_000L;
+  /**
+   * 闲置超时（毫秒）—— 契约 {@code IDLE_TIMEOUT_MS}（两侧同值），也是服务端的 {@code IDLE_TIMEOUT} 收尾点。
+   *
+   * <p>★ 契约已因 {@code #181} 从 60s 调到 300s：兜底流式实现首字节 = 全量生成时间，前端若仍按 60s 放弃，
+   * 就会出现「界面报连接中断、重进会话却有回复」。服务端必须与前端同值，否则这条关系只在一侧成立。
+   */
+  public static final long IDLE_TIMEOUT_MS = 300_000L;
 
   /** 落库 flush 的最长间隔（毫秒）—— {@code 03 §1.4} 的 500ms。 */
   public static final long FLUSH_INTERVAL_MS = 500L;

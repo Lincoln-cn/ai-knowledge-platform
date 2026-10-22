@@ -65,11 +65,11 @@ public class LocalOnnxEmbedding {
 
   public LocalOnnxEmbedding(
       @Value("${app.embedding.local.enabled:true}") boolean enabled,
-      @Value("${app.embedding.local.model-path:models/bge-small-zh-v1.5/model_quantized.onnx}")
+      @Value("${app.embedding.local.model-path:models/multilingual-e5-small/model_quantized.onnx}")
           String modelPath,
-      @Value("${app.embedding.local.tokenizer-path:models/bge-small-zh-v1.5/tokenizer.json}")
+      @Value("${app.embedding.local.tokenizer-path:models/multilingual-e5-small/tokenizer.json}")
           String tokenizerPath,
-      @Value("${app.embedding.local.model-name:bge-small-zh-v1.5}") String servedModelName) {
+      @Value("${app.embedding.local.model-name:multilingual-e5-small}") String servedModelName) {
     this.enabled = enabled;
     this.modelPath = modelPath;
     this.tokenizerPath = tokenizerPath;
@@ -91,10 +91,28 @@ public class LocalOnnxEmbedding {
   }
 
   /**
+   * @return 是否启用本地 ONNX（关掉时走上游，健康指示器报 UNKNOWN）
+   */
+  public boolean enabled() {
+    return enabled;
+  }
+
+  /**
    * @return 是否已成功初始化（健康指示与判据都用它）
    */
   public boolean ready() {
     return model.get() != null;
+  }
+
+  /**
+   * 预热本地模型：显式触发懒加载，让管理页的「预热」与健康状态能在用户点击时推进。
+   *
+   * <p>★ 不改变懒加载语义：不预热时首次 {@link #embed} 仍会自行加载；这里只是给"我想先确认它能不能用"一个入口。
+   *
+   * @throws BusinessException 未启用 / 文件缺失 / 初始化失败（都带可读原因）
+   */
+  public void warmUp() {
+    requireModel();
   }
 
   /**

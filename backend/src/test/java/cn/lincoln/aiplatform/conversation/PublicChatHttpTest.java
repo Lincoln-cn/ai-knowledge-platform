@@ -1,6 +1,9 @@
 package cn.lincoln.aiplatform.conversation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.doAnswer;
 
 import cn.lincoln.aiplatform.assistant.application.AccessCredentialService;
 import cn.lincoln.aiplatform.conversation.support.FakeChatStreamPorts;
@@ -33,9 +36,9 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -141,6 +144,15 @@ class PublicChatHttpTest {
   /** 每个用例自己装一个假模型（见 {@link FakeChatStreamPorts}）。 */
   @Autowired AtomicReference<ChatStreamPort> fakeModel;
 
+  /**
+   * ★ 用 {@code @MockitoBean} 替换唯一的 {@link ChatStreamPort} 入口，而不是再注册一个 {@code @Primary} 的测试 bean。
+   *
+   * <p>生产侧已有 {@code UpstreamStreamingChatAdapter}（{@code @Primary}）与 {@code
+   * ChatPortFallbackStreamAdapter} 两个候选；测试再给一个 {@code @Primary} 会得到“more than one 'primary' bean”
+   * —— 上下文在注入阶段就挂， 十条用例全报 Error（{@code #200}）。{@code @MockitoBean} 按类型替换入口，不再制造第二个 primary。
+   */
+  @MockitoBean ChatStreamPort chatStreamPort;
+
   /** 撤销那一条用例要**走真实撤销路径**（服务层 → {@code forget}），而不是直接改库。 */
   @Autowired AccessCredentialService credentialService;
 
@@ -162,7 +174,56 @@ class PublicChatHttpTest {
   @BeforeEach
   void anonymousByDefault() {
     fakeModel.set(FakeChatStreamPorts.streaming(0, 0, 12));
+    wireFakeModel();
     fixture = seedFixture();
+  }
+
+  /**
+   * 把 Mockito 替身接到“每个用例自己装的那个假模型”上。
+   *
+   * <p>★ 必须同时钉住 4 参与 5 参两个重载：{@code ChatService} 现在走带 {@code thinking} 的 5 参入口； Mockito
+   * 的默认方法不会自动调用真实默认实现，漏钉就会“模型根本没被调用”。
+   */
+  private void wireFakeModel() {
+    doAnswer(
+        invocation -> {
+          answerWithFakeModel(
+              invocation.getArgument(0),
+              invocation.getArgument(1),
+              false,
+              invocation.getArgument(2),
+              invocation.getArgument(3));
+          return null;
+        })
+        .when(chatStreamPort)
+        .stream(any(), any(), any(), any());
+    doAnswer(
+        invocation -> {
+          answerWithFakeModel(
+              invocation.getArgument(0),
+              invocation.getArgument(1),
+              invocation.getArgument(2),
+              invocation.getArgument(3),
+              invocation.getArgument(4));
+          return null;
+        })
+        .when(chatStreamPort)
+        .stream(any(), any(), anyBoolean(), any(), any());
+  }
+
+  private void answerWithFakeModel(
+      UUID modelId,
+      String prompt,
+      boolean thinking,
+      Duration timeout,
+      ChatStreamPort.Callback callback) {
+    ChatStreamPort actual = fakeModel.get();
+    if (actual != null) {
+      actual.stream(modelId, prompt, thinking, timeout, callback);
+      return;
+    }
+    callback.onChunk(FakeChatStreamPorts.ANSWER);
+    callback.onEnd(ChatStreamPort.End.COMPLETE, null);
   }
 
   @AfterEach
@@ -729,9 +790,10 @@ class PublicChatHttpTest {
     UUID appId = UUID.randomUUID();
     jdbc.update(
         "insert into as_assistant (id, name, icon, description, type, model_id, owner_id,"
-            + " visibility, published, prologue, quick_questions, created_at, updated_at)"
+            + " visibility, published, prologue, quick_questions, retrieval_mode,"
+            + " retrieval_threshold, created_at, updated_at)"
             + " values (?, ?, '🤖', '公开面夹具应用描述', 'SIMPLE', ?, ?, 'PRIVATE',"
-            + " true, '你好，我能回答制度类问题', array['差旅标准是多少'], now(), now())",
+            + " true, '你好，我能回答制度类问题', array['差旅标准是多少'], 'FULLTEXT', 0.00, now(), now())",
         appId,
         FIXTURE_PREFIX + "应用",
         chatModelId,
@@ -829,21 +891,6 @@ class PublicChatHttpTest {
     @Bean
     AtomicReference<ChatStreamPort> fakeModel() {
       return new AtomicReference<>();
-    }
-
-    @Bean
-    @Primary
-    ChatStreamPort fakeChatStreamPort(AtomicReference<ChatStreamPort> fakeModel) {
-      // ★ 兜底实现（未装假模型时）：一次吐完、没有停顿
-      return (modelId, prompt, timeout, callback) -> {
-        ChatStreamPort actual = fakeModel.get();
-        if (actual != null) {
-          actual.stream(modelId, prompt, timeout, callback);
-          return;
-        }
-        callback.onChunk(FakeChatStreamPorts.ANSWER);
-        callback.onEnd(ChatStreamPort.End.COMPLETE, null);
-      };
     }
   }
 }

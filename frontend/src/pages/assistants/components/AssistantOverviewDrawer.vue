@@ -84,6 +84,7 @@ import * as echarts from 'echarts'
 import dayjs from 'dayjs'
 import { analyticsApi, assistantsApi } from '@/api'
 import type { AccessCredential, Assistant } from '@/api/assistants'
+import type { RetrievalMode } from '@/api/retrieval'
 import { ApiError } from '@/api/types'
 import type { TrendPoint } from '@/api/analytics'
 import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/components/InstrumentCard.vue'
@@ -204,6 +205,15 @@ const loadCredentials = async () => {
   }
 }
 
+/** 检索模式的机器码（契约 RetrievalMode）→ 展示名；放局部映射，模板不塞复杂表达式 */
+const RETRIEVAL_MODE_TEXT: Record<RetrievalMode, string> = {
+  FULLTEXT: '全文检索',
+  VECTOR: '向量检索',
+  HYBRID: '混合检索'
+}
+const retrievalModeText = (mode?: RetrievalMode) =>
+  mode ? (RETRIEVAL_MODE_TEXT[mode] ?? mode) : RETRIEVAL_MODE_TEXT.FULLTEXT
+
 /**
  * 读数行。**零新增字段**：全部取自 `assistant` 上已有但此前没展示的属性 —— 不编数字。
  *
@@ -222,14 +232,14 @@ const publishRows = computed<InstrumentRow[]>(() => {
     {
       label: '应用类型',
       value: workflow ? '编排' : '简单',
-      hint: workflow ? '创建后不可更改' : `${a.retrieval.mode} · Top${a.retrieval.topN}`
+      hint: workflow ? '创建后不可更改' : `${retrievalModeText(a.retrieval.mode)} · Top${a.retrieval.topN} · 阈值 ${a.retrieval.threshold}`
     },
     {
       label: '模型',
       value: workflow ? '见流程' : (a.modelName ?? '—'),
       hint: workflow
         ? (a.workflow ? `流程共 ${a.workflow.nodeCount} 个节点` : undefined)
-        : `${a.multiTurn ? '多轮' : '单轮'}上下文 · 思考模式${a.thinkingEnabled ? '开' : '关'}`
+        : `${a.multiTurn ? '多轮' : '单轮'}上下文 · 思考${a.thinkingEnabled ? '开' : '关'}`
     },
     {
       label: '知识库',

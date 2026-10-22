@@ -367,10 +367,12 @@ onBeforeUnmount(() => {
 }
 
 /* 顶栏的 surface 底透掉，让 bar 与石墨卡片共享同一片色场；
-   它自己带一条底部发丝线，分面照旧。 */
+   它自己带一条底部发丝线，分面照旧。
+   横向内边距交给 `.head-band`（16px）—— 顶栏再加一层会与下方应用卡错开 4px。 */
 .head-band :deep(.topbar) {
   position: relative;
   z-index: 1;
+  padding: 0;
   background: transparent;
 }
 

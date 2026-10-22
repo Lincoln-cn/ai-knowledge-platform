@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import java.util.List;
 import java.util.UUID;
@@ -109,6 +110,23 @@ class RetrievalVectorScopeBoundaryTest {
         .isFalse();
   }
 
+  /**
+   * ★ 问答链路专用：{@code withoutConversation()} 必须只摘会话域，不动共用库。
+   *
+   * <p>它防的是"为了走向量而把整个范围清空"——那会让知识库也一起搜不到，读数看起来只是"零命中"。
+   */
+  @Test
+  void withoutConversationKeepsTheKnowledgeBaseDomain() {
+    RetrievalScope scope = new RetrievalScope(List.of(SHARED_KB), null, CONVERSATION, ME);
+
+    RetrievalScope vectorScope = scope.withoutConversation();
+
+    assertThat(vectorScope.hasConversationScope()).as("会话域必须被摘掉").isFalse();
+    assertThat(vectorScope.sharedKbIds()).as("共用库一支必须原样保留").containsExactly(SHARED_KB);
+    assertThat(vectorScope.conversationId()).isNull();
+    assertThat(vectorScope.ownerId()).isNull();
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
 
   /**
@@ -118,6 +136,7 @@ class RetrievalVectorScopeBoundaryTest {
    * vectorSearch}，不经过它们的公开入口 —— 于是这三条断言不需要任何模型桩、也不需要库。
    */
   private static RetrievalService service() {
-    return new RetrievalService(null, null, null, null);
+    return new RetrievalService(
+        null, null, null, null, new RetrievalBudgetProperties(5000, 5000, 0.6, true, true));
   }
 }

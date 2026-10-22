@@ -69,7 +69,13 @@ MATRIX = [
 #    （知识库只在 own / all 下有页面形态），也看不到「应用管理」（同理）。
 #    应用市场（/market）登录即可进，所有人可见；应用管理（/assistants）只在 own / all 有形态。
 NAV = {
-    "admin": ["工作台", "对话", "知识库", "应用市场", "应用管理", "提示词", "模型管理", "运营看板", "反馈处理", "系统管理"],
+    "admin": [
+        "工作台", "对话", "知识库", "应用市场", "应用管理", "提示词",
+        "模型管理", "运营看板", "反馈处理",
+        # ★ 2026-10-19 服务商配置 / 基础数据 / 组织机构从「系统管理」拆成独立菜单，
+        #   这条期望矩阵必须同步；否则门禁会把"菜单按规则搬对了"报成红。
+        "基础数据", "服务商配置", "组织机构", "系统管理",
+    ],
     "zhangyun": ["工作台", "对话", "知识库", "应用市场", "应用管理", "运营看板", "反馈处理"],
     "liwei": ["工作台", "对话", "知识库", "应用市场", "应用管理", "提示词", "运营看板"],
     "chenjun": ["工作台", "对话", "应用市场"],
@@ -120,23 +126,21 @@ def main() -> int:
 
                 # 每个账号都从干净 context 开始：localStorage 里不能残留别人的 token
                 page.goto(base + "#/login", wait_until="networkidle")
-                page.wait_for_timeout(500)
+                page.wait_for_selector("input[autocomplete='username']", timeout=15000)
                 page.fill("input[autocomplete='username']", username)
                 page.fill("input[autocomplete='current-password']", password)
                 page.click("button:has-text('登录')")
-                # ★ 等**真的离开登录页**，而不是固定 1600ms（issue #14）。
-                #   实测偶发红过的就是这一行：负载高时 1600ms 内跳转没完成，
-                #   于是报「仍停在 …/#/login」—— 那不是登录坏了，是等待方式不对。
+                # ★ #14 / #54：等**登录后的壳挂上**，不是固定时长。路由跳转、首屏 chunk、
+                #   工作台 h1 是三个不同的信号，缺一个都会让后面的路由检查读到半成品页面。
                 try:
-                    page.wait_for_url(lambda u: "#/login" not in u, timeout=20000)
+                    page.wait_for_url(lambda u: "#/login" not in u, timeout=15000)
+                    page.wait_for_selector(".shell", timeout=15000)
+                    page.locator("h1", has_text="工作台").first.wait_for(timeout=15000)
                 except Exception:  # noqa: BLE001
-                    pass
-                page.wait_for_timeout(400)
-
-                if "#/login" in page.url:
-                    # 失败信息带上现场：只报"仍停在 /login"会让人以为是路由问题，
+                    # 失败信息带上现场：只报"壳没挂上"会让人以为是路由问题，
                     # 而真相可能是"值没进模型 / 验证码空 / 接口被拒"——三者处置完全不同
                     evidence = {
+                        "url": page.url.split("#")[-1],
                         "user": page.input_value("input[autocomplete='username']"),
                         "pwd_len": len(page.input_value("input[autocomplete='current-password']")),
                         "captcha_inputs": page.locator("input[autocomplete='off']").count(),
@@ -145,7 +149,11 @@ def main() -> int:
                             t.strip() for t in page.locator(".el-form-item__error").all_inner_texts()
                         ][:3],
                     }
-                    check(False, f"{role_name}：登录", f"仍停在 {page.url} · 现场 {evidence}")
+                    check(False, f"{role_name}：登录后壳未挂上", f"现场 {evidence}")
+                    # ★ 一个账号登录失败后必须跳出：否则后面 11 条路由都会在未登录页上
+                    #   连锁失败，把一个登录问题放大成"整片红"，读数反而更难定位。
+                    ctx.close()
+                    continue
 
                 for route, _ in MATRIX:
                     try:

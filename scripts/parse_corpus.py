@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -120,12 +121,33 @@ def upload(base: str, kb_id: str, token: str, path: pathlib.Path, meta: dict[str
         return -1, {"message": f"{type(e).__name__}: {e}"}
 
 
+MODEL_NAME = os.environ.get("CORPUS_MODEL_NAME", "bge-small-zh-v1.5")
+MODEL_DIMENSION = int(os.environ.get("CORPUS_MODEL_DIMENSION", "512"))
+"""本机进程内 ONNX 模型（可用环境变量覆盖，便于**同一条命令对比不同模型**）。
+
+★★ 为什么必须是这个名字与维度：
+  - 路由（`RoutingEmbeddingAdapter`）按 **baseModel 名**判"走进程内还是走上游"；
+    名字不对就会去连 11434，而那个桩在本地 ONNX 方案里**不需要起** ⇒ 只会得到 `EMBEDDING_FAILED`；
+  - 维度 512 决定数据落到 `vec_embedding_512`（`vectorindex` 按维度路由）。
+    写 768 会让向量写入与列类型不匹配。
+"""
+
+
 def ensure_embedding_model(base: str, token: str) -> str:
-    """找一个可用的 EMBEDDING 模型；没有就建一个（与 `check_knowledge_parse.py` 同口径）。"""
+    """找本机 ONNX 那个向量模型；没有就建一个。"""
     status, payload = call(base, "GET", "/models?size=100", token)
     rows = (payload.get("data") or {}).get("list") or []
+    # ★ 先找**名字对得上**的：随便挑一个 EMBEDDING 模型会走到上游去（见 MODEL_NAME 的注释）
     for row in rows:
-        if row.get("kind") == "EMBEDDING" and row.get("status") == "LOADED":
+        # ★★ 只要 baseModel 对得上就复用，**不看 status**。
+        #    向量模型是懒加载的：`NOT_LOADED` 只表示"还没被用过"，不代表不可用。
+        #    第一版要求 `status == "LOADED"` ⇒ 永远找不到 ⇒ 每跑一次就新建一个模型
+        #    ⇒ 实测在模型列表里堆了 45 个 `本地ONNX向量-<时间戳>` 残留
+        #      （页面被淹没，而"找第一个 LOADED 向量模型"的逻辑还会挑到旧模型）。
+        if (
+            row.get("kind") == "EMBEDDING"
+            and (row.get("baseModel") or "").strip().lower() == MODEL_NAME
+        ):
             return row["id"]
     created_status, created = call(
         base,
@@ -133,17 +155,84 @@ def ensure_embedding_model(base: str, token: str) -> str:
         "/models",
         token,
         {
-            "name": f"语料解析向量-{int(time.time())}",
+            "name": f"本地ONNX向量-{int(time.time())}",
             "kind": "EMBEDDING",
             "supplier": "LOCAL_INFERENCE",
-            "baseModel": "bge-m3",
-            "dimension": 1024,
+            "baseModel": MODEL_NAME,
+            "dimension": MODEL_DIMENSION,
         },
     )
     model_id = (created.get("data") or {}).get("id")
     if not model_id:
-        fail_exit(f"没有可用的向量模型，且新建失败（{created_status}）：{str(created)[:200]}")
+        fail_exit(f"没有可用的向量模型，且新建失败（{created_status}）：{str(created)[:300]}")
     return model_id
+
+
+def status_of(row: dict) -> str:
+    """取状态码。
+
+    ★★ 实测踩过：`status` 有时是对象 `{"code": …}`、有时是裸字符串 ⇒
+    第一版直接 `(r.get("status") or {}).get("code")` 在裸字符串上会抛
+    `AttributeError: 'str' object has no attribute 'get'`，整轮在上传完之后崩掉，
+    连"解析结果"都打不出来。
+    """
+    raw = row.get("status")
+    if isinstance(raw, dict):
+        return str(raw.get("code") or "")
+    return str(raw or "")
+
+
+def trigger_embedding(base: str, kb_id: str, token: str) -> None:
+    """对已解析的文档逐个触发向量化。
+
+    ★★ 这一步**不能省**：向量化在契约里是**用户显式动作**
+    （`DocumentService.startEmbedding` 的注释原话「用户显式动作，后端不自动推进」）。
+    第一版漏了这一步，16 份文档全部停在 `PENDING_EMBEDDING` —— 看起来像"向量化坏了"，
+    其实是**少点了一次按钮**。
+
+    ★ 只对 `PARSED` 触发：`PARSED_EMPTY` 没有分段，触发只会得到 400。
+    """
+    status, payload = call(base, "GET", f"/knowledge-bases/{kb_id}/documents?page=1&size=50", token)
+    if status != 200:
+        fail_exit(f"读文档列表失败（{status}）：{str(payload)[:200]}")
+    rows = (payload.get("data") or {}).get("list") or []
+    triggered = 0
+    for row in rows:
+        # ★ 解析完成后文档停在 `PENDING_EMBEDDING`（不是 `PARSED`）—— 第一版只认 `PARSED`，
+        #   结果"已触发 0 份"，看起来像接口不通，其实是判据写窄了。
+        if status_of(row).upper() not in {"PARSED", "PENDING_EMBEDDING"}:
+            continue
+        st, body = call(base, "POST", f"/documents/{row['id']}/embedding", token, {})
+        if st not in (200, 202):
+            print(f"  ★ 触发向量化失败（{row.get('name')}）：{st} {str(body)[:160]}")
+        else:
+            triggered += 1
+    print(f"  已触发向量化 {triggered} 份（★ 显式动作 —— 契约里后端不自动推进）")
+
+
+def wait_embedded(base: str, kb_id: str, token: str) -> list[dict]:
+    """等全部文档到「向量化终态」。
+
+    ★ 与 `wait_parsed` 同一形状：轮询 + 超时，不靠固定 sleep。
+    """
+    deadline = time.time() + POLL_TIMEOUT_SEC
+    while True:
+        status, payload = call(base, "GET", f"/knowledge-bases/{kb_id}/documents?page=1&size=50", token)
+        if status != 200:
+            fail_exit(f"读文档列表失败（{status}）：{str(payload)[:200]}")
+        rows = (payload.get("data") or {}).get("list") or []
+        busy = [
+            r
+            for r in rows
+            if status_of(r).upper()
+            not in {"EMBEDDED", "EMBEDDING_FAILED", "FAILED", "PARSED_EMPTY"}
+        ]
+        if not busy:
+            return rows
+        if time.time() > deadline:
+            print(f"  ★ 向量化超时：仍有 {len(busy)} 份未完成 —— {[r.get('name') for r in busy]}")
+            return rows
+        time.sleep(POLL_INTERVAL_SEC)
 
 
 def wait_parsed(base: str, kb_id: str, token: str) -> list[dict]:
@@ -263,6 +352,12 @@ def main() -> int:
     print("\n  等解析（轮询，不靠固定 sleep）…")
     rows = wait_parsed(base, kb_id, token)
 
+    # ★★ 向量化是**显式动作**（契约原话「后端不自动推进」）—— 不触发就会一直停在
+    #   PENDING_EMBEDDING，而那个状态看起来非常像"向量化坏了"。
+    print("\n== 触发向量化（本地 ONNX，进程内，不需要 11434）==")
+    trigger_embedding(base, kb_id, token)
+    rows = wait_embedded(base, kb_id, token)
+
     print(f"\n{'文档':40s} {'状态':14s} {'字符数':>8s}  失败原因")
     problems: list[str] = []
     for row in rows:
@@ -298,7 +393,10 @@ def main() -> int:
                     "kbIds": [kb_id],
                 },
             )
-            hits = (payload.get("data") or {}).get("list") or (payload.get("data") or {}).get("hits") or []
+            # ★★ 响应里的命中列表字段叫 `items`（实测：`data.items`）。此前读 `list`/`hits`
+            #   ⇒ **假 0 命中**，那会把"检索完全不通"当成结论，而实际上向量检索是通的
+            #   （实测 VECTOR / HYBRID 各 5 条命中，且命中的正是期望文档）。
+            hits = (payload.get("data") or {}).get("items") or []
             names = [str((h or {}).get("docName") or (h or {}).get("documentName") or "") for h in hits]
             hit = doc in names if names else False
             joined = " ".join(str((h or {}).get("content") or "") for h in hits)

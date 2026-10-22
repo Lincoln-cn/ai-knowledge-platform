@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
+import cn.lincoln.aiplatform.modelcatalog.domain.ProviderEgress;
 import cn.lincoln.aiplatform.modelcatalog.domain.Supplier;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
@@ -48,10 +49,13 @@ public class ModelEgressAdapter implements ModelEgressPort {
   private static final ClassificationLevel LOCAL_UNLIMITED = ClassificationLevel.CONFIDENTIAL;
 
   private final ModelRepository models;
+  private final ModelUpstreamResolver upstream;
   private final EgressProperties properties;
 
-  public ModelEgressAdapter(ModelRepository models, EgressProperties properties) {
+  public ModelEgressAdapter(
+      ModelRepository models, ModelUpstreamResolver upstream, EgressProperties properties) {
     this.models = models;
+    this.upstream = upstream;
     this.properties = properties;
   }
 
@@ -65,7 +69,8 @@ public class ModelEgressAdapter implements ModelEgressPort {
       // ★ fail-closed：模型不存在时不许放行（调用方自己会把"null 上限"与"最高档"分开处置）
       return null;
     }
-    return ceilingFor(model.supplier(), properties);
+    // ★ 权威来源是服务商的 egress；服务商被停用/删除时空 ⇒ fail-closed，不回落到旧 supplier。
+    return upstream.egressOf(model).map(egress -> ceilingFor(egress, properties)).orElse(null);
   }
 
   /**
@@ -88,6 +93,22 @@ public class ModelEgressAdapter implements ModelEgressPort {
     }
     // ★ 读到本枚举之外的供应商值（数据坏了、或将来加了新枚举值却忘了在这里处置）：
     //   同样 fail-closed，而不是挑一个"看起来安全"的默认分支 —— 那会让新增的枚举值**默认被放行**。
+    return null;
+  }
+
+  /**
+   * 服务商出网边界 → 上限（{@code #72} 的 provider-aware 版本）。
+   *
+   * <p>★ 与 {@link #ceilingFor(Supplier, EgressProperties)} 同一条判据表，只是入参从"旧 supplier"升级为 "服务商的
+   * egress"：自建 vLLM 用 OpenAI 协议也必须是 LOCAL，不能按厂家名推断。
+   */
+  public static ClassificationLevel ceilingFor(ProviderEgress egress, EgressProperties properties) {
+    if (egress == ProviderEgress.LOCAL) {
+      return LOCAL_UNLIMITED;
+    }
+    if (egress == ProviderEgress.EXTERNAL) {
+      return properties.externalApiCeiling();
+    }
     return null;
   }
 }

@@ -44,6 +44,11 @@ public class MessageRepositoryAdapter implements MessageRepository {
   }
 
   @Override
+  public Optional<Message> findByIdForUpdate(UUID id) {
+    return jpa.findByIdForUpdate(id);
+  }
+
+  @Override
   public List<Message> listByConversation(UUID conversationId) {
     return jpa.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId);
   }

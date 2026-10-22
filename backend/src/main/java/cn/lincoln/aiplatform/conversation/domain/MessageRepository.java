@@ -63,6 +63,22 @@ public interface MessageRepository {
   Optional<Message> findById(UUID id);
 
   /**
+   * ★★ 按 id 取并<strong>锁住这一行</strong>（{@code SELECT … FOR UPDATE}）。
+   *
+   * <p>只给"读历史时收敛陈旧 {@code GENERATING}"用（{@code #182}）：读到 {@code GENERATING} 之后、写回 {@code FAILED}
+   * 之前，收尾线程可能正好把它完成。若不加锁，"读时收敛"会把一条<strong>刚刚生成好的答案</strong>改写成失败 ——
+   * 用户看到的是"答案没了"，而日志里两边都成功。加锁后两个写者排队，后到者重新看到对方写的终态并让路。
+   *
+   * <p>★ 默认实现退化成普通读：领域层不为测试假件强加锁语义；真正的锁由 JPA 适配器提供。
+   *
+   * @param id 消息 id
+   * @return 消息；不存在时空
+   */
+  default Optional<Message> findByIdForUpdate(UUID id) {
+    return findById(id);
+  }
+
+  /**
    * 按会话列出全部消息（<strong>按创建时间升序</strong>，即对话的自然顺序）。
    *
    * <p>★ 本批<strong>只有测试调用它</strong>（真栈往返要"读回来一整条对话"）。真正的分页 / 窗口读法 （{@code page} / {@code around}）属第

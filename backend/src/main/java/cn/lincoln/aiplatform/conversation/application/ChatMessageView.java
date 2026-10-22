@@ -75,6 +75,19 @@ public record ChatMessageView(
 
   /** 一次问答里助手消息的耗时上限没有业务含义，这里只是让"可空 ⇒ 0"这条转换只有一个落点。 */
   public static ChatMessageView of(Message message) {
+    return of(message, List.of());
+  }
+
+  /**
+   * 带推荐追问的版本（2026-10-18 起有值）。
+   *
+   * <p>★ 追问来自 {@code cv_message.artifacts} 的 JSON，由 {@code SuggestionService} 生成并落库；
+   * 这一层只管"把读到的填进视图"，不关心它是怎么来的。
+   *
+   * @param message 消息
+   * @param suggestions 推荐追问（没有 ⇒ 空列表；契约里它是必填数组）
+   */
+  public static ChatMessageView of(Message message, List<String> suggestions) {
     TokenUsage usage = message.tokens();
     Long duration = message.durationMs();
     return new ChatMessageView(
@@ -84,7 +97,7 @@ public record ChatMessageView(
         message.content(),
         message.status(),
         refsOf(message.references()),
-        List.of(),
+        suggestions,
         message.feedback() == null ? null : message.feedback().name(),
         usage == null ? 0 : usage.total(),
         duration == null ? 0L : duration,

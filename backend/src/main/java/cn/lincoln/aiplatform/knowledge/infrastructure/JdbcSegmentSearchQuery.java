@@ -420,8 +420,11 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
 
     List<Object> args = new ArrayList<>();
     args.add(toVectorLiteral(query.vector()));
-    // ★ 绑定值的位置约定与另外三条路逐字一致：向量字面量 → 三域 → 密级 → limit
+    // ★ 绑定值的位置约定与另外三条路逐字一致：向量字面量 → 三域 → 密级 → (可选 model_id) → limit
     bindSecurityPredicate(args, scope, clearanceRank());
+    if (query.embeddingModelId() != null) {
+      args.add(query.embeddingModelId().toString());
+    }
     args.add(Math.max(1, query.limit()));
 
     // ★ 向量表写在最前 + order by distance limit：这是"top-N 按距离"的规范形状，
@@ -436,6 +439,9 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
             + " left join kb_knowledge_base k on k.id = s.kb_id"
             + " where"
             + securityPredicate(scope.sharedKbIds().size())
+            + (query.embeddingModelId() != null
+                ? " and (v.metadata::jsonb ->> 'model_id') = ?"
+                : "")
             + " order by distance"
             + " limit ?";
 

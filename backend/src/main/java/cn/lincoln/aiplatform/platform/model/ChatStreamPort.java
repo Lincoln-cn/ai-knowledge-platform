@@ -47,6 +47,20 @@ public interface ChatStreamPort {
   void stream(UUID modelId, String prompt, Duration timeout, Callback callback);
 
   /**
+   * 带应用思考开关的流式调用（{@code #185}）。
+   *
+   * <p>★ 默认实现<strong>忽略</strong> {@code thinking} 并委托旧方法 —— 兼容既有实现；生产实现 {@code
+   * UpstreamStreamingChatAdapter} 必须覆盖它，否则应用上的思考开关又会变成死开关。
+   *
+   * <p>{@code thinking} <strong>不等于</strong>"上游一定思考"：能不能关由<strong>模型能力</strong>决定，适配器按 {@code
+   * ThinkingMode} 三态映射成 {@code reasoning_effort}（或干脆不发）。
+   */
+  default void stream(
+      UUID modelId, String prompt, boolean thinking, Duration timeout, Callback callback) {
+    stream(modelId, prompt, timeout, callback);
+  }
+
+  /**
    * 带**角色边界**的多轮流式对话（`#168`）。
    *
    * <p>★ 默认实现把消息拼成一段文本交给 {@link #stream} —— **兼容兜底**，会丢 role 边界 （而丢了边界的多轮正是反向注入 `#84` 的形状）⇒
@@ -59,6 +73,21 @@ public interface ChatStreamPort {
       flattened.append(message.wireRole()).append(": ").append(message.content()).append('\n');
     }
     stream(modelId, flattened.toString(), timeout, callback);
+  }
+
+  /**
+   * 带应用思考开关的多轮流式调用（{@code #185}）。
+   *
+   * <p>★ 与 {@link #stream(UUID, String, boolean, Duration, Callback)} 同一条兼容口径：默认忽略 {@code
+   * thinking}，生产实现必须覆盖。
+   */
+  default void streamConversation(
+      UUID modelId,
+      java.util.List<ChatMessage> messages,
+      boolean thinking,
+      Duration timeout,
+      Callback callback) {
+    streamConversation(modelId, messages, timeout, callback);
   }
 
   /** 逐块回调。★ 业务帧那几个方法都<strong>可能</strong>被调用方抛异常打断 —— 见 {@link Callback#onChunk}。 */

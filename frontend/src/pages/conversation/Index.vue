@@ -6,6 +6,8 @@
       :app-id="appBrief?.id ?? appId"
       :public-mode="false"
       :show-share="canShare"
+      :show-chat-settings="canViewSettings"
+      align-panel
       @back="onBack"
       @share="openShare()"
     />
@@ -48,6 +50,22 @@
           @retry="reloadMessages"
           @load-earlier="chat.loadEarlier"
         />
+
+        <div
+          v-if="!chat.messages.value.length && !chat.loadingHistory.value && appBrief?.quickQuestions.length"
+          class="quick-asks"
+        >
+          <span class="micro muted">试试这些问题</span>
+          <div class="quick-chips">
+            <button
+              v-for="q in appBrief.quickQuestions"
+              :key="q"
+              type="button"
+              class="quick-chip"
+              @click="onSuggest(q)"
+            >{{ q }}</button>
+          </div>
+        </div>
 
         <Composer
           ref="composerRef"
@@ -109,7 +127,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { conversationsApi } from '@/api'
+import { assistantsApi, conversationsApi } from '@/api'
+import type { Assistant } from '@/api/assistants'
 import type { ChatMessage } from '@/api/conversations'
 import { useSessionStore } from '@/stores/session'
 import { PERM } from '@/constants/permissions'
@@ -158,20 +177,34 @@ const composerRef = ref<InstanceType<typeof Composer>>()
 
 /** 分享入口按权限点显隐（03 权限点词汇：conversation:share） */
 const canShare = computed(() => session.can(PERM.conversationShare))
+
+/** 「对话设置」入口：读权限与页面本身一致（改配置需要 system:manage，在页面内再把一次） */
+const canViewSettings = computed(() => session.can(PERM.chatSettings))
 const shareConversationId = computed(() => activeConversation.value?.id ?? null)
 
 /* ── 顶栏 ── */
 
+const isPlaceholderTitle = (title: string | undefined | null) =>
+  !title || title === '新建会话' || title === '新会话'
+
 const headerTitle = computed(() => {
-  if (activeConversation.value && activeConversation.value.title !== '新建会话') {
+  if (activeConversation.value && !isPlaceholderTitle(activeConversation.value.title)) {
     return activeConversation.value.title
   }
   return appBrief.value?.name || '通用问答'
 })
 
 const headerSubtitle = computed(() => {
+  /*
+   * 副标题回答的是「这条会话属于哪里」，不是把标题再写一遍。
+   *
+   *  - 通用问答的空会话：标题已经是「通用问答」⇒ 副标题改说状态与范围；
+   *  - 通用问答的已有会话：标题是会话名 ⇒ 副标题回到「通用问答」；
+   *  - 应用会话：副标题只说类型（应用名与说明由下方 AppInfoBar 承担），
+   *    避免同一个应用名在页头与信息区里各写一遍。
+   */
   if (appBrief.value) return appBrief.value.type
-  return '通用问答'
+  return headerTitle.value === '通用问答' ? '新会话 · 未绑定应用' : '通用问答'
 })
 
 const emptyText = computed(() => {
@@ -184,9 +217,14 @@ const composerPlaceholder = computed(
   () => '输入问题，Enter 发送 / Shift+Enter 换行'
 )
 
-const showThinkingToggle = computed(
-  () => !!appBrief.value?.thinkingEnabled && !!appBrief.value?.modelName
-)
+/**
+ * 思考模式开关（★ `#185`：会话页不再展示）。
+ *
+ * <p>思考已改为应用级配置：配置页按模型能力决定是否给开关，`ChatTurnWriter` 把
+ * {@code app.thinkingEnabled} 带进每一轮，`/chat/stream` 的 {@code thinking} 字段仍只是形状兼容、不消费。
+ * 会话页再放一个临时开关，只会让用户以为它能覆盖应用配置 —— 实际不会。
+ */
+const showThinkingToggle = computed(() => false)
 
 /* ── 引用 ── */
 
@@ -229,7 +267,57 @@ mq.addEventListener('change', syncWide)
 
 /* ── 会话 ── */
 
-const loadHistory = () => history.load(appId.value || undefined)
+const loadHistory = () => {
+  // ★★ 历史面板**永远按域过滤**，域由"这两个页面是哪一种"决定：
+  //
+  //   通用问答页（无 appId）  ⇒ 只要通用问答的会话（`genericOnly`）
+  //   应用页（有 appId）      ⇒ 只要该应用的会话
+  //
+  //   ★ 为什么通用页要 `genericOnly` 而不能靠"不传 appId"：不传 = **全部**，
+  //     于是通用页会列出「法务专家」的会话 —— 用户原话「应用的对话是不是不应该出现在这里」。
+  //   ★ 也曾经反过来试过"有 conversationId 就不过滤"（想在点开会话时显示全部），
+  //     那会把应用会话又混进通用页，方向不对，已撤。
+  return appId.value
+    ? history.load(appId.value)
+    : history.load(undefined, true)
+}
+
+/**
+ * 契约里 Conversation 没有 app 展示字段（C7），真后端只回 appId / 空 appName。
+ * 应用页因此补一次 getAssistant，把图标 / 描述 / 开场白 / 推荐问题 / 思考能力补齐；
+ * mock 的 conv.app 仍优先，不需要多打一次。
+ */
+const assistantToBrief = (a: Assistant): AppBrief => ({
+  id: a.id,
+  name: a.name,
+  icon: a.icon || '🤖',
+  description: a.description,
+  type: a.type === 'WORKFLOW' ? '编排应用' : '知识应用',
+  modelName: a.modelName || '',
+  modelId: a.modelId || '',
+  prologue: a.prologue,
+  quickQuestions: a.quickQuestions || [],
+  kbNames: [],
+  multiTurn: a.multiTurn,
+  thinkingEnabled: a.thinkingEnabled,
+  hasKnowledge: (a.kbIds?.length ?? 0) > 0
+})
+
+let appBriefRequested = ''
+const loadAppBrief = async (fallbackAppId = appId.value) => {
+  const id = fallbackAppId || appBrief.value?.id || ''
+  if (!id || appBrief.value?.id === id || appBriefRequested === id) return
+  appBriefRequested = id
+  try {
+    const assistant = await assistantsApi.getAssistant(id)
+    // 切换应用/会话后，晚到的响应不能覆盖当前页
+    if ((appBrief.value?.id || appId.value) === id) appBrief.value = assistantToBrief(assistant)
+  } catch {
+    // 应用已删除 / 不可见：保持通用上下文，不阻塞会话；不弹错（页面已有自己的错误态）
+  } finally {
+    if (appBriefRequested === id) appBriefRequested = ''
+  }
+}
 
 const applyAppBrief = (conv: ConversationEx | null, fallbackAppId?: string) => {
   const fromConv = readAppBrief(conv?.app)
@@ -258,8 +346,13 @@ const openConversation = async (conv: ConversationEx, opts: { aroundMessageId?: 
   if (chat.generating.value) chat.stop()
   activeConversation.value = conv
   applyAppBrief(conv)
+  await loadAppBrief(conv.appId || appId.value)
   activeMessage.value = null
   activeRefIndex.value = null
+  // ★★ 切换会话必须清空输入框草稿（用户报：「提示词选中后，切换会话，不会清空对话框」）。
+  //   输入框里的是**这一条会话**的草稿（含「提示词」插进去的那段文字与待发附件）——
+  //   带到另一条会话里，用户会在错误的上下文里发出去，而且很可能没注意到。
+  composerRef.value?.reset()
   await chat.loadHistory(conv.id, opts.aroundMessageId ? { around: opts.aroundMessageId } : {})
   // 深链定位：消息加载完再滚/高亮，否则目标节点还不存在
   if (opts.aroundMessageId) {
@@ -295,9 +388,12 @@ const onCreateConv = async () => {
     history.prepend(conv)
     activeConversation.value = conv
     applyAppBrief(conv, appId.value)
+    await loadAppBrief(conv.appId || appId.value)
     chat.messages.value = []
     activeMessage.value = null
     activeRefIndex.value = null
+    // ★ 新建会话同样清空草稿（草稿属于「上一条会话」）
+    composerRef.value?.reset()
     router.replace({
       path: '/conversation',
       query: {
@@ -434,6 +530,9 @@ onMounted(async () => {
   document.addEventListener('keydown', onEsc)
   await loadHistory()
 
+  // ★ 真后端 Conversation 不带 app 展示字段（C7）⇒ 应用页补一次 getAssistant
+  await loadAppBrief()
+
   const convId = route.query.conversationId as string
   // 深链定位：URL 带 messageId 时用 around 取窗口，再滚/高亮到那条消息
   const deepMessageId = (route.query.messageId as string) || ''
@@ -476,7 +575,9 @@ watch(
   async () => {
     // 切换应用时重载
     if (route.name !== 'conversation') return
+    appBrief.value = null
     await loadHistory()
+    await loadAppBrief()
   }
 )
 
@@ -489,6 +590,9 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .chat-page {
+  /* 三栅的列宽真源：页头（TopBar）与历史面板都读它，
+     改一处即可保持「返回列 / 会话面板左缘」对齐。 */
+  --history-w: 220px;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -521,11 +625,54 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+/* 应用开场推荐问题：只在空会话出现；点一下填入输入框（不直接发送） */
+.quick-asks {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: 0 var(--space-lg) var(--space-sm);
+}
+
+.quick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.quick-chip {
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-ink-2);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  padding: var(--space-2xs) var(--space-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-micro) var(--ease-out),
+    border-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
+}
+
+.quick-chip:hover {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-line);
+  color: var(--color-accent);
+}
+
 .stream-fail {
+  /* ★ 从「浮在输入框上方」改成「消息区顶部」。
+   *
+   *   原来 `bottom: var(--space-3xl)` 让它浮在 Composer 正上方，而同一件事在消息气泡里
+   *   已经显示过一次（「生成失败：…」+ 重新生成）⇒ 两处重复，且底部浮动条盖住输入框上沿，
+   *   看起来就是「异常提示位置不正确」。
+   *   放在 `.center` 顶部：错误属于这条消息流，视线第一时间落在那里。 */
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  bottom: var(--space-3xl);
+  top: var(--space-sm);
   z-index: var(--z-sticky);
   display: flex;
   align-items: center;

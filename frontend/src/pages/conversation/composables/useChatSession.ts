@@ -106,7 +106,26 @@ export function groupLabel(updatedAt: string): string {
  * 不会触发重渲染（onDelta/onRefs/onStatus 全都反映不到界面上）。
  */
 function toReactiveMessage(raw: ChatMessage): ChatMessage {
-  return reactive({ ...raw }) as ChatMessage
+  // ★★ 为什么这里要兜底（实测症状）：
+  //
+  //   某个会话的**用户消息**里 `refs` 是 `null`（后端有意为之，见下），
+  //   而 `MessageList` 的模板读的是 `msg.refs.length` ⇒ 抛
+  //   `Cannot read properties of null (reading 'length')`；
+  //   那个异常发生在 `.center` 的渲染过程中 ⇒ **整块消息列表都不渲染**，
+  //   页面上只剩 Composer，看起来就是「输入框跑到上方、没有内容区」。
+  //
+  //   ★★ 但 `refs` 的 `null` 是**有语义的**，不许在这里抹平：
+  //     `ChatMessageView` 的 javadoc：「`null` = 这一批引用从来没到过，`[]` = 明确的零命中 ——
+  //     两者不许糊成一个」。所以 `refs` 原样保留，**由模板用 `?.` 防御**。
+  //
+  //   ★ 其余三个字段没有这种区分（`content` 恒是串、`suggestions` 后端恒 `[]`、
+  //     `attachments` 没有就是没有）⇒ 在这里一次兜掉，免得每个模板各写一遍 `?? []`。
+  return reactive({
+    ...raw,
+    content: raw.content ?? '',
+    suggestions: raw.suggestions ?? [],
+    attachments: raw.attachments ?? []
+  }) as ChatMessage
 }
 
 /* ── 会话列表 ── */
@@ -135,9 +154,14 @@ export function useHistoryPanel() {
     return [...map.entries()]
   })
 
-  const fetchPage = async (appId: string | undefined, p: number) => {
+  const fetchPage = async (
+    appId: string | undefined,
+    p: number,
+    genericOnly?: boolean
+  ) => {
     const result = await conversationsApi.listConversations({
       appId,
+      genericOnly,
       keyword: keyword.value.trim() || undefined,
       page: p,
       size: HISTORY_PAGE_SIZE
@@ -152,12 +176,12 @@ export function useHistoryPanel() {
       return ex
     })
 
-  const load = async (appId?: string) => {
+  const load = async (appId?: string, genericOnly?: boolean) => {
     loading.value = true
     loadError.value = null
     page = 1
     try {
-      const result = await fetchPage(appId, 1)
+      const result = await fetchPage(appId, 1, genericOnly)
       list.value = mapConvs(result.list)
       hasMore.value = result.total > list.value.length
     } catch (error) {
@@ -168,12 +192,12 @@ export function useHistoryPanel() {
   }
 
   /** 加载更早的一页并接在后面（历史列表按更新时间倒序，后面的更早） */
-  const loadMore = async (appId?: string) => {
+  const loadMore = async (appId?: string, genericOnly?: boolean) => {
     if (loadingMore.value || !hasMore.value) return
     loadingMore.value = true
     try {
       page += 1
-      const result = await fetchPage(appId, page)
+      const result = await fetchPage(appId, page, genericOnly)
       const seen = new Set(list.value.map((c) => c.id))
       list.value = [...list.value, ...mapConvs(result.list).filter((c) => !seen.has(c.id))]
       hasMore.value = result.total > list.value.length
@@ -556,9 +580,40 @@ export function useChatSession(options: ChatSessionOptions = {}) {
         if (result.status === 'GENERATED' && !assistant.content.trim()) {
           assistant.failReason = '本次没有返回内容'
           assistant.failHint = '可以点「重新生成」再试一次，或换个问法'
+          return
         }
+        // ★ 推荐追问（「猜你想问」）：**回答完成之后**再拉一次。
+        //
+        //   为什么不塞进这一轮的 SSE：契约里 artifact 要落在 done 之前 ⇒ 那会拖慢"完成"本身
+        //   （1.5B 生成 3 个短问题要 10~20 秒）。用户已经在读答案了，这一步慢一点无所谓。
+        //   ★ 失败静默：追问生成不出来，界面上只是不显示 chips —— 不该在这里弹一个错误。
+        void loadSuggestions(assistant)
       }
     })
+  }
+
+  /**
+   * 拉这条回答的推荐追问（「猜你想问」）。
+   *
+   * <p>★ 失败的处置是**静默**：追问生成不出来，界面上只是不显示那排 chips。
+   * 用户刚拿到一条正常回答，不该因为"锦上添花的东西没生成出来"看到一个错误。
+   *
+   * <p>★ 只在 {@code GENERATED} 时拉：失败/停止的回答上没有"可以继续问什么"这回事。
+   *
+   * @param assistant 刚完成的那条助手消息（就地填 `suggestions`）
+   */
+  const loadSuggestions = async (assistant: ChatMessageEx) => {
+    if (assistant.status !== 'GENERATED' || !assistant.id) {
+      return
+    }
+    try {
+      const items = await conversationsApi.suggestForMessage(assistant.id)
+      if (Array.isArray(items) && items.length) {
+        assistant.suggestions = items
+      }
+    } catch {
+      // ★ 静默（理由见上）
+    }
   }
 
   /** 发送一条问题。conversationId 为空时由调用方先建会话 */

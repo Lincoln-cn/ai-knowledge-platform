@@ -43,6 +43,19 @@ public class ChatPortFallbackStreamAdapter implements ChatStreamPort {
   /** 切块大小（字符）—— 与前端 mock 的吐字节拍同量级，只为了让"逐块"这件事真的发生。 */
   private static final int CHUNK_CHARS = 24;
 
+  /**
+   * 回放节奏（毫秒/块）。
+   *
+   * <p>★★ 为什么需要它（实测症状）：本类拿到的是**上游一次性返回的整段文本**， 原来那个 {@code for} 循环**没有任何延迟** —— 400 字被切成 17
+   * 块，在**几毫秒内全部写完**。 于是前端（它每帧都立即渲染，`sse.ts` 的 `case 'delta'` 直接 `onDelta`） 收到的是"82 秒什么都没有，然后 17
+   * 帧一起到" ⇒ 用户看到的是 **「一次性展示，没有打字机效果」**，并合理地怀疑"前端是不是等到 done 才开始渲染"。
+   *
+   * <p>★ 400ms/块 ≈ 60 字/秒，接近真实模型的中文出字速度；不是为了"骗人"， 而是让**已经生成完的内容**以用户能读的节奏出现（一次性喷完反而更难读）。
+   *
+   * <p>★ 它是**过渡措施**：真解法是让上游真的流式（Ollama `stream=true`）， 那时 token 一产生就转发，本常量与本循环一起删掉（见 `#181` 正文）。
+   */
+  private static final long REPLAY_DELAY_MS = 400;
+
   private final ChatPort chat;
 
   public ChatPortFallbackStreamAdapter(ChatPort chat) {
@@ -96,9 +109,28 @@ public class ChatPortFallbackStreamAdapter implements ChatStreamPort {
       callback.onEnd(End.COMPLETE, null);
       return;
     }
-    log.debug("兜底流式实现：上游一次性返回 {} 字，按 {} 字切块送出（真流式实现属'接真模型'那一批）", text.length(), CHUNK_CHARS);
+    int blocks = (text.length() + CHUNK_CHARS - 1) / CHUNK_CHARS;
+    log.info(
+        "兜底流式回放：{} 字 → {} 块，每块 {} 字，块间延迟 {}ms（预计回放 {}s）",
+        text.length(),
+        blocks,
+        CHUNK_CHARS,
+        REPLAY_DELAY_MS,
+        (blocks - 1) * REPLAY_DELAY_MS / 1000.0);
     for (int at = 0; at < text.length(); at += CHUNK_CHARS) {
       callback.onChunk(text.substring(at, Math.min(text.length(), at + CHUNK_CHARS)));
+      if (at + CHUNK_CHARS >= text.length()) {
+        break; // 最后一块不睡
+      }
+      try {
+        Thread.sleep(REPLAY_DELAY_MS);
+      } catch (InterruptedException stopped) {
+        // ★ 用户停止 / 闲置超时：恢复中断标志后**直接返回**，不补 onEnd ——
+        //   ChatService 的收尾线程按 run 上的标志收尾（那是既有且唯一的收尾路径；
+        //   在这里补一个 onEnd 反而会与它竞争"恰好一次 done"）。
+        Thread.currentThread().interrupt();
+        return;
+      }
     }
     callback.onEnd(End.COMPLETE, null);
   }

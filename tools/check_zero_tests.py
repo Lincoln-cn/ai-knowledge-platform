@@ -1,4 +1,4 @@
-"""零用例闸门：把「`Tests run: 0` 报成绿」变成红。
+"""零用例闸门：把「没有跑用例却报绿」变成红。
 
 用法：
 
@@ -17,8 +17,13 @@
 `RetrievalSecurityTest` / `RetrievalHitTestTest` / `EmbeddingPipelineTest` / `OpenAiStubContractTest` /
 `UpstreamEmbeddingAdapterTest` …），而它们的用例在 CI 里是真的在跑的。
 
+★ 还有更隐蔽的一种（Issue #50）：`mvn test -Dtest=A,B` 多类名写法可能**一条都没匹配到**，
+控制台里**没有 `Tests run:` 行**，结尾却是 `BUILD SUCCESS`。如果只检查 `Tests run: 0`，
+这种「零读数」会被当成通过 —— 所以本脚本同时要求**报告/日志里必须出现 `Tests run:` 行**。
+
 ⇒ **判绿的依据必须是「这个类真的跑了 N 条」**，而不是「构建成功」。这条闸门就是那句话的机器版本，
-它同时覆盖三种来源：桩没起（本次实测）、`-Dtest=A,B` 静默不跑（Issue #50）、以及将来某天新加的一个 `assume`。
+它同时覆盖四种来源：桩没起（本次实测）、`-Dtest=A,B` 静默不跑（Issue #50）、
+空报告目录、以及将来某天新加的一个 `assume`。
 
 ★ **本机使用的注意**：`target/surefire-reports` 是**累积**的（上一次跑留下的报告还在），
 所以在本机要看「**这一次**跑成什么样」，请用 **log 模式**（把 maven 输出落到文件再扫），
@@ -84,6 +89,15 @@ def _class_of(joined: str) -> str:
     return match.group(1).rstrip(".") if match else NO_CLASS
 
 
+def _has_tests_run_line(lines: list[str]) -> bool:
+    """这份报告/日志里有没有 `Tests run:` 读数。
+
+    ★ 这是 Issue #50 的判据 ①：**没有读数 = 不能证明跑过**，不能因为没看到 `Tests run: 0`
+    就报绿。surefire 的每个 `.txt` 报告都应有这一行；maven 日志则至少应有一行。
+    """
+    return any("Tests run:" in line for line in lines)
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(__doc__)
@@ -95,10 +109,14 @@ def main(argv: list[str]) -> int:
 
     offenders: list[tuple[str, str]] = []
     allowed_seen: list[str] = []
+    no_readout: list[str] = []
     zero_lines = 0
     zero_totals = 0  # 没有 `-- in 类名` 的那些 = 整套跑成 0 条（与"某个类 0 条"是两件事）
 
-    for _name, lines in _lines_of(target):
+    for name, lines in _lines_of(target):
+        if not _has_tests_run_line(lines):
+            no_readout.append(name)
+            continue
         index = 0
         while index < len(lines):
             line = lines[index]
@@ -132,6 +150,13 @@ def main(argv: list[str]) -> int:
             index += 1
 
     print(f"零用例闸门：扫了 {target}")
+    if no_readout:
+        print(f"  [红] {len(no_readout)} 份报告/日志里没有 `Tests run:` 行：")
+        for name in no_readout:
+            print(f"       {name}")
+        print("  ⇒ 没有读数不等于通过：可能是 `-Dtest=A,B` 没匹配到任何类，或报告被截断/为空。")
+        return 1
+
     if zero_lines == 0:
         print("  没有任何类报 `Tests run: 0` ⇒ 每个跑到的类都真的跑了用例。")
         return 0

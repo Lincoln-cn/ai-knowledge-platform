@@ -11,7 +11,11 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
+import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
+import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.retrieval.SourceLabels;
@@ -110,11 +114,17 @@ public class ChatService {
    */
   private static final long POLL_INTERVAL_MS = 25L;
 
-  /** 检索候选上限（引用最多这么多条；与 {@code 03 §2.3} 的 TopN 同量级）。 */
-  private static final int RETRIEVAL_LIMIT = 5;
-
   /** 候选过采样倍数 —— 过滤（去重 / 缺展示信息）会砍掉几条，按 1× 取会"少给"引用。 */
   private static final int RETRIEVAL_OVERFETCH = 3;
+
+  /**
+   * 零引用且应用选择「拒答」时的固定文案（{@code #185}）。
+   *
+   * <p>★ 它是<strong>产品承诺</strong>（{@code 02 FR-02-19-6} / {@code 10 §5}）：没有资料支持时，用户必须能区分
+   * 「检索不到」与「模型自由发挥」。所以这句话是能力的一部分，不交给模型去编。
+   */
+  static final String NO_REF_REFUSAL =
+      "未在已绑定的知识库中检索到与这个问题相关的资料，因此不作回答。" + "可以补充或调整知识库资料，或把「无引用策略」改为「自由回答」后再试。";
 
   private final ChatTurnStore turns;
   private final SegmentSearchPort segmentSearch;
@@ -122,6 +132,39 @@ public class ChatService {
   private final ChatStreamPort chatStream;
   private final ChatStopSignal stopSignal;
   private final ChatStreamProperties properties;
+
+  /**
+   * 通用会话设置（初始提示词）的读取口。
+   *
+   * <p>★ 用 <b>setter 可选注入</b>而不是构造器参数：本类有一个 7 参数的测试构造器被大量用例使用，
+   * 加必选构造参数会一次改穿所有测试；而这条依赖在测试环境里**确实可以没有** （没有 cv_chat_settings 那一行时行为等同于"不加提示词"，与改造前逐字一致）。
+   */
+  private ChatPolicyResolver policyResolver;
+
+  /**
+   * @param resolver 解析器（可空 = 不加系统提示词，测试环境即如此）
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setPolicyResolver(ChatPolicyResolver resolver) {
+    this.policyResolver = resolver;
+  }
+
+  /**
+   * 向量化端口（{@code #185} 的 VECTOR / HYBRID 检索）。
+   *
+   * <p>★ 与 {@link #setPolicyResolver} 同一形状的 <b>setter 可选注入</b>：本类的两个构造器被大量测试依赖，
+   * 不改构造器参数列表；而这条依赖在测试环境里<strong>确实可以没有</strong>（不设时 VECTOR 模式按"未装配" 抛 {@link
+   * IllegalStateException} ⇒ 零引用，绝不静默退回全文）。
+   */
+  private EmbeddingPort embeddingPort;
+
+  /**
+   * @param embeddingPort 向量化端口（可空 = 未装配向量模型，VECTOR 检索不可用）
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setEmbeddingPort(EmbeddingPort embeddingPort) {
+    this.embeddingPort = embeddingPort;
+  }
 
   /**
    * 出站闸门（{@code #72}）—— ★ 它与 {@link AccessScopePort} 上的密级<strong>不是一回事</strong>：
@@ -290,6 +333,103 @@ public class ChatService {
   }
 
   /**
+   * 应用调试的一轮（{@code #184}）—— <strong>不落任何正式会话记录</strong>。
+   *
+   * <h3>★★ 为什么它必须走同一套编排</h3>
+   *
+   * <p>{@code BR-02-08}：调试结果只有在"与正式问答同配置"时才可信。所以这里不新写一条问答链，而是：
+   *
+   * <ol>
+   *   <li>由 {@link ChatTurnStore#prepareDebug} 走与正式轮<strong>同一段</strong>应用映射（模型 / 知识库 / 角色 / 检索参数）；
+   *   <li>复用同一个 {@link #retrieve}（阈值 / TopN / 无引用策略与线上同源）；
+   *   <li>复用同一个 {@link #promptOf} 与 {@link ChatStreamPort}。
+   * </ol>
+   *
+   * <h3>★★ 它<strong>不</strong>写 {@code cv_conversation} / {@code cv_message}</h3>
+   *
+   * <p>整条路径没有一次 {@code prepare} / {@code flush} / {@code finish}：{@code prepareDebug} 只读应用，
+   * 检索是只读，模型端口不碰库。判据见 {@code AssistantDebugHttpTest}：调试前后两张表的行数不变。
+   *
+   * @param appId 应用 id（看不见 ⇒ 404，与正式轮同一条口径）
+   * @param question 调试问题（非空）
+   * @return 答案 + 引用 + 耗时 + 用量（{@code tokens = null} 表示上游没有上报，不是 0）
+   * @throws BusinessException 应用不存在 / 不可见（404）· 空问题（400）· 上游失败（502）
+   */
+  public DebugAnswer debugTurn(UUID appId, String question) {
+    if (question == null || question.isBlank()) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "调试问题不能为空", "请输入要调试的问题");
+    }
+    String trimmed = question.strip();
+    long startedAt = System.nanoTime();
+    ChatTurnWriter.PreparedTurn turn = turns.prepareDebug(appId, trimmed);
+    RetrievalParams retrieval = effectiveRetrieval(turn);
+    List<SourceRef> refs = retrieve(trimmed, turn.kbIds(), null, turn.modelId(), retrieval);
+
+    if (refuses(refs, retrieval)) {
+      log.info("应用 {} 的调试命中零引用且策略为 REFUSE ⇒ 直接回拒答文案", appId);
+      return new DebugAnswer(NO_REF_REFUSAL, refs, elapsedMs(startedAt), null);
+    }
+
+    String prompt = promptOf(trimmed, refs, systemPromptOrNull(turn));
+    DebugCollector collector = new DebugCollector();
+    try {
+      chatStream.stream(
+          turn.modelId(),
+          prompt,
+          turn.thinkingEnabled(),
+          Duration.ofMillis(properties.idleTimeoutMs()),
+          collector);
+    } catch (RuntimeException failure) {
+      throw new BusinessException(
+          ErrorCode.UPSTREAM_UNAVAILABLE,
+          "调试生成失败：" + failure.getMessage(),
+          "检查模型是否已加载、上游是否可达；本次调试没有写任何会话记录");
+    }
+    if (collector.failed) {
+      throw new BusinessException(
+          ErrorCode.UPSTREAM_UNAVAILABLE,
+          "调试生成失败：" + collector.detail,
+          "检查模型是否已加载、上游是否可达；本次调试没有写任何会话记录");
+    }
+    return new DebugAnswer(
+        collector.text.toString(), refs, elapsedMs(startedAt), collector.usageTotalOrNull());
+  }
+
+  /**
+   * 调试结果（{@code POST /assistants/:id/debug} 的响应体）。
+   *
+   * @param tokens ★ {@code null} = 上游没有上报用量（{@code #142} 之前的生产实现就是这种），<strong>不是 0</strong>
+   */
+  public record DebugAnswer(String answer, List<SourceRef> refs, long elapsedMs, Integer tokens) {}
+
+  /** 零引用时是否应当拒答 —— <strong>唯一</strong>的判定（流式与调试两条路都读它）。 */
+  private static boolean refuses(List<SourceRef> refs, RetrievalParams retrieval) {
+    return refs.isEmpty() && retrieval.noRefStrategy() == NoRefStrategy.REFUSE;
+  }
+
+  /**
+   * 这一轮真正生效的检索参数 —— {@code #185} 的"应用值 vs 平台值"<strong>唯一</strong>选择点。
+   *
+   * <p>★ 应用有绑定就用应用的（即使值是默认值）；通用问答（应用为 null）才回落平台设置。 不要在三处各判一次（{@code ChatService} / {@code
+   * ChatTurnWriter} / 适配器）—— 那正是口径会漂的形状。
+   */
+  private RetrievalParams effectiveRetrieval(ChatTurnWriter.PreparedTurn turn) {
+    if (turn.retrieval() != null) {
+      return turn.retrieval();
+    }
+    if (policyResolver == null) {
+      return RetrievalParams.platformDefaults();
+    }
+    return new RetrievalParams(
+        // ★ 平台设置没有"检索模式"这一格（它只属于应用 / 知识库）⇒ 通用问答固定全文。
+        RetrievalMode.FULLTEXT,
+        policyResolver.retrievalThreshold(),
+        policyResolver.retrievalTopN(),
+        // ★ 通用问答没有"无引用策略"这一格 ⇒ 保持既有行为（自由回答）。
+        NoRefStrategy.FREE_ANSWER);
+  }
+
+  /**
    * 把这一轮跑到收尾 —— <strong>阻塞</strong>直到 {@code done} 已经交给 {@code sink}。
    *
    * <p>★ 失败路径（断开 / 超时 / 上游报错）<strong>都是正常结局</strong>（各自有终态），所以本方法不抛； 只有"流还没开始"的问题（会话看不见、没有模型）才从
@@ -366,15 +506,41 @@ public class ChatService {
     //     "在检索期间就发现超时"还是"检索回来才发现"——两者收尾都是 IDLE_TIMEOUT，都拿不到模型的一个字。
     //     而"检索要不要有自己的预算"是另一件事（`error.reason` 今天仍借"生成超时"那句文案），见交付报告。
     Thread heartbeat = startHeartbeatThread(run);
-    List<SourceRef> refs = retrieve(question, turn.kbIds(), turn.conversationId(), turn.modelId());
+    RetrievalParams retrieval = effectiveRetrieval(turn);
+    List<SourceRef> refs =
+        retrieve(question, turn.kbIds(), turn.conversationId(), turn.modelId(), retrieval);
     run.assembler.references(refs);
     run.bindRefs(refs);
     run.pump();
 
-    Thread model = startModelThread(turn, question, refs, run);
+    // ★★ `#185`：无引用策略的**生产消费点**。
+    //
+    //   此前 `assistant.retrieval_no_ref_strategy` 只在实体 / 视图 / 导出里出现，
+    //   问答链路零消费 ⇒ 用户选了「拒答」也照样自由回答（而且不会报错）。
+    //
+    //   ★ 拒答**不调用模型**：既省一次调用，也让"零引用 ⇒ 固定文案"这条承诺不被模型改写。
+    //   ★ 正文仍走 delta（`refs` 已经交进装配器，所以顺序 meta → refs → delta → done 不变）。
+    Thread model = null;
+    if (refs.isEmpty() && retrieval.noRefStrategy() == NoRefStrategy.REFUSE) {
+      log.info(
+          "应用 {} 的无引用策略是 REFUSE，本轮零引用 ⇒ 直接回拒答文案，不调用模型（会话 {}）", turn.appId(), turn.conversationId());
+      try {
+        run.assembler.delta(NO_REF_REFUSAL);
+        run.pump();
+      } catch (UncheckedIOException disconnected) {
+        // ★ 与模型线程同一条处置：写不出去 ⇒ 交给收尾线程按 DISCONNECT 收，不要在这里抛穿
+        run.disconnected = true;
+        log.info("拒答文案写不出去（连接已断）：{}", disconnected.getMessage());
+      }
+      run.modelDone.set(true);
+    } else {
+      model = startModelThread(turn, question, refs, run);
+    }
     awaitTerminal(turn, run);
     heartbeat.interrupt();
-    model.interrupt();
+    if (model != null) {
+      model.interrupt();
+    }
   }
 
   /**
@@ -423,21 +589,39 @@ public class ChatService {
     //   理由与同文件检索那条注释逐字相同：访问范围是 ThreadLocal，新建的模型线程上它是空的。
     //   读历史本身只按 conversationId 取（归属在 prepare 阶段已经判过），不依赖范围。
     List<cn.lincoln.aiplatform.platform.model.ChatMessage> history = List.of();
+    // ★ 历史条数上限来自「对话设置」（此前是硬编码常量 MAX_HISTORY_MESSAGES = 20）。
+    //   它决定上下文长度、推理成本与跨话题串味风险，应该能在页面上调。
+    //   ★ 读不到配置时退回常量默认值（与改造前逐字一致）。
+    final int historyLimit =
+        policyResolver == null ? MAX_HISTORY_MESSAGES : policyResolver.historyMaxMessages();
     if (turn.multiTurn()) {
       List<cn.lincoln.aiplatform.platform.model.ChatMessage> previous =
-          turns.historyBefore(turn.conversationId(), turn.userMessageId(), MAX_HISTORY_MESSAGES);
+          turns.historyBefore(turn.conversationId(), turn.userMessageId(), historyLimit);
       if (!previous.isEmpty()) {
         List<cn.lincoln.aiplatform.platform.model.ChatMessage> withCurrent =
             new java.util.ArrayList<>(previous);
         // ★ 本轮问题带上引用，与单轮那条路的 `promptOf` 逐字同源 —— 两条路不能各拼各的
+        // ★ 初始提示词同样要带：否则「第 1 轮有口径、第 2 轮起消失」，模型行为会在中途变
         withCurrent.add(
             new cn.lincoln.aiplatform.platform.model.ChatMessage(
                 cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER,
-                promptOf(question, refs)));
+                promptOf(question, refs, systemPromptOrNull(turn))));
         history = List.copyOf(withCurrent);
       }
     }
     final List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages = history;
+    // ★ 每轮一行：这一轮到底带上了几条历史。
+    //   ★ 它此前恒为 0 且**没有任何痕迹** ——「多轮不生效」在界面上只表现为
+    //     "模型答非所问"，不查这条日志根本看不出是历史没带（这次就是靠它定位的）。
+    // ★ 措辞要写清"含本轮"：historyLimit 管的是**历史**条数，而 messages 里还有本轮问题，
+    //   直接打两个数会让人以为"上限 2 却带了 3 条"是 bug。
+    log.info(
+        "本轮带 {} 条消息（= 历史 {} + 本轮问题；历史上限 {}，会话 {}）",
+        messages.size(),
+        // ★ 第一轮走单轮路径：messages 为空（本轮问题不在里面），减 1 会打出"历史 -1"
+        Math.max(0, messages.size() - 1),
+        historyLimit,
+        turn.conversationId());
     Thread thread =
         new Thread(
             () -> {
@@ -445,12 +629,17 @@ public class ChatService {
                 if (messages.isEmpty()) {
                   chatStream.stream(
                       turn.modelId(),
-                      promptOf(question, refs),
+                      promptOf(question, refs, systemPromptOrNull(turn)),
+                      turn.thinkingEnabled(),
                       Duration.ofMillis(properties.idleTimeoutMs()),
                       run);
                 } else {
                   chatStream.streamConversation(
-                      turn.modelId(), messages, Duration.ofMillis(properties.idleTimeoutMs()), run);
+                      turn.modelId(),
+                      messages,
+                      turn.thinkingEnabled(),
+                      Duration.ofMillis(properties.idleTimeoutMs()),
+                      run);
                 }
               } catch (StopUpstream cancel) {
                 // 用户停止 / 已判超时：不是错，终态由收尾线程按标志决定
@@ -592,36 +781,57 @@ public class ChatService {
     }
   }
 
-  /** 落库终态（状态 + 已生成文本 + 引用快照 + tokens）。 */
+  /**
+   * 落库终态（状态 + 已生成文本 + 引用快照 + tokens）。
+   *
+   * <p>★★ Issue #182 根因 2：收尾线程若带着<strong>中断标志</strong>进到这里（收尾被打断过一次）， Hikari/JDBC 会在拿连接或执行时抛 {@code
+   * InterruptedIOException} ⇒ <strong>终态根本没写成</strong>， 消息永久停在 {@code GENERATING}。所以：<b>入口先 {@link
+   * Thread#interrupted()} 清标志</b>， 落完终态后在 {@code finally} 里把标志恢复回去（异常路径也恢复）。
+   */
   private void persistTerminal(
       ChatTurnWriter.PreparedTurn turn,
       Run run,
       StreamTerminationPath path,
       long durationMs,
       boolean upstreamFailed) {
-    StreamEvent.StreamDoneEvent done = run.assembler.done();
-    if (done == null) {
-      // 理论上到不了（finish 一定产出 done）；真到了说明终态出口被绕过了 —— 留痕而不是静默
-      throw new IllegalStateException("收尾时没有 done 事件 —— 终态出口只能有一个（StreamAssembler#finish）");
+    // ★ 先清中断标志再落终态，否则消息会永远停在 GENERATING（Hikari/JDBC 见中断位就抛 InterruptedIOException）
+    boolean interrupted = Thread.interrupted();
+    if (interrupted) {
+      log.warn(
+          "收尾线程被中断，先清标志再落终态，否则消息会永远停在 GENERATING（会话 {} / 消息 {}）",
+          turn.conversationId(),
+          turn.assistantMessageId());
     }
-    turns.finish(
-        turn.assistantMessageId(),
-        path,
-        run.assembler.text(),
-        run.persistedChars,
-        run.refsBound ? run.refs : null,
-        done.tokens(),
-        durationMs,
-        failReasonFor(path, upstreamFailed ? run.lastFailReason : null),
-        failHintFor(path));
-    log.info(
-        "会话 {} 的助手消息 {} 收尾：{}（正文 {} 字，tokens {}，耗时 {}ms）",
-        turn.conversationId(),
-        turn.assistantMessageId(),
-        done.status(),
-        run.assembler.text().length(),
-        done.tokens().total(),
-        durationMs);
+    try {
+      StreamEvent.StreamDoneEvent done = run.assembler.done();
+      if (done == null) {
+        // 理论上到不了（finish 一定产出 done）；真到了说明终态出口被绕过了 —— 留痕而不是静默
+        throw new IllegalStateException("收尾时没有 done 事件 —— 终态出口只能有一个（StreamAssembler#finish）");
+      }
+      turns.finish(
+          turn.assistantMessageId(),
+          path,
+          run.assembler.text(),
+          run.persistedChars,
+          run.refsBound ? run.refs : null,
+          done.tokens(),
+          durationMs,
+          failReasonFor(path, upstreamFailed ? run.lastFailReason : null),
+          failHintFor(path));
+      log.info(
+          "会话 {} 的助手消息 {} 收尾：{}（正文 {} 字，tokens {}，耗时 {}ms）",
+          turn.conversationId(),
+          turn.assistantMessageId(),
+          done.status(),
+          run.assembler.text().length(),
+          done.tokens().total(),
+          durationMs);
+    } finally {
+      if (interrupted) {
+        // ★ 恢复中断位放在最末：异常路径也必须恢复，否则打断方（停止 / 超时）丢失自己的语义
+        Thread.currentThread().interrupt();
+      }
+    }
   }
 
   /** 失败原因：★ 与装配器发出去的 {@code error.reason} 同源（由它按路径合成）。 */
@@ -715,7 +925,40 @@ public class ChatService {
    * 正文里就会出现一个指向不存在引用的 {@code [N]}。
    */
   private List<SourceRef> retrieve(
-      String question, Collection<UUID> requestedKbIds, UUID conversationId, UUID modelId) {
+      String question,
+      Collection<UUID> requestedKbIds,
+      UUID conversationId,
+      UUID modelId,
+      RetrievalParams retrieval) {
+    // ★★ 召回开关（通用问答）：未启用 ⇒ 一条都不检索，直接返回空。
+    //
+    //   为什么要有这一条：`requestedKbIds` 为空时会走 `RetrievalScope.shared` 支
+    //   （= 用户可见的**全部**知识库），于是通用问答在**静默做全库检索**。
+    //   实测症状：问「编写一个 java 的 hello world」，却把 Vue 文档 / Gutenberg 电子书
+    //   以 0.25 分塞进 prompt，模型照着复述成「创建一个 Vue 单文件组件…」。
+    //
+    //   ★ 只在"调用方没指定库"（通用问答 / 应用未绑库）时看这个开关：
+    //     应用显式绑了库，那是用户自己配的范围，不该被通用问答的开关关掉。
+    if ((requestedKbIds == null || requestedKbIds.isEmpty())
+        && policyResolver != null
+        && !policyResolver.retrievalEnabled()) {
+      log.info("通用问答未启用召回（app.retrieval 的 retrieval_enabled=false）⇒ 本轮零引用");
+      return List.of();
+    }
+    // ★ 配置了范围且调用方没指定 ⇒ 用配置的范围（否则仍是"全部可见库"）
+    Collection<UUID> effectiveKbIds = requestedKbIds;
+    if ((effectiveKbIds == null || effectiveKbIds.isEmpty())
+        && policyResolver != null
+        && policyResolver.retrievalKbIds() != null
+        && !policyResolver.retrievalKbIds().isEmpty()) {
+      effectiveKbIds = policyResolver.retrievalKbIds();
+    }
+    // ★★ `#185`：应用级参数优先于平台设置 —— 这一处是**唯一**的"谁赢"判定。
+    //   通用问答（app == null）的 retrieval 是 null ⇒ 回落平台设置；应用有绑定 ⇒ 用它自己的。
+    //   ★ 模式三路都已接线（VECTOR / FULLTEXT / HYBRID）：VECTOR 走向量检索，HYBRID 两路 RRF 融合。
+    int retrievalLimit = retrieval.topN();
+    double threshold = retrieval.threshold();
+
     List<UUID> ordered;
     // ★ 出站上限在 try 之外声明：try 内取到、组装循环里用（catch 一律 return，故定值分析成立）
     ClassificationLevel egressCeiling;
@@ -728,7 +971,7 @@ public class ChatService {
       //   （旧的 `new TextQuery(问题, kbIds, limit)` 走的是 RetrievalScope.shared ⇒ 会话域那一支恒假）。
       // ★ 为什么用 retrievalScope 而不是 visibleKbIds：三支的绑定值来自三个不同的地方，其中 ownerId
       //   只能从当前范围取 —— 让装配点自己拼等于把"用谁的身份检索会话附件"变成一个可以填错的入参。
-      RetrievalScope scope = segmentSearch.retrievalScope(requestedKbIds, conversationId, false);
+      RetrievalScope scope = segmentSearch.retrievalScope(effectiveKbIds, conversationId, false);
       if (scope.isEmpty()) {
         // ★★ 这一条早退的留痕是补上的（第 17 周）：它此前**一条日志都没有** ⇒ 与"库里确实没有相关内容"
         //   在读数上完全一样。而它的成因有两个形状，处置相同、含义完全不同：
@@ -769,18 +1012,49 @@ public class ChatService {
             modelId);
         return List.of();
       }
-      List<SegmentSearchPort.Scored> hits =
-          segmentSearch.fullText(
-              new SegmentSearchPort.TextQuery(
-                  question, scope, RETRIEVAL_LIMIT * RETRIEVAL_OVERFETCH));
+      List<SegmentSearchPort.Scored> hits;
+      int fetchLimit = retrievalLimit * RETRIEVAL_OVERFETCH;
+      switch (retrieval.mode()) {
+        case VECTOR -> {
+          hits = vectorHits(question, scope, fetchLimit);
+        }
+        case HYBRID -> {
+          // ★ 两路并跑：全文那一路仍是主干，向量那一路只作补充。
+          //   向量路失败（RuntimeException）⇒ log.warn 后回退全文那一路，不许把整轮打死；
+          //   全文路失败仍走外层 catch ⇒ 零引用（VECTOR 模式的失败同理）。
+          List<SegmentSearchPort.Scored> fullTextHits =
+              segmentSearch.fullText(new SegmentSearchPort.TextQuery(question, scope, fetchLimit));
+          List<SegmentSearchPort.Scored> vectorHitsList;
+          try {
+            vectorHitsList = vectorHits(question, scope, fetchLimit);
+          } catch (RuntimeException vectorFailure) {
+            log.warn("混合检索的向量一路失败，本轮只用全文那一路继续：{}", vectorFailure.getMessage());
+            vectorHitsList = List.of();
+          }
+          hits = vectorHitsList.isEmpty() ? fullTextHits : fuseHybrid(fullTextHits, vectorHitsList);
+        }
+        case FULLTEXT -> {
+          hits =
+              segmentSearch.fullText(new SegmentSearchPort.TextQuery(question, scope, fetchLimit));
+        }
+        default -> throw new IllegalArgumentException("未知的检索模式：" + retrieval.mode());
+      }
       if (hits.isEmpty()) {
         return List.of();
       }
-      ordered = new ArrayList<>(RETRIEVAL_LIMIT);
+      ordered = new ArrayList<>(retrievalLimit);
       scoreById = new LinkedHashMap<>();
       for (SegmentSearchPort.Scored hit : hits) {
-        if (ordered.size() >= RETRIEVAL_LIMIT) {
+        if (ordered.size() >= retrievalLimit) {
           break;
+        }
+        // ★★ 准确度阈值：低于下限的命中直接丢弃。
+        //
+        //   实测那个答非所问的案例里，5 条命中**全是 0.25 分** —— 那是"沾一点边就算命中"的分数，
+        //   而模型会把它们当事实复述。阈值是这里唯一的拦截点：它必须在**进 prompt 之前**生效，
+        //   否则"低分引用"仍会污染上下文（界面上的引用列表反而不是主要危害）。
+        if (hit.score() < threshold) {
+          continue;
         }
         // ★ 去重（同一分段可能被多个词元命中）
         if (!scoreById.containsKey(hit.segmentId())) {
@@ -878,8 +1152,107 @@ public class ChatService {
           egressCeiling,
           refs.size());
     }
-    log.info("本轮检索到 {} 条引用（上限 {}）", refs.size(), RETRIEVAL_LIMIT);
+    log.info("本轮检索到 {} 条引用（上限 {}）", refs.size(), retrievalLimit);
     return refs;
+  }
+
+  /**
+   * 向量检索一路（{@code #185}）：把问题按知识库各自的向量模型分组向量化，再逐组向量检索、RRF 融合。
+   *
+   * @param question 用户问题
+   * @param scope 检索范围（会话附件部分不参与向量检索，见方法内说明）
+   * @param limit 每组的召回上限
+   * @return 按融合顺序排列的命中（display score = 该分段在各模型下的最大相似度）
+   */
+  private List<SegmentSearchPort.Scored> vectorHits(
+      String question, RetrievalScope scope, int limit) {
+    if (embeddingPort == null) {
+      // ★ 不静默退回全文：模式是 VECTOR 就必须走向量，缺依赖要让外层 catch 走零引用并留日志。
+      throw new IllegalStateException("检索模式为 VECTOR，但 EmbeddingPort 未装配");
+    }
+    if (scope.hasConversationScope()) {
+      // ★ 问答链路的 conversationId 每轮都有值（不代表有附件）。向量查询只能按知识库的模型/维度表走，
+      //   把 CONVERSATION 分段混进来会拿错模型；这里显式收窄并在下面留痕，不静默。
+      //   混合模式的会话附件仍由全文一路覆盖；纯向量模式只检索知识库 —— 界面说明与这里同口径。
+      log.info("向量检索只查知识库：本轮会话附件不参与向量一路");
+    }
+    RetrievalScope vectorScope = scope.withoutConversation();
+    Map<UUID, UUID> modelByKb = segmentSearch.embeddingModelByKb(vectorScope.kbIdsWithModelRows());
+    if (modelByKb.isEmpty()) {
+      throw new IllegalStateException("这些知识库没有可用的向量模型");
+    }
+    // 按向量模型分组：同一模型的库共用一次向量化 + 一次检索。
+    Map<UUID, List<UUID>> kbIdsByModel = new LinkedHashMap<>();
+    modelByKb.forEach(
+        (kbId, modelId) -> kbIdsByModel.computeIfAbsent(modelId, k -> new ArrayList<>()).add(kbId));
+    List<List<SegmentSearchPort.Scored>> rankedPerModel = new ArrayList<>(kbIdsByModel.size());
+    for (Map.Entry<UUID, List<UUID>> group : kbIdsByModel.entrySet()) {
+      UUID modelId = group.getKey();
+      // ★ 按模型分组隔离失败：一个向量模型没加载不该让其它模型的库也一起零引用。
+      //   失败组 log.warn 后跳过；全部失败才抛，由外层统一落成"零引用 + 可读日志"。
+      try {
+        List<float[]> embedded = embeddingPort.embed(modelId, List.of(question));
+        if (embedded == null || embedded.isEmpty()) {
+          throw new IllegalStateException("向量模型未返回问题的向量：" + modelId);
+        }
+        float[] vector = embedded.getFirst();
+        if (vector == null || vector.length == 0) {
+          throw new IllegalStateException("向量模型返回了空向量：" + modelId);
+        }
+        rankedPerModel.add(
+            segmentSearch.vectorSearch(
+                new SegmentSearchPort.VectorQuery(
+                    vector.length,
+                    vector,
+                    vectorScope.withinShared(group.getValue()),
+                    limit,
+                    modelId)));
+      } catch (RuntimeException groupFailure) {
+        log.warn("向量模型 {} 的分组检索失败，跳过该组：{}", modelId, groupFailure.getMessage());
+      }
+    }
+    if (rankedPerModel.isEmpty()) {
+      throw new IllegalStateException("所有向量模型分组都检索失败");
+    }
+    if (rankedPerModel.size() == 1) {
+      // 单组保持该组顺序。
+      return rankedPerModel.getFirst();
+    }
+    return fuseHybrid(rankedPerModel);
+  }
+
+  /**
+   * 两路（或多组）命中的本地 RRF 融合（{@code #185}）。
+   *
+   * <p>★ 刻意<b>不</b> import {@code retrieval} 模块的 {@code Rrf}：那是平台内部参考实现，问答链路与它 不该产生模块耦合。公式：{@code
+   * score(d) = Σ 1 / (k + rank_i(d))}，k=60，rank 从 1 起。
+   *
+   * <p>★ 融合后的 {@code score} 取该分段在各路中的<strong>最大原始分</strong>（用于阈值判定与界面展示）， 顺序按 RRF 分数。
+   */
+  private static List<SegmentSearchPort.Scored> fuseHybrid(
+      List<SegmentSearchPort.Scored> routeA, List<SegmentSearchPort.Scored> routeB) {
+    return fuseHybrid(List.of(routeA, routeB));
+  }
+
+  private static List<SegmentSearchPort.Scored> fuseHybrid(
+      List<List<SegmentSearchPort.Scored>> routes) {
+    final int k = 60;
+    Map<UUID, Double> rrfScore = new LinkedHashMap<>();
+    Map<UUID, Double> displayScore = new LinkedHashMap<>();
+    for (List<SegmentSearchPort.Scored> route : routes) {
+      int rank = 1;
+      for (SegmentSearchPort.Scored hit : route) {
+        rrfScore.merge(hit.segmentId(), 1.0 / (k + rank), Double::sum);
+        displayScore.merge(hit.segmentId(), hit.score(), Math::max);
+        rank++;
+      }
+    }
+    List<SegmentSearchPort.Scored> fused = new ArrayList<>(rrfScore.size());
+    rrfScore.entrySet().stream()
+        .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+        .forEach(
+            e -> fused.add(new SegmentSearchPort.Scored(e.getKey(), displayScore.get(e.getKey()))));
+    return fused;
   }
 
   /**
@@ -937,11 +1310,41 @@ public class ChatService {
    * <p>★ 本批<strong>不</strong>做提示词模板渲染（{@code as_assistant_prompt} 的绑定与模板引擎属另一批）： 这里给一个确定形状，让"引用编号
    * {@code [N]} 与 {@code refs} 的顺序"有唯一依据。
    */
-  private static String promptOf(String question, List<SourceRef> refs) {
-    if (refs.isEmpty()) {
-      return question;
+  /**
+   * 本轮要用的初始提示词。
+   *
+   * <p>★ 读失败一律降级为 {@code null}（不加前缀）而不是让整轮问答失败： 它是"锦上添花"的口径，不该比"能不能回答"优先级更高。
+   *
+   * @return 提示词；{@code null} = 不加
+   */
+  private String systemPromptOrNull(ChatTurnWriter.PreparedTurn turn) {
+    // ★★ 应用会话只读应用自己的 rolePrompt，**不回落**到平台通用提示词（#183）。
+    //   空角色 = 不加前缀，而不是"借用通用问答的口径"——两者混用会让应用的回答被平台口径污染。
+    if (turn.appId() != null) {
+      String role = turn.rolePrompt();
+      return role == null || role.isBlank() ? null : role.strip();
     }
-    StringBuilder prompt = new StringBuilder(question).append("\n\n参考资料：\n");
+    if (policyResolver == null) {
+      return null;
+    }
+    try {
+      return policyResolver.systemPrompt();
+    } catch (RuntimeException failure) {
+      log.warn("读通用会话设置失败，本轮不加初始提示词（对话行为与未配置时一致）", failure);
+      return null;
+    }
+  }
+
+  private static String promptOf(String question, List<SourceRef> refs, String systemPrompt) {
+    // ★ 初始提示词拼在**问题之前**，而不是作为一条 system 消息：
+    //   `ChatMessage.Role` 只有 USER/ASSISTANT（它的 javadoc 明确写「system 由提示词承担」），
+    //   所以"系统口径"在这个工程里本来就住在 prompt 文本里。
+    String prefix =
+        (systemPrompt == null || systemPrompt.isBlank()) ? "" : systemPrompt.strip() + "\n\n";
+    if (refs.isEmpty()) {
+      return prefix + question;
+    }
+    StringBuilder prompt = new StringBuilder(prefix).append(question).append("\n\n参考资料：\n");
     for (SourceRef ref : refs) {
       prompt
           .append('[')
@@ -957,6 +1360,54 @@ public class ChatService {
 
   private static long elapsedMs(long startedAtNanos) {
     return (System.nanoTime() - startedAtNanos) / 1_000_000;
+  }
+
+  /**
+   * 调试用的回调收集器（{@code #184}）：把模型吐出的块拼成整段答案，并汇总它上报的用量。
+   *
+   * <p>★ 与流式那条路的区别只有一处：这里没有装配器、没有心跳、没有落库 —— 调试是"一次阻塞调用换一段文本"。 而 {@code onUsage} 仍然按端口语义收下：上游不报就不调 ⇒
+   * {@code tokens} 是 {@code null}（不是 0）。
+   */
+  private static final class DebugCollector implements ChatStreamPort.Callback {
+
+    private final StringBuilder text = new StringBuilder();
+
+    private int promptTokens;
+
+    private int completionTokens;
+
+    /** 有没有任何一次 {@code onUsage} —— 区分"没报"与"报了 0"。 */
+    private boolean usageReported;
+
+    private boolean failed;
+
+    private String detail;
+
+    @Override
+    public void onChunk(String chunk) {
+      if (chunk != null && !chunk.isEmpty()) {
+        text.append(chunk);
+      }
+    }
+
+    @Override
+    public void onUsage(int promptTokens, int completionTokens) {
+      this.usageReported = true;
+      this.promptTokens += promptTokens;
+      this.completionTokens += completionTokens;
+    }
+
+    @Override
+    public void onEnd(ChatStreamPort.End end, String detail) {
+      if (end == ChatStreamPort.End.FAILED) {
+        this.failed = true;
+        this.detail = detail;
+      }
+    }
+
+    private Integer usageTotalOrNull() {
+      return usageReported ? promptTokens + completionTokens : null;
+    }
   }
 
   // ────────────────────────── 这一轮的可变状态 ──────────────────────────
