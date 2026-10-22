@@ -272,6 +272,22 @@ public class UpstreamGateway {
       List<Map<String, String>> history,
       Duration timeout,
       AuthStyle authStyle) {
+    return chatCompletionWithUsage(model, apiBase, apiKey, history, timeout, authStyle).content();
+  }
+
+  /**
+   * 一次性对话补全，并把上游 {@code usage} 一并带回来（{@code #199}）。
+   *
+   * <p>★ 与流式路径同一口径：上游没给 {@code usage} 时两个分量都是 {@code null}，表示 <strong>没有读数</strong>，不是
+   * 0。兜底流式适配器据此决定是否调用 {@code onUsage}。
+   */
+  public ChatResult chatCompletionWithUsage(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      AuthStyle authStyle) {
     // ★★ 用序列化器拼请求体，**不要**手拼字符串 —— 真栈闸门实测抓到过：
     //   查询理解的提示词是**多行**的，而 escape() 只处理了反斜杠与引号，换行原样留在 JSON
     //   字符串里 ⇒ 上游按"请求体不是合法 JSON"直接 400。那是最难查的一类错：
@@ -281,17 +297,49 @@ public class UpstreamGateway {
     String body =
         post(resolve(apiBase, "/chat/completions"), writeJson(payload), apiKey, authStyle, timeout);
     try {
-      JsonNode content =
-          json.readTree(body).path("choices").path(0).path("message").path("content");
+      JsonNode root = json.readTree(body);
+      JsonNode content = root.path("choices").path(0).path("message").path("content");
       if (!content.isTextual()) {
         // ★ 明确拒绝而不是返回空串："上游回了 200 但没有正文"与"模型答了个空"是两件事，
         //   而下游（解析）会把两者都看成"解析失败"—— 分开报才知道该找谁
         throw new UpstreamUnreachableException(
             "上游响应里没有 choices[0].message.content。响应片段：" + abbreviate(body));
       }
-      return content.asText();
+      JsonNode usage = root.path("usage");
+      if (!usage.isObject()) {
+        return new ChatResult(content.asText(), null, null);
+      }
+      JsonNode promptTokens = usage.path("prompt_tokens");
+      JsonNode completionTokens = usage.path("completion_tokens");
+      if (!promptTokens.isIntegralNumber() || !completionTokens.isIntegralNumber()) {
+        return new ChatResult(content.asText(), null, null);
+      }
+      int promptCount = promptTokens.asInt();
+      int completionCount = completionTokens.asInt();
+      if (promptCount < 0 || completionCount < 0) {
+        return new ChatResult(content.asText(), null, null);
+      }
+      return new ChatResult(content.asText(), promptCount, completionCount);
     } catch (JacksonException e) {
       throw new UpstreamUnreachableException("上游返回的对话响应不是合法 JSON：" + e.getMessage(), e);
+    }
+  }
+
+  /** 一次性补全的正文与用量；两个用量分量同时为 {@code null} 表示上游没上报。 */
+  public record ChatResult(String content, Integer promptTokens, Integer completionTokens) {
+
+    public ChatResult {
+      if ((promptTokens == null) != (completionTokens == null)) {
+        throw new IllegalArgumentException("promptTokens 与 completionTokens 必须同时有值或同时为空");
+      }
+      if (promptTokens != null && (promptTokens < 0 || completionTokens < 0)) {
+        throw new IllegalArgumentException(
+            "token 数不能为负：prompt=" + promptTokens + ", completion=" + completionTokens);
+      }
+    }
+
+    public boolean hasUsage() {
+      return promptTokens != null;
     }
   }
 

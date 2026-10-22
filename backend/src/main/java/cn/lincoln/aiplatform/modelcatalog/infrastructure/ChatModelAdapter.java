@@ -70,6 +70,53 @@ public class ChatModelAdapter implements ChatPort {
   }
 
   /**
+   * 带用量的一次性补全（{@code #199}）：兜底流式适配器需要正文与 usage 一起拿。
+   *
+   * <p>上游没给 {@code usage} 时返回 {@link Completion#withoutUsage} 的语义（两个分量为 null）， 不伪造 0。
+   */
+  @Override
+  public Completion completeWithUsage(UUID modelId, String prompt, Duration timeout) {
+    Model model = requireChatModel(modelId);
+    try {
+      ResolvedUpstream target = upstream.resolve(model);
+      UpstreamGateway.ChatResult result =
+          gateway.chatCompletionWithUsage(
+              model.baseModel(),
+              target.apiBase(),
+              target.apiKey(),
+              List.of(Map.of("role", "user", "content", prompt)),
+              timeout,
+              target.authStyle());
+      return new Completion(result.content(), result.promptTokens(), result.completionTokens());
+    } catch (UpstreamGateway.UpstreamUnreachableException e) {
+      throw upstreamFailure(e);
+    }
+  }
+
+  /** 带用量的多轮一次性补全（{@code #199}）：保留 role 边界，同时把 usage 带回来。 */
+  @Override
+  public Completion completeConversationWithUsage(
+      UUID modelId, List<ChatMessage> messages, Duration timeout) {
+    Model model = requireChatModel(modelId);
+    List<Map<String, String>> history =
+        messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
+    try {
+      ResolvedUpstream target = upstream.resolve(model);
+      UpstreamGateway.ChatResult result =
+          gateway.chatCompletionWithUsage(
+              model.baseModel(),
+              target.apiBase(),
+              target.apiKey(),
+              history,
+              timeout,
+              target.authStyle());
+      return new Completion(result.content(), result.promptTokens(), result.completionTokens());
+    } catch (UpstreamGateway.UpstreamUnreachableException e) {
+      throw upstreamFailure(e);
+    }
+  }
+
+  /**
    * ★ **覆盖**端口的默认实现（`#168`）：走 `messages[]`，每条各带 role。
    *
    * <p>端口那个默认实现是把消息拼成一段文本 —— 那会丢掉 role 边界，而丢了边界的多轮 正是反向注入（{@code #84}）的形状。★ 生产路径必须走本方法。
@@ -221,11 +268,15 @@ public class ChatModelAdapter implements ChatPort {
           timeout,
           target.authStyle());
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
-      throw new BusinessException(
-          ErrorCode.UPSTREAM_UNAVAILABLE,
-          "调用对话模型失败：" + e.getMessage(),
-          "请确认对话模型服务可用（地址与密钥）；检索会退回原始问题继续，不会因此失败");
+      throw upstreamFailure(e);
     }
+  }
+
+  private static BusinessException upstreamFailure(UpstreamGateway.UpstreamUnreachableException e) {
+    return new BusinessException(
+        ErrorCode.UPSTREAM_UNAVAILABLE,
+        "调用对话模型失败：" + e.getMessage(),
+        "请确认对话模型服务可用（地址与密钥）；检索会退回原始问题继续，不会因此失败");
   }
 
   private static BusinessException parseFailure(Class<?> type, String detail) {
