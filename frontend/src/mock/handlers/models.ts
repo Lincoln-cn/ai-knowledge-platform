@@ -3,8 +3,6 @@ import type { BaseModelOption, ModelCapability, ModelInfo, UpsertModelBody } fro
 import type { ProbeBaseModelBody } from '@/api/models'
 import type { MockRoute } from '../dispatch'
 import { MockEnvelope, paginate } from '../dispatch'
-import { assistants } from '../fixtures/assistants'
-import { knowledgeBases } from '../fixtures/knowledge'
 import { baseModels, externalBaseModels, models, probedCapabilities } from '../fixtures/models'
 
 /** 加载是异步的：先置「加载中」，若干秒后转「已加载」。与真实后端行为一致 */
@@ -252,22 +250,9 @@ export const modelRoutes: MockRoute[] = [
         throw new ApiError(ErrorCode.BAD_REQUEST, `「${model.name}」是内置模型，不可删除`)
       }
 
-      // 门禁是「被谁引用」，不是「当前加载态」：契约里只有 load 没有 unload，
-      // 拿加载态当门禁会让加载过的模型永远删不掉。删除即停用，不必先卸载。
-      const appNames = assistants.filter((a) => a.modelId === model.id).map((a) => a.name)
-      const kbNames = knowledgeBases.filter((k) => k.embeddingModelId === model.id).map((k) => k.name)
-      if (appNames.length || kbNames.length) {
-        const brief = (names: string[], unit: string) =>
-          `${names.length} 个${unit}（${names.slice(0, 2).join('、')}${names.length > 2 ? ' 等' : ''}）`
-        const refs = [
-          appNames.length ? brief(appNames, '应用') : '',
-          kbNames.length ? brief(kbNames, '知识库') : ''
-        ]
-          .filter(Boolean)
-          .join('、')
-        throw new ApiError(ErrorCode.BAD_REQUEST, `该模型被 ${refs} 引用，无法删除；请先在这些引用处更换模型`)
-      }
-
+      // 与后端当前行为一致：`ModelService.delete` 的「被应用/知识库引用」检查只是钩子，
+      // 后端还没有引用方查询；mock 若单方面拒绝，会让「mock 点不动、真栈能删」重演（#22）。
+      // 等后端补上引用计数后，两边同批加回。
       models.splice(models.indexOf(model), 1)
       return undefined
     }
@@ -278,8 +263,8 @@ export const modelRoutes: MockRoute[] = [
     '/models/:id/load',
     ({ path }) => {
       const model = findModel(path.id)
-      if (model.status === 'LOADING') throw new ApiError(ErrorCode.BAD_REQUEST, '该模型正在加载中，请勿重复提交')
-
+      // 与后端 `ModelService.load` 一致：任意态都可发起，重复点也返回 200；
+      // mock 不再单方面抛「正在加载中」（#22）。
       model.status = 'LOADING'
       // 异步转「已加载」。界面靠刷新/轮询看到变化，与真实后端一致
       setTimeout(() => {
