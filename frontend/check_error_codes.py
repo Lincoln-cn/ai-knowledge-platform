@@ -108,6 +108,28 @@ def main() -> int:
     shadow = [(f, ln, c) for f, ln, c in hits if 4000 <= c < 4100]
     check(not shadow, f"没有 4xxx 非 HTTP 码（实测 {len(shadow)} 处）")
 
+    print("\n== 4. 同一错误在 mock 与后端同码（#41 T184） ==")
+    # 这一节只钉住一条最容易被“各自都在契约里”掩盖的错误：
+    # 改密时原密码错。mock 与后端都必须抛 OLD_PASSWORD_MISMATCH(1004)，
+    # 不能一边 BAD_REQUEST、一边 OLD_PASSWORD_MISMATCH。
+    mock_change_password = (
+        ROOT / "frontend/src/mock/handlers/identity.ts"
+    ).read_text(encoding="utf-8")
+    backend_change_password = (
+        ROOT
+        / "backend/src/main/java/cn/lincoln/aiplatform/identity/application/AuthService.java"
+    ).read_text(encoding="utf-8")
+    mock_old_password = "ErrorCode.OLD_PASSWORD_MISMATCH" in mock_change_password
+    backend_old_password = (
+        "ErrorCode.OLD_PASSWORD_MISMATCH" in backend_change_password
+    )
+    check(mock_old_password, "mock 的旧密码错误使用 OLD_PASSWORD_MISMATCH")
+    check(backend_old_password, "后端的旧密码错误使用 OLD_PASSWORD_MISMATCH")
+    check(
+        mock_old_password and backend_old_password,
+        "同一旧密码错误在 mock 与后端同码（T184）",
+    )
+
     bad_msgs = [m for c, m in ok if not c]
     print("=" * 60)
     print(f"通过 {len(ok) - len(bad_msgs)}/{len(ok)}")
