@@ -107,10 +107,8 @@ class ContractDriftTest {
           missing("GET", "/assistants/{*}/workflow/versions", "#198", "15–18 周"),
           missing("GET", "/assistants/{*}/workflow/versions/{*}", "#198", "15–18 周"),
           missing("POST", "/assistants/{*}/workflow/versions/{*}/rollback", "#198", "15–18 周"),
-          // ★ conversations（6）—— 第 17 周 0.4.5：SSE 问答链路（会话 CRUD 与消息流）
-          missing("DELETE", "/conversations/{*}", "#187", "17 周"),
-          missing("GET", "/conversations/{*}", "#187", "17 周"),
-          missing("PATCH", "/conversations/{*}", "#187", "17 周"),
+          // ★ conversations（3）—— GET/PATCH/DELETE /conversations/{id} 已随 #187 落地，
+          //   只剩会话分享三条（第 17 周）
           missing("GET", "/conversations/{*}/shares", "#187", "17 周"),
           missing("POST", "/conversations/{*}/shares", "#187", "17 周"),
           missing("DELETE", "/conversations/{*}/shares/{*}", "#187", "17 周"),
