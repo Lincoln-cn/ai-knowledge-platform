@@ -64,15 +64,15 @@ public class ChatPortFallbackStreamAdapter implements ChatStreamPort {
 
   @Override
   public void stream(UUID modelId, String prompt, Duration timeout, Callback callback) {
-    String text;
+    ChatPort.Completion completion;
     try {
-      text = chat.complete(modelId, prompt, timeout);
+      completion = chat.completeWithUsage(modelId, prompt, timeout);
     } catch (RuntimeException failure) {
       // ★ 上游失败是"这一路调用失败"，不是"整个请求 500"：交回回调，由链路收成 FAILED
       callback.onEnd(End.FAILED, failure.getMessage());
       return;
     }
-    emitInChunks(text, callback);
+    emitInChunks(completion, callback);
   }
 
   /**
@@ -86,23 +86,30 @@ public class ChatPortFallbackStreamAdapter implements ChatStreamPort {
       java.util.List<cn.lincoln.aiplatform.platform.model.ChatMessage> messages,
       Duration timeout,
       Callback callback) {
-    String text;
+    ChatPort.Completion completion;
     try {
-      text = chat.completeConversation(modelId, messages, timeout);
+      completion = chat.completeConversationWithUsage(modelId, messages, timeout);
     } catch (RuntimeException failure) {
       callback.onEnd(End.FAILED, failure.getMessage());
       return;
     }
-    emitInChunks(text, callback);
+    emitInChunks(completion, callback);
   }
 
   /**
    * 把上游一次性返回的整段文本按 {@link #CHUNK_CHARS} 切块送出。
    *
-   * @param text 上游返回（可能为 {@code null}/空 —— 那是"生成了 0 个字的答案"）
+   * <p>★ 用量在第一个 delta 之前交给回调：{@link ChatStreamPort.Callback#onUsage} 必须在 {@code onEnd} 之前到达，而第一个
+   * delta 之前是最早的稳定位置。
+   *
+   * @param completion 上游返回（正文可能为 {@code null}/空 —— 那是"生成了 0 个字的答案"）
    * @param callback 回调；★ 它可能抛（用户停止 / 闲置超时 / 连接已断）⇒ 让异常传出去并停止继续吐
    */
-  private void emitInChunks(String text, Callback callback) {
+  private void emitInChunks(ChatPort.Completion completion, Callback callback) {
+    if (completion.hasUsage()) {
+      callback.onUsage(completion.promptTokens(), completion.completionTokens());
+    }
+    String text = completion.text();
     if (text == null || text.isEmpty()) {
       // 空回答：一个 delta 都不发（装配器拒绝空增量），直接以 COMPLETE 收 ——
       // 终态仍是 GENERATED，这正是"生成了 0 个字的答案"

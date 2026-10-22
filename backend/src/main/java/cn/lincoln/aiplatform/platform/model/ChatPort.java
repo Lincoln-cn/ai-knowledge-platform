@@ -59,6 +59,29 @@ public interface ChatPort {
   }
 
   /**
+   * 带用量的一次性对话补全（{@code #199}）。
+   *
+   * <p>★ 为什么不在 {@link #complete} 上直接改返回类型：既有调用方（查询理解、多跳判定、推荐问题）只关心正文， 改签名会让它们全部跟着改；而兜底流式适配器需要的是"正文
+   * + 用量"。默认实现明确返回 <strong>没有用量</strong>（{@link Completion#withoutUsage}），而不是报 0 —— 报 0
+   * 与"没上报"在成本口径上是两个答案。
+   *
+   * <p>★ 生产实现必须覆盖本方法与 {@link #completeConversationWithUsage}，否则兜底路径仍会静默丢用量。
+   */
+  default Completion completeWithUsage(UUID modelId, String prompt, Duration timeout) {
+    return Completion.withoutUsage(complete(modelId, prompt, timeout));
+  }
+
+  /**
+   * 带用量、带角色边界的多轮一次性补全（{@code #199}）。
+   *
+   * <p>默认实现退回 {@link #completeConversation} 并标记"没有用量"；生产适配器应覆盖。
+   */
+  default Completion completeConversationWithUsage(
+      UUID modelId, java.util.List<ChatMessage> messages, Duration timeout) {
+    return Completion.withoutUsage(completeConversation(modelId, messages, timeout));
+  }
+
+  /**
    * 发一次对话补全，返回模型输出的<strong>原文</strong>。
    *
    * <p>★ 为什么这一路返回原文而不是解析好的对象：它的调用点用的是<strong>简单分隔</strong>输出（查询理解按换行给多条查询， {@code 11 §2.2.1} 照抄官方
@@ -92,4 +115,33 @@ public interface ChatPort {
    *     <strong>输出不符合 schema</strong>
    */
   <T> T completeAs(UUID modelId, String prompt, Class<T> type, Duration timeout);
+
+  /**
+   * 一次补全的正文与用量。
+   *
+   * <p>{@code promptTokens}/{@code completionTokens} 同时为 {@code null} 表示<strong>这一路没有上报用量</strong>；
+   * 不允许只填一个。用可空而不是 0，是为了让"没有读数"与"真的 0 token"在类型上就分开。
+   */
+  record Completion(String text, Integer promptTokens, Integer completionTokens) {
+
+    public Completion {
+      if ((promptTokens == null) != (completionTokens == null)) {
+        throw new IllegalArgumentException("promptTokens 与 completionTokens 必须同时有值或同时为空");
+      }
+      if (promptTokens != null && (promptTokens < 0 || completionTokens < 0)) {
+        throw new IllegalArgumentException(
+            "token 数不能为负：prompt=" + promptTokens + ", completion=" + completionTokens);
+      }
+    }
+
+    /** 没有用量读数（不是 0）。 */
+    public static Completion withoutUsage(String text) {
+      return new Completion(text, null, null);
+    }
+
+    /** 是否有可上报的用量。 */
+    public boolean hasUsage() {
+      return promptTokens != null;
+    }
+  }
 }

@@ -17,6 +17,7 @@ import cn.lincoln.aiplatform.modelcatalog.infrastructure.ChatModelAdapter;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.ModelUpstreamResolver;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.UpstreamGateway;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.model.ChatPort;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -157,6 +158,21 @@ class ChatModelAdapterTest {
     assertThat(gateway.reasoningEffort).as("★ ALWAYS_ON 不接受关闭，不能发 none").isNull();
   }
 
+  /** `#199`：兜底流式适配器要的用量必须从真实适配器出口带出来，而不是在网关上丢掉。 */
+  @Test
+  void exposesUsageThroughCompletion() {
+    Model model = chatModel(UUID.randomUUID());
+    gateway.chatResult = new UpstreamGateway.ChatResult("答案", 9, 4);
+
+    ChatPort.Completion completion =
+        adapter(model).completeWithUsage(model.id(), PROMPT, Duration.ofSeconds(5));
+
+    assertThat(completion.text()).isEqualTo("答案");
+    assertThat(completion.promptTokens()).isEqualTo(9);
+    assertThat(completion.completionTokens()).isEqualTo(4);
+    assertThat(completion.hasUsage()).isTrue();
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
 
   /**
@@ -208,6 +224,7 @@ class ChatModelAdapterTest {
 
     String prompt;
     String reasoningEffort;
+    ChatResult chatResult;
     String response = "{\"sufficient\": true, \"nextQuery\": null}";
 
     RecordingGateway() {
@@ -230,6 +247,18 @@ class ChatModelAdapterTest {
         AuthStyle authStyle) {
       this.prompt = prompt;
       return response;
+    }
+
+    @Override
+    public ChatResult chatCompletionWithUsage(
+        String model,
+        String apiBase,
+        String apiKey,
+        List<java.util.Map<String, String>> history,
+        Duration timeout,
+        AuthStyle authStyle) {
+      this.prompt = history.get(history.size() - 1).get("content");
+      return chatResult;
     }
 
     @Override
