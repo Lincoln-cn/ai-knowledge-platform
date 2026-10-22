@@ -124,16 +124,6 @@ class ContractDriftTest {
           // ★ knowledge-bases（2）—— 建档/文档已落地；余下暂存上传与上传策略两条，属 P1
           missing("GET", "/knowledge-bases/{*}/upload-policy", "#197", "P1（未排周次）"),
           missing("POST", "/knowledge-bases/{*}/uploads", "#197", "P1（未排周次）"),
-          // ★ prompt-configs（4）—— §3.1 M4：提示词管理页（pages/assistants/prompts/），后端随 assistant 域
-          missing("GET", "/prompt-configs", "#196", "随 assistant 域"),
-          missing("POST", "/prompt-configs", "#196", "随 assistant 域"),
-          missing("DELETE", "/prompt-configs/{*}", "#196", "随 assistant 域"),
-          missing("PUT", "/prompt-configs/{*}", "#196", "随 assistant 域"),
-          // ★ prompt-types（4）—— 同上，随 assistant 域
-          missing("GET", "/prompt-types", "#196", "随 assistant 域"),
-          missing("POST", "/prompt-types", "#196", "随 assistant 域"),
-          missing("DELETE", "/prompt-types/{*}", "#196", "随 assistant 域"),
-          missing("PUT", "/prompt-types/{*}", "#196", "随 assistant 域"),
           // ★ workflow（1）—— 第 15 周 0.4.3 / M5.5：编排画布接契约的节点类型查询
           missing("GET", "/workflow/node-types", "#198", "15–16 周"));
 

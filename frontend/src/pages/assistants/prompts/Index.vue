@@ -2,9 +2,10 @@
   <div class="page">
     <PageHeader
       title="提示词"
-      desc="提示词配置：可复用的角色指令，被应用按引用选用。类别里的类型是分类法（契约），由管理员在「基础数据 → 提示词类型」维护"
+      desc="提示词配置：可复用的角色指令，被应用按引用选用；类型可在本页「类型管理」里维护"
     >
       <template #actions>
+        <el-button size="small" :icon="Setting" @click="openTypes">类型管理</el-button>
         <el-button size="small" :icon="Refresh" :loading="loadingTypes || loadingConfigs" @click="reloadAll">
           刷新
         </el-button>
@@ -34,19 +35,26 @@
     />
 
     <PromptFormDialog ref="formRef" :types="types" @saved="onSaved" />
+    <PromptTypeDialog
+      ref="typeDialogRef"
+      :types="types"
+      :loading="loadingTypes"
+      @changed="onTypesChanged"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Setting } from '@element-plus/icons-vue'
 import { promptsApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { PromptConfig, PromptType } from '@/api/prompts'
 import PageHeader from '@/components/PageHeader.vue'
 import PromptConfigPanel from '../components/prompts/PromptConfigPanel.vue'
 import PromptFormDialog from '../components/prompts/PromptFormDialog.vue'
+import PromptTypeDialog from '../components/prompts/PromptTypeDialog.vue'
 
 const types = ref<PromptType[]>([])
 const configs = ref<PromptConfig[]>([])
@@ -59,8 +67,9 @@ const loadingTypes = ref(false)
 const loadingConfigs = ref(false)
 
 const formRef = ref<InstanceType<typeof PromptFormDialog>>()
+const typeDialogRef = ref<InstanceType<typeof PromptTypeDialog>>()
 
-/** 类型是只读引用：本页只把它填进筛选/表单的下拉，读写都由「基础数据 → 提示词类型」负责 */
+/** 类型与模板同在提示词域：本页负责读写，避免「基础数据」与提示词页两套入口各写一半 */
 const loadTypes = async () => {
   loadingTypes.value = true
   try {
@@ -97,6 +106,16 @@ const openConfig = (row?: PromptConfig) => {
 
 const onSaved = () => {
   reloadAll()
+}
+
+const openTypes = () => {
+  typeDialogRef.value?.open()
+}
+
+const onTypesChanged = async () => {
+  await loadTypes()
+  // 类型名称/图标会出现在筛选项与模板表里，一并刷新
+  await loadConfigs()
 }
 
 const removeConfig = async (row: PromptConfig) => {
