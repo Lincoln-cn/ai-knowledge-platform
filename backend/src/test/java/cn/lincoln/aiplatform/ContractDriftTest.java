@@ -87,12 +87,6 @@ class ContractDriftTest {
    */
   private static final List<MissingEndpoint> KNOWN_MISSING =
       List.of(
-          // ★ analytics（5）—— §3.1「工作台」4 项指标来自 analytics 域（随 0.4.x 之后）
-          missing("GET", "/analytics/assistants", "#193", "0.5.0 后"),
-          missing("GET", "/analytics/me/summary", "#193", "0.5.0 后"),
-          missing("GET", "/analytics/overview", "#193", "0.5.0 后"),
-          missing("GET", "/analytics/quality", "#193", "0.5.0 后"),
-          missing("GET", "/analytics/trend", "#193", "0.5.0 后"),
           // ★ assistants（19）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置 + 发布校验余下的市场筛选/收藏/标签/API Key/共享写/导入
           missing("POST", "/assistants/import", "#195", "15–18 周"),
           missing("POST", "/assistants/import/check", "#195", "15–18 周"),

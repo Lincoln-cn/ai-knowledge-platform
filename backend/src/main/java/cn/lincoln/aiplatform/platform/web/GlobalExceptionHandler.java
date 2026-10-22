@@ -11,6 +11,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -171,6 +172,23 @@ public class GlobalExceptionHandler {
                 ErrorCode.BAD_REQUEST,
                 "请求方法不被允许：" + cause.getMethod() + " 该路径",
                 "该路径只接受 " + supported + " —— 若这是前端契约里已声明、后端尚未实现的端点，" + "它在后端还不存在（不是服务器故障）"));
+  }
+
+  /**
+   * 缺少必填查询参数（如 {@code /analytics/overview} 没带 {@code from}/{@code to}）⇒ 400。
+   *
+   * <p>★ 与 {@link #onUnreadableBody} / {@link #onTypeMismatch} 同族：这是调用方自己能修的输入问题， 落进兜底
+   * {@code @ExceptionHandler(Exception.class)} 会变成 500「服务内部错误」—— 联调时会被误读成后端崩了。
+   */
+  @ExceptionHandler(MissingServletRequestParameterException.class)
+  public ResponseEntity<ApiResponse<Void>> onMissingParameter(
+      MissingServletRequestParameterException cause) {
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .body(
+            ApiResponse.fail(
+                ErrorCode.BAD_REQUEST,
+                "缺少必填查询参数：" + cause.getParameterName(),
+                "请检查请求是否带上该参数（" + cause.getParameterType() + "）"));
   }
 
   /**
