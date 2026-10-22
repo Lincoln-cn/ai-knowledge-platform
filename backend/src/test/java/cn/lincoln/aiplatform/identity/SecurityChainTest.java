@@ -135,8 +135,8 @@ class SecurityChainTest {
    * <p>这条是**前后端联调时抓出来的**：前端的分析看板调 {@code /api/v1/analytics/overview} （后端第 2 周还没实现），界面收到
    * 500「服务内部错误」， 于是排查方向变成"后端崩了"，而真实原因是"这个接口还没做"。
    *
-   * <p>★ 2026-10-22（#193）：分析端点已经实现，这条改用**仍未实现**的 {@code /prompt-configs} 作为样本；
-   * 已实现端点缺参数的情形由下一条用例守（400，不是 500）。
+   * <p>★ 2026-10-22（#193）：分析端点已经实现，这条改用**仍未实现**的 {@code /workflow/node-types} 作为样本；
+   * 2026-10-22（#196）`/prompt-configs` 也已落地，不能再拿它当“未实现”样本。 已实现端点缺参数的情形由下一条用例守（400，不是 500）。
    *
    * <p>根因是兜底的 {@code @ExceptionHandler(Exception.class)} 把 Spring 的 {@code
    * NoResourceFoundException} 也抓了 —— 它继承自 Exception。
@@ -145,7 +145,7 @@ class SecurityChainTest {
   void 未实现的端点返回404而不是500() throws Exception {
     String accessToken = jsonField(login("admin", "admin").body(), "accessToken");
 
-    HttpResponse<String> res = get("/api/v1/prompt-configs", accessToken);
+    HttpResponse<String> res = get("/api/v1/workflow/node-types", accessToken);
 
     assertThat(res.statusCode()).as("★ 未实现 ≠ 服务出错：返 500 会让'接口还没做'看起来像'后端崩了'").isEqualTo(404);
     assertThat(res.body()).contains("\"code\":404");
