@@ -34,7 +34,8 @@ export interface AssistantRankItem {
 /** 质量观测。首字延迟比总耗时更接近用户感知（03 §机制七） */
 export interface QualityMetrics {
   avgRefCount: number
-  firstTokenLatencyP50: number
+  /** 首字延迟 P50；当前 cv_message 没有首 token 时间戳，无数据源时为 null */
+  firstTokenLatencyP50: number | null
   /** 结构化输出失败率。MVP 只埋点，V1.1 起考核 */
   artifactFailureRate: number | null
   upCount: number
