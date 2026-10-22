@@ -57,8 +57,8 @@ import org.hibernate.annotations.UpdateTimestamp;
  * <h3>★ 字段口径（{@code 02 §2.6}）</h3>
  *
  * <p>{@link #assistantId} 可空 = <strong>通用问答</strong>（不属于任何一个应用）—— 可空是语义的一部分，不是"还没填"。 {@link
- * #deletedAt} 列存在<strong>不等于</strong>已经有删除入口：本批连 {@code markDeleted} 都<strong>不提供</strong>，
- * 免得一个没有调用方的领域方法被读成"删除功能已经在"。
+ * #deletedAt} 列存在<strong>不等于</strong>已经有删除入口：删除入口是 {@code #187} 补的 {@link
+ * #markDeleted}，它只写软删时间，不物理删消息。
  *
  * <p>★ 密级列<strong>没有</strong> {@code classification_rank} 生成列（与 {@code kb_segment} / {@code
  * kb_qa_pair} 刻意不同）：那一列是<strong>检索 pre-filter</strong> 的绑定列，而会话密级<strong>不参与</strong>
@@ -144,7 +144,7 @@ public class Conversation {
   @Column(name = "updated_at", nullable = false)
   private Instant updatedAt;
 
-  /** 软删。★ 列存在 ≠ 有删除入口（本批没有服务层，也没有任何写它的路径）。 */
+  /** 软删时间。★ 有删除入口（{@code #187}）后，列表与 GET 都必须过滤它。 */
   @Column(name = "deleted_at")
   private Instant deletedAt;
 
@@ -264,6 +264,20 @@ public class Conversation {
       throw new IllegalArgumentException("会话标题不能超过 " + MAX_TITLE_LENGTH + " 字");
     }
     this.title = trimmed;
+  }
+
+  /**
+   * 软删（契约 {@code deleteConversation}：{@code DELETE /conversations/:id}）。
+   *
+   * <p>★ 只写 {@code deleted_at}，不删消息：消息与引用快照是审计证据（{@code 13 §2.2}）， 删会话不等于删证据。列表查询本来就带 {@code
+   * deleted_at is null} ⇒ 软删后立刻从侧栏消失。
+   *
+   * <p>★ 重复删除是幂等的：保留第一次的删除时间，不把"删过"变成"再删一次就报错"。
+   */
+  public void markDeleted(Instant now) {
+    if (deletedAt == null) {
+      deletedAt = now == null ? Instant.now() : now;
+    }
   }
 
   // ────────────────────────── 访问器 ──────────────────────────

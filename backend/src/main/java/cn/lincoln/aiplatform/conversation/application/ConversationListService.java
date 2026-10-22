@@ -171,6 +171,63 @@ public class ConversationListService {
   }
 
   /**
+   * 取一条会话（契约 {@code getConversation}：{@code GET /conversations/:id}）。
+   *
+   * <p>★ 只给本人：别人的会话一律按 404 处理，不区分"不存在"与"不是你的"—— 后者会泄露 id 是否存在。
+   */
+  @Transactional(readOnly = true)
+  public ConversationListItem get(UUID conversationId, UUID userId) {
+    return toItem(requireOwned(conversationId, userId));
+  }
+
+  /**
+   * 改名（契约 {@code renameConversation}：{@code PATCH /conversations/:id}，body {@code {title}}）。
+   *
+   * <p>★ 空白标题拒绝：侧栏会变成一条看不见名字的会话，用户无法再找到它。
+   */
+  @Transactional
+  public ConversationListItem rename(UUID conversationId, UUID userId, String title) {
+    Conversation conversation = requireOwned(conversationId, userId);
+    if (title == null || title.isBlank()) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "标题不能为空", "给这条会话起一个能认出来的名字");
+    }
+    try {
+      conversation.rename(title);
+    } catch (IllegalArgumentException tooLong) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, tooLong.getMessage(), "标题最多 256 字");
+    }
+    return toItem(conversations.save(conversation));
+  }
+
+  /**
+   * 软删（契约 {@code deleteConversation}：{@code DELETE /conversations/:id}）。
+   *
+   * <p>★ 只标记 {@code deleted_at}，消息与引用快照保留（审计证据）。重复删除幂等。
+   */
+  @Transactional
+  public void delete(UUID conversationId, UUID userId) {
+    Conversation conversation = requireOwned(conversationId, userId);
+    conversation.markDeleted(Instant.now());
+    conversations.save(conversation);
+  }
+
+  /**
+   * 本人可见的会话；不存在、已软删、或归属别人 ⇒ 一律 404。
+   *
+   * <p>★ 不把"归属别人"单独报 403：那会告诉调用方这个 id 真实存在。
+   */
+  private Conversation requireOwned(UUID conversationId, UUID userId) {
+    Conversation conversation =
+        conversations
+            .findById(conversationId)
+            .filter(c -> c.deletedAt() == null)
+            .filter(c -> c.userId().equals(userId))
+            .orElseThrow(
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "会话不存在", "它可能已被删除，或者不在你的可见范围内"));
+    return conversation;
+  }
+
+  /**
    * 契约 {@code Conversation} 的线上形状（只含本批能给的字段）。
    *
    * @param id 会话 id
