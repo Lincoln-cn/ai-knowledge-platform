@@ -202,6 +202,27 @@ class StreamContractCrossCheckTest {
     assertThat(wireEventNames(wire)).as("★ 心跳不许变成业务事件名 —— 它是注释帧").doesNotContain("heartbeat");
   }
 
+  /**
+   * ★ 设计册的 wire 示例不得再出现冻结契约已经否定的旧字段（`#114`）。
+   *
+   * <p>这条与上面的“契约 ⇄ 实现”对读互补：那里钉实现，这里钉文档。旧示例最容易被照抄， 而它写错时不会让任何代码报错；把四个旧记号写成断言，改回去就会红。
+   */
+  @Test
+  void designDocDoesNotCarryTheStaleSseExample() {
+    String design = read(Path.of("..", "docs", "系统设计方案", "03-关键机制设计.md"));
+
+    assertThat(design)
+        .as("★ 03 §1.2 的 refs 示例必须用线上的 {\"refs\":[...]}，不许回到 {\"references\":[...]}")
+        .doesNotContain("\"references\":");
+    assertThat(design).as("★ SourceRef 的字段是 kbName，不是 baseName").doesNotContain("baseName");
+    assertThat(design)
+        .as("★ done.status 只能是 GENERATED / STOPPED / FAILED，不许写 DONE")
+        .doesNotContain("\"status\":\"DONE\"");
+    assertThat(design)
+        .as("★ error 的字段是 reason / hint，不是 retryable")
+        .doesNotContain("\"retryable\"");
+  }
+
   // ────────────────────────── 内部 ──────────────────────────
 
   private static List<String> componentNames(Class<?> record) {
