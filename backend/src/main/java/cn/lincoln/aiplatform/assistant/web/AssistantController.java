@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.assistant.web;
 
 import cn.lincoln.aiplatform.assistant.application.AccessCredentialService;
 import cn.lincoln.aiplatform.assistant.application.AccessCredentialView;
+import cn.lincoln.aiplatform.assistant.application.AssistantApiKeyView;
 import cn.lincoln.aiplatform.assistant.application.AssistantBundleView;
 import cn.lincoln.aiplatform.assistant.application.AssistantService;
 import cn.lincoln.aiplatform.assistant.application.AssistantView;
@@ -63,8 +64,11 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>★ <strong>导入</strong>（{@code POST /assistants/import/check} 与 {@code POST
  * /assistants/import}）也已落： 导入生成新应用，引用由服务端重新复核（模型已加载 / 知识库可见 / 提示词存在），缺引用时要么 400
- * 说清、要么按「跳过引用」保留能用的那部分。 唯一仍在 {@code ContractDriftTest} 欠账清单里的是 <strong>API Key</strong> ——
- * 它缺的是<strong>程序化调用的鉴权链</strong>， 只有管理端点等于造一个空转入口。
+ * 说清、要么按「跳过引用」保留能用的那部分。
+ *
+ * <p>★ <strong>API Key 管理</strong>（{@code #195} 的最后一个子项）也已落：{@code GET/POST
+ * /assistants/:id/api-keys} 与 {@code PATCH /assistants/:id/api-keys/:keyId/enabled}。★ 但要说清：
+ * 这三条是<strong>管理面</strong>，平台还没有"用 {@code X-API-Key} 调平台"的鉴权链 —— 使用侧是一个独立的设计项， 不要把它读成"已经能程序化调用"了。
  *
  * <h3>★ 权限点（{@code 07 §4.1}）</h3>
  *
@@ -327,6 +331,50 @@ public class AssistantController {
         assistants.setVisibility(id, body.visibility(), UUID.fromString(jwt.getSubject())));
   }
 
+  // ────────────────────────── API Key（#195 的 API Key 子项）──────────────────────────
+
+  /**
+   * 列出应用的 API Key（契约 {@code listApiKeys}）。
+   *
+   * <p>★ 含已停用的 Key：管理页要能看见"这把停用了"，否则停用等于删除。
+   *
+   * <p>★ 这是<strong>管理面</strong>，权限用 {@code assistant:edit}（与生成 / 启停同一道门）： Key 是明文凭据， 只给 {@code
+   * assistant:view} 会让任何能看应用的人拿到程序化调用凭据。
+   */
+  @GetMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/api-keys")
+  @PreAuthorize("hasAuthority('assistant:edit')")
+  public ApiResponse<List<AssistantApiKeyView>> listApiKeys(@PathVariable UUID id) {
+    return ApiResponse.ok(assistants.listApiKeys(id));
+  }
+
+  /**
+   * 生成 / 轮换一把 API Key（契约 {@code regenerateApiKey}）。
+   *
+   * <p>★ 轮换只新增、不停用旧的：页面文案承诺"旧 Key 保留可单独停用"，悄悄吊销会让正在跑的集成在轮换瞬间断掉。
+   */
+  @PostMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/api-keys")
+  @PreAuthorize("hasAuthority('assistant:edit')")
+  public ApiResponse<AssistantApiKeyView> regenerateApiKey(@PathVariable UUID id) {
+    return ApiResponse.ok(assistants.rotateApiKey(id));
+  }
+
+  /**
+   * 停用 / 启用一把 API Key（契约 {@code setApiKeyEnabled}）。
+   *
+   * <p>★ Key 不属于这个应用 ⇒ 404：静默成功会让页面显示"已停用"，而那把 Key 仍在别处可用。
+   */
+  @PatchMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/api-keys/"
+          + "{keyId:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/enabled")
+  @PreAuthorize("hasAuthority('assistant:edit')")
+  public ApiResponse<AssistantApiKeyView> setApiKeyEnabled(
+      @PathVariable UUID id, @PathVariable UUID keyId, @RequestBody ApiKeyEnabledBody body) {
+    return ApiResponse.ok(
+        assistants.setApiKeyEnabled(id, keyId, Boolean.TRUE.equals(body.enabled())));
+  }
+
   // ────────────────────────── 访问凭证（第 16 周 · 0.4.4）──────────────────────────
 
   /**
@@ -505,6 +553,9 @@ public class AssistantController {
 
   /** 导入（契约 {@code importAssistant}）：{@code skipMissingReferences} 缺省为 false（先让用户看清缺什么）。 */
   public record ImportBundleBody(AssistantBundleView bundle, Boolean skipMissingReferences) {}
+
+  /** API Key 启停（契约 {@code setApiKeyEnabled} 的 {@code { enabled }}）。 */
+  public record ApiKeyEnabledBody(Boolean enabled) {}
 
   /** 契约里的 {@code grants} 是可选的；{@code null} 与空数组同义 —— 都是"把名单清空"。 */
   private static List<Grant> toGrants(GrantsBody body) {

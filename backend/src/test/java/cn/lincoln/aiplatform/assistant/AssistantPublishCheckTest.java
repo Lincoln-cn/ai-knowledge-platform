@@ -4,11 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import cn.lincoln.aiplatform.assistant.application.AssistantApiKeyView;
 import cn.lincoln.aiplatform.assistant.application.AssistantBundleView;
 import cn.lincoln.aiplatform.assistant.application.AssistantService;
 import cn.lincoln.aiplatform.assistant.application.AssistantView;
 import cn.lincoln.aiplatform.assistant.application.PublishCheckResult;
 import cn.lincoln.aiplatform.assistant.domain.Assistant;
+import cn.lincoln.aiplatform.assistant.domain.AssistantApiKey;
+import cn.lincoln.aiplatform.assistant.domain.AssistantApiKeyRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantFavoriteRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
@@ -19,6 +22,7 @@ import cn.lincoln.aiplatform.platform.access.GrantSubjectPort;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.access.Subject;
 import cn.lincoln.aiplatform.platform.access.SubjectKind;
+import cn.lincoln.aiplatform.platform.access.Visibility;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ModelStatusPort;
@@ -26,6 +30,7 @@ import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -58,6 +63,7 @@ class AssistantPublishCheckTest {
 
   private final FakeAssistants assistants = new FakeAssistants();
   private final FakeFavorites favorites = new FakeFavorites();
+  private final FakeApiKeys apiKeys = new FakeApiKeys();
   private final FakeGrantSubjects grantSubjects = new FakeGrantSubjects();
   private final FakePromptReferences promptReferences = new FakePromptReferences();
   private final FakeModels models = new FakeModels();
@@ -66,7 +72,7 @@ class AssistantPublishCheckTest {
 
   private final AssistantService service =
       new AssistantService(
-          assistants, favorites, scope, models, segments, grantSubjects, promptReferences);
+          assistants, favorites, apiKeys, scope, models, segments, grantSubjects, promptReferences);
 
   /** 建一个"各项都过"的简单应用；各用例只破坏其中一项。 */
   private Assistant publishable() {
@@ -433,6 +439,44 @@ class AssistantPublishCheckTest {
   }
 
   /**
+   * ★ API Key：轮换只新增（旧 Key 仍在列表里）、停用是唯一改动作、只有所有者能管理。
+   *
+   * <p>★ "启停后真的不再通过鉴权"这里证明不了 —— 平台还没有 {@code X-API-Key} 鉴权链， 那条读数属于使用侧的设计项；本用例只钉住管理面的语义。
+   */
+  @Test
+  void apiKeysRotateWithoutRevokingAndOnlyOwnerManagesThem() {
+    Assistant app = publishable();
+    scope.setRequesterId(OWNER);
+    assertThat(service.listApiKeys(app.id())).as("新应用没有 Key").isEmpty();
+
+    AssistantApiKeyView first = service.rotateApiKey(app.id());
+    AssistantApiKeyView second = service.rotateApiKey(app.id());
+    assertThat(first.key()).as("前缀 + 32 位十六进制").startsWith("ask_").hasSize(36);
+    assertThat(second.key()).as("轮换必须换一把").isNotEqualTo(first.key());
+    assertThat(service.listApiKeys(app.id()))
+        .as("旧的仍在列表里，新生成的在前")
+        .extracting(AssistantApiKeyView::id)
+        .containsExactly(second.id(), first.id());
+
+    assertThat(service.setApiKeyEnabled(app.id(), first.id(), false).enabled()).isFalse();
+    assertThat(service.listApiKeys(app.id()))
+        .filteredOn(key -> key.id().equals(first.id()))
+        .singleElement()
+        .satisfies(key -> assertThat(key.enabled()).isFalse());
+
+    assertThatThrownBy(() -> service.setApiKeyEnabled(app.id(), UUID.randomUUID(), false))
+        .isInstanceOf(BusinessException.class)
+        .satisfies(e -> assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.NOT_FOUND));
+
+    app.setVisibility(Visibility.PUBLIC, OWNER);
+    scope.setRequesterId(SHARED_USER);
+    assertThatThrownBy(() -> service.rotateApiKey(app.id()))
+        .as("看得见 ≠ 能以它的名义签发凭据")
+        .isInstanceOf(BusinessException.class)
+        .satisfies(e -> assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.FORBIDDEN));
+  }
+
+  /**
    * ★ 共享写：写 grants ⇒ 可见性变 SHARED；切回 PRIVATE ⇒ 名单清空；空名单 + SHARED ⇒ 400。
    *
    * <p>★ 主体存在性在这里只证明"会拦"：真实对照表（账号 / 角色 / 部门）由 {@code GrantSubjectPort} 的 JDBC 实现回答， 本夹具只认一个账号与一个角色
@@ -667,6 +711,39 @@ class AssistantPublishCheckTest {
       return promptIds.stream()
           .filter(ids::contains)
           .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+  }
+
+  /** API Key 夹具：按应用存行，新生成的插到最前（与端口"倒序"的语义一致）。 */
+  private static final class FakeApiKeys implements AssistantApiKeyRepository {
+
+    private final Map<UUID, List<AssistantApiKey>> rows = new LinkedHashMap<>();
+
+    @Override
+    public List<AssistantApiKey> list(UUID assistantId) {
+      return List.copyOf(rows.getOrDefault(assistantId, List.of()));
+    }
+
+    @Override
+    public AssistantApiKey add(UUID assistantId, String keyValue) {
+      AssistantApiKey key =
+          new AssistantApiKey(UUID.randomUUID(), assistantId, keyValue, true, Instant.now());
+      rows.computeIfAbsent(assistantId, id -> new ArrayList<>()).add(0, key);
+      return key;
+    }
+
+    @Override
+    public Optional<AssistantApiKey> find(UUID assistantId, UUID keyId) {
+      return rows.getOrDefault(assistantId, List.of()).stream()
+          .filter(key -> key.id().equals(keyId))
+          .findFirst();
+    }
+
+    @Override
+    public boolean setEnabled(UUID assistantId, UUID keyId, boolean enabled) {
+      Optional<AssistantApiKey> found = find(assistantId, keyId);
+      found.ifPresent(key -> key.setEnabled(enabled));
+      return found.isPresent();
     }
   }
 

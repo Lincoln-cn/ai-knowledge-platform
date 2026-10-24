@@ -1,6 +1,8 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import cn.lincoln.aiplatform.assistant.domain.Assistant;
+import cn.lincoln.aiplatform.assistant.domain.AssistantApiKey;
+import cn.lincoln.aiplatform.assistant.domain.AssistantApiKeyRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantFavoriteRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
@@ -20,8 +22,10 @@ import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.math.BigDecimal;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -86,6 +90,9 @@ public class AssistantService {
   private static final int MAX_SUB_QUESTIONS_MAX = 5;
   private static final int NAME_MAX = 30;
 
+  /** API Key 的随机源。★ 用 {@link SecureRandom} 而不是 {@code Math.random()}：这是凭据。 */
+  private static final SecureRandom KEY_RANDOM = new SecureRandom();
+
   /** 分页口径：契约默认 20 条一页，单页硬顶 100（与知识库同一条纪律：不许无界分页）。 */
   private static final int DEFAULT_PAGE_SIZE = 20;
 
@@ -98,6 +105,7 @@ public class AssistantService {
 
   private final AssistantRepository assistants;
   private final AssistantFavoriteRepository favorites;
+  private final AssistantApiKeyRepository apiKeys;
   private final AccessScopePort accessScope;
   private final ModelStatusPort modelStatus;
   private final SegmentSearchPort segmentSearch;
@@ -107,6 +115,7 @@ public class AssistantService {
   public AssistantService(
       AssistantRepository assistants,
       AssistantFavoriteRepository favorites,
+      AssistantApiKeyRepository apiKeys,
       AccessScopePort accessScope,
       ModelStatusPort modelStatus,
       SegmentSearchPort segmentSearch,
@@ -114,6 +123,7 @@ public class AssistantService {
       PromptReferencePort promptReferences) {
     this.assistants = assistants;
     this.favorites = favorites;
+    this.apiKeys = apiKeys;
     this.accessScope = accessScope;
     this.modelStatus = modelStatus;
     this.segmentSearch = segmentSearch;
@@ -302,6 +312,70 @@ public class AssistantService {
     }
     assistant.setVisibility(visibility, actorId);
     return view(assistants.save(assistant));
+  }
+
+  /**
+   * 列出某个应用的 API Key（契约 {@code listApiKeys}）。
+   *
+   * <p>★ 列表含<strong>停用的</strong> Key：管理页要能看见"这把已经停用了"，否则停用等于删除， 与页面文案"旧 Key 保留可单独停用"相反。
+   */
+  @Transactional(readOnly = true)
+  public List<AssistantApiKeyView> listApiKeys(UUID assistantId) {
+    requireOwner(requireVisible(assistantId));
+    return apiKeys.list(assistantId).stream().map(AssistantApiKeyView::from).toList();
+  }
+
+  /**
+   * 生成 / 轮换 API Key（契约 {@code regenerateApiKey}）。
+   *
+   * <p>★ 轮换 = <strong>新增</strong>一行，旧的既不删也不自动停用 —— 这个语义写在页面脚注里，也写在 {@code #195} 的判据里；悄悄吊销旧 Key
+   * 会让正在跑的集成在轮换瞬间断掉。
+   *
+   * <p>★ 前缀 {@code ask_}（assistant key）只为人眼识别，鉴权侧按整串精确匹配。
+   */
+  @Transactional
+  public AssistantApiKeyView rotateApiKey(UUID assistantId) {
+    requireOwner(requireVisible(assistantId));
+    AssistantApiKey created = apiKeys.add(assistantId, newApiKeyValue());
+    return AssistantApiKeyView.from(created);
+  }
+
+  /**
+   * 停用 / 启用一把 Key（契约 {@code setApiKeyEnabled}）。
+   *
+   * <p>★ Key 不属于这个应用 ⇒ 404，不静默成功：否则页面会显示"已停用"，而实际那把 Key 仍在别处可用。
+   */
+  @Transactional
+  public AssistantApiKeyView setApiKeyEnabled(UUID assistantId, UUID keyId, boolean enabled) {
+    requireOwner(requireVisible(assistantId));
+    if (!apiKeys.setEnabled(assistantId, keyId, enabled)) {
+      throw new BusinessException(ErrorCode.NOT_FOUND, "API Key 不存在", "它可能已被删除，或不属于这个应用；刷新列表再试");
+    }
+    return apiKeys
+        .find(assistantId, keyId)
+        .map(AssistantApiKeyView::from)
+        .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "API Key 不存在", "刷新列表再试"));
+  }
+
+  /** 32 个十六进制字符 = 128 位随机量；碰撞概率可忽略，唯一索引只是兜底。 */
+  private static String newApiKeyValue() {
+    byte[] bytes = new byte[16];
+    KEY_RANDOM.nextBytes(bytes);
+    return "ask_" + HexFormat.of().formatHex(bytes);
+  }
+
+  /**
+   * API Key 只允许所有者管理（与访问凭证同一条纪律）。
+   *
+   * <p>★ 权限点 {@code assistant:edit} 说明"你能编辑应用"，但<strong>不能推出</strong>"你能以它的名义签发凭据" ——
+   * 那会让一个能编辑别人应用的人拿到以别人应用身份调用的长期凭证。收窄靠归属，不靠新增权限点。
+   */
+  private void requireOwner(Assistant assistant) {
+    UUID me = accessScope.currentScope().me();
+    if (me == null || !me.equals(assistant.ownerId())) {
+      throw new BusinessException(
+          ErrorCode.FORBIDDEN, "只有应用所有者能管理 API Key", "API Key 是程序化调用的长期凭据；能编辑别人的应用，不等于能以它的名义签发凭据");
+    }
   }
 
   /** 主体不存在（或已软删 / 部门已停用）⇒ 400 + 可读原因。★ 错误消息里用中文类别名，不把机器码甩给用户。 */
