@@ -1237,6 +1237,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | 视图 | `AssistantView.grants` 下发（共享对话框 `restoreFromGrants` 靠它回填）；`workflow` 仍是唯一刻意不下发的域 |
 | 契约台账 | `ContractDriftTest.KNOWN_MISSING` 摘掉 `PUT /{*}/grants` 与 `PATCH /{*}/visibility`：assistants **16 → 14** |
 | 验证 | `AssistantShareHttpTest` 1/1（真 PG 91.77s：共享前 chenjun 详情 404 → 写 USER grant → 详情 200 且**列表命中** → 切 PRIVATE → 两条都恢复 → 空名单 SHARED 400 → ROLE grant 也能命中 → 未知主体 400 → 未知应用 404）· `AssistantPublishCheckTest` 20/20（新增共享单测）· `ContractDriftTest` 15/15 · `AssistantUnknownSubPathTest` 2/2 · `MigrationIntegrationTest` 4/4 · 架构闸门两条通配符绿 |
+| CI | `0ddc9be` 的 5 条 workflow 全绿：快闸 `40098984436` · 前端构建 `40098984462` · 真栈 `40098984429` · 浏览器 `40098984488` · 后端回归 `40098984434`（**首轮红过一次**：`ChatStreamHttpTest.clientDisconnectPersistsFailedWithoutLosingWhatWasGenerated:737` 的 `HTTP/1.1 header parser received no bytes`，与共享写无交集；本地单类 9/9 绿，`--failed` 重跑 attempt 2 绿） |
 | `#195` 余量 | **5 条**（API Key 3 · 导入 2）—— API Key 等程序化鉴权链立项后再做；导入归导入导出那一批 |
 
 ★ 四条判据留档：① **共享不是可见性** —— 共享写的是"谁能看见"（`grants`），可见性是"给多大范围"（`PRIVATE/SHARED/PUBLIC`），
