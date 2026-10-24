@@ -24,6 +24,10 @@ import java.util.UUID;
  *       个主体"，而事实是"还没接"。
  * </ul>
  *
+ * <p>★ {@code favorited} 是<strong>当前请求者</strong>的收藏状态，不是应用自身的属性： 同一份配置对 A 是 {@code true}、对 B 是
+ * {@code false}。它由服务层用 {@code AssistantFavoriteRepository} 按 {@code (assistantId, me)} 查出来再传进来 ——
+ * 视图不查库，这是本项目的一贯分工。
+ *
  * @param modelName 模型显示名；查不到时为 null ⇒ 字段不出现（列表卡片显示不出"哪个模型"，与"没绑模型"是两件事，由 {@code modelId} 区分）
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -35,6 +39,7 @@ public record AssistantView(
     String type,
     boolean builtin,
     boolean published,
+    boolean favorited,
     UUID modelId,
     String modelName,
     List<UUID> kbIds,
@@ -73,8 +78,9 @@ public record AssistantView(
    * 由实体组装。
    *
    * @param modelName 由调用方查好（{@code ModelStatusPort}）—— 视图层不查库，这是本项目的一贯分工
+   * @param favorited 当前请求者是否收藏了它（同样由调用方查好；列表走批量查询，单条走 {@code exists}）
    */
-  public static AssistantView from(Assistant assistant, String modelName) {
+  public static AssistantView from(Assistant assistant, String modelName, boolean favorited) {
     return new AssistantView(
         assistant.id(),
         assistant.name(),
@@ -83,6 +89,7 @@ public record AssistantView(
         assistant.type().name(),
         assistant.builtin(),
         assistant.published(),
+        favorited,
         assistant.modelId(),
         modelName,
         assistant.kbIds(),

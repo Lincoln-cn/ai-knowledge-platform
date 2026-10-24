@@ -9,6 +9,7 @@ import cn.lincoln.aiplatform.assistant.application.AssistantService;
 import cn.lincoln.aiplatform.assistant.application.AssistantView;
 import cn.lincoln.aiplatform.assistant.application.PublishCheckResult;
 import cn.lincoln.aiplatform.assistant.domain.Assistant;
+import cn.lincoln.aiplatform.assistant.domain.AssistantFavoriteRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
 import cn.lincoln.aiplatform.identity.FakeAccessScope;
@@ -50,12 +51,13 @@ class AssistantPublishCheckTest {
   private static final UUID KB_BAD = UUID.fromString("00000000-0000-4000-8000-0000000000c2");
 
   private final FakeAssistants assistants = new FakeAssistants();
+  private final FakeFavorites favorites = new FakeFavorites();
   private final FakeModels models = new FakeModels();
   private final FakeSegments segments = new FakeSegments();
   private final FakeAccessScope scope = new FakeAccessScope();
 
   private final AssistantService service =
-      new AssistantService(assistants, scope, models, segments);
+      new AssistantService(assistants, favorites, scope, models, segments);
 
   /** 建一个"各项都过"的简单应用；各用例只破坏其中一项。 */
   private Assistant publishable() {
@@ -376,13 +378,32 @@ class AssistantPublishCheckTest {
     assertThat(page.page()).isEqualTo(1);
   }
 
-  /** ★ {@code favorite=true} 显式拒绝：静默忽略会让"筛了没效果"看起来像"确实没有收藏过的"。 */
+  /**
+   * ★ 收藏：幂等 + 看不见的应用 404。
+   *
+   * <p>★ "按用户隔离"与"列表 {@code favorite=true} 的 SQL 语义"这里**证明不了**（{@code FakeAssistants} 不认 {@code
+   * filter.favorite()}）—— 那两条由 {@code AssistantFavoriteHttpTest} 在真 PostgreSQL 上读。
+   */
   @Test
-  void favoriteFilterIsRejectedInsteadOfSilentlyIgnored() {
-    assertThatThrownBy(
-            () -> service.list(null, null, null, null, true, null, null, null, null, null))
+  void setFavoriteIsIdempotentAndGuarded() {
+    Assistant app = publishable();
+    // ★ 读回 favorited 需要"当前请求者"：FakeAccessScope 未声明请求者时返回 nobody()，
+    //   那样 view() 根本不会去查收藏 —— 断言会退化成"永远 false"
+    scope.setRequesterId(OWNER);
+
+    assertThat(service.get(app.id()).favorited()).as("默认未收藏").isFalse();
+
+    service.setFavorite(app.id(), true, OWNER);
+    service.setFavorite(app.id(), true, OWNER);
+    assertThat(service.get(app.id()).favorited()).as("重复收藏不报错，且仍为 true").isTrue();
+
+    service.setFavorite(app.id(), false, OWNER);
+    service.setFavorite(app.id(), false, OWNER);
+    assertThat(service.get(app.id()).favorited()).as("重复取消不报错").isFalse();
+
+    assertThatThrownBy(() -> service.setFavorite(UUID.randomUUID(), true, OWNER))
         .isInstanceOf(BusinessException.class)
-        .hasMessageContaining("收藏筛选尚未实现");
+        .satisfies(e -> assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.NOT_FOUND));
   }
 
   /** 枚举型查询参数拼错 ⇒ 可读 400（不许"收下但不筛"）。 */
@@ -506,6 +527,41 @@ class AssistantPublishCheckTest {
     @Override
     public List<Card> load(Collection<UUID> segmentIds) {
       return new ArrayList<>();
+    }
+  }
+
+  /** 收藏假实现：键 {@code userId:assistantId}，语义与端口一致（幂等、按用户隔离）。 */
+  private static final class FakeFavorites implements AssistantFavoriteRepository {
+
+    private final Set<String> keys = new LinkedHashSet<>();
+
+    @Override
+    public void add(UUID assistantId, UUID userId) {
+      keys.add(userId + ":" + assistantId);
+    }
+
+    @Override
+    public void remove(UUID assistantId, UUID userId) {
+      keys.remove(userId + ":" + assistantId);
+    }
+
+    @Override
+    public boolean exists(UUID assistantId, UUID userId) {
+      return keys.contains(userId + ":" + assistantId);
+    }
+
+    @Override
+    public Set<UUID> favoritedAmong(UUID userId, Collection<UUID> assistantIds) {
+      if (assistantIds == null || assistantIds.isEmpty()) {
+        return Set.of();
+      }
+      Set<UUID> found = new LinkedHashSet<>();
+      for (UUID assistantId : assistantIds) {
+        if (exists(assistantId, userId)) {
+          found.add(assistantId);
+        }
+      }
+      return found;
     }
   }
 }

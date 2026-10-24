@@ -40,11 +40,13 @@ public interface AssistantRepository {
   /**
    * 列表筛选条件（契约 {@code AssistantQuery}）。
    *
-   * <p>★ 为什么收成一个 record 而不是七个位置参数：里面有两个 {@code Boolean}（{@code published} / {@code mine}）
+   * <p>★ 为什么收成一个 record 而不是多个位置参数：里面有两个 {@code Boolean}（{@code published} / {@code mine}）
    * 和一个排序键，按位置传参时把两个布尔写反<strong>编译器不会报错</strong>。
    *
    * @param origin {@code OFFICIAL}（内置）/ {@code SHARED}（他人共享）/ {@code MINE}（我建的）；null = 不过滤
    * @param sort {@code POPULAR} / {@code LATEST} / {@code NAME}；null = {@code LATEST}
+   * @param favorite 只看<strong>我收藏的</strong>（{@code favorite=true}）。★ 与 {@code mine} 正交：{@code mine}
+   *     是"我建的"，{@code favorite} 是"我收藏的" —— 自己建的应用不自动算收藏
    */
   record Filter(
       AssistantType type,
@@ -53,5 +55,6 @@ public interface AssistantRepository {
       String origin,
       String tag,
       String keyword,
-      String sort) {}
+      String sort,
+      boolean favorite) {}
 }

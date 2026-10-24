@@ -33,7 +33,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 应用配置端点（契约 {@code frontend/src/api/assistants.ts}）—— 第 15 周 · 0.4.3 + 第 16 周 · 0.4.4。
  *
- * <h3>本批落了哪 10 个（以及其余为什么没落）</h3>
+ * <h3>本批落了哪些（以及其余为什么没落）</h3>
  *
  * <p>第 15 周落下的是"配一个简单应用 ⇒ 发布 ⇒ 导出"这条链：{@code POST /assistants} · {@code GET /assistants/:id} ·
  * {@code PUT /assistants/:id} · {@code GET /assistants/:id/publish-check} · {@code PATCH
@@ -46,10 +46,9 @@ import org.springframework.web.bind.annotation.RestController;
  * （创建时冻结密级、撤销即失效、凭证可启停）；<strong>免登录面本身</strong> （{@code /api/v1/public/**} 的 HTTP 端点）仍是第 17 周 ——
  * 本批只落它的解析形状 （{@code platform.access.PublicTokenResolver}）。
  *
- * <p>其余（列表与市场筛选 · 收藏 · 标签 · API Key · 共享写 · 导入）仍在 {@code ContractDriftTest.UNIMPLEMENTED_PREFIXES}
- * 的 {@code /assistants} 名下 —— 那是"前端已跑在后端前面"的既有状态， 每个域各自有排期（共享写是 T302 后半，导入归导入导出那一批）。 ★
- * 清单按<strong>前缀</strong>登记，所以该前缀下仍有欠账时它必须留着：本批把"凭证"从那句注释里划掉， 但 {@code /assistants}
- * 这一行不动（否则会变成"曾经欠过、现在早已实现"的噪音的反面 —— 提前摘掉它）。
+ * <p>★ <strong>收藏</strong>（{@code #195} 的收藏子项）本批已落：{@code POST} / {@code DELETE
+ * /assistants/:id/favorite} 两条。在此之前市场页的心形按钮与「只看收藏」是"契约有、页面有、后端 400"。 其余高级端点（标签 · API Key · 共享写 ·
+ * 导入）仍在 {@code ContractDriftTest} 的逐条欠账清单里， 每个域各自有排期（共享写是 T302 后半，导入归导入导出那一批）。
  *
  * <h3>★ 权限点（{@code 07 §4.1}）</h3>
  *
@@ -90,7 +89,8 @@ public class AssistantController {
    * 列表（契约 {@code listAssistants}）。★ 范围与筛选拼进查询，{@code total} 与页内条数同口径。
    *
    * <p>★ 枚举型参数（{@code type} / {@code origin} / {@code sort}）拼错 ⇒ 可读 400：收了却不筛，
-   * 症状是"筛了没效果"，而它看起来像"确实没有符合条件的"。{@code favorite=true} 同理显式拒绝（收藏还没落）。
+   * 症状是"筛了没效果"，而它看起来像"确实没有符合条件的"。{@code favorite=true} ⇒ 只看我收藏的（收藏状态按 JWT 的 {@code sub}
+   * 取，不接受请求体指定"看谁的收藏"）。
    */
   @GetMapping
   @PreAuthorize("hasAuthority('assistant:view')")
@@ -189,6 +189,40 @@ public class AssistantController {
   public ApiResponse<Void> delete(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
     assistants.delete(id, UUID.fromString(jwt.getSubject()));
     return ApiResponse.ok();
+  }
+
+  // ────────────────────────── 收藏（#195 的收藏子项）──────────────────────────
+
+  /**
+   * 收藏一个应用（契约 {@code favoriteAssistant}）。
+   *
+   * <p>★ <strong>幂等</strong>：重复收藏返回成功、{@code favorited} 仍是 {@code true} —— 页面是"乐观更新 +
+   * 失败回滚"，一个"已经收藏过"的 400 会把刚点亮的心形回滚掉，看起来像"点了没反应"。
+   *
+   * <p>★ 只能收藏<strong>自己看得见的</strong>应用：看不见 ⇒ 404（与 {@code get} 同一口径，不泄露 id 是否存在）。
+   *
+   * <p>★ 权限点用 {@code assistant:view} 而不是 {@code assistant:edit}：收藏是<strong>读者</strong>的动作，
+   * 不是配置写。它也不改变任何可见性 —— 收藏只回答"我的市场页该不该点亮心形"。
+   */
+  @PostMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/favorite")
+  @PreAuthorize("hasAuthority('assistant:view')")
+  public ApiResponse<AssistantView> favorite(
+      @PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(assistants.setFavorite(id, true, UUID.fromString(jwt.getSubject())));
+  }
+
+  /**
+   * 取消收藏（契约 {@code unfavoriteAssistant}）。
+   *
+   * <p>★ 同样是幂等的：本来就没收藏也返回成功、{@code favorited} 为 {@code false}。
+   */
+  @DeleteMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/favorite")
+  @PreAuthorize("hasAuthority('assistant:view')")
+  public ApiResponse<AssistantView> unfavorite(
+      @PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(assistants.setFavorite(id, false, UUID.fromString(jwt.getSubject())));
   }
 
   // ────────────────────────── 访问凭证（第 16 周 · 0.4.4）──────────────────────────

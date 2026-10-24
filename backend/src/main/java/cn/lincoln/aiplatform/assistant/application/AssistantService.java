@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import cn.lincoln.aiplatform.assistant.domain.Assistant;
+import cn.lincoln.aiplatform.assistant.domain.AssistantFavoriteRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
@@ -47,8 +48,8 @@ import org.springframework.transaction.annotation.Transactional;
  * <h3>⚠️ 本批明确<strong>不做</strong>的（都在别的批次/模块，且都在响应里如实体现）</h3>
  *
  * <ul>
- *   <li><b>列表与数据范围过滤</b>：契约 {@code listAssistants} 的筛选面（来源分段 / 排序 / 标签 / 关键词）还没落 ——
- *       它要的是"范围谓词与筛选合进同一条 SQL"，属于下一批
+ *   <li><b>列表与数据范围过滤</b>：已落 —— 范围谓词与筛选（来源分段 / 排序 / 标签 / 关键词 / 只看收藏）合进同一条 SQL（{@code
+ *       AssistantRepositoryAdapter}），{@code total} 与页内条数同口径
  *   <li><b>编排应用</b>：{@code workflow} 模块只有一个 {@code package-info}（编排执行引擎属 V1.0）⇒
  *       编排应用<strong>无法发布</strong>，且发布校验里那两项<strong>如实失败</strong>（见 {@link #checkBeforePublish}）
  *   <li><b>提示词模板</b>：{@code prompt-configs} 那一域尚未建表 ⇒ 导出包里它的依赖项标 {@code satisfied=false}
@@ -88,16 +89,19 @@ public class AssistantService {
   private static final Set<String> SORTS = Set.of("POPULAR", "LATEST", "NAME");
 
   private final AssistantRepository assistants;
+  private final AssistantFavoriteRepository favorites;
   private final AccessScopePort accessScope;
   private final ModelStatusPort modelStatus;
   private final SegmentSearchPort segmentSearch;
 
   public AssistantService(
       AssistantRepository assistants,
+      AssistantFavoriteRepository favorites,
       AccessScopePort accessScope,
       ModelStatusPort modelStatus,
       SegmentSearchPort segmentSearch) {
     this.assistants = assistants;
+    this.favorites = favorites;
     this.accessScope = accessScope;
     this.modelStatus = modelStatus;
     this.segmentSearch = segmentSearch;
@@ -155,8 +159,9 @@ public class AssistantService {
    *
    * <p>★ 范围与筛选<strong>拼进查询</strong>（仓储那侧共用一份谓词），{@code total} 与页内条数同口径。
    *
-   * <p>⚠️ {@code favorite=true} <strong>显式拒绝</strong>：收藏的存储还没有（它在市场那一批）。
-   * 静默忽略会让"筛了没效果"看起来像"确实没有收藏过的应用"—— 那是本项目最怕的那类静默失败。
+   * <p>★ {@code favorite=true} 走<strong>相关 EXISTS 子查询</strong>（{@code
+   * AssistantRepositoryAdapter}），而不是"把收藏全拉进内存再拼 IN" —— 后者会让 {@code total} 变成另一个口径。 {@code
+   * favorited} 字段用一次批量 IN 查询装饰，保证"列表里点过心的那条"与"详情页"读数一致。
    */
   @Transactional(readOnly = true)
   public PageResult<AssistantView> list(
@@ -170,10 +175,6 @@ public class AssistantService {
       String sort,
       Integer page,
       Integer size) {
-    if (favorite != null && favorite) {
-      throw new BusinessException(
-          ErrorCode.BAD_REQUEST, "收藏筛选尚未实现", "收藏的存储与写入口在市场那一批；当前请去掉 favorite 参数");
-    }
     int safeSize = size == null ? DEFAULT_PAGE_SIZE : Math.min(Math.max(1, size), MAX_PAGE_SIZE);
     int safePage = page == null ? 1 : Math.max(1, page);
     AssistantRepository.Filter filter =
@@ -184,12 +185,45 @@ public class AssistantService {
             requireIn("来源分段", origin, ORIGINS),
             blankToNull(tag),
             blankToNull(keyword),
-            requireIn("排序", sort, SORTS));
+            requireIn("排序", sort, SORTS),
+            favorite != null && favorite);
 
     ScopeFilter scope = accessScope.currentScope();
     List<Assistant> found = assistants.search(scope, filter, (safePage - 1) * safeSize, safeSize);
     long total = assistants.countSearch(scope, filter);
-    return PageResult.of(found.stream().map(this::view).toList(), total, safePage, safeSize);
+
+    // ★ 一次 IN 查询回答"这一页里哪几个被我收藏"：逐条 exists 是 N+1，而空页在适配器那层直接返回空集
+    Set<UUID> favoritedIds =
+        scope.me() == null
+            ? Set.of()
+            : favorites.favoritedAmong(scope.me(), found.stream().map(Assistant::id).toList());
+    return PageResult.of(
+        found.stream()
+            .map(assistant -> view(assistant, favoritedIds.contains(assistant.id())))
+            .toList(),
+        total,
+        safePage,
+        safeSize);
+  }
+
+  /**
+   * 收藏 / 取消收藏（契约 {@code favoriteAssistant} / {@code unfavoriteAssistant}，{@code #195} 的收藏子项）。
+   *
+   * <p>★ 两条判据：① 只有<strong>看得见</strong>的应用能收藏（看不见 ⇒ 404，与 {@code get} 同一口径，不泄露 id 是否存在）；② 幂等 —— 重复收藏
+   * / 重复取消都返回成功，页面才敢做乐观更新。
+   *
+   * <p>★ 为什么不校验 {@code assistant:edit}：收藏是<strong>读者</strong>的动作（市场页任何能看见它的人都能点心形）， 不是配置写。权限点由 Web
+   * 层的 {@code assistant:view} 管。
+   */
+  @Transactional
+  public AssistantView setFavorite(UUID id, boolean favorited, UUID userId) {
+    Assistant assistant = requireVisible(id);
+    if (favorited) {
+      favorites.add(id, userId);
+    } else {
+      favorites.remove(id, userId);
+    }
+    return view(assistant, favorited);
   }
 
   /**
@@ -341,8 +375,14 @@ public class AssistantService {
     return assistant;
   }
 
-  /** 组装对外形状。★ 模型名在这里查一次（视图层不查库）。 */
+  /** 组装对外形状（单条）。★ 收藏状态查一次 {@code (id, me)}；列表走批量重载，避免 N+1。 */
   private AssistantView view(Assistant assistant) {
+    UUID me = accessScope.currentScope().me();
+    return view(assistant, me != null && favorites.exists(assistant.id(), me));
+  }
+
+  /** 组装对外形状，收藏状态由调用方给出（列表已批量查好）。 */
+  private AssistantView view(Assistant assistant, boolean favorited) {
     String modelName =
         assistant.modelId() == null
             ? null
@@ -350,7 +390,7 @@ public class AssistantService {
                 .find(assistant.modelId())
                 .map(ModelStatusPort.ModelSnapshot::name)
                 .orElse(null);
-    return AssistantView.from(assistant, modelName);
+    return AssistantView.from(assistant, modelName, favorited);
   }
 
   /** 写入共用部分（创建与更新都走这里，且入参已经由 {@link #complete} 补全 —— 这里不再判 null）。 */

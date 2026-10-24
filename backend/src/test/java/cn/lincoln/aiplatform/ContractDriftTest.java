@@ -87,15 +87,14 @@ class ContractDriftTest {
    */
   private static final List<MissingEndpoint> KNOWN_MISSING =
       List.of(
-          // ★ assistants（19）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置 + 发布校验余下的市场筛选/收藏/标签/API Key/共享写/导入
+          // ★ assistants（17）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置 + 发布校验余下的市场筛标签/API Key/共享写/导入
+          //   ★ 收藏两条（POST/DELETE /assistants/{*}/favorite）已随 #195 的收藏子项落地，故从欠账里摘掉
           missing("POST", "/assistants/import", "#195", "15–18 周"),
           missing("POST", "/assistants/import/check", "#195", "15–18 周"),
           missing("GET", "/assistants/tags", "#195", "15–18 周"),
           missing("GET", "/assistants/{*}/api-keys", "#195", "15–18 周"),
           missing("POST", "/assistants/{*}/api-keys", "#195", "15–18 周"),
           missing("PATCH", "/assistants/{*}/api-keys/{*}/enabled", "#195", "15–18 周"),
-          missing("DELETE", "/assistants/{*}/favorite", "#195", "15–18 周"),
-          missing("POST", "/assistants/{*}/favorite", "#195", "15–18 周"),
           missing("PUT", "/assistants/{*}/grants", "#195", "15–18 周"),
           missing("PATCH", "/assistants/{*}/visibility", "#195", "15–18 周"),
           missing("POST", "/assistants/{*}/workflow/debug", "#198", "15–18 周"),

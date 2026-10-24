@@ -1,13 +1,16 @@
 package cn.lincoln.aiplatform.assistant.infrastructure;
 
 import cn.lincoln.aiplatform.assistant.domain.Assistant;
+import cn.lincoln.aiplatform.assistant.domain.AssistantFavorite;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.access.Visibility;
 import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -103,11 +106,22 @@ public class AssistantRepositoryAdapter implements AssistantRepository {
 
   private static Specification<Assistant> spec(ScopeFilter scope, Filter filter) {
     return (root, query, cb) ->
-        cb.and(visiblePredicates(root, cb, scope, filter).toArray(new Predicate[0]));
+        cb.and(visiblePredicates(root, query, cb, scope, filter).toArray(new Predicate[0]));
   }
 
+  /**
+   * 范围 + 筛选谓词。<strong>{@code search} 与 {@code countSearch} 共用它</strong>（两处各拼一遍必然漂移， 症状是"列表 3
+   * 条、total 却是 10"）。
+   *
+   * <p>★ {@code query} 只给 {@code favorite} 的相关子查询用：{@code CriteriaBuilder} 的 {@code subquery} 要从外层
+   * {@code CriteriaQuery} 上开，不能凭空造。
+   */
   private static List<Predicate> visiblePredicates(
-      Root<Assistant> root, CriteriaBuilder cb, ScopeFilter scope, Filter filter) {
+      Root<Assistant> root,
+      CriteriaQuery<?> query,
+      CriteriaBuilder cb,
+      ScopeFilter scope,
+      Filter filter) {
     List<Predicate> predicates = new ArrayList<>();
     predicates.add(cb.isNull(root.get("deletedAt")));
 
@@ -126,6 +140,20 @@ public class AssistantRepositoryAdapter implements AssistantRepository {
           cb.or(
               cb.equal(root.get("ownerId"), me),
               cb.equal(root.get("visibility"), Visibility.PUBLIC)));
+    }
+
+    // ── 只看我收藏的（#195）──
+    // ★ 必须是相关 EXISTS：把收藏 id 先查进内存再拼 `in (...)`，总条数会在收藏变多时撞上 IN 列表上限，
+    //   而且"翻页"与"筛选"会变成两次读（两次读之间取消收藏 ⇒ 页内少一条、total 没变）。
+    if (filter.favorite() && me != null) {
+      Subquery<UUID> favorited = query.subquery(UUID.class);
+      Root<AssistantFavorite> favorite = favorited.from(AssistantFavorite.class);
+      favorited
+          .select(favorite.<UUID>get("assistantId"))
+          .where(
+              cb.equal(favorite.get("assistantId"), root.get("id")),
+              cb.equal(favorite.get("userId"), me));
+      predicates.add(cb.exists(favorited));
     }
 
     // ── 业务筛选（契约 AssistantQuery）──
