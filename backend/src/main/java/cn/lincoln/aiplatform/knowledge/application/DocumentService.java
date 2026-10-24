@@ -228,6 +228,17 @@ public class DocumentService {
    * @param kbId 知识库 id
    * @throws BusinessException 库不可见/不存在（404，不泄漏存在性）
    */
+  /**
+   * 上传策略（契约 {@code UploadPolicy}）—— 先做库的可见性判定，再给平台级上限。
+   *
+   * <p>★ 值与 {@code spring.servlet.multipart.max-file-size=100MB} 对齐；库级更小配额还没有数据模型，等配额落地再加字段。
+   */
+  @Transactional(readOnly = true)
+  public UploadPolicyView uploadPolicy(UUID kbId) {
+    knowledgeBases.get(kbId);
+    return new UploadPolicyView(100, 20, List.of(".pdf", ".docx", ".doc", ".md", ".txt"));
+  }
+
   @Transactional(readOnly = true)
   public IngestionProgressView progress(UUID kbId) {
     knowledgeBases.get(kbId);
