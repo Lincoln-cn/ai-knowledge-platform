@@ -151,7 +151,11 @@ jobs:
           DB_USER: aiplatform
           DB_PASSWORD: aiplatform
         run: |
-          java -jar target/ai-knowledge-platform-0.0.1-SNAPSHOT.jar \
+          # ★ 不写死版本号：pom 的 version 是发布切点，会随周次前进（0.4.5 …），
+          #   写死只会在下一次版本对齐时把闸门变成"找不到 jar"。
+          JAR="$(ls target/ai-knowledge-platform-*.jar | head -n 1)"
+          echo "起 jar：$JAR"
+          java -jar "$JAR" \
             --app.security.captcha.enabled=false > /tmp/backend.log 2>&1 &
           for i in $(seq 1 90); do
             if grep -q "Started AiPlatformApplication" /tmp/backend.log; then
