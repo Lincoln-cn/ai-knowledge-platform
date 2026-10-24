@@ -20,6 +20,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -282,6 +283,7 @@ public class ChatController {
   public ResponseEntity<StreamingResponseBody> chat(
       @RequestBody ChatStreamBody body,
       @AuthenticationPrincipal Jwt jwt,
+      Authentication authentication,
       @RequestHeader(value = "X-Access-Credential", required = false) String credentialToken,
       // ★ 必须传进 streamOf：`Writer.flush()` 不会让容器发 chunk（实测 chunk 全是 8192 字节），
       //   只有 `response.flushBuffer()` 才会 ⇒ 每帧到达浏览器而不是攒满 8KB 才发。
@@ -307,6 +309,14 @@ public class ChatController {
                   new ChatStreamAssembler.AsyncTurn(
                       turn.prepared(), body.question().strip(), null, publicChat.streamTurn(turn)),
                   httpResponse));
+    }
+    // ★ X-API-Key 的绑定检查（#195 使用侧）：Key 只代表签发它的那个应用。
+    //   放在 credential 分支之后、任何落库之前：跨应用调用必须在写消息之前就被拒。
+    if (authentication != null
+        && authentication.getDetails() instanceof UUID bound
+        && !bound.equals(body.appId())) {
+      throw new BusinessException(
+          ErrorCode.FORBIDDEN, "这把 API Key 不属于该应用", "API Key 与签发它的应用绑定；要用另一个应用，请在那个应用下单独生成一把 Key");
     }
     UUID userId = subjectOf(jwt);
     // ★ 落库与归属判定走服务层（看不见 ⇒ 404）；它在写流之前发生，所以错误还能用包络返回

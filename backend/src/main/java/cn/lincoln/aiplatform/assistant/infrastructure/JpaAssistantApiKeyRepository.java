@@ -12,4 +12,7 @@ public interface JpaAssistantApiKeyRepository extends JpaRepository<AssistantApi
   List<AssistantApiKey> findByAssistantIdOrderByCreatedAtDesc(UUID assistantId);
 
   Optional<AssistantApiKey> findByIdAndAssistantId(UUID id, UUID assistantId);
+
+  /** ★ 鉴权侧按明文 Key 查；只认启用中的行（停用 = 保留记录但不再通过鉴权）。 */
+  Optional<AssistantApiKey> findByKeyValueAndEnabledTrue(String keyValue);
 }

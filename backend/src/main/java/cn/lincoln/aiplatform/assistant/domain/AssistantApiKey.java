@@ -85,4 +85,13 @@ public class AssistantApiKey {
   public void setEnabled(boolean enabled) {
     this.enabled = enabled;
   }
+
+  /**
+   * 记录一次成功鉴权（使用侧回写 {@code last_used_at}）。
+   *
+   * <p>★ 只在"这把 Key 通过了校验"时调用；停用/未知的 Key 不该刷新时间 —— 否则管理页上"最近使用"会把攻击尝试也记成正常使用。
+   */
+  public void markUsed(Instant at) {
+    this.lastUsedAt = at;
+  }
 }

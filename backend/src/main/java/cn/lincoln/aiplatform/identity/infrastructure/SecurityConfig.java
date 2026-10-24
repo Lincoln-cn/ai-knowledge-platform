@@ -1,5 +1,9 @@
 package cn.lincoln.aiplatform.identity.infrastructure;
 
+import cn.lincoln.aiplatform.identity.domain.RolePermissionRepository;
+import cn.lincoln.aiplatform.identity.domain.RoleRepository;
+import cn.lincoln.aiplatform.identity.domain.UserRepository;
+import cn.lincoln.aiplatform.platform.security.ApiKeyAuthenticator;
 import java.util.Base64;
 import java.util.List;
 import javax.crypto.SecretKey;
@@ -23,6 +27,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 
 /**
@@ -54,7 +59,8 @@ public class SecurityConfig {
       HttpSecurity http,
       JwtAuthenticationConverter authorityConverter,
       RestAuthenticationEntryPoint entryPoint,
-      RestAccessDeniedHandler deniedHandler)
+      RestAccessDeniedHandler deniedHandler,
+      ApiKeyAuthenticationFilter apiKeyFilter)
       throws Exception {
     http
         // 令牌式无状态 API：CSRF 不适用（官方做法）
@@ -92,6 +98,8 @@ public class SecurityConfig {
                     .permitAll()
                     .anyRequest()
                     .authenticated())
+        // ★ X-API-Key（#195 使用侧）：排在 Bearer 之前 —— 两者同时出现时本过滤器让路，登录身份优先。
+        .addFilterBefore(apiKeyFilter, BearerTokenAuthenticationFilter.class)
         // ★ JWT 的验签与解析交给官方（08 §4.2.2：不手写 JWT 解析 Filter）
         .oauth2ResourceServer(
             o ->
@@ -131,6 +139,26 @@ public class SecurityConfig {
   @Bean
   PasswordEncoder passwordEncoder() {
     return new BCryptPasswordEncoder();
+  }
+
+  /**
+   * {@code X-API-Key} 的认证过滤器。
+   *
+   * <p>★ 在这里声明成 bean 而不是给过滤器类加 {@code @Component}：Spring Boot 会把容器里的每个 {@code Filter} bean 自动注册到
+   * servlet 链上，那会让它在 Security 链之外**再跑一次**。这里只让 Security 链持有它。
+   */
+  @Bean
+  ApiKeyAuthenticationFilter apiKeyAuthenticationFilter(
+      ApiKeyAuthenticator authenticator,
+      UserRepository users,
+      RoleRepository roles,
+      RolePermissionRepository rolePermissions,
+      JwtTokenService tokens,
+      JwtDecoder decoder,
+      JwtAuthenticationConverter converter,
+      RestAuthenticationEntryPoint entryPoint) {
+    return new ApiKeyAuthenticationFilter(
+        authenticator, users, roles, rolePermissions, tokens, decoder, converter, entryPoint);
   }
 
   @Bean

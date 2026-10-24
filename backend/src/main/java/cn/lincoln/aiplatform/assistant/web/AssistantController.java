@@ -67,8 +67,9 @@ import org.springframework.web.bind.annotation.RestController;
  * 说清、要么按「跳过引用」保留能用的那部分。
  *
  * <p>★ <strong>API Key 管理</strong>（{@code #195} 的最后一个子项）也已落：{@code GET/POST
- * /assistants/:id/api-keys} 与 {@code PATCH /assistants/:id/api-keys/:keyId/enabled}。★ 但要说清：
- * 这三条是<strong>管理面</strong>，平台还没有"用 {@code X-API-Key} 调平台"的鉴权链 —— 使用侧是一个独立的设计项， 不要把它读成"已经能程序化调用"了。
+ * /assistants/:id/api-keys} 与 {@code PATCH /assistants/:id/api-keys/:keyId/enabled}。使用侧（{@code
+ * X-API-Key} 换身份）同日补齐，见 {@code ApiKeyAuthenticationFilter}：Key 绑定签发它的应用，停用即 401，且 {@code
+ * last_used_at} 由成功鉴权回写。
  *
  * <h3>★ 权限点（{@code 07 §4.1}）</h3>
  *
