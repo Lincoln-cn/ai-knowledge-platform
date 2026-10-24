@@ -7,6 +7,37 @@
 
 ---
 
+## 0.4.5 · 第 17 周 · 流式问答链路（"每个字都来自生成，每条引用都先于它"）
+
+### 这一版能做什么
+
+**在会话里发一条消息 ⇒ 引用先出现 ⇒ 答案逐字流出 ⇒ 停在哪儿都留下已经生成的部分，且 `done` 只来一次**：
+
+```
+引用    `refs` 必须是 SSE 的第一个业务帧（缺引用就**抛**，不静默当零引用）
+逐字    文本 `delta` 连续下发；心跳是注释帧，不是业务事件
+停一次  `done` 恰好一次（正常 / 停止 / 断开 / 空闲超时四条路径），断开也不会补发第二条
+停得住  调 `/stop` 后已生成的正文保留，终态是 STOPPED 而不是 FAILED
+再来一版  `mode=REGENERATE` + `targetMessageId` 重生成；`CONTINUE` 仍显式 400（未实现，不假装）
+用量     `done.tokens` 由生产链路喂入，不是测试桩
+```
+
+### ★ 判据读数（第 17 周判据表，2026-10-24 复核）
+
+| 判据 | 载体 | 读数 |
+|---|---|---|
+| ① `refs` 先于第一个 `delta` | `StreamAssembler#flushPendingBeforeFirstDelta` · `StreamDeltaOrderTest` · `ChatStreamHttpTest` | 域层 **9 个 `@Test`** · 真栈 **8/8** |
+| ② 恰好一次 `done`（四条路径） | `StreamAssembler#finish`（`settled`）+ `ChatService.Run#terminalTaken`（CAS） | `ChatStreamHttpTest` **8/8** · `ConversationStopEndpointTest` **5/5** |
+| ③ 心跳在检索阶段也发出 | `ChatService.java:508` 先 `startHeartbeatThread(run)`、`:511` 才 `retrieve(...)` | `ChatStreamHttpTest#heartbeatIsAnSseCommentFrameNotABusinessEvent` · `ChatStreamTimingTest` **2/2** |
+| ④ 三态终态 + `tokens` 汇总 | `StreamTerminationPath#status()` · `ChatService.java:1651` `assembler.addUsage(...)` | `MessagePersistenceTest` **15/15** · `StreamTokensTest` **5 个 `@Test`** |
+| ⑤ 框架假设断言（`DOCUMENT_CONTEXT` / `order=250` / joiner） | `AdvisorChainAssumptionTest` | **1/1**（2026-10-24） |
+| 演示：停止保留正文 | `ConversationStopEndpointTest#stopViaTheEndpointEndsAsStoppedAndKeepsTheGeneratedText` | **5/5** |
+| 演示：重生成 | `ChatService.startTurn` 接 `ChatMode.REGENERATE`（`ChatService.java:273-290`）· `RegenerateTurnTest` | 绿（`CONTINUE` 仍 400） |
+
+★ **已知边界（不冒充已接入）**：生产对话端口仍走手写 HTTP（`ChatModelAdapter` → `UpstreamGateway`），
+**没有接 Spring AI advisor 链**（`#62`）。判据⑤ 断言的是「官方框架的语义成立」，不是「生产路径已经在用」；
+检索 advisor（order 250）、安全闸门、`StructuredOutputValidationAdvisor` 的生产挂点仍归 `#62`。
+
 ## 0.4.4 · 第 16 周 · 公开链接 + 密级冻结（"生成的链接自带它的权限上限"）
 
 ### 这一版能做什么

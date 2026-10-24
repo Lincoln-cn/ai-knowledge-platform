@@ -14,7 +14,7 @@
 
   <groupId>cn.lincoln</groupId>
   <artifactId>ai-knowledge-platform</artifactId>
-  <version>0.0.1-SNAPSHOT</version>
+  <version>0.4.5</version>
   <name>ai-knowledge-platform</name>
   <description>企业级 RAG 知识助理平台 · 模块化单体（Spring Modulith）</description>
 

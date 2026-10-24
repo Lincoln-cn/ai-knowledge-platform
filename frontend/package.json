@@ -1,7 +1,7 @@
 {
   "name": "ai-knowledge-platform-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.4.5",
   "type": "module",
   "description": "知识助理平台 · 前端（Vue 3 + Element Plus + Vite + Pinia）",
   "license": "Apache-2.0",
