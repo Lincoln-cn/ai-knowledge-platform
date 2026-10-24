@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.feedback.application;
 
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.feedback.FeedbackPromotionPort;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -68,9 +69,11 @@ public class FeedbackService {
       """;
 
   private final NamedParameterJdbcTemplate jdbc;
+  private final FeedbackPromotionPort promotions;
 
-  public FeedbackService(NamedParameterJdbcTemplate jdbc) {
+  public FeedbackService(NamedParameterJdbcTemplate jdbc, FeedbackPromotionPort promotions) {
     this.jdbc = jdbc;
+    this.promotions = promotions;
   }
 
   /** 列表：分页 + status/appId/mine/keyword 过滤；只返回有赞踩的消息。 */
@@ -189,7 +192,12 @@ public class FeedbackService {
             .addValue("assignee", safeAssignee)
             .addValue("resolution", safeResolution)
             .addValue("kb", promoteToKbId));
-    return get(id);
+    FeedbackView saved = get(id);
+    if (promoteToKbId != null) {
+      promotions.promote(
+          promoteToKbId, id, saved.conversationId(), saved.question(), saved.answer());
+    }
+    return saved;
   }
 
   /** 重新打开：RESOLVED/IGNORED → PROCESSING，清空处理时间。 */
