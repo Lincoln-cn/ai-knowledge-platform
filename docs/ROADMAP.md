@@ -721,10 +721,10 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 |---|---|---|---|
 | ① | `refs` 先于第一个 `delta`（首元素缓冲） | **已验收** | `StreamAssembler#flushPendingBeforeFirstDelta`（缺 refs ⇒ **抛**，不静默当零引用）· 域层 `StreamDeltaOrderTest` **9 个 `@Test`** · 真栈 `ChatStreamHttpTest` **8/8**（PR `#138` 表）· ★ 反证：PR `#117`"去掉首元素缓冲 ⇒ **1 failure**（`to start with [meta, refs]`）" |
 | ② | **恰好一次 `done`**（正常 / 停止 / 断开 / 超时四条路径） | **已验收** | 唯一出口 `StreamAssembler#finish`（`settled`）+ `ChatService.Run#terminalTaken`（CAS，`ChatService.java:456`）· 四路径**各有真栈用例**（`ChatStreamHttpTest` 的 `normalPath…` / `stopSignal…` / `idleTimeout…` / `clientDisconnect…`）**8/8** · `ConversationStopEndpointTest` **5/5** · ★ 反证：`#118`（**CLOSED** 2026-10-14）去掉 CAS ⇒ `expected: 1L but was: 2L`（夜间报告 N1）· ★ **读数口径限定（逐字）**：断开那一条是"假模型抛 `UncheckedIOException`"，"**不是真 RST**"（PR `#138`） |
-| ③ | 心跳在**检索阶段**也发出 | **部分** | 契约常量与数值关系有读数（`ChatStreamTimingTest` **2/2**，夜间报告 N1）· 真栈心跳是**注释帧**：`ChatStreamHttpTest#heartbeatIsAnSseCommentFrameNotABusinessEvent`（8/8 之一），但它造的是"假模型第一块之前停 700ms"= **生成阶段**的间隙 · 域层 `StreamDeltaOrderTest:86-107` 只证明"装配器**允许**心跳早于 refs" · ★ **差的那一格**：`ChatService#streamTurnWithTerminalGate` 是**先 `retrieve(...)`、再 `startHeartbeatThread(run)`**（`ChatService.java:270-278`）⇒ **检索期间没有心跳线程**；`StreamAssembler#heartbeat()` 的 javadoc 自陈"**本批不驱动它**"（`StreamAssembler.java:195-197`），且这条链上的检索**不走** `RetrievalService` 的 5000ms 预算 |
-| ④ | **三态终态 + `tokens` 汇总** | **部分**（三态已验收；`tokens` **差生产喂入点**） | 四路径→三态的唯一映射 = `StreamTerminationPath#status()`（枚举声明顺序 = 契约书写顺序）· 真栈落库终态 `MessagePersistenceTest` **15/15**（PR `#138`）· `tokens` 的**领域侧**有读数（`StreamTokensTest` **5 个 `@Test`**，逐字断言 `done` **事件上**的 payload）· ★ **差的那一格**：`StreamAssembler#addUsage` 在 `backend/src/main` 里**零调用点**（全文只有它自己的 javadoc 用法示例），而 `ChatStreamPort.Callback` **只有 `onChunk`/`onEnd`、没有用量通道**（`ChatStreamPort.java:50-73`）⇒ 生产链路上 `done.tokens` 只能是 `TokenUsage.zero()`；★ `StreamTokensTest:42` 却把"真实链路会喂"写成了前提 |
-| ⑤ | **框架假设断言**（`DOCUMENT_CONTEXT` 可取 · `order=250` 生效 · joiner 真被调用） | **未开始** | `StreamContractCrossCheckTest.java:36-37` **逐字**："**不**断言 `03 §4.7.3` 里的第 ⑤ 条『框架假设』……那三条的载体是 Spring AI 的 advisor 链，属第 17 周（本批刻意不引依赖）" · `AiModelConfig.java:19-20` 逐字"⚠️ 这里**不挂任何 advisor**" · 全仓 grep `DOCUMENT_CONTEXT` / `order = 250` **零命中** · 载体 `#62` / `#43` / `#45` **三条全 OPEN** |
-| 演示 | 流式逐字 + 引用栏先出现 + 停止保留内容 + **重生成** | **部分**（差"重生成"） | 前三条各有真栈读数（`ChatStreamHttpTest#normalPathEmitsTheContractSequenceAndPersistsTheAnswer` 8/8 · 判据① · `ConversationStopEndpointTest#stopViaTheEndpointEndsAsStoppedAndKeepsTheGeneratedText` 5/5，断言逐字含 `A5：停止保留已生成内容`）· ★ **重生成未落**：`ChatController.java:45-46` 逐字"契约里没有的字段一律不收：`mode` / `targetMessageId`（重生成 / 继续生成）……本批不落"，`ChatService.java:165-166` 同口径 |
+| ③ | 心跳在**检索阶段**也发出 | **已验收（2026-10-24 复核）** | 本节旧读数写的是 `streamTurnWithTerminalGate`（`ChatService.java:270-278`）先检索再起心跳；★ **2026-10-24 复核**：流式入口 `ChatService.java:508` 先 `startHeartbeatThread(run)`、`:511` 才 `retrieve(...)`，差的那一格已补 · 真栈心跳用例 `ChatStreamHttpTest#heartbeatIsAnSseCommentFrameNotABusinessEvent`（8/8 之一）· `ChatStreamTimingTest` 2/2 |
+| ④ | **三态终态 + `tokens` 汇总** | **已验收（2026-10-24 复核）** | 四路径→三态的唯一映射 = `StreamTerminationPath#status()`；真栈落库终态 `MessagePersistenceTest` 15/15 · `StreamTokensTest` 5 个 `@Test` · ★ **2026-10-24 复核**：`assembler.addUsage(new TokenUsage(...))` 在 `ChatService.java:1651` 有生产调用点；`ChatStreamPort.Callback` 的用量通道由 `#199` 的兜底适配器补齐（`completeWithUsage`） |
+| ⑤ | **框架假设断言**（`DOCUMENT_CONTEXT` 可取 · `order=250` 生效 · joiner 真被调用） | **已断言（框架层）· 生产挂点仍 `#62`** | `AdvisorChainAssumptionTest`（2026-10-24）用官方 `RetrievalAugmentationAdvisor` + 桩 `ChatModel` 钉住三件事：`DOCUMENT_CONTEXT` 在 order 300 的 advisor 里可读到两条 `Document` · 检索 advisor `getOrder()==250` 且 250 先于 300 · `DocumentJoiner` 恰好调用一次且合并结果进了最终 prompt · ★ **不证明**生产端口已接入：生产仍走手写 HTTP（`ChatModelAdapter` → `UpstreamGateway`），`AiModelConfig.java:19-20` 仍写着"这里不挂任何 advisor"；生产化见 `#62` |
+| 演示 | 流式逐字 + 引用栏先出现 + 停止保留内容 + **重生成** | **已验收（2026-10-24 复核）** | 前三条各有真栈读数（`ChatStreamHttpTest#normalPathEmitsTheContractSequenceAndPersistsTheAnswer` 8/8 · 判据① · `ConversationStopEndpointTest#stopViaTheEndpointEndsAsStoppedAndKeepsTheGeneratedText` 5/5）· ★ **重生成已落**：`ChatService.startTurn` 接受 `ChatMode.REGENERATE`（`ChatService.java:273-290`），`ChatController` 收 `mode`/`targetMessageId`，`RegenerateTurnTest` 覆盖；`CONTINUE` 仍显式 400 |
 | 公开面 1 | `PublicContext` 必须返回 `maxClassification`，并从**可选改必填** | **已验收** | 契约 `frontend/src/api/conversations.ts:83` = `maxClassification: ClassificationLevel`（**无 `?`**）· 提交 `001a527`（`#110`，题名逐字含"`PublicContext.maxClassification` 改必填"）· 真栈 `PublicChatHttpTest#anonymousVisitorResolvesTheContextAndTheFrozenClearance`（**9/9** 之一） |
 | 公开面 2 | 四态业务码的**「emit」那一半** | **已验收** | `PublicChatController.java:106-123`（`40401`–`40404` ⇒ 显式 `404` + `application/json`）· `ChatController.java:236-243`（同一组码在 `chat` 端点也识别）· 真栈 `PublicChatHttpTest` **9/9**，四个用例逐字覆盖 `40401`/`40402`/`40403`/`40404` · `check_error_codes.py` 18=18（见本节 `#41` 行）★ 开工前四件表里的 `#41` 那一格 = 本行，不重复记 |
 | 开工前 1 | `#92` 匿名委派的 `asSubject` | **已验收（实现已落）· ★ 但 Issue `#92` 仍 OPEN** | 提交 `f3326b4`（PR `#106`，题名逐字"匿名委派的 `asSubject` 实现（三条判据 + 金丝雀）+ 修一个借链接读超密的洞"）· 判据 1/2 的真栈读数 = `PublicChatHttpTest` 的 `anonymousVisitor…` 与 `loggedInCallerCannotReachBeyondHisOwnClearanceThroughTheSameLink` · `PublicSubjectDelegationTest` **3/3**（夜间报告 N2） |
@@ -1097,7 +1097,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 
 | 维度 | 读数 |
 |---|---|
-| 分支 / HEAD | `main` / `f687968`（API Key 子项代码；其前 `1ee6bea` 是导入、`ec09044` 是共享写、`7f28c90` 是 MVP 盘点）；工作区仅 4 个既有未跟踪项 · **全盘盘点见 11.10.10** |
+| 分支 / HEAD | `main` / `f687968`（API Key 子项代码；`5b0f7f2` 是判据⑤的框架断言测试；其前 `1ee6bea` 是导入、`ec09044` 是共享写、`7f28c90` 是 MVP 盘点）；工作区仅 4 个既有未跟踪项 · **全盘盘点见 11.10.10** |
 | 最近 CI | 2026-10-24T06:16Z PR `#210`（HEAD `f717326`）**7/7 success**：编译 + 格式化 42s、全量回归 24m24s、12 门 5m22s、真栈 6m56s、类型 39s、构建 3m23s、架构 2m16s |
 | 本轮收口 | `#14` `#22` `#41` `#50` `#54` `#79` `#114` `#142` `#146` `#168` `#170` `#181` `#182` `#184` `#185` `#188` `#192` `#193` `#194` `#196` `#197` `#199` `#200` `#208` 全部关闭；`#187` 的取一条/改名/软删已落（`0e6a297`），分享与附件仍 open |
 | 能答 | SSE 逐字 · 引用先于正文 · 停止 · 历史 · 多轮 · 应用级检索参数（FULLTEXT/VECTOR/HYBRID）· 思考开关 · `done.tokens` · 不落库调试 · 提示词类型/模板维护 · 反馈管理（列表/统计/详情/办理/批量/重开/沉淀为问答对）· 应用收藏（市场心形 +「只看收藏」）· 应用标签筛选（市场标签下拉框）· 应用共享（定向共享 / 按角色 / 可见性切换） |
@@ -1250,7 +1250,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 > **触发**：用户要求「整理现在的开发进度，然后并且对现在还有哪些功能未完成，无法发布到 mvp 可用的功能还缺哪些。更新到开发进度中」。
 > 本节是**只读盘点**：不新开 Issue、不改代码；数字与出处都可核对。旧节里 2026-10-15 的审计表如果与本节冲突，**以本节为准**。
 
-**一句话**：`0.4.4`（第 16 周）是最后一个**已登记**的版本；第 17 周 `0.4.5` 的 SSE 主链路**代码已落、判据 ①–④ 已收口，但判据 ⑤（框架假设断言）仍卡在 `#62`** ⇒ `0.4.5` **还没算发布**；第 18 周 `0.5.0` 的三场景 / A1–A9 / B1–B7 **没有一份验收读数**。
+**一句话**：`0.4.4`（第 16 周）是最后一个**已登记**的版本；第 17 周 `0.4.5` 的 SSE 主链路**代码已落、判据 ①–④ 已收口**，判据 ⑤ 的**框架假设**已由 `AdvisorChainAssumptionTest` 钉住（2026-10-24），**但生产端口仍未接 advisor 链（`#62`）** ⇒ `0.4.5` 的代码判据齐了，生产化仍差一格；第 18 周 `0.5.0` 的三场景 / A1–A9 / B1–B7 **没有一份验收读数**。
 功能面的欠账是 **15 条端点 + 7 条零消费**，它们**一条都不挡 0.5.0**；真正挡 0.5.0 的是「**读数 + 语料 + 引导/空态 + 版本台账**」。
 
 **本轮（2026-10-24）实际落地的 8 条端点**：应用收藏 2（`POST`/`DELETE /assistants/{id}/favorite`，`V50`）· 应用标签 1（`GET /assistants/tags`）· 应用共享写 2（`PUT /{id}/grants`、`PATCH /{id}/visibility`，`V51`）· 应用导入 2（`POST /import`、`POST /import/check`）· API Key 3（`GET/POST /{id}/api-keys`、`PATCH …/enabled`，`V52`）。`#195` 的 10 条 **10 → 0，Issue 已关**。
@@ -1264,7 +1264,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | **M2 · 知识库与入库** | ✅ | 七态入库、OCR、四层分块、切分预览（`0.2.x` / `0.3.0`） |
 | **M3 · 检索** | ✅ | 三模式 + RRF、密级 pre-filter、命中测试、多跳（`0.3.x` / `0.4.0`–`0.4.2`） |
 | **M4a · 应用配置与发布** | ✅ | 配置/发布/凭证（`0.4.3` / `0.4.4`）；`#195` 的 10 条高级端点（收藏 / 标签 / 共享写 / 导入 / API Key）于 2026-10-24 全部落地（`V50`–`V52`） |
-| **M4b · 问答链路** | 🟡 | 流式/引用/多轮/停止/重生成已落；差 **判据 ⑤ 框架假设断言**（`#62` 未关 ⇒ advisor 链没有挂点） |
+| **M4b · 问答链路** | 🟡 | 流式/引用/多轮/停止/重生成已落；判据 ⑤ 的框架假设已断言（`AdvisorChainAssumptionTest`）；**生产 advisor 挂点仍 `#62`** |
 | **M5 · 反馈与看板** | ✅ | 赞踩 + 反馈管理 6 端点（`V49`）+ 分析 5 端点（`#193`/`#194`） |
 | **M5.5 · 编排配置面** | ⬜ | `#198` 的 10 条未开始；排第 19 周起（`§4.5` 建议 0.6.0） |
 | **M6 · 验收与调优** | ⬜ | 三场景 / A1–A9 / B1–B7 的验收**未开始** |
@@ -1343,7 +1343,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 **6. 下一步顺序（按"挡不挡验收"排）**
 
 1. **P1 语料**：今天发清单（最长前置，业务侧 2–3 周）。
-2. **判据 ⑤ 的裁决**：引 Spring AI 生产端口（`#62`）把 advisor 链接上，或明确写"`0.4.5` 不发布"。
+2. **判据 ⑤ 的裁决**：框架假设已断言（`AdvisorChainAssumptionTest`）；生产端口接 advisor 链（`#62`）仍是独立欠账，不与 `0.4.5` 的判据混为一谈。
 3. **S1/S2/S3 三条脚本**：先用合成文档跑通，不等语料。
 4. **A1–A9 汇总表**：把已有闸门读数归档；补 A6「10 轮」与 A7「按钮 + 接口」两侧。
 5. **B1–B7**：语料到位后跑；开测前先清 `#71` / `#51` 两个入库侧读数。
@@ -1379,3 +1379,16 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | 契约台账 | assistants 12 → **9**（只剩 `#198` 编排的 9 条）；总台账 18 → **15**；`#195` **10 条全部落地，Issue 关闭** |
 | 验证 | `AssistantPublishCheckTest` 22/22（0.685s）· `AssistantApiKeyHttpTest` 1/1（真 PG，88.98s；含轮换两把都在、停用落库、非所有者 403）· `ContractDriftTest` 15/15（40.24s）· `MigrationIntegrationTest` 4/4（35.87s） |
 | 判据 | ① **管理面 ≠ 调用面**：端点 200 不等于 key 能用，鉴权链是独立设计项；② **权限点 ≠ 所有权**：能编辑别人的应用，不等于能给它签长期凭据；③ **轮换不吊销**：旧 Key 必须还能在列表里被看到与停用，否则"轮换"会静默掐断已部署的调用方 |
+
+#### 11.10.13 2026-10-24 判据⑤框架假设断言（Spring AI advisor 链）
+
+| 项 | 读数 |
+|---|---|
+| 断言载体 | `backend/src/test/java/cn/lincoln/aiplatform/modelcatalog/AdvisorChainAssumptionTest.java`（无 DB、0.6s） |
+| 依赖 | `backend/pom.xml` 新增 `spring-ai-rag`（**test scope**，版本由 `spring-ai-bom:2.0.1` 管理）；★ 生产依赖未变，避免"依赖先看起来接了" |
+| 断言 1 | `RetrievalAugmentationAdvisor.DOCUMENT_CONTEXT` 在 order 300 的 advisor 里**可读到**两条检索到的 `Document` |
+| 断言 2 | 检索 advisor 的 `getOrder()==250`；250 先跑、300 后跑（300 才看得见 250 写入的上下文） |
+| 断言 3 | 自带的 `DocumentJoiner` **恰好调用一次**，且合并结果真的进了最终 `Prompt`（桩 `ChatModel` 收到的正文含两段文档） |
+| 读数 | `AdvisorChainAssumptionTest` 1/1（0.599s）；`-DskipTests test-compile` exit 0；Spotless exit 0 |
+| ★ 它不证明 | **生产端口没有接 advisor 链**：`ChatModelAdapter` 仍直接走 `UpstreamGateway`（JDK `HttpClient`），`AiModelConfig.java:19-20` 仍写着"这里不挂任何 advisor"。生产化 = `#62`（P1），不在本节冒充 |
+| 判据 | ① **假设要能红**：用官方类而非自造同名概念，升级导致 `DOCUMENT_CONTEXT` 改名 / order 语义变化时会失败；② **断言 ≠ 接入**：测试证明框架语义，不证明生产路径在用；③ **test scope**：在生产端口切换前，不让依赖改变生产装配 |
