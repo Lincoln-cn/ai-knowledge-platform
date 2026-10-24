@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.assistant.domain.Assistant;
 import cn.lincoln.aiplatform.assistant.domain.AssistantFavoriteRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
+import cn.lincoln.aiplatform.assistant.domain.PromptReferencePort;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.Grant;
 import cn.lincoln.aiplatform.platform.access.GrantSubjectPort;
@@ -58,7 +59,8 @@ import org.springframework.transaction.annotation.Transactional;
  *       AssistantRepositoryAdapter}），{@code total} 与页内条数同口径
  *   <li><b>编排应用</b>：{@code workflow} 模块只有一个 {@code package-info}（编排执行引擎属 V1.0）⇒
  *       编排应用<strong>无法发布</strong>，且发布校验里那两项<strong>如实失败</strong>（见 {@link #checkBeforePublish}）
- *   <li><b>提示词模板</b>：{@code prompt-configs} 那一域尚未建表 ⇒ 导出包里它的依赖项标 {@code satisfied=false}
+ *   <li><b>提示词模板</b>：提示词配置的 id 属于导出方环境，跨环境导入几乎必然不存在 ⇒ 由 {@link PromptReferencePort}
+ *       逐条复核；不存在的引用在导入时按「跳过引用」处理
  * </ul>
  */
 @Service
@@ -100,6 +102,7 @@ public class AssistantService {
   private final ModelStatusPort modelStatus;
   private final SegmentSearchPort segmentSearch;
   private final GrantSubjectPort grantSubjects;
+  private final PromptReferencePort promptReferences;
 
   public AssistantService(
       AssistantRepository assistants,
@@ -107,13 +110,15 @@ public class AssistantService {
       AccessScopePort accessScope,
       ModelStatusPort modelStatus,
       SegmentSearchPort segmentSearch,
-      GrantSubjectPort grantSubjects) {
+      GrantSubjectPort grantSubjects,
+      PromptReferencePort promptReferences) {
     this.assistants = assistants;
     this.favorites = favorites;
     this.accessScope = accessScope;
     this.modelStatus = modelStatus;
     this.segmentSearch = segmentSearch;
     this.grantSubjects = grantSubjects;
+    this.promptReferences = promptReferences;
   }
 
   // ────────────────────────── 创建 / 读取 / 更新 ──────────────────────────
@@ -474,6 +479,180 @@ public class AssistantService {
         dependenciesOf(assistant));
   }
 
+  // ────────────────────────── 导入（判据 ③ 的入口）──────────────────────────
+
+  /**
+   * 导入前的依赖检查（契约 {@code checkBundleDependencies}）。
+   *
+   * <p>⚠️ 这个接口<strong>不做权威判定</strong>：它只拿到客户端解析出的依赖清单，没有 ids 可复核。它回答的是"你这份清单里有没有不满足的项"，
+   * 用来决定页面要不要让用户勾「跳过引用导入」。真正会拦下导入的复算在 {@link #importBundle}。
+   */
+  @Transactional(readOnly = true)
+  public BundleCheckResult checkImport(
+      String format, List<AssistantBundleView.Dependency> dependencies) {
+    List<AssistantBundleView.Dependency> deps =
+        dependencies == null ? List.of() : List.copyOf(dependencies);
+    boolean legacy = !BUNDLE_FORMAT.equals(blankToNull(format));
+    return new BundleCheckResult(
+        format, legacy, deps, deps.stream().anyMatch(dep -> !dep.satisfied()));
+  }
+
+  /**
+   * 导入一个导出包，生成<strong>新的</strong>应用（不覆盖同 id 的应用）。
+   *
+   * <p>★ 依赖在这里<strong>重新算一遍</strong>，不信客户端那份清单：只要能拿 ids 判的，就必须由服务端判 —— 否则"检查时说不缺、导入时缺一半"
+   * 只会在用户点下按钮之后才暴露。
+   *
+   * <p>★ {@code skipMissingReferences}：为 true 时保留能用的知识库/提示词引用、丢掉不能用的；模型 id 原样保留（SIMPLE
+   * 应用必须有模型，未加载由发布校验拦下）；为 false 时只要有一条缺失就 400， 让用户先看清缺什么。跳过不是静默：响应里 {@code view} 的 {@code
+   * kbIds/promptIds/modelId} 就是实际保留下来的。
+   */
+  @Transactional
+  public AssistantView importBundle(
+      AssistantBundleView bundle, boolean skipMissingReferences, UUID ownerId) {
+    if (bundle == null || bundle.config() == null) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "导入包缺少 config", "请确认文件是由「导出」得到的 JSON 包");
+    }
+    String format = blankToNull(bundle.format());
+    if (!BUNDLE_FORMAT.equals(format)) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "不认识的导入包格式：" + (format == null ? "（空）" : format),
+          "当前只支持 " + BUNDLE_FORMAT);
+    }
+    AssistantBundleView.Config config = bundle.config();
+    AssistantType type = parseBundleType(config.type());
+    List<AssistantBundleView.Dependency> deps = importDependencies(config, type);
+    List<String> missing =
+        deps.stream()
+            .filter(dep -> !dep.satisfied())
+            .map(AssistantBundleView.Dependency::name)
+            .toList();
+    if (!missing.isEmpty() && !skipMissingReferences) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "导入包有 " + missing.size() + " 个依赖在当前环境不满足",
+          "缺失：" + String.join("、", missing) + "。确认「跳过引用导入」后不会带回这些引用");
+    }
+    Draft draft =
+        new Draft(
+            config.name(),
+            config.icon(),
+            config.description(),
+            type,
+            // ★ 模型 id 原样保留：SIMPLE 应用创建时必须有模型，剥掉它会让「跳过引用」直接 400；
+            //   模型未加载的后果留给发布校验（AS-I2）说，不在这里改配置
+            config.modelId(),
+            config.rolePrompt(),
+            keepSatisfiedKbs(config.kbIds()),
+            keepSatisfiedPrompts(config.promptIds()),
+            retrievalDraft(config.retrieval()),
+            config.multiTurn(),
+            config.thinkingEnabled(),
+            config.prologue(),
+            config.quickQuestions(),
+            List.of(),
+            null);
+    return create(draft, ownerId);
+  }
+
+  /** 导入时的权威依赖复算：与 {@link #dependenciesOf} 同一套判据，只是入参换成了包里的 ids。 */
+  private List<AssistantBundleView.Dependency> importDependencies(
+      AssistantBundleView.Config config, AssistantType type) {
+    List<AssistantBundleView.Dependency> deps = new ArrayList<>();
+    if (config.modelId() != null) {
+      Optional<ModelStatusPort.ModelSnapshot> model = modelStatus.find(config.modelId());
+      boolean loaded = model.map(ModelStatusPort.ModelSnapshot::loaded).orElse(false);
+      deps.add(
+          new AssistantBundleView.Dependency(
+              "MODEL",
+              model
+                  .map(ModelStatusPort.ModelSnapshot::name)
+                  .orElse("（模型 " + config.modelId() + "）"),
+              loaded ? "已加载" : "未加载或已不存在",
+              loaded,
+              loaded ? null : "导入时可以选择跳过；跳过则这个应用暂时没有对话模型"));
+    }
+    List<UUID> kbIds = config.kbIds() == null ? List.of() : config.kbIds();
+    if (!kbIds.isEmpty()) {
+      Set<UUID> usable = new LinkedHashSet<>(segmentSearch.visibleKbIds(kbIds));
+      for (UUID kbId : kbIds) {
+        boolean ok = usable.contains(kbId);
+        deps.add(
+            new AssistantBundleView.Dependency(
+                "KNOWLEDGE_BASE",
+                "知识库 " + kbId,
+                ok ? "可用" : "不可用（已停用 / 已删除 / 不可见）",
+                ok,
+                ok ? null : "导入后这一段知识不会被检索到，需要启用或重新绑定"));
+      }
+    }
+    List<UUID> promptIds = config.promptIds() == null ? List.of() : config.promptIds();
+    if (!promptIds.isEmpty()) {
+      Set<UUID> existing = promptReferences.existing(promptIds);
+      for (UUID promptId : promptIds) {
+        boolean ok = existing.contains(promptId);
+        deps.add(
+            new AssistantBundleView.Dependency(
+                "PROMPT",
+                "提示词 " + promptId,
+                ok ? "存在" : "不存在（提示词可能已删除或来自别的环境）",
+                ok,
+                ok ? null : "导入后需要手动重新绑定提示词"));
+      }
+    }
+    if (type == AssistantType.WORKFLOW) {
+      deps.add(
+          new AssistantBundleView.Dependency(
+              "WORKFLOW", "流程定义", "画布后端（workflow 模块）未落地，无法导入", false, "导入后画布为空，需要重新绘制流程"));
+    }
+    return deps;
+  }
+
+  private List<UUID> keepSatisfiedKbs(List<UUID> kbIds) {
+    if (kbIds == null || kbIds.isEmpty()) {
+      return List.of();
+    }
+    Set<UUID> usable = new LinkedHashSet<>(segmentSearch.visibleKbIds(kbIds));
+    return kbIds.stream().filter(usable::contains).toList();
+  }
+
+  private List<UUID> keepSatisfiedPrompts(List<UUID> promptIds) {
+    if (promptIds == null || promptIds.isEmpty()) {
+      return List.of();
+    }
+    Set<UUID> existing = promptReferences.existing(promptIds);
+    return promptIds.stream().filter(existing::contains).toList();
+  }
+
+  private static RetrievalDraft retrievalDraft(AssistantView.RetrievalView retrieval) {
+    if (retrieval == null) {
+      return RetrievalDraft.defaults();
+    }
+    return new RetrievalDraft(
+        retrieval.mode(),
+        retrieval.threshold(),
+        retrieval.topN(),
+        retrieval.noRefStrategy(),
+        retrieval.queryCount(),
+        retrieval.decomposeEnabled(),
+        retrieval.maxSubQuestions());
+  }
+
+  private static AssistantType parseBundleType(String raw) {
+    String value = blankToNull(raw);
+    if (value == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "应用类型必填（SIMPLE / WORKFLOW）", "导入包里的 config.type 不能为空");
+    }
+    try {
+      return AssistantType.valueOf(value.toUpperCase(Locale.ROOT));
+    } catch (IllegalArgumentException ex) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "应用类型只支持 SIMPLE / WORKFLOW", "导入包里的 config.type 是：" + value);
+    }
+  }
+
   // ────────────────────────── 内部 ──────────────────────────
 
   private Assistant requireVisible(UUID id) {
@@ -697,10 +876,16 @@ public class AssistantService {
                 ok ? null : "导入后这一段知识不会被检索到，需要启用或重新绑定"));
       }
     }
+    Set<UUID> existingPrompts = promptReferences.existing(assistant.promptIds());
     for (UUID promptId : assistant.promptIds()) {
+      boolean ok = existingPrompts.contains(promptId);
       deps.add(
           new AssistantBundleView.Dependency(
-              "PROMPT", "提示词 " + promptId, "提示词配置尚未落地，无法校验", false, "导入后需要手动重新绑定提示词"));
+              "PROMPT",
+              "提示词 " + promptId,
+              ok ? "存在" : "不存在（提示词可能已删除）",
+              ok,
+              ok ? null : "导入后需要手动重新绑定提示词"));
     }
     if (assistant.type() == AssistantType.WORKFLOW) {
       deps.add(

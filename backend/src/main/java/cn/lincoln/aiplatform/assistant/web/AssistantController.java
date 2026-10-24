@@ -5,6 +5,7 @@ import cn.lincoln.aiplatform.assistant.application.AccessCredentialView;
 import cn.lincoln.aiplatform.assistant.application.AssistantBundleView;
 import cn.lincoln.aiplatform.assistant.application.AssistantService;
 import cn.lincoln.aiplatform.assistant.application.AssistantView;
+import cn.lincoln.aiplatform.assistant.application.BundleCheckResult;
 import cn.lincoln.aiplatform.assistant.application.PublishCheckResult;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
 import cn.lincoln.aiplatform.platform.access.Grant;
@@ -58,9 +59,12 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>★ <strong>共享写</strong>（{@code #195} 的第三个子项）也已落：{@code PUT /assistants/:id/grants} 与 {@code
  * PATCH /assistants/:id/visibility}。它们把"别人共享给我的应用"这条链接通 —— 之前 {@code ScopeFilter.canSee} 早就会按
- * {@code grants()} 判定，只是 {@code Assistant.grants()} 恒为空、共享对话框里的「定向共享」保存下去没有任何效果。 其余高级端点（API Key ·
- * 导入）仍在 {@code ContractDriftTest} 的逐条欠账清单里：API Key 缺的是<strong>程序化调用的鉴权链</strong>（只有管理端点等于造一个空转入口），
- * 导入归导入导出那一批。
+ * {@code grants()} 判定，只是 {@code Assistant.grants()} 恒为空、共享对话框里的「定向共享」保存下去没有任何效果。
+ *
+ * <p>★ <strong>导入</strong>（{@code POST /assistants/import/check} 与 {@code POST
+ * /assistants/import}）也已落： 导入生成新应用，引用由服务端重新复核（模型已加载 / 知识库可见 / 提示词存在），缺引用时要么 400
+ * 说清、要么按「跳过引用」保留能用的那部分。 唯一仍在 {@code ContractDriftTest} 欠账清单里的是 <strong>API Key</strong> ——
+ * 它缺的是<strong>程序化调用的鉴权链</strong>， 只有管理端点等于造一个空转入口。
  *
  * <h3>★ 权限点（{@code 07 §4.1}）</h3>
  *
@@ -133,6 +137,39 @@ public class AssistantController {
   @PreAuthorize("hasAuthority('assistant:view')")
   public ApiResponse<List<String>> tags() {
     return ApiResponse.ok(assistants.listTags());
+  }
+
+  /**
+   * 导入前的依赖检查（契约 {@code checkBundleDependencies}）。
+   *
+   * <p>★ 只回显"这份清单里有没有不满足的项"，不碰数据库 —— 权威复算在 {@code POST /import} 那一侧（那里拿得到完整 config）。
+   */
+  @PostMapping("/import/check")
+  @PreAuthorize("hasAuthority('assistant:edit')")
+  public ApiResponse<BundleCheckResult> checkImport(@RequestBody CheckBundleBody body) {
+    return ApiResponse.ok(
+        assistants.checkImport(
+            body == null ? null : body.format(), body == null ? null : body.dependencies()));
+  }
+
+  /**
+   * 导入一个导出包（契约 {@code importAssistant}）⇒ <strong>新建</strong>一个应用。
+   *
+   * <p>★ 依赖由服务端重新算：{@code skipMissingReferences=false} 且有缺失 ⇒ 400 并列出缺什么； 为 true
+   * 时保留能用的引用（模型不可用则置空），响应里的 {@code kbIds/promptIds} 就是实际保留的结果。
+   */
+  @PostMapping("/import")
+  @PreAuthorize("hasAuthority('assistant:edit')")
+  public ApiResponse<AssistantView> importAssistant(
+      @RequestBody ImportBundleBody body, @AuthenticationPrincipal Jwt jwt) {
+    if (body == null || body.bundle() == null) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "导入包不能为空", "请确认文件是由「导出」得到的 JSON 包");
+    }
+    return ApiResponse.ok(
+        assistants.importBundle(
+            body.bundle(),
+            Boolean.TRUE.equals(body.skipMissingReferences()),
+            UUID.fromString(jwt.getSubject())));
   }
 
   /** 取一个应用（含检索参数与绑定）。 */
@@ -462,6 +499,12 @@ public class AssistantController {
 
   /** 可见性开关（契约 {@code setAssistantVisibility} 的 {@code { visibility }}）。 */
   public record VisibilityBody(String visibility) {}
+
+  /** 导入前检查（契约 {@code checkBundleDependencies}）：页面把包里的 {@code format + dependencies} 原样送来。 */
+  public record CheckBundleBody(String format, List<AssistantBundleView.Dependency> dependencies) {}
+
+  /** 导入（契约 {@code importAssistant}）：{@code skipMissingReferences} 缺省为 false（先让用户看清缺什么）。 */
+  public record ImportBundleBody(AssistantBundleView bundle, Boolean skipMissingReferences) {}
 
   /** 契约里的 {@code grants} 是可选的；{@code null} 与空数组同义 —— 都是"把名单清空"。 */
   private static List<Grant> toGrants(GrantsBody body) {

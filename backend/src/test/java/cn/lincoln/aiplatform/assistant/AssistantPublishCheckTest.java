@@ -12,6 +12,7 @@ import cn.lincoln.aiplatform.assistant.domain.Assistant;
 import cn.lincoln.aiplatform.assistant.domain.AssistantFavoriteRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
+import cn.lincoln.aiplatform.assistant.domain.PromptReferencePort;
 import cn.lincoln.aiplatform.identity.FakeAccessScope;
 import cn.lincoln.aiplatform.platform.access.Grant;
 import cn.lincoln.aiplatform.platform.access.GrantSubjectPort;
@@ -58,12 +59,14 @@ class AssistantPublishCheckTest {
   private final FakeAssistants assistants = new FakeAssistants();
   private final FakeFavorites favorites = new FakeFavorites();
   private final FakeGrantSubjects grantSubjects = new FakeGrantSubjects();
+  private final FakePromptReferences promptReferences = new FakePromptReferences();
   private final FakeModels models = new FakeModels();
   private final FakeSegments segments = new FakeSegments();
   private final FakeAccessScope scope = new FakeAccessScope();
 
   private final AssistantService service =
-      new AssistantService(assistants, favorites, scope, models, segments, grantSubjects);
+      new AssistantService(
+          assistants, favorites, scope, models, segments, grantSubjects, promptReferences);
 
   /** 建一个"各项都过"的简单应用；各用例只破坏其中一项。 */
   private Assistant publishable() {
@@ -384,6 +387,23 @@ class AssistantPublishCheckTest {
     assertThat(page.page()).isEqualTo(1);
   }
 
+  /** 导入前检查：旧格式只标 legacy（仍可读），缺失项让 {@code hasMissing} 为真。 */
+  @Test
+  void checkImportFlagsLegacyFormatAndMissingDependencies() {
+    var ok = new AssistantBundleView.Dependency("MODEL", "模型", "已加载", true, null);
+    var missing = new AssistantBundleView.Dependency("PROMPT", "提示词", "不存在", false, "重新绑定");
+
+    var current = service.checkImport("assistant-bundle@1", List.of(ok));
+    assertThat(current.legacy()).as("当前格式").isFalse();
+    assertThat(current.hasMissing()).as("没有缺失项").isFalse();
+
+    var legacy = service.checkImport("assistant-bundle@0", List.of(ok, missing));
+    assertThat(legacy.legacy()).as("旧格式仍然可读，只是要标出来").isTrue();
+    assertThat(legacy.hasMissing()).as("有一条不满足").isTrue();
+    assertThat(legacy.format()).isEqualTo("assistant-bundle@0");
+    assertThat(legacy.dependencies()).hasSize(2);
+  }
+
   /**
    * ★ 收藏：幂等 + 看不见的应用 404。
    *
@@ -627,6 +647,26 @@ class AssistantPublishCheckTest {
         }
       }
       return found;
+    }
+  }
+
+  /** 提示词引用夹具：默认没有一条存在（跨环境导入的常态），需要时用 {@code add} 造一条存在的。 */
+  private static final class FakePromptReferences implements PromptReferencePort {
+
+    private final Set<UUID> ids = new LinkedHashSet<>();
+
+    void add(UUID id) {
+      ids.add(id);
+    }
+
+    @Override
+    public Set<UUID> existing(Collection<UUID> promptIds) {
+      if (promptIds == null || promptIds.isEmpty()) {
+        return Set.of();
+      }
+      return promptIds.stream()
+          .filter(ids::contains)
+          .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
   }
 
