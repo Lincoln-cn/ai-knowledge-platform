@@ -23,15 +23,14 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  *
  * <h3>它要钉的到底是什么</h3>
  *
- * <p>契约有 {@code POST /assistants/import}（与 {@code /import/check}，都在 {@code #195}
- * 的欠账里），后端**没有**这个端点，但有 {@code @GetMapping("/{id}")} + {@code @PathVariable UUID id} ⇒ {@code
- * "import"} 转 UUID 失败 ⇒ Spring 抛 {@code MethodArgumentTypeMismatchException} ⇒
- * <strong>400</strong>。
+ * <p>契约有 {@code POST /assistants/import}（与 {@code /import/check}），后端**后来补上了**（{@code #195} 的导入子项），
+ * 所以它不再是"契约有、后端没有"的代表；现在的代表是 {@code #198} 的 {@code /assistants/{id}/workflow} 一族 （9 条 workflow 端点仍在
+ * {@code ContractDriftTest} 的欠账清单里）。
  *
  * <p>★ <strong>400 在说假话</strong>：它的含义是"你的请求有问题"，而事实是"这个端点还没实现"。 排查的人会去查自己的参数，而不是查"这功能做了没有"。
  *
- * <p>★ 选 {@code /import} 而不是原来的 {@code /tags}：{@code GET /assistants/tags} 已随 {@code #195}
- * 的标签子项落地（它现在有 真实 handler），{@code /import} 仍是"契约有、后端没有"的代表，判据不变。
+ * <p>★ 选 {@code /workflow} 而不是 {@code /import}：{@code POST /assistants/import} 已随 {@code #195}
+ * 落地（它现在有真实 handler），{@code /workflow} 仍是"契约有、后端没有"的代表，判据不变。
  *
  * <p>★ 而且它让<strong>未实现清单的读数不一致</strong>：其它未实现端点都是 404 （{@code /analytics/*}、{@code
  * /prompts/*}、{@code /feedbacks/*}），只有这一条 400 ⇒ 任何"按状态码分类未实现端点"的扫查都会漏掉它。
@@ -57,11 +56,12 @@ class AssistantUnknownSubPathTest {
   void unimplementedSubPathIs404NotBadRequest() throws Exception {
     String token = login();
 
-    HttpResponse<String> res = get("/api/v1/assistants/import", token);
+    HttpResponse<String> res =
+        get("/api/v1/assistants/00000000-0000-4000-8000-0000000000aa/workflow", token);
 
     assertThat(res.statusCode())
         .as(
-            "★★ `/assistants/import` 是**契约里有、后端没有**的端点 ⇒ 必须是 404（未实现），"
+            "★★ `/assistants/{id}/workflow` 是**契约里有、后端没有**的端点（#198）⇒ 必须是 404（未实现），"
                 + "不许是 400 —— 400 会让排查的人去查自己的参数，而不是查这功能做了没有（#165）")
         .isEqualTo(404);
   }
