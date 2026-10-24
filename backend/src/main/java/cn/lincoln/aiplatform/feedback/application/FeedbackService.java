@@ -1,10 +1,8 @@
 package cn.lincoln.aiplatform.feedback.application;
 
-import cn.lincoln.aiplatform.knowledge.application.QaPairService;
-import cn.lincoln.aiplatform.knowledge.domain.QaPairOrigin;
-import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.feedback.FeedbackPromotionPort;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -71,11 +69,11 @@ public class FeedbackService {
       """;
 
   private final NamedParameterJdbcTemplate jdbc;
-  private final QaPairService qaPairs;
+  private final FeedbackPromotionPort promotions;
 
-  public FeedbackService(NamedParameterJdbcTemplate jdbc, QaPairService qaPairs) {
+  public FeedbackService(NamedParameterJdbcTemplate jdbc, FeedbackPromotionPort promotions) {
     this.jdbc = jdbc;
-    this.qaPairs = qaPairs;
+    this.promotions = promotions;
   }
 
   /** 列表：分页 + status/appId/mine/keyword 过滤；只返回有赞踩的消息。 */
@@ -196,46 +194,10 @@ public class FeedbackService {
             .addValue("kb", promoteToKbId));
     FeedbackView saved = get(id);
     if (promoteToKbId != null) {
-      promoteToQaPair(promoteToKbId, id, saved);
+      promotions.promote(
+          promoteToKbId, id, saved.conversationId(), saved.question(), saved.answer());
     }
     return saved;
-  }
-
-  /**
-   * 把一条反馈真正写进知识库问答对（{@code #208}）。
-   *
-   * <p>★ 用已有的 {@link QaPairService#importPairs} 而不是复制一条 INSERT：它已经带库可见性、密级 ceiling、出处归属三条校验，也把
-   * origin 固定成 {@link QaPairOrigin#FEEDBACK}。本方法只补两件它不知道的事：从会话取密级、用 {@code feedback:<id>} 做幂等键。
-   */
-  private void promoteToQaPair(UUID kbId, UUID feedbackId, FeedbackView feedback) {
-    String ref = "feedback:" + feedbackId;
-    Integer existing =
-        jdbc.queryForObject(
-            """
-            select count(*) from kb_qa_pair
-             where kb_id = :kb and source_ref = :ref and deleted_at is null
-            """,
-            Map.of("kb", kbId, "ref", ref),
-            Integer.class);
-    if (existing != null && existing > 0) {
-      return;
-    }
-    String level =
-        jdbc.queryForObject(
-            "select max_classification from cv_conversation where id = :id",
-            Map.of("id", feedback.conversationId()),
-            String.class);
-    qaPairs.importPairs(
-        kbId,
-        List.of(
-            new QaPairService.ImportPair(
-                feedback.question(),
-                feedback.answer(),
-                null,
-                ClassificationLevel.valueOf(level),
-                QaPairOrigin.FEEDBACK,
-                ref)),
-        null);
   }
 
   /** 重新打开：RESOLVED/IGNORED → PROCESSING，清空处理时间。 */
