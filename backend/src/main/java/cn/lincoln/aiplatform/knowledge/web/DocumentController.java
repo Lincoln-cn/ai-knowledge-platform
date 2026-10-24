@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.knowledge.application.DocumentService;
 import cn.lincoln.aiplatform.knowledge.application.DocumentView;
 import cn.lincoln.aiplatform.knowledge.application.IngestionProgressView;
 import cn.lincoln.aiplatform.knowledge.application.ReembedKbView;
+import cn.lincoln.aiplatform.knowledge.application.UploadPolicyView;
 import cn.lincoln.aiplatform.knowledge.domain.OrgAssignment;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
@@ -108,6 +109,17 @@ public class DocumentController {
    *
    * <p>★ 前端只在 {@code running} 为 true 时轮询（{@code 03 §3.4}），所以这个字段的语义必须准。
    */
+  /**
+   * 上传策略（契约 {@code UploadPolicy}，{@code #197}）—— 上传对话框打开时先取这一档。
+   *
+   * <p>★ 返回的是<strong>平台级</strong>上限；库级配额尚无数模型，先统一。前端拿到后决定可选扩展名、单文件大小与数量。
+   */
+  @GetMapping("/{kbId}/upload-policy")
+  @PreAuthorize("hasAuthority('knowledge:view')")
+  public ApiResponse<UploadPolicyView> uploadPolicy(@PathVariable UUID kbId) {
+    return ApiResponse.ok(documentService.uploadPolicy(kbId));
+  }
+
   @GetMapping("/{kbId}/ingestion-progress")
   @PreAuthorize("hasAuthority('knowledge:view')")
   public ApiResponse<IngestionProgressView> ingestionProgress(@PathVariable UUID kbId) {

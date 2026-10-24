@@ -165,6 +165,24 @@ class DocumentListClearanceTest {
         .isEqualTo(totalOf(list));
   }
 
+  /**
+   * 上传策略（{@code #197}）：库可见 ⇒ 200 且返回平台级上限。
+   *
+   * <p>★ 这是上传对话框的第一步；它 404 时用户看到的是“上传入口坏了”，而不是“策略没配”。
+   */
+  @Test
+  void uploadPolicyIsServedForVisibleKb() throws Exception {
+    String token = token("admin", "admin");
+    Fixture f = seed(ClassificationLevel.INTERNAL.ordinal());
+
+    String body =
+        send("GET", "/api/v1/knowledge-bases/" + f.kbId() + "/upload-policy", null, token).body();
+
+    assertThat(body).as("上传策略必须返回 maxFileSizeMB").contains("\"maxFileSizeMB\":100");
+    assertThat(body).as("上传策略必须返回 maxFileCount").contains("\"maxFileCount\":20");
+    assertThat(body).as("上传策略必须给出可接受的扩展名").contains(".pdf");
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
 
   private record Fixture(String kbId, String visibleDocId, String hiddenDocId) {}
