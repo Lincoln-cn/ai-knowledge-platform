@@ -1097,7 +1097,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 
 | 维度 | 读数 |
 |---|---|
-| 分支 / HEAD | `main` / `276b772`（#195 标签子项，本地待推送；此前 `f82146d` 收藏子项）；工作区仅 4 个既有未跟踪项 |
+| 分支 / HEAD | `main` / `276b772`（#195 标签子项代码；其后的 docs `dfca888` 与走查闸门 `9fe036d` 另计）；工作区仅 4 个既有未跟踪项 |
 | 最近 CI | 2026-10-24T06:16Z PR `#210`（HEAD `f717326`）**7/7 success**：编译 + 格式化 42s、全量回归 24m24s、12 门 5m22s、真栈 6m56s、类型 39s、构建 3m23s、架构 2m16s |
 | 本轮收口 | `#14` `#22` `#41` `#50` `#54` `#79` `#114` `#142` `#146` `#168` `#170` `#181` `#182` `#184` `#185` `#188` `#192` `#193` `#194` `#196` `#197` `#199` `#200` `#208` 全部关闭；`#187` 的取一条/改名/软删已落（`0e6a297`），分享与附件仍 open |
 | 能答 | SSE 逐字 · 引用先于正文 · 停止 · 历史 · 多轮 · 应用级检索参数（FULLTEXT/VECTOR/HYBRID）· 思考开关 · `done.tokens` · 不落库调试 · 提示词类型/模板维护 · 反馈管理（列表/统计/详情/办理/批量/重开/沉淀为问答对）· 应用收藏（市场心形 +「只看收藏」）· 应用标签筛选（市场标签下拉框） |
@@ -1211,7 +1211,8 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | 不过滤 published | 草稿/私有应用只要请求者看得见，标签就进筛选（与 mock 的 `visiblePredicate(..., {})` 一致） |
 | 实现约束 | 不能用 `jpa.findAll(spec)`：Spring Data 会在 spec 之后强制 `query.select(root)`，把 `unnest` 的 select 覆盖掉；改直接持有 `EntityManager` 构造 `CriteriaQuery<String>` |
 | 契约台账 | `ContractDriftTest.KNOWN_MISSING` 摘掉 `GET /assistants/tags`：assistants **17 → 16**；`AssistantUnknownSubPathTest` 的 404 读数改用仍在欠账里的 `/assistants/import` |
-| 验证 | `AssistantTagHttpTest` 1/1（真 PG：两应用共用标签只出现一次 · 各自独有标签都在 · USER 看不见私有应用时也看不见其标签）· `AssistantPublishCheckTest` 19/19 · `ContractDriftTest` 15/15 · `AssistantUnknownSubPathTest` 2/2 · `MigrationIntegrationTest` 4/4 · 架构闸门两条通配符（`cn.lincoln.aiplatform.*Test` / `cn.lincoln.aiplatform.caliber.*Test`）绿 |
+| 验证 | `AssistantTagHttpTest` 1/1（真 PG：两应用共用标签只出现一次 · 各自独有标签都在 · USER 看不见私有应用时也看不见其标签）· `AssistantPublishCheckTest` 19/19 · `ContractDriftTest` 15/15 · `AssistantUnknownSubPathTest` 2/2 · `MigrationIntegrationTest` 4/4 · 架构闸门两条通配符（`cn.lincoln.aiplatform.*Test` / `cn.lincoln.aiplatform.caliber.*Test`）绿 · CI 5/5 绿（`9fe036d`，含本轮全部代码与闸门改动） |
+| 走查闸门 | `dfca888` 的真栈红在 `[NG] 应用市场（/market）已不再报失败 => 请把它从 KNOWN_PENDING 移走`：标签补上后该页零失败，按闸门口径已由 `9fe036d` 移入 `MUST_WORK` |
 | `#195` 余量 | **7 条**（API Key / 共享写 / 导入）—— 仍按功能账，不占本轮阻塞位 |
 
 ★ 两条判据留档：① **从侧面泄露也是泄露** —— 「按可见性取标签」与「按可见性取应用」必须是同一份谓词，检验方式是拿 USER 账号读同一个响应；
