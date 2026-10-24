@@ -235,6 +235,11 @@ MUST_WORK: list[tuple[str, str, str]] = [
     #   `失败接口=0 控制台错误=0`；闸门逐字要求「已不再报失败 ⇒ 请把它从
     #   KNOWN_PENDING 移走」，因此升级为“必须真的不报失败”。
     ("/feedback", "反馈处理", "反馈"),
+    # ★ 2026-10-24（#195 收藏 + 标签子项）：`/market` 加载链路最后一个 404 是
+    #   `GET /assistants/tags`（`fetchTags` 失败后静默置空）；收藏两条在此前也已落地。
+    #   两者补齐后这一页 `失败接口=0 控制台错误=0`，闸门逐字要求移走
+    #   （逐字：`[NG] 应用市场（/market）已不再报失败 => 请把它从 KNOWN_PENDING 移走`）。
+    ("/market", "应用市场", "应用"),
 ]
 
 # ── 已知后端未落地：**加载时就会报失败**（各自有周次计划，只记录不判失败）──
@@ -251,7 +256,9 @@ KNOWN_PENDING: list[tuple[str, str, str]] = [
     #   `[NG] 提示词（/assistants/prompts）已不再报失败 => 请把它从 KNOWN_PENDING 移走`。
     # ★ `/feedback` 已从本清单**移走**（2026-10-24 · #194）：反馈管理 6 端点落地后，
     #   这一页 `失败接口=0 控制台错误=0`，闸门逐字要求移走。
-    ("/market", "应用市场", "应用"),
+    # ★ `/market` 已从本清单**移走**（2026-10-24 · #195 收藏 + 标签）：收藏端点与
+    #   `GET /assistants/tags` 落地后，这一页不再有 404；闸门逐字要求
+    #   `[NG] 应用市场（/market）已不再报失败 => 请把它从 KNOWN_PENDING 移走`。
 ]
 
 ALL_PAGES = MUST_WORK + KNOWN_PENDING
