@@ -46,9 +46,10 @@ import org.springframework.web.bind.annotation.RestController;
  * （创建时冻结密级、撤销即失效、凭证可启停）；<strong>免登录面本身</strong> （{@code /api/v1/public/**} 的 HTTP 端点）仍是第 17 周 ——
  * 本批只落它的解析形状 （{@code platform.access.PublicTokenResolver}）。
  *
- * <p>★ <strong>收藏</strong>（{@code #195} 的收藏子项）本批已落：{@code POST} / {@code DELETE
- * /assistants/:id/favorite} 两条。在此之前市场页的心形按钮与「只看收藏」是"契约有、页面有、后端 400"。 其余高级端点（标签 · API Key · 共享写 ·
- * 导入）仍在 {@code ContractDriftTest} 的逐条欠账清单里， 每个域各自有排期（共享写是 T302 后半，导入归导入导出那一批）。
+ * <p>★ <strong>收藏与标签</strong>（{@code #195} 的两个子项）本批已落：{@code POST} / {@code DELETE
+ * /assistants/:id/favorite} 与 {@code GET
+ * /assistants/tags}。在此之前市场页的心形按钮、「只看收藏」勾选框与标签筛选都是"契约有、页面有、后端没有"。 其余高级端点（API Key · 共享写 · 导入）仍在
+ * {@code ContractDriftTest} 的逐条欠账清单里， 每个域各自有排期（共享写是 T302 后半，导入归导入导出那一批）。
  *
  * <h3>★ 权限点（{@code 07 §4.1}）</h3>
  *
@@ -107,6 +108,20 @@ public class AssistantController {
       @RequestParam(required = false) Integer size) {
     return ApiResponse.ok(
         assistants.list(type, published, mine, origin, favorite, tag, keyword, sort, page, size));
+  }
+
+  /**
+   * 全部可见标签（契约 {@code listAssistantTags}）。市场筛选下拉框在用。
+   *
+   * <p>★ 只返回<strong>当前请求者看得见的应用</strong>上的标签（与列表共用范围谓词）——「看不见的应用，其标签也不该出现」。 去重、按库侧排序；不按 {@code
+   * published} 过滤（与 mock 语义一致）。
+   *
+   * <p>★ 这条是字面量路径：必须排在 {@code /{id}} 之前心智上，且 {@code /{id}} 已带 UUID 形状约束，两者不会互相吃掉。
+   */
+  @GetMapping("/tags")
+  @PreAuthorize("hasAuthority('assistant:view')")
+  public ApiResponse<List<String>> tags() {
+    return ApiResponse.ok(assistants.listTags());
   }
 
   /** 取一个应用（含检索参数与绑定）。 */

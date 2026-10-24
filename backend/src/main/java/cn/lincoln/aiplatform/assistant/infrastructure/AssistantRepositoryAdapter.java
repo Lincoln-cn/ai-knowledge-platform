@@ -6,8 +6,10 @@ import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.access.Visibility;
+import jakarta.persistence.EntityManager;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.Expression;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
 import jakarta.persistence.criteria.Subquery;
@@ -51,9 +53,11 @@ import org.springframework.stereotype.Component;
 public class AssistantRepositoryAdapter implements AssistantRepository {
 
   private final JpaAssistantRepository jpa;
+  private final EntityManager em;
 
-  public AssistantRepositoryAdapter(JpaAssistantRepository jpa) {
+  public AssistantRepositoryAdapter(JpaAssistantRepository jpa, EntityManager em) {
     this.jpa = jpa;
+    this.em = em;
   }
 
   @Override
@@ -92,7 +96,25 @@ public class AssistantRepositoryAdapter implements AssistantRepository {
     return jpa.count(spec(scope, filter));
   }
 
+  @Override
+  public List<String> listTags(ScopeFilter scope) {
+    // ★ 用 EntityManager 而不是 jpa.findAll(spec)：Spring Data 会在 spec 之后强制 query.select(root)，
+    //   把这里的 `select distinct unnest(tags)` 覆盖掉（读数是"返回一串应用实体"，不是标签）。
+    CriteriaBuilder cb = em.getCriteriaBuilder();
+    CriteriaQuery<String> query = cb.createQuery(String.class);
+    Root<Assistant> root = query.from(Assistant.class);
+    Expression<String> tag = cb.function("unnest", String.class, root.get("tags"));
+    query.select(tag).distinct(true);
+    query.where(visiblePredicates(root, query, cb, scope, NO_FILTER).toArray(new Predicate[0]));
+    query.orderBy(cb.asc(tag));
+    return em.createQuery(query).getResultList();
+  }
+
   // ────────────────────────── 内部 ──────────────────────────
+
+  /** 标签列表只需要范围谓词，业务筛选一律关掉（与 mock 的语义一致）。 */
+  private static final Filter NO_FILTER =
+      new Filter(null, null, false, null, null, null, null, false);
 
   /** 契约 {@code AssistantQuery.sort} 的三档；不传 = 最近创建在前。 */
   private static Sort sortOf(Filter filter) {

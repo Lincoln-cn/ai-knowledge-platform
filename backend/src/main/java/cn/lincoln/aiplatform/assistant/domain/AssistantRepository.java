@@ -38,6 +38,17 @@ public interface AssistantRepository {
   long countSearch(ScopeFilter scope, Filter filter);
 
   /**
+   * 全部可见标签（市场筛选用，契约 {@code listAssistantTags}）。
+   *
+   * <p>★ 与 {@link #search} <strong>共用同一份范围谓词</strong>：标签是从"我看得见的应用"里长出来的，不是全表 {@code distinct} ——
+   * 否则市场下拉框会泄露别人应用上的标签（看不见的应用，其标签也不该出现）。
+   *
+   * <p>★ 去重且按库侧排序（同一标签被 N 个应用用过只出现一次）；不按 {@code published} 过滤 —— 与 mock 的语义一致 （{@code
+   * frontend/src/mock/handlers/assistants.ts} 只按可见性筛）。
+   */
+  List<String> listTags(ScopeFilter scope);
+
+  /**
    * 列表筛选条件（契约 {@code AssistantQuery}）。
    *
    * <p>★ 为什么收成一个 record 而不是多个位置参数：里面有两个 {@code Boolean}（{@code published} / {@code mine}）

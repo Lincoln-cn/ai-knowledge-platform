@@ -439,6 +439,11 @@ class AccessCredentialTest {
     public long countSearch(ScopeFilter scope, Filter filter) {
       return 0;
     }
+
+    @Override
+    public List<String> listTags(ScopeFilter scope) {
+      return List.of();
+    }
   }
 
   private static final class FakeCredentials implements AccessCredentialRepository {

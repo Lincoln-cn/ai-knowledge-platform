@@ -207,6 +207,20 @@ public class AssistantService {
   }
 
   /**
+   * 全部可见标签（契约 {@code listAssistantTags}，{@code #195} 的标签子项；市场筛选下拉框在用）。
+   *
+   * <p>★ 与 {@link #list} 同一份范围口径：标签只从<strong>当前请求者看得见的应用</strong>里长出来 —— 全表 {@code distinct}
+   * 会把别人私有应用上的标签放进市场下拉框，那是看不见的数据从侧面漏出去。
+   *
+   * <p>★ 不按 {@code published} 过滤：与 mock（{@code frontend/src/mock/handlers/assistants.ts}）一致 ——
+   * 标签是"市场里有哪些主题"的索引，草稿应用只要我看得见，它的标签就可以出现在筛选里。
+   */
+  @Transactional(readOnly = true)
+  public List<String> listTags() {
+    return assistants.listTags(accessScope.currentScope());
+  }
+
+  /**
    * 收藏 / 取消收藏（契约 {@code favoriteAssistant} / {@code unfavoriteAssistant}，{@code #195} 的收藏子项）。
    *
    * <p>★ 两条判据：① 只有<strong>看得见</strong>的应用能收藏（看不见 ⇒ 404，与 {@code get} 同一口径，不泄露 id 是否存在）；② 幂等 —— 重复收藏

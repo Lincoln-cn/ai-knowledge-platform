@@ -478,6 +478,17 @@ class AssistantPublishCheckTest {
           .filter(a -> !filter.mine() || OWNER.equals(a.ownerId()))
           .count();
     }
+
+    /** 标签的假实现只做"去重 + 排序"；范围谓词是 SQL 语义，交给真库的 HTTP 测试（同 search 的注释）。 */
+    @Override
+    public List<String> listTags(ScopeFilter scope) {
+      return store.values().stream()
+          .filter(a -> !a.isDeleted())
+          .flatMap(a -> a.tags().stream())
+          .distinct()
+          .sorted()
+          .toList();
+    }
   }
 
   private static final class FakeModels implements ModelStatusPort {
