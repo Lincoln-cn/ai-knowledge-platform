@@ -130,6 +130,44 @@ class FeedbackHttpTest {
         .contains("\"status\":\"PROCESSING\"")
         .contains("\"handledAt\":null");
 
+    UUID kbId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into kb_knowledge_base
+          (id, name, category, import_type, embedding_model_id, max_classification,
+           owner_id, created_at, updated_at)
+        values (?, '反馈沉淀测试库', 'GENERAL', 'LOCAL', ?, 'INTERNAL', ?, ?, ?)
+        """,
+        kbId,
+        UUID.randomUUID(),
+        userId,
+        Timestamp.from(now),
+        Timestamp.from(now));
+    String promoteBody =
+        "{\"status\":\"RESOLVED\",\"resolution\":\"沉淀到知识库\",\"promoteToKbId\":\"" + kbId + "\"}";
+    HttpResponse<String> promoted =
+        send(token, "PATCH", "/api/v1/feedbacks/" + answerId, promoteBody);
+    assertThat(promoted.statusCode()).as("沉淀应 200，实际：%s", promoted.body()).isEqualTo(200);
+    assertThat(promoted.body())
+        .contains("\"promotedToKbId\":\"" + kbId + "\"")
+        .contains("\"promotedToKbName\":\"反馈沉淀测试库\"");
+    Integer pairs =
+        jdbc.queryForObject(
+            "select count(*) from kb_qa_pair where source_ref = ?",
+            Integer.class,
+            "feedback:" + answerId);
+    assertThat(pairs).as("沉淀必须真的写入 kb_qa_pair").isEqualTo(1);
+
+    HttpResponse<String> promotedAgain =
+        send(token, "PATCH", "/api/v1/feedbacks/" + answerId, promoteBody);
+    assertThat(promotedAgain.statusCode()).isEqualTo(200);
+    Integer pairsAfterRetry =
+        jdbc.queryForObject(
+            "select count(*) from kb_qa_pair where source_ref = ?",
+            Integer.class,
+            "feedback:" + answerId);
+    assertThat(pairsAfterRetry).as("重复沉淀不能产生第二条问答对").isEqualTo(1);
+
     HttpResponse<String> batch =
         send(
             token,
