@@ -229,6 +229,15 @@
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- ★ 判据⑤的框架假设断言（#62 / ROADMAP §4.7.3 第 ⑤ 条）：用官方
+         RetrievalAugmentationAdvisor 验证 DOCUMENT_CONTEXT 可取、order=250 生效、
+         DocumentJoiner 真被调用。★ test scope —— 生产端口还没接 advisor 链（#62 未关），
+         不让依赖先"看起来已经接了"。 -->
+    <dependency>
+      <groupId>org.springframework.ai</groupId>
+      <artifactId>spring-ai-rag</artifactId>
+      <scope>test</scope>
+    </dependency>
     <!-- Boot 4 的测试侧也按 security- 前缀改名（09 §4.0） -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
