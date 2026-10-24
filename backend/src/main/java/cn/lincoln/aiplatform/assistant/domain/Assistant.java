@@ -5,6 +5,7 @@ import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.Visibility;
 import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
+import jakarta.persistence.CascadeType;
 import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
 import jakarta.persistence.ElementCollection;
@@ -14,9 +15,11 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
+import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -43,8 +46,9 @@ import org.hibernate.type.SqlTypes;
  * 删除保护要用），而 {@code 02 §5.1} 明确"JSON 列仅用于不参与查询的结构化数据"。 这里用 {@code @ElementCollection}：join 表的增删交给
  * Hibernate，不自己写 SQL。
  *
- * <p>⚠️ 本批 <b>不落共享（grants）</b>：{@link #grants()} 返回空列表，理由见 {@code V29} 文末 ——
- * 共享的写入口与判定接线属于"共享"那批（与知识库共享对话框同一族）。
+ * <p>⚠️ 共享（grants）的<strong>判定已接线</strong>（{@link #grants()} 进 {@code ScopeFilter.canSee} 与列表 SQL 的
+ * EXISTS 谓词）；写入口在 {@code AssistantService.replaceGrants} / {@code setVisibility}（{@code #195}
+ * 的共享写子项）。 ★ 没有 grants 的旧数据不受影响：{@code visibility} 默认 {@code PRIVATE}，判定侧是 fail-closed 的。
  */
 @Entity
 @Table(name = "as_assistant")
@@ -184,6 +188,14 @@ public class Assistant implements OwnedResource {
   @Column(name = "prompt_config_id", nullable = false)
   private Set<UUID> promptIds = new LinkedHashSet<>();
 
+  /** 共享授权。★ 子表（可进 EXISTS 谓词），不是 JSON 列 —— 与知识库同一形状。 */
+  @OneToMany(
+      mappedBy = "assistant",
+      cascade = CascadeType.ALL,
+      orphanRemoval = true,
+      fetch = FetchType.LAZY)
+  private List<AssistantGrant> grantRows = new ArrayList<>();
+
   protected Assistant() {}
 
   /**
@@ -277,6 +289,50 @@ public class Assistant implements OwnedResource {
     this.promptIds.clear();
     if (promptIds != null) {
       this.promptIds.addAll(promptIds);
+    }
+    this.updatedBy = updatedBy;
+  }
+
+  /**
+   * 覆盖式写入共享授权（契约 {@code setAssistantGrants} / {@code 07 §8.1}）。
+   *
+   * <p>★ <strong>覆盖式而不是增量</strong>：共享对话框干的本来就是"这份清单长这样"；增量语义在两个人同时改时不可解释。
+   *
+   * <p>★ <strong>可见性跟着授权走</strong>：有授权 = {@code SHARED}，清单空 = 回到 {@code PRIVATE}。 不留"SHARED
+   * 但一条授权都没有"的中间态 —— 那种应用对谁都不共享，界面上却显示着"已共享"。
+   *
+   * <p>★ 主体是否存在<strong>不在这里校验</strong>：那要查账号 / 角色 / 部门目录（{@code GrantSubjectPort}）， 属于应用层。
+   * 领域对象只负责把"清单长这样"落成状态。
+   */
+  public void replaceGrants(List<Grant> grants, UUID updatedBy) {
+    grantRows.clear();
+    if (grants != null) {
+      for (Grant grant : grants) {
+        grantRows.add(
+            new AssistantGrant(
+                UUID.randomUUID(),
+                this,
+                grant.subject().kind(),
+                grant.subject().id(),
+                grant.actions().toArray(String[]::new),
+                grant.expiresAt(),
+                grant.canDelegate()));
+      }
+    }
+    this.visibility = grantRows.isEmpty() ? Visibility.PRIVATE : Visibility.SHARED;
+    this.updatedBy = updatedBy;
+  }
+
+  /**
+   * 直接设置可见性（契约 {@code setAssistantVisibility}）。
+   *
+   * <p>★ 非 {@code SHARED} 时<strong>清掉 grants</strong>：留着旧授权，日后切回 {@code SHARED} 会"复活"一批 谁都不记得给过的共享。
+   * 而 {@code SHARED} 且 grants 为空的情形由服务层挡住（否则同上：显示已共享，实际谁都不共享）。
+   */
+  public void setVisibility(Visibility visibility, UUID updatedBy) {
+    this.visibility = visibility;
+    if (visibility != Visibility.SHARED) {
+      grantRows.clear();
     }
     this.updatedBy = updatedBy;
   }
@@ -445,14 +501,13 @@ public class Assistant implements OwnedResource {
   }
 
   /**
-   * ★ 本批返回空列表：共享（grants）的表与写入口在"共享"那一批一起落（见 {@code V29} 文末）。
+   * 共享授权（{@code 07 §8.1}）：判定侧只认 {@code Grant}，不认 {@link AssistantGrant} 实体。
    *
-   * <p>这不是"暂时糊一下"：现在返回空是<strong>可判定的真相</strong>（库里确实没有任何 assistant 的 grant）， 且 {@code visibility}
-   * 默认 {@code PRIVATE} ⇒ 判定侧是 fail-closed 的（看不见，而不是看见不该看的）。
+   * <p>★ 这是 {@code ScopeFilter.canSee} 与列表 SQL 的 EXISTS 谓词共同的真相源 —— 两处若各读一份， 就会出现"详情能看、列表看不到"。
    */
   @Override
   public List<Grant> grants() {
-    return List.of();
+    return grantRows.stream().map(AssistantGrant::toGrant).toList();
   }
 
   /** 简单有模型、编排无模型（与库里 {@code chk_as_model_by_type} 同一条规则，这里让它早失败）。 */

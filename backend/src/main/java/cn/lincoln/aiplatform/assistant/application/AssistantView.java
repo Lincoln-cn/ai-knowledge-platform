@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import cn.lincoln.aiplatform.assistant.domain.Assistant;
+import cn.lincoln.aiplatform.platform.access.Grant;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -14,15 +15,14 @@ import java.util.UUID;
  * satisfaction} 等是 <strong>可选</strong>字段，而"可选"在 JSON 里应当表现为<strong>字段不出现</strong>，不是出现一个 {@code
  * null} —— 前端 {@code v-model} 与"未配置"的判断都按"有没有这个字段"写。与 {@code ModelView} / {@code UserView} 同一处理。
  *
- * <h3>★ 本批刻意<strong>不下发</strong>的两个字段（各有一处待落的模块）</h3>
+ * <h3>★ 本批刻意<strong>不下发</strong>的字段</h3>
  *
- * <ul>
- *   <li><b>{@code workflow}</b>（编排应用摘要 {@code WorkflowBrief}）：它要读 {@code workflow} 模块的流程定义，
- *       而那个模块目前只有一个 {@code package-info}（编排执行引擎属 V1.0 范围）。<strong>下发 {@code {nodeCount: 0}}
- *       是编造</strong> —— 它会让列表卡片显示"0 个节点"，而真相是"没有画布"。字段不出现才是诚实的。
- *   <li><b>{@code grants}</b>：共享的表与写入口在"共享"那一批一起落（{@code V29} 文末）。同理，回一个空数组会被读成 "共享了 0
- *       个主体"，而事实是"还没接"。
- * </ul>
+ * <p><b>{@code workflow}</b>（编排应用摘要 {@code WorkflowBrief}）：它要读 {@code workflow} 模块的流程定义，
+ * 而那个模块目前只有一个 {@code package-info}（编排执行引擎属 V1.0 范围）。<strong>下发 {@code {nodeCount: 0}} 是编造</strong>
+ * —— 它会让列表卡片显示"0 个节点"，而真相是"没有画布"。字段不出现才是诚实的。
+ *
+ * <p>★ {@code grants}（共享授权）<strong>已下发</strong>：共享写子项落地后，共享对话框要按它回填已选主体， 而 {@code
+ * ScopeFilter.canSee} 也读同一份数据。空数组 = 真的没共享给任何人（不是"还没接"）。
  *
  * <p>★ {@code favorited} 是<strong>当前请求者</strong>的收藏状态，不是应用自身的属性： 同一份配置对 A 是 {@code true}、对 B 是
  * {@code false}。它由服务层用 {@code AssistantFavoriteRepository} 按 {@code (assistantId, me)} 查出来再传进来 ——
@@ -55,6 +55,7 @@ public record AssistantView(
     BigDecimal satisfaction,
     UUID ownerId,
     String visibility,
+    List<Grant> grants,
     List<String> tags,
     Instant createdAt) {
 
@@ -112,6 +113,7 @@ public record AssistantView(
         assistant.satisfaction(),
         assistant.ownerId(),
         assistant.visibility().name(),
+        assistant.grants(),
         assistant.tags(),
         assistant.createdAt());
   }

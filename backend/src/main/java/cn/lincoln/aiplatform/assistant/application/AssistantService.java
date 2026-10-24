@@ -5,7 +5,12 @@ import cn.lincoln.aiplatform.assistant.domain.AssistantFavoriteRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
+import cn.lincoln.aiplatform.platform.access.Grant;
+import cn.lincoln.aiplatform.platform.access.GrantSubjectPort;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import cn.lincoln.aiplatform.platform.access.Subject;
+import cn.lincoln.aiplatform.platform.access.SubjectKind;
+import cn.lincoln.aiplatform.platform.access.Visibility;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ModelStatusPort;
@@ -18,6 +23,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -93,18 +99,21 @@ public class AssistantService {
   private final AccessScopePort accessScope;
   private final ModelStatusPort modelStatus;
   private final SegmentSearchPort segmentSearch;
+  private final GrantSubjectPort grantSubjects;
 
   public AssistantService(
       AssistantRepository assistants,
       AssistantFavoriteRepository favorites,
       AccessScopePort accessScope,
       ModelStatusPort modelStatus,
-      SegmentSearchPort segmentSearch) {
+      SegmentSearchPort segmentSearch,
+      GrantSubjectPort grantSubjects) {
     this.assistants = assistants;
     this.favorites = favorites;
     this.accessScope = accessScope;
     this.modelStatus = modelStatus;
     this.segmentSearch = segmentSearch;
+    this.grantSubjects = grantSubjects;
   }
 
   // ────────────────────────── 创建 / 读取 / 更新 ──────────────────────────
@@ -238,6 +247,97 @@ public class AssistantService {
       favorites.remove(id, userId);
     }
     return view(assistant, favorited);
+  }
+
+  // ────────────────────────── 共享写（#195 的共享子项）──────────────────────────
+
+  /**
+   * 覆盖式写入共享授权（契约 {@code setAssistantGrants} / {@code 07 §8.1}）。
+   *
+   * <p>★ 两道校验都必须在这里、而且必须给<strong>可读原因</strong>：
+   *
+   * <ol>
+   *   <li><strong>主体必须真实存在</strong>（{@link GrantSubjectPort}）：写错一个 id 的授权 = 静默没共享出去 ——
+   *       对方看不到，写的人以为共享了，症状与"没共享过"一模一样。
+   *   <li><strong>每条授权至少要有一个动作</strong>：空动作的授权谁也不满足，只会让界面显示"已共享"。
+   * </ol>
+   *
+   * <p>★ 看不见的应用返 404（与其它写端点同口径）：403 等于确认这个 id 存在。
+   */
+  @Transactional
+  public AssistantView replaceGrants(UUID id, List<Grant> grants, UUID actorId) {
+    Assistant assistant = requireVisible(id);
+    List<Grant> incoming = grants == null ? List.of() : List.copyOf(grants);
+    for (Grant grant : incoming) {
+      requireShareableSubject(grant);
+      if (grant.actions() == null || grant.actions().isEmpty()) {
+        throw new BusinessException(
+            ErrorCode.BAD_REQUEST, "每条共享授权至少要有一个动作", "给这个主体选一个动作（例如「可以查看」）再保存");
+      }
+    }
+    assistant.replaceGrants(incoming, actorId);
+    return view(assistants.save(assistant));
+  }
+
+  /**
+   * 设置可见性（契约 {@code setAssistantVisibility}）。
+   *
+   * <p>★ {@code SHARED} 但没有任何授权 ⇒ 400：那会造出"显示已共享、实际谁都不共享"的中间态。 前端共享对话框已经先拦了一道， 后端也必须拦 —— 直接调 API
+   * 的人绕得过前端。
+   *
+   * <p>★ {@code PRIVATE} / {@code PUBLIC} 会清掉 grants（实体负责）：否则日后切回 {@code SHARED} 会复活一批旧授权。
+   */
+  @Transactional
+  public AssistantView setVisibility(UUID id, String rawVisibility, UUID actorId) {
+    Assistant assistant = requireVisible(id);
+    Visibility visibility = parseVisibility(rawVisibility);
+    if (visibility == Visibility.SHARED && assistant.grants().isEmpty()) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "定向共享至少要选一个账号或角色", "先选择共享给谁再保存；如果要收回全部共享，请选择「仅自己可见」");
+    }
+    assistant.setVisibility(visibility, actorId);
+    return view(assistants.save(assistant));
+  }
+
+  /** 主体不存在（或已软删 / 部门已停用）⇒ 400 + 可读原因。★ 错误消息里用中文类别名，不把机器码甩给用户。 */
+  private void requireShareableSubject(Grant grant) {
+    Subject subject = grant.subject();
+    if (subject != null && grantSubjects.exists(subject.kind(), subject.id())) {
+      return;
+    }
+    String what = subject == null ? "（未指定主体）" : kindLabel(subject.kind()) + " " + subject.id();
+    throw new BusinessException(
+        ErrorCode.BAD_REQUEST,
+        "共享主体不存在：" + what,
+        "重新选择一个主体再保存。★ 写错 id 的授权不会报错，但对方永远看不到这个应用；已停用的部门也不能接受新的共享");
+  }
+
+  private static String kindLabel(SubjectKind kind) {
+    if (kind == null) {
+      return "主体";
+    }
+    return switch (kind) {
+      case USER -> "账号";
+      case ROLE -> "角色";
+      case ORG -> "部门";
+      case GROUP, LINK -> "暂不支持的主体";
+    };
+  }
+
+  /** 契约里 visibility 是字符串（{@code 'PRIVATE' | 'SHARED' | 'PUBLIC'}），拼错要给人话。 */
+  private static Visibility parseVisibility(String raw) {
+    if (raw == null || raw.isBlank()) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "可见性只支持 PRIVATE / SHARED / PUBLIC，收到空值", "从「仅自己 / 定向共享 / 公开」里选一个");
+    }
+    try {
+      return Visibility.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+    } catch (IllegalArgumentException e) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "可见性只支持 PRIVATE / SHARED / PUBLIC，收到：" + raw,
+          "从「仅自己 / 定向共享 / 公开」里选一个");
+    }
   }
 
   /**

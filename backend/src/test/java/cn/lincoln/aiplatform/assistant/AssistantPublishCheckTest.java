@@ -13,7 +13,11 @@ import cn.lincoln.aiplatform.assistant.domain.AssistantFavoriteRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
 import cn.lincoln.aiplatform.identity.FakeAccessScope;
+import cn.lincoln.aiplatform.platform.access.Grant;
+import cn.lincoln.aiplatform.platform.access.GrantSubjectPort;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import cn.lincoln.aiplatform.platform.access.Subject;
+import cn.lincoln.aiplatform.platform.access.SubjectKind;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ModelStatusPort;
@@ -49,15 +53,17 @@ class AssistantPublishCheckTest {
   private static final UUID MODEL = UUID.fromString("00000000-0000-4000-8000-0000000000b1");
   private static final UUID KB_OK = UUID.fromString("00000000-0000-4000-8000-0000000000c1");
   private static final UUID KB_BAD = UUID.fromString("00000000-0000-4000-8000-0000000000c2");
+  private static final UUID SHARED_USER = UUID.fromString("00000000-0000-4000-8000-0000000000d1");
 
   private final FakeAssistants assistants = new FakeAssistants();
   private final FakeFavorites favorites = new FakeFavorites();
+  private final FakeGrantSubjects grantSubjects = new FakeGrantSubjects();
   private final FakeModels models = new FakeModels();
   private final FakeSegments segments = new FakeSegments();
   private final FakeAccessScope scope = new FakeAccessScope();
 
   private final AssistantService service =
-      new AssistantService(assistants, favorites, scope, models, segments);
+      new AssistantService(assistants, favorites, scope, models, segments, grantSubjects);
 
   /** 建一个"各项都过"的简单应用；各用例只破坏其中一项。 */
   private Assistant publishable() {
@@ -406,6 +412,54 @@ class AssistantPublishCheckTest {
         .satisfies(e -> assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.NOT_FOUND));
   }
 
+  /**
+   * ★ 共享写：写 grants ⇒ 可见性变 SHARED；切回 PRIVATE ⇒ 名单清空；空名单 + SHARED ⇒ 400。
+   *
+   * <p>★ 主体存在性在这里只证明"会拦"：真实对照表（账号 / 角色 / 部门）由 {@code GrantSubjectPort} 的 JDBC 实现回答， 本夹具只认一个账号与一个角色
+   * —— 足够让"写错 id 必须报错"这条断言成立。
+   */
+  @Test
+  void grantsToggleVisibilityAndAreClearedWhenPrivate() {
+    Assistant app = publishable();
+    scope.setRequesterId(OWNER);
+    Grant granted =
+        new Grant(
+            new Subject(SubjectKind.USER, SHARED_USER.toString()),
+            Set.of("assistant:view"),
+            null,
+            false);
+
+    AssistantView shared = service.replaceGrants(app.id(), List.of(granted), OWNER);
+    assertThat(shared.visibility()).as("有名单 ⇒ 定向共享").isEqualTo("SHARED");
+    assertThat(shared.grants()).hasSize(1);
+
+    assertThatThrownBy(
+            () ->
+                service.replaceGrants(
+                    app.id(),
+                    List.of(
+                        new Grant(
+                            new Subject(SubjectKind.USER, UUID.randomUUID().toString()),
+                            Set.of("assistant:view"),
+                            null,
+                            false)),
+                    OWNER))
+        .isInstanceOf(BusinessException.class)
+        .hasMessageContaining("共享主体不存在");
+
+    AssistantView privateView = service.setVisibility(app.id(), "PRIVATE", OWNER);
+    assertThat(privateView.visibility()).isEqualTo("PRIVATE");
+    assertThat(privateView.grants()).as("切回私有必须清空名单，否则日后切回 SHARED 会复活旧授权").isEmpty();
+
+    assertThatThrownBy(() -> service.setVisibility(app.id(), "SHARED", OWNER))
+        .isInstanceOf(BusinessException.class)
+        .hasMessageContaining("定向共享至少要选一个账号或角色");
+
+    assertThatThrownBy(() -> service.setVisibility(app.id(), "EVERYONE", OWNER))
+        .isInstanceOf(BusinessException.class)
+        .hasMessageContaining("可见性只支持 PRIVATE / SHARED / PUBLIC");
+  }
+
   /** 枚举型查询参数拼错 ⇒ 可读 400（不许"收下但不筛"）。 */
   @Test
   void unknownSortIsRejected() {
@@ -573,6 +627,22 @@ class AssistantPublishCheckTest {
         }
       }
       return found;
+    }
+  }
+
+  /** 主体存在性夹具：只认一个账号与一个角色代码；其余一律"不存在"（这正是要测的那条 400）。 */
+  private static final class FakeGrantSubjects implements GrantSubjectPort {
+
+    @Override
+    public boolean exists(SubjectKind kind, String subjectId) {
+      if (kind == null || subjectId == null) {
+        return false;
+      }
+      return switch (kind) {
+        case USER -> SHARED_USER.toString().equals(subjectId);
+        case ROLE -> "USER".equals(subjectId);
+        default -> false;
+      };
     }
   }
 }

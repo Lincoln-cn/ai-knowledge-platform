@@ -7,6 +7,9 @@ import cn.lincoln.aiplatform.assistant.application.AssistantService;
 import cn.lincoln.aiplatform.assistant.application.AssistantView;
 import cn.lincoln.aiplatform.assistant.application.PublishCheckResult;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
+import cn.lincoln.aiplatform.platform.access.Grant;
+import cn.lincoln.aiplatform.platform.access.Subject;
+import cn.lincoln.aiplatform.platform.access.SubjectKind;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
@@ -14,7 +17,10 @@ import cn.lincoln.aiplatform.platform.web.PageResult;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -48,8 +54,13 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>★ <strong>收藏与标签</strong>（{@code #195} 的两个子项）本批已落：{@code POST} / {@code DELETE
  * /assistants/:id/favorite} 与 {@code GET
- * /assistants/tags}。在此之前市场页的心形按钮、「只看收藏」勾选框与标签筛选都是"契约有、页面有、后端没有"。 其余高级端点（API Key · 共享写 · 导入）仍在
- * {@code ContractDriftTest} 的逐条欠账清单里， 每个域各自有排期（共享写是 T302 后半，导入归导入导出那一批）。
+ * /assistants/tags}。在此之前市场页的心形按钮、「只看收藏」勾选框与标签筛选都是"契约有、页面有、后端没有"。
+ *
+ * <p>★ <strong>共享写</strong>（{@code #195} 的第三个子项）也已落：{@code PUT /assistants/:id/grants} 与 {@code
+ * PATCH /assistants/:id/visibility}。它们把"别人共享给我的应用"这条链接通 —— 之前 {@code ScopeFilter.canSee} 早就会按
+ * {@code grants()} 判定，只是 {@code Assistant.grants()} 恒为空、共享对话框里的「定向共享」保存下去没有任何效果。 其余高级端点（API Key ·
+ * 导入）仍在 {@code ContractDriftTest} 的逐条欠账清单里：API Key 缺的是<strong>程序化调用的鉴权链</strong>（只有管理端点等于造一个空转入口），
+ * 导入归导入导出那一批。
  *
  * <h3>★ 权限点（{@code 07 §4.1}）</h3>
  *
@@ -240,6 +251,45 @@ public class AssistantController {
     return ApiResponse.ok(assistants.setFavorite(id, false, UUID.fromString(jwt.getSubject())));
   }
 
+  // ────────────────────────── 共享写（#195 的共享子项）──────────────────────────
+
+  /**
+   * 覆盖式写入共享授权（契约 {@code setAssistantGrants}，{@code 07 §8.1}）。
+   *
+   * <p>★ 是<strong>覆盖</strong>不是追加：共享对话框每次提交的都是"完整的一份名单"，追加会让"取消勾选某人"变成无效动作（旧授权还在）。
+   *
+   * <p>★ 请求体形状与知识库同一套（{@code {grants:[{subject:{kind,id}, actions, expiresAt?, canDelegate?}]}}）：
+   * 两个域共用 {@code Grant} 的形状，前端也共用一个对话框组件。
+   *
+   * <p>★ {@code kind} 拼错 ⇒ 可读 400：照 {@code valueOf} 的原始异常抛 500 是最糟的一种 —— 调用方以为服务端坏了， 而实际上是自己的请求写错了。
+   *
+   * <p>★ 主体是否存在、每条是否至少一个动作，均由服务层校验（{@code replaceGrants}）：这两条一旦静默，界面上会显示"已共享"而对方永远看不到。
+   */
+  @PutMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/grants")
+  @PreAuthorize("hasAuthority('assistant:edit')")
+  public ApiResponse<AssistantView> replaceGrants(
+      @PathVariable UUID id, @RequestBody GrantsBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        assistants.replaceGrants(id, toGrants(body), UUID.fromString(jwt.getSubject())));
+  }
+
+  /**
+   * 设置可见性（契约 {@code setAssistantVisibility}）。
+   *
+   * <p>★ {@code SHARED} 但没有任何授权 ⇒ 400（服务层）：否则会出现"状态是定向共享、名单是空的" —— 界面显示已共享、实际谁都不共享。
+   *
+   * <p>★ {@code PRIVATE} / {@code PUBLIC} 会清空 grants（实体负责）：保留旧名单会让日后切回 {@code SHARED} 时复活一批早已收回的授权。
+   */
+  @PatchMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/visibility")
+  @PreAuthorize("hasAuthority('assistant:edit')")
+  public ApiResponse<AssistantView> setVisibility(
+      @PathVariable UUID id, @RequestBody VisibilityBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        assistants.setVisibility(id, body.visibility(), UUID.fromString(jwt.getSubject())));
+  }
+
   // ────────────────────────── 访问凭证（第 16 周 · 0.4.4）──────────────────────────
 
   /**
@@ -399,6 +449,56 @@ public class AssistantController {
 
   /** 启停开关（契约 {@code setCredentialEnabled}）。 */
   public record EnabledBody(boolean enabled) {}
+
+  /** 共享授权列表（契约 {@code setAssistantGrants} 的 {@code { grants: Grant[] }}）。缺省 = 清空名单。 */
+  public record GrantsBody(List<GrantBody> grants) {}
+
+  /** 一条共享授权。{@code actions} 缺省按空集处理（服务层会拒绝空动作）。 */
+  public record GrantBody(
+      SubjectBody subject, List<String> actions, Instant expiresAt, Boolean canDelegate) {}
+
+  /** 授权主体：{@code kind} ∈ USER / ROLE / ORG（GROUP / LINK 是预留种类，服务层会按"不存在"拒绝）。 */
+  public record SubjectBody(String kind, String id) {}
+
+  /** 可见性开关（契约 {@code setAssistantVisibility} 的 {@code { visibility }}）。 */
+  public record VisibilityBody(String visibility) {}
+
+  /** 契约里的 {@code grants} 是可选的；{@code null} 与空数组同义 —— 都是"把名单清空"。 */
+  private static List<Grant> toGrants(GrantsBody body) {
+    if (body == null || body.grants() == null) {
+      return List.of();
+    }
+    List<Grant> grants = new ArrayList<>();
+    for (GrantBody raw : body.grants()) {
+      if (raw == null || raw.subject() == null) {
+        throw new BusinessException(ErrorCode.BAD_REQUEST, "每条共享授权都要有主体", "选择共享给某个账号 / 角色 / 部门再保存");
+      }
+      String subjectId = raw.subject().id();
+      if (subjectId == null || subjectId.isBlank()) {
+        throw new BusinessException(ErrorCode.BAD_REQUEST, "共享主体缺少 id", "选择共享给某个账号 / 角色 / 部门再保存");
+      }
+      grants.add(
+          new Grant(
+              new Subject(parseSubjectKind(raw.subject().kind()), subjectId.trim()),
+              raw.actions() == null ? Set.of() : Set.copyOf(raw.actions()),
+              raw.expiresAt(),
+              Boolean.TRUE.equals(raw.canDelegate())));
+    }
+    return grants;
+  }
+
+  private static SubjectKind parseSubjectKind(String raw) {
+    if (raw == null || raw.isBlank()) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "共享主体缺少 kind", "共享主体只支持 USER / ROLE / ORG");
+    }
+    try {
+      return SubjectKind.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+    } catch (IllegalArgumentException e) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "共享主体只支持 USER / ROLE / ORG，收到：" + raw, "从账号 / 角色 / 部门里选一个主体");
+    }
+  }
 
   private static AssistantType parseType(String raw) {
     if (raw == null || raw.isBlank()) {

@@ -2,9 +2,11 @@ package cn.lincoln.aiplatform.assistant.infrastructure;
 
 import cn.lincoln.aiplatform.assistant.domain.Assistant;
 import cn.lincoln.aiplatform.assistant.domain.AssistantFavorite;
+import cn.lincoln.aiplatform.assistant.domain.AssistantGrant;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import cn.lincoln.aiplatform.platform.access.SubjectKind;
 import cn.lincoln.aiplatform.platform.access.Visibility;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.criteria.CriteriaBuilder;
@@ -13,9 +15,11 @@ import jakarta.persistence.criteria.Expression;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
 import jakarta.persistence.criteria.Subquery;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -39,12 +43,12 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>{@code ALL} —— 不加归属谓词
  *   <li>{@code OWN} —— 个人沙箱：只看 {@code owner_id = me}
- *   <li>{@code SHARED} —— 自己的 + {@code PUBLIC}
+ *   <li>{@code SHARED} —— 自己的 + {@code PUBLIC} + 有效 grant 命中的
  * </ul>
  *
- * <p>⚠️ SHARED 分支<strong>没有 grants 子查询</strong>：{@code assistant} 的共享表与写入口在"共享"那一批（{@code V29}
- * 文末）。于是"别人共享给我的应用"当前是<strong>空集</strong> —— 那不是遗漏，是当前真相， 且方向是 fail-closed（看不见，而不是看见不该看的）。 将来加
- * grants 时，这里照 {@code KnowledgeBaseRepositoryAdapter.grantedToMe} 长出 EXISTS 子查询即可。
+ * <p>★ SHARED 分支的 grants 子查询与 {@code ScopeFilter.canSee} 同一份数据（{@code as_assistant_grant}）：
+ * 少了它，别人共享给我的应用会出现"详情 404、列表里也没有"或更糟的"详情能看、列表看不到"。 主体三种 kind（USER / ROLE / ORG）都拼上 —— ORG
+ * 用构造范围时已展开好的祖先链。
  *
  * <p>⚠️ 标签筛选用 Postgres 的 {@code array_position}：{@code tags} 是 {@code text[]}（{@code V29}）。
  * <strong>这是本文件里唯一没有闸门覆盖的 SQL 谓词</strong>（真栈那几条闸门还没走到标签筛选；市场那一批补）。
@@ -158,10 +162,12 @@ public class AssistantRepositoryAdapter implements AssistantRepository {
     } else if (scope.scope() == DataScope.OWN) {
       predicates.add(cb.equal(root.get("ownerId"), me));
     } else {
+      // SHARED：自己的 + PUBLIC + 有效 grant 命中的
       predicates.add(
           cb.or(
               cb.equal(root.get("ownerId"), me),
-              cb.equal(root.get("visibility"), Visibility.PUBLIC)));
+              cb.equal(root.get("visibility"), Visibility.PUBLIC),
+              grantedToMe(root, query, cb, scope)));
     }
 
     // ── 只看我收藏的（#195）──
@@ -219,5 +225,50 @@ public class AssistantRepositoryAdapter implements AssistantRepository {
               cb.like(cb.lower(root.get("description")), pattern)));
     }
     return predicates;
+  }
+
+  /**
+   * {@code EXISTS} 子查询：存在一条有效 grant 覆盖我 / 我的角色 / 我的部门（{@code 07 §8.5} 的可下推谓词）。
+   *
+   * <p>★ kind 与 id 一起比 —— 部门「3」不是角色「3」。时限必须带上，否则会写出一条永远不会过期的共享。
+   *
+   * <p>★ 只在 {@code visibility = SHARED} 时才算：与 {@code ScopeFilter.canSee} 的分支顺序一致（PUBLIC 在前面已放行、
+   * PRIVATE 直接返回 false）。否则一条残留的 grant 会让私有应用在列表里露出半张脸。
+   *
+   * <p>★ ORG 用 {@code scope.myOrgIds()}（构造范围时已展开好的祖先链）：共享给「技术部」= 技术部及下级看得见 ⇒ "我在它下级里" ⟺ "它在我的祖先链上"。
+   */
+  private static Predicate grantedToMe(
+      Root<Assistant> root, CriteriaQuery<?> query, CriteriaBuilder cb, ScopeFilter scope) {
+    Subquery<Integer> sq = query.subquery(Integer.class);
+    Root<AssistantGrant> g = sq.from(AssistantGrant.class);
+    List<Predicate> grantPredicates = new ArrayList<>();
+    grantPredicates.add(cb.equal(g.get("assistant").get("id"), root.get("id")));
+    grantPredicates.add(cb.equal(root.get("visibility"), Visibility.SHARED));
+
+    List<Predicate> subjectMatches = new ArrayList<>();
+    UUID me = scope.me();
+    subjectMatches.add(
+        cb.and(
+            cb.equal(g.get("subjectKind"), SubjectKind.USER),
+            cb.equal(g.get("subjectId"), me.toString())));
+    Set<String> myRoles = scope.myRoles();
+    if (myRoles != null && !myRoles.isEmpty()) {
+      subjectMatches.add(
+          cb.and(cb.equal(g.get("subjectKind"), SubjectKind.ROLE), g.get("subjectId").in(myRoles)));
+    }
+    Set<String> myOrgIds = scope.myOrgIds();
+    if (myOrgIds != null && !myOrgIds.isEmpty()) {
+      subjectMatches.add(
+          cb.and(cb.equal(g.get("subjectKind"), SubjectKind.ORG), g.get("subjectId").in(myOrgIds)));
+    }
+    grantPredicates.add(cb.or(subjectMatches.toArray(new Predicate[0])));
+
+    // 时效：expires_at 为 null（长期）或尚未过期 —— 不带时限的共享等于永远不会过期
+    Instant now = Instant.now();
+    grantPredicates.add(
+        cb.or(cb.isNull(g.get("expiresAt")), cb.greaterThan(g.get("expiresAt"), now)));
+
+    sq.select(cb.literal(1)).where(grantPredicates.toArray(new Predicate[0]));
+    return cb.exists(sq);
   }
 }
