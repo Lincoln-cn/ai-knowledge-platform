@@ -117,6 +117,7 @@
               <el-tag size="small" effect="plain">{{ kb.category }}</el-tag>
               <el-tag v-if="kb.embeddingLocked && !consumer" size="small" type="warning" effect="plain">向量已锁定</el-tag>
               <span class="grow" />
+              <el-button v-if="canManage" link size="small" type="primary" @click.stop="openShare(kb)">共享</el-button>
               <el-button v-if="!consumer" link size="small" type="danger" @click.stop="remove(kb)">删除</el-button>
             </div>
           </el-card>
@@ -266,6 +267,8 @@
     </template>
 
     <CreateWizard ref="wizardRef" @created="onCreated" />
+    <!-- 共享写：契约与后端都在（PUT /knowledge-bases/{id}/grants），此前页面零调用 -->
+    <ShareDialog ref="shareRef" :kb="shareKb" @saved="onKbChanged" />
   </div>
 </template>
 
@@ -284,6 +287,7 @@ import { useSessionStore } from '@/stores/session'
 import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/components/InstrumentCard.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import CreateWizard from './components/CreateWizard.vue'
+import ShareDialog from './components/ShareDialog.vue'
 import DocumentPanel from './components/DocumentPanel.vue'
 import SegmentPanel from './components/SegmentPanel.vue'
 import QuestionPanel from './components/QuestionPanel.vue'
@@ -294,6 +298,8 @@ const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
 const canCreate = computed(() => session.can(PERM.knowledgeCreate))
+/** 共享写走 `knowledge:manage`（与后端 PUT /grants 的权限点同口径） */
+const canManage = computed(() => session.can(PERM.knowledgeManage))
 
 /**
  * 消费者形态（07 §五）：数据范围 `shared` = 只用别人做好的。
@@ -735,6 +741,14 @@ const onKbChanged = async () => {
 }
 
 const wizardRef = ref<InstanceType<typeof CreateWizard>>()
+const shareRef = ref<InstanceType<typeof ShareDialog>>()
+const shareKb = ref<KnowledgeBase | null>(null)
+
+/** 打开共享：先把当前库放进 props，再 open —— 列表行是最新快照 */
+const openShare = (kb: KnowledgeBase) => {
+  shareKb.value = kb
+  shareRef.value?.open(kb)
+}
 
 // ★ 把当前筛选的分类带进向导：用户已经用筛选表达过"我要建这一类"，再问一次是白问一遍。
 //   （空列表的「创建第一个知识库」就是这个意思 —— 那个按钮只在"当前筛选下没有库"时出现。）
