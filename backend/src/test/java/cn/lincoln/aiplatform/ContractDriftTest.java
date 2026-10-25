@@ -102,11 +102,8 @@ class ContractDriftTest {
           missing("GET", "/assistants/{*}/workflow/versions", "#198", "15–18 周"),
           missing("GET", "/assistants/{*}/workflow/versions/{*}", "#198", "15–18 周"),
           missing("POST", "/assistants/{*}/workflow/versions/{*}/rollback", "#198", "15–18 周"),
-          // ★ conversations（3）—— GET/PATCH/DELETE /conversations/{id} 已随 #187 落地，
-          //   只剩会话分享三条（第 17 周）
-          missing("GET", "/conversations/{*}/shares", "#187", "17 周"),
-          missing("POST", "/conversations/{*}/shares", "#187", "17 周"),
-          missing("DELETE", "/conversations/{*}/shares/{*}", "#187", "17 周"),
+          // ★ conversations（0）—— GET/PATCH/DELETE /conversations/{id} 已随 #187 落地，
+          //   会话分享三条也已在 2026-10-25 落地（V53 + 公开面 /public/shares/{token}）
           // ★ feedbacks（6）—— 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）
           // ★ feedbacks（6）—— #194 已落：列表/统计/详情/办理/批量/重开
           // ★ files（1）—— 第 17 周随问答链路：附件上传（multipart）

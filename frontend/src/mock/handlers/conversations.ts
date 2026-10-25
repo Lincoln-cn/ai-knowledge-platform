@@ -640,6 +640,36 @@ export const conversationRoutes: MockRoute[] = [
 
   /* ── 免登录 ── */
 
+  /**
+   * 会话分享的只读快照（#187 shares 三条的另一半：公开面读）。
+   *
+   * ★ 与 `/public/:token` 的区别：那条是**访问凭证**（能继续提问），这条只是**读一份记录**。
+   *   所以响应里没有 appId / prologue / quickQuestions，也没有任何"可以继续聊"的入口。
+   * ★ 只有 share 分支认；凭证 token 走这里 ⇒ 404（不要拿一条能提问的凭证冒充分享）。
+   */
+  [
+    'GET',
+    '/public/shares/:token',
+    ({ path }) => {
+      const gate = gateOrThrow(path.token)
+      if (!gate.share) {
+        throw new ApiError(ErrorCode.NOT_FOUND, '分享链接不存在')
+      }
+      const share = findShareByToken(gate.share.token)
+      const conv = share ? findConversation(share.conversationId) : undefined
+      if (!share || !conv) {
+        throw new ApiError(ErrorCode.NOT_FOUND, '会话不存在')
+      }
+      return {
+        title: conv.title,
+        createdAt: share.createdAt,
+        maxClassification: share.maxClassification,
+        expiresAt: share.expiresAt,
+        messages: messagesOfShare(share)
+      }
+    }
+  ],
+
   [
     'GET',
     '/public/:token',

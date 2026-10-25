@@ -30,5 +30,13 @@ export const immersiveRoutes: RouteRecordRaw[] = [
     name: 'public-chat',
     component: () => import('./public/Index.vue'),
     meta: { title: '公开对话', public: true }
+  },
+  {
+    // 会话分享的只读页（#187）：同一份记录，不是可继续提问的凭证。
+    // 路由形状必须与后端 `ConversationShareView.PUBLIC_PATH_PREFIX = "/#/share/"` 一致。
+    path: '/share/:token',
+    name: 'public-share',
+    component: () => import('./public/Share.vue'),
+    meta: { title: '分享的对话', public: true }
   }
 ]

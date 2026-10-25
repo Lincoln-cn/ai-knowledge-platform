@@ -92,7 +92,7 @@ export interface PublicContext {
 }
 
 /**
- * 会话级分享回执。`url` 是**前端真能打开**的形状：hash 路由 `/#/public/:token`
+ * 会话级分享回执。`url` 是**前端真能打开**的形状：hash 路由 `/#/share/:token`
  * （见 bootstrap/router.ts 与 pages/conversation/route.ts）。
  */
 export interface ConversationShare {
@@ -408,4 +408,26 @@ export const revokeConversationShare = (
     method: 'DELETE',
     url: '/conversations/:id/shares/:token',
     path: { id: conversationId, token }
+  })
+
+/**
+ * 公开分享页读到的只读快照（#187）。
+ *
+ * ★ 它不是 `Conversation`：链接只冻结了**标题 / 密级 / 有效期 / 消息**四件事，
+ * 不带 ownerId、assistantId 之类的账户信息 —— 公开面不该因为"多返回一个字段"而泄露会话归属。
+ */
+export interface PublicConversationShare {
+  title: string
+  createdAt: string
+  maxClassification: ClassificationLevel
+  expiresAt: string | null
+  messages: ChatMessage[]
+}
+
+/** 免登录读一条会话分享。撤销 / 过期 / 未知 token 都是 404，文案由后端分开给。 */
+export const resolvePublicShare = (token: string): Promise<PublicConversationShare> =>
+  request<PublicConversationShare>({
+    method: 'GET',
+    url: '/public/shares/:token',
+    path: { token }
   })
