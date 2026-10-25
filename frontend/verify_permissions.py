@@ -222,6 +222,41 @@ def main() -> int:
                 except Exception as exc:  # noqa: BLE001
                     check(False, f"{role_name} ▸ 顶栏", f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
 
+                # ── A7 按钮侧：没有 assistant:edit 的账号看不到「新建应用」──
+                # 接口侧已由 AssistantPermissionHttpTest 钉住（USER 建/发布 403）；
+                # 这一条钉界面侧：同一页面对四种角色分别断言按钮在/不在 ——
+                # 只藏一种角色的按钮，等于另外三种角色还在走"点下去才报错"的老路。
+                try:
+                    page.goto(base + "#/assistants", wait_until="networkidle")
+                    page.wait_for_timeout(1500)
+                    new_app = page.locator("button", has_text="新建应用").count()
+                    want_new = username in ("admin", "liwei")  # 只有 assistant:edit
+                    check(
+                        (new_app > 0) == want_new,
+                        f"{role_name} ▸ 应用管理「新建应用」按钮{'可见' if want_new else '不可见'}",
+                        f"实得 {new_app} 个",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    check(False, f"{role_name} ▸ 应用管理按钮层",
+                          f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
+
+                # ── A7 按钮侧（第二页）：没有 knowledge:create 的账号看不到「创建知识库」──
+                # 与上一条同形，但权限点不同（knowledge:create 只给 ADMIN / KB_OPERATOR）。
+                # 两页一起看，才能排除"恰好这一页写对了"的巧合。
+                try:
+                    page.goto(base + "#/knowledge", wait_until="networkidle")
+                    page.wait_for_timeout(1500)
+                    new_kb = page.locator("button", has_text="创建知识库").count()
+                    want_kb = username in ("admin", "zhangyun")
+                    check(
+                        (new_kb > 0) == want_kb,
+                        f"{role_name} ▸ 知识库「创建知识库」按钮{'可见' if want_kb else '不可见'}",
+                        f"实得 {new_kb} 个",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    check(False, f"{role_name} ▸ 知识库按钮层",
+                          f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
+
                 # ── T86 提示词类型收紧：应用配置进得了提示词页，但一个「类型」写入口都没有 ──
                 # 本页的门禁没变（仍是 assistant:edit）—— 变的是**类型的归属**：
                 # 类型是分类法（契约，归系统管理），提示词是内容（归应用配置）。
