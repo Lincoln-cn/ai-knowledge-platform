@@ -723,7 +723,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | ② | **恰好一次 `done`**（正常 / 停止 / 断开 / 超时四条路径） | **已验收** | 唯一出口 `StreamAssembler#finish`（`settled`）+ `ChatService.Run#terminalTaken`（CAS，`ChatService.java:456`）· 四路径**各有真栈用例**（`ChatStreamHttpTest` 的 `normalPath…` / `stopSignal…` / `idleTimeout…` / `clientDisconnect…`）**8/8** · `ConversationStopEndpointTest` **5/5** · ★ 反证：`#118`（**CLOSED** 2026-10-14）去掉 CAS ⇒ `expected: 1L but was: 2L`（夜间报告 N1）· ★ **读数口径限定（逐字）**：断开那一条是"假模型抛 `UncheckedIOException`"，"**不是真 RST**"（PR `#138`） |
 | ③ | 心跳在**检索阶段**也发出 | **已验收（2026-10-24 复核）** | 本节旧读数写的是 `streamTurnWithTerminalGate`（`ChatService.java:270-278`）先检索再起心跳；★ **2026-10-24 复核**：流式入口 `ChatService.java:508` 先 `startHeartbeatThread(run)`、`:511` 才 `retrieve(...)`，差的那一格已补 · 真栈心跳用例 `ChatStreamHttpTest#heartbeatIsAnSseCommentFrameNotABusinessEvent`（8/8 之一）· `ChatStreamTimingTest` 2/2 |
 | ④ | **三态终态 + `tokens` 汇总** | **已验收（2026-10-24 复核）** | 四路径→三态的唯一映射 = `StreamTerminationPath#status()`；真栈落库终态 `MessagePersistenceTest` 15/15 · `StreamTokensTest` 5 个 `@Test` · ★ **2026-10-24 复核**：`assembler.addUsage(new TokenUsage(...))` 在 `ChatService.java:1651` 有生产调用点；`ChatStreamPort.Callback` 的用量通道由 `#199` 的兜底适配器补齐（`completeWithUsage`） |
-| ⑤ | **框架假设断言**（`DOCUMENT_CONTEXT` 可取 · `order=250` 生效 · joiner 真被调用） | **已断言（框架层）· 生产挂点仍 `#62`** | `AdvisorChainAssumptionTest`（2026-10-24）用官方 `RetrievalAugmentationAdvisor` + 桩 `ChatModel` 钉住三件事：`DOCUMENT_CONTEXT` 在 order 300 的 advisor 里可读到两条 `Document` · 检索 advisor `getOrder()==250` 且 250 先于 300 · `DocumentJoiner` 恰好调用一次且合并结果进了最终 prompt · ★ **不证明**生产端口已接入：生产仍走手写 HTTP（`ChatModelAdapter` → `UpstreamGateway`），`AiModelConfig.java:19-20` 仍写着"这里不挂任何 advisor"；生产化见 `#62` |
+| ⑤ | **框架假设断言**（`DOCUMENT_CONTEXT` 可取 · `order=250` 生效 · joiner 真被调用） | **已接非流式（2026-10-25）· 流式挂点仍 `#62`** | `AdvisorChainAssumptionTest`（2026-10-24）用官方 `RetrievalAugmentationAdvisor` + 桩 `ChatModel` 钉住三件事：`DOCUMENT_CONTEXT` 在 order 300 的 advisor 里可读到两条 `Document` · 检索 advisor `getOrder()==250` 且 250 先于 300 · `DocumentJoiner` 恰好调用一次且合并结果进了最终 prompt · ★ **2026-10-25 生产装配**：非流式五条出口（`complete` / `completeWithUsage` / `completeConversation` / `completeConversationWithUsage` / `completeAs`）改走 `SpringAiChatAdapter`（`ChatClient` + advisor 按 order 排序：`SafeGuardChatAdvisor` 100 · `AdvisorChainTrace` 150），传输 `NativeSpringAiChatModel` 直连上游（不经 `UpstreamGateway`）· `SpringAiChatAdapterTest` **7/7**：链探针 1 次 / 默认路径网关 0 次 / 无 advisors 时探针 0 次（金丝雀）/ 敏感词命中上游 0 次 / 用量 7+3 / `@Component` 注册断言 · `ChatStreamHttpTest` 9/9 证流式未变 · ★ **残余**：流式（SSE）仍走 `UpstreamGateway`，因此判据④的 **HTTP 级**敏感词 e2e 还没有；`app.chat.advisors.enabled=false` 可显式退回网关（见 §11.10.18） |
 | 演示 | 流式逐字 + 引用栏先出现 + 停止保留内容 + **重生成** | **已验收（2026-10-24 复核）** | 前三条各有真栈读数（`ChatStreamHttpTest#normalPathEmitsTheContractSequenceAndPersistsTheAnswer` 8/8 · 判据① · `ConversationStopEndpointTest#stopViaTheEndpointEndsAsStoppedAndKeepsTheGeneratedText` 5/5）· ★ **重生成已落**：`ChatService.startTurn` 接受 `ChatMode.REGENERATE`（`ChatService.java:273-290`），`ChatController` 收 `mode`/`targetMessageId`，`RegenerateTurnTest` 覆盖；`CONTINUE` 仍显式 400 |
 | 公开面 1 | `PublicContext` 必须返回 `maxClassification`，并从**可选改必填** | **已验收** | 契约 `frontend/src/api/conversations.ts:83` = `maxClassification: ClassificationLevel`（**无 `?`**）· 提交 `001a527`（`#110`，题名逐字含"`PublicContext.maxClassification` 改必填"）· 真栈 `PublicChatHttpTest#anonymousVisitorResolvesTheContextAndTheFrozenClearance`（**9/9** 之一） |
 | 公开面 2 | 四态业务码的**「emit」那一半** | **已验收** | `PublicChatController.java:106-123`（`40401`–`40404` ⇒ 显式 `404` + `application/json`）· `ChatController.java:236-243`（同一组码在 `chat` 端点也识别）· 真栈 `PublicChatHttpTest` **9/9**，四个用例逐字覆盖 `40401`/`40402`/`40403`/`40404` · `check_error_codes.py` 18=18（见本节 `#41` 行）★ 开工前四件表里的 `#41` 那一格 = 本行，不重复记 |
@@ -1097,7 +1097,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 
 | 维度 | 读数 |
 |---|---|
-| 分支 / HEAD | `main` / `83a976f`（会话分享 shares 三条；其前 `92e64c0` 是 A7 接口读数、`bd20b67` 是 0.4.5 发布、`f687968` 是 API Key 子项）；工作区仅 4 个既有未跟踪项 · **全盘盘点见 11.10.10** |
+| 分支 / HEAD | `main` / `4832439`（#62 非流式 advisor 链；其前 `83a976f` 是会话分享 shares、`92e64c0` 是 A7 接口读数、`bd20b67` 是 0.4.5 发布、`f687968` 是 API Key 子项）；工作区仅 4 个既有未跟踪项 · **全盘盘点见 11.10.10** |
 | 最近 CI | 2026-10-25T02:27Z `main` HEAD `43c100b` **5/5 success**：快闸 49s（`40152626194`）、前端构建 3m59s（`40152626203`）、浏览器 5m20s（`40152626224`）、真栈 7m11s（`40152626231`）、后端全量回归 28m28s（`40152626253`） |
 | 本轮收口 | `#14` `#22` `#41` `#50` `#54` `#79` `#114` `#142` `#146` `#168` `#170` `#181` `#182` `#184` `#185` `#188` `#192` `#193` `#194` `#196` `#197` `#199` `#200` `#208` 全部关闭；`#187` 的取一条/改名/软删已落（`0e6a297`），分享与附件仍 open |
 | 能答 | SSE 逐字 · 引用先于正文 · 停止 · 历史 · 多轮 · 应用级检索参数（FULLTEXT/VECTOR/HYBRID）· 思考开关 · `done.tokens` · 不落库调试 · 提示词类型/模板维护 · 反馈管理（列表/统计/详情/办理/批量/重开/沉淀为问答对）· 应用收藏（市场心形 +「只看收藏」）· 应用标签筛选（市场标签下拉框）· 应用共享（定向共享 / 按角色 / 可见性切换） |
@@ -1251,7 +1251,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 > **触发**：用户要求「整理现在的开发进度，然后并且对现在还有哪些功能未完成，无法发布到 mvp 可用的功能还缺哪些。更新到开发进度中」。
 > 本节是**只读盘点**：不新开 Issue、不改代码；数字与出处都可核对。旧节里 2026-10-15 的审计表如果与本节冲突，**以本节为准**。
 
-**一句话**：`0.4.4`（第 16 周）与 `0.4.5`（第 17 周，2026-10-24 补登记）都已进 `CHANGELOG`；`0.4.5` 的 SSE 判据 ①–④ 已收口，判据 ⑤ 的**框架假设**已由 `AdvisorChainAssumptionTest` 钉住，**但生产端口仍未接 advisor 链（`#62`）** ⇒ 代码判据齐了，生产化仍差一格；第 18 周 `0.5.0` 的三场景 / A1–A9 / B1–B7 **没有一份验收读数**。
+**一句话**：`0.4.4`（第 16 周）与 `0.4.5`（第 17 周，2026-10-24 补登记）都已进 `CHANGELOG`；`0.4.5` 的 SSE 判据 ①–④ 已收口，判据 ⑤ 的**框架假设**已由 `AdvisorChainAssumptionTest` 钉住、**非流式生产路径**已于 2026-10-25 接上 advisor 链（§11.10.18），**流式挂点仍 `#62`** ⇒ 代码判据齐了，流式生产化仍差一格；第 18 周 `0.5.0` 的三场景 / A1–A9 / B1–B7 **没有一份验收读数**。
 功能面的欠账是 **12 条端点 + 7 条零消费**，它们**一条都不挡 0.5.0**；真正挡 0.5.0 的是「**读数 + 语料 + 引导/空态 + 版本台账**」。
 
 **本轮（2026-10-24）实际落地的 8 条端点**：应用收藏 2（`POST`/`DELETE /assistants/{id}/favorite`，`V50`）· 应用标签 1（`GET /assistants/tags`）· 应用共享写 2（`PUT /{id}/grants`、`PATCH /{id}/visibility`，`V51`）· 应用导入 2（`POST /import`、`POST /import/check`）· API Key 3（`GET/POST /{id}/api-keys`、`PATCH …/enabled`，`V52`）。`#195` 的 10 条 **10 → 0，Issue 已关**。
@@ -1265,7 +1265,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | **M2 · 知识库与入库** | ✅ | 七态入库、OCR、四层分块、切分预览（`0.2.x` / `0.3.0`） |
 | **M3 · 检索** | ✅ | 三模式 + RRF、密级 pre-filter、命中测试、多跳（`0.3.x` / `0.4.0`–`0.4.2`） |
 | **M4a · 应用配置与发布** | ✅ | 配置/发布/凭证（`0.4.3` / `0.4.4`）；`#195` 的 10 条高级端点（收藏 / 标签 / 共享写 / 导入 / API Key）于 2026-10-24 全部落地（`V50`–`V52`） |
-| **M4b · 问答链路** | 🟡 | 流式/引用/多轮/停止/重生成已落；判据 ⑤ 的框架假设已断言（`AdvisorChainAssumptionTest`）；**生产 advisor 挂点仍 `#62`** |
+| **M4b · 问答链路** | 🟡 | 流式/引用/多轮/停止/重生成已落；判据⑤**非流式**已接 advisor 链（`4832439`，见 §11.10.18），**流式挂点仍 `#62`** |
 | **M5 · 反馈与看板** | ✅ | 赞踩 + 反馈管理 6 端点（`V49`）+ 分析 5 端点（`#193`/`#194`） |
 | **M5.5 · 编排配置面** | ⬜ | `#198` 的 10 条未开始；排第 19 周起（`§4.5` 建议 0.6.0） |
 | **M6 · 验收与调优** | ⬜ | 三场景 / A1–A9 / B1–B7 的验收**未开始** |
@@ -1344,7 +1344,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 **6. 下一步顺序（按"挡不挡验收"排）**
 
 1. **P1 语料**：今天发清单（最长前置，业务侧 2–3 周）。
-2. **判据 ⑤ 的裁决**：框架假设已断言（`AdvisorChainAssumptionTest`）；生产端口接 advisor 链（`#62`）仍是独立欠账，不与 `0.4.5` 的判据混为一谈。
+2. **判据 ⑤ 的裁决**：框架假设已断言（`AdvisorChainAssumptionTest`）；**非流式**生产路径已接 advisor 链（`4832439`，见 §11.10.18），**流式挂点仍是独立欠账**（`#62`），不与 `0.4.5` 的判据混为一谈。
 3. **S1/S2/S3 三条脚本**：先用合成文档跑通，不等语料。
 4. **A1–A9 汇总表**：把已有闸门读数归档；补 A6「10 轮」与 A7「按钮 + 接口」两侧。
 5. **B1–B7**：语料到位后跑；开测前先清 `#71` / `#51` 两个入库侧读数。
@@ -1391,7 +1391,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | 断言 2 | 检索 advisor 的 `getOrder()==250`；250 先跑、300 后跑（300 才看得见 250 写入的上下文） |
 | 断言 3 | 自带的 `DocumentJoiner` **恰好调用一次**，且合并结果真的进了最终 `Prompt`（桩 `ChatModel` 收到的正文含两段文档） |
 | 读数 | `AdvisorChainAssumptionTest` 1/1（0.599s）；`-DskipTests test-compile` exit 0；Spotless exit 0 |
-| ★ 它不证明 | **生产端口没有接 advisor 链**：`ChatModelAdapter` 仍直接走 `UpstreamGateway`（JDK `HttpClient`），`AiModelConfig.java:19-20` 仍写着"这里不挂任何 advisor"。生产化 = `#62`（P1），不在本节冒充 |
+| ★ 它不证明 | 当时生产端口没有接 advisor 链；**2026-10-25 非流式已接**（`SpringAiChatAdapter`，见 §11.10.18），流式仍走 `UpstreamGateway`，流式挂点归 `#62`（P1） |
 | 判据 | ① **假设要能红**：用官方类而非自造同名概念，升级导致 `DOCUMENT_CONTEXT` 改名 / order 语义变化时会失败；② **断言 ≠ 接入**：测试证明框架语义，不证明生产路径在用；③ **test scope**：在生产端口切换前，不让依赖改变生产装配 |
 
 #### 11.10.14 2026-10-24 0.4.5 发布（版本对齐 + CHANGELOG + tag/Release）
@@ -1443,3 +1443,19 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | CI | `43c100b` **5/5 success**：快闸 49s · 前端构建 3m59s · 浏览器 5m20s · 真栈 7m11s · 后端全量回归 28m28s |
 | 仍欠 | `POST /files` 与问答链路对 `attachmentIds` 的消费（`#187` 不关）；附件要与 `#31` 的三域一起做，只补上传端点会造第二个空转入口 |
 | 判据 | ① **分享 ≠ 凭证**：分享只是读一份记录，不能继续提问，两者不能共用一个页面冒充；② **冻结值必须来自创建那一刻**：用会话当前密级或默认值都是另一条口径；③ **失效四态要分开**：合并成"链接无效"会把人指向错误的下一步 |
+
+#### 11.10.18 2026-10-25 `#62` 非流式 advisor 链（生产装配的第一步）
+
+| 项 | 读数 |
+|---|---|
+| 为什么只改非流式 | 流式的 SSE 契约（refs 先于 delta、恰好一次 done、心跳）由 `ChatStreamHttpTest` 9/9 钉着；换传输会把功能改动与协议改动混在一批，失败时无法区分是谁坏的 |
+| 载体 | `SpringAiChatAdapter`（`ChatClient` + advisor 按 `getOrder()` 排序）· `NativeSpringAiChatModel`（`implements ChatModel`，直连上游 HTTP）· `SafeGuardChatAdvisor`（继承官方 `SafeGuardAdvisor`，词表来自 `app.chat.guard.sensitive-words`）· `AdvisorChainTrace`（order 150，只计数） |
+| 开关 | `app.chat.advisors.enabled` 默认 `true`；`false` ⇒ `ChatModelAdapter` 退回 `UpstreamGateway`（显式兜底，不自动回落） |
+| 判据① | `SpringAiChatAdapterTest#runsThroughAdvisorChainAndReturnsTheModelAnswer`：真 `HttpServer` 收到请求，链探针 `callCount()==1` |
+| 判据② | `#defaultPathDoesNotTouchTheGatewayButExplicitFallbackDoes`：默认路径 `CountingGateway.calls==0`；显式 disabled 时 `==1` |
+| 判据③ | 两层金丝雀：`#canaryWithoutAdvisorRegistrationTheProbeStaysZero`（无 advisor 时探针 0）· `#productionComponentsAreRegisteredAsAdvisors`（三个 `@Component` 注解 + order 100/150，删注解即红） |
+| 判据④ | `#officialSafeGuardAdvisorBlocksSensitiveInputBeforeUpstream`：命中「绝密」⇒ 返回固定拒绝话术，上游 `hits==0`。★ 这是**适配器层**读数，不是 HTTP/SSE e2e |
+| 其它读数 | `#passesRoleBoundariesAndUsageBack`（assistant 角色进请求体、usage 7/3）· `#mapsUpstreamFailureToBusinessFailure`（上游不可达 ⇒ `BusinessException`，文案含「调用对话模型失败」） |
+| 回归 | `SpringAiChatAdapterTest` **7/7**（4.89s）· `ChatModelAdapterTest` 全绿（3 参构造仍走网关，兜底路径未变）· `ChatStreamHttpTest` **9/9**（89.80s，流式零改动） |
+| 仍欠 | ① 流式路径未接 advisor 链 ⇒ 判据④的 **HTTP 级** e2e 仍缺；② `#62` 保持 OPEN，本条只记「非流式已接」；③ 检索 advisor（order 250）本身仍未挂在生产请求上 —— 它需要检索上下文进入 `ChatClient`，是下一步而不是本批 |
+| 判据 | ① **先换传输、再接语义**：先证明"链能被走到、默认不走网关"，再谈检索 advisor 挂上去做什么；② **金丝雀要能删出红**：`@Component` 断言与"无 advisors ⇒ 探针 0"两条各钉一半；③ **兜底必须显式**：`enabled=false` 才走网关，不做"出错自动回落"（那会让判据②永远为真） |
