@@ -1394,14 +1394,15 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | ★ 它不证明 | **生产端口没有接 advisor 链**：`ChatModelAdapter` 仍直接走 `UpstreamGateway`（JDK `HttpClient`），`AiModelConfig.java:19-20` 仍写着"这里不挂任何 advisor"。生产化 = `#62`（P1），不在本节冒充 |
 | 判据 | ① **假设要能红**：用官方类而非自造同名概念，升级导致 `DOCUMENT_CONTEXT` 改名 / order 语义变化时会失败；② **断言 ≠ 接入**：测试证明框架语义，不证明生产路径在用；③ **test scope**：在生产端口切换前，不让依赖改变生产装配 |
 
-#### 11.10.14 2026-10-24 0.4.5 发布准备（版本对齐 + CHANGELOG 补登记）
+#### 11.10.14 2026-10-24 0.4.5 发布（版本对齐 + CHANGELOG + tag/Release）
 
 | 项 | 读数 |
 |---|---|
-| `CHANGELOG.md` | 新增 **`0.4.5 · 第 17 周 · 流式问答链路`**：这一版能做什么（refs 先于 delta / done 恰好一次 / 心跳 / 停止保留 / 重生成 / tokens）+ 判据①–⑤读数 + ★ **已知边界：生产 advisor 挂点仍归 `#62`** |
+| `CHANGELOG.md` | 新增 **`0.4.5 · 第 17 周 · 流式问答链路`**：这一版能做什么（refs 先于 delta / done 恰好一次 / 心跳 / 停止保留 / 重生成 / tokens / API Key 程序化调用）+ 判据①–⑤读数 + ★ **已知边界：生产 advisor 挂点仍归 `#62`** |
 | 版本三处 | `backend/pom.xml` 与 `frontend/package.json` / `frontend/package-lock.json`（根与 `packages[""]`）统一为 **`0.4.5`**；`CHANGELOG` 同号 |
 | 为什么现在对齐 | `§4.7.1` 判据 4 要求"版本三处一致"；此前 `pom=0.0.1-SNAPSHOT`、`package=0.1.0`、`CHANGELOG=0.4.4` 三套编号并存，正是 §一 认账过的"两套编号"病根 |
-| 还没做 | 打 tag / Release notes（需 CI 全绿后）· 业务示例数据（当前只有账号/组织/提示词类型 seed）· `docs/` 的「如何加一个模块」 |
+| tag / Release | 注释 tag **`v0.4.5`**（指向 `bd20b67`）已推送；GitHub Release `v0.4.5` 已发布（非 draft / 非 prerelease），正文取 CHANGELOG 的 0.4.5 节：<https://github.com/Lincoln-cn/ai-knowledge-platform/releases/tag/v0.4.5> |
+| 还没做 | 业务示例数据（当前只有账号/组织/提示词类型 seed）· `docs/` 的「如何加一个模块」· `0.5.0` 的 S1–S3 / A1–A9 / B1–B7 读数 |
 | 判据 | ① **版本号是发布切点，不是构建号**：对齐发生在"可发布"那一刻，不能一边叫 0.1.0 一边在 CHANGELOG 写 0.4.5；② **CHANGELOG 不写文件清单**：只写"这一版能演示什么"与判据读数；③ **已知边界要写在发布说明里**：`#62` 不因为版本号前进而消失 |
 
 #### 11.10.15 2026-10-24 API Key 使用侧（`X-API-Key` 鉴权链）
