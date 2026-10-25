@@ -207,8 +207,18 @@ const openCreate = () => {
   formRef.value?.open()
 }
 
-const openEdit = (user: User) => {
-  editing.value = user
+/**
+ * 编辑前用 `GET /users/{id}` 取一次最新记录：列表是分页快照，别人刚改过角色/状态时，
+ * 直接拿行数据打开表单会把旧值写回去（看起来"保存成功"，其实回退了一处变更）。
+ */
+const openEdit = async (user: User) => {
+  let latest = user
+  try {
+    latest = await identityApi.getUser(user.id)
+  } catch (e) {
+    ElMessage.warning(e instanceof ApiError ? e.message : '读取最新用户失败，显示列表快照')
+  }
+  editing.value = latest
   formRef.value?.open()
 }
 

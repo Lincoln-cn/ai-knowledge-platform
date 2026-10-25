@@ -514,9 +514,18 @@ const openHandle = (row: FeedbackItem) => {
   handleRef.value?.open()
 }
 
-const openDetail = (row: FeedbackItem) => {
+/**
+ * 打开详情时用 `GET /feedbacks/{id}` 取一次最新记录（列表里是快照）。
+ * 拉失败不阻断：退回行数据并提示，避免"点详情打不开"。
+ */
+const openDetail = async (row: FeedbackItem) => {
   current.value = row
   handleRef.value?.open({ readonly: true })
+  try {
+    current.value = await feedbackApi.getFeedback(row.id)
+  } catch (e) {
+    ElMessage.warning(e instanceof Error ? e.message : '详情刷新失败，显示的是列表快照')
+  }
 }
 
 const openPromote = (row: FeedbackItem) => {
