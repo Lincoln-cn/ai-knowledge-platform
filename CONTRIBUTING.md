@@ -51,6 +51,10 @@ cd backend
 
 # 格式化（Spotless 在 compile 阶段会 check；折行/超 100 列都会红）
 .\mvn-jdk25.cmd com.diffplug.spotless:spotless-maven-plugin:3.10.3:apply
+
+# 发布台账（pom / package.json / package-lock / CHANGELOG 四处同号；--self-test 先证明它会红）
+python tools/check_release_metadata.py --self-test
+python tools/check_release_metadata.py
 ```
 
 **本地不要跑整包 `mvn verify`**：那是 CI 的活（一条命令几分钟到几十分钟），
