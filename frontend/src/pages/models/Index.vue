@@ -198,6 +198,18 @@
 
           <el-button link size="small" type="primary" @click="openEdit(m)">编辑</el-button>
 
+          <!-- 能力探测：后端 2026-10 已有端点，页面此前零消费（#79 的第三格读数之一） -->
+          <el-button
+            link
+            size="small"
+            type="primary"
+            :loading="probingId === m.id"
+            :disabled="probingId !== null && probingId !== m.id"
+            @click="probe(m)"
+          >
+            探测能力
+          </el-button>
+
           <!-- 内置模型不可删 —— 按钮直接不渲染，而不是渲染后报错 -->
           <el-button v-if="!m.builtin" link size="small" type="danger" @click="remove(m)">删除</el-button>
           <span v-else class="micro muted">内置模型不可删除</span>
@@ -296,6 +308,8 @@ const list = ref<ModelInfo[]>([])
 const total = ref(0)
 const loading = ref(false)
 const error = ref<string | null>(null)
+/** 正在探测能力的模型 id（同一时刻只允许一个，避免并发探测把上游打满）。 */
+const probingId = ref<string | null>(null)
 const pageSize = ref(12)
 
 /**
@@ -629,6 +643,29 @@ const reload = async (model: ModelInfo) => {
     schedule()
   } catch (e) {
     ElMessage.error(e instanceof ApiError ? e.message : '提交加载失败')
+  }
+}
+
+/**
+ * 能力探测（契约 `POST /models/:id/probe`）。
+ *
+ * ★ 这个按钮以前不存在：后端端点落了、页面零消费，用户只能靠"手工声明"填能力三态。
+ * ★ 探测只回答"上游现在报什么"，**不回写模型行**（`source` 由后端决定；本端点不落库），
+ *   所以成功后不重新拉列表 —— 拉回来也是同一行，反而让人以为改过了。
+ */
+const probe = async (model: ModelInfo) => {
+  probingId.value = model.id
+  try {
+    const cap = await modelsApi.probeModelCapability(model.id)
+    const parts = [`思考 ${THINKING_LABEL[cap.thinking]}`, `工具 ${TOOLS_LABEL[cap.tools]}`]
+    if (cap.contextWindow) parts.push(`上下文 ${cap.contextWindow.toLocaleString()} tokens`)
+    if (cap.dimension) parts.push(`${cap.dimension} 维`)
+    parts.push(cap.source === 'PROBED' ? '探测' : '手工声明')
+    ElMessage.success(`探测完成：${parts.join(' · ')}（未改动已保存的配置）`)
+  } catch (e) {
+    ElMessage.error(e instanceof ApiError ? e.message : '探测失败，请检查服务商是否可达')
+  } finally {
+    probingId.value = null
   }
 }
 
