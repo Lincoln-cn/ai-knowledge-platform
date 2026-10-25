@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -45,12 +46,24 @@ public class ChatModelAdapter implements ChatPort {
   private final ModelRepository models;
   private final ModelUpstreamResolver upstream;
   private final UpstreamGateway gateway;
+  private final SpringAiChatAdapter springAi;
 
+  @Autowired
   public ChatModelAdapter(
-      ModelRepository models, ModelUpstreamResolver upstream, UpstreamGateway gateway) {
+      ModelRepository models,
+      ModelUpstreamResolver upstream,
+      UpstreamGateway gateway,
+      SpringAiChatAdapter springAi) {
     this.models = models;
     this.upstream = upstream;
     this.gateway = gateway;
+    this.springAi = springAi;
+  }
+
+  /** 测试/兜底用：不启用 advisor 链，全部走网关（显式兜底，不是自动回落）。 */
+  public ChatModelAdapter(
+      ModelRepository models, ModelUpstreamResolver upstream, UpstreamGateway gateway) {
+    this(models, upstream, gateway, SpringAiChatAdapter.disabled());
   }
 
   @Override
@@ -66,7 +79,11 @@ public class ChatModelAdapter implements ChatPort {
 
   @Override
   public String complete(UUID modelId, String prompt, Duration timeout) {
-    return chat(requireChatModel(modelId), prompt, timeout);
+    Model model = requireChatModel(modelId);
+    if (springAi.enabled()) {
+      return springAi.complete(upstream.resolve(model), model.baseModel(), prompt, timeout);
+    }
+    return chat(model, prompt, timeout);
   }
 
   /**
@@ -77,6 +94,13 @@ public class ChatModelAdapter implements ChatPort {
   @Override
   public Completion completeWithUsage(UUID modelId, String prompt, Duration timeout) {
     Model model = requireChatModel(modelId);
+    if (springAi.enabled()) {
+      return springAi.completeWithUsage(
+          upstream.resolve(model),
+          model.baseModel(),
+          List.of(new ChatMessage(ChatMessage.Role.USER, prompt)),
+          timeout);
+    }
     try {
       ResolvedUpstream target = upstream.resolve(model);
       UpstreamGateway.ChatResult result =
@@ -98,6 +122,10 @@ public class ChatModelAdapter implements ChatPort {
   public Completion completeConversationWithUsage(
       UUID modelId, List<ChatMessage> messages, Duration timeout) {
     Model model = requireChatModel(modelId);
+    if (springAi.enabled()) {
+      return springAi.completeWithUsage(
+          upstream.resolve(model), model.baseModel(), messages, timeout);
+    }
     List<Map<String, String>> history =
         messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
     try {
@@ -124,6 +152,10 @@ public class ChatModelAdapter implements ChatPort {
   @Override
   public String completeConversation(UUID modelId, List<ChatMessage> messages, Duration timeout) {
     Model model = requireChatModel(modelId);
+    if (springAi.enabled()) {
+      return springAi.completeConversation(
+          upstream.resolve(model), model.baseModel(), messages, timeout);
+    }
     List<Map<String, String>> history =
         messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
     try {
@@ -223,6 +255,9 @@ public class ChatModelAdapter implements ChatPort {
   @Override
   public <T> T completeAs(UUID modelId, String prompt, Class<T> type, Duration timeout) {
     Model model = requireChatModel(modelId);
+    if (springAi.enabled()) {
+      return springAi.completeAs(upstream.resolve(model), model.baseModel(), prompt, type, timeout);
+    }
     // ★ 格式说明（"只输出 JSON" + schema）由官方转换器生成，我们不手写这一段
     BeanOutputConverter<T> converter = new BeanOutputConverter<>(type);
     String raw = chat(model, prompt + FORMAT_SEPARATOR + converter.getFormat(), timeout);

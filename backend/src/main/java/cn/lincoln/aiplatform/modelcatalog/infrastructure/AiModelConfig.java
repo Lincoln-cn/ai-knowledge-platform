@@ -16,8 +16,8 @@ import org.springframework.context.annotation.Configuration;
  * 挂上检索 advisor（{@code 11 §9} 的 order 250 那一段）之后， 每个请求各建一个客户端等于把整条 advisor 链重建一遍 ——
  * 这是那种"功能全对、只是慢"的问题， 最难在测试里发现。
  *
- * <p>⚠️ 这里**不挂任何 advisor**。检索增强、记忆、结构化输出都在 M3/M4b 落地，届时按 {@code 11} 的 order 约定（memory +200 / 我们 250
- * / tool +300）显式装配。 现在挂一个空的，只会让人误以为"advisor 已经配好了"。
+ * <p>⚠️ 这个 bean **不挂 advisor**：它只是 modelcatalog 暴露的通用客户端。真正的 advisor 链在 {@link SpringAiChatAdapter}
+ * 里按 order 装配（{@code SafeGuardChatAdvisor} 100 / {@code AdvisorChainTrace} 150）；流式路径还没接这条链（{@code #62} 的剩余面）。
  */
 @Configuration
 @EnableConfigurationProperties({ModelApiProperties.class, EgressProperties.class})
