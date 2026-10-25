@@ -20,6 +20,7 @@
 停得住  调 `/stop` 后已生成的正文保留，终态是 STOPPED 而不是 FAILED
 再来一版  `mode=REGENERATE` + `targetMessageId` 重生成；`CONTINUE` 仍显式 400（未实现，不假装）
 用量     `done.tokens` 由生产链路喂入，不是测试桩
+程序化调用  应用 API Key 可换身份调用平台接口（`X-API-Key`）：绑定签发它的应用、停用即 401、`lastUsedAt` 回写
 ```
 
 ### ★ 判据读数（第 17 周判据表，2026-10-24 复核）
@@ -33,6 +34,7 @@
 | ⑤ 框架假设断言（`DOCUMENT_CONTEXT` / `order=250` / joiner） | `AdvisorChainAssumptionTest` | **1/1**（2026-10-24） |
 | 演示：停止保留正文 | `ConversationStopEndpointTest#stopViaTheEndpointEndsAsStoppedAndKeepsTheGeneratedText` | **5/5** |
 | 演示：重生成 | `ChatService.startTurn` 接 `ChatMode.REGENERATE`（`ChatService.java:273-290`）· `RegenerateTurnTest` | 绿（`CONTINUE` 仍 400） |
+| 附带：API Key 使用侧 | `ApiKeyAuthenticationFilter` + `ApiKeyAuthenticatorAdapter` | `AssistantApiKeyAuthHttpTest` **1/1**（有效 / 无效 / 停用 / 跨应用） |
 
 ★ **已知边界（不冒充已接入）**：生产对话端口仍走手写 HTTP（`ChatModelAdapter` → `UpstreamGateway`），
 **没有接 Spring AI advisor 链**（`#62`）。判据⑤ 断言的是「官方框架的语义成立」，不是「生产路径已经在用」；
