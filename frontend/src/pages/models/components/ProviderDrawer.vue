@@ -93,6 +93,20 @@
               测试连接
             </el-button>
             <el-button link size="small" @click="openEdit(p)">编辑</el-button>
+            <!--
+              换 / 清密钥走独立端点（`POST` / `DELETE /model-providers/:id/key`）。
+              编辑表单里也能改，但那条路要重填整张表；密钥轮换是个单动作。
+            -->
+            <el-button link size="small" type="primary" @click="changeKey(p)">换密钥</el-button>
+            <el-button
+              v-if="p.hasApiKey"
+              link
+              size="small"
+              type="danger"
+              @click="clearKey(p)"
+            >
+              清除密钥
+            </el-button>
             <el-button link size="small" :type="p.enabled ? 'warning' : 'success'" @click="toggle(p)">
               {{ p.enabled ? '停用' : '启用' }}
             </el-button>
@@ -376,6 +390,48 @@ const toggle = async (p: ModelProviderInfo) => {
     emit('changed')
   } catch (error) {
     ElMessage.error(error instanceof ApiError ? error.message : '操作失败')
+  }
+}
+
+const changeKey = async (p: ModelProviderInfo) => {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `给「${p.name}」设置新密钥。保存后旧密钥立即失效；界面不会回显明文。`,
+      '换密钥',
+      {
+        inputType: 'password',
+        inputPlaceholder: '粘贴新密钥',
+        confirmButtonText: '保存',
+        cancelButtonText: '取消',
+        inputValidator: (v: string) => (v && v.trim() ? true : '密钥不能为空')
+      }
+    )
+    await providersApi.setProviderKey(p.id, value.trim())
+    ElMessage.success('密钥已更新')
+    await fetchList()
+    emit('changed')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error(error instanceof ApiError ? error.message : '更新密钥失败')
+    }
+  }
+}
+
+const clearKey = async (p: ModelProviderInfo) => {
+  try {
+    await ElMessageBox.confirm(
+      `清除「${p.name}」的密钥？之后调用会以"无密钥"发出，直到重新配置。`,
+      '清除密钥',
+      { type: 'warning' }
+    )
+    await providersApi.clearProviderKey(p.id)
+    ElMessage.success('密钥已清除')
+    await fetchList()
+    emit('changed')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error(error instanceof ApiError ? error.message : '清除密钥失败')
+    }
   }
 }
 
