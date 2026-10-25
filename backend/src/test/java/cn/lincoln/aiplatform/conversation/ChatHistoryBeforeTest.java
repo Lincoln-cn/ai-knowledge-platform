@@ -125,6 +125,41 @@ class ChatHistoryBeforeTest {
         .containsExactly("答 3", "问 4", "答 4");
   }
 
+  /**
+   * ★ A6 的**第 10 轮读数**：九轮之后，第一轮还在不在窗口里。
+   *
+   * <p>指代本身（「它呢」对上第 9 轮的话题）要真模型才能判；这里判的是它**还有没有可能**对上 —— 如果第 10 轮的历史里已经没有第 1
+   * 轮，那么任何模型都不可能"记得"第一轮说过的实体。
+   */
+  @Test
+  void tenRoundsKeepTheFirstRoundInsideTheWindow() {
+    UUID owner = UUID.randomUUID();
+    UUID conversation = seedConversation(owner);
+
+    for (int i = 1; i <= 9; i++) {
+      messages.save(Message.user(UUID.randomUUID(), conversation, "第 " + i + " 轮：甘孜州公安局的话题 " + i));
+      messages.save(new Message(UUID.randomUUID(), conversation, "答 " + i));
+    }
+    Message tenth = messages.save(Message.user(UUID.randomUUID(), conversation, "它呢？"));
+
+    List<ChatMessage> history = writer.historyBefore(conversation, tenth.id(), 20);
+
+    assertThat(history).as("★ 九轮问答 = 18 条，全部进第 10 轮的窗口").hasSize(18);
+    assertThat(history)
+        .as("★★ 第 1 轮必须还在 —— 否则「它呢」不可能对上第一轮的实体，A6 直接不成立")
+        .first()
+        .extracting(ChatMessage::content)
+        .asString()
+        .contains("第 1 轮")
+        .contains("甘孜州公安局");
+    assertThat(history)
+        .as("★ 最近的仍然是第 9 轮的答案（顺序不许反）")
+        .last()
+        .extracting(ChatMessage::content)
+        .isEqualTo("答 9");
+    assertThat(history).as("★ 本轮的问题自己不在历史里").extracting(ChatMessage::content).doesNotContain("它呢？");
+  }
+
   // ────────────────────────── 工具 ──────────────────────────
 
   private UUID seedConversation(UUID owner) {
