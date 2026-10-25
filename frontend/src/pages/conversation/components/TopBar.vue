@@ -60,6 +60,15 @@
         </router-link>
       </template>
       <button
+        v-if="showRate"
+        type="button"
+        class="tlink rate"
+        title="给这次会话评分"
+        @click="emit('rate')"
+      >
+        <el-icon><Star /></el-icon><span>评分</span>
+      </button>
+      <button
         v-if="showShare"
         type="button"
         class="tlink share"
@@ -72,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowLeft, Collection, Setting, Share, Timer } from '@element-plus/icons-vue'
+import { ArrowLeft, Collection, Setting, Share, Star, Timer } from '@element-plus/icons-vue'
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -88,6 +97,8 @@ const props = defineProps<{
   alignPanel?: boolean
   /** 分享入口显隐由调用方按权限点决定（conversation:share） */
   showShare?: boolean
+  /** 评分入口：评分是「读者对这一次会话」的动作，公开只读页不显示 */
+  showRate?: boolean
   /** 「对话设置」入口（按 conversation:view；改配置需要 system:manage，在页面内再把一次） */
   showChatSettings?: boolean
 }>()
@@ -95,6 +106,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   back: []
   share: []
+  rate: []
 }>()
 
 const showAppConfig = computed(() => !!props.appId && !props.publicMode)
@@ -104,6 +116,7 @@ const appConfigTo = computed(() =>
 const showShare = computed(
   () => props.showShare !== false && !props.publicMode
 )
+const showRate = computed(() => !!props.showRate && !props.publicMode)
 const showKbLink = computed(() => props.showKbLink !== false)
 </script>
 

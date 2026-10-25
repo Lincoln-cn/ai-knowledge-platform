@@ -6,10 +6,12 @@
       :app-id="appBrief?.id ?? appId"
       :public-mode="false"
       :show-share="canShare"
+      :show-rate="!!activeConversation"
       :show-chat-settings="canViewSettings"
       align-panel
       @back="onBack"
       @share="openShare()"
+      @rate="openRate"
     />
 
     <!-- 应用信息区：仅应用模式展示 -->
@@ -114,6 +116,32 @@
       :message-text="shareText"
     />
 
+    <!--
+      会话评分（契约 `POST /conversations/{id}/feedback`）。
+      ★ 这个入口以前不存在：契约与后端都在，页面零调用 —— S3 的「评分」因此在界面上不可达。
+      同一用户对同一会话只有一条评分，再提交是覆盖（后端口径），文案要说清楚。
+    -->
+    <el-dialog v-model="rateOpen" title="给这次会话评分" width="420px" append-to-body>
+      <div class="rate-row">
+        <el-rate v-model="rateScore" :max="5" show-score score-template="{value} 分" />
+      </div>
+      <el-input
+        v-model="rateComment"
+        type="textarea"
+        :rows="3"
+        maxlength="500"
+        show-word-limit
+        placeholder="可选：哪里有用、哪里不对（最多 500 字）"
+      />
+      <p class="micro muted rate-hint">同一会话再次评分会覆盖上一次，不会产生第二条记录。</p>
+      <template #footer>
+        <el-button size="small" @click="rateOpen = false">取消</el-button>
+        <el-button size="small" type="primary" :loading="rating" @click="submitRate">
+          提交评分
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 生成失败横幅：原因 + 下一步，不静默 -->
     <div v-if="chat.streamError.value" class="stream-fail notice err">
       <span><b>生成中断：</b>{{ chat.streamError.value.reason }}</span>
@@ -172,6 +200,10 @@ const wide = ref(true)
 const shareRef = ref<InstanceType<typeof ShareDialog>>()
 const shareText = ref('')
 const shareMessageId = ref<string | null>(null)
+const rateOpen = ref(false)
+const rateScore = ref(5)
+const rateComment = ref('')
+const rating = ref(false)
 const msgListRef = ref<InstanceType<typeof MessageList>>()
 const composerRef = ref<InstanceType<typeof Composer>>()
 
@@ -515,6 +547,37 @@ const openShare = (msg?: ChatMessage) => {
   shareRef.value?.open()
 }
 
+const openRate = () => {
+  if (!activeConversation.value) {
+    ElMessage.warning('先开始一次对话，再给这次会话评分')
+    return
+  }
+  rateScore.value = 5
+  rateComment.value = ''
+  rateOpen.value = true
+}
+
+const submitRate = async () => {
+  if (!activeConversation.value) return
+  if (rateScore.value < 1) {
+    ElMessage.warning('请先选一个分数')
+    return
+  }
+  rating.value = true
+  try {
+    await conversationsApi.submitConversationFeedback(activeConversation.value.id, {
+      score: rateScore.value,
+      comment: rateComment.value.trim() || null
+    })
+    ElMessage.success('评分已记录（再提交会覆盖上一次）')
+    rateOpen.value = false
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '评分失败，请稍后重试')
+  } finally {
+    rating.value = false
+  }
+}
+
 const onSuggest = (text: string) => {
   composerRef.value?.sendText(text)
 }
@@ -589,6 +652,14 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.rate-row {
+  margin-bottom: var(--space-sm);
+}
+
+.rate-hint {
+  margin-top: var(--space-xs);
+}
+
 .chat-page {
   /* 三栅的列宽真源：页头（TopBar）与历史面板都读它，
      改一处即可保持「返回列 / 会话面板左缘」对齐。 */
