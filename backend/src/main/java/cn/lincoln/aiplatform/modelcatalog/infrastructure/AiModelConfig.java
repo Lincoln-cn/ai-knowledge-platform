@@ -17,7 +17,8 @@ import org.springframework.context.annotation.Configuration;
  * 这是那种"功能全对、只是慢"的问题， 最难在测试里发现。
  *
  * <p>⚠️ 这个 bean **不挂 advisor**：它只是 modelcatalog 暴露的通用客户端。真正的 advisor 链在 {@link SpringAiChatAdapter}
- * 里按 order 装配（{@code SafeGuardChatAdvisor} 100 / {@code AdvisorChainTrace} 150）；流式路径还没接这条链（{@code #62} 的剩余面）。
+ * 里按 order 装配（{@code SafeGuardChatAdvisor} 100 / {@code AdvisorChainTrace} 150）；流式路径还没接这条链（{@code
+ * #62} 的剩余面）。
  */
 @Configuration
 @EnableConfigurationProperties({ModelApiProperties.class, EgressProperties.class})
