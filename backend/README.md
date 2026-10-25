@@ -1,7 +1,8 @@
 # backend · 后端服务
 
-与 `frontend/` 一起构成平台的前后端两侧。**当前进度：0.0.1（第 1 周 · M0 骨架）** ——
-"这一版能做什么"与验证记录（含本版踩到的坑）见根目录 [`CHANGELOG.md`](../CHANGELOG.md)。
+与 `frontend/` 一起构成平台的前后端两侧。**当前版本：`0.4.5`（M4a 端点齐全 · M4b 判据⑤已接非流式）** ——
+"这一版能做什么"与验证记录（含本版踩到的坑）见根目录 [`CHANGELOG.md`](../CHANGELOG.md)；
+改代码前的环境、闸门与"加一个模块"步骤见 [`CONTRIBUTING.md`](../CONTRIBUTING.md)。
 
 构建方式：**`mvn-jdk25.cmd`**（本项目钉 Temurin 25，不改系统 `JAVA_HOME`，见该脚本内的说明）。
 
