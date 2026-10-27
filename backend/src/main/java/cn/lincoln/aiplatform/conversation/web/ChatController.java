@@ -163,8 +163,13 @@ public class ChatController {
       @PathVariable UUID conversationId,
       @RequestBody ConversationFeedbackBody body,
       @AuthenticationPrincipal Jwt jwt) {
+    // ★★ 参数顺序曾经传反（`submit(subjectOf(jwt), conversationId, …)` 而签名是
+    // `submit(conversationId, userId, …)`）⇒ 服务层拿"用户 id"当会话 id 去查，永远查不到，
+    // 于是任何会话都 404「会话不存在」，这一格其实从来没通过过。领域层的
+    // `ConversationFeedbackTest` 直接调服务层、参数天然是对的，所以它一直绿、抓不到。
+    // 抓它的是 `ConversationFeedbackHttpTest`（真 HTTP + 真库），见那个类的类注释。
     var saved =
-        conversationFeedback.submit(subjectOf(jwt), conversationId, body.score(), body.comment());
+        conversationFeedback.submit(conversationId, subjectOf(jwt), body.score(), body.comment());
     return ApiResponse.ok(
         new ConversationFeedbackView(
             saved.conversationId(),
