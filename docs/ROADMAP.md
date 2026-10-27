@@ -1788,3 +1788,37 @@ cd backend; .\mvn-jdk25.cmd spring-boot:run
 1. **示例数据要"能用的一半"，不要"跑完的一半"** —— 把状态机停在用户需要动手的那一格，比给一个看起来完整、但每一步都点不动的夹具诚实。
 2. **计数列不许手写常量** —— 派生值一旦手写，正文一改就静默过期，而界面读的正是它。
 3. **「默认关」这件事必须有读数** —— 它不是一句注释：打开它会让一批按条数断言的用例红，所以默认关是**测试集合的形状**要求，不是口味。
+
+#### 11.10.29 2026-10-28 SSE 异常收尾：把「原始异常是什么」这件事补回来（`#216` 观测那一半）
+
+`#216` 的现场不在用户看到的那一半（那次是 500 + 空响应体，重跑同一 commit 即绿），而在**事后无据可查**：
+artifact 的 `backend.log` 里只有五条 Tomcat 层 NPE —— `MimeHeaders.removeHeader` 的 `this.headers[i] is null`，
+由 `DispatcherServlet.processHandlerException` → `Response.setHeader` 触发 —— 紧接着一句
+「Exception while processing an asynchronous request」。原始异常的类型与消息**一个字节都没留下**。
+
+★ 为什么它必然丢：开流填充帧（12KB）会把响应头**先**提交出去，否则首帧要等整条流结束（本仓 0.4.5 踩过）。
+提交之后异常就走不到错误包络那条路，容器反过来在「已提交的响应上再写一遍错误」时自己炸一次 ⇒ 一炸盖一炸。
+
+| 步骤 | 改前 | 改后 |
+|---|---|---|
+| 响应已提交时异常 | 继续外抛 → 容器二次崩溃 → 原始类型丢失 | 记 **类型 + 消息 + 栈**，不再外抛 |
+| 响应未提交时异常 | 外抛（对）但没记 | 照样记一笔，再原样外抛 |
+| `Error` | 外抛 | 外抛（真 OOM 时「安静收尾」比崩溃更难查） |
+| 客户端断开（`UncheckedIOException`） | 外抛，通常被容器记成 ERROR | **debug** 记账（预期事件，按 ERROR 记会埋掉真错误） |
+
+★ 故意**没有**在这里补一个 `error` 帧：事件形状归 `StreamAssembler`（`TIMEOUT` / `DISCONNECT` 两种原因都在那儿），
+在这里再发一次就是第二套形状。与 `§11.10.24`「一种事实只有一处主语」是同一条纪律的两面。
+
+**读数**：`ChatStreamAssemblerFailureTest` 3 例全绿（logback `ListAppender` 直接读日志事件，不看字符串）——
+已提交那条断言 `throwableProxy.className == java.lang.IllegalStateException` 且 `响应已提交=true`；
+未提交那条断言异常原样抛出；断开那条断言无 ERROR 且 debug 行含 `Broken pipe`。
+回归：`conversation.application.*Test` **49 例全绿**、`ChatStreamHttpTest` 9/9、`PublicChatHttpTest` 10/10。
+
+**判据（三条，均可核对）**：
+
+1. **每一条都要有红过的反证**：`if (!committed)` → `if (false && !committed)`（未提交那条红）；
+   断开分支 `debug` → `error`（断开那条红）；`catch (Throwable)` → `catch (IOException)`（3 条全红）。
+2. **日志事件要按字段断，不按整句断**：断 `throwableProxy.className` 而不是断「日志里有 IllegalStateException 这个词」——
+   后者在消息体里出现同名词时也会绿。
+3. **修「看不见」不等于修「不会发生」**：`#216` 判据 ② 是「连续 200 次 0 次 500」，那要先能复现那次偶发；
+   本轮没有复现手段，所以 Issue **不关**，只补目击证据。
