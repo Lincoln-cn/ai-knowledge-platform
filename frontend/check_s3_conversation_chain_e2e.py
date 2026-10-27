@@ -225,10 +225,15 @@ def first_refs_index(frames: list[dict]) -> int:
     return -1
 
 
-def chat(token: str, body: dict) -> tuple[int, list[dict]]:
-    """整段读完的一次提问（不需要中途停止时用它）。"""
+def chat(token: str, body: dict) -> tuple[int, list[dict], str]:
+    """整段读完的一次提问（不需要中途停止时用它）。返回 `(状态码, 帧, 原始响应体)`。
+
+    ★ 为什么把原始响应体也交出去（2026-10-27 run `40520445036` 换来）：那一次第 1 轮拿到 500，
+      而旧实现只把**解析出来的帧**交给调用方 ⇒ 500 的响应体一个字节都没留下，诊断行打出 `[]`
+      —— **"没帧"和"没看"在读数上长得一模一样**。原始响应体是唯一能区分的证据。
+    """
     status, payload = call("POST", "/conversations/chat", token, body)
-    return status, sse_frames(payload)
+    return status, sse_frames(payload), payload
 
 
 def chat_collect(
@@ -525,9 +530,11 @@ def main() -> int:
     try:
         # ── ① 流式作答 + ② 引用先于正文、且能溯源 ──
         print("== ① 第 1 轮：流式作答 + 引用可溯源 ==")
-        status, frames = chat(token, {"appId": app_id, "conversationId": conversation_id, "question": QUESTION})
+        status, frames, raw = chat(
+            token, {"appId": app_id, "conversationId": conversation_id, "question": QUESTION}
+        )
         if not check(status == 200, f"第 1 轮提问 ⇒ 200 + SSE（实得 {status}）"):
-            print(f"  [诊断] {json.dumps(frames)[:300]}")
+            print(f"  [诊断] 帧数 {len(frames)} · 响应体原文：{raw[:600] or '（空）'}")
             return 1
         meta = meta_of(frames)
         answer_1 = str(meta.get("messageId") or "")
@@ -562,11 +569,13 @@ def main() -> int:
         rounds = 1
         for turn in range(2, 6):
             q = f"{FOLLOW_UP}（第 {turn} 轮）"
-            status, frames = chat(
+            status, frames, raw = chat(
                 token, {"appId": app_id, "conversationId": conversation_id, "question": q}
             )
             ok_round = status == 200 and done_of(frames).get("status") == "GENERATED"
             check(ok_round, f"第 {turn} 轮 ⇒ 200 + GENERATED（实得 {status} / {done_of(frames).get('status')}）")
+            if not ok_round:
+                print(f"  [诊断] 第 {turn} 轮返回 {status} · 响应体原文：{raw[:600] or '（空）'}")
             rounds += 1
         msgs = list_messages(token, conversation_id)
         users = [m for m in msgs if m.get("role") == "USER"]
@@ -676,7 +685,7 @@ def main() -> int:
 
         # ── ⑤ 重新生成：覆盖同一条 ──
         print("== ⑤ 重新生成：覆盖同一条消息 ==")
-        status, regen_frames = chat(
+        status, regen_frames, regen_raw = chat(
             token,
             {
                 "appId": app_id,
@@ -687,6 +696,8 @@ def main() -> int:
             },
         )
         check(status == 200, f"重新生成 ⇒ 200 + SSE（实得 {status}）")
+        if status != 200:
+            print(f"  [诊断] 重新生成返回 {status} · 响应体原文：{regen_raw[:600] or '（空）'}")
         regen_meta = meta_of(regen_frames)
         check(
             str(regen_meta.get("messageId") or "") == answer_1,

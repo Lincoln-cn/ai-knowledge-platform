@@ -1542,3 +1542,30 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 **它证明到哪为止**：证明"这条链在真栈上能一次走完，且每一步的边界值都对"（段数分母一致、进度单调、停用真的失、启用真的回）。**不证明"命中的质量"** —— 那是 B1（命中率）的事，分母是 P1 语料。
 
 **三条判据**：① **命中断言要落在"埋进去的那句话"上，不能落在条数上** —— 填充段里到处是「运维」「标准」，断"停用后 0 条"会绿在与停用无关的现象上，而且改一处文本就假红；② **预览与入库要比"段数相等"，且两者必须同源** —— 同源于 `DocumentService` 与 `/segmentation/preview` 走同一个 `Segmenter#plan`、同一组 500/60 默认值，数字相等但来源不同只是巧合；③ **中间进度要真读到** —— 夹具必须 ≥3 批（`EmbeddingRunner.BATCH_SIZE=20`），只断终态等于没测进度（第一版夹具只出 40 段，卡在边界上，遂加长到 71 段）。
+
+#### 11.10.23 2026-10-27 S3 整链真栈读数（一个会话里走完七件事）
+
+**补的是哪一格**：台账里 S3 一直是 🟡 —— 零件齐全（`ChatStreamHttpTest` 9/9、`ConversationStopEndpointTest` 5/5、`RegenerateTurnTest`、`check_regenerate_e2e`），但**没有一条在同一个会话里连续走完七步**的读数。本轮补 `frontend/check_s3_conversation_chain_e2e.py`（纯 urllib + threading，自己造夹具：向量模型 → 知识库 → 传一篇报销制度 → 显式向量化 → **再建一个对话模型并加载**），接进 `ci.yml` 真栈 `gates` 数组第二位。
+
+**读数**（`ci.yml` run `40520445036` attempt 2，head `463757b`，真栈 job ✅）：
+
+| 步骤 | 读数 |
+|---|---|
+| ① 流式 + 引用 | 200 + 正文**分片**拼出 45 字 + `GENERATED` + 引用 **1 条** + `refs@1 < text@2`（引用帧**先于**第一个正文帧） |
+| ① 引用可溯源 | 引用带 `segmentId` ⇒ `GET /segments/{id}` 200，`documentId` 挂得住刚上传的文档 |
+| ③ 连续追问 | 第 2–5 轮全 200/`GENERATED`；5 问 5 答**同一个会话**；无卡在 `GENERATING` 的；`turnCount=10`；首两条 `[USER, ASSISTANT]` |
+| ④ 生成中停止 | 注入 `chunk_delay_ms=300`（否则整段一次到齐，没有中间态）⇒ **吐到第 12 字时停止**：`accepted=True` / 无 `error` 帧 / 终态 **`STOPPED`** / 库里 **12 字留住** |
+| ⑤ 重新生成 | `mode=REGENERATE` + `targetMessageId` ⇒ **覆盖同一条**（期望==实得 `31b5da27…`）+ 重新检索带引用 |
+| ⑥ 赞 / 取消赞 | UP 200 → 回读 UP；改 DOWN（互斥覆盖）→ 回读 DOWN；取消 → 回读 **None** |
+| ⑦ 会话评分 | 5 分 200 → 再评**覆盖为 3**、`createdAt` 不变、`updatedAt` 前进 |
+
+**这一轮抓出的两个真缺陷**：
+
+1. **会话评分端点恒 404**（`#213`）：`ChatController` 把 `submit(conversationId, userId, …)` 的两个 UUID 形参传反 ⇒ 任何会话都「会话不存在」。**领域层测试永远抓不到它** —— `ConversationFeedbackTest` 里调的是 `feedbacks.submit(conversation, owner, …)`，参数天然正确。补 `ConversationFeedbackHttpTest`（真 HTTP + 真库，4 例），修前实测 `Failures: 2`（正是 404），修后 4/4 绿。
+2. **停止判据的脚本 bug**：第一版线程里写 `stop_frames.extend(chat_collect(...))`，而 `chat_collect` **整条流读完才返回** ⇒ 主线程看到的永远是空列表，「等到吐出 3 片再停」退化成「等流结束再停」（读数形状：`停止前已吐出正文（45 字）` = 全文）。改成 `chat_collect(..., sink=stop_frames)` 边到边写。
+
+**一条必须记下来的环境读数**：同一 commit 的 attempt 1 红在**第一条断言**（`第 1 轮提问 ⇒ 200 + SSE（实得 500）`，响应体为空），`gh run rerun --failed` 后全绿 ⇒ 偶发。`backend.log` 里真正的异常**没有留下**，只有 Tomcat 层二次 NPE（`MimeHeaders.removeHeader` ← `Response.setHeader` ← `DispatcherServlet.processHandlerException`）。已开 `#216`：**"处理异常时再炸"会把原始异常擦掉**，这比偶发 500 本身更值得先修。
+
+**它证明到哪为止**：证明七件事在**真栈、真库、一个会话**里逐条成立且边界值都对（引用先到、停止保字、覆盖同一条、覆盖改 `updatedAt` 不改 `createdAt`）。**不证明**「赞/取消赞刷新页面仍在」的浏览器那一半（归 A2，已有读数），也不证明答案质量（B2，等语料）。
+
+**三条判据**：① **"停住了"要三个读数同时成立** —— `accepted=True`（服务端只在消息处于 `GENERATING` 时才接信号）+ 终态 `STOPPED` + 库里字数 == 已收到字数；只断前两个，会把"停得太晚、正文已写完"当成绿；② **引用必须比正文先到** —— 断 `refs` 帧下标 < 第一个 `text` 帧下标，否则"可溯源"只是事后补的装饰；③ **一个缺陷在自己的测试里天然不可见** —— 形参顺序、SSE 帧序这类错只有在 HTTP 那一层才现形，所以每条链都要有一条**从网关进、从库里出**的读数。
