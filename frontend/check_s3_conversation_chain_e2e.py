@@ -23,6 +23,12 @@
   而 S3 要验的恰恰是**中间态**（已生成的要保留）。`delay_ms` 做不到：它只推迟回答的**开始**。
   本脚本用完必须复位成 0 —— 同一个 job 里后面的闸门共用这一个桩。
 
+★★ 为什么自己造库、自己传文档（而不是"找一个 documentCount>0 的库"）：
+  `ci.yml` 的 `gates` 是**顺序**跑的，前一条闸门在 finally 里把夹具删干净之后，
+  "找一个有文档的库"完全可能一个都找不到 —— 那时红的会是**夹具**而不是 S3。
+  自造夹具多花几秒（一个模型 + 一个库 + 一份 400 字的文档 + 一次向量化），
+  换来的是"这条闸门的红只可能来自它自己"。
+
 用法：
     python check_s3_conversation_chain_e2e.py [http://localhost:5280]
 """
@@ -31,6 +37,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -41,6 +48,8 @@ API = BASE + "/api/v1"
 
 #: 桩的根地址（注入帧间延迟用）。
 STUB = os.environ.get("AIP_STUB_URL", "http://127.0.0.1:11434").rstrip("/")
+#: 桩的 OpenAI 兼容根地址：新建对话模型时要写进 `apiBase`，否则上游请求无处可去。
+STUB_API_BASE = STUB + "/v1"
 
 USER = "admin"
 PASSWORD = "admin"
@@ -48,6 +57,35 @@ PASSWORD = "admin"
 QUESTION = "报销标准"
 #: 追问用同一句话 + 序号：只要后端返回 200，就证明"带着 conversationId 的这一轮"被接住了。
 FOLLOW_UP = "那差旅住宿的上限呢"
+
+#: ★ 本条闸门**自己造库、自己传文档、自己向量化**，不去借别的闸门留下的数据：
+#:   `ci.yml` 的 `gates` 是**顺序**跑的，前一条闸门在 finally 里把夹具删干净之后，
+#:   "找一个 documentCount>0 的库"就可能一个都找不到（==> 一条与 S3 无关的红）。
+#:   代价是每次多花几秒，换来的是"这条闸门的红只可能来自它自己"。
+ORG_ROOT = "00000000-0000-4000-8000-000000000001"
+DOC_TYPE = "制度"
+DOC_CLASSIFICATION = "INTERNAL"
+KB_CATEGORY = "制度规范"
+#: 夹具正文：★ 必须含 `QUESTION` 与 `FOLLOW_UP` 里的实词（报销 / 差旅 / 住宿 / 上限），
+#: 否则引用为空会是夹具的问题、而不是检索的问题。
+FIXTURE_TEXT = """# 差旅与费用报销管理办法
+
+## 一、适用范围
+
+本办法适用于本单位全体在职人员的国内差旅与日常费用报销。
+
+## 二、差旅报销标准
+
+市内交通费每天不超过八十元，凭票据实报实销；住宿费上限为每晚五百元，超出部分自理。
+
+## 三、报销流程
+
+出差结束后五个工作日内，通过知识助理平台提交报销申请并上传票据扫描件。
+
+## 四、其他
+
+本办法由财务部门负责解释，自发布之日起施行。
+"""
 
 #: 帧间延迟（毫秒）。桩按 4 个字符一片切正文，一段几百字的回答就有几十片 ⇒
 #: 60ms 给出数秒的"正在吐"窗口，主线程在这段窗口里发停止请求**来得及**（收到 3 片就停）。
@@ -219,20 +257,179 @@ def chat_collect(token: str, body: dict, deadline: float = 120.0) -> list[dict]:
 # ──────────────────────────────── 夹具 ────────────────────────────────
 
 
-def pick_chat_model(token: str) -> str:
-    _, payload = call("GET", "/models?size=50", token)
-    for row in data_of(payload).get("list") or []:
-        if row.get("kind") == "CHAT" and row.get("status") == "LOADED":
-            return row["id"]
-    return ""
+def ensure_chat_model(token: str) -> tuple[str, bool]:
+    """取一个**已加载**的对话模型；已加载的没有就加载一个，一个都没有就建一个。
+
+    返回 `(model_id, created)` —— `created=True` 时 finally 里要删掉。
+
+    ★ 为什么必须自己兜这一层（2026-10-27 首次跑挂在这里，日志逐字「没有已加载的对话模型」）：
+      `ci.yml` 里**没有任何 seed 步骤**，真库启动时一个已加载的 CHAT 模型都没有；
+      而没加载的模型发不出流式响应，于是"第 1 轮提问 500"会被误读成"流式坏了"。
+      造法与 `check_query_understanding_e2e.py:157-177` 一致（`stub-plain` + 桩的 `apiBase`），
+      `POST /models/{id}/load` 是异步的，所以这里轮询到 LOADED 才算就绪（不固定 sleep）。
+    """
+    _, payload = call("GET", "/models?kind=CHAT&size=50", token)
+    rows = data_of(payload).get("list") or []
+    for row in rows:
+        if row.get("status") == "LOADED":
+            return str(row["id"]), False
+
+    if rows:
+        model_id, created = str(rows[0]["id"]), False
+    else:
+        status, payload = call(
+            "POST",
+            "/models",
+            token,
+            {
+                "name": f"S3整链-对话-{int(time.time())}",
+                "kind": "CHAT",
+                "supplier": "LOCAL_INFERENCE",
+                "baseModel": "stub-plain",
+                "apiBase": STUB_API_BASE,
+            },
+        )
+        if status not in (200, 201):
+            raise SystemExit(f"建对话模型失败（{status}）：{payload[:300]}")
+        model_id, created = str(data_of(payload).get("id") or ""), True
+        if not model_id:
+            raise SystemExit(f"建对话模型没返回 id：{payload[:300]}")
+
+    status, loaded = call("POST", f"/models/{model_id}/load", token, {})
+    if status not in (200, 202):
+        raise SystemExit(f"加载对话模型失败（{status}）：{loaded[:300]}")
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        _, payload = call("GET", "/models?kind=CHAT&size=50", token)
+        for row in data_of(payload).get("list") or []:
+            if str(row.get("id")) == model_id and row.get("status") == "LOADED":
+                return model_id, created
+        time.sleep(0.5)
+    raise SystemExit(f"对话模型 {model_id} 在 120s 内没变成 LOADED")
 
 
-def pick_kb_with_docs(token: str) -> str:
-    _, payload = call("GET", "/knowledge-bases?size=50", token)
+def ensure_embedding_model(token: str) -> tuple[str, bool]:
+    """取一个可用的向量模型；没有就建一个（返回值第二项 = 是不是我建的，删的时候要用）。"""
+    _, payload = call("GET", "/models?kind=EMBEDDING&size=50", token)
     for row in data_of(payload).get("list") or []:
-        if (row.get("documentCount") or 0) > 0:
-            return row["id"]
-    return ""
+        if row.get("status") in ("LOADED", "UNLOADED", "LOADING", None):
+            return str(row["id"]), False
+    status, payload = call(
+        "POST",
+        "/models",
+        token,
+        {
+            "name": f"S3整链-向量-{int(time.time())}",
+            "kind": "EMBEDDING",
+            "supplier": "LOCAL_INFERENCE",
+            "baseModel": "bge-m3",
+            "dimension": 768,
+        },
+    )
+    if status not in (200, 201):
+        raise SystemExit(f"建向量模型失败（{status}）：{payload[:300]}")
+    return str(data_of(payload).get("id") or ""), True
+
+
+def upload_text(token: str, kb_id: str, path: str) -> str:
+    """multipart 上传一个 .md（手写 boundary —— 标准库里没有现成的 multipart 编码）。"""
+    boundary = "----s3chain" + str(int(time.time() * 1000))
+    head = b""
+    for key, value in (
+        ("docType", DOC_TYPE),
+        ("orgId", ORG_ROOT),
+        ("classification", DOC_CLASSIFICATION),
+    ):
+        head += (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{key}"\r\n\r\n{value}\r\n'.encode("utf-8")
+        )
+    with open(path, "rb") as handle:
+        content = handle.read()
+    body = (
+        head
+        + (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="files"; filename="{os.path.basename(path)}"\r\n'
+            "Content-Type: text/markdown\r\n\r\n"
+        ).encode("utf-8")
+        + content
+        + b"\r\n"
+        + f"--{boundary}--\r\n".encode("utf-8")
+    )
+    req = urllib.request.Request(
+        API + f"/knowledge-bases/{kb_id}/documents",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Authorization": f"Bearer {token}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            payload = resp.read().decode("utf-8", errors="replace")
+            rows = (json.loads(payload) or {}).get("data") or []
+            if isinstance(rows, dict):
+                rows = rows.get("list") or []
+            if not rows:
+                raise SystemExit(f"上传没返回文档：{payload[:200]}")
+            return str(rows[0]["id"])
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"上传失败（{e.code}）：{e.read().decode('utf-8', 'replace')[:300]}") from e
+
+
+def wait_document(token: str, kb_id: str, doc_id: str, wanted: set[str], seconds: float) -> dict:
+    """轮询文档状态直到落进 `wanted`（★ 不用固定 sleep：解析快慢随机器变）。"""
+    deadline = time.time() + seconds
+    last: dict = {}
+    while time.time() < deadline:
+        _, payload = call("GET", f"/knowledge-bases/{kb_id}/documents?page=1&size=50", token)
+        for row in data_of(payload).get("list") or []:
+            if str(row.get("id")) == doc_id:
+                last = row
+                if row.get("status") in wanted:
+                    return row
+        time.sleep(0.2)
+    raise SystemExit(f"文档 {doc_id} 在 {seconds}s 内没到 {wanted}（最后状态 {last.get('status')}）")
+
+
+def build_kb(token: str, stamp: str, workdir: str) -> tuple[str, str, str, bool]:
+    """自造一条"能引用的内容"：向量模型 + 空库 + 一份真文档 + 向量化。
+
+    返回 `(kb_id, doc_id, model_id, created_model)`。
+    """
+    model_id, created_model = ensure_embedding_model(token)
+    status, payload = call(
+        "POST",
+        "/knowledge-bases",
+        token,
+        {
+            "name": f"S3整链-库-{stamp}",
+            "category": KB_CATEGORY,
+            "description": "S3 整链闸门的临时知识库（跑完即删）",
+            "importType": "LOCAL",
+            "embeddingModelId": model_id,
+            "maxClassification": "SECRET",
+        },
+    )
+    if status not in (200, 201):
+        raise SystemExit(f"建知识库失败（{status}）：{payload[:300]}")
+    kb_id = str(data_of(payload).get("id") or "")
+
+    path = os.path.join(workdir, "s3chain.md")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(FIXTURE_TEXT)
+    doc_id = upload_text(token, kb_id, path)
+    # ★ 解析落地即可：向量化是**用户显式动作**，后端不会自动推进。
+    doc = wait_document(token, kb_id, doc_id, {"PENDING_EMBEDDING", "SEGMENT_FAILED"}, 180)
+    if doc.get("status") != "PENDING_EMBEDDING":
+        raise SystemExit(f"夹具文档解析失败（{doc.get('status')}）：{doc.get('failReason')}")
+    call("POST", f"/documents/{doc_id}/embedding", token, {})
+    doc = wait_document(token, kb_id, doc_id, {"SUCCEEDED", "EMBEDDING_FAILED"}, 180)
+    if doc.get("status") != "SUCCEEDED":
+        raise SystemExit(f"夹具文档向量化失败（{doc.get('status')}）：{doc.get('failReason')}")
+    return kb_id, doc_id, model_id, created_model
 
 
 def create_assistant(token: str, model_id: str, kb_id: str, stamp: str) -> str:
@@ -302,13 +499,12 @@ def main() -> int:
         raise SystemExit("登录成功但没拿到 accessToken")
     print("  已登录（admin）")
 
-    model_id = pick_chat_model(token)
-    if not model_id:
-        raise SystemExit("没有已加载的对话模型：S3 需要先加载一个 CHAT 模型")
-    kb_id = pick_kb_with_docs(token)
-    if not kb_id:
-        raise SystemExit("没有含文档的知识库：S3 要求有可引用的内容")
+    model_id, created_chat = ensure_chat_model(token)
+    print(f"  夹具：对话模型 {model_id}（{'本闸门新建并加载' if created_chat else '复用已加载的'}）")
     stamp = str(int(time.time()))
+    workdir = tempfile.mkdtemp(prefix="s3chain-")
+    kb_id, doc_id, embedding_model_id, created_model = build_kb(token, stamp, workdir)
+    print(f"  夹具：知识库 {kb_id} · 文档 {doc_id}（已向量化）")
     app_id = create_assistant(token, model_id, kb_id, stamp)
     conversation_id = create_conversation(token, app_id)
     print(f"  夹具：应用 {app_id} · 会话 {conversation_id}")
@@ -540,6 +736,25 @@ def main() -> int:
             for row in data_of(listing).get("list") or []:
                 call("DELETE", f"/conversations/{row.get('id')}", token)
             call("DELETE", f"/assistants/{app_id}", token)
+        # ★ 夹具的删除顺序由后端决定：模型"被知识库/应用引用"时删不掉，所以先删应用（上面）→
+        #   再删文档 → 再删库 → 最后删我建的模型。
+        if doc_id:
+            call("DELETE", f"/documents/{doc_id}", token)
+        if kb_id:
+            call("DELETE", f"/knowledge-bases/{kb_id}", token)
+        if created_model and embedding_model_id:
+            call("DELETE", f"/models/{embedding_model_id}", token)
+        # ★ 只删**自己建的**对话模型：复用的那个是别人的夹具，删掉会让后面的闸门找不到可用模型。
+        if created_chat and model_id and model_id != embedding_model_id:
+            call("DELETE", f"/models/{model_id}", token)
+        try:
+            os.remove(os.path.join(workdir, "s3chain.md"))
+        except OSError:
+            pass
+        try:
+            os.rmdir(workdir)
+        except OSError:
+            pass
 
     if problems:
         print(f"\n结果：红 —— {len(problems)} 条不成立")
