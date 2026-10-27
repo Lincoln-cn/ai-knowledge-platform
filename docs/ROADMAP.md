@@ -1835,3 +1835,36 @@ artifact 的 `backend.log` 里只有五条 Tomcat 层 NPE —— `MimeHeaders.re
    后者在消息体里出现同名词时也会绿。
 3. **修「看不见」不等于修「不会发生」**：`#216` 判据 ② 是「连续 200 次 0 次 500」，那要先能复现那次偶发；
    本轮没有复现手段，所以 Issue **不关**，只补目击证据。
+
+#### 11.10.30 2026-10-28 A7 写入口铺开到八处（并补一颗能红的静态闸门）
+
+**为什么先做这一件**：A7 之前只有三处按钮读数，且三处是**手写**的 —— 手写断言的数量上限 = 写的人想得起来的入口数。更关键的是它抓不到一整类缺陷：**一个写入口借用语义不相关的权限点**，或**一颗权限点没有任何角色持有**。后者本轮真的抓到了一颗（`#220`）。
+
+**这一轮做了什么**
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | 三段手写断言 → 数据驱动表 `WRITE_ENTRIES`（7 字段：路由 / 名称 / 按钮文案 / 权限点 / 应可见账号 / 只检查哪些账号 / 是否精确匹配），从 3 处铺到 **8 处** | `frontend/verify_permissions.py` |
+| 2 | 路由矩阵补 `/org`、`/settings/chat`（均仅 admin）⇒ **12 条路由 × 4 角色** | 同上（`MATRIX`） |
+| 3 | 新增静态闸门：前后端权限点值集合相等 · mock 目录覆盖全部常量 · 目录无笔误 · 四角色集合逐点等于后端初始映射 · `src/**` 引用的 `PERM.*` 都有定义（**8 条**） | `frontend/check_permission_catalog.py`（新） |
+| 4 | 静态闸门从 7 道变 8 道 | `.github/workflows/ci-fast.yml` |
+| 5 | mock 权限夹具补 `knowledge:qa:edit` 与 `conversation:settings` 两颗点，`KB_OPERATOR` 对齐后端 | `frontend/src/mock/fixtures/identity.ts` |
+
+**读数**
+
+| 读数 | 值 |
+| --- | --- |
+| CI 浏览器闸门（dev server，head `b0983ea`） | run `40557079218` ⇒ `权限门禁断言 83/83 通过`；4 条 SKIP = `chenjun` 对共享档库不展开详情 |
+| 本地 dist + mock | `AIP_GATE_PORT=14213 python verify_permissions.py` ⇒ **79/79**（原 63/63） |
+| 静态闸门 | `python check_permission_catalog.py` ⇒ **8/8**；修 mock 夹具前是 **6/8** |
+| 快闸（含第 8 道静态闸门） | run `40557079323` ✅ 53s |
+
+**这一轮抓到的真缺陷**（`#220`）：`frontend/src/mock/fixtures/identity.ts` 的权限点目录只登记 18 颗，缺 `knowledge:qa:edit` 与 `conversation:settings` ⇒ 这两颗点**没有任何角色持有** ⇒ `QuestionPanel.vue:161` 的 `canEdit`（守「新建问答对」「批量新建」「改名」「删除」）与 `pages/settings/chat/Index.vue:360` 的 `canEdit`（守整页可编辑）**对包括 admin 在内的所有人恒假**；且 `KB_OPERATOR` 的 mock 集合比后端初始映射少 `knowledge:qa:edit`。既有闸门一个都抓不到：`check_flow_walkthrough` / `verify_features` 都不数权限复选框。
+
+**反证（实测）**：把 `PERM.qaEdit` 从 mock 的 `KB_OPERATOR` 摘掉 → 重建 dist → 跑闸门 ⇒ **78/79**，唯一红行 `FAIL  知识运营 ▸ 知识库详情 · 新建问答对（knowledge:qa:edit）应可见    实得 0 个`；恢复后 79/79。
+
+**三条判据**
+
+1. **一条权限点断言必须先问「谁能持有它」** —— 静态闸门比按钮断言便宜一个量级，且它能红的那一类缺陷（无人持有 / 语义错配）按钮断言抓不到。
+2. **按钮文案要能精确匹配** —— `/knowledge?kb=kb4&tab=settings` 里同时有「保存」与恒在的「保存检索参数」，模糊匹配会让断言量到后者。
+3. **量「权限」不能靠需要前置状态的东西** —— `/org` 用「新增根部门」（header 常驻）而不是「新增下级」（要先选中节点），否则量的是「有没有选中」。
