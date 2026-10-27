@@ -109,6 +109,8 @@ public class SecurityConfig {
         //   （见 PublicRateLimitFilter 的类注释：登录面不该按 IP 掐）。
         .addFilterBefore(publicRateLimitFilter, BearerTokenAuthenticationFilter.class)
         // ★ X-API-Key（#195 使用侧）：排在 Bearer 之前 —— 两者同时出现时本过滤器让路，登录身份优先。
+        // ★★ 反证（#218，已实测）：把下一行整行删掉 ⇒ AssistantApiKeyAuthHttpTest 会红
+        //    （expected: 200，实得 401）—— 因为容器级自动注册已被 apiKeyFilterRegistration 摘掉。
         .addFilterBefore(apiKeyFilter, BearerTokenAuthenticationFilter.class)
         // ★ JWT 的验签与解析交给官方（08 §4.2.2：不手写 JWT 解析 Filter）
         .oauth2ResourceServer(
@@ -195,8 +197,9 @@ public class SecurityConfig {
   /**
    * {@code X-API-Key} 的认证过滤器。
    *
-   * <p>★ 在这里声明成 bean 而不是给过滤器类加 {@code @Component}：Spring Boot 会把容器里的每个 {@code Filter} bean 自动注册到
-   * servlet 链上，那会让它在 Security 链之外**再跑一次**。这里只让 Security 链持有它。
+   * <p>★ 这里声明成 bean 而不是给过滤器类加 {@code @Component}：类上不加注解至少说明"意图是只让 Security 链持有它"。 ★★
+   * <strong>但意图不等于事实</strong>（{@code #218}）：Spring Boot 会把容器里每个 {@code Filter} bean 自动注册到 servlet
+   * 链，所以光靠"不加 {@code @Component}"挡不住第二次注册 —— 必须显式摘掉， 见 {@link #apiKeyFilterRegistration}。
    */
   @Bean
   ApiKeyAuthenticationFilter apiKeyAuthenticationFilter(
@@ -210,6 +213,35 @@ public class SecurityConfig {
       RestAuthenticationEntryPoint entryPoint) {
     return new ApiKeyAuthenticationFilter(
         authenticator, users, roles, rolePermissions, tokens, decoder, converter, entryPoint);
+  }
+
+  /**
+   * ★★ 关掉 {@link ApiKeyAuthenticationFilter} 的<strong>容器级自动注册</strong>，只留 {@code apiFilterChain}
+   * 里那一条（{@code #218}）。
+   *
+   * <h3>为什么这条欠账必须还</h3>
+   *
+   * <p>{@code #214} 做限流时做反证实验才发现的：把 {@code apiFilterChain} 里的 {@code
+   * addFilterBefore(publicRateLimitFilter, …)} 整行删掉，测试<strong>仍然全绿</strong> —— 真正干活的是容器自动注册的那一份。
+   * 同一个形状在 {@code ApiKeyAuthenticationFilter} 上一模一样，只是它跑错了位置<strong>不会</strong>报错：
+   *
+   * <ul>
+   *   <li>写在 {@code BearerTokenAuthenticationFilter} 之前，是为了"两者同时出现时 API Key 让路、登录身份优先"；
+   *   <li>被容器自动注册时它跑在<strong>整条 Security 链之外</strong>的位置，于是这条优先级没有代码在保证 —— 谁先看到请求取决于 Boot 注册的
+   *       order，而那是配置的偶然值。
+   * </ul>
+   *
+   * <p>摘掉自动注册之后，位置就变成"被 Security 链钉住的"，而且可被反证实验验证（删 {@code addFilterBefore} 那一行 ⇒ 带 {@code
+   * X-API-Key} 的请求不再被识别）。两者都是 {@code OncePerRequestFilter}， 同请求去重让"跑两遍"一直隐形，所以这个错误不会以任何用户可见的方式暴露 ——
+   * 只能靠断言。
+   */
+  @Bean
+  FilterRegistrationBean<ApiKeyAuthenticationFilter> apiKeyFilterRegistration(
+      ApiKeyAuthenticationFilter filter) {
+    FilterRegistrationBean<ApiKeyAuthenticationFilter> registration =
+        new FilterRegistrationBean<>(filter);
+    registration.setEnabled(false);
+    return registration;
   }
 
   @Bean
