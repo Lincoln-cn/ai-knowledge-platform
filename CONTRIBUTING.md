@@ -38,6 +38,10 @@ npm run dev
 要让页面连真后端：在 `frontend/.env.local` 写 `VITE_USE_MOCK=false` 再 `npm run dev`。
 **页面代码一行不改** —— `VITE_USE_MOCK` 是唯一开关，mock 只住在传输层。
 
+想看**业务示例数据**（3 个库 / 3 份文档 / 9 条分段 / 2 个模型占位 / 2 个应用）：
+起后端前设 `SEED_SAMPLE_DATA=true`。它默认关 —— 灌进去的是业务数据，会打红一批「按条数断言」
+的集成测试，所以只在试用/演示环境打开（`docs/ROADMAP.md §11.10.28`）。
+
 ## 3. 测试与闸门
 
 ```powershell

@@ -58,7 +58,7 @@ A7 权限生效（前端看不到按钮 **且** 直接调接口被拒）· A8 �
 | 量化指标（`04` §6.3） | **B1 命中率 ≥70%** · **B2 答案可用率 ≥75%** · B3 引用准确率 ≥80% · **B4 首字延迟 ≤10s**（CPU/4B）· B5 完整回答 ≤60s · B6 入库 ≥3 段/秒 · B7 连续 200 次问答无未处理异常 |
 | 前端闸门 | `vue-tsc` 0 · 模板配平 · 设计系统维度全 0 · `build:mock` ✓ · 11 个脚本 exit 0 · console 0 |
 | 后端闸门 | 架构校验测试通过 · 关键链路集成测试通过 · **契约漂移检测**通过（见 §七） |
-| 工程 | **CI（GitHub Actions）跑通**：前端 11 个脚本 + `vue-tsc`/`build` + 后端四类闸门 · `docker-compose.yml` 一条命令起（应用 + PG/pgvector + 模型网关）· 示例数据种子 |
+| 工程 | **CI（GitHub Actions）跑通**：前端 11 个脚本 + `vue-tsc`/`build` + 后端四类闸门 · `docker-compose.yml` 一条命令起（应用 + PG/pgvector + 模型网关）· 示例数据种子（★ 2026-10-28 已有：`db/seed/V900__sample_business_data.sql`，`SEED_SAMPLE_DATA=true` 打开，见 §11.10.28） |
 | 文档 | 面向贡献者的「如何加一个模块」· CHANGELOG 起点 |
 
 > **B1/B2 不达标不是"功能没做完"，而是假设 H1 不成立** —— 此时正确的动作是回机制二（检索策略）
@@ -1288,7 +1288,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | 4 | **P1 语料** | `§六` 6.1 | **0 份标注语料**；≥50 文档 / ≥50 问题 / ≥2 评审人，业务侧要 2–3 周 | **今天启动**（最长前置） |
 | 5 | **F2 首次引导** | `§五` | 全库 `onboarding / 首次引导 / 引导流程` **0 命中** | 不依赖后端，可并行 |
 | 6 | **F4 空态 / 错误态盘点** | `§五` | 未做；只有零散的 `PAGEERROR` 修复（`#160`） | 逐页清单 |
-| 7 | **发布台账** | `§4.7.1` 判据 4 | ★ **2026-10-24 已补**：`CHANGELOG.md` 有 `0.4.5` 条目（SSE 链路 + 判据①–⑤读数 + `#62` 边界）；版本三处对齐为 **`0.4.5`**（`backend/pom.xml` · `frontend/package.json` · `frontend/package-lock.json`）。★ **2026-10-25 已补贡献者文档**：根目录 `CONTRIBUTING.md`（环境 / 起服务 / 闸门 / 加一个模块 / 三格配对 / 提交纪律），`README.md` 与 `backend/README.md` 的过时进度也已订正。仍缺：业务示例数据（只有账号/组织/提示词类型 seed） | 发布前补示例数据；`0.5.0` 读数另账 |
+| 7 | **发布台账** | `§4.7.1` 判据 4 | ★ **2026-10-24 已补**：`CHANGELOG.md` 有 `0.4.5` 条目（SSE 链路 + 判据①–⑤读数 + `#62` 边界）；版本三处对齐为 **`0.4.5`**（`backend/pom.xml` · `frontend/package.json` · `frontend/package-lock.json`）。★ **2026-10-25 已补贡献者文档**：根目录 `CONTRIBUTING.md`（环境 / 起服务 / 闸门 / 加一个模块 / 三格配对 / 提交纪律），`README.md` 与 `backend/README.md` 的过时进度也已订正。★ **2026-10-28 已补业务示例数据**：`db/seed/V900__sample_business_data.sql`（3 库 / 3 文档 / 9 分段 / 2 模型占位 / 2 应用 / 2 提示词），由 `SEED_SAMPLE_DATA=true` 打开（默认关，理由见 §11.10.28） | `0.5.0` 读数另账 |
 
 > ★ 第 17 周的 ③ 与 ④ **已经在代码里收口**，别再按 2026-10-15 的审计表读：心跳线程在 `ChatService.java:508` 先于 `:511` 的 `retrieve` 启动；`assembler.addUsage(...)` 在 `ChatService.java:1651` 有生产调用点。**剩下的只有 ⑤**。
 
@@ -1351,7 +1351,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 4. **A1–A9 台账**：`docs/验收台账.md` 已建（2026-10-25）；A6 的 10 轮窗口读数已补（`ChatHistoryBeforeTest` 4/4），下一步补 A7「按钮不可见」与 A2/A3/A4/A8 的归档读数。
 5. **B1–B7**：语料到位后跑；开测前先清 `#71` / `#51` 两个入库侧读数。
 6. **F2 + F4**：不依赖后端，可与 3–5 并行。
-7. **发布卫生**：★ 版本三处已对齐 `0.4.5`、`0.4.5` 条目已补（2026-10-24）· **贡献者文档已补**（`CONTRIBUTING.md`，2026-10-25，含「加一个模块」）· `0.5.0` CHANGELOG 待验收读数 · 业务示例数据。
+7. **发布卫生**：★ 版本三处已对齐 `0.4.5`、`0.4.5` 条目已补（2026-10-24）· **贡献者文档已补**（`CONTRIBUTING.md`，2026-10-25，含「加一个模块」）· `0.5.0` CHANGELOG 待验收读数 · **业务示例数据已补**（2026-10-28，`db/seed` + `SEED_SAMPLE_DATA`，§11.10.28）。
 8. **功能账按页面价值排**：`#187` 会话附件（shares 三条已于 2026-10-25 落，见 §11.10.17）→ 知识库共享 UI → 模型探测/密钥 → `#198` 编排。（`#195` 的 API Key 使用侧已于 2026-10-24 补，见 §11.10.15；M5.5 编排仍不等 0.5.0。）
 
 **7. 明确现在不做的（写下来防止反复讨论）**
@@ -1406,7 +1406,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | tag / Release | 注释 tag **`v0.4.5`**（指向 `bd20b67`）已推送；GitHub Release `v0.4.5` 已发布（非 draft / 非 prerelease），正文取 CHANGELOG 的 0.4.5 节：<https://github.com/Lincoln-cn/ai-knowledge-platform/releases/tag/v0.4.5> |
 | 贡献者文档 | ★ **2026-10-25 已补** 根目录 [`CONTRIBUTING.md`](../CONTRIBUTING.md)：三处真源 / 环境（JDK25 wrapper、Docker、桩模型）/ 起服务 / 闸门（单类、两条架构模式、Spotless）/ **加一个模块的 8 步**（`@ApplicationModule`、`ModuleBoundaryTest` 的 12→13、跨模块端口、V54 迁移）/ 三格配对 / 编码命名 / Issue 与提交纪律。`README.md` 与 `backend/README.md` 的过时进度同步订正 |
 | 发布台账闸门 | ★ **2026-10-25 新增**（`0821778`）`tools/check_release_metadata.py`：① `backend/pom.xml` / `frontend/package.json` / `frontend/package-lock.json`（根与 `packages[""]`）四处同号；② 版本号不得带 `-SNAPSHOT`；③ `CHANGELOG.md` 有 `## <version>` 且该节正文非占位。`--self-test` 用四个临时样本（一致 / package 漂移 / 缺节 / SNAPSHOT）证明**它会红**；已接进快闸后端 job |
-| 还没做 | 业务示例数据（当前只有账号/组织/提示词类型 seed）· `0.5.0` 的 S1–S3 / A1–A9 / B1–B7 读数 |
+| 还没做 | `0.5.0` 的 S1–S3 / A1–A9 / B1–B7 读数（示例数据已于 2026-10-28 补上，§11.10.28） |
 | 判据 | ① **版本号是发布切点，不是构建号**：对齐发生在"可发布"那一刻，不能一边叫 0.1.0 一边在 CHANGELOG 写 0.4.5；② **CHANGELOG 不写文件清单**：只写"这一版能演示什么"与判据读数；③ **已知边界要写在发布说明里**：`#62` 不因为版本号前进而消失 |
 
 #### 11.10.15 2026-10-24 API Key 使用侧（`X-API-Key` 鉴权链）
@@ -1733,3 +1733,58 @@ A8 一直是 🟡 且理由不是读数不足 —— 全仓 `grep -E '(?i)(rate.
 1. **「删掉了」与「删干净了」要分开读** —— 应用的删除返回 200 只说明软删成功，它留下的绑定行会不会反噬别的删除入口，得另一条断言去问。
 2. **引用数这种口径必须写清"算谁的引用"** —— 不写清就会在某个入口上和另一个模块的软删语义打架（本批正是）。
 3. **闸门里的「绕过去」要留账** —— 夹具按标记复用能绕过缺陷，但那是绕；绕过去之后必须把原缺陷开成 Issue 并修，否则下次它会在别处咬人（本批的 `#217` 就是这么被发现的）。
+
+#### 11.10.28 2026-10-28 业务示例数据种子（`db/seed` + 一个显式开关）
+
+**一、它补的是发布台账最后一行**
+
+发布台账第 7 行一直写着「仍缺：业务示例数据（只有账号/组织/提示词类型 seed）」。今天补上：`backend/src/main/resources/db/seed/V900__sample_business_data.sql`。
+
+内容（全部用可读的固定 uuid：`5ee1…` 模型 · `5ee2…` 库 · `5ee3…` 文档 · `5ee4…` 分段 · `5ee5…` 提示词类型 · `5ee6…` 提示词 · `5ee7…` 应用）：
+
+| 对象 | 条数 | 形状 |
+| --- | --- | --- |
+| 模型 | 2 | 对话 `qwen2.5:7b` + 向量 `bge-m3`（dimension 1024、`max_chars` 400），都是 `NOT_LOADED`、无密钥 |
+| 知识库 | 3 | 密级上限 `SECRET` / `INTERNAL` / `PUBLIC` 各一个，正好覆盖可见性判定的三档 |
+| 文档 | 3 | 已解析、`PENDING_EMBEDDING`、`processed_segments = 0` |
+| 分段 | 9 | 每份文档 3 段，`PENDING_EMBEDDING`，`search_text = content` |
+| 提示词 | 1 类型 + 2 条 | 「严谨口径」「引用口径」；`#215` 之后它们真的会进 system prompt |
+| 应用 | 2 | SIMPLE：各绑 1 个库；第二个绑两条提示词（`as_assistant_prompt`） |
+
+**二、为什么不放进 `db/migration/**`，而是要一个开关**
+
+集成测试与迁移共用同一个库。示例数据灌的是**业务数据**，默认灌进去会让一批「按条数断言」的用例红 —— 例如 `KnowledgeBaseManagementTest`「第一页 size=2」、`AssistantPublishCheckTest`「page.list() 两条」。那不是产品坏了，而是「库里有别人的数据」被断言成了「库里没有别人的数据」。
+
+⇒ 脚本放在 `classpath:db/seed`，默认**不扫**；`app.seed.sample-data=true` 时由 `cn.lincoln.aiplatform.platform.seed.SampleDataFlywayConfiguration` 把它**追加**到 `spring.flyway.locations` 末尾（用 `FlywayConfigurationCustomizer`，不自己 new `Flyway`，否则会丢掉 Boot 的 migrate-at-startup / baseline）。
+
+这**不与** `V4__identity_seed_demo_accounts.sql` 的口径冲突：那份 seed 说明的是「seed 该走 Flyway 而不是启动时 Runner」（只跑一次、顺序固定、不与测试事务边界打架），本文件同样走 Flyway，只是位置与开关不同。
+
+**三、两条数据形状的取舍**
+
+1. **两个模型都不加载、不带密钥** —— 示例数据不替使用者决定接哪个推理服务；库/文档/分段/应用全都建好，只剩「把 `api_base` 指过去 → 点加载 → 点向量化」这三步，而这正是新用户第一次打开系统要走的路。
+2. **文档停在 `PENDING_EMBEDDING`（0 段已处理）** —— 向量化是用户的显式动作（`EmbeddingRunner` 只由 `POST /documents/{id}/embedding` 触发）。替他跑完会让「待向量化 → 向量化中 → 已就绪」这条状态机在演示里消失，而它是最容易出静默 bug 的一段。
+
+**四、读数**
+
+`SampleBusinessDataSeedTest`（真 HTTP + Testcontainers，`@TestPropertySource(app.seed.sample-data=true)`）⇒ **`Tests run: 4, Failures: 0, Errors: 0`** / `BUILD SUCCESS`：
+
+- 三个库都能被 `/knowledge-bases` 读出来，`documentCount = 1`、`segmentCount = 3`（★ 计数列不手写常量，由脚本末尾的 `update … (select count(*) …)` 从真实行算回来 —— 手写常量会在改正文时静默过期，而列表页读的就是这几列）；
+- 文档 `status = PENDING_EMBEDDING`、`processedSegments = 0`，`/segments` 正好 3 条、全部 `PENDING_EMBEDDING`、正文含「八十元」；
+- 「产品说明问答示例」的 `promptIds` 两条、`kbIds` 一条；
+- 两个模型 `NOT_LOADED`、向量模型 `dimension = 1024`。
+
+脚本第一次跑就抓到一个真错：`column "kind" of relation "kb_document" does not exist` —— `kind` 是 `V34` 加在 `kb_knowledge_base` 上的列，文档那边只有 `scope_kind/scope_id/owner_id` 三列。这正是「脚本本身合不合法」要有读数的理由。
+
+**五、打开方式**
+
+```powershell
+# 试用 / 演示环境：让 Flyway 多扫一格，迁移只跑一次
+$env:SEED_SAMPLE_DATA = "true"
+cd backend; .\mvn-jdk25.cmd spring-boot:run
+```
+
+**三条判据**
+
+1. **示例数据要"能用的一半"，不要"跑完的一半"** —— 把状态机停在用户需要动手的那一格，比给一个看起来完整、但每一步都点不动的夹具诚实。
+2. **计数列不许手写常量** —— 派生值一旦手写，正文一改就静默过期，而界面读的正是它。
+3. **「默认关」这件事必须有读数** —— 它不是一句注释：打开它会让一批按条数断言的用例红，所以默认关是**测试集合的形状**要求，不是口味。

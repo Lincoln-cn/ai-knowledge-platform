@@ -67,6 +67,16 @@ spring:
       api-key: ${AI_API_KEY:ollama-local}
 
 app:
+  # ─── 业务示例数据（`db/seed`，默认关闭）───
+  #
+  # ★ 只有打开时才把 `classpath:db/seed` 追加进 Flyway 的 locations（见
+  #   `cn.lincoln.aiplatform.platform.seed.SampleDataFlywayConfiguration`）。
+  # ★ 为什么默认关：集成测试与它共用同一套迁移，默认灌业务数据会让一批「按条数断言」
+  #   的用例红 —— 详细理由写在 `db/seed/V900__sample_business_data.sql` 头部。
+  # ★ 试用/演示环境打开：`SEED_SAMPLE_DATA=true` 后再启动后端（迁移只跑一次）。
+  seed:
+    sample-data: ${SEED_SAMPLE_DATA:false}
+
   # ─── 进程内 ONNX 向量化（`#172`）───
   #
   # ★★ 默认模型 = `multilingual-e5-small`（**中英双语**，384 维，int8 112.8MB）。
