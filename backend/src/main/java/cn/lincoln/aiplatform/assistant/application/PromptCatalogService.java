@@ -228,11 +228,22 @@ public class PromptCatalogService {
     }
   }
 
+  /**
+   * 引用数 = <strong>还活着的</strong>应用数。
+   *
+   * <p>★ {@code #217}：删应用是软删（{@code Assistant#markDeleted} 只写 {@code deleted_at}），绑定表 {@code
+   * as_assistant_prompt} 里那几行不会跟着消失。早期口径只 count 绑定表、不看 {@code
+   * as_assistant.deleted_at}，后果是任何被应用用过的提示词<strong>永久删不掉</strong>（400「已被 1 个应用引用」），而那个应用早就从界面上消失了
+   * —— 用户没有任何办法解开这个环，连它的类型也被「该类型下还有 N 个提示词」一起锁死。
+   *
+   * <p>口径选择：按「活着的引用」算，而不是在删应用时级联删绑定行。级联删会把「这个提示词曾被谁用过」这段历史一起丢掉（排查与审计要用），而「能不能删」只该看「现在还有没有人在用」。
+   */
   private long usageCount(UUID configId) {
     Long count =
         jdbc.queryForObject(
-            "select count(distinct assistant_id) from as_assistant_prompt where prompt_config_id ="
-                + " ?",
+            "select count(distinct p.assistant_id) from as_assistant_prompt p"
+                + " join as_assistant a on a.id = p.assistant_id"
+                + " where p.prompt_config_id = ? and a.deleted_at is null",
             Long.class,
             configId);
     return count == null ? 0 : count;
