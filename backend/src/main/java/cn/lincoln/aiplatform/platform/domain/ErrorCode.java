@@ -68,6 +68,17 @@ public enum ErrorCode {
    */
   NOT_FOUND(404, "资源不存在"),
 
+  /**
+   * 请求过于频繁（公开面限流，{@code #214}）。
+   *
+   * <p>★ 码值与 HTTP <strong>429</strong> 对齐 —— 与 401/403/404 同族。两者都给的理由是前端有两条分支路径： 一条看 HTTP 状态（{@code
+   * lib/http.ts}），一条看包络 {@code code}；少给一边就有客户端永远看不到限流。
+   *
+   * <p>★ 它是<strong>可重试</strong>的：{@code hint} 里带"还有多少秒"，响应头带 {@code Retry-After}。 这一点与 {@link
+   * #UPSTREAM_UNAVAILABLE} 不同（后者要人去查服务）。
+   */
+  TOO_MANY_REQUESTS(429, "请求过于频繁"),
+
   /** 模型尚未加载完成等可重试状态（modelcatalog）。 */
   MODEL_NOT_READY(2001, "模型未就绪"),
   /** 上游模型服务不可用（连不上 / 响应不合规）—— 与 400 分开：用户改不动请求，下一步是查服务或重试。 */

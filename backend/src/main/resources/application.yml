@@ -127,6 +127,16 @@ app:
       max-attempts: ${LOGIN_MAX_ATTEMPTS:3}
       lock-duration: ${LOGIN_LOCK_DURATION:30m}
 
+    public-rate-limit:
+      # ★ 公开面（免登录）限流（#214）：链接解析 / 读历史 / 停止生成 / 带 X-Access-Credential 的问答流。
+      #   它缺的从来不是读数，是实现 —— 2026-10-27 全仓 grep rate.?limit|bucket4j|throttl 是 0 命中。
+      #   ★ enabled 默认 true：安全开关的默认值必须是"开着"，否则漏配的环境会静默退回无限流。
+      #   ★ 60 次 / 60 秒 = 一个访客正常读一条链接（解析 → 历史 → 问几轮）到不了的量。
+      #   ★ 真栈读数见 PublicRateLimitHttpTest（它会把 capacity 压到 3 来证"真的会 429"）。
+      enabled: ${PUBLIC_RATE_LIMIT_ENABLED:true}
+      capacity: ${PUBLIC_RATE_LIMIT_CAPACITY:60}
+      window-seconds: ${PUBLIC_RATE_LIMIT_WINDOW_SECONDS:60}
+
   model:
     # ⚠️ 本地开发默认密钥（Base64 的 32 字节随机串，只用于本机）。
     #    任何非本地环境都必须用环境变量覆盖 —— 这个值在仓库里，等于公开：

@@ -4,11 +4,14 @@ import cn.lincoln.aiplatform.identity.domain.RolePermissionRepository;
 import cn.lincoln.aiplatform.identity.domain.RoleRepository;
 import cn.lincoln.aiplatform.identity.domain.UserRepository;
 import cn.lincoln.aiplatform.platform.security.ApiKeyAuthenticator;
+import cn.lincoln.aiplatform.platform.security.PublicRateLimitFilter;
+import cn.lincoln.aiplatform.platform.security.PublicRateLimitProperties;
 import java.util.Base64;
 import java.util.List;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -50,7 +53,8 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableConfigurationProperties({
   JwtProperties.class,
   CaptchaProperties.class,
-  LoginFailureProperties.class
+  LoginFailureProperties.class,
+  PublicRateLimitProperties.class
 })
 public class SecurityConfig {
 
@@ -60,7 +64,8 @@ public class SecurityConfig {
       JwtAuthenticationConverter authorityConverter,
       RestAuthenticationEntryPoint entryPoint,
       RestAccessDeniedHandler deniedHandler,
-      ApiKeyAuthenticationFilter apiKeyFilter)
+      ApiKeyAuthenticationFilter apiKeyFilter,
+      PublicRateLimitFilter publicRateLimitFilter)
       throws Exception {
     http
         // 令牌式无状态 API：CSRF 不适用（官方做法）
@@ -98,6 +103,11 @@ public class SecurityConfig {
                     .permitAll()
                     .anyRequest()
                     .authenticated())
+        // ★ 公开面限流（#214）：排在认证之前 —— 它判的是"这个来源/这条链接还允许提问吗"，
+        //   与"你是谁"无关；放后面会让每个被限流的请求先白跑一次验签。
+        //   ★ 它只认 /api/v1/public/** 与带 X-Access-Credential 的 POST /conversations/chat
+        //   （见 PublicRateLimitFilter 的类注释：登录面不该按 IP 掐）。
+        .addFilterBefore(publicRateLimitFilter, BearerTokenAuthenticationFilter.class)
         // ★ X-API-Key（#195 使用侧）：排在 Bearer 之前 —— 两者同时出现时本过滤器让路，登录身份优先。
         .addFilterBefore(apiKeyFilter, BearerTokenAuthenticationFilter.class)
         // ★ JWT 的验签与解析交给官方（08 §4.2.2：不手写 JWT 解析 Filter）
@@ -139,6 +149,47 @@ public class SecurityConfig {
   @Bean
   PasswordEncoder passwordEncoder() {
     return new BCryptPasswordEncoder();
+  }
+
+  /**
+   * 公开面（免登录）限流器（{@code #214}）。
+   *
+   * <p>★ 它由 Security 链持有（{@code apiFilterChain} 里的 {@code addFilterBefore(…,
+   * BearerTokenAuthenticationFilter.class)}）。 ★★ <strong>但只写那一行是不够的</strong> —— 还必须把它从 Boot
+   * 的容器级自动注册里摘掉，见 {@link #publicRateLimitFilterRegistration}。
+   */
+  @Bean
+  PublicRateLimitFilter publicRateLimitFilter(PublicRateLimitProperties properties) {
+    return new PublicRateLimitFilter(properties);
+  }
+
+  /**
+   * ★★ 关掉 {@link PublicRateLimitFilter} 的<strong>容器级自动注册</strong>，只留 Security 链里那一条。
+   *
+   * <h3>为什么需要这一条 —— 这是实测出来的，不是推理出来的</h3>
+   *
+   * <p>Spring Boot 会把容器里<strong>每一个 {@code Filter} 类型的 bean</strong> 自动注册到 servlet 链上， 与它是不是
+   * {@code @Component} <strong>无关</strong>。所以"声明成 bean 就不会双重注册"这个说法是错的。
+   *
+   * <p>● <strong>它是怎么被发现的</strong>：{@code PublicRateLimitHttpTest} 的反证实验 —— 把 {@code
+   * apiFilterChain} 里的 {@code addFilterBefore(publicRateLimitFilter, …)} 整行删掉再跑， 预期是"不再
+   * 429"，实测<strong>仍然 3/3 绿</strong>。说明真正在干活的是容器自动注册的那一条， 代码里写的位置<strong>不决定</strong>它实际跑在哪。
+   *
+   * <p>● <strong>为什么没表现为"每条请求算两次"</strong>：两个实例都是 {@code OncePerRequestFilter}， 它用请求属性做同请求去重 ⇒
+   * 第二个实例直接放行。计数不翻倍，但"我把它放在认证之前"这句话是假的 —— 实际位置取决于容器注册的 order。
+   *
+   * <p>● <strong>处置</strong> = 只让一个位置生效：摘掉自动注册、保留 Security 链里那一条。 这样"位置"既可读又可测（反证实验会真的变红）。
+   *
+   * <p>⚠️ 同一个形状在 {@code ApiKeyAuthenticationFilter} 上<strong>也存在</strong>（它同样是被容器自动注册的 {@code
+   * OncePerRequestFilter}）—— 那是既有欠账，已登记 {@code #218}；本类只修自己这一处， 不顺手改动鉴权链。
+   */
+  @Bean
+  FilterRegistrationBean<PublicRateLimitFilter> publicRateLimitFilterRegistration(
+      PublicRateLimitFilter filter) {
+    FilterRegistrationBean<PublicRateLimitFilter> registration =
+        new FilterRegistrationBean<>(filter);
+    registration.setEnabled(false);
+    return registration;
   }
 
   /**

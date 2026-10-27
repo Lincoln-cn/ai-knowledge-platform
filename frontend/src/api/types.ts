@@ -58,6 +58,13 @@ export const ErrorCode = {
   UNAUTHORIZED: 401,
   FORBIDDEN: 403,
   NOT_FOUND: 404,
+  /**
+   * 请求过于频繁（公开面限流，`#214`）。与 401/403/404 同族 —— 码值与 HTTP 429 对齐。
+   *
+   * ★ 可重试：`hint` 与响应头 `Retry-After` 都会说"还有多少秒"。
+   * 它**不是** `UPSTREAM_UNAVAILABLE`：那个要人去查模型服务，这个只要等。
+   */
+  TOO_MANY_REQUESTS: 429,
   /** 模型未加载完成等可重试状态 */
   MODEL_NOT_READY: 2001,
   /**
