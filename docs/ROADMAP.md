@@ -1671,3 +1671,39 @@ A4（`§2.2`「引用能点开回到原文」）此前只有服务端那一半�
 （`emit` 出去没人听）永远绿；② **「跳得对」要按消息收窄** —— 同一页里每条回答都有自己的
 `[1]`，不收窄就会跳到别人的引用上，而且**不报错**；③ **夹具与判据要能分别失败** ——
 本闸门首跑就把④那一格判红了一次（修前恒 `False`），说明它不是照着实现写的。
+
+#### 11.10.26 2026-10-27 A8 公开面限流：从「缺实现」到两层读数
+
+A8 一直是 🟡 且理由不是读数不足 —— 全仓 `grep -E '(?i)(rate.?limit|bucket4j|throttl|限流)' --include=*.java` 是 **0 命中**（`#214`）。本轮把它做成可验收的一格。
+
+**实现（有意为之的口径）**
+
+| 块 | 落点 | 口径 |
+| --- | --- | --- |
+| 配置 | `platform/security/PublicRateLimitProperties.java` | `app.security.public-rate-limit.enabled/capacity/window-seconds`，默认 `true/60/60`，三个都有环境变量口子 |
+| 过滤器 | `platform/security/PublicRateLimitFilter.java` | 只认 `/api/v1/public/**`（按**链接 token** 分桶，拿不到 token 才退化 `ip:`）与带 `X-Access-Credential` 的 `POST /conversations/chat`（按凭据分桶）；登录面不计数 |
+| 错误码 | `ErrorCode.TOO_MANY_REQUESTS(429)` + `frontend/src/api/types.ts` | 两侧同值，`frontend/check_error_codes.py` 7/7 |
+| 接线 | `SecurityConfig#apiFilterChain` | `addFilterBefore(publicRateLimitFilter, BearerTokenAuthenticationFilter.class)` |
+
+三条取舍：**固定窗口而非令牌桶**（无后台线程、无过期调度；代价 = 边界处最多 2×capacity 突发）· **429 双给**（HTTP + 包络 `code` + `Retry-After`，且响应体手工拼 JSON，因为过滤器跑在 MVC 之外，序列化器抛异常会让限流器自己 500）· **`enabled` 默认 true、`capacity` 非正数按 1**（配置事故不该变成全站 429）。
+
+**读数**
+
+- `PublicRateLimitFilterTest` **8/8** · `PublicRateLimitHttpTest` **3/3**（真 HTTP + Testcontainers，`capacity` 压到 3）。
+- `frontend/check_error_codes.py` **7/7**。
+
+**★ 反证实验发现的一个真问题（本批最重要的一条）**
+
+只删 `SecurityConfig` 里那行 `addFilterBefore` ⇒ 测试**仍然 3/3 绿**。原因是 Boot 会把容器里**每个 `Filter` 类型 bean** 自动注册到 servlet 链，真正干活的是那一份；两个实例都是 `OncePerRequestFilter`，同请求去重让计数没翻倍，所以「跑了两遍」一直隐形。
+
+⇒ 补 `FilterRegistrationBean#setEnabled(false)` 摘掉容器注册之后：只删 `addFilterBefore` ⇒ **`Tests run: 3, Failures: 2`**（`expected: 429`，实得 404）；恢复 ⇒ **3/3 绿**。位置从此是被测试钉住的，而不是被注释钉住的。同族欠账开 `#218`（`ApiKeyAuthenticationFilter` 同一形状，本批不动鉴权链）。
+
+**它证明到哪为止**
+
+不解决：单进程内存（多实例时真实上限 = `capacity` × 实例数）· 无按用户/租户配额 · 无持久化无指标（`#73`）· 无验证码/挑战升级。
+
+**三条判据**
+
+1. **「有实现」和「有读数」要分开写** —— A8 在这里卡了整整两天（台账里写着「缺的不是读数」，实际却一直等读数）。
+2. **一处限流要能说清"桶按什么分"** —— 按 IP 分桶会把共出口 IP 的同事连带掐掉，按链接分桶才与"配额跟谁走"一致。
+3. **装配位置必须有一条"摘掉就红"的反证** —— 否则「写在 Security 链上」只是一句注释（本批实测：它真的只是一句注释）。
