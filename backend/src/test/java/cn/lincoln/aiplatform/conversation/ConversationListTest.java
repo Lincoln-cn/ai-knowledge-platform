@@ -101,6 +101,7 @@ class ConversationListTest {
                         false,
                         false,
                         "",
+                        List.of(),
                         RetrievalParams.platformDefaults())));
   }
 

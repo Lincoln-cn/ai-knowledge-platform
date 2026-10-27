@@ -990,6 +990,7 @@ class ChatStreamEventRecordingTest {
           false,
           null,
           null,
+          List.of(),
           null);
     }
 

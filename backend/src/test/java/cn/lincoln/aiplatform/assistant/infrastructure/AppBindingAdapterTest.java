@@ -46,7 +46,9 @@ class AppBindingAdapterTest {
     when(accessScope.canSee(app)).thenReturn(true);
 
     AppBindingPort.AppBinding binding =
-        new AppBindingAdapter(assistants, accessScope).findVisibleById(appId).orElseThrow();
+        new AppBindingAdapter(assistants, accessScope, mock(JpaPromptConfigRepository.class))
+            .findVisibleById(appId)
+            .orElseThrow();
 
     assertThat(binding.thinkingEnabled()).as("★ 应用勾了思考，绑定必须带 true").isTrue();
     assertThat(binding.retrieval())

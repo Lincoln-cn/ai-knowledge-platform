@@ -114,6 +114,9 @@ public class ChatTurnWriter implements ChatTurnStore {
       //   不能在 ChatService 里再猜一次（#183）。
       UUID appId,
       String rolePrompt,
+      // ★ `#215`：应用绑定的提示词正文（已排序、已去空、已去重）。它此前**不进链路** ⇒
+      //   "给应用选提示词"是个只在界面上生效的设置。空 = 没绑。
+      List<String> promptTexts,
       // ★ `#185`：应用级检索参数。通用问答（app == null）时是 null ⇒ 由 ChatService 回落到平台设置。
       RetrievalParams retrieval) {}
 
@@ -187,6 +190,8 @@ public class ChatTurnWriter implements ChatTurnStore {
         app != null && app.thinkingEnabled(),
         app == null ? null : app.appId(),
         app == null ? null : app.rolePrompt(),
+        // ★ `#215`：提示词正文随这一轮进链路（此前只有 rolePrompt 一个来源）
+        app == null ? List.of() : app.promptTexts(),
         // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）
         app == null ? null : app.retrieval());
   }
@@ -220,6 +225,8 @@ public class ChatTurnWriter implements ChatTurnStore {
         app.thinkingEnabled(),
         app.appId(),
         app.rolePrompt(),
+        // ★ `#215`：调试要看到和应用会话**同一段** prompt —— 否则"调试通过、线上不一致"（`BR-02-08`）
+        app.promptTexts(),
         app.retrieval());
   }
 
@@ -450,6 +457,8 @@ public class ChatTurnWriter implements ChatTurnStore {
         app != null && app.thinkingEnabled(),
         app == null ? null : app.appId(),
         app == null ? null : app.rolePrompt(),
+        // ★ `#215`：提示词正文随这一轮进链路（此前只有 rolePrompt 一个来源）
+        app == null ? List.of() : app.promptTexts(),
         // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）
         app == null ? null : app.retrieval());
   }

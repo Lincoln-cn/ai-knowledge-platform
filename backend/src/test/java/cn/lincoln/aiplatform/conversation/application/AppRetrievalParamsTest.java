@@ -481,6 +481,7 @@ class AppRetrievalParamsTest {
           false,
           APP_ID,
           "你是法务助手",
+          List.of(),
           params);
     }
 

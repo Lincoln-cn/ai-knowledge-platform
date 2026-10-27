@@ -1307,22 +1307,39 @@ public class ChatService {
   /**
    * 提示词（{@code 03} 机制一的最小形态）：问题 + 检索到的片段。
    *
-   * <p>★ 本批<strong>不</strong>做提示词模板渲染（{@code as_assistant_prompt} 的绑定与模板引擎属另一批）： 这里给一个确定形状，让"引用编号
-   * {@code [N]} 与 {@code refs} 的顺序"有唯一依据。
+   * <p>★ 本批<strong>不</strong>做提示词<b>模板渲染</b>（{@code {{变量}}} 插值、条件块、长度预算）。 ★★ 但 {@code #215}
+   * 之后，应用绑定的提示词<b>正文</b>确实会拼进来（见 {@link #systemPromptOrNull}）—— "绑定生效"与"模板引擎"是两件事，前者此前一直没有，后者仍未做。
    */
   /**
    * 本轮要用的初始提示词。
    *
    * <p>★ 读失败一律降级为 {@code null}（不加前缀）而不是让整轮问答失败： 它是"锦上添花"的口径，不该比"能不能回答"优先级更高。
    *
+   * <p>★★ 应用会话的拼装口径（{@code #215}）：
+   *
+   * <ol>
+   *   <li><b>提示词正文在前</b>，按 {@code typeId → roleName} 稳定排序（排序在 {@code AppBindingAdapter} 里做， 见那里的
+   *       javadoc：集合顺序随入库而变，会让同一条应用每次拼出不同的 prompt）；
+   *   <li><b>{@code rolePrompt} 在最后一句</b>：它是应用作者在这个应用上手写的、最具体的一段。放在最后既符合 "后出现的约束更贴近本轮"，也是冲突时
+   *       "谁赢"的唯一可断言依据（两者重复时只留一份）；
+   *   <li><b>不回落</b>到平台通用提示词（{@code #183}）：空角色 + 空提示词 = 不加前缀， 而不是借用通用问答的口径。
+   * </ol>
+   *
    * @return 提示词；{@code null} = 不加
    */
   private String systemPromptOrNull(ChatTurnWriter.PreparedTurn turn) {
-    // ★★ 应用会话只读应用自己的 rolePrompt，**不回落**到平台通用提示词（#183）。
-    //   空角色 = 不加前缀，而不是"借用通用问答的口径"——两者混用会让应用的回答被平台口径污染。
     if (turn.appId() != null) {
-      String role = turn.rolePrompt();
-      return role == null || role.isBlank() ? null : role.strip();
+      // ★★ 应用会话只读应用自己的 rolePrompt 与它绑的提示词，**不回落**到平台通用提示词（#183）。
+      //   空 = 不加前缀，而不是"借用通用问答的口径"——两者混用会让应用的回答被平台口径污染。
+      List<String> parts = new ArrayList<>();
+      if (turn.promptTexts() != null) {
+        for (String text : turn.promptTexts()) {
+          addIfUseful(parts, text);
+        }
+      }
+      // ★ `#215`：rolePrompt 刻意排在**最后**（冲突时它赢），且与某条提示词逐字相同时不重复加
+      addIfUseful(parts, turn.rolePrompt());
+      return parts.isEmpty() ? null : String.join("\n\n", parts);
     }
     if (policyResolver == null) {
       return null;
@@ -1332,6 +1349,17 @@ public class ChatService {
     } catch (RuntimeException failure) {
       log.warn("读通用会话设置失败，本轮不加初始提示词（对话行为与未配置时一致）", failure);
       return null;
+    }
+  }
+
+  /** 往拼装列表里加一段非空文本；逐字重复的不加（同一条提示词既是 callWord 又被抄进 rolePrompt 时只留一份）。 */
+  private static void addIfUseful(List<String> parts, String text) {
+    if (text == null || text.isBlank()) {
+      return;
+    }
+    String stripped = text.strip();
+    if (!parts.contains(stripped)) {
+      parts.add(stripped);
     }
   }
 

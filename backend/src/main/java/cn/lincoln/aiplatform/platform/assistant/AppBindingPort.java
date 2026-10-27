@@ -53,6 +53,11 @@ public interface AppBindingPort {
    *     对话模型"，不是"没有模型"（见 {@code ChatPort#pickChatModel}）
    * @param kbIds 应用绑定的知识库（★ 顺序不承诺语义；空 = 没绑 —— 那是通用问答，不是"绑了一个空库"）
    * @param rolePrompt 应用的角色设定；★ 空串 = 应用没有设定（**不回落**到平台通用提示词）
+   * @param promptTexts 应用绑定的**提示词正文**（{@code as_assistant_prompt → as_prompt_config.call_word}）， 已按
+   *     {@code typeId → roleName} 稳定排序、已去空、已去重。★★ {@code #215}：这个字段此前**根本没有**，
+   *     于是「给应用选提示词」存下来了却从不参与拼装 —— 界面显示已选、问答行为一字不变。 拼装顺序与冲突口径见 {@code
+   *     ChatService#systemPromptOrNull}：提示词在前、{@code rolePrompt} 在最后一句 （后出现的约束更贴近本轮；两者重复时只留一份）。空 =
+   *     没绑（不是"绑了一条空提示词"）
    * @param thinkingEnabled 应用的思考开关（{@code #185}）。★ 它只表达"用户想不想思考"；能不能关由模型能力声明 {@code ThinkingMode}
    *     决定 —— 适配器按模型三态决定是否发送 {@code reasoning_effort}，这里不替模型做主
    * @param retrieval 应用级检索参数（{@code #185}）。★ 它此前不在这份事实里，于是配置页的阈值 / TopN / 无引用策略 全是死控件；问答链路只能读平台设置
@@ -64,6 +69,7 @@ public interface AppBindingPort {
       boolean multiTurn,
       boolean thinkingEnabled,
       String rolePrompt,
+      List<String> promptTexts,
       RetrievalParams retrieval) {}
 
   /**

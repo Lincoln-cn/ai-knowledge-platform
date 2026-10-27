@@ -261,6 +261,7 @@ class ChatRetrievalHeartbeatTest {
           false,
           null,
           null,
+          List.of(),
           null);
     }
 

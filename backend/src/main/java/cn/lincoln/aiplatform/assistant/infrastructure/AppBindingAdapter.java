@@ -2,9 +2,13 @@ package cn.lincoln.aiplatform.assistant.infrastructure;
 
 import cn.lincoln.aiplatform.assistant.domain.Assistant;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
+import cn.lincoln.aiplatform.assistant.domain.PromptConfig;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.assistant.AppBindingPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
@@ -34,10 +38,15 @@ public class AppBindingAdapter implements AppBindingPort {
 
   private final AssistantRepository assistants;
   private final AccessScopePort accessScope;
+  private final JpaPromptConfigRepository prompts;
 
-  public AppBindingAdapter(AssistantRepository assistants, AccessScopePort accessScope) {
+  public AppBindingAdapter(
+      AssistantRepository assistants,
+      AccessScopePort accessScope,
+      JpaPromptConfigRepository prompts) {
     this.assistants = assistants;
     this.accessScope = accessScope;
+    this.prompts = prompts;
   }
 
   @Override
@@ -46,10 +55,10 @@ public class AppBindingAdapter implements AppBindingPort {
       // ★ null 不是"也许有这个应用"：通用问答本来就没有应用，直接空，不去查库
       return Optional.empty();
     }
-    return assistants.findById(appId).filter(accessScope::canSee).map(AppBindingAdapter::binding);
+    return assistants.findById(appId).filter(accessScope::canSee).map(this::binding);
   }
 
-  private static AppBinding binding(Assistant app) {
+  private AppBinding binding(Assistant app) {
     return new AppBinding(
         app.id(),
         app.modelId(),
@@ -58,6 +67,7 @@ public class AppBindingAdapter implements AppBindingPort {
         // ★ `#185`：思考开关随绑定进链路；是否真的发 reasoning_effort 由模型三态决定
         app.thinkingEnabled(),
         app.rolePrompt(),
+        promptTexts(app.promptIds()),
         // ★ `#185`：应用级检索参数随绑定一起进问答链路。此前它们只存在于实体 / 视图 / 导出里，
         //   `ChatService` 读的是平台设置 ⇒ 配置页那几个控件全是装饰。
         new RetrievalParams(
@@ -65,5 +75,30 @@ public class AppBindingAdapter implements AppBindingPort {
             app.retrievalThreshold().doubleValue(),
             app.retrievalTopN(),
             app.retrievalNoRefStrategy()));
+  }
+
+  /**
+   * 应用绑定的提示词正文（{@code #215}）。
+   *
+   * <p>★★ 为什么排序在这里做、而不是让调用方按 {@code promptIds} 的集合顺序拼： id 是随机 UUID，集合顺序随入库/取库而变 ⇒ 同一条应用每次拼出来的
+   * prompt 文本可能不同，而那种不稳定**不会报错**，只会让"同一问题两次答案不一样"变得无法归因。按 {@code typeId → roleName}
+   * 排序是确定性的，且与提示词管理页的分组一致。
+   *
+   * <p>★ 已删除的提示词被绑定关系指向时（`keepSatisfiedPrompts` 只在写路径清，库里仍可能残留）表现为"少了那一段"， 而不是抛异常 —— 拼 prompt 失败导致的
+   * 500 比少一段提示词严重得多。
+   */
+  private List<String> promptTexts(Collection<UUID> promptIds) {
+    if (promptIds == null || promptIds.isEmpty()) {
+      return List.of();
+    }
+    return prompts.findAllById(promptIds).stream()
+        .filter(p -> p.callWord() != null && !p.callWord().isBlank())
+        .sorted(
+            Comparator.comparing(
+                    (PromptConfig p) -> p.typeId() == null ? "" : p.typeId().toString())
+                .thenComparing(p -> p.roleName() == null ? "" : p.roleName()))
+        .map(p -> p.callWord().strip())
+        .distinct()
+        .toList();
   }
 }

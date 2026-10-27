@@ -72,6 +72,63 @@ class ChatPromptSourceTest {
         .doesNotContain(ROLE_PROMPT);
   }
 
+  @Test
+  void appTurnPutsBoundPromptTextsBeforeTheRolePrompt() {
+    RecordingStore store = new RecordingStore();
+    RecordingStream stream = new RecordingStream();
+    ChatService service = service(store, stream);
+    service.setPolicyResolver(policyWithPlatformPrompt());
+
+    service.streamTurn(
+        store.turn(APP_ID, ROLE_PROMPT, List.of("PROMPT_A_MARKER", "PROMPT_B_MARKER")),
+        "PING",
+        new NoopSink());
+
+    String prompt = stream.prompts.get(0);
+    // ★ `#215`：绑定的提示词正文必须真的进来 —— 这一条在修复前恒红（那时只拼 rolePrompt）
+    assertThat(prompt).contains("PROMPT_A_MARKER").contains("PROMPT_B_MARKER");
+    // ★ 顺序是口径的一部分：提示词在前、rolePrompt 在最后一句（冲突时它赢）
+    assertThat(prompt.indexOf("PROMPT_A_MARKER"))
+        .as("提示词之间的相对顺序归 AppBindingAdapter 管，这里只钉它们都在 rolePrompt 之前")
+        .isLessThan(prompt.indexOf(ROLE_PROMPT));
+    assertThat(prompt.indexOf("PROMPT_B_MARKER")).isLessThan(prompt.indexOf(ROLE_PROMPT));
+    assertThat(prompt).as("平台提示词仍不得污染应用会话").doesNotContain(PLATFORM_PROMPT);
+  }
+
+  @Test
+  void rolePromptCopiedIntoAPromptTextAppearsOnlyOnce() {
+    RecordingStore store = new RecordingStore();
+    RecordingStream stream = new RecordingStream();
+    ChatService service = service(store, stream);
+
+    // 作者把同一段话既写进 rolePrompt、又提交成一条提示词 ⇒ 拼出来只应有一份。
+    // ★ 同时带一条**只存在于提示词里**的标记：否则"提示词整体被忽略"也会让这条绿（只出现一份），
+    //   那就成了自证 —— 去重与"真的拼进来了"必须一起断。
+    service.streamTurn(
+        store.turn(APP_ID, ROLE_PROMPT, List.of("PROMPT_ONLY_MARKER", ROLE_PROMPT)),
+        "PING",
+        new NoopSink());
+
+    String prompt = stream.prompts.get(0);
+    assertThat(prompt).contains("PROMPT_ONLY_MARKER");
+    assertThat(prompt.split(ROLE_PROMPT, -1)).as("同一段文本只拼一次").hasSize(2);
+  }
+
+  @Test
+  void appWithOnlyPromptsAndNoRolePromptStillGetsAPrefix() {
+    RecordingStore store = new RecordingStore();
+    RecordingStream stream = new RecordingStream();
+    ChatService service = service(store, stream);
+
+    service.streamTurn(
+        store.turn(APP_ID, "", List.of("PROMPT_ONLY_MARKER")), "PING", new NoopSink());
+
+    assertThat(stream.prompts.get(0))
+        .as("rolePrompt 为空不等于什么都不加：绑了提示词就应当有前缀")
+        .contains("PROMPT_ONLY_MARKER")
+        .doesNotContain(PLATFORM_PROMPT);
+  }
+
   private static ChatPolicyResolver policyWithPlatformPrompt() {
     ChatPolicyResolver policy = mock(ChatPolicyResolver.class);
     when(policy.systemPrompt()).thenReturn(PLATFORM_PROMPT);
@@ -158,6 +215,10 @@ class ChatPromptSourceTest {
     private PreparedTurn turn;
 
     private PreparedTurn turn(UUID appId, String rolePrompt) {
+      return turn(appId, rolePrompt, List.of());
+    }
+
+    private PreparedTurn turn(UUID appId, String rolePrompt, List<String> promptTexts) {
       UUID assistantMessageId = UUID.randomUUID();
       turn =
           new ChatTurnWriter.PreparedTurn(
@@ -172,6 +233,7 @@ class ChatPromptSourceTest {
               false,
               appId,
               rolePrompt,
+              promptTexts,
               null);
       return turn;
     }

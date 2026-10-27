@@ -74,6 +74,7 @@ class ConversationCreateIdempotentTest {
                         false,
                         false,
                         "",
+                        List.of(),
                         RetrievalParams.platformDefaults())));
   }
 
