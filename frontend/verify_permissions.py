@@ -257,6 +257,38 @@ def main() -> int:
                     check(False, f"{role_name} ▸ 知识库按钮层",
                           f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
 
+                # ── A7 按钮侧（第三处）：知识库**详情页**的「+ 上传文档」要 documentUpload ──
+                # 与前一处不是同一个权限点（`knowledge:create` vs `knowledge:document:upload`）：
+                # 分开断才能排除「所有写入口都被同一颗权限点整体放开/挡住」这种整体性错误 ——
+                # 那种错误在只断一处时看起来完全正常。
+                # kb4 是 PUBLIC + owner=u1，三种数据范围都看得见；
+                # ★ chenjun（USER / SHARED）**不切详情**（`Index.vue:368` 的 `openedKb`
+                #   对 consumer 恒为 null）⇒ 对他「没有上传按钮」是恒真句，不能当判据，
+                #   显式打印 SKIP 而不是 check(True)。
+                try:
+                    page.goto(base + "#/knowledge?kb=kb4", wait_until="networkidle")
+                    page.wait_for_timeout(1800)
+                    detail_open = page.locator(".doc-panel").count() > 0
+                    upload = page.locator("button", has_text="上传文档").count()
+                    want_upload = username in ("admin", "zhangyun")  # 只有 knowledge:document:upload
+                    if username == "chenjun" and not detail_open:
+                        print("  SKIP  知识库详情「+ 上传文档」（普通用户是共享档，不切详情，见 openedKb）")
+                    else:
+                        check(
+                            detail_open,
+                            f"{role_name} ▸ 知识库详情能打开（kb4）",
+                            f"文档面板 {detail_open}",
+                        )
+                        check(
+                            (upload > 0) == want_upload,
+                            f"{role_name} ▸ 知识库详情「+ 上传文档」按钮{'可见' if want_upload else '不可见'}",
+                            f"实得 {upload} 个",
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    check(False, f"{role_name} ▸ 知识库详情按钮层",
+                          f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
+
+
                 # ── T86 提示词类型收紧：应用配置进得了提示词页，但一个「类型」写入口都没有 ──
                 # 本页的门禁没变（仍是 assistant:edit）—— 变的是**类型的归属**：
                 # 类型是分类法（契约，归系统管理），提示词是内容（归应用配置）。
