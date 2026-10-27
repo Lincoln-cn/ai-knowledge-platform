@@ -59,7 +59,34 @@ MATRIX = [
     ("/analytics", ["admin", "zhangyun", "liwei"]),
     ("/feedback", ["admin", "zhangyun"]),
     ("/admin", ["admin"]),
+    ("/org", ["admin"]),
+    ("/settings/chat", ["admin"]),
     ("/conversation", ["admin", "zhangyun", "liwei", "chenjun"]),
+]
+
+# ── A7 写入口矩阵（按钮侧）──
+#
+# 每一行 = 一个**界面写入口**：路由、按钮文案、守它的权限点、哪些账号该看见、检查哪些账号、是否精确匹配。
+# 与 `MATRIX`（路由层）配对读：路由层回答"进不进的去"，这张表回答"进去了能不能动手"。
+# 一个门禁借用语义不相关的权限点，只有把入口逐条摊开才会在读数上露出来。
+WRITE_ENTRIES = [
+    # 路由, 名称, 按钮文案, 权限点, 应可见账号, 只检查这些账号（None = 四个角色全跑）, 精确匹配
+    ("/assistants", "应用管理 · 新建应用", "新建应用", "assistant:edit", {"admin", "liwei"}, None, True),
+    ("/knowledge", "知识库 · 创建知识库", "创建知识库", "knowledge:create", {"admin", "zhangyun"}, None, True),
+    ("/knowledge?kb=kb4", "知识库详情 · 上传文档", "+ 上传文档",
+     "knowledge:document:upload", {"admin", "zhangyun"}, None, True),
+    ("/knowledge?kb=kb4&tab=segments", "知识库详情 · 全部重新向量化", "全部重新向量化",
+     "knowledge:segment:edit", {"admin", "zhangyun"}, None, True),
+    ("/knowledge?kb=kb4&tab=questions", "知识库详情 · 新建问答对", "新建问答对",
+     "knowledge:qa:edit", {"admin", "zhangyun"}, None, True),
+    ("/knowledge?kb=kb4&tab=settings", "知识库详情 · 保存设置", "保存",
+     "knowledge:manage", {"admin", "zhangyun"}, None, True),
+    # `/org` 与 `/models` 的路由门禁本身就是这两个点 ⇒ 其余角色在路由层被拦（MATRIX 已断）
+    # ★ 组织机构用「新增根部门」而不是「新增下级」：后者要先**选中一个节点**才渲染
+    #   （`pages/org/Index.vue:75` 在 `v-if="selected"` 的模板里），刚进页面必然 0 个 ——
+    #   那样量的是"有没有选中"，不是"有没有权限"。
+    ("/org", "组织机构 · 新增根部门", "新增根部门", "identity:org:manage", {"admin"}, {"admin"}, True),
+    ("/models", "模型管理 · 添加模型", "添加模型", "model:manage", {"admin"}, {"admin"}, True),
 ]
 
 # ── 顶栏期望（同一矩阵的另一面：菜单不该出现进不去的项）──
@@ -75,6 +102,11 @@ NAV = {
         # ★ 2026-10-19 服务商配置 / 基础数据 / 组织机构从「系统管理」拆成独立菜单，
         #   这条期望矩阵必须同步；否则门禁会把"菜单按规则搬对了"报成红。
         "基础数据", "服务商配置", "组织机构", "系统管理",
+        # ★ 2026-10-28：「对话设置」这一项之前对**所有人**都不出现 —— 不是菜单写错，
+        #   而是 `conversation:settings` 这颗权限点在 mock 里没有任何角色持有
+        #   （目录漏登记，`check_permission_catalog.py` 现在钉着）。修完夹具后它按规则出现，
+        #   期望矩阵必须跟上，否则红的是"菜单按规则出现"这件对的事。
+        "对话设置",
     ],
     "zhangyun": ["工作台", "对话", "知识库", "应用市场", "应用管理", "运营看板", "反馈处理"],
     "liwei": ["工作台", "对话", "知识库", "应用市场", "应用管理", "提示词", "运营看板"],
@@ -222,72 +254,45 @@ def main() -> int:
                 except Exception as exc:  # noqa: BLE001
                     check(False, f"{role_name} ▸ 顶栏", f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
 
-                # ── A7 按钮侧：没有 assistant:edit 的账号看不到「新建应用」──
-                # 接口侧已由 AssistantPermissionHttpTest 钉住（USER 建/发布 403）；
-                # 这一条钉界面侧：同一页面对四种角色分别断言按钮在/不在 ——
-                # 只藏一种角色的按钮，等于另外三种角色还在走"点下去才报错"的老路。
-                try:
-                    page.goto(base + "#/assistants", wait_until="networkidle")
-                    page.wait_for_timeout(1500)
-                    new_app = page.locator("button", has_text="新建应用").count()
-                    want_new = username in ("admin", "liwei")  # 只有 assistant:edit
-                    check(
-                        (new_app > 0) == want_new,
-                        f"{role_name} ▸ 应用管理「新建应用」按钮{'可见' if want_new else '不可见'}",
-                        f"实得 {new_app} 个",
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    check(False, f"{role_name} ▸ 应用管理按钮层",
-                          f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
-
-                # ── A7 按钮侧（第二页）：没有 knowledge:create 的账号看不到「创建知识库」──
-                # 与上一条同形，但权限点不同（knowledge:create 只给 ADMIN / KB_OPERATOR）。
-                # 两页一起看，才能排除"恰好这一页写对了"的巧合。
-                try:
-                    page.goto(base + "#/knowledge", wait_until="networkidle")
-                    page.wait_for_timeout(1500)
-                    new_kb = page.locator("button", has_text="创建知识库").count()
-                    want_kb = username in ("admin", "zhangyun")
-                    check(
-                        (new_kb > 0) == want_kb,
-                        f"{role_name} ▸ 知识库「创建知识库」按钮{'可见' if want_kb else '不可见'}",
-                        f"实得 {new_kb} 个",
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    check(False, f"{role_name} ▸ 知识库按钮层",
-                          f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
-
-                # ── A7 按钮侧（第三处）：知识库**详情页**的「+ 上传文档」要 documentUpload ──
-                # 与前一处不是同一个权限点（`knowledge:create` vs `knowledge:document:upload`）：
-                # 分开断才能排除「所有写入口都被同一颗权限点整体放开/挡住」这种整体性错误 ——
-                # 那种错误在只断一处时看起来完全正常。
-                # kb4 是 PUBLIC + owner=u1，三种数据范围都看得见；
-                # ★ chenjun（USER / SHARED）**不切详情**（`Index.vue:368` 的 `openedKb`
-                #   对 consumer 恒为 null）⇒ 对他「没有上传按钮」是恒真句，不能当判据，
-                #   显式打印 SKIP 而不是 check(True)。
-                try:
-                    page.goto(base + "#/knowledge?kb=kb4", wait_until="networkidle")
-                    page.wait_for_timeout(1800)
-                    detail_open = page.locator(".doc-panel").count() > 0
-                    upload = page.locator("button", has_text="上传文档").count()
-                    want_upload = username in ("admin", "zhangyun")  # 只有 knowledge:document:upload
-                    if username == "chenjun" and not detail_open:
-                        print("  SKIP  知识库详情「+ 上传文档」（普通用户是共享档，不切详情，见 openedKb）")
-                    else:
+                # ── A7 写入口矩阵（按钮侧）──
+                #
+                # 与 MATRIX 同一条纪律：**期望列独立写下**（真源 = 后端 `identity/domain/Permissions.of(...)`
+                # 与 `docs/前端页面与功能清单.md` 的权限点归属），**不从界面里那句 `session.can(...)` 推导** ——
+                # 从界面推导的话，"借错了一颗别的点"和"借了一颗谁都不持有的点"都会跟着一起绿
+                # （后者 2026-10-28 真发生过：`knowledge:qa:edit` / `conversation:settings` 没人持有，
+                #  两个写入口对包括管理员在内的所有人隐形，见 `frontend/check_permission_catalog.py`）。
+                #
+                # 两种形态：
+                #   shown —— 有权限就渲染、没权限就不渲染（数按钮）
+                #   route —— 只在"有权限的人"身上断（其余角色在**路由层**就被拦，MATRIX 已经断过；
+                #            在这里再断一句"看不见"是恒真的废话，会白白撑大分母）
+                for route, label, button_text, permission, allowed, only_roles, exact in WRITE_ENTRIES:
+                    if only_roles is not None and username not in only_roles:
+                        continue
+                    # 普通用户对知识库**详情**根本不展开（`pages/knowledge/Index.vue` 的 `openedKb` 对
+                    # consumer 恒 null），此时"没按钮"是一句恒真的废话 ⇒ 显式 SKIP 而不是 check(True)。
+                    if "kb=kb4" in route and username == "chenjun":
+                        print(f"  SKIP  {label}（普通用户是共享档，不展开知识库详情）")
+                        continue
+                    try:
+                        page.goto(base + "#" + route, wait_until="networkidle")
+                        page.wait_for_timeout(1800 if "kb=kb4" in route else 1400)
+                        if exact:
+                            # ★ 精确匹配可及名称：`tab=settings` 那张表单里还有一颗「保存检索参数」，
+                            #   而它是**恒在**的（没有 v-if）—— 用包含匹配会把"没权限"读成"有权限"。
+                            actual = page.get_by_role("button", name=button_text, exact=True).count()
+                        else:
+                            actual = page.locator("button", has_text=button_text).count()
+                        expected_visible = username in allowed
                         check(
-                            detail_open,
-                            f"{role_name} ▸ 知识库详情能打开（kb4）",
-                            f"文档面板 {detail_open}",
+                            (actual > 0) == expected_visible,
+                            f"{role_name} ▸ {label}（{permission}）应{'可见' if expected_visible else '不可见'}",
+                            f"实得 {actual} 个",
                         )
-                        check(
-                            (upload > 0) == want_upload,
-                            f"{role_name} ▸ 知识库详情「+ 上传文档」按钮{'可见' if want_upload else '不可见'}",
-                            f"实得 {upload} 个",
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    check(False, f"{role_name} ▸ 知识库详情按钮层",
-                          f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
-
+                    except Exception as exc:  # noqa: BLE001
+                        # 页面打不开也要留一行读数：否则"没跑"和"没权限"在日志里长得一样
+                        check(False, f"{role_name} ▸ {label}",
+                              f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}")
 
                 # ── T86 提示词类型收紧：应用配置进得了提示词页，但一个「类型」写入口都没有 ──
                 # 本页的门禁没变（仍是 assistant:edit）—— 变的是**类型的归属**：

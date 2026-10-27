@@ -9,6 +9,11 @@ export const permissions: PermissionItem[] = [
   { code: PERM.knowledgeManage, label: '编辑/删除知识库', module: '知识' },
   { code: PERM.documentUpload, label: '上传与加工文档', module: '知识' },
   { code: PERM.segmentEdit, label: '治理分段', module: '知识' },
+  // ★ 问答对的增删改（`FR-03-12`）与「治理分段」**不是**同一颗点：
+  //   分段是自动切的、问答对是人工标的（后端 `Permissions.java:52` 有同一句理由）。
+  //   这条曾经漏登记 ⇒ 目录里没有它 ⇒ 没有任何角色持有 ⇒ 问答对写入口对**所有人**不可见，
+  //   而界面看上去只是"这个功能没做"。`frontend/check_permission_catalog.py` 现在守这一格。
+  { code: PERM.qaEdit, label: '维护问答对', module: '知识' },
   { code: PERM.hitTest, label: '命中测试', module: '检索' },
   { code: PERM.assistantView, label: '查看应用', module: '应用' },
   { code: PERM.assistantEdit, label: '配置应用', module: '应用' },
@@ -20,6 +25,10 @@ export const permissions: PermissionItem[] = [
   { code: PERM.modelManage, label: '模型管理', module: '模型' },
   { code: PERM.dashboardView, label: '查看运营看板', module: '运营' },
   { code: PERM.feedbackHandle, label: '处理反馈', module: '运营' },
+  // ★ 对话设置（默认模型 / 初始提示词 / 召回阈值 / 流式超时）单开一颗点，不复用 `system:manage`：
+  //   「让人调召回阈值」比「整个系统管理」窄得多，复用只能二选一（全给或全不给）。
+  //   默认只有 ADMIN（后端 `Permissions.java:74` 的注释与 `BY_ROLE_CODE` 一致）。
+  { code: PERM.chatSettings, label: '配置对话设置', module: '对话' },
   { code: PERM.systemManage, label: '账号与权限', module: '系统' },
   { code: PERM.orgManage, label: '组织机构', module: '系统' },
   { code: PERM.dictManage, label: '基础数据', module: '系统' }
@@ -53,6 +62,7 @@ export const roles: Role[] = [
       PERM.knowledgeManage,
       PERM.documentUpload,
       PERM.segmentEdit,
+      PERM.qaEdit,
       PERM.hitTest,
       PERM.assistantView,
       PERM.conversationView,
