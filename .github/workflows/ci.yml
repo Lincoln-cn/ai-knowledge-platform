@@ -245,6 +245,14 @@ jobs:
           #   逐件删干净（含把桩的 delay_ms 复位 0）—— 本 job 的闸门顺序跑，泄漏夹具会污染后面每一条。
           #   台账里 S1 在它之前只有"三段各自有脚本"，没有一条把它们串起来的读数。
           gates=(check_s1_knowledge_chain_e2e \
+                   # ★ S3 的**整链**（MVP · ROADMAP §2.1）：在**一个会话**里跑完七件事 —— 流式作答 →
+                   #   引用先于正文且按 segmentId 真能读回内容 → 连续追问 5 轮（都落在同一个会话里）→
+                   #   生成中停止（终态 STOPPED、不发 error、已生成的字一个不少地留在库里）→ 重新生成
+                   #   覆盖同一条 → 赞/取消赞刷新后仍在 → 会话评分是覆盖不是追加。
+                   #   ★ 「生成中停止」要有中间态，而桩默认把正文一次 flush 全到 ⇒ 本条靠桩的
+                   #   chunk_delay_ms 注入帧间延迟（delay_ms 做不到：它只推迟开始），用完必须复位 0 ——
+                   #   同 job 后面的闸门共用这一个桩。
+                   check_s3_conversation_chain_e2e \
                  check_knowledge_parse check_knowledge_form check_segmentation_e2e \
                  check_document_actions check_flow_walkthrough check_ocr_e2e \
                  check_classification_e2e check_query_understanding_e2e \

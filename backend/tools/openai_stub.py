@@ -41,6 +41,11 @@ OpenAI 兼容的测试桩服务 —— 开发期替代真模型服务（后端 T
     curl -X POST http://localhost:11434/__stub/reset
     curl -X POST -d '{"delay_ms":200}' http://localhost:11434/__stub/config
 
+    # ★ 让**流式**回答按帧慢放（S3 的「生成中停止」需要"吐到一半"的窗口）：
+    #   delay_ms 只推迟**整个回答的开始**，正文仍是一次性全到 —— 停在"一半"是不可能的。
+    curl -X POST -d '{"chunk_delay_ms":40}' http://localhost:11434/__stub/config
+    curl -X POST -d '{"chunk_delay_ms":0}' http://localhost:11434/__stub/config   # 复位
+
     # ★ 让结构化输出按指定的值回（多跳判定的难例演示、注入类闸门靠它）
     curl -X POST -d '{"entity_override":{"sufficient":false,"nextQuery":"违约金 上限"}}' \
          http://localhost:11434/__stub/config
@@ -97,7 +102,7 @@ _LOCK = threading.Lock()
 _REQUESTS: list[dict] = []
 #: `entity_override` 是"把结构化输出的某些**值**改成我指定的"（键名仍由 schema 决定）。
 #: 默认 None = 完全按 schema 造占位值（既有测试依赖那些值，别改默认）。
-_CONFIG = {"delay_ms": 0, "fail_rate": 0.0, "entity_override": None}
+_CONFIG = {"delay_ms": 0, "chunk_delay_ms": 0, "fail_rate": 0.0, "entity_override": None}
 _EMBED_DIM = 768
 
 #: 假的 token 计数用：让 usage 字段看起来合理（M1 的用量统计要读它）
@@ -382,6 +387,12 @@ class StubHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             self.wfile.write(b"\r\n")
             self.wfile.flush()
+            # ★ 帧间延迟：让上游"吐到一半"这件事在真栈上可观测。
+            #   没有它，整段正文会在一次 flush 里全到 ⇒ 「生成中停止」只能停在"零字"或"全字"，
+            #   S3 那条「停止保留已生成内容」就永远断言不到中间态（`delay_ms` 做不到这件事：它只推迟开头）。
+            chunk_delay = _CONFIG.get("chunk_delay_ms") or 0
+            if chunk_delay:
+                time.sleep(chunk_delay / 1000.0)
         self.wfile.write(b"0\r\n\r\n")
         self.wfile.flush()
 
@@ -464,7 +475,7 @@ class StubHandler(BaseHTTPRequestHandler):
             return
         if path == "/__stub/config":
             with _LOCK:
-                for key in ("delay_ms", "fail_rate"):
+                for key in ("delay_ms", "chunk_delay_ms", "fail_rate"):
                     if key in body:
                         _CONFIG[key] = body[key]
                 if "entity_override" in body:
