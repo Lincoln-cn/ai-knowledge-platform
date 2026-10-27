@@ -3,9 +3,12 @@ package cn.lincoln.aiplatform.conversation.application;
 import cn.lincoln.aiplatform.conversation.domain.stream.StreamEvent;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
+import java.io.UncheckedIOException;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -72,6 +75,8 @@ public class ChatStreamAssembler {
   //   ★ 12KB = 8KB 缓冲 + 余量；它只在每条流开头发一次，占用的带宽可以忽略。
   private static final String OPEN_PADDING =
       "open: " + "sse-response-header-commit-padding.".repeat(480);
+
+  private static final Logger log = LoggerFactory.getLogger(ChatStreamAssembler.class);
 
   private final ChatService chatService;
   private final ChatStreamWriter writer;
@@ -179,10 +184,54 @@ public class ChatStreamAssembler {
         } else {
           authorize.authorize(turn);
         }
+      } catch (Error fatal) {
+        // ★ Error 一律继续抛：真出 OOM / StackOverflow 时「安静收尾」比崩溃更难查。
+        throw fatal;
+      } catch (Throwable failure) {
+        // ★★ 这个 catch 的存在理由只有一个：**让原始异常的类型进日志**。
+        //   响应一旦提交（开流填充帧就是为了提交它），异常就再也走不到包络那条路 ——
+        //   容器会在「已提交的响应上再写一遍错误」时抛它自己的 NPE（#216 的现场：
+        //   MimeHeaders.removeHeader / this.headers[i] is null），原始异常被这层二次崩溃吃掉，
+        //   日志里只剩「Exception while processing an asynchronous request」，类型完全取不到。
+        //   ⇒ 已提交：记下类型 + 栈，然后**不再抛**（客户端已经拿到 200 与半条流，再抛只会再炸一次）；
+        //   ⇒ 未提交：记下类型 + 栈，再原样抛出（包络那条路仍然是唯一的错误形状）。
+        boolean committed = response != null && response.isCommitted();
+        logFailure(failure, committed);
+        if (!committed) {
+          throw asUnchecked(failure);
+        }
       } finally {
         SecurityContextHolder.setContext(previous);
       }
     };
+  }
+
+  /** 把「流为什么异常收尾」写进日志：类型 + 消息 + 栈，并带上响应是否已提交。 */
+  private static void logFailure(Throwable failure, boolean committed) {
+    if (failure instanceof UncheckedIOException disconnected) {
+      // 客户端断开是**预期事件**（DISCONNECT 已经有了领域事件与消息状态），不该按 ERROR 记账。
+      // ★ 用 String.valueOf 而不是直接传 cause：slf4j 会把「最后一个参数是 Throwable」当作异常吃掉，
+      //   占位符就留在日志里（本类第一版就是这么错的，读数里出现过字面量 `：{}`）。
+      log.debug("SSE 流因写失败收尾（响应已提交={}）：{}", committed, String.valueOf(disconnected.getCause()));
+      return;
+    }
+    log.error(
+        "SSE 流异常收尾（响应已提交={}）：原始异常类型 = {}，消息 = {}",
+        committed,
+        failure.getClass().getName(),
+        failure.getMessage(),
+        failure);
+  }
+
+  /** 未提交时的重抛：checked 异常裹成 {@link UncheckedIOException}，保持「DISCONNECT 只有一种形状」。 */
+  private static RuntimeException asUnchecked(Throwable failure) {
+    if (failure instanceof RuntimeException runtime) {
+      return runtime;
+    }
+    if (failure instanceof IOException io) {
+      return ChatStreamWriter.disconnected(io);
+    }
+    return new IllegalStateException(failure);
   }
 
   /**
