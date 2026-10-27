@@ -238,7 +238,14 @@ jobs:
           PGPASSWORD: aiplatform
           PGDATABASE: aiplatform
         run: |
-          gates=(check_knowledge_parse check_knowledge_form check_segmentation_e2e \
+          # ★ S1 的**整链**（MVP · ROADMAP §2.1）：**从空库起**一条命令跑完 ——
+          #   建库（先断 documentCount==0）→ 上传真实字节 → 解析 → 切分预览与入库**同源**（段数相等）
+          #   → 显式向量化（**读到过中间进度**，不是只看终态）→ 命中测试有引用且引用落到本文件
+          #   → 停用分段后**不命中** → 重新启用后**又命中**。★ 它自己造库造模型，且 finally 里
+          #   逐件删干净（含把桩的 delay_ms 复位 0）—— 本 job 的闸门顺序跑，泄漏夹具会污染后面每一条。
+          #   台账里 S1 在它之前只有"三段各自有脚本"，没有一条把它们串起来的读数。
+          gates=(check_s1_knowledge_chain_e2e \
+                 check_knowledge_parse check_knowledge_form check_segmentation_e2e \
                  check_document_actions check_flow_walkthrough check_ocr_e2e \
                  check_classification_e2e check_query_understanding_e2e \
                  check_multihop_e2e \
