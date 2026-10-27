@@ -231,8 +231,18 @@ def chat(token: str, body: dict) -> tuple[int, list[dict]]:
     return status, sse_frames(payload)
 
 
-def chat_collect(token: str, body: dict, deadline: float = 120.0) -> list[dict]:
-    """开一条 SSE 但**逐帧**收（停止测试要这条路径）。返回收到的帧（到流结束为止）。"""
+def chat_collect(
+    token: str, body: dict, deadline: float = 120.0, sink: list[dict] | None = None
+) -> list[dict]:
+    """开一条 SSE 但**逐帧**收（停止测试要这条路径）。返回收到的帧（到流结束为止）。
+
+    ★★ `sink` 是本轮修掉的一个真 bug（2026-10-27 run `40518816715` 第 ④ 步三条红）：
+      原实现让线程去 `stop_frames.extend(chat_collect(...))`，而 `chat_collect` 是**整条流读完才返回**的
+      ⇒ 主线程那 60 秒里看到 `stop_frames` 一直是空的 ⇒ "等到吐出 3 片再停"退化成了"等流结束再停"
+      ⇒ 停止请求到的时候这一轮早就 GENERATED 了（`accepted=False`）。读数上表现为
+      「停止前已吐出正文（45 字）」= 证据本身，45 字是**全文**，不是 3 片。
+      ⇒ 逐帧收必须**边到边写进共享列表**，不能等函数返回。
+    """
     headers = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
@@ -244,7 +254,7 @@ def chat_collect(token: str, body: dict, deadline: float = 120.0) -> list[dict]:
         method="POST",
         headers=headers,
     )
-    frames: list[dict] = []
+    frames: list[dict] = sink if sink is not None else []
     resp = urllib.request.urlopen(req, timeout=deadline)
     try:
         for raw in resp:
@@ -596,11 +606,11 @@ def main() -> int:
 
         def reader() -> None:
             try:
-                stop_frames.extend(
-                    chat_collect(
-                        token,
-                        {"appId": app_id, "conversationId": conversation_id, "question": "请详细说明报销流程"},
-                    )
+                # ★ 帧写进共享列表（`sink=`），主线程才可能"边吐边看"—— 见 `chat_collect` 的说明
+                chat_collect(
+                    token,
+                    {"appId": app_id, "conversationId": conversation_id, "question": "请详细说明报销流程"},
+                    sink=stop_frames,
                 )
             except Exception as e:  # noqa: BLE001
                 stop_error.append(str(e))
