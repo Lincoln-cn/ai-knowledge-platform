@@ -288,7 +288,29 @@ watch(
   }
 )
 
-defineExpose({ scrollToBottom, scrollToMessage })
+/**
+ * 「回到原句」：滚回**这条回答**里正文的 `[N]` 角标，并让它短暂亮一下。
+ *
+ * ★★ 为什么必须按 `messageId` 定位、不能像 `AnswerBody#scrollToCite` 那样 `document.querySelector`：
+ *   那个选择器只按 `data-ref` 找人，而一页里 N 条回答可能各有一个 `[1]` ⇒ 会滚到**别人的**引用上，
+ *   而且不会报错（`#91` 同族：两端各自都对，接缝错了）。所以这里带 `data-message-id` 收窄。
+ *
+ * ★ 高亮用**临时 class**而不是状态：`.cite` 是 `v-html` 出来的节点，改状态要走字符串重渲染，
+ *   为一次 1.6 秒的提示不值当；而"有没有亮"这件事闸门要能读到，所以 class 名必须稳定（见 `cite-flash`）。
+ */
+const scrollToCite = (messageId: string, index: number) => {
+  const el = scroller.value
+  if (!el) return
+  const cite = el.querySelector(
+    `[data-message-id="${messageId}"] .cite[data-ref="${index}"]`
+  ) as HTMLElement | null
+  if (!cite) return
+  cite.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  cite.classList.add('cite-flash')
+  window.setTimeout(() => cite.classList.remove('cite-flash'), 1600)
+}
+
+defineExpose({ scrollToBottom, scrollToMessage, scrollToCite })
 </script>
 
 <style scoped>
@@ -355,6 +377,18 @@ defineExpose({ scrollToBottom, scrollToMessage })
 .msg.focused {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+/*
+ * 「回到原句」落到的那枚角标：临时亮一下（`scrollToCite` 加、1.6 秒后摘）。
+ * ★ 选择器必须走 `:deep` —— `.cite` 是 `AnswerBody` 里 `v-html` 出来的，
+ *   不在本组件的 scoped 作用域里，直接写 `.cite-flash` 会**永远不生效而没有任何报错**。
+ * ★ 用 `outline` 而不是 `background`：高亮不能改变文字排版，否则"跳过去"的瞬间正文会跳动。
+ */
+.msg-body :deep(.cite-flash) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 
 /* 角色行：mono 小标签，替代左右气泡 */

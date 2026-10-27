@@ -338,17 +338,27 @@ def cleanup(token: str, path: str) -> None:
         print(f"  [注记] 清夹具 {path} 没成功（{status}）：{payload[:160]}")
 
 
-def create_prompt(token: str) -> tuple[str, str]:
-    """建一个「提示词类型 + 提示词」，返回 `(typeId, configId)`。
+def create_prompt(token: str) -> tuple[str, str, bool]:
+    """建一个「提示词类型 + 提示词」，返回 `(typeId, configId, created)`。
 
     ★★ 为什么这一格必须补（`#215`）：S2 此前建应用时 `promptIds: []` —— 一条都没绑，
     于是「应用能带提示词运行」这件事**从来没有被点过**。而补上之后暴露的真缺陷是：
     `ChatService` 当时只读 `rolePrompt`，绑定的提示词正文**根本不参与拼装** ——
     界面显示已选、问答行为一字不变、且不报错（本项目头号病 `silent-failure` 的形状）。
 
-    ★ 先建**新的**类型而不是复用已有那条：闸门要能重复跑，也要能把自己的夹具删干净
-    （删类型前必须先删它下面的模板，复用别人的类型会牵连别的数据）。
+    ★★ 为什么先找**同标记**的那一条、只有找不到才新建（本批真栈跑出来的教训）：
+    `DELETE /assistants/{id}` 是**软删**（`markDeleted`），而提示词的「被引用数」是直接
+    `count(distinct assistant_id) from as_assistant_prompt`、不 join 助手的 `deleted_at`
+    ⇒ 一条提示词只要被任何应用用过（哪怕应用已经删了）就**永远删不掉**（`#217`）。
+    于是"每次新建自己的类型、跑完删掉"在真栈上做不到：本批第一次跑就漏下
+    「1 条 prompt-config + 1 个 prompt-type」，而 `ci.yml` 的 gates 是顺序跑的 ——
+    每跑一次脏一行，攒到第 N 次就会有人以为"提示词列表怎么这么多"。
+    ⇒ 改成**按标记复用**：同一条提示词可以被任意多个应用绑定，重复跑不再增长。
     """
+    type_id, config_id = find_prompt_by_marker(token)
+    if config_id:
+        return type_id, config_id, False
+
     stamp = int(time.time())
     status, payload = call(
         "POST",
@@ -374,7 +384,24 @@ def create_prompt(token: str) -> tuple[str, str]:
     )
     if status not in (200, 201):
         raise SystemExit(f"建提示词失败（{status}）：{payload[:300]}")
-    return type_id, json.loads(payload)["data"]["id"]
+    return type_id, json.loads(payload)["data"]["id"], True
+
+
+def find_prompt_by_marker(token: str) -> tuple[str, str]:
+    """找一条 `callWord` 正好是 `PROMPT_MARKER` 的提示词，返回 `(typeId, configId)`；没有就 `("", "")`。
+
+    ★ 按 `callWord` 精确匹配而不是按名字前缀：标记是**内容**、名字是**标签** ——
+      跑闸门的人可能改名字，但正文必须一字不差才有意义（断言就是拿它去比上游请求体）。
+    """
+    status, payload = call("GET", "/prompt-configs?page=1&size=100", token)
+    if status != 200:
+        return "", ""
+    rows = data_of(payload)
+    rows = rows.get("list") if isinstance(rows, dict) else rows
+    for row in rows or []:
+        if str(row.get("callWord") or "").strip() == PROMPT_MARKER:
+            return str(row.get("typeId") or ""), str(row.get("id") or "")
+    return "", ""
 
 
 def stub_call(method: str, path: str) -> tuple[int, str]:
@@ -514,8 +541,11 @@ def main() -> int:
     kb_id, doc_id, embedding_model_id, created_embedding_model = build_kb(token, workdir)
     print(f"  已建知识库 {kb_id} 并上传/向量化文档 {doc_id}")
 
-    prompt_type_id, prompt_id = create_prompt(token)
-    print(f"  已建提示词 {prompt_id}（类型 {prompt_type_id}）")
+    prompt_type_id, prompt_id, created_prompt = create_prompt(token)
+    print(
+        f"  {'已建' if created_prompt else '复用'}提示词 {prompt_id}（类型 {prompt_type_id}）"
+        + ("" if created_prompt else " —— 复用是为了不让夹具在库里越攒越多（见 create_prompt 的注释）")
+    )
 
     app_id = create_app(token, model_id, kb_id, [prompt_id])
     print(f"  已建应用 {app_id}（已绑 1 条提示词）")
@@ -613,11 +643,15 @@ def main() -> int:
         # ★ 清夹具（这一条以前没有，每跑一次就多一个应用 / 提示词 / 类型 / 库 / 模型）。
         #   顺序有讲究：**先删应用**（它引用提示词与库），再删文档 → 库 → 提示词模板 → 类型 → 我建的模型。
         #   ★ 模型最后删：它被库引用着的时候删不掉。
+        #   ★★ 提示词/类型只在**本轮自己建的**时候才删：应用是软删、而提示词的「被引用数」不 join
+        #     `deleted_at`（`#217`）⇒ 自己建的也删不掉，能删的只有"从没被别的应用用过"的那一条。
+        #     复用别人的那条**绝不能删** —— 它不是本轮的夹具。
         cleanup(token, f"/assistants/{app_id}")
         cleanup(token, f"/documents/{doc_id}")
         cleanup(token, f"/knowledge-bases/{kb_id}")
-        cleanup(token, f"/prompt-configs/{prompt_id}")
-        cleanup(token, f"/prompt-types/{prompt_type_id}")
+        if created_prompt:
+            cleanup(token, f"/prompt-configs/{prompt_id}")
+            cleanup(token, f"/prompt-types/{prompt_type_id}")
         if created_embedding_model:
             cleanup(token, f"/models/{embedding_model_id}")
         if created_chat_model:

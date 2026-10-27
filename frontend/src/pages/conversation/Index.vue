@@ -87,6 +87,7 @@
           :refs="activeRefs"
           :active-index="activeRefIndex"
           @select="selectRef"
+          @back="backToCite"
           @jump="jumpToSegment"
         />
       </aside>
@@ -105,6 +106,7 @@
         closable
         @close="drawerVisible = false"
         @select="selectRef"
+        @back="backToCite"
         @jump="jumpToSegment"
       />
     </el-drawer>
@@ -273,6 +275,26 @@ const onCite = (msg: ChatMessage, index: number) => {
 
 const selectRef = (index: number) => {
   activeRefIndex.value = index
+}
+
+/**
+ * 「回到原句」：把正文里那枚 `[N]` 角标滚进视野并亮一下。
+ *
+ * ★★ 这条链此前是**两端都在、接缝没有**：`RefPanel` 会 `emit('back')`，
+ *   `AnswerBody` 也 `defineExpose({ scrollToCite })` —— 但页面没监听 `back`，
+ *   而 `MessageList` 从没把调用转给 `AnswerBody` ⇒ 按钮点下去**什么都不发生、也不报错**
+ *   （`#91` 同族：用户只会以为"这个按钮是装饰"）。
+ *   A4「引用能点开回到原文」缺的就是这一格，所以它归在闸门 `check_refs_jump_e2e.py` 里断。
+ *
+ * ★ 用 `activeMessage` 而不是"当前最后一条回答"：引用面板可能是用户点**历史某条**回答的 `[N]` 打开的，
+ *   那时"最后一条"是别人。
+ */
+const backToCite = (index: number) => {
+  activeRefIndex.value = index
+  const msg = activeMessage.value ?? chat.lastAssistant.value
+  if (!msg) return
+  msgListRef.value?.scrollToCite(msg.id, index)
+  if (!wide.value) drawerVisible.value = false
 }
 
 const jumpToSegment = (ref: SourceRefEx) => {

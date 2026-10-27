@@ -120,6 +120,7 @@
             :refs="activeRefs"
             :active-index="activeRefIndex"
             @select="(n) => (activeRefIndex = n)"
+            @back="backToCite"
             @jump="jumpToSegment"
           />
         </aside>
@@ -132,6 +133,7 @@
           closable
           @close="drawerVisible = false"
           @select="(n) => (activeRefIndex = n)"
+          @back="backToCite"
           @jump="jumpToSegment"
         />
       </el-drawer>
@@ -207,6 +209,9 @@ const activeMessage = ref<ChatMessage | null>(null)
 const drawerVisible = ref(false)
 const wide = ref(true)
 const composerRef = ref<InstanceType<typeof Composer>>()
+// ★ 模板里早就有 `ref="msgListRef"`，但**没有这一行声明** ⇒ 那个 ref 一直是空的（用不上也测不出）。
+//   「回到原句」需要它，所以补上。
+const msgListRef = ref<InstanceType<typeof MessageList>>()
 
 const activeRefs = computed(() => {
   const msg = activeMessage.value ?? chat.lastAssistant.value
@@ -225,6 +230,21 @@ const jumpToSegment = (ref: SourceRefEx) => {
   if (ref.segmentId) query.segment = ref.segmentId
   if (ref.kbId) query.kb = ref.kbId
   router.push({ path: '/knowledge', query })
+}
+
+/**
+ * 「回到原句」：滚回正文里的 `[N]` 角标并亮一下。
+ *
+ * ★ 与 `conversation/Index.vue` 同一口径（那边写清了"两端都在、接缝没有"的来历）。
+ * ★ 公开面也必须接：访客对引用的用法与内部用户没有区别，少了这个按钮就是"公开面功能更弱"
+ *   —— 而公开面恰恰是给外部人看的。
+ */
+const backToCite = (index: number) => {
+  activeRefIndex.value = index
+  const msg = activeMessage.value ?? chat.lastAssistant.value
+  if (!msg) return
+  msgListRef.value?.scrollToCite(msg.id, index)
+  if (!wide.value) drawerVisible.value = false
 }
 
 const onEsc = (e: KeyboardEvent) => {

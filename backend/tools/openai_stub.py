@@ -560,6 +560,15 @@ class StubHandler(BaseHTTPRequestHandler):
             content = json.dumps(payload, ensure_ascii=False)
         else:
             content = f"（桩）关于「{prompt[:30]}」，这是占位回答。"
+            # ★ 有参考资料就带上 `[N]` 角标：真实模型被要求在正文里标出处（`promptOf` 把
+            #   refs 按 `[1] 标题 / 正文` 摆好），而桩不标的话 ——
+            #   ① 前端「回到原句」滚过去**没有角标可落**，「引用能点开」这条交互在真栈上
+            #      永远测不到（`check_design.py` 只能断"按钮存在"，存在 ≠ 有反应）；
+            #   ② 而"界面没有角标"到底是模型没标、还是渲染丢了，读数上分不开。
+            #   ⇒ 桩在这里模仿"标了出处"的形状，让下游那一格可测。
+            marks = re.findall(r"^\[(\d+)\] ", prompt, re.M)
+            if marks:
+                content += "据资料" + "".join(f"[{m}]" for m in marks) + "所述。"
         return content, reasoning_for(model, effort)
 
     def _handle_chat(self, body) -> None:
