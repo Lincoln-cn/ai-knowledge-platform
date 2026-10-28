@@ -70,6 +70,20 @@ public final class StreamAssembler {
   /** 心跳载荷 —— 契约里 {@code HEARTBEAT_PAYLOAD = 'keep-alive'}（解析端只认前缀 {@code ':'}，不按载荷匹配）。 */
   private static final String HEARTBEAT_PAYLOAD = "keep-alive";
 
+  /** 上游失败时的 {@code reason} 前缀（见 {@link #failureText}）。 */
+  private static final String UPSTREAM_FAILED_PREFIX = "生成失败：";
+
+  /**
+   * 上游失败时的 {@code hint}。
+   *
+   * <p>★ 与 {@link #NETWORK_HINT} 分开的理由：网络故障的下一步是「重试」，而「模型名不存在」的下一步是 <strong>去改配置</strong> —— 同一个
+   * hint 覆盖两种情况，等于两种都没说清（{@code #224}）。
+   */
+  private static final String UPSTREAM_HINT = "请检查该应用的对话模型配置（地址、密钥、模型名）；配置正确的话可稍后重试";
+
+  /** 上游 detail 最多带多少字符 —— 一条 404 的响应体能到几 KB，线上没必要把整页都推给用户。 */
+  private static final int MAX_DETAIL_CHARS = 160;
+
   /** 已按顺序产出的事件（含心跳）。 */
   private final List<StreamEvent> emitted = new ArrayList<>();
 
@@ -211,6 +225,86 @@ public final class StreamAssembler {
   }
 
   /**
+   * ★★<strong>失败文案的唯一算法</strong> —— {@code error} 帧与落库的 {@code fail_reason} 都从这里取（{@code #224}）。
+   *
+   * <h3>为什么必须"一处算、两处用"</h3>
+   *
+   * <p>改之前是两处各写一份：装配器发常量「连接中断」，而 {@code ChatService.failReasonFor} 在<strong>有</strong> 上游 detail
+   * 时落库「生成失败：上游返回 HTTP 404：…」。于是同一个失败在库里可查、在流里只剩一句「连接中断」—— {@code ChatService} 那行注释写着"与装配器发出去的
+   * {@code error.reason} 同源"，而实现不同源。 <b>"同源"这件事只能靠"同一个函数"保证</b>， 靠两处写一样的话保证不住（第一次改文案就会分叉）。
+   *
+   * <h3>三档语义（{@code #224} 要求分清的那一刀）</h3>
+   *
+   * <ol>
+   *   <li><strong>用户主动停止 / 客户端断开</strong>（没有 detail）⇒「连接中断」+「网络或服务异常，可重试」。 ★
+   *       不许把上游的内部话术糊到用户脸上：用户点停止时，"上游说了什么"与他做的动作无关；
+   *   <li><strong>上游失败</strong>（有 detail）⇒「生成失败：上游返回 HTTP 404：…」+ 去改配置的 hint。
+   *       这句是<strong>可行动</strong>的 ——「连接中断」不能让人去改模型名；
+   *   <li><strong>闲置超时</strong> ⇒「生成超时」+ 超时口径的 hint（与上面两档都不同）。
+   * </ol>
+   *
+   * <p>★ detail 只做<strong>归一与截断</strong>（换行压成空格、超过 {@value #MAX_DETAIL_CHARS} 字加省略号），
+   * <strong>不做脱敏</strong>：上游把它自己的密钥回显进 error body 这种情形要由出站脱敏（{@code #85}）在
+   * <strong>更靠近上游的那一层</strong>处理 —— 在本方法里做只能遮住这一条路。
+   *
+   * @param path 终止路径（非空）
+   * @param upstreamDetail 上游报错的可读原因；<strong>用户停止 / 写连接失败时为 {@code null}</strong>
+   * @return 文案（{@code reason == null} 表示这条路径不该发 {@code error}）
+   */
+  public static FailureText failureText(StreamTerminationPath path, String upstreamDetail) {
+    Objects.requireNonNull(path, "path");
+    if (!path.errorPrecedesDone()) {
+      return new FailureText(null, null);
+    }
+    if (path == StreamTerminationPath.IDLE_TIMEOUT) {
+      return new FailureText(TIMEOUT_REASON, TIMEOUT_HINT);
+    }
+    String detail = normalizeDetail(upstreamDetail);
+    return detail == null
+        ? new FailureText(DISCONNECT_REASON, NETWORK_HINT)
+        : new FailureText(UPSTREAM_FAILED_PREFIX + detail, UPSTREAM_HINT);
+  }
+
+  /** 把上游 detail 归一成"一句话"：空 ⇒ {@code null}；换行/连续空白压成一个空格；过长截断。 */
+  private static String normalizeDetail(String upstreamDetail) {
+    if (upstreamDetail == null) {
+      return null;
+    }
+    String oneLine = upstreamDetail.strip().replaceAll("\\s+", " ");
+    if (oneLine.isEmpty()) {
+      return null;
+    }
+    return oneLine.length() <= MAX_DETAIL_CHARS
+        ? oneLine
+        : oneLine.substring(0, MAX_DETAIL_CHARS) + "…";
+  }
+
+  /**
+   * 失败文案（{@code error} 帧的 {@code reason}/{@code hint}，也是库里 {@code fail_reason}/{@code fail_hint}）。
+   */
+  public record FailureText(String reason, String hint) {
+
+    /** 这条路径要不要发 {@code error}。 */
+    public boolean persistable() {
+      return reason != null;
+    }
+  }
+
+  /**
+   * ★★ <strong>唯一</strong>的终态出口 —— 四条路径都走这里（ROADMAP 判据②）。
+   *
+   * <p>这个重载不带上游 detail ⇒ 只有「连接中断 / 生成超时」两档（用户停止、写连接失败、超时都属此）。 带上游原因请用 {@link
+   * #finish(StreamTerminationPath, long, String)}。
+   *
+   * @param path 终止路径（非空）
+   * @param durationMs 耗时（毫秒，非负）
+   * @return 本次调用是否产出了 {@code done}（{@code false} = 已经收过尾了）
+   */
+  public synchronized boolean finish(StreamTerminationPath path, long durationMs) {
+    return finish(path, durationMs, null);
+  }
+
+  /**
    * ★★ <strong>唯一</strong>的终态出口 —— 四条路径都走这里（ROADMAP 判据②）。
    *
    * <p>语义三条：
@@ -228,9 +322,11 @@ public final class StreamAssembler {
    *
    * @param path 终止路径（非空）
    * @param durationMs 耗时（毫秒，非负）
+   * @param upstreamDetail 上游报错的可读原因（★ 用户停止 / 写连接失败时传 {@code null} —— 见 {@link #failureText}）
    * @return 本次调用是否产出了 {@code done}（{@code false} = 已经收过尾了）
    */
-  public synchronized boolean finish(StreamTerminationPath path, long durationMs) {
+  public synchronized boolean finish(
+      StreamTerminationPath path, long durationMs, String upstreamDetail) {
     Objects.requireNonNull(path, "path");
     if (durationMs < 0) {
       throw new IllegalArgumentException("durationMs 不能为负：" + durationMs);
@@ -240,11 +336,9 @@ public final class StreamAssembler {
     }
     emitMetaIfPending();
     flushRefsAtTermination();
-    if (path.errorPrecedesDone()) {
-      emit(
-          path == StreamTerminationPath.IDLE_TIMEOUT
-              ? new StreamEvent.StreamErrorEvent(TIMEOUT_REASON, TIMEOUT_HINT)
-              : new StreamEvent.StreamErrorEvent(DISCONNECT_REASON, NETWORK_HINT));
+    FailureText failure = failureText(path, upstreamDetail);
+    if (failure.reason() != null) {
+      emit(new StreamEvent.StreamErrorEvent(failure.reason(), failure.hint()));
     }
     this.done = new StreamEvent.StreamDoneEvent(path.status(), messageId, tokens, durationMs);
     settled = true;

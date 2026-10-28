@@ -770,9 +770,10 @@ public class ChatService {
     }
     long durationMs = elapsedMs(run.startedAtNanos);
     try {
-      // ★ error 帧与 done 帧都由装配器产出（它按路径合成 reason/hint）——
-      //   本层不自己编文案，否则"界面上看到的原因"与"库里记的原因"会分叉
-      run.assembler.finish(path, durationMs);
+      // ★ error 帧与 done 帧都由装配器产出（文案用它那一份算法）——
+      //   本层不自己编文案，否则"界面上看到的原因"与"库里记的原因"会分叉（#224）
+      // ★ 上游失败时把 detail 交下去；用户停止 / 写连接失败时 upstreamFailed 为 false ⇒ detail 为 null
+      run.assembler.finish(path, durationMs, upstreamFailed ? run.lastFailReason : null);
       run.pump();
     } catch (UncheckedIOException gone) {
       log.info("终态帧写不出去（连接已断）：{} —— 库里仍会落终态", gone.getMessage());
@@ -808,6 +809,10 @@ public class ChatService {
         // 理论上到不了（finish 一定产出 done）；真到了说明终态出口被绕过了 —— 留痕而不是静默
         throw new IllegalStateException("收尾时没有 done 事件 —— 终态出口只能有一个（StreamAssembler#finish）");
       }
+      // ★★ 落库的失败文案与 error 帧出自**同一个函数**（#224）——
+      //   装配器已经算过一次（fed 到 wire），这里再算一次拿同一份结果，而不是各写一句
+      StreamAssembler.FailureText failure =
+          StreamAssembler.failureText(path, upstreamFailed ? run.lastFailReason : null);
       turns.finish(
           turn.assistantMessageId(),
           path,
@@ -816,8 +821,8 @@ public class ChatService {
           run.refsBound ? run.refs : null,
           done.tokens(),
           durationMs,
-          failReasonFor(path, upstreamFailed ? run.lastFailReason : null),
-          failHintFor(path));
+          failure.reason(),
+          failure.hint());
       log.info(
           "会话 {} 的助手消息 {} 收尾：{}（正文 {} 字，tokens {}，耗时 {}ms）",
           turn.conversationId(),
@@ -834,26 +839,8 @@ public class ChatService {
     }
   }
 
-  /** 失败原因：★ 与装配器发出去的 {@code error.reason} 同源（由它按路径合成）。 */
-  private static String failReasonFor(StreamTerminationPath path, String upstreamDetail) {
-    if (!path.errorPrecedesDone()) {
-      return null;
-    }
-    if (path == StreamTerminationPath.IDLE_TIMEOUT) {
-      return "生成超时";
-    }
-    // DISCONNECT 的两种来源：上游报错（有 detail）与连接断开（写失败，没有 detail）
-    return upstreamDetail == null ? "连接中断" : "生成失败：" + upstreamDetail;
-  }
-
-  /** 失败提示：与契约的 {@code error.hint} 同一条口径。 */
-  private static String failHintFor(StreamTerminationPath path) {
-    return switch (path) {
-      case COMPLETE, ABORT -> null;
-      case IDLE_TIMEOUT -> "可稍后重试；若持续超时请联系管理员";
-      case DISCONNECT -> "网络或服务异常，可重试";
-    };
-  }
+  // ★ 失败原因与提示不再在本层合成：唯一算法在 {@link StreamAssembler#failureText}
+  //   （#224 —— 之前这里各写一份，于是"库里可查的原因"与"线上那句连接中断"不同源）
 
   // ────────────────────────── 检索与提示词 ──────────────────────────
 

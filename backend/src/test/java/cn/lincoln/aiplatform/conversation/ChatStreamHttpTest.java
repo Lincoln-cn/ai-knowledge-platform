@@ -677,6 +677,43 @@ class ChatStreamHttpTest {
     assertThat(failReasonInDb(messageId)).as("★ FAILED 必填原因（库层也有 CHECK 兜一道）").isNotBlank();
   }
 
+  // ────────────────────────── ③b 上游失败（DISCONNECT 的那一半）──────────────────────────
+
+  /**
+   * ★★ {@code #224} 判据①②：上游失败时，<strong>线上那句原因与库里那句原因必须是同一句</strong>。
+   *
+   * <p>造法：假模型直接以 {@code FAILED} 收尾并给一句 detail（真实现里这句就是「上游返回 HTTP 404：模型不存在」那种）。
+   * 于是不需要一个坏掉的真上游，也能读到"detail 有没有被丢在半路"。
+   *
+   * <p>★ 反证：把 {@code ChatService} 交下去的 detail 改成 {@code null}（或把装配器换回常量），
+   * 第一条断言立刻红在「只说了连接中断」——这正是修复前现场的样子。
+   */
+  @Test
+  void upstreamFailurePutsItsReasonOnTheWireAndInTheDatabase() throws Exception {
+    Fixture fixture = seedWithVisibleSegment();
+    fakeModel.set(FakeChatStreamPorts.failing("上游返回 HTTP 500：boom"));
+
+    Response response = chat(login(), body(fixture.appId(), null, "差旅住宿标准"));
+
+    List<String> events = response.events();
+    assertThat(events).as("失败路径：先 error 收原因，再 done 收终态").contains("error").contains("done");
+    assertThat(events.indexOf("error"))
+        .as("★ error 不是终态 —— 必须排在 done 之前")
+        .isLessThan(events.indexOf("done"));
+
+    String frameReason = stringField(response.dataOf("error"), "reason");
+    assertThat(frameReason)
+        .as("★★ 判据①：线上必须给出可行动的原因（修复前这里恒为「连接中断」）")
+        .contains("HTTP 500")
+        .isNotEqualTo("连接中断");
+
+    String messageId = stringField(response.dataOf("meta"), "messageId");
+    waitForStatus(messageId, "FAILED", 10_000);
+    assertThat(failReasonInDb(messageId))
+        .as("★★ 判据②：同一个字符串既上线也写库 —— 两处各写一份就会在这里分叉")
+        .isEqualTo(frameReason);
+  }
+
   // ────────────────────────── ④ 连接断开（DISCONNECT）──────────────────────────
 
   /**
