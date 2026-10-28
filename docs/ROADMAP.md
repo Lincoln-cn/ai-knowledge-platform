@@ -1868,3 +1868,52 @@ artifact 的 `backend.log` 里只有五条 Tomcat 层 NPE —— `MimeHeaders.re
 1. **一条权限点断言必须先问「谁能持有它」** —— 静态闸门比按钮断言便宜一个量级，且它能红的那一类缺陷（无人持有 / 语义错配）按钮断言抓不到。
 2. **按钮文案要能精确匹配** —— `/knowledge?kb=kb4&tab=settings` 里同时有「保存」与恒在的「保存检索参数」，模糊匹配会让断言量到后者。
 3. **量「权限」不能靠需要前置状态的东西** —— `/org` 用「新增根部门」（header 常驻）而不是「新增下级」（要先选中节点），否则量的是「有没有选中」。
+
+#### 11.10.31 2026-10-28 `#62` 流式也进 advisor 链（那一半的空洞补上了）
+
+**为什么这一条是"空洞"而不是"功能"**：`#62` 的判据①–④ 在非流式那半边早已有读数（§11.10.18），缺的是**流式那一半**。`SafeGuardChatAdvisor` 继承的官方 `SafeGuardAdvisor` 本来就 `implements CallAdvisor, StreamAdvisor`（`javap` 实测），所以"流式没有安全闸门"不是缺组件，而是**流式根本没经过 `ChatClient`**：`NativeSpringAiChatModel.stream()` 一直是一个直接抛 `UnsupportedOperationException` 的占位方法。同一个应用里两种提问方式的安全边界不一样 —— 这正是最不该有的那种不一致。
+
+**这一轮做了什么**
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | `stream(Prompt)` 真实现：`Flux.defer` + 内部 `SseFrames implements Iterable<ChatResponse>`，**拉一帧产出一帧**（不攒成 List），`doFinally` 关连接；容忍 `choices: []` 的 usage 帧（只落用量、不产出元素）、跳过空 delta、`[DONE]` 结束；非 2xx / IO 异常统一抛 `UpstreamGateway.UpstreamUnreachableException` | `NativeSpringAiChatModel` |
+| 2 | `payload(messages, stream)` 两条路径共用：`stream:true` 时带 `stream_options:{include_usage:true}`；`reasoning_effort` **只在非 null 时出现**（`#185`） | 同上 |
+| 3 | 新增 `streamConversation(...)`：`clientOf(model)` → `prompt().messages(...).stream().chatResponse().toIterable()` 同步迭代，返回"至少收到过一块正文"；**只**把 `UpstreamUnreachableException` 包成 `BusinessException`，消费方抛的异常原样穿透 | `SpringAiChatAdapter` |
+| 4 | `keyOf(target)`：服务商没配 key 时**仅 Bearer** 回落配置默认 key（与 `UpstreamGateway.effectiveKey` 逐字同一条规则） | 同上 |
+| 5 | `implements CallAdvisor, StreamAdvisor`；新 `streamCount()`，计数写在 `Flux.defer` 里（写在方法体里会变成"装配即计数"） | `AdvisorChainTrace` |
+| 6 | `streamChat` 先算 `reasoningEffort`，再按 `springAi.enabled()` 分流；`history` 只在网关分支里构造 | `ChatModelAdapter` |
+
+**读数**
+
+| 判据 | 读数 |
+| --- | --- |
+| ① 流式经链 | `SpringAiChatAdapterTest#streamsThroughTheAdvisorChainAndForwardsEveryChunk`（适配器直连：`streamCount()==1`、`callCount()==0`、正文按块 `containsExactly("流式","回答。")`）· `#streamingPathAlsoAvoidsTheGatewayUnlessExplicitlyDisabled`（**从端口层 `ChatModelAdapter` 一路下来** `streamCount()==1`） |
+| ② 默认不走网关 | 同上用例：`CountingGateway.calls==0`；`SpringAiChatAdapter.disabled()` ⇒ `streamCalls==1` 且正文来自网关 |
+| ③ 金丝雀 | 常驻：`#streamCanaryWithoutAdvisorRegistrationTheProbeStaysZero`（`List.of()` 注册 ⇒ 探针 0，正文仍到）· 反证 A（实测）：把 `stream_options` 与 `reasoning_effort` 两处 `if` 改成恒假 ⇒ `streamsThrough…:284` 与 `thinkingToggle…:486` **红**，还原后 16/16 · 反证 B（实测）：把分流改成恒走网关 ⇒ `streamingPathAlsoAvoids…:440` 与 `thinkingToggle…:486` **红** |
+| ④ 安全闸门在流式上生效 | `#officialSafeGuardAdvisorBlocksSensitiveInputOnTheStreamingPath`：命中「绝密」⇒ 交付 `SafeGuardChatAdvisor.REFUSAL` **整块**（官方实现是 `Flux.just(...)` 一个响应，不是切碎流），上游 `hits==0`。★ 仍是**适配器层**读数，不是 HTTP/SSE e2e |
+| ⑤ 空流语义 | `#streamWithoutAnyDataFrameReportsNotStreamed`（只有 `[DONE]` ⇒ `false`，200 但零正文必须报失败，否则上层收成一条"成功但零字"的消息）· `#usageOnlyFramesAreNotMistakenForContent`（role 帧 + usage 帧 ⇒ `false`，不许把用量帧当正文）· 既有 `UpstreamStreamingChatAdapterTest` **1/1 未改** |
+| 停止/断开 | `#consumerFailureInterruptsTheStreamAndPropagatesAsIs`：`onDelta` 抛 `IllegalStateException("用户点了停止")` ⇒ 同实例抛回（`isSameAs`）、后续块一块都不再交付；`finally` 里 `closeStream()` 幂等 |
+| 用量 | `#streamsThroughTheAdvisorChain…`：`usage` 回调恰好 `(7,3)`；流后**两个分量都有**才回调，不伪造 0 |
+| 认证回落 | `#blankProviderKeyFallsBackToTheConfiguredDefaultKey`：`Authorization: Bearer <配置默认值>` |
+| 回归 | `SpringAiChatAdapterTest` **16/16** · `ChatModelAdapterTest` **8/8**（`#185` 网关侧未变）· `cn.lincoln.aiplatform.modelcatalog.*Test` **99/99** · 架构闸门 `cn.lincoln.aiplatform.*Test` **34/34** · `cn.lincoln.aiplatform.caliber.*Test` **16/16** |
+
+**仍欠（`#62` 保持 OPEN 的理由）**
+
+| 欠什么 | 为什么没取到 |
+| --- | --- |
+| `ChatStreamHttpTest`（9 例，SSE 契约不回归） | 本机**没有 Docker**：`Could not find a valid Docker environment`（Testcontainers 起不来 PG）。这是环境读数缺失，不是代码红 |
+| 真栈三条（`check_public_share_e2e` / `check_regenerate_e2e` / `check_failure_visible_e2e`） | 需要**用户点启动器**起后端 8080 + 桩 11434；本轮三次 HTTP 探活全部"无法连接到远程服务器"（agent 不启服务） |
+| HTTP 级的安全闸门读数 | 上面 ④ 是适配器层；`/conversations/*/stream` 上的敏感词拦截还没有端到端读数 |
+
+**构建口径（本轮踩到的两处，记下来省下一次）**
+
+1. **必须 `JAVA_HOME=D:\Java\jdk-25`**：默认 `JAVA_HOME`（sdkman 的 `current`）是 **21**，`release 25` 直接失败在 `不支持发行版本 25`，而报错点是 `maven-compiler-plugin`，看起来像 pom 写错了。
+2. **`-Dspotless.check.skip=true` 在 pwsh 里会被点号拆开**（报 `Unknown lifecycle phase ".check.skip=true"`），要么加引号，要么干脆先跑 `mvn -o -q spotless:apply`。本轮的 5 个文件都被 spotless 重排过 javadoc 换行——**改完先 apply 再跑测试**，否则红在格式而不是逻辑。
+
+**三条判据**
+
+1. **"官方组件已具备"与"它在这条路径上生效"是两件事** —— `SafeGuardAdvisor` 实现了 `StreamAdvisor` 是一回事，流式经过 `ChatClient` 是另一回事；判据要钉在**后者的可观测读数**（探针计数）上，不能钉在"类实现了哪个接口"上。
+2. **金丝雀要能删出红，而"删掉注册"比"删掉代码"更接近真实故障** —— 反证 A/B 各删一半（请求体字段 / 分流分支），对应用例立刻红；只写"注册了 advisor"这类断言，删代码与删配置都抓不到。
+3. **空流必须显式判失败** —— `200` + 零 `data` 帧是上游不支持 `stream:true` 时的真实形态，它和"回答为空"在数据上无法区分；不判就会静默产出一条零字消息。
+

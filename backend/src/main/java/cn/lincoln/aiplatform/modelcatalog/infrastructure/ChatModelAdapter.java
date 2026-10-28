@@ -216,6 +216,10 @@ public class ChatModelAdapter implements ChatPort {
   /**
    * 带用量回调的流式调用（{@code #142}）：把上游 {@code usage} 两个分量原样转给端口层。
    *
+   * <p>★ 两条路径（{@code #62} 的后半段）：默认经 {@code SpringAiChatAdapter} 走 {@code ChatClient} —— 于是流式 也在
+   * advisor 链上（安全闸门、可观测探针与非流式同一张网）；只有显式关掉 {@code app.chat.advisors.enabled} 时才回到 {@code
+   * UpstreamGateway}。两条路径的请求体与终态语义<strong>逐条同口径</strong>，否则"关掉链"会悄悄地改变回答内容。
+   *
    * @param onUsage {@code null} = 调用方不关心用量
    */
   public boolean streamChat(
@@ -226,12 +230,22 @@ public class ChatModelAdapter implements ChatPort {
       java.util.function.Consumer<String> onDelta,
       java.util.function.BiConsumer<Integer, Integer> onUsage) {
     Model model = requireChatModel(modelId);
-    List<Map<String, String>> history =
-        messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
     String reasoningEffort =
         model.thinking() == cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode.TOGGLEABLE
             ? (thinking ? "high" : "none")
             : null;
+    if (springAi.enabled()) {
+      return springAi.streamConversation(
+          upstream.resolve(model),
+          model.baseModel(),
+          messages,
+          reasoningEffort,
+          timeout,
+          onDelta,
+          onUsage);
+    }
+    List<Map<String, String>> history =
+        messages.stream().map(m -> Map.of("role", m.wireRole(), "content", m.content())).toList();
     try {
       ResolvedUpstream target = upstream.resolve(model);
       return gateway.streamChatCompletion(
