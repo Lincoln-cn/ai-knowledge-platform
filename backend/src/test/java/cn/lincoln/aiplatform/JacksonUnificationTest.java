@@ -2,9 +2,8 @@ package cn.lincoln.aiplatform;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
+import cn.lincoln.aiplatform.support.ArchUnitImports;
 import com.tngtech.archunit.core.domain.JavaClasses;
-import com.tngtech.archunit.core.importer.ClassFileImporter;
-import com.tngtech.archunit.core.importer.ImportOption;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -40,16 +39,15 @@ import org.junit.jupiter.api.Test;
  *
  * <p>★★ 排除测试<strong>不等于放宽</strong>：主代码里再 import 一次 {@code com.fasterxml.jackson.databind..} /
  * {@code core..} 照样会红（做法：在 {@code conversation/domain} 下临时加一个类 import 它 ⇒ 必须红 ⇒ 还原）。 ★
- * 本类<strong>没有</strong>常驻金丝雀，而且做不到：坏样本只能住在<strong>测试</strong>源集里，而这次收窄恰好把它排除在外 ⇒
- * 任何常驻金丝雀都<strong>证明不了</strong>"收窄后还看得见主代码"。那条只能由一次<strong>临时</strong>的主代码违规来证明。
+ * 本类<strong>没有</strong>常驻金丝雀，而且做不到：坏样本只能住在<strong>测试</strong>源集里，而这次收窄恰好把它排除在外。
+ *
+ * <p>★ 但"收窄之后的导入还看得见主代码"这件事不再靠手工取证：{@link ArchUnitImports} + {@code ArchUnitImportsTest}
+ * 常驻断言（收窄看不见测试类 · 不收窄看得见它 · 收窄仍看得见主代码），任何人改坏导入构造都会立刻红（{@code #135}）。
  */
 class JacksonUnificationTest {
 
   /** ★ 只导入主代码；测试源集里的序列化器（如 {@code SourceRefSerializationTest}）不属本闸门范围。 */
-  private static final JavaClasses APP_CLASSES =
-      new ClassFileImporter()
-          .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
-          .importPackages("cn.lincoln.aiplatform");
+  private static final JavaClasses APP_CLASSES = ArchUnitImports.mainSources();
 
   /**
    * 我们的代码不得再出现 Jackson 2 的 {@code databind} / {@code core} —— 中文的"为什么"写在类 javadoc 里 （标识符一律

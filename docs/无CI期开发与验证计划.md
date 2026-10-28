@@ -213,5 +213,15 @@ tools\run-frontend-gates.cmd     ← 跑 11 道浏览器闸门 + verify_features
 
 ---
 
+## §九 收窄过的 ArchUnit 闸门：导入构造要能自证（`#135`，2026-10-28）
 
+**现象**：靠 `ImportOption.Predefined.DO_NOT_INCLUDE_TESTS` 收窄过扫描范围的闸门（`JacksonUnificationTest`、`AccessScopeUniquenessTest`）有一个天然盲区 —— 坏样本只能住在**测试**源集里，而收窄恰好把它排除在外，于是"规则还能红"的常驻金丝雀**证明不了**"收窄之后还看得见主代码"。
 
+**旧口径（已废止）**：每次改动导入构造，都在报告里补一次**临时主代码违规**的取证。它要求"每次都记得"，而这正是最不可靠的一类约束。
+
+**新口径（2026-10-28 起）**：
+1. 收窄/全量导入**只有一个构造点** —— `backend/src/test/java/cn/lincoln/aiplatform/support/ArchUnitImports.java`（`mainSources()` / `allSources()`）；闸门里不许再手写 `new ClassFileImporter()…`。
+2. **那条构造点自身有常驻测试** —— `ArchUnitImportsTest` 三例：① 收窄后的集合**看不见**一个已知测试类；② 不收窄的集合**看得见**它（否则①会因为"根本没导入"而通过，是假绿）；③ 收窄后的集合**仍看得见**一个已知主代码类（没有收过头）。
+3. ★ **两件事分开证**：上述证明的是**导入构造**；**规则**能不能红仍靠各闸门自己的金丝雀（或在主代码里临时造一次违规）。把"看得见"读成"判得对"是这一类闸门最常见的误读。
+
+**读数**：`ArchUnitImportsTest` 3/3；反证 = 把 `mainSources()` 的 `withImportOption(DO_NOT_INCLUDE_TESTS)` 去掉 ⇒ `narrowedImportCannotSeeTestSources` 红（`Expecting value to be false but was true`），还原后绿。

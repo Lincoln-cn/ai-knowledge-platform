@@ -2122,3 +2122,13 @@ B6（150 段）与 B7（200 次）会明显拉长真栈 job；**三条重闸门�
 
 **35.4 与 `#135` 的关系（同一个形状，两处已按它写）**：`#135` 说的是"靠 `ImportOption` 收窄过的闸门，其导入构造无法用常驻金丝雀自证"。本轮两个新闸门都自带自证：`AuthHeaderUsageTest.theScanActuallySeesCallSites`（扫不到调用就红）、`JacksonTwoUsageTest.theWhitelistEntryStillNeedsJacksonTwo`（白名单条目失效就红）。`#135` 保持 OPEN，因为它点的是**已有的两条**收窄闸门 —— 它们的自证方式还没统一，属于下一批。
 
+**35.5 `#135` 的同批处置：把「导入构造」抽成一个可自证的构造点（同日完成）**
+
+旧口径是"每次改动导入构造都在报告里补一次临时主代码违规的取证" —— 它要求**每次都记得**，而这正是最不可靠的一类约束（本项目已经用 `#134` 证明"将来可能"会变成"已经发生"）。改成结构性的：
+
+- 新 `support/ArchUnitImports.java`：`mainSources()`（`DO_NOT_INCLUDE_TESTS` 收窄）与 `allSources()`（全量）**唯一构造点**；三个闸门（`JacksonUnificationTest` / `AccessScopeUniquenessTest` / `JacksonTwoUsageTest`）里不再出现 `new ClassFileImporter()…`。
+- 新 `support/ArchUnitImportsTest`（3 例）常驻自证：① 收窄后的集合**看不见**一个已知测试类；② 不收窄的集合**看得见**它（否则①会因为"根本没导入它"而通过 —— 那是假绿）；③ 收窄后的集合**仍看得见**一个已知主代码类（没有收过头）。
+- ★ **两件事分开证**：上面证明的是**导入构造**；**规则**能不能红仍靠各闸门自己的金丝雀或在主代码里临时造违规。把"看得见"读成"判得对"，是这类闸门最常见的误读 —— 两个闸门的 javadoc 已按这条口径改写。
+- 反证：把 `mainSources()` 的 `withImportOption(DO_NOT_INCLUDE_TESTS)` 去掉 ⇒ `narrowedImportCannotSeeTestSources` 红（`Expecting value to be false but was true`，指到 `ArchUnitImportsTest.java:28`）；还原后 **3/3** 绿。同时 `JacksonUnificationTest` 1/1、`AccessScopeUniquenessTest` 2/2 仍绿（换成共用构造点没有改变它们判的东西）。
+- 口径落点：`docs/无CI期开发与验证计划.md` §九（这一条的真源是文档，不是 javadoc —— `#135` 原文就写了"javadoc 不是口径真源"）。
+
