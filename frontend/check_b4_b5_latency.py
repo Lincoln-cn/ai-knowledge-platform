@@ -125,6 +125,21 @@ def _row_serves(row: dict) -> bool:
     return str(row.get("baseModel") or "") in _served_models()
 
 
+def _pinned_model(rows: list[dict]) -> str | None:
+    """`AIP_CHAT_MODEL_ID`（id 或名字）指定的模型 —— A/B 对比时必须能钉死是哪一个。
+
+    ★ 存在的理由：同一个 `baseModel` 可以有多条记录指向**不同上游**（一个 CPU Ollama、
+      一个 GPU Ollama），列表接口又不带 `apiBase` ⇒ 不钉死的话"换模型"的 A/B 会静默选错行。
+    """
+    pinned = os.environ.get("AIP_CHAT_MODEL_ID", "").strip()
+    if not pinned:
+        return None
+    for row in rows:
+        if pinned in (str(row.get("id")), str(row.get("name"))):
+            return str(row.get("id"))
+    raise SystemExit(f"AIP_CHAT_MODEL_ID={pinned} 没在模型列表里找到 —— 本跑不算读数")
+
+
 def ensure_chat_model(token: str) -> tuple[str, bool]:
     """取一个**上游真的能服务**且已加载的对话模型；没有就建一个并等它 LOADED。
 
@@ -139,6 +154,9 @@ def ensure_chat_model(token: str) -> tuple[str, bool]:
     """
     _, body = call("GET", "/models?kind=CHAT&size=50", token)
     rows = data_of(body).get("list") or []
+    pinned = _pinned_model(rows)
+    if pinned is not None:
+        return pinned, False
     for row in rows:
         if row.get("status") == "LOADED" and _row_serves(row):
             return str(row["id"]), False

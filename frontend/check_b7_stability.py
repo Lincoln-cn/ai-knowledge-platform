@@ -20,6 +20,11 @@
 **p95 ≤ B5 的上限（60s）**，max 只打印。★ 但"越跑越慢"本身是读数：首 10 轮与末 10 轮的中位数
 也会打印，两者差一个量级就是一条独立发现，不该被"p95 绿"盖住。
 
+━━━ 令牌过期不算产品红（`#225` 那条，2026-10-28 实测踩到）━━━
+`access-ttl` 是 30m，而 200 轮真模型实测要 27–31 分钟 ⇒ **长跑一定跨过它**。第一次跑到 #124
+起连续 77 条 `HTTP 401`，如果照实计成"未处理异常"，这条闸门量的就是"令牌有没有过期"。
+⇒ 碰到 401 就**重新登录并重试该轮**，续签次数单独打印（续签之后仍 401 才计失败）。
+
 用法：
     python check_b7_stability.py
     AIP_B7_ROUNDS=200 AIP_B7_LOG=/tmp/backend.log python check_b7_stability.py
@@ -342,11 +347,21 @@ def main() -> int:
         failing_rounds: list[str] = []
         durations: list[float] = []
         readings: list[dict] = []
+        reauths = 0
         started = time.perf_counter()
 
         for index in range(1, ROUNDS + 1):
             question = f"第 {index} 问：请用一句话回答「{index} 加一等于几」。"
             reading = ask_once(token, app_id, conversation_id, question)
+            if reading["http"] == 401:
+                # ★★ 令牌过期是**量具**的问题，不是产品红。
+                #   access-ttl = 30m（backend/src/main/resources/application.yml:121），
+                #   而 200 轮真模型实测要 27–31 分钟 ⇒ 长跑**一定会**跨过它。
+                #   第一次跑到 #124 起连续 77 条 401 就是这个（见 #225）：不续签的话，
+                #   「200 次 0 次未处理异常」会被一条 30 分钟的令牌过期判成红。
+                token = login()
+                reauths += 1
+                reading = ask_once(token, app_id, conversation_id, question)
             durations.append(reading["seconds"])
             readings.append(reading)
             kind = failure_kind(reading)
@@ -402,6 +417,9 @@ def main() -> int:
         note(
             f"耗时：p50 {median(durations):.2f}s · p95 {p95:.2f}s · max {observe_max:.2f}s · "
             f"总 {total_seconds:.0f}s"
+        )
+        note(
+            f"令牌续签 {reauths} 次（access-ttl 30m，200 轮会跨过它；续签那一轮重试后不计失败）"
         )
         note(
             f"退化读数：首 10 轮中位 {early:.2f}s → 末 10 轮中位 {late:.2f}s"
