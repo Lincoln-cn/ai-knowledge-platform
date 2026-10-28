@@ -4,11 +4,11 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
+import cn.lincoln.aiplatform.support.ArchUnitImports;
 import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
-import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.lang.ArchRule;
 import org.junit.jupiter.api.Test;
 
@@ -35,15 +35,14 @@ import org.junit.jupiter.api.Test;
  * identity}，而闸门从此对这些替身再也说不出任何话。
  *
  * <p>★★ 排除测试<strong>不等于放宽</strong>：主代码里再出现一个 {@code AccessScopePort} 的实现（非 {@code platform}、
- * 非接口）照样会红。★ 反过来也要说清：下面那条金丝雀证明的是<strong>规则</strong>还能红，它<strong>证明不了</strong> "这份收窄后的导入还看得见主代码"——
- * 后者只能由一次<strong>临时</strong>的主代码违规来证明（在生产代码里加一个实现 ⇒ 必须红 ⇒ 还原），因为常驻的坏样本只能住在测试源集里，而它恰好被这次的收窄排除在外。
+ * 非接口）照样会红。★ 反过来也要说清：下面那条金丝雀证明的是<strong>规则</strong>还能红，它<strong>证明不了</strong> "这份收窄后的导入还看得见主代码"。
+ *
+ * <p>★ 那件事现在由 {@link ArchUnitImports} + {@code ArchUnitImportsTest} 常驻守着（收窄看不见测试类 · 不收窄看得见它 ·
+ * 收窄仍看得见主代码），不再依赖"每次改动都记得手工造一次主代码违规"（{@code #135}）。★ 但**规则**仍要靠本类的金丝雀 —— "看得见"与"判得对"是两件事。
  */
 class AccessScopeUniquenessTest {
 
-  private static final JavaClasses APP_CLASSES =
-      new ClassFileImporter()
-          .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
-          .importPackages("cn.lincoln.aiplatform");
+  private static final JavaClasses APP_CLASSES = ArchUnitImports.mainSources();
 
   /** ★ 金丝雀住在测试源集里，所以它单独导入、<strong>不</strong>套用上面的收窄。 */
   private static final JavaClasses CANARY_CLASSES =

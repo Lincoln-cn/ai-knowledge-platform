@@ -2,8 +2,8 @@ package cn.lincoln.aiplatform;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.lincoln.aiplatform.support.ArchUnitImports;
 import com.tngtech.archunit.core.domain.JavaClasses;
-import com.tngtech.archunit.core.importer.ClassFileImporter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +43,7 @@ class JacksonTwoUsageTest {
 
   @Test
   void jacksonTwoIsOnlyForbiddenOutsideTheWhitelist() {
-    JavaClasses classes = new ClassFileImporter().importPackages("cn.lincoln.aiplatform");
+    JavaClasses classes = ArchUnitImports.allSources();
 
     Map<String, String> offenders = new LinkedHashMap<>();
     for (var javaClass : classes) {
@@ -74,7 +74,7 @@ class JacksonTwoUsageTest {
    */
   @Test
   void theWhitelistEntryStillNeedsJacksonTwo() {
-    JavaClasses classes = new ClassFileImporter().importPackages("cn.lincoln.aiplatform");
+    JavaClasses classes = ArchUnitImports.allSources();
 
     assertThat(ALLOWED).isNotEmpty();
     for (String name : ALLOWED.keySet()) {
