@@ -2132,3 +2132,46 @@ B6（150 段）与 B7（200 次）会明显拉长真栈 job；**三条重闸门�
 - 反证：把 `mainSources()` 的 `withImportOption(DO_NOT_INCLUDE_TESTS)` 去掉 ⇒ `narrowedImportCannotSeeTestSources` 红（`Expecting value to be false but was true`，指到 `ArchUnitImportsTest.java:28`）；还原后 **3/3** 绿。同时 `JacksonUnificationTest` 1/1、`AccessScopeUniquenessTest` 2/2 仍绿（换成共用构造点没有改变它们判的东西）。
 - 口径落点：`docs/无CI期开发与验证计划.md` §九（这一条的真源是文档，不是 javadoc —— `#135` 原文就写了"javadoc 不是口径真源"）。
 
+#### 11.10.36 2026-10-28 B 组第一批真读数：B4 未达标、B5 达标、B7 起跑（上游从桩换成 Ollama）
+
+**36.0 触发**：用户拍板「你测试是 api-stub 这个模拟服务。你换一个 ollama」。桩造不出真实的首字延迟（0.06s）与真实的失败形态，所以 B 组在桩上永远只能验"量具能跑"，验不出读数。
+
+**36.1 换上游之后的现场**
+- `11434` 现在是 `aip-ollama`（`0.0.0.0:11434->11434`，`qwen2.5:1.5b`）；桩的 `POST /__stub/config` 已 404（桩撤了）。
+- 前端 `5280` 停了，但**读数脚本不需要前端**：后端直连 `http://127.0.0.1:18088`（`POST /api/v1/auth/login` 200）—— 四个读数脚本本来打的就是 `/api/v1`，与 `VITE_USE_MOCK` 无关。这条要记住：**界面侧判据要看前端，读数脚本不用。**
+
+**36.2 B4/B5 第一份真读数（`frontend/check_b4_b5_latency.py`，4 轮 = 1 冷 + 3 热）**
+
+| 轮 | 首字 | 完整 | 终态 | 正文字数 | `completion tokens` |
+|---|---|---|---|---|---|
+| 冷启动 | **45.80s** | 45.85s | GENERATED | 100 | 55 |
+| 第 1 轮 | 9.63s | 9.73s | GENERATED | 93 | 57 |
+| 第 2 轮 | 14.30s | 14.32s | GENERATED | 12 | 8 |
+| 第 3 轮 | 11.99s | 12.00s | GENERATED | 25 | 17 |
+
+- ❌ **B4（首字 ≤10s）不达标**：中位 13.14s、最差 45.80s。
+- 🟡 **B5（完整 ≤60s）达标**：最差 45.85s。
+- ★ 冷启动那一轮 45.80s 里大部分是**加载模型**（Ollama 首次把 `qwen2.5:1.5b` 读进内存）。热轮仍有 9.6–14.3s，所以"扣掉冷启动就达标"不成立 —— 四轮里只有一轮 ≤10s。
+
+**36.3 这份读数为什么可信（前两次假绿的教训）**
+- 第一次跑（11434 还是桩）是 `0.03–0.06s / 65 字` 的"全绿"，而那 65 字是**无引用策略拒答**的话术，`tokens` 全 0 —— 整条链没调模型。
+- 所以两份脚本各加了一条**读数有效性判据**：`⓪d`（B4/B5）与 `1b`（B7）**`completion tokens > 0`**，并把夹具的 `retrieval.noRefStrategy` 设成 `FREE_ANSWER`（无知识库时也真的生成）。没通过 `⓪d` 之前，延迟读数不成立。
+- 账在 **`#225`**（含"删掉 `⓪d` 就会变回全绿 0.04s"这条反向读数）。
+
+**36.4 夹具判据改了三次，最后落在"上游真的有没有这个模型"**
+1. 「取第一个 LOADED 的对话模型」⇒ 取到 Ollama 的 `qwen2.5:1.5b`，而当时 11434 是桩 ⇒ `404 模型不存在`，200 次全记成上游失败。
+2. 「只认 apiBase 指向桩的模型」⇒ 桩一撤、Ollama 上 11434，判据全部落空（一个模型都选不出来，`120s 内没到 LOADED`）。
+3. ✅ 现在的判据：**只选"默认上游（`AIP_CHAT_API_BASE`，默认 `http://127.0.0.1:11434/v1`）的 `/v1/models` 里真有该 `baseModel` 且已 LOADED"的模型**。★ 为什么不能读行里的 `apiBase`：**模型的列表接口根本不返回这个字段**（实测 = `{id,name,kind,supplier,baseModel,status,contextWindow,dimension,thinking,tools,builtin,remark,legacyDirect}`），只有 `legacyDirect` 这个布尔说明"走默认上游"。
+- 三次错的共同形状：**判据写在了"谁是上游"上，而该写的对象是"上游有没有这个模型"**。
+
+**36.5 B4 未达标，判据**不改**（这一格要用户拍板）**
+- §二 写的是产品上限（≤10s），不是"本机小模型的性能"。所以台账记 ❌，不记"环境原因不算"。
+- 三条可能原因，按可验证性排：① 模型小而 CPU 推理慢（`qwen2.5:1.5b` Q4_K_M，Docker 里无 GPU）；② 冷启动把加载时间算进首字（判据口径就是"用户按下回车到看见第一个字"，所以不能扣）；③ 夹具没绑知识库 ⇒ **没有检索耗时**，即这份读数已经是乐观值。
+- ⇒ 要动的是"用哪个模型、跑在什么硬件上"这一格：**租 API（按 token）还是自备 GPU**，与 `#72`（数据外发）一起定。在定之前，B4 的读数是"本机 Ollama CPU 上不达标"。
+
+**36.6 B7 与 B6**
+- B7：1 轮冒烟绿（17.30s/轮、`completion tokens` 12、`turnCount == 2×1`）；200 轮已起跑（本机约 1 小时/轮次 × 200）。
+- B6：脚本在，**读数未取** —— 需要能服务的嵌入模型（桩撤离后要先确认本地 ONNX 或 Ollama 的嵌入口）。
+- ★ 用桩时 B7 跑过三轮共 600 次，**2 次空体 500（≈0.33%）**，JFR 抓到 `IllegalStateException: Cannot reset buffer after response has been committed`（`ResponseFacade.checkCommitted:442 ← resetBuffer:190 ← DispatcherServlet.processHandlerException:1217`）与 `UncheckedIOException("SSE 连接已断开…")`（`ChatStreamWriter.disconnected:175`）⇒ 给 `#211` 补了可复现的读数，但 500 的因果链还没定（换真 Ollama 后先看还发不发生）。
+
+

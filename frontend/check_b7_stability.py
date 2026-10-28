@@ -33,6 +33,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5280").rstrip("/")
@@ -95,16 +96,43 @@ def login() -> str:
     return str(token)
 
 
+def _served_models() -> set[str]:
+    """默认上游（`AIP_CHAT_API_BASE`）的 `/v1/models` 里实际有哪些模型名（探不到就空集）。
+
+    ★ 为什么不用行里的 `apiBase`：模型的**列表接口不返回 apiBase**（实测一条为
+      `{id,name,kind,supplier,baseModel,status,contextWindow,dimension,thinking,tools,builtin,remark,legacyDirect}`），
+      所以只能问"默认上游到底服务哪些模型"。
+    """
+    url = os.environ.get("AIP_CHAT_API_BASE", "http://127.0.0.1:11434/v1").rstrip("/") + "/models"
+    try:
+        with urllib.request.urlopen(url, timeout=3) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception:  # noqa: BLE001
+        return set()
+    return {str(row.get("id")) for row in payload.get("data") or []}
+
+
+def _row_serves(row: dict) -> bool:
+    """这条模型记录声明的 baseModel，默认上游**真的**有吗。"""
+    return str(row.get("baseModel") or "") in _served_models()
+
+
+
 def ensure_chat_model(token: str) -> str:
-    """找一个**已加载**的对话模型；没有就建一个本地推理模型并等它加载完。
+    """找一个**上游真的能服务**且**已加载**的对话模型；没有就建一个并等它加载完。
 
     ★ 这一步不能省：没有已加载模型时第一轮会 500，那个 500 会被 B7 记成"上游异常"，
       而它其实只是夹具没准备好。
+    ★★ 2026-10-28 实测（`#225`）：也**不能"随便取第一个 LOADED"** ——
+      ① 先量到的是 `qwen2.5-1.5b-本地`（Ollama），当时 11434 是桩 ⇒ `404 模型不存在`；
+      ② 换成"只认桩"之后又反过来 —— 桩一撤、Ollama 上 11434，判据全部落空。
+      ⇒ **既不能认"桩"也不能认"Ollama"，只能认"这条记录的上游 `/v1/models` 里真的有它的
+      baseModel"**（`_served_models` + `_row_serves`）。
     """
     _, body = call("GET", "/models?kind=CHAT&size=50", token)
     rows = data_of(body).get("list") or []
     for row in rows:
-        if row.get("status") == "LOADED":
+        if row.get("status") == "LOADED" and _row_serves(row):
             return str(row.get("id"))
 
     stamp = int(time.time())
@@ -116,8 +144,8 @@ def ensure_chat_model(token: str) -> str:
             "name": f"B7稳定性-{stamp}",
             "kind": "CHAT",
             "supplier": "LOCAL_INFERENCE",
-            "baseModel": "stub-plain",
-            "apiBase": os.environ.get("AIP_STUB_URL", "http://127.0.0.1:11434") + "/v1",
+            "baseModel": os.environ.get("AIP_CHAT_BASE_MODEL", "qwen2.5:1.5b"),
+            "apiBase": os.environ.get("AIP_CHAT_API_BASE", "http://127.0.0.1:11434/v1"),
         },
     )
     model_id = str(data_of(created).get("id") or "")
@@ -150,7 +178,15 @@ def create_app(token: str, model_id: str) -> str:
             "kbIds": [],
             "rolePrompt": "你是稳定性压测的应答方，请简短回答。",
             "promptIds": [],
-            "retrieval": {"mode": "HYBRID", "topK": 5, "threshold": 0},
+            "retrieval": {
+                "mode": "HYBRID",
+                "topK": 5,
+                "threshold": 0,
+                # ★★ 2026-10-28 实测（`#225`）：不绑知识库时默认策略是 REFUSE，
+                #   整条链**根本不调上游模型**（done 帧 tokens 全 0、65 字拒答话术）
+                #   ⇒ 那样 200 次"稳"是拒答路径的稳。FREE_ANSWER 才真的走生成。
+                "noRefStrategy": "FREE_ANSWER",
+            },
             "multiTurn": True,
             "thinkingEnabled": False,
             "prologue": "",
@@ -191,6 +227,7 @@ def ask_once(token: str, app_id: str, conversation_id: str, question: str) -> di
         "error": "",
         "done_status": "",
         "chars": 0,
+        "completion_tokens": 0,
         "seconds": 0.0,
         "tail": "",
     }
@@ -218,6 +255,8 @@ def ask_once(token: str, app_id: str, conversation_id: str, question: str) -> di
                 # done 帧的识别与 S3/B4B5 闸门同口径（status + messageId 同时出现）
                 if "status" in frame and "messageId" in frame:
                     reading["done_status"] = str(frame.get("status"))
+                    tokens = frame.get("tokens") or {}
+                    reading["completion_tokens"] = int(tokens.get("completion") or 0)
     except urllib.error.HTTPError as e:
         reading["http"] = e.code
         reading["error"] = e.read().decode("utf-8", errors="replace")[:300]
@@ -302,12 +341,14 @@ def main() -> int:
         failures: dict[str, int] = {}
         failing_rounds: list[str] = []
         durations: list[float] = []
+        readings: list[dict] = []
         started = time.perf_counter()
 
         for index in range(1, ROUNDS + 1):
             question = f"第 {index} 问：请用一句话回答「{index} 加一等于几」。"
             reading = ask_once(token, app_id, conversation_id, question)
             durations.append(reading["seconds"])
+            readings.append(reading)
             kind = failure_kind(reading)
             if kind:
                 failures[kind] = failures.get(kind, 0) + 1
@@ -338,6 +379,20 @@ def main() -> int:
         )
         for line in failing_rounds:
             note(f"[失败样本] {line}")
+
+        # ── 判据 1b：这一跑真的调到了上游模型吗（2026-10-28 新增，`#225`）──
+        #   不绑知识库 + 默认 REFUSE 策略时，整条链只回一句 65 字拒答话术，
+        #   `tokens.completion` 恒为 0 —— 那样 200 次"稳"是拒答路径的稳，不是模型链路的稳。
+        #   只看**没坏**的那些轮：坏轮本来就没有 tokens，混进来会把"1 次 500"重复计成两条红。
+        generated = [
+            r["completion_tokens"] for r in readings if not failure_kind(r)
+        ]
+        check(
+            bool(generated) and all(value > 0 for value in generated),
+            f"没坏的那些轮都真的生成了正文（completion tokens > 0，最小 "
+            f"{min(generated) if generated else 0}，样本 {len(generated)} 轮）"
+            f"—— 全为 0 说明只走到拒答路径",
+        )
 
         # ── 判据 2：耗时 p95（max 只打印，理由见文件头）──
         p95 = percentile(durations, 0.95)
