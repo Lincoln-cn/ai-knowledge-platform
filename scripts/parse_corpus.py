@@ -52,8 +52,23 @@ MAX_PAGE_SIZE = 100
 POLL_INTERVAL_SEC = 2
 POLL_TIMEOUT_SEC = 180
 
-# 解析终态。★ 非终态（PENDING/PARSING）继续等；FAILED 是终态但**算失败**。
-TERMINAL = {"PARSED", "PARSED_EMPTY", "FAILED", "READY", "DONE"}
+# 解析终态。★ 非终态（PENDING_PARSE / SEGMENTING）继续等；两个 *FAILED 是终态但**算失败**。
+#
+# ★★ 实测踩过：第一版沿用了一套**后端根本不发**的状态词（`PARSED` / `PARSED_EMPTY` / `FAILED`
+#    / `READY` / `DONE`），而 `DocumentStatus` 的七态是 `PENDING_PARSE` / `SEGMENTING` /
+#    `PENDING_EMBEDDING` / `EMBEDDING` / `SUCCEEDED` / `SEGMENT_FAILED` / `EMBEDDING_FAILED`
+#    ⇒ 每份文档都会「等满 180 秒再放弃」，而结论照样是绿的（4 份文档白等 6 分钟）。
+#    判据写错时**读数和正确时一样**，这是本项目头号病（`silent-failure`）的典型形状。
+PARSE_SETTLED = {
+    "PENDING_EMBEDDING",  # 解析+分段完成，等显式向量化
+    "EMBEDDING",  # 向量化在途
+    "SUCCEEDED",  # 全链路完成
+    "SEGMENT_FAILED",  # 解析/分段失败（终态，算失败）
+    "EMBEDDING_FAILED",  # 向量化失败（终态，算失败）
+}
+
+#: 向量化终态。★ `PENDING_EMBEDDING` 不是终态 —— 它是**等不到向量化**的那一态。
+EMBEDDING_SETTLED = {"SUCCEEDED", "SEGMENT_FAILED", "EMBEDDING_FAILED"}
 
 
 def fail_exit(message: str) -> None:
@@ -199,14 +214,14 @@ def trigger_embedding(base: str, kb_id: str, token: str) -> None:
     第一版漏了这一步，16 份文档全部停在 `PENDING_EMBEDDING` —— 看起来像"向量化坏了"，
     其实是**少点了一次按钮**。
 
-    ★ 只对 `PARSED` 触发：`PARSED_EMPTY` 没有分段，触发只会得到 400。
+    ★ 只对 `PENDING_EMBEDDING` 触发：`SEGMENT_FAILED` 没有分段，触发只会得到 400；
+    `SUCCEEDED` 已经向量化过（再触发是重复消费）。
     """
     rows = list_documents(base, kb_id, token)
     triggered = 0
     for row in rows:
-        # ★ 解析完成后文档停在 `PENDING_EMBEDDING`（不是 `PARSED`）—— 第一版只认 `PARSED`，
-        #   结果"已触发 0 份"，看起来像接口不通，其实是判据写窄了。
-        if status_of(row).upper() not in {"PARSED", "PENDING_EMBEDDING"}:
+        # ★ 解析完成后文档停在 `PENDING_EMBEDDING`（不是 `PARSED`，那个状态词后端不存在）。
+        if status_of(row).upper() != "PENDING_EMBEDDING":
             continue
         st, body = call(base, "POST", f"/documents/{row['id']}/embedding", token, {})
         if st not in (200, 202):
@@ -224,12 +239,7 @@ def wait_embedded(base: str, kb_id: str, token: str) -> list[dict]:
     deadline = time.time() + POLL_TIMEOUT_SEC
     while True:
         rows = list_documents(base, kb_id, token)
-        busy = [
-            r
-            for r in rows
-            if status_of(r).upper()
-            not in {"EMBEDDED", "EMBEDDING_FAILED", "FAILED", "PARSED_EMPTY"}
-        ]
+        busy = [r for r in rows if status_of(r).upper() not in EMBEDDING_SETTLED]
         if not busy:
             return rows
         if time.time() > deadline:
@@ -243,21 +253,7 @@ def wait_parsed(base: str, kb_id: str, token: str) -> list[dict]:
     deadline = time.time() + POLL_TIMEOUT_SEC
     while True:
         rows = list_documents(base, kb_id, token)
-
-        def status_code(row: dict) -> str:
-            """取状态码。
-
-            ★★ 实测踩过：`status` 有时是对象 `{"code": …}`、有时是裸字符串 ⇒
-            第一版直接 `(r.get("status") or {}).get("code")` 在裸字符串上会抛
-            `AttributeError: 'str' object has no attribute 'get'`，整轮在上传完之后崩掉，
-            连"解析结果"都打不出来。
-            """
-            raw = row.get("status")
-            if isinstance(raw, dict):
-                return str(raw.get("code") or "")
-            return str(raw or "")
-
-        pending = [r for r in rows if status_code(r).upper() not in TERMINAL]
+        pending = [r for r in rows if status_of(r).upper() not in PARSE_SETTLED]
         if not pending:
             return rows
         if time.time() > deadline:

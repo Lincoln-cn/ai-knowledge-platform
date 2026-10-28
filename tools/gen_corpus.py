@@ -180,6 +180,14 @@ class DocContext:
         for i in range(1, 4):
             self.base[f"record{i}"] = subject.records[(i - 1) % len(subject.records)]
 
+        # ★★ 记录保存期限必须是**文档级常量**，不能每段现抽。
+        #   实测踩过：`anchor_record` 自己抽 `randint(3, 30)`、而记录类通用池也各抽各的
+        #   ⇒ 同一份文档里《固定资产验收单》一会儿 14 年、一会儿 16 年，**自相矛盾**；
+        #   而且一轮跑出"保存期限不少于22年""不少于26年"这种不合常理的数。
+        #   档期取常见档位（3 / 5 / 10 / 30 年），操作日志另用一组短档（1 / 3 / 5 年）。
+        self.base["ret"] = str(rng.choice([3, 5, 10, 30]))
+        self.base["logret"] = str(rng.choice([1, 3, 5]))
+
     # -- 便捷读取 ---------------------------------------------------------
     @property
     def obj1(self) -> str:
@@ -397,9 +405,11 @@ def build_tables(ctx: DocContext) -> list[tuple[str, tuple]]:
                 "表2  主要记录清单",
                 ["记录名称", "形成环节", "保存部门", "保存期限"],
                 [
-                    [rec1, f"{act1}办理", dept, f"{rng.randint(3, 10)}年"],
-                    [rec2, "审核审批", dept, f"{rng.randint(5, 30)}年"],
-                    [rec3, "归档移交", "综合管理部", f"{rng.randint(10, 30)}年"],
+                    # ★ 与正文、锚句同源（`ctx.base["ret"]`）：表格与正文各抽一个年份
+                    #   会让"记录清单"和"记录管理"章对同一条记录给出两个期限。
+                    [rec1, f"{act1}办理", dept, f"{ctx.base['ret']}年"],
+                    [rec2, "审核审批", dept, f"{ctx.base['ret']}年"],
+                    [rec3, "归档移交", "综合管理部", "永久"],
                 ],
             ),
         ))
@@ -677,7 +687,9 @@ def anchor_approval(ctx: DocContext) -> tuple[str, str, str, str, str]:
 
 def anchor_record(ctx: DocContext) -> tuple[str, str, str, str, str]:
     record = ctx.base["record1"]
-    years = ctx.rng.randint(3, 30)
+    # ★ 用文档级常量 `ret`，不要在这里现抽年份：现抽会让同一份文档对同一条记录
+    #   写出两个不同的保存期限（实测出现过 14 年 / 16 年并存）。
+    years = ctx.base["ret"]
     snippet = f"《{record}》的保存期限不少于{years}年"
     para = f"公司对{ctx.subject.short}相关记录实行统一管理，{snippet}，到期按规定鉴定销毁。"
     question = f"《{record}》的保存期限是多少年？"
@@ -695,8 +707,12 @@ def anchor_deadline(ctx: DocContext) -> tuple[str, str, str, str, str]:
 
 def anchor_sop(ctx: DocContext) -> tuple[str, str, str, str, str]:
     target = ctx.base["obj1"]
-    snippet = f"作业前须确认{target}已停机并切断电源"
-    para = snippet + f"，悬挂“禁止合闸、有人工作”警示牌，并确认{ctx.base['obj2']}处于安全状态。"
+    # ★★ 不能写死"停机并切断电源"：这条锚句对**规程族的所有对象**生效，
+    #   而对象里有消火栓、电缆、接地网这类根本没有电源的东西 ⇒ 实测产出
+    #   "作业前须确认消火栓已停机并切断电源"，读起来是错的。
+    #   改成不绑定动力的通用表述（"退出运行 + 隔离 + 警示牌"对机电、消防、管网都成立）。
+    snippet = f"作业前须确认{target}已退出运行并落实隔离措施"
+    para = snippet + f"，悬挂“禁止操作”警示牌，并确认{ctx.base['obj2']}处于安全状态。"
     question = f"{ctx.subject.short}作业前，{target}应处于什么状态？"
     return "步骤", para, snippet, question, f"{ctx.subject.short}/作业前提"
 
