@@ -368,6 +368,18 @@ def build_chapter_articles(
 # ---------------------------------------------------------------------------
 
 
+def join_act(obj: str, act: str) -> str:
+    """对象名 + 动作的拼接，避免"出差申请申请"这类叠词。
+
+    <p>★ 本仓已踩过两次同类坑（{@code anchor_deadline} 的"申请申请"、{@code anchor_sop}
+    的"消火栓已停机并切断电源"）：<strong>模板与词池的组合必须显式检查</strong>，
+    因为池子里的值（"出差申请" 与 "申请"）彼此重叠。
+    """
+    if act in obj:
+        return obj
+    return obj + act
+
+
 def build_tables(ctx: DocContext) -> list[tuple[str, tuple]]:
     """返回 [(章节关键字, 表格 block)]。"""
     rng = ctx.rng
@@ -391,10 +403,10 @@ def build_tables(ctx: DocContext) -> list[tuple[str, tuple]]:
                 "表1  分级审批权限表",
                 ["事项类别", "金额区间", "审批人", "办理时限"],
                 [
-                    [f"{obj1}{act1}", f"{low}万元以下", role1, f"{rng.randint(3, 10)}个工作日"],
-                    [f"{obj2}{act1}", f"{low}万元至{mid}万元（含）", role2, f"{rng.randint(5, 15)}个工作日"],
-                    [f"{obj3}{act1}", f"{mid}万元以上", committee, f"{rng.randint(10, 30)}个工作日"],
-                    [f"{obj1}的{act2}", "不涉及金额", dept, f"{rng.randint(2, 8)}个工作日"],
+                    [f"{join_act(obj1, act1)}", f"{low}万元以下", role1, f"{rng.randint(3, 10)}个工作日"],
+                    [f"{join_act(obj2, act1)}", f"{low}万元至{mid}万元（含）", role2, f"{rng.randint(5, 15)}个工作日"],
+                    [f"{join_act(obj3, act1)}", f"{mid}万元以上", committee, f"{rng.randint(10, 30)}个工作日"],
+                    [f"{join_act(obj1, act2)}", "不涉及金额", dept, f"{rng.randint(2, 8)}个工作日"],
                 ],
             ),
         ))
@@ -699,9 +711,13 @@ def anchor_record(ctx: DocContext) -> tuple[str, str, str, str, str]:
 def anchor_deadline(ctx: DocContext) -> tuple[str, str, str, str, str]:
     action = ctx.base["act1"]
     days = ctx.rng.randint(3, 20)
-    snippet = f"{action}申请自受理之日起{days}个工作日内办结"
+    # ★★ 不能无条件拼 "申请"：act 池里本来就有「申请」这一条 ⇒ 实测产出
+    #   "申请申请自受理之日起14个工作日内办结"，问题也变成"差旅费的申请申请应在几个工作日内办结"。
+    #   以动作本身是否已经以「申请」结尾来判断，而不是给池子打补丁（池子以后还会加词）。
+    tail = "" if action.endswith("申请") else "申请"
+    snippet = f"{action}{tail}自受理之日起{days}个工作日内办结"
     para = snippet + f"，逾期由{ctx.dept}督办。"
-    question = f"{ctx.subject.short}的{action}申请应在几个工作日内办结？"
+    question = f"{ctx.subject.short}的{action}{tail}应在几个工作日内办结？"
     return "时限", para, snippet, question, f"{ctx.subject.short}/办理时限"
 
 
