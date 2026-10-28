@@ -537,6 +537,54 @@ class SpringAiChatAdapterTest {
     assertThat(lastAuthorization).isEqualTo("Bearer configured-default-key");
   }
 
+  /**
+   * `#221`：密钥含中文时**必须在发请求之前**变成可读的失败，且不许回显密钥。
+   *
+   * <p>★ 修复前的症状有两层：{@code HttpRequest.Builder.header} 抛的是 {@code IllegalArgumentException: invalid
+   * header value: "Bearer &lt;密钥&gt;"}（<strong>把密钥原文写进了异常消息</strong>）， 而它不在任何 {@code catch} 的范围内 ⇒
+   * 接口 500。所以这条同时断三件事：类型是 {@code BusinessException}（能被
+   * 统一包络读出来）、消息只说位置不回显字符、桩**一次都没被请求到**（校验发生在拼头时，不是等上游回 401）。
+   */
+  @Test
+  void nonAsciiKeyIsRejectedBeforeAnyRequestIsSent() {
+    SpringAiChatAdapter adapter = new SpringAiChatAdapter(List.of(), true, base());
+
+    assertThatThrownBy(
+            () ->
+                adapter.complete(
+                    ResolvedUpstream.legacy(base(), "密钥oops", ProviderEgress.LOCAL),
+                    "stub-model",
+                    "你好",
+                    Duration.ofSeconds(5)))
+        .isInstanceOf(BusinessException.class)
+        .hasMessageContaining("第 1 个字符")
+        // ★ 断的是"密钥内容不回显"，不是"消息里不能出现『密钥』这两个字" —— 后者本来就该出现。
+        .hasMessageNotContaining("oops");
+    assertThat(hits).as("★ 校验必须在发请求之前").hasValue(0);
+  }
+
+  /** 流式那一半也走同一个校验点（`#62` 之后它是另一条出站路径，不能只修非流式）。 */
+  @Test
+  void streamingPathAlsoRejectsNonAsciiKeyBeforeAnyRequest() {
+    SpringAiChatAdapter adapter = new SpringAiChatAdapter(List.of(), true, base());
+    List<String> chunks = new ArrayList<>();
+
+    assertThatThrownBy(
+            () ->
+                adapter.streamConversation(
+                    ResolvedUpstream.legacy(base(), "密钥oops", ProviderEgress.LOCAL),
+                    "stub-model",
+                    List.of(new ChatMessage(ChatMessage.Role.USER, "你好")),
+                    null,
+                    Duration.ofSeconds(5),
+                    chunks::add,
+                    (promptTokens, completionTokens) -> {}))
+        .isInstanceOf(BusinessException.class)
+        .hasMessageContaining("第 1 个字符");
+    assertThat(chunks).as("一个字节都不该交付").isEmpty();
+    assertThat(hits).as("★ 校验必须在发请求之前").hasValue(0);
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
 
   private String base() {

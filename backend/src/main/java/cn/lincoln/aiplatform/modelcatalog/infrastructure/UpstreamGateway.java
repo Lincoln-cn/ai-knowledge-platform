@@ -541,10 +541,9 @@ public class UpstreamGateway {
   }
 
   private void applyAuth(HttpRequest.Builder builder, String apiKey, AuthStyle authStyle) {
-    String key = effectiveKey(apiKey, authStyle);
-    if (key != null && authStyle.headerName() != null) {
-      builder.header(authStyle.headerName(), authStyle.prefix() + key);
-    }
+    // ★ 拼头与校验同址（`#221`）：两条对话路径 + 向量化 + 探活都经过这里，任何一处内联拼头都会
+    //   绕开校验，症状是“某条路径填了中文密钥就 500，而另一条路径报得很清楚”。
+    AuthHeader.apply(builder, authStyle, effectiveKey(apiKey, authStyle));
   }
 
   private String get(String url, String apiKey) {

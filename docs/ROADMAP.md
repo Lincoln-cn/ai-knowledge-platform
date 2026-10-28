@@ -2061,3 +2061,34 @@ B6（150 段）与 B7（200 次）会明显拉长真栈 job；**三条重闸门�
 
 **33.6 一条流程读数**：这一批**没有一行产品代码**，全部是量具。它值得单独一节的理由是——`0.5.0` 的四问里有三问卡在"没有读数"，而读数缺的不是代码而是**量具**；量具可以先写，真栈读数后补，这两件事的完成线不一样，混在一起写就会把"写了脚本"记成"达标了"。
 
+#### 11.10.34 2026-10-28 认证头值只允许可打印 ASCII（`#221` 关账）
+
+**34.1 现象与根因（两条，叠在一起才变成 500 + 泄密）**
+
+1. **拼头处没有校验**：`HttpRequest.Builder.header(name, value)` 对非法值抛 `IllegalArgumentException: invalid header value: "Bearer <密钥>"` —— **密钥原文被写进异常消息**。
+2. **没人接住它**：`UpstreamGateway` 只 catch `IOException|InterruptedException|JacksonException`，`ChatModelAdapter` 只 catch `UpstreamUnreachableException` ⇒ 它一路穿到 Web 层，症状是「填了个含中文的密钥 ⇒ 500，且日志与响应里各留一份密钥」。
+3. **两条出站路径各拼一次头**（`NativeSpringAiChatModel.requestBuilder` 与 `UpstreamGateway.applyAuth`），任何"只在一处校验"的写法都会变成不对称 —— 本项目在 `effectiveKey` 上已经栽过同型（「流式 401、非流式正常」）。
+
+**34.2 处置：把校验与拼头绑在同址**
+
+- 新 `modelcatalog/infrastructure/AuthHeader.java`（包内可见）：`static void apply(HttpRequest.Builder, AuthStyle, String)` —— 唯一构造点。两条路径各自只留一行调用；`headerName()` 在全仓 `main` 里只剩这一个使用处。
+- 口径：头值只允许 **`0x20`–`0x7E`**。CR/LF 是头注入；非 ASCII 是 JDK 直接拒收；制表符虽合 RFC 但出现在密钥里一定是粘贴错误。
+- 失败是 `BusinessException(UPSTREAM_UNAVAILABLE, "认证密钥含不能放进 HTTP 头的字符（第 N 个字符是<回车/换行/制表符/控制字符/非 ASCII 字符>）", hint)` —— **只说位置与类别，不回显字符**；否则"修好了 500"会换成"在错误消息里泄露密钥的一段"。
+- 校验发生在**构造请求时**（不是等上游回 401）⇒ 一个字节都不会发出去。
+
+**34.3 读数（5 例新增，全部带反证）**
+
+| 用例 | 断什么 |
+|---|---|
+| `UpstreamGatewayAuthTest.nonAsciiKeyIsRejectedBeforeTheRequestIsSent` | `BusinessException` · 消息含「第 1 个字符」「非 ASCII」· **不含密钥内容** · 探活计数 0 |
+| `UpstreamGatewayAuthTest.newlineInKeyIsReportedByPosition` | 「第 4 个字符」「换行」（头注入那一类要能指到位置） |
+| `UpstreamGatewayAuthTest.defaultKeyIsValidatedToo` | **回落的默认 key 也校验**（它同样进请求头，且不由用户当场输入） |
+| `SpringAiChatAdapterTest.nonAsciiKeyIsRejectedBeforeAnyRequestIsSent` | 非流式适配器层同上，桩 `hits == 0` |
+| `SpringAiChatAdapterTest.streamingPathAlsoRejectsNonAsciiKeyBeforeAnyRequest` | **流式那一半**（`#62` 之后的第二条出站路径）同一校验点 · 零字节交付 |
+
+★ **反证实测**：把范围放宽成 `0x00`–`0xFFFF` ⇒ `UpstreamGatewayAuthTest` **3 红**（`:164`/`:178`/`:190`）、`SpringAiChatAdapterTest` **2 红**（`:559`/`:582`）；还原后 **9/9** 与 **18/18** 全绿。这两组数字才是"断言不是摆设"的证据。
+
+**34.4 一处踩坑（值得记）**：第一版断言写的是 `hasMessageNotContaining("密钥")` —— 而消息正文是「认证**密钥**含不能放进 HTTP 头的字符」，**本来就该出现这两个字**。断的是"密钥**内容**不回显"，所以断言必须落在密钥里那个唯一的 ASCII 尾巴（`oops`）上。★ 同族：`#221` 这一类"泄密"问题的判据，天然容易被写成"某个词不许出现"，而正确的判据是"某个**值**不许出现"。
+
+**34.5 仍未做（写下来，不留给记忆）**：`AuthStyle.parse` 把非法值原样拼进异常消息（`"认证方式只支持 BEARER / X_API_KEY / NONE，收到：" + raw`）—— 那里回显的是认证方式字符串、不是密钥，**暂不处置**，但留着这条是因为它属于同一个"消息回显"族。
+

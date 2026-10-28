@@ -203,9 +203,9 @@ final class NativeSpringAiChatModel implements ChatModel {
     if (stream) {
       builder.header("Accept", "text/event-stream");
     }
-    if (authStyle.headerName() != null && apiKey != null && !apiKey.isBlank()) {
-      builder.header(authStyle.headerName(), authStyle.prefix() + apiKey);
-    }
+    // ★ 认证头只从这里出（`#221`）：非法值在这里变成可读的 BusinessException，而不是 JDK 那句
+    //   `invalid header value: "Bearer <密钥>"`（它会回显密钥，且没人接住 ⇒ 500）。
+    AuthHeader.apply(builder, authStyle, apiKey);
     return builder;
   }
 
