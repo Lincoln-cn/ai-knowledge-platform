@@ -3,8 +3,6 @@ package cn.lincoln.aiplatform.platform.seed;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.support.PostgresImage;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -18,6 +16,8 @@ import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * 业务示例数据（{@code db/seed/V900__sample_business_data.sql}）的<strong>真 HTTP</strong>读数。

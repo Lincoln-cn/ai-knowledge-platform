@@ -2107,3 +2107,18 @@ B6（150 段）与 B7（200 次）会明显拉长真栈 job；**三条重闸门�
 
 **34.5 仍未做（写下来，不留给记忆）**：`AuthStyle.parse` 把非法值原样拼进异常消息（`"认证方式只支持 BEARER / X_API_KEY / NONE，收到：" + raw`）—— 那里回显的是认证方式字符串、不是密钥，**暂不处置**，但留着这条是因为它属于同一个"消息回显"族。
 
+#### 11.10.35 2026-10-28 测试源集的 Jackson 2 出口收成一条白名单闸门（`#134` 关账，`#135` 借用同一个形状）
+
+**35.1 残余面是什么**：`JacksonUnificationTest` 与 `AccessScopeUniquenessTest` 按裁定把扫描范围收窄到主代码（`ImportOption.Predefined.DO_NOT_INCLUDE_TESTS`）—— 收窄是对的（违规对象本来就是测试源集里的刻意替身），但**收窄有价钱**：测试代码从此可以自由引 Jackson 2，于是「用 Jackson 2 断言的 JSON 形状 ≠ 生产 Jackson 3 实际发出的形状」这类**假绿**没有任何闸门在守。这条价钱不是"将来可能"，是已经发生了。
+
+**35.2 闸门形状：白名单式，且**不回退**原规则**
+- 新 `JacksonTwoUsageTest`（2 例，`cn.lincoln.aiplatform` 整包扫测试源集）：
+  - `jacksonTwoIsOnlyForbiddenOutsideTheWhitelist`：任何类只要**直接依赖** `com.fasterxml.jackson.databind..` / `com.fasterxml.jackson.core..`，且不在白名单里 ⇒ 红。白名单 = `Map<类名, 为什么非它不可>`，只有一项 `SourceRefSerializationTest`（要复现 Hibernate `JsonFormatMapper` 落 jsonb 的形状，而它用的就是 Jackson 2）。
+  - `theWhitelistEntryStillNeedsJacksonTwo`：**白名单必须随清理收缩** —— 那条测试哪天真不需要 Jackson 2 了，白名单条目要删，否则它会变成"下一个人的先例"。
+- ★ 用"直接依赖"（bytecode）而不是"import 语句"：只在注释或未使用的 import 里出现，不构成依赖，也不该报红；真依赖才可能造假绿。
+
+**35.3 落地当天就抓到一处真实漂移（所以它值得存在）**
+第一次跑，闸门红在 `{"cn.lincoln.aiplatform.platform.seed.SampleBusinessDataSeedTest"="com.fasterxml.jackson.databind.JsonNode"}` —— 它用 **Jackson 2** 解析真 HTTP 响应，而生产发出的是 **Jackson 3** 的形状。已改成 `tools.jackson.databind.JsonNode/ObjectMapper`，闸门转绿（**2/2**）。★ 这条读数比"闸门能红"更值钱：它证明这个残余面不是理论风险。
+
+**35.4 与 `#135` 的关系（同一个形状，两处已按它写）**：`#135` 说的是"靠 `ImportOption` 收窄过的闸门，其导入构造无法用常驻金丝雀自证"。本轮两个新闸门都自带自证：`AuthHeaderUsageTest.theScanActuallySeesCallSites`（扫不到调用就红）、`JacksonTwoUsageTest.theWhitelistEntryStillNeedsJacksonTwo`（白名单条目失效就红）。`#135` 保持 OPEN，因为它点的是**已有的两条**收窄闸门 —— 它们的自证方式还没统一，属于下一批。
+
