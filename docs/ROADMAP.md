@@ -2076,7 +2076,7 @@ B6（150 段）与 B7（200 次）会明显拉长真栈 job；**三条重闸门�
 - 失败是 `BusinessException(UPSTREAM_UNAVAILABLE, "认证密钥含不能放进 HTTP 头的字符（第 N 个字符是<回车/换行/制表符/控制字符/非 ASCII 字符>）", hint)` —— **只说位置与类别，不回显字符**；否则"修好了 500"会换成"在错误消息里泄露密钥的一段"。
 - 校验发生在**构造请求时**（不是等上游回 401）⇒ 一个字节都不会发出去。
 
-**34.3 读数（5 例新增，全部带反证）**
+**34.3 读数（7 例新增，全部带反证）**
 
 | 用例 | 断什么 |
 |---|---|
@@ -2087,6 +2087,21 @@ B6（150 段）与 B7（200 次）会明显拉长真栈 job；**三条重闸门�
 | `SpringAiChatAdapterTest.streamingPathAlsoRejectsNonAsciiKeyBeforeAnyRequest` | **流式那一半**（`#62` 之后的第二条出站路径）同一校验点 · 零字节交付 |
 
 ★ **反证实测**：把范围放宽成 `0x00`–`0xFFFF` ⇒ `UpstreamGatewayAuthTest` **3 红**（`:164`/`:178`/`:190`）、`SpringAiChatAdapterTest` **2 红**（`:559`/`:582`）；还原后 **9/9** 与 **18/18** 全绿。这两组数字才是"断言不是摆设"的证据。
+
+**34.3.1 判据③ 的后半句：「两条路径都调用同一个校验方法」要变成一条断言，而不是一句评论**
+
+`#221` 的第三条判据写的是「金丝雀：删掉校验 ⇒ 上面两条变红；**再加一条断言"网关与适配器两条路径都调用同一个校验方法"（否则只修一半）**」。前半句由上面那组反证满足；后半句如果只写在评论里，那么下一个人在**第三条**出站路径上重新内联 `builder.header(style.headerName(), …)` 时，所有功能用例仍然全绿——这正是 `#218`「看起来在某处、实际在另一处」的形状。
+
+落点：新 `modelcatalog/AuthHeaderUsageTest.java`（ArchUnit，2 例）。
+
+| 断言 | 断什么 |
+|---|---|
+| `onlyAuthHeaderMayReadTheHeaderName` | `noClasses().that().areNotAssignableTo(AuthHeader).should().callMethod(AuthStyle, "headerName")` —— **认证头名只有 `AuthHeader` 能读** |
+| `theScanActuallySeesCallSites` | `headerName()` 的调用者集合 `containsExactly(AuthHeader)` —— 防"规则把方法名写错 ⇒ 永远绿"（`#135` 同族：闸门要能自证它看得见东西） |
+
+★ 选 **`headerName()` 的调用者集合**、不选「含 `builder.header(` 的文件数」：后者会把 `Content-Type` / `Accept` 三处**固定头**也扫进来（`UpstreamGateway:441-442/596`、`NativeSpringAiChatModel:201/204`），只能靠一张豁免表维持，而豁免表是下一个"漂移点"。前者恰好就是"谁在拼**认证**头"，一条豁免都不需要。
+
+★ **反证实测**：在 `NativeSpringAiChatModel.requestBuilder` 里临时重新内联 `authStyle.headerName()` ⇒ **2 例全红**，报错精确到 `Method <…NativeSpringAiChatModel.requestBuilder(…)> calls method <…AuthStyle.headerName()> in (NativeSpringAiChatModel.java:211)`；删掉后 **2/2 绿**。
 
 **34.4 一处踩坑（值得记）**：第一版断言写的是 `hasMessageNotContaining("密钥")` —— 而消息正文是「认证**密钥**含不能放进 HTTP 头的字符」，**本来就该出现这两个字**。断的是"密钥**内容**不回显"，所以断言必须落在密钥里那个唯一的 ASCII 尾巴（`oops`）上。★ 同族：`#221` 这一类"泄密"问题的判据，天然容易被写成"某个词不许出现"，而正确的判据是"某个**值**不许出现"。
 
