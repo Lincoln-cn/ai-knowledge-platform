@@ -2256,6 +2256,34 @@ B7 第一次 200 轮真模型跑批（`gate-exit=1`）读到 **77 条 `HTTP 401`
 - **判据⑤ 真栈 UI 读数**：需要前端以 `VITE_USE_MOCK=false` 重启（`#223` 的第③条陷阱）。
 - **真栈端到端一次**：用"把 `baseModel` 写错"造一个真 404（修复前那次的现场就是它）。
 
+#### 11.10.39 2026-10-28 波次 A 中段：A2 只差读数、A3 先隔离依赖（`#216` / `#160`）
+
+**39.0 一处编号订正**：§11.10.37 的波次表把 A2 写成 `#211`，实际 `#211` 是「`POST /uploads` 无消费点」，
+**「偶发 chat 500 且响应体为空」是 `#216`**。以本节为准（`gh issue view` 逐条核过）。
+
+**39.1 `#216`：观测那一半已经在 `32dee4e` 落了**
+- `ChatStreamAssembler.streamOf` 的 `catch (Throwable)` 在**响应已提交**时记「原始异常类型 + 消息 + 栈」然后**不再抛**
+  （再抛只会让容器在已提交的响应上二次炸，正是 `MimeHeaders.removeHeader` 那个 NPE）；未提交时记完原样抛出。
+- 单测 `ChatStreamAssemblerFailureTest#aFailureAfterTheResponseIsCommittedIsLoggedWithItsOwnTypeAndStopsThere`
+  断的正是**类型名**：`java.lang.IllegalStateException`，另有一条 `响应已提交=true`。
+- 于是 `#216` 的判据① 已有读数；**仍欠**：判据② 的 200 次读数（B7），与**触发层**（"原始异常到底是谁抛的"）仍只到推断。
+
+**39.2 `#160`：处置 2 落地 —— 「未实现端点」不再变成页面异常**
+- 新 `frontend/src/lib/degrade.ts`：`isEndpointMissing(error)`（`code` 为 404/501 **且** message 含「接口不存在」两段同时成立）、
+  `degradeOnMissingEndpoint(promise, fallback, label)`（命中 ⇒ 空数据 + 一条 WARN；未命中 ⇒ **原样抛**）、`resetDegradeWarnings()`。
+- `frontend/src/api/analytics.ts` 五条（`getOverview` / `getTrend` / `listTopAssistants` / `getQualityMetrics` / `getMySummary`）全部接上，
+  空数据形状与该端点契约一致（可空字段给 `null`、计数给 0）。
+- 单测 `frontend/src/lib/degrade.test.ts` **7/7**（`node --test`）：两段判据 · 「资源不存在」不算 · 只念一次 WARN · **非该错误必须原样抛** · 成功透传。
+- 读数：`npm run typecheck` **exit 0**。
+
+**39.3 两条口径（写给下一个改这里的人）**
+1. **只降「接口不存在」**：500 / 越权 / 网络不通照旧抛 —— 否则"静默"从页面搬进数据层，而数据层不会亮红，只会安静地回 0。
+2. **同一个端点只念一次 WARN**：一个页面能并发调五条，念五条同样的噪音等于没念。
+
+**39.4 还欠**
+- `#160` 判据①（**隔离实验**：把 `/analytics` 的调用去掉，看会话页是否恢复渲染）与判据③（`check_reload_keeps_state_e2e.py` 的 ④ 无 PAGEERROR + 内容渲染）—— 都需要真栈 + **非 mock** 的前端（`VITE_USE_MOCK=false`）。
+- `#216` 判据②：B7 200 次读数；`#216` 处置③（复核 Tomcat 11 / Spring MVC 7 是否有对应补丁）未查。
+
 
 
 

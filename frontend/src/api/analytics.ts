@@ -1,3 +1,4 @@
+import { degradeOnMissingEndpoint } from '@/lib/degrade'
 import { request } from '@/lib/http'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
@@ -65,22 +66,66 @@ export interface MeSummary {
 
 /* ────────────────────────── 接口 ────────────────────────── */
 
+/**
+ * ★ 这五条都在 `ContractDriftTest` 的 `KNOWN_MISSING` 里（后端还没写）。
+ *
+ * <h3>为什么在这里降级（`#160`）</h3>
+ * <p>不降级时，`await` 它们拿到的是一条 404 包络（`接口不存在：api/v1/analytics/...`），
+ * 于是变成一次**未处理 rejection ⇒ 页面级 PAGEERROR**；而用户看到的只是"这块空着"。
+ * 结果"功能还没做"与"已做的功能被未实现端点拖坏"在读数上长得一模一样。
+ *
+ * <p>降级后：空数据 + 一条 WARN（同一个端点一次流程只念一次），页面照常渲染；
+ * 后端补上端点之后这层自动不再触发。★ 只认「接口不存在」这一种错误，
+ * 500 / 越权 / 网络不通照旧往上抛（见 `src/lib/degrade.ts`）。
+ *
+ * <p>★ 空数据用「零 / 空数组 / `null`」：可空字段（`satisfaction` 等）本来就约定
+ * "无数据显示「—」而不是 0"，所以给 `null`；计数类给 0 —— 但"0 次提问"与"还没实现"
+ * 仍要靠那条 WARN 区分，别把 0 当成"这个月真的没人问"。
+ */
+
 export const getOverview = (range: AnalyticsRange) =>
-  request<OverviewMetrics>({ method: 'GET', url: '/analytics/overview', query: { ...range } })
+  degradeOnMissingEndpoint(
+    request<OverviewMetrics>({ method: 'GET', url: '/analytics/overview', query: { ...range } }),
+    { questionCount: 0, activeUserCount: 0, newUserCount: 0, tokenCount: 0, satisfaction: null },
+    'GET /analytics/overview'
+  )
 
 export const getTrend = (range: AnalyticsRange) =>
-  request<TrendPoint[]>({ method: 'GET', url: '/analytics/trend', query: { ...range } })
+  degradeOnMissingEndpoint(
+    request<TrendPoint[]>({ method: 'GET', url: '/analytics/trend', query: { ...range } }),
+    [],
+    'GET /analytics/trend'
+  )
 
 export const listTopAssistants = (range: AnalyticsRange, limit = 10) =>
-  request<AssistantRankItem[]>({
-    method: 'GET',
-    url: '/analytics/assistants',
-    query: { ...range, limit }
-  })
+  degradeOnMissingEndpoint(
+    request<AssistantRankItem[]>({
+      method: 'GET',
+      url: '/analytics/assistants',
+      query: { ...range, limit }
+    }),
+    [],
+    'GET /analytics/assistants'
+  )
 
 export const getQualityMetrics = (range: AnalyticsRange) =>
-  request<QualityMetrics>({ method: 'GET', url: '/analytics/quality', query: { ...range } })
+  degradeOnMissingEndpoint(
+    request<QualityMetrics>({ method: 'GET', url: '/analytics/quality', query: { ...range } }),
+    {
+      avgRefCount: 0,
+      firstTokenLatencyP50: null,
+      artifactFailureRate: null,
+      upCount: 0,
+      downCount: 0,
+      pendingFeedbackCount: 0
+    },
+    'GET /analytics/quality'
+  )
 
 /** 我的口径聚合（消费者工作台用）。与 `getOverview` 是两套口径，不可互换 */
 export const getMySummary = (range: AnalyticsRange) =>
-  request<MeSummary>({ method: 'GET', url: '/analytics/me/summary', query: { ...range } })
+  degradeOnMissingEndpoint(
+    request<MeSummary>({ method: 'GET', url: '/analytics/me/summary', query: { ...range } }),
+    { myQuestionCount: 0, myConversationCount: 0, lastActiveAt: null, myUp: 0, myDown: 0 },
+    'GET /analytics/me/summary'
+  )
