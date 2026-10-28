@@ -17,7 +17,12 @@
     python scripts/parse_corpus.py                     # 默认 http://localhost:5280
     python scripts/parse_corpus.py --base http://127.0.0.1:5280
     python scripts/parse_corpus.py --keep              # 跑完不删知识库（默认删）
+    python scripts/parse_corpus.py --corpus corpus/synthetic   # 合成语料（tools/gen_corpus.py 生成）
 退出码：0 = 全部解析成功且问答对全部命中；1 = 有失败。
+
+★ 文档列表走**分页**（`list_documents`）：后端单页上限 100，语料 70 份时写死
+  `?page=1&size=50` 会静默只看前 50 份（详见 `MAX_PAGE_SIZE` 的注释）。
+★ `expected_snippet` 的比对是**去空白后**逐字子串（PDF 文本层会插空白）。
 """
 
 from __future__ import annotations
@@ -35,8 +40,12 @@ import urllib.request
 USER = "admin"
 PASSWORD = "admin"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-DOCS = ROOT / "corpus" / "documents"
-QA = ROOT / "corpus" / "qa.jsonl"
+
+#: 后端 `DocumentService.MAX_PAGE_SIZE` 也是 100。
+#: ★★ 第一版把文档列表请求写死成 `?page=1&size=50`（`wait_parsed` / `trigger_embedding`
+#:   / `wait_embedded` 三处）⇒ 语料超过 50 份时只看到前 50 份：第 51 份起永远不会
+#:   被等、向量化也不会被触发，而**全程不报错**（"少看了文档"看起来和"都好了"一样）。
+MAX_PAGE_SIZE = 100
 
 # ★ 解析是**异步**的：轮询到终态，不用固定 sleep。
 #   本仓已有教训（`#170`）：固定等待是"间歇红"的常见来源。
@@ -192,10 +201,7 @@ def trigger_embedding(base: str, kb_id: str, token: str) -> None:
 
     ★ 只对 `PARSED` 触发：`PARSED_EMPTY` 没有分段，触发只会得到 400。
     """
-    status, payload = call(base, "GET", f"/knowledge-bases/{kb_id}/documents?page=1&size=50", token)
-    if status != 200:
-        fail_exit(f"读文档列表失败（{status}）：{str(payload)[:200]}")
-    rows = (payload.get("data") or {}).get("list") or []
+    rows = list_documents(base, kb_id, token)
     triggered = 0
     for row in rows:
         # ★ 解析完成后文档停在 `PENDING_EMBEDDING`（不是 `PARSED`）—— 第一版只认 `PARSED`，
@@ -217,10 +223,7 @@ def wait_embedded(base: str, kb_id: str, token: str) -> list[dict]:
     """
     deadline = time.time() + POLL_TIMEOUT_SEC
     while True:
-        status, payload = call(base, "GET", f"/knowledge-bases/{kb_id}/documents?page=1&size=50", token)
-        if status != 200:
-            fail_exit(f"读文档列表失败（{status}）：{str(payload)[:200]}")
-        rows = (payload.get("data") or {}).get("list") or []
+        rows = list_documents(base, kb_id, token)
         busy = [
             r
             for r in rows
@@ -239,10 +242,7 @@ def wait_parsed(base: str, kb_id: str, token: str) -> list[dict]:
     """轮询文档列表直到全部到终态（或超时）。★ 不用固定 sleep。"""
     deadline = time.time() + POLL_TIMEOUT_SEC
     while True:
-        status, payload = call(base, "GET", f"/knowledge-bases/{kb_id}/documents?page=1&size=50", token)
-        if status != 200:
-            fail_exit(f"读文档列表失败（{status}）：{str(payload)[:200]}")
-        rows = (payload.get("data") or {}).get("list") or []
+        rows = list_documents(base, kb_id, token)
 
         def status_code(row: dict) -> str:
             """取状态码。
@@ -266,29 +266,71 @@ def wait_parsed(base: str, kb_id: str, token: str) -> list[dict]:
         time.sleep(POLL_INTERVAL_SEC)
 
 
+def list_documents(base: str, kb_id: str, token: str) -> list[dict]:
+    """**分页**读全量文档列表（不写死 size=50，见 MAX_PAGE_SIZE 的注释）。"""
+    rows: list[dict] = []
+    page = 1
+    while True:
+        status, payload = call(
+            base,
+            "GET",
+            f"/knowledge-bases/{kb_id}/documents?page={page}&size={MAX_PAGE_SIZE}",
+            token,
+        )
+        if status != 200:
+            fail_exit(f"读文档列表失败（{status}）：{str(payload)[:200]}")
+        data = payload.get("data") or {}
+        chunk = data.get("list") or []
+        rows.extend(chunk)
+        try:
+            total = int(data.get("total"))
+        except (TypeError, ValueError):
+            total = None
+        if not chunk or len(chunk) < MAX_PAGE_SIZE or (total is not None and len(rows) >= total):
+            return rows
+        page += 1
+
+
 def snippet_in(normalized_haystack: str, snippet: str) -> bool:
+    """去空白后子串比对（`corpus/README.md` 的 B3 判据口径）。
+
+    ★ 不能只把连续空白折叠成一个空格：PDF 文本层会在行尾和字间插入空白，
+      折叠后仍是"维护记录 表》"这种带空格的串，逐字比对必然失败。
+    """
     import re
 
-    def norm(t: str) -> str:
-        return re.sub(r"\s+", " ", t).strip()
+    def squash(text: str) -> str:
+        return re.sub(r"\s+", "", text)
 
-    return norm(snippet) in norm(normalized_haystack)
+    return squash(snippet) in squash(normalized_haystack)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://localhost:5280")
     parser.add_argument("--keep", action="store_true", help="跑完保留知识库（默认删除）")
+    parser.add_argument(
+        "--corpus",
+        default="corpus",
+        help="语料目录（相对仓库根；默认 corpus，合成语料用 corpus/synthetic）",
+    )
     args = parser.parse_args()
     base = args.base.rstrip("/")
 
-    print("== 语料解析与问答对核对 ==")
-    if not DOCS.is_dir():
-        fail_exit(f"找不到语料目录：{DOCS}")
+    corpus_dir = pathlib.Path(args.corpus)
+    if not corpus_dir.is_absolute():
+        corpus_dir = ROOT / corpus_dir
+    docs_dir = corpus_dir / "documents"
+    qa_path = corpus_dir / "qa.jsonl"
 
-    files = sorted(p for p in DOCS.iterdir() if p.is_file() and not p.name.startswith("_"))
+    print("== 语料解析与问答对核对 ==")
+    print(f"  语料目录：{corpus_dir}")
+    if not docs_dir.is_dir():
+        fail_exit(f"找不到语料目录：{docs_dir}")
+
+    files = sorted(p for p in docs_dir.iterdir() if p.is_file() and not p.name.startswith("_"))
     if not files:
-        fail_exit(f"{DOCS} 里没有文档")
+        fail_exit(f"{docs_dir} 里没有文档")
     print(f"  语料 {len(files)} 份：{[p.name for p in files]}")
 
     status, payload = call(base, "POST", "/auth/login", body={"username": USER, "password": PASSWORD})
@@ -373,9 +415,9 @@ def main() -> int:
             problems.append(f"{row.get('name')}：解析出 0 字符（无文字层？）")
 
     # ── 问答对核对：用标注问题检索，看命中是不是期望的那份文档 ──
-    if QA.exists():
+    if qa_path.exists():
         print("\n== 问答对核对（检索，HYBRID，threshold=0）==")
-        qa_rows = [json.loads(l) for l in QA.read_text(encoding="utf-8").splitlines() if l.strip()]
+        qa_rows = [json.loads(l) for l in qa_path.read_text(encoding="utf-8").splitlines() if l.strip()]
         for row in qa_rows:
             doc = row.get("expected_document")
             code, payload = call(
