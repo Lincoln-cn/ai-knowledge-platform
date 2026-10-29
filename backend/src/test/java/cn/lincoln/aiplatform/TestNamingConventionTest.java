@@ -79,7 +79,6 @@ class TestNamingConventionTest {
           "cn/lincoln/aiplatform/knowledge/DocumentRegistrationTest.java",
           "cn/lincoln/aiplatform/knowledge/DocumentStateMachineTest.java",
           "cn/lincoln/aiplatform/knowledge/EmbeddingPipelineTest.java",
-          "cn/lincoln/aiplatform/knowledge/EmbeddingProgressServiceTest.java",
           "cn/lincoln/aiplatform/knowledge/KnowledgeBaseManagementTest.java",
           "cn/lincoln/aiplatform/knowledge/MarkdownChunkerTest.java",
           "cn/lincoln/aiplatform/knowledge/NoiseStripperTest.java",

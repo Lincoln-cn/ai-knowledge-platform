@@ -44,7 +44,9 @@ import java.util.UUID;
  * <p>★★ <strong>(a) 的代价与它的处置</strong>：口径（"当前值严格低于本轮 max 才抬升"）要在 SQL 里再写一遍。
  * 处置是把它压成<strong>一处</strong>：{@link Conversation#strictlyLowerThan} （次序仍<strong>只</strong>由 {@link
  * cn.lincoln.aiplatform.platform.access.ClassificationLevel} 的声明顺序给出，SQL
- * 里<strong>不出现任何密级次序字面量</strong>）， 并配一条"领域方法与那条 SQL 单调口径一致"的等价用例 （两侧各自抬升同一序列 ⇒ 终值与"是否真的抬升"都必须相同）。
+ * 里<strong>不出现任何密级次序字面量</strong>）， 并配一条"领域方法与那条 SQL 单调口径一致"的等价用例 （两侧各自抬升同一序列 ⇒
+ * "是否真的抬升"必须相同；库侧还要断言终值 = 两者的 max）。 ★ 领域侧那一半<strong>只在内存里</strong>抬（{@code updatable = false} 之后
+ * {@code save()} 落不了这一列）， 所以那条用例比的是<strong>规则</strong>，不是"两条落库路径"。
  *
  * <p>★ <strong>为什么也不给"异步 / 后台重算"的入口</strong>（这是 {@code #27} 与 {@code 13 §2.2} 都点名的取舍）： 它只是一行同事务的
  * {@code UPDATE}，异步化只会制造"引用已落库、会话密级还没跟上"的窗口 —— 而那个窗口里的读数正好是"越权能看到"。
@@ -57,7 +59,11 @@ import java.util.UUID;
  */
 public interface ConversationRepository {
 
-  /** 保存（新增或更新）。★ 会话密级的抬升<strong>不走这里</strong>（见 {@link #raiseClassification}）。 */
+  /**
+   * 保存（新增或更新）。★ 会话密级的抬升<strong>不走这里</strong>（见 {@link #raiseClassification}）——
+   * 而且现在<strong>走不通</strong>： {@code max_classification} 映射为 {@code updatable = false}，{@code
+   * save()} 只在 INSERT 时写它 （{@code #108} 择一 A 的封死，见 {@link Conversation} 的字段注释）。
+   */
   Conversation save(Conversation conversation);
 
   /**

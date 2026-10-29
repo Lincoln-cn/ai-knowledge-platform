@@ -89,6 +89,7 @@ final class CaliberShape {
           "knowledge/V27__knowledge_document_org.sql",
           "knowledge/V31__knowledge_qa_pair.sql",
           "knowledge/V34__knowledge_document_scope.sql",
+          "knowledge/V54__knowledge_base_drop_count_columns.sql",
           "assistant/V29__assistant_app.sql",
           "assistant/V30__assistant_access_credential.sql",
           "conversation/V32__conversation.sql",
@@ -151,8 +152,9 @@ final class CaliberShape {
   /**
    * 该表在<strong>全部迁移跑完之后</strong>的列清单（顺序 = 定义顺序）。
    *
-   * <p>认得三种写法：{@code create table ... ( ... )} 里的列、{@code alter table ... add column ...}、 {@code
-   * alter table ... rename column a to b}。★ 后两种必须认，否则"这个形状是 V25 加的"这类增量会读不出来。
+   * <p>认得四种写法：{@code create table ... ( ... )} 里的列、{@code alter table ... add column ...}、 {@code
+   * alter table ... rename column a to b}、{@code alter table ... drop column x}。★ 后三种必须认，否则这个形状是
+   * V25 加的、 V54 删的这类增量会读不出来。
    *
    * @param table 表名（小写）
    */
@@ -226,6 +228,13 @@ final class CaliberShape {
       while (rename.find()) {
         columns.remove(rename.group(1).toLowerCase());
         columns.add(rename.group(2).toLowerCase());
+      }
+      // ★ 第四种形态：`drop column`（V54 起）。不认它的话，"删掉的列"会一直留在累计视图里 ——
+      //   而那条列清单断言写的是"全量相等"，于是它会**比真实形状更旧**却照样绿。
+      Matcher drop =
+          Pattern.compile("(?i)drop\\s+column\\s+(\\w+)", Pattern.MULTILINE).matcher(body);
+      while (drop.find()) {
+        columns.remove(drop.group(1).toLowerCase());
       }
     }
   }

@@ -7,45 +7,35 @@ import cn.lincoln.aiplatform.knowledge.application.EmbeddingProgressService;
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
-import cn.lincoln.aiplatform.knowledge.domain.EmbeddingProgressed;
 import cn.lincoln.aiplatform.knowledge.domain.ImportType;
 import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBase;
 import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBaseRepository;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.support.PostgresImage;
-import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.test.context.event.ApplicationEvents;
-import org.springframework.test.context.event.RecordApplicationEvents;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
- * 进度回写 + 事件（第 8 周 · 0.3.0 · 判据 ②④）。
+ * 进度回写（第 8 周 · 0.3.0 · 判据 ②）。
  *
- * <p>★ 判据 ④ 的原话是「{@code EmbeddingProgressed} <strong>按事实发布</strong>」—— 两处都要盯：
+ * <p>★ 这条判据的两个读数都在<strong>库里</strong>：落的是"已完成多少段的事实"（覆盖写，不是 {@code += 1}），
+ * 而且它必须<strong>持久化</strong> —— 前端刷新后还能看到进度，靠的就是这一条（"刷新页面不重置"的唯一实现方式）。
  *
- * <ol>
- *   <li><strong>发布了</strong>：用 {@code @RecordApplicationEvents} 抓真实事件（不是"看日志里像发了"）
- *   <li><strong>带的是事实</strong>：事件里的数字必须等于<strong>落库之后</strong>的当前进度， 而不是调用方传进来的数 ——
- *       一次重投的旧事件不能把进度"讲回去"
- * </ol>
- *
- * <p>★ 进度必须<strong>落库</strong>：前端刷新后还能看到进度，靠的就是它（"刷新页面不重置"的唯一实现方式）。 所以下面每条断言都同时看「返回的对象」与「重新查库的结果」。
- *
- * <p>⚠️ 已知边界：事件目前<strong>没有消费者</strong>（本批只发不收），因此它不会落进 Modulith 的 {@code event_publication} 表 ——
- * 那张表是按"每个监听者一条"记录的。第一个真正的事件消费者 （进度观测/跨模块联动）落地时，这张表才有行；届时用同一套断言补一条"落表"的测试。
+ * <p>★★ 2026-10-29（{@code #12} 裁定 C+）：这个类原先还有四条"发布事实事件"的断言（{@code @RecordApplicationEvents} +
+ * {@code EmbeddingProgressed}）。取证结论是那条事件<strong>一个消费者都没有</strong>，发布点已删（见 {@link
+ * EmbeddingProgressService} 的类注释）⇒ 那四条断言一并删除 —— 它们守的是一个不存在的东西。 ★
+ * 将来真有消费者时，要补的是<strong>"它收到了"</strong>的断言（落库/副作用），而不是"有人发了"。
  */
 @SpringBootTest
 @Testcontainers
 @TestPropertySource(properties = "app.security.captcha.enabled=false")
-@RecordApplicationEvents
 class EmbeddingProgressServiceTest {
 
   @Container @ServiceConnection
@@ -63,59 +53,50 @@ class EmbeddingProgressServiceTest {
   @Autowired EmbeddingProgressService progress;
   @Autowired DocumentRepository documents;
   @Autowired KnowledgeBaseRepository knowledgeBases;
-  @Autowired ApplicationEvents events;
 
-  // ────────────────────────── 1 · 按事实发布 ──────────────────────────
+  // ────────────────────────── 1 · 每批落的是事实（覆盖写） ──────────────────────────
 
-  /** ★ 每批报一次 ⇒ 每次都发一个带真实数字的事件。 */
+  /** ★ 每批报一次 ⇒ 库里每批都是那一批的当前事实（3，然后 7），不是累加。 */
   @Test
-  void 每批报进度都发布带真实数字的事件() {
+  void everyBatchWritePersistsThatBatchsFactualProgress() {
     Document doc = persistedEmbedding(10);
 
     progress.report(doc.id(), 3);
-    progress.report(doc.id(), 7);
+    assertThat(reload(doc.id()).processedSegments()).isEqualTo(3);
 
-    List<EmbeddingProgressed> published = events.stream(EmbeddingProgressed.class).toList();
-    assertThat(published).hasSize(2);
-    assertThat(published.get(0).documentId()).isEqualTo(doc.id());
-    assertThat(published.get(0).processedSegments()).isEqualTo(3);
-    assertThat(published.get(0).segmentCount()).isEqualTo(10);
-    assertThat(published.get(0).completed()).isFalse();
-    assertThat(published.get(1).processedSegments()).isEqualTo(7);
+    progress.report(doc.id(), 7);
+    assertThat(reload(doc.id()).processedSegments())
+        .as("第二批落的是 7（已完成 7 段的事实），不是 3 + 7")
+        .isEqualTo(7);
   }
 
-  /** ★ 同一批重投 ⇒ 进度**不翻倍**，事件带的仍是当前事实（3，而不是 6）。 */
+  /** ★ 同一批重投 ⇒ 进度**不翻倍**（累加写法在这里会变成 6）。 */
   @Test
-  void 重投同一批进度不翻倍且事件仍是事实() {
+  void reportingTheSameBatchTwiceDoesNotDoubleTheProgress() {
     Document doc = persistedEmbedding(10);
 
     progress.report(doc.id(), 3);
     progress.report(doc.id(), 3);
 
     assertThat(reload(doc.id()).processedSegments()).as("覆盖写：重投同一批仍是 3（累加写法在这里会变成 6）").isEqualTo(3);
-    List<EmbeddingProgressed> published = events.stream(EmbeddingProgressed.class).toList();
-    assertThat(published).hasSize(2);
-    assertThat(published.get(1).processedSegments())
-        .as("第二个事件带的必须是落库之后的当前事实，而不是「再来 3 段」")
-        .isEqualTo(3);
   }
 
-  /** ★ 旧事件重投（回退值）⇒ 无害 no-op：进度不变，事件仍报当前事实（不许出现"进度倒退"的假事实）。 */
+  /** ★ 旧事件重投（回退值）⇒ 无害 no-op：进度停在较大的那个值，不倒退、也不报错。 */
   @Test
-  void 旧事件重投不改变进度也不报错() {
+  void replayingAnOlderBatchIsANoOp() {
     Document doc = persistedEmbedding(10);
 
     progress.report(doc.id(), 7);
     progress.report(doc.id(), 4);
 
-    assertThat(reload(doc.id()).processedSegments()).isEqualTo(7);
-    assertThat(events.stream(EmbeddingProgressed.class).toList().get(1).processedSegments())
-        .isEqualTo(7);
+    assertThat(reload(doc.id()).processedSegments()).as("回退值被领域层判为 no-op ⇒ 库里仍是 7").isEqualTo(7);
   }
+
+  // ────────────────────────── 2 · 落库与拒绝 ──────────────────────────
 
   /** ★ 进度确实落库（刷新页面还能看到，靠的就是这一条）。 */
   @Test
-  void 进度必须落库() {
+  void progressIsPersisted() {
     Document doc = persistedEmbedding(10);
     progress.report(doc.id(), 5);
 
@@ -125,17 +106,14 @@ class EmbeddingProgressServiceTest {
     assertThat(reloaded.status()).isEqualTo(DocumentStatus.EMBEDDING);
   }
 
-  // ────────────────────────── 2 · 失败的调用不该发事件 ──────────────────────────
-
-  /** ★ 越界被拒时**一个事件都不许发** —— 假事实比没事实更坏。 */
+  /** ★ 越界被拒 ⇒ 一行都不许改（假进度比没进度更坏）。 */
   @Test
-  void 越界被拒时不发任何事件() {
+  void outOfRangeProgressIsRejectedAndPersistsNothing() {
     Document doc = persistedEmbedding(10);
 
     assertThatThrownBy(() -> progress.report(doc.id(), 11))
         .isInstanceOf(IllegalArgumentException.class);
 
-    assertThat(events.stream(EmbeddingProgressed.class)).isEmpty();
     assertThat(reload(doc.id()).processedSegments()).isZero();
   }
 
