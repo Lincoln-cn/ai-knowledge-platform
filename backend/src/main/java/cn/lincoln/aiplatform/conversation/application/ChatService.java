@@ -1543,13 +1543,17 @@ public class ChatService {
     /**
      * 终态判定的本体 —— <strong>顺序即上面那张表的顺序</strong>（只在 {@link #pathOf()} 里被调一次）。
      *
-     * <p>★ 第一行那个 {@code consume} 是"显式停止优先"的<strong>唯一</strong>实现点，也是本批新增的那一步： 去掉它（或让它排在 {@code
-     * disconnected} 之后）⇒ 先停止再断连就会收成 {@code FAILED}， 也就是 {@code #119} 里的竞态。这一条由真栈用例 {@code
+     * <p>★ 第一行那个 {@code settle}（{@code #242} 起；此前是 {@code
+     * consume}）是"显式停止优先"的<strong>唯一</strong>实现点，也是本批新增的那一步： 去掉它（或让它排在 {@code disconnected} 之后）⇒
+     * 先停止再断连就会收成 {@code FAILED}， 也就是 {@code #119} 里的竞态。这一条由真栈用例 {@code
      * ConversationStopEndpointTest#stopThenDisconnectStillEndsAsStopped} 钉住。
      */
     private StreamTerminationPath decideTerminalPath() {
-      // ★★ ① 显式停止优先于一切（读到即清 —— 留着会让下一轮同名消息一上来就被停）
-      boolean stopRequested = stopSignal.consume(messageId);
+      // ★★ ① 显式停止优先于一切（★ #242：这一步同时也是"**取下终态**"的动作 ——
+      //   它之后到来的停止请求会被 ChatStopSignal#agree 当场拒收 accepted=false，
+      //   于是"accepted=true ⇒ 终态必为 STOPPED"重新成为不变量，而不是取决于毫秒级先后）；
+      //   读到即清 —— 留着会让下一轮同名消息一上来就被停
+      boolean stopRequested = stopSignal.settle(messageId);
       if (cancelledByStop || stopRequested) {
         return StreamTerminationPath.ABORT;
       }

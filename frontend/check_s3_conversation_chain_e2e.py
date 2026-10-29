@@ -46,6 +46,15 @@ import urllib.request
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5280").rstrip("/")
 API = BASE + "/api/v1"
 
+#: ★★ 流式那一跳**直连后端**，不走开发服务器代理（#237 诊断，2026-10-30）。
+#:   实测（run 40920861173）：同一条 54 字答案，客户端只看到"第 1 行 +0.02s → 空等 5.13s → 尾部一次到齐"，
+#:   相邻行间隔 `[0,0,0,0,5.13,0,…]` —— 帧在到达校验脚本之前就被攒住了。这一层若是 Vite 的 dev proxy，
+#:   那"停止能不能停在半路"测的其实是代理的攒包行为，与产品无关；所以流式这一跳绕开它，直连后端端口。
+#:   判据：这一跳如果开始呈现 ~0.3s 的帧间隔，就说明攒包在代理层；仍是一次到齐则说明在服务端。
+STREAM_API = (
+    (os.environ.get("AIP_STREAM_BASE") or "http://127.0.0.1:8080").rstrip("/") + "/api/v1"
+)
+
 #: 桩的根地址（注入帧间延迟用）。
 STUB = os.environ.get("AIP_STUB_URL", "http://127.0.0.1:11434").rstrip("/")
 #: 桩的 OpenAI 兼容根地址：新建对话模型时要写进 `apiBase`，否则上游请求无处可去。
@@ -87,12 +96,15 @@ FIXTURE_TEXT = """# 差旅与费用报销管理办法
 本办法由财务部门负责解释，自发布之日起施行。
 """
 
-#: 帧间延迟（毫秒）。桩按 4 个字符一片切正文，而**桩的答案只有 45 字左右** = 约 12 片 ⇒
+#: 帧间延迟（毫秒）。桩按 4 个字符一片切正文，而**桩的答案只有 45–54 字** = 约 12 片 ⇒
 #: 60ms 只有 0.72 秒的"正在吐"窗口，主线程在这段窗口里发停止请求**来不及**（实测 `accepted=false`，
 #: 终态是 GENERATED 而不是 STOPPED，见 2026-10-27 run `40514976243`）。
 #: 300ms ⇒ 约 3.6 秒窗口，比一次 HTTP 往返（真栈实测几十毫秒）宽两个数量级。
 #: ★ 不能设太小：停止请求是另一次 HTTP 往返，窗口比往返还短的话，请求到的时候这一轮已经收尾，
 #:   回执会是 `accepted=false`（= 停晚了），于是这条闸门变成在测"网络有多快"。
+#: ★★ 2026-10-30 追加（#237）：窗口够宽**不等于**能停住 —— 客户端看到的"帧"不是桩的帧：
+#:   后端会把若干 delta 合并成一帧（54 字实测只有约 3 帧、每帧 ~18 字）。所以触发条件必须是
+#:   **第一片正文**，不是"第 3 片"：等 3 片等于等整条答案到齐，节拍再慢也照样 `accepted=false`。
 CHUNK_DELAY_MS = 300
 
 problems: list[str] = []
@@ -237,7 +249,11 @@ def chat(token: str, body: dict) -> tuple[int, list[dict], str]:
 
 
 def chat_collect(
-    token: str, body: dict, deadline: float = 120.0, sink: list[dict] | None = None
+    token: str,
+    body: dict,
+    deadline: float = 120.0,
+    sink: list[dict] | None = None,
+    times: list[float] | None = None,
 ) -> list[dict]:
     """开一条 SSE 但**逐帧**收（停止测试要这条路径）。返回收到的帧（到流结束为止）。
 
@@ -254,7 +270,7 @@ def chat_collect(
         "Authorization": f"Bearer {token}",
     }
     req = urllib.request.Request(
-        API + "/conversations/chat",
+        STREAM_API + "/conversations/chat",
         data=json.dumps(body).encode("utf-8"),
         method="POST",
         headers=headers,
@@ -263,6 +279,9 @@ def chat_collect(
     resp = urllib.request.urlopen(req, timeout=deadline)
     try:
         for raw in resp:
+            # ★ 每一帧的到达时刻（#237 诊断用）：只靠"收到了几帧"分不清"边到边收"与"流结束才到齐"
+            if times is not None:
+                times.append(time.time())
             frame = parse_frame(raw.decode("utf-8", errors="replace"))
             if frame is not None:
                 frames.append(frame)
@@ -608,10 +627,14 @@ def main() -> int:
         if chunk_delay_injected:
             note(f"已向桩注入 chunk_delay_ms={CHUNK_DELAY_MS}（否则整段正文一次到齐，没有中间态可停）")
         else:
-            note("桩不接受 chunk_delay_ms ⇒ 停止只能停在零字或全字，本轮只断终态与不回 error")
+            # ★ 这里不再写"本轮只断终态"（那是自相矛盾，见 #237）：桩不认节拍时这一轮必然在
+            #   停止请求到达前就写完了，`accepted` 一定是 false ⇒ 下面那条断言会红。红得对 ——
+            #   "停不下来"正是这一步要测的行为，不该靠一句注记把它降级成"只是没测到"。
+            note("桩不接受 chunk_delay_ms ⇒ 停止必然迟到（accepted=false ⇒ 这一步会红）")
 
         stop_frames: list[dict] = []
         stop_error: list[str] = []
+        frame_times: list[float] = []
 
         def reader() -> None:
             try:
@@ -620,26 +643,47 @@ def main() -> int:
                     token,
                     {"appId": app_id, "conversationId": conversation_id, "question": "请详细说明报销流程"},
                     sink=stop_frames,
+                    times=frame_times,
                 )
             except Exception as e:  # noqa: BLE001
                 stop_error.append(str(e))
 
+        started_at = time.time()
         worker = threading.Thread(target=reader, daemon=True)
         worker.start()
-        # 等到"已经吐出几个字"再停 —— 这是本步的全部意义所在
+        # 等**第一片**正文就停 —— 不是第 3 片。
+        #
+        # ★★ 为什么是 1（#237，2026-10-30 实测）：桩按 4 字一片吐，但**客户端看到的片不是桩的片** ——
+        #   后端把若干 delta 合并成一帧（实测一条 54 字的答案到客户端只有约 3 帧、每帧 ~18 字）。
+        #   于是"等 3 片"= "等整条答案到齐" ⇒ 停止请求永远迟到（`accepted=False`），而这与节拍快慢无关：
+        #   测的其实是"帧有多粗"，不是"停止能不能停在半路"。
+        #   等第 1 片则有真正的余量：第一帧到达时后面还有 ~2/3 的字没吐。
         deadline = time.time() + 60
         while time.time() < deadline:
-            if len([f for f in stop_frames if "text" in f]) >= 3:
+            if len([f for f in stop_frames if "text" in f]) >= 1:
                 break
             if stop_error:
                 break
-            time.sleep(0.05)
+            time.sleep(0.02)
 
         meta_stop = meta_of(stop_frames)
         stop_message_id = str(meta_stop.get("messageId") or "")
         sent_before = text_of(stop_frames)
+        frames_before = len([f for f in stop_frames if "text" in f])
         check(bool(stop_message_id), f"停止前已拿到 messageId（实得 {stop_message_id}）")
-        check(bool(sent_before), f"停止前已吐出正文（{len(sent_before)} 字）")
+        check(bool(sent_before), f"停止前已吐出正文（{len(sent_before)} 字 / {frames_before} 帧）")
+
+        # ★ #237 诊断（2026-10-30）：只用"收到了几帧"分不清"边到边收"与"流结束才到齐"。
+        #   `第 1 帧 +X.XXs` < `停止请求 +Y.YYs` ⇒ 客户端确实边到边收（迟到的是别的环节）；
+        #   两者都挤在流尾、间隔全是 0.0x ⇒ 帧在到达客户端之前被攒住了，要往容器/代理那一层查。
+        first_at = (frame_times[0] - started_at) if frame_times else -1.0
+        send_at = time.time() - started_at
+        gaps = [round(b - a, 2) for a, b in zip(frame_times, frame_times[1:])][:6]
+        print(
+            f"  [诊断] 第 1 帧 +{first_at:.2f}s · 停止请求 +{send_at:.2f}s · 行数 {len(frame_times)}"
+            f" · 相邻行间隔（前 6 个）{gaps}"
+        )
+        print(f"  [诊断] 流式这一跳直连 {STREAM_API}（绕过开发服务器代理，见文件头 STREAM_API 的说明）")
 
         stop_status, stop_payload = call(
             "POST",
@@ -650,7 +694,9 @@ def main() -> int:
         check(stop_status == 200, f"停止请求被接住（{stop_status}）")
         check(
             stop_receipt.get("accepted") is True,
-            f"服务端收下了停止信号（accepted={stop_receipt.get('accepted')}）",
+            f"服务端收下了停止信号（accepted={stop_receipt.get('accepted')}"
+            f" · 停止前已收 {len(sent_before)} 字 / {frames_before} 帧"
+            f" ⇒ {'迟到：这一轮在请求到达前就写完了' if stop_receipt.get('accepted') is False else '回执异常'}）",
         )
         worker.join(timeout=120)
         check(not stop_error, f"流正常收尾（异常：{stop_error[:1]}）")
