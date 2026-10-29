@@ -87,12 +87,15 @@ FIXTURE_TEXT = """# 差旅与费用报销管理办法
 本办法由财务部门负责解释，自发布之日起施行。
 """
 
-#: 帧间延迟（毫秒）。桩按 4 个字符一片切正文，而**桩的答案只有 45 字左右** = 约 12 片 ⇒
+#: 帧间延迟（毫秒）。桩按 4 个字符一片切正文，而**桩的答案只有 45–54 字** = 约 12 片 ⇒
 #: 60ms 只有 0.72 秒的"正在吐"窗口，主线程在这段窗口里发停止请求**来不及**（实测 `accepted=false`，
 #: 终态是 GENERATED 而不是 STOPPED，见 2026-10-27 run `40514976243`）。
 #: 300ms ⇒ 约 3.6 秒窗口，比一次 HTTP 往返（真栈实测几十毫秒）宽两个数量级。
 #: ★ 不能设太小：停止请求是另一次 HTTP 往返，窗口比往返还短的话，请求到的时候这一轮已经收尾，
 #:   回执会是 `accepted=false`（= 停晚了），于是这条闸门变成在测"网络有多快"。
+#: ★★ 2026-10-30 追加（#237）：窗口够宽**不等于**能停住 —— 客户端看到的"帧"不是桩的帧：
+#:   后端会把若干 delta 合并成一帧（54 字实测只有约 3 帧、每帧 ~18 字）。所以触发条件必须是
+#:   **第一片正文**，不是"第 3 片"：等 3 片等于等整条答案到齐，节拍再慢也照样 `accepted=false`。
 CHUNK_DELAY_MS = 300
 
 problems: list[str] = []
@@ -608,7 +611,10 @@ def main() -> int:
         if chunk_delay_injected:
             note(f"已向桩注入 chunk_delay_ms={CHUNK_DELAY_MS}（否则整段正文一次到齐，没有中间态可停）")
         else:
-            note("桩不接受 chunk_delay_ms ⇒ 停止只能停在零字或全字，本轮只断终态与不回 error")
+            # ★ 这里不再写"本轮只断终态"（那是自相矛盾，见 #237）：桩不认节拍时这一轮必然在
+            #   停止请求到达前就写完了，`accepted` 一定是 false ⇒ 下面那条断言会红。红得对 ——
+            #   "停不下来"正是这一步要测的行为，不该靠一句注记把它降级成"只是没测到"。
+            note("桩不接受 chunk_delay_ms ⇒ 停止必然迟到（accepted=false ⇒ 这一步会红）")
 
         stop_frames: list[dict] = []
         stop_error: list[str] = []
@@ -626,20 +632,27 @@ def main() -> int:
 
         worker = threading.Thread(target=reader, daemon=True)
         worker.start()
-        # 等到"已经吐出几个字"再停 —— 这是本步的全部意义所在
+        # 等**第一片**正文就停 —— 不是第 3 片。
+        #
+        # ★★ 为什么是 1（#237，2026-10-30 实测）：桩按 4 字一片吐，但**客户端看到的片不是桩的片** ——
+        #   后端把若干 delta 合并成一帧（实测一条 54 字的答案到客户端只有约 3 帧、每帧 ~18 字）。
+        #   于是"等 3 片"= "等整条答案到齐" ⇒ 停止请求永远迟到（`accepted=False`），而这与节拍快慢无关：
+        #   测的其实是"帧有多粗"，不是"停止能不能停在半路"。
+        #   等第 1 片则有真正的余量：第一帧到达时后面还有 ~2/3 的字没吐。
         deadline = time.time() + 60
         while time.time() < deadline:
-            if len([f for f in stop_frames if "text" in f]) >= 3:
+            if len([f for f in stop_frames if "text" in f]) >= 1:
                 break
             if stop_error:
                 break
-            time.sleep(0.05)
+            time.sleep(0.02)
 
         meta_stop = meta_of(stop_frames)
         stop_message_id = str(meta_stop.get("messageId") or "")
         sent_before = text_of(stop_frames)
+        frames_before = len([f for f in stop_frames if "text" in f])
         check(bool(stop_message_id), f"停止前已拿到 messageId（实得 {stop_message_id}）")
-        check(bool(sent_before), f"停止前已吐出正文（{len(sent_before)} 字）")
+        check(bool(sent_before), f"停止前已吐出正文（{len(sent_before)} 字 / {frames_before} 帧）")
 
         stop_status, stop_payload = call(
             "POST",
@@ -650,7 +663,9 @@ def main() -> int:
         check(stop_status == 200, f"停止请求被接住（{stop_status}）")
         check(
             stop_receipt.get("accepted") is True,
-            f"服务端收下了停止信号（accepted={stop_receipt.get('accepted')}）",
+            f"服务端收下了停止信号（accepted={stop_receipt.get('accepted')}"
+            f" · 停止前已收 {len(sent_before)} 字 / {frames_before} 帧"
+            f" ⇒ {'迟到：这一轮在请求到达前就写完了' if stop_receipt.get('accepted') is False else '回执异常'}）",
         )
         worker.join(timeout=120)
         check(not stop_error, f"流正常收尾（异常：{stop_error[:1]}）")
