@@ -41,10 +41,12 @@ OpenAI 兼容的测试桩服务 —— 开发期替代真模型服务（后端 T
     curl -X POST http://localhost:11434/__stub/reset
     curl -X POST -d '{"delay_ms":200}' http://localhost:11434/__stub/config
 
-    # ★ 让**流式**回答按帧慢放（S3 的「生成中停止」需要"吐到一半"的窗口）：
-    #   delay_ms 只推迟**整个回答的开始**，正文仍是一次性全到 —— 停在"一半"是不可能的。
+    # ★ 让**流式**回答按帧慢放：这是**默认行为**（`chunk_delay_ms = 40`，≈100 字/秒）。
+    #   ★ 为什么默认要慢：不受节拍约束的桩会让「流式看起来一次性全出」「生成中停止」这两件事
+    #     都量不到真东西（`#237` 的 `accepted=False` 就是它造成的）。要快就显式关掉：
+    #       curl -X POST -d '{"chunk_delay_ms":0}' http://localhost:11434/__stub/config
     curl -X POST -d '{"chunk_delay_ms":40}' http://localhost:11434/__stub/config
-    curl -X POST -d '{"chunk_delay_ms":0}' http://localhost:11434/__stub/config   # 复位
+    curl -X POST -d '{"chunk_delay_ms":0}' http://localhost:11434/__stub/config   # 复位成"一次性全到"
 
     # ★ 让结构化输出按指定的值回（多跳判定的难例演示、注入类闸门靠它）
     curl -X POST -d '{"entity_override":{"sufficient":false,"nextQuery":"违约金 上限"}}' \
@@ -102,7 +104,19 @@ _LOCK = threading.Lock()
 _REQUESTS: list[dict] = []
 #: `entity_override` 是"把结构化输出的某些**值**改成我指定的"（键名仍由 schema 决定）。
 #: 默认 None = 完全按 schema 造占位值（既有测试依赖那些值，别改默认）。
-_CONFIG = {"delay_ms": 0, "chunk_delay_ms": 0, "fail_rate": 0.0, "entity_override": None}
+#: ★★ `chunk_delay_ms` **默认 40**（2026-10-29 改，起因见 `#237` + 「流式看起来是一次性出来」）：
+#:   一个不受节拍约束的桩会把三种读数一起做坏 —— ① 界面上的流式看起来像"一次性全出"；
+#:   ② 真栈闸门 ④「生成中停止」量到的是"已经写完了才点停"（`accepted=False` 是如实回执）；
+#:   ③ 任何"首字延迟/逐帧刷新"的判据在桩上都恒绿。≈100 字/秒，与真 Ollama 同一量级。
+#:   ★ 要"越快越好"就把 `chunk_delay_ms` 显式设 0（`--chunk-delay-ms 0` 或 POST /__stub/config），
+#:     但那时**别再拿桩跑"停止 / 逐帧"类判据** —— 它量的不再是时序。
+_DEFAULT_CHUNK_DELAY_MS = 40
+_CONFIG = {
+    "delay_ms": 0,
+    "chunk_delay_ms": _DEFAULT_CHUNK_DELAY_MS,
+    "fail_rate": 0.0,
+    "entity_override": None,
+}
 _EMBED_DIM = 768
 
 #: 假的 token 计数用：让 usage 字段看起来合理（M1 的用量统计要读它）
@@ -634,17 +648,26 @@ def main() -> int:
     parser.add_argument("--host", default="0.0.0.0", help="默认 0.0.0.0（容器内外都能连）")
     parser.add_argument("--dim", type=int, default=768, help="embedding 维度")
     parser.add_argument("--delay-ms", type=int, default=0, help="每次请求的固定延迟")
+    parser.add_argument(
+        "--chunk-delay-ms",
+        type=int,
+        default=_DEFAULT_CHUNK_DELAY_MS,
+        help="流式帧间隔（默认 40 ≈100 字/秒；0 = 一次性全到）",
+    )
     parser.add_argument("--fail-rate", type=float, default=0.0, help="0~1，注入 500 的概率")
     args = parser.parse_args()
 
     _EMBED_DIM = args.dim
     _CONFIG["delay_ms"] = args.delay_ms
+    _CONFIG["chunk_delay_ms"] = args.chunk_delay_ms
     _CONFIG["fail_rate"] = args.fail_rate
 
     server = ThreadingHTTPServer((args.host, args.port), StubHandler)
     print(f"★ OpenAI 兼容桩服务已启动：http://localhost:{args.port}/v1")
     print(f"  模型：{', '.join(list(CHAT_MODELS) + [EMBED_MODEL])}（embedding 维度 {_EMBED_DIM}）")
-    print(f"  行为：延迟 {args.delay_ms}ms · 故障率 {args.fail_rate}")
+    print(
+        f"  行为：延迟 {args.delay_ms}ms · 流式帧间隔 {args.chunk_delay_ms}ms · 故障率 {args.fail_rate}"
+    )
     print(f"  观测：GET http://localhost:{args.port}/__stub/requests")
     print("  ★ 提醒：本服务的结果是设定值，不能当作真实模型能力的技术结论。")
     try:
