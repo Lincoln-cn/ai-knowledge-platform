@@ -46,6 +46,15 @@ import urllib.request
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5280").rstrip("/")
 API = BASE + "/api/v1"
 
+#: ★★ 流式那一跳**直连后端**，不走开发服务器代理（#237 诊断，2026-10-30）。
+#:   实测（run 40920861173）：同一条 54 字答案，客户端只看到"第 1 行 +0.02s → 空等 5.13s → 尾部一次到齐"，
+#:   相邻行间隔 `[0,0,0,0,5.13,0,…]` —— 帧在到达校验脚本之前就被攒住了。这一层若是 Vite 的 dev proxy，
+#:   那"停止能不能停在半路"测的其实是代理的攒包行为，与产品无关；所以流式这一跳绕开它，直连后端端口。
+#:   判据：这一跳如果开始呈现 ~0.3s 的帧间隔，就说明攒包在代理层；仍是一次到齐则说明在服务端。
+STREAM_API = (
+    (os.environ.get("AIP_STREAM_BASE") or "http://127.0.0.1:8080").rstrip("/") + "/api/v1"
+)
+
 #: 桩的根地址（注入帧间延迟用）。
 STUB = os.environ.get("AIP_STUB_URL", "http://127.0.0.1:11434").rstrip("/")
 #: 桩的 OpenAI 兼容根地址：新建对话模型时要写进 `apiBase`，否则上游请求无处可去。
@@ -261,7 +270,7 @@ def chat_collect(
         "Authorization": f"Bearer {token}",
     }
     req = urllib.request.Request(
-        API + "/conversations/chat",
+        STREAM_API + "/conversations/chat",
         data=json.dumps(body).encode("utf-8"),
         method="POST",
         headers=headers,
@@ -674,6 +683,7 @@ def main() -> int:
             f"  [诊断] 第 1 帧 +{first_at:.2f}s · 停止请求 +{send_at:.2f}s · 行数 {len(frame_times)}"
             f" · 相邻行间隔（前 6 个）{gaps}"
         )
+        print(f"  [诊断] 流式这一跳直连 {STREAM_API}（绕过开发服务器代理，见文件头 STREAM_API 的说明）")
 
         stop_status, stop_payload = call(
             "POST",
