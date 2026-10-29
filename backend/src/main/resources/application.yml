@@ -228,6 +228,21 @@ management:
 logging:
   level:
     cn.lincoln.aiplatform: DEBUG
+  # ★★ 落盘日志（2026-10-29 加，起因见「通用问答卡住却没有任何日志可查」那一次排障）：
+  #   在此之前只有控制台输出 ⇒ 起服务的那个进程一旦不是"有人在看窗口"（比如被 agent 的后台
+  #   job 用 `2>&1` 接走了 stdout），日志就只活在内存里、随会话一起丢弃，事后"查运行日志"
+  #   根本没有可查的东西。落盘之后，收尾异常 / 模型线程异常 / 心跳异常都能事后取证。
+  #   ★ 路径相对进程工作目录（scripts/aip-be-live.cmd 里先 cd backend）⇒ backend/logs/ai-platform.log，
+  #     被 .gitignore 的 `*.log` 覆盖，不会进提交。
+  file:
+    name: ${LOG_FILE:logs/ai-platform.log}
+  charset:
+    file: UTF-8
+  logback:
+    rollingpolicy:
+      max-file-size: 20MB
+      max-history: 7
+      total-size-cap: 300MB
   # 结构化 JSON 日志（Boot 3.4+ 内置，不引第三方 encoder：09 §10.1）。
   # 开发期保持关闭 —— 采集环境才需要它，本地读文本更省事。
   # structured:
