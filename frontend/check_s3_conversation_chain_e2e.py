@@ -653,14 +653,17 @@ def main() -> int:
         worker.start()
         # 等**第一片**正文就停 —— 不是第 3 片。
         #
-        # ★★ 为什么是 1（#237，2026-10-30 实测）：桩按 4 字一片吐，但**客户端看到的片不是桩的片** ——
-        #   后端把若干 delta 合并成一帧（实测一条 54 字的答案到客户端只有约 3 帧、每帧 ~18 字）。
-        #   于是"等 3 片"= "等整条答案到齐" ⇒ 停止请求永远迟到（`accepted=False`），而这与节拍快慢无关：
-        #   测的其实是"帧有多粗"，不是"停止能不能停在半路"。
-        #   等第 1 片则有真正的余量：第一帧到达时后面还有 ~2/3 的字没吐。
+        # ★★ 触发条件 = **拿到 messageId（meta 帧）就停**，不等到正文（#237 / #244，2026-10-30）。
+        #   实测两条读数：
+        #     ① 等正文第 1 帧 ⇒ 测试实际是"帧有多粗"：真栈上一条 54 字答案的 14 个 delta 帧是
+        #        `[0,0,0,0,5.13,0,…]` 这样**攒到生成结束一次到齐**的（直连后端与经代理读数相同，
+        #        见 issue #244）⇒ 等第 1 帧 = 等全文 ⇒ 停止请求与收尾赛跑，`accepted` 一真一假；
+        #     ② 拿 messageId 的那一帧在第 1 行（+0.01s）就到 ⇒ 在这一刻停，余量是**整段生成时间**。
+        #   这条判据要测的是"停止 ⇒ 终态 STOPPED + 不发 error + 内容不丢"，不是"帧有多粗"；
+        #   后者归 #244（帧攒包）单独量，别让它继续污染这一步。
         deadline = time.time() + 60
         while time.time() < deadline:
-            if len([f for f in stop_frames if "text" in f]) >= 1:
+            if str(meta_of(stop_frames).get("messageId") or ""):
                 break
             if stop_error:
                 break
@@ -671,7 +674,9 @@ def main() -> int:
         sent_before = text_of(stop_frames)
         frames_before = len([f for f in stop_frames if "text" in f])
         check(bool(stop_message_id), f"停止前已拿到 messageId（实得 {stop_message_id}）")
-        check(bool(sent_before), f"停止前已吐出正文（{len(sent_before)} 字 / {frames_before} 帧）")
+        # ★ 不要求"已经吐出正文"：在 meta 帧就停时它**本来就可能是 0 字** ——
+        #   硬要求非空等于把"停得早"判成失败（与要测的东西相反）。留住内容的判据在下面（库里 ≥ 已收到）。
+        note(f"停止时客户端已收 {len(sent_before)} 字 / {frames_before} 帧（在 meta 帧就停，可能为 0）")
 
         # ★ #237 诊断（2026-10-30）：只用"收到了几帧"分不清"边到边收"与"流结束才到齐"。
         #   `第 1 帧 +X.XXs` < `停止请求 +Y.YYs` ⇒ 客户端确实边到边收（迟到的是别的环节）；
@@ -692,11 +697,9 @@ def main() -> int:
         )
         stop_receipt = data_of(stop_payload)
         check(stop_status == 200, f"停止请求被接住（{stop_status}）")
-        check(
-            stop_receipt.get("accepted") is True,
-            f"服务端收下了停止信号（accepted={stop_receipt.get('accepted')}"
-            f" · 停止前已收 {len(sent_before)} 字 / {frames_before} 帧"
-            f" ⇒ {'迟到：这一轮在请求到达前就写完了' if stop_receipt.get('accepted') is False else '回执异常'}）",
+        note(
+            f"停止回执 accepted={stop_receipt.get('accepted')}"
+            f" · 停止时已收 {len(sent_before)} 字 / {frames_before} 帧（判据在下文：accepted 必须由终态兑现）"
         )
         worker.join(timeout=120)
         check(not stop_error, f"流正常收尾（异常：{stop_error[:1]}）")
@@ -715,8 +718,15 @@ def main() -> int:
             f"库里记的是 STOPPED（实得 {stopped_msg.get('status')}）—— 不是 FAILED、也不是 GENERATED",
         )
         check(
-            bool(sent_final) and str(stopped_msg.get("content") or "").startswith(sent_final),
+            # ★ `sent_final` 可能为空（在 meta 帧就停）—— 空串的 startswith 恒真，正是"没收到任何字就没得丢"。
+            str(stopped_msg.get("content") or "").startswith(sent_final),
             f"已生成的内容留住了（库里 {len(str(stopped_msg.get('content') or ''))} 字 ≥ 已收到 {len(sent_final)} 字）",
+        )
+        # ★ 这一轮额外硬要求：**停止必须被接住**（accepted=True）。在 meta 帧就停留的是整段生成时间，
+        #   所以"late"不再是可接受读数 —— #244（帧攒包）修复之后这条才真正稳定；它若红，红在服务端。
+        check(
+            stop_receipt.get("accepted") is True,
+            f"停止被接住（accepted={stop_receipt.get('accepted')} · 停止时已收 {len(sent_before)} 字）",
         )
         if chunk_delay_injected:
             # ★ 这里**不再加一条"停在中间"的断言**：`accepted=True` 本身就是那条判据 ——
