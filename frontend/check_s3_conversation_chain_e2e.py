@@ -240,7 +240,11 @@ def chat(token: str, body: dict) -> tuple[int, list[dict], str]:
 
 
 def chat_collect(
-    token: str, body: dict, deadline: float = 120.0, sink: list[dict] | None = None
+    token: str,
+    body: dict,
+    deadline: float = 120.0,
+    sink: list[dict] | None = None,
+    times: list[float] | None = None,
 ) -> list[dict]:
     """开一条 SSE 但**逐帧**收（停止测试要这条路径）。返回收到的帧（到流结束为止）。
 
@@ -266,6 +270,9 @@ def chat_collect(
     resp = urllib.request.urlopen(req, timeout=deadline)
     try:
         for raw in resp:
+            # ★ 每一帧的到达时刻（#237 诊断用）：只靠"收到了几帧"分不清"边到边收"与"流结束才到齐"
+            if times is not None:
+                times.append(time.time())
             frame = parse_frame(raw.decode("utf-8", errors="replace"))
             if frame is not None:
                 frames.append(frame)
@@ -618,6 +625,7 @@ def main() -> int:
 
         stop_frames: list[dict] = []
         stop_error: list[str] = []
+        frame_times: list[float] = []
 
         def reader() -> None:
             try:
@@ -626,10 +634,12 @@ def main() -> int:
                     token,
                     {"appId": app_id, "conversationId": conversation_id, "question": "请详细说明报销流程"},
                     sink=stop_frames,
+                    times=frame_times,
                 )
             except Exception as e:  # noqa: BLE001
                 stop_error.append(str(e))
 
+        started_at = time.time()
         worker = threading.Thread(target=reader, daemon=True)
         worker.start()
         # 等**第一片**正文就停 —— 不是第 3 片。
@@ -653,6 +663,17 @@ def main() -> int:
         frames_before = len([f for f in stop_frames if "text" in f])
         check(bool(stop_message_id), f"停止前已拿到 messageId（实得 {stop_message_id}）")
         check(bool(sent_before), f"停止前已吐出正文（{len(sent_before)} 字 / {frames_before} 帧）")
+
+        # ★ #237 诊断（2026-10-30）：只用"收到了几帧"分不清"边到边收"与"流结束才到齐"。
+        #   `第 1 帧 +X.XXs` < `停止请求 +Y.YYs` ⇒ 客户端确实边到边收（迟到的是别的环节）；
+        #   两者都挤在流尾、间隔全是 0.0x ⇒ 帧在到达客户端之前被攒住了，要往容器/代理那一层查。
+        first_at = (frame_times[0] - started_at) if frame_times else -1.0
+        send_at = time.time() - started_at
+        gaps = [round(b - a, 2) for a, b in zip(frame_times, frame_times[1:])][:6]
+        print(
+            f"  [诊断] 第 1 帧 +{first_at:.2f}s · 停止请求 +{send_at:.2f}s · 行数 {len(frame_times)}"
+            f" · 相邻行间隔（前 6 个）{gaps}"
+        )
 
         stop_status, stop_payload = call(
             "POST",
