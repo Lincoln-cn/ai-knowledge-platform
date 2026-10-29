@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
  *
  * <h3>它断言的是"当前没做这件事"，所以它将来必须被刻意改掉</h3>
  *
- * <p>{@code 13 §十二} 新增的那一节写的是：<strong>平台内标注是唯一权威源，源系统 ACL 今天不参与判定</strong>。
+ * <p>{@code 07 §十二} 新增的那一节写的是：<strong>平台内标注是唯一权威源，源系统 ACL 今天不参与判定</strong>。
  * 文档一旦被读成"权限已经跟着源系统走了"，就会冒出一条最危险的假设 —— <em>"这个人在源系统看不到，所以他在平台里也搜不到"</em>（{@code #81} 危害 ①）。
  * 这条断言把这个假设钉在地上：<strong>它今天是假的</strong>。
  *
@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test;
  *       connector_id}）。
  * </ol>
  *
- * <p>★ 红的时候要做什么：回去读 {@code 13} 那一节口径，把<strong>冲突时谁赢</strong>（源 ACL 与平台密级/组织 谁优先）写进文档，再更新 {@link
+ * <p>★ 红的时候要做什么：回去读 {@code 07} 那一节口径，把<strong>冲突时谁赢</strong>（源 ACL 与平台密级/组织 谁优先）写进文档，再更新 {@link
  * Caliber} 里的基线 —— 而不是把断言删掉。
  *
  * <p>★ 本类<strong>不需要库、不需要 Spring、不需要桩模型</strong>：读的是编译产物与迁移资源。
