@@ -428,6 +428,67 @@ class ChatStreamHttpTest {
   }
 
   /**
+   * ★★ {@code #244} 的取样点：帧要<strong>边生成边到</strong>，而不是攒到生成结束一次到齐。
+   *
+   * <h3>为什么这条要单独存在</h3>
+   *
+   * <p>真栈上量到过：一条 54 字的答案，客户端在 <strong>5.13s 的空窗之后一次性收到 14 个 {@code delta} 帧</strong> （相邻到达间隔 {@code
+   * [0,0,0,0,5.13,0…]}），直连 {@code 8080} 与经 Vite 代理读数完全相同 ——
+   * 也就是说"用户看到的是一次性出来"这件事，<strong>传输层与渲染层都不是原因</strong>。剩下的候选只有 ① 本进程内某处把帧攒住了；② 上游没有逐帧回调。这条用例量的是 ①：
+   * 假模型每 <strong>300ms</strong> 吐 4 个字，若本进程逐帧发，客户端应当在 4 秒多的生成过程中 <strong>持续</strong>收到 {@code
+   * delta}；一旦攒包，所有 {@code delta} 会挤在最后几百毫秒里。
+   *
+   * <p>★ 断言用两个可证伪的读数，而不是"总数对就行"：<strong>(a)</strong> 首个与最后一个 {@code delta}
+   * 的到达跨度必须接近生成总时长（攒包时这个跨度会塌到几百毫秒）；<strong>(b)</strong> 相邻 {@code delta} 的最大间隔必须小于 1.2s（攒包时会出现一个 ≈
+   * 整个生成时长的空档）。
+   */
+  @Test
+  void deltaFramesReachTheClientWhileTheModelIsStillGenerating() throws Exception {
+    Fixture fixture = seedWithVisibleSegment();
+    // 4 字/片、300ms/片 ⇒ 54 字 ≈ 14 片 ≈ 4.2 秒；生成过程足够长，攒包一眼可见
+    fakeModel.set(FakeChatStreamPorts.streaming(0, 300, 4));
+
+    String token = login();
+    String body = body(fixture.appId(), null, "差旅住宿标准");
+    List<Long> deltaAtMillis = new ArrayList<>();
+    long startedAtNanos = System.nanoTime();
+    try (InputStream stream = openChatStream(token, body)) {
+      BufferedReader reader =
+          new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
+      String line;
+      while ((line = reader.readLine()) != null) {
+        if (line.startsWith("event: delta")) {
+          deltaAtMillis.add((System.nanoTime() - startedAtNanos) / 1_000_000);
+        }
+      }
+    }
+
+    assertThat(deltaAtMillis)
+        .as("★★ 这条用例的前提：至少要有 5 个 delta 帧，否则'攒不攒'无从量起")
+        .hasSizeGreaterThanOrEqualTo(5);
+
+    long first = deltaAtMillis.get(0);
+    long last = deltaAtMillis.get(deltaAtMillis.size() - 1);
+    assertThat(last - first)
+        .as(
+            "★★ #244：首个与最后一个 delta 的到达跨度必须接近生成时长（约 4s）。"
+                + "塌到几百毫秒 ⇒ 帧被攒到生成结束才一次到齐，用户看到的就是'一次性出来'。"
+                + "实测到达时刻（毫秒）：%s",
+            deltaAtMillis)
+        .isGreaterThan(2000L);
+
+    long maxGap = 0;
+    for (int i = 1; i < deltaAtMillis.size(); i++) {
+      maxGap = Math.max(maxGap, deltaAtMillis.get(i) - deltaAtMillis.get(i - 1));
+    }
+    assertThat(maxGap)
+        .as(
+            "★★ #244：相邻 delta 的最大间隔必须小于 1.2s —— 攒包时会出现一个 ≈ 整个生成时长的空档。" + "实测到达时刻（毫秒）：%s",
+            deltaAtMillis)
+        .isLessThan(1200L);
+  }
+
+  /**
    * ★★ 判据④：{@code title} 为 {@code NULL} 的分段<strong>仍然出现</strong>，而且它的 {@code title} 是 {@code
    * docName} （读取侧兜底）。
    *
