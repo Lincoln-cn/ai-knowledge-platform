@@ -29,7 +29,7 @@ class WorkflowRecordContractShapeTest {
   private static final Path CONTRACT = Path.of("..", "frontend", "src", "api", "workflow.ts");
 
   @Test
-  void 执行记录保留改写归因所需的两个字段且graphVersion在run级() {
+  void recordKeepsTheTwoAttributionFieldsAndGraphVersionIsRunLevel() {
     String source = read();
     String record = slice(source, "export interface WorkflowRecord {");
     String trail = sliceUntil(source, "  nodeTrail: Array<{", "\n  }>");
