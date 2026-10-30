@@ -66,6 +66,7 @@ def main() -> int:
     app_id = ""
     kb_id = ""
     created_model = False
+    created_chat_model = False
 
     with tempfile.TemporaryDirectory(prefix="aip-cross-") as workdir:
         try:
@@ -74,8 +75,12 @@ def main() -> int:
             s3.note(f"① S1 路径建好的库 = {kb_id}（文档 {doc_id}）")
 
             # ② S2 的路径：建应用并绑**这个**库
-            app_id = s3.create_assistant(token, model_id, kb_id, STAMP)
-            s3.note(f"② S2 路径建好的应用 = {app_id}（绑库 {kb_id}）")
+            #   ★ `build_kb` 返回的 model_id 是**向量**模型（它的任务是入库），
+            #     拿它当对话模型建应用 ⇒ 生成阶段必失败（首跑就是这么红的：
+            #     「终态 FAILED、正文 0 字、引用有 1 条」）。对话模型要单独取。
+            chat_model_id, created_chat_model = s3.ensure_chat_model(token)
+            app_id = s3.create_assistant(token, chat_model_id, kb_id, STAMP)
+            s3.note(f"② S2 路径建好的应用 = {app_id}（绑库 {kb_id} · 对话模型 {chat_model_id}）")
 
             # ③ S3 的路径：开会话提问
             conversation_id = s3.create_conversation(token, app_id)
@@ -127,6 +132,8 @@ def main() -> int:
                 s3.call("DELETE", f"/knowledge-bases/{kb_id}", token)
             if created_model:
                 s3.call("DELETE", f"/models/{model_id}", token)
+            if created_chat_model:
+                s3.call("DELETE", f"/models/{chat_model_id}", token)
 
     if failures:
         print(f"\n== 跨场景整链：{failures} 条不成立 ==")
