@@ -20,6 +20,13 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * <p>⇒ 预算从常量变配置。★ 默认值<b>保持 5000</b>（与设计册 {@code 10 §6.2} 一致， 不改变已有部署的行为）；低配环境用 {@code
  * --spring.profiles.active=lowend} 覆盖（见 {@code application-lowend.yml}）。
  *
+ * <h3>★★ {@code total-budget-ms} 量的是"检索阶段"，不含查询理解（{@code #230}）</h3>
+ *
+ * <p>两者同为 5000 时，"查询理解用了 4.9s" 与 "检索总预算 5s" 是同一把尺子 ⇒ 查询理解只要不是瞬间返回， 检索在第 0
+ * 路就被判"预算耗尽"，整条链路静默降级成单路（真栈读数 B1 在两轮之间从 99% 摆到 67%）。 现在检索的时钟从查询理解**之后**开始（{@code
+ * RetrievalService#hitTest} 里的 {@code retrievalStartedAt}）， 所以这两个数**可以**相等乃至反过来 —— 但相等意味着"查询理解 +
+ * 检索"的总上界是两倍， 对 {@code ROADMAP §二} 的 B4（首字 ≤10s）不友好，低配环境仍建议显式调大或用 {@code lowend} profile。
+ *
  * <h3>★ 三个"低配"开关，各自省的是不同的东西</h3>
  *
  * <table border="1">
@@ -47,7 +54,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * 里必须能分开，否则"关掉了"会被读成"坏了"。
  *
  * @param queryUnderstandingBudgetMs 单次查询理解调用的超时（毫秒）
- * @param totalBudgetMs 检索阶段总预算（毫秒）—— 每一路开始前检查余量
+ * @param totalBudgetMs 检索阶段<strong>净</strong>预算（毫秒，<strong>不含查询理解</strong>）—— 每一路开始前检查余量
  * @param hopBudgetRatio 多跳的"该收手了"水位（{@code 10 §6.3}：D1 = 用掉 60%）
  * @param queryUnderstandingEnabled 是否做查询理解（低配可关，直接单路）
  * @param queryUnderstandingRetryOnParseFailure 解析失败时是否重试一次

@@ -219,6 +219,44 @@ class MultiHopTest {
         .hasMessageContaining("多跳轮数应在 1～3 之间");
   }
 
+  /**
+   * ★★ #230 的回归：查询理解花掉的时间**不许**计入检索预算。
+   *
+   * <p>此前 {@code hitTest} 用方法开头那个 {@code startedAt} 判预算，于是"查询理解用了 120ms、检索预算 60ms"这种配置 会让第 0
+   * 路就被判"预算耗尽"（日志：{@code 检索预算 60ms 已耗尽（已跑 0 路）}），整条链路静默降级成单路 —— 真栈上的表现就是 B1 在两轮之间摆动三十个百分点。
+   */
+  @Test
+  void queryUnderstandingTimeDoesNotEatTheRetrievalBudget() {
+    search.answer(QUESTION, hits(S1, S2), 0.9);
+
+    RetrievalService service =
+        new RetrievalService(
+            search,
+            new FakeEmbedding(),
+            new SlowUnderstanding(120),
+            hop,
+            new RetrievalBudgetProperties(5000, 60, 0.6, true, true));
+    HitTestQuery request =
+        new HitTestQuery(
+            RetrievalMode.FULLTEXT.name(),
+            0.6,
+            5,
+            null,
+            List.of(KB),
+            QUESTION,
+            1,
+            false,
+            3,
+            false,
+            1);
+
+    HitTestView view = service.hitTest(request);
+
+    assertThat(view.items()).as("#230：120ms 的查询理解不许吃掉 60ms 的检索预算").isNotEmpty();
+    assertThat(view.trace().degradeLevel()).as("没耗尽 ⇒ 不是降级").isZero();
+    assertThat(search.queries).as("至少真的检索了一路").isNotEmpty();
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
 
   private HitTestView run(boolean multiHop, int maxHops) {
@@ -329,6 +367,33 @@ class MultiHopTest {
                 ClassificationLevel.INTERNAL));
       }
       return cards;
+    }
+  }
+
+  /** 假查询理解：先**真的花掉** 120ms，证明检索预算的时钟不是从方法开头算的（#230）。 */
+  private static final class SlowUnderstanding extends QueryUnderstandingService {
+
+    private final long sleepMs;
+
+    SlowUnderstanding(long sleepMs) {
+      super(new FakeChat(), new RetrievalBudgetProperties(5000, 5000, 0.6, true, true));
+      this.sleepMs = sleepMs;
+    }
+
+    @Override
+    public Outcome understand(
+        String question,
+        int queryCount,
+        boolean decomposeEnabled,
+        int maxSubQuestions,
+        long budgetMs) {
+      try {
+        Thread.sleep(sleepMs);
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+      }
+      return new Outcome(
+          QueryUnderstanding.single(question), 0, null, false, false, List.of(), sleepMs);
     }
   }
 
