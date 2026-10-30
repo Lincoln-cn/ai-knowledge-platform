@@ -203,6 +203,76 @@ class NoiseStripperTest {
     assertThat(result.markdown()).contains("第 1 页第 1 段正文");
   }
 
+  // ────────────────────────── #51：PDF 占位标记 ──────────────────────────
+
+  @Test
+  void 整行的PDF占位标记被剥掉且计数可见() {
+    String markdown =
+        """
+        # 第一章 总则
+
+        [PDF 1]
+
+        第一条 为了规范管理，制定本制度。
+
+        [PDF 2]
+
+        第二条 本制度适用于全体人员。
+
+        [ PDF 12 ]
+        """;
+
+    NoiseStripper.Result result = NoiseStripper.strip(markdown);
+
+    assertThat(result.removedLines()).as("三条整行占位标记").isEqualTo(3);
+    assertThat(result.markdown())
+        .doesNotContain("[PDF 1]")
+        .doesNotContain("[PDF 2]")
+        .doesNotContain("[ PDF 12 ]");
+    assertThat(result.markdown()).contains("第一条 为了规范管理，制定本制度。");
+    assertThat(result.samples()).as("剥掉的东西要看得见").contains("[PDF 1]");
+  }
+
+  @Test
+  void 图注与表标题不许被顺手剥掉() {
+    // ★ 负向断言（判据 ②）：真实图注/表标题长这样 —— 它们含方括号或数字，但不是占位标记。
+    String markdown =
+        """
+        [PDF 1]
+
+        图 1 系统架构
+
+        [图 1] 架构总览
+
+        表 2 参数清单
+
+        [图 2]
+        """;
+
+    NoiseStripper.Result result = NoiseStripper.strip(markdown);
+
+    assertThat(result.removedLines()).as("只剥 [PDF 1] 这一条").isEqualTo(1);
+    assertThat(result.markdown())
+        .contains("图 1 系统架构")
+        .contains("[图 1] 架构总览")
+        .contains("表 2 参数清单")
+        .contains("[图 2]");
+  }
+
+  @Test
+  void 行内的PDF标记不动() {
+    // ★ 保守：行内出现可能是正文的一部分（"见附件[PDF 1]"），剥了就是误杀（12 §10.2 风险 2）。
+    String markdown =
+        """
+        详细数据见附件[PDF 1]，另见[PDF 2]。
+        """;
+
+    NoiseStripper.Result result = NoiseStripper.strip(markdown);
+
+    assertThat(result.removedLines()).isZero();
+    assertThat(result.markdown()).contains("详细数据见附件[PDF 1]，另见[PDF 2]。");
+  }
+
   @Test
   void 空输入原样返回() {
     assertThat(NoiseStripper.strip(null).markdown()).isEmpty();
