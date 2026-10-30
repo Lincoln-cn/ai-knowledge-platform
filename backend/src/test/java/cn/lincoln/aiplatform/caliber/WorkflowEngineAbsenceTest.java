@@ -32,7 +32,7 @@ class WorkflowEngineAbsenceTest {
   private static final Path DESIGN = Path.of("..", "docs", "系统设计方案", "09-中间件与-Spring-模块选型.md");
 
   @Test
-  void workflow模块今天只有模块说明没有执行引擎() {
+  void workflowModuleStillHasOnlyThePackageInfo() {
     List<String> files;
     try (Stream<Path> walk = Files.walk(WORKFLOW_MAIN)) {
       files =
@@ -54,7 +54,7 @@ class WorkflowEngineAbsenceTest {
   }
 
   @Test
-  void 设计册里的两段式与三处形状仍在册() {
+  void theTwoStageRequirementIsStillOnTheBooks() {
     String design = read(DESIGN);
 
     assertThat(design).as("09 §5.3 的『图 → 执行计划 → 执行』两段式要求：它消失 = #113 的前提被悄悄抹掉").contains("执行计划");
