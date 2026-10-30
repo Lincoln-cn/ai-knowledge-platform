@@ -81,6 +81,10 @@ WRITE_ENTRIES = [
      "knowledge:qa:edit", {"admin", "zhangyun"}, None, True),
     ("/knowledge?kb=kb4&tab=settings", "知识库详情 · 保存设置", "保存",
      "knowledge:manage", {"admin", "zhangyun"}, None, True),
+    # 列表卡片上的「删除」是**破坏性动作**：它连文档与分段一起删，且不可恢复。
+    # 这一条此前没有入口被钉住（只在 SettingsPanel 里有一份同权限的删除按钮），
+    # 所以"谁不该看到删除"一直是靠 `!consumer` 这个**角色判断**兜的 —— 角色判断不是权限点。
+    ("/knowledge", "知识库卡片 · 删除", "删除", "knowledge:manage", {"admin", "zhangyun"}, None, True),
     # `/org` 与 `/models` 的路由门禁本身就是这两个点 ⇒ 其余角色在路由层被拦（MATRIX 已断）
     # ★ 组织机构用「新增根部门」而不是「新增下级」：后者要先**选中一个节点**才渲染
     #   （`pages/org/Index.vue:75` 在 `v-if="selected"` 的模板里），刚进页面必然 0 个 ——
