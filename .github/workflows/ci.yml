@@ -253,6 +253,10 @@ jobs:
                    #   chunk_delay_ms 注入帧间延迟（delay_ms 做不到：它只推迟开始），用完必须复位 0 ——
                    #   同 job 后面的闸门共用这一个桩。
                    check_s3_conversation_chain_e2e \
+                   # ★ 跨场景整链（A1 的唯一缺口，2026-10-31 加）：S1 建的库 → S2 绑库的应用 →
+                   #   S3 会话里的引用，断言引用三元组里的 kbId **就是** S1 那个库、segmentId 回读
+                   #   200 且属于那份文档。三条链各自有读数 ≠ 三条链接得上 —— 这一条测的是"接得上"。
+                   check_cross_scenario_e2e \
                  check_knowledge_parse check_knowledge_form check_segmentation_e2e \
                  check_document_actions check_flow_walkthrough check_ocr_e2e \
                  check_classification_e2e check_query_understanding_e2e \
