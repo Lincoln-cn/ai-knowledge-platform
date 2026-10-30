@@ -596,7 +596,9 @@ export const workflowRecords: Record<string, WorkflowRecord[]> = {
       status: 'SUCCEEDED',
       failReason: null,
       elapsedMs: 4841,
-      startedAt: '2026-02-13T09:22:10Z'
+      startedAt: '2026-02-13T09:22:10Z',
+      // 这条跑的是第 3 版图（#112：执行记录要能回答"当时跑的是哪一版"）
+      graphVersion: 3
     },
     {
       id: 'wr-1002',
@@ -613,7 +615,9 @@ export const workflowRecords: Record<string, WorkflowRecord[]> = {
       status: 'FAILED',
       failReason: '检索节点失败：向量服务超时',
       elapsedMs: 720,
-      startedAt: '2026-02-13T10:05:44Z'
+      startedAt: '2026-02-13T10:05:44Z',
+      // 失败那次跑的是第 2 版：改版前的失败与改版后的失败要能分开查
+      graphVersion: 2
     },
     {
       id: 'wr-1003',
@@ -633,7 +637,9 @@ export const workflowRecords: Record<string, WorkflowRecord[]> = {
       status: 'SUCCEEDED',
       failReason: null,
       elapsedMs: 3632,
-      startedAt: '2026-02-13T11:01:03Z'
+      startedAt: '2026-02-13T11:01:03Z',
+      // 同一条应用、不同版本 ⇒ 记录里必须看得出差别
+      graphVersion: 4
     }
   ]
 }
