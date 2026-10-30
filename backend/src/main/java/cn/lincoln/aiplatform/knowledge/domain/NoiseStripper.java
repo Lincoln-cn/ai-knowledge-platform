@@ -7,7 +7,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * 噪声剥离（第 9 周 · 0.3.1，{@code 12 §2.4}）—— 解析之后、分块之前跑一遍，把页眉页脚/页码/目录剔掉。
+ * 噪声剥离（第 9 周 · 0.3.1，{@code 12 §2.4}）—— 解析之后、分块之前跑一遍，把页眉页脚/页码/目录/**PDF 占位标记**剔掉。
  *
  * <h3>★ 为什么必须有这一环</h3>
  *
@@ -50,6 +50,18 @@ public final class NoiseStripper {
    */
   private static final Pattern TOC_LINE =
       Pattern.compile(".*?[.．…·]{2,}[\\s.．，,、;；:：]*\\d{1,4}\\s*$");
+
+  /**
+   * PDF 占位标记整行：{@code [PDF 1]} / {@code [ PDF 12 ]}（#51）。
+   *
+   * <p>★★ 只认「整行只有这个标记」这一种形态：它进 {@code search_text} 会污染向量与全文索引，而对读者是零信息的（不是图注、不是表标题）。 行内的同形态（{@code
+   * 见附件[PDF 1]继续}）一律不动 —— 那可能是正文的一部分，剥了就是 {@code 12 §10.2} 风险 2 的误杀。
+   *
+   * <p>★ 为什么正则必须这么窄：真实图注/表标题长这样 —— {@code 图 1 系统架构}、{@code 表 2 参数}、{@code [图 1] 架构}。
+   * 按"含方括号就删"写会把它们一起删掉，那是另一种静默损失。
+   */
+  private static final Pattern PDF_PLACEHOLDER =
+      Pattern.compile("^\\[\\s*(?i:pdf)\\s*\\d{1,4}\\s*]$");
 
   private static final String FENCE = "```";
 
@@ -99,6 +111,13 @@ public final class NoiseStripper {
     for (int i = 0; i < lines.length; i++) {
       String trimmed = lines[i].strip();
       if (!trimmed.isEmpty() && !inFence[i] && PAGE_NUMBER.matcher(trimmed).matches()) {
+        drop[i] = true;
+      }
+    }
+
+    // ②b 独立成行的 PDF 占位标记（#51）—— 只认整行，行内的一律不动（理由见 PDF_PLACEHOLDER）
+    for (int i = 0; i < lines.length; i++) {
+      if (!inFence[i] && PDF_PLACEHOLDER.matcher(lines[i].strip()).matches()) {
         drop[i] = true;
       }
     }
