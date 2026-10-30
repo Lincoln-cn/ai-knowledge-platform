@@ -263,3 +263,36 @@ scoop 会自动把 `TESSDATA_PREFIX` 指到上面那个目录 —— 所以开�
 | 误配（`TESSDATA_PREFIX` 指向空目录）被探测并报 `DEGRADED` | ✅ 实测 |
 | **镜像内跑完整 OCR 入库链**（上传 `scanned.pdf` → 分块 → 向量化） | ⏳ **未验** —— 需要把 PG 与桩模型服务一起拉进同一网络，随真栈闸门 `check_ocr_e2e.py` 落地时补 |
 | 内网 `docker save/load` 全流程 | ⏳ 未验（机制标准，但没有内网机器可验） |
+| 交付 compose（`deploy/docker-compose.yml`：应用 + PG + Ollama 一条命令起） | ✅ **`docker compose config` 实测**：给了 `JWT_SECRET` ⇒ 展开正确（`DB_URL` 指服务名 `postgres`、`AI_BASE_URL` 指 `ollama`）；不给 ⇒ **`exit 1` 并指名要哪个变量**。⏳ 还没在有 GPU 的机器上真跑过一整轮问答（缺的是"起得来"之外的读数，不是配置正确性） |
+
+---
+
+## 九、一条命令起（交付形态）
+
+前面第三、四节讲的是"镜像怎么来"，这一节讲"拿到镜像之后怎么起"。文件是
+[`docker-compose.yml`](./docker-compose.yml)（★ 与根目录那份**不是**一个东西：
+根目录是开发期、只起 PG；这一份是交付期、应用也进容器）。
+
+```bash
+# 1) 起（JWT_SECRET 必填：交付形态不让它静默沿用开发默认值）
+JWT_SECRET="$(openssl rand -base64 48)" docker compose -f deploy/docker-compose.yml up -d
+
+# 2) 拉模型（否则界面会一路报"没有可用模型"；离线交付时模型随卷带走，跳过这步）
+docker compose -f deploy/docker-compose.yml exec ollama ollama pull qwen2.5:3b
+docker compose -f deploy/docker-compose.yml exec ollama ollama pull bge-m3
+
+# 3) 验
+curl -fsS http://127.0.0.1:8080/actuator/health
+```
+
+三个必须知道的点：
+
+1. **容器里连的是服务名**（`postgres` / `ollama`），不是 `localhost` —— 这是"一条命令起"最容易错的一格，
+   也是本地 `application.yml` 默认值（`localhost:15432` / `localhost:11434`）在容器里**一定**连不上的原因。
+2. **`JWT_SECRET` 用 `:?` 强制**：不设就 `exit 1`，并打出"必须设置 JWT_SECRET"。理由在文件头 ——
+   交付形态里静默沿用开发密钥 = 所有部署共用一把钥匙。
+3. **模型不自动拉**：`ollama pull` 要网络，而离线交付恰恰没有网络。离线件 = 镜像 + `.ollama` 卷
+   （`aip-ollama`），落地后挂上即可。
+
+端口可用 `APP_PORT` 改（默认 8080）；PG 不对外暴露端口（只在 compose 网络内可达），
+需要从宿主机连库做排查时，临时加一条 `ports: ["15432:5432"]` 即可，别把它留在交付件里。
