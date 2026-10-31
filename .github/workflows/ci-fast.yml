@@ -166,6 +166,14 @@ jobs:
       - name: 恢复演练记录自检（#75）
         run: python scripts/restore_drill.py --self-check
 
+      # ★ `app.*` 配置键：代码里引用了、yml 里没声明 => Spring 用默认值静默起起来（silent-failure）。
+      #   读的是仓库里那一份（`git show HEAD:`），CI 下与工作树一致。
+      - name: 配置键声明自检（#75/#227）
+        working-directory: backend
+        run: |
+          python tools/check_config_keys.py --self-check
+          python tools/check_config_keys.py
+
       # ★ 闸门自己的守卫也要能被断言（#223）：这三条守的是"别量错东西"，
       #   而一条守卫错了的表现是静默 —— 永远为真等于没有，过严则把正确情形判成错。
       #   离线、不需要浏览器、不连栈（playwright 在脚本里是延迟导入的）。

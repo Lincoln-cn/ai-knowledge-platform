@@ -69,6 +69,15 @@ spring:
 app:
   # 审计留存期清理（#75 判据 ② 的调度项）：默认关闭 —— 删审计不可逆，而"客户规定的留存期"
   # 是客户事实、不是代码事实；由代码替客户拍一个天数然后开始删，比不删更危险
+  # 对话侧的 advisor 链总开关（Spring AI 的 SafeGuardAdvisor 等）：默认开。
+  # ★ 关掉只用于排障 —— 关着上线等于安全闸门不生效（12 §12）
+  chat:
+    advisors:
+      enabled: ${CHAT_ADVISORS_ENABLED:true}
+    # 安全闸门的敏感词表（逗号分隔，空 = 不拦）。
+    # ★ 默认空不是"忘了配"，而是"由部署方按自己的合规要求填"；填了才拦
+    guard:
+      sensitive-words: ${CHAT_GUARD_SENSITIVE_WORDS:}
   audit:
     retention:
       enabled: ${AUDIT_RETENTION_ENABLED:false}
