@@ -43,6 +43,8 @@ class DocumentPurgeTest {
 
   @Autowired cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort segmentSearch;
 
+  @Autowired cn.lincoln.aiplatform.knowledge.domain.DocumentRepository documentRepository;
+
   private final HttpClient http = HttpClient.newHttpClient();
 
   @Test
@@ -226,6 +228,38 @@ class DocumentPurgeTest {
                 doc.get("documentId")))
         .as("没发生的动作不留痕")
         .isZero();
+  }
+
+  /**
+   * ★ 超期清理用的那条查询（`#259`）：按「删除时间早于 cutoff」跨库捞，且**不按库、不按密级过滤** （清理是系统在按留存期执行策略，不是某个人在读）。
+   *
+   * <p>★ 这条走真栈而不只是 Mockito：`Specification` 拼错了只有真查一次才看得见 —— 而清理作业恰恰是"平时没人看"的那类，错了往往等到磁盘满了才发现。
+   */
+  @Test
+  void theRetentionQueryFindsOnlyExpiredDocuments() throws Exception {
+    String admin = accessToken("admin", "admin");
+    String kbId = createKb(admin, "超期清理查询库");
+    Map<String, Object> fresh = createDocumentWithSegments(admin, kbId, "刚删.docx");
+    Map<String, Object> old = createDocumentWithSegments(admin, kbId, "早就删了.docx");
+    for (Map<String, Object> doc : java.util.List.of(fresh, old)) {
+      assertThat(delete("/api/v1/documents/" + doc.get("documentId"), admin).statusCode())
+          .isEqualTo(200);
+    }
+    jdbc.update(
+        "update kb_document set deleted_at = now() - interval '30 days' where id = ?::uuid",
+        old.get("documentId"));
+
+    var expired =
+        documentRepository.findDeletedBefore(
+            java.time.Instant.now().minus(java.time.Duration.ofDays(7)), 10);
+
+    assertThat(expired)
+        .extracting(d -> d.id().toString())
+        .contains(String.valueOf(old.get("documentId")));
+    assertThat(expired)
+        .extracting(d -> d.id().toString())
+        .as("刚删的（未超期）不许被清理作业捞走")
+        .doesNotContain(String.valueOf(fresh.get("documentId")));
   }
 
   /* ── 夹具与请求 ── */

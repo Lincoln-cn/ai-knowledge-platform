@@ -7,6 +7,7 @@ import cn.lincoln.aiplatform.knowledge.domain.OrgAssignment;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import java.time.Instant;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -87,6 +88,18 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
     return jpa.findAll(
             deletedFilter(kbId),
             PageRequest.of(offset / limit, limit, Sort.by(Sort.Direction.DESC, "deletedAt")))
+        .getContent();
+  }
+
+  @Override
+  public List<Document> findDeletedBefore(Instant before, int limit) {
+    // ★ 与回收站列表不同：这条**不按库、也不按密级**过滤 —— 清理不是某个人在读，
+    //   而是系统在按留存期执行策略。把当前调用者的 clearance 带进来，会让"运维清不动别人库里的旧文档"。
+    Specification<Document> spec =
+        (root, query, cb) ->
+            cb.and(cb.isNotNull(root.get("deletedAt")), cb.lessThan(root.get("deletedAt"), before));
+    return jpa.findAll(
+            spec, PageRequest.of(0, Math.max(1, limit), Sort.by(Sort.Direction.ASC, "deletedAt")))
         .getContent();
   }
 

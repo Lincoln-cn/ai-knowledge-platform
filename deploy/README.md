@@ -311,6 +311,23 @@ pg_restore -d "$TARGET_URL" --clean --if-exists /backup/aip-2026-10-31.dump
 
 ---
 
+## 七之补、回收站超期清理（`#259`）：默认关，开了才会真删
+
+删除文档之后内容只是**拿出检索面**（保留期内可「恢复」）。过了 `app.knowledge.restore-window-days`（默认 7 天）
+恢复会被拒绝，但内容仍占空间 —— 真正腾空间的是这条作业：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `KNOWLEDGE_CLEANUP_ENABLED` | `false` | **默认关闭**：装好就有一个定时任务在删数据，是这类功能最不该有的默认值 |
+| `KNOWLEDGE_CLEANUP_RETAIN_DAYS` | `7` | 与 `KNOWLEDGE_RESTORE_WINDOW_DAYS` 同值即可：能恢复的窗口一过就该腾空间 |
+| `KNOWLEDGE_CLEANUP_BATCH_SIZE` | `50` | 一次一批，别把整表搬进内存 |
+| `KNOWLEDGE_CLEANUP_CRON` | `0 10 4 * * *` | 每天 04:10（审计留存清理是 03:30，错开一小时） |
+
+★ 它删什么：**分段 + 向量 + 文档行**，顺序固定（先分段再文档行 —— 反过来会留孤儿分段，而孤儿分段照样命中），
+每条写一条 `document.purge` 审计（`detail.trigger = retention`，谁都没调，所以 `actor_id` 为空）。
+★ 它**不**删审计记录：那是 `app.audit.retention` 那条作业的事。两条留期分开配，
+混成一条会让"业务数据的留存期"和"审计的留存期"互相拖住。
+
 ## 八、启动时看什么：配置自检的那两行日志（`#227` / `#65`）
 
 后端起来时会跑一遍**配置自检**（`StartupSettingsWarningRunner`），只打日志、**不阻止启动**。

@@ -204,10 +204,17 @@ app:
     #     读数见日志 `上下文窗口：文档 … 并入 N 段 / M 字`。
     context-window: ${SEGMENT_CONTEXT_WINDOW:80}
 
-  # ★ 回收站保留期（`#259`）：删除的文档在这么多天内可以恢复，超期只能彻底删除。
-  #   默认 7 天 —— 与"误删第二天才想起来"这个真实节奏对齐；配 0 = 关闭恢复（删除即不可恢复）。
+  # ★ 回收站超期清理（`#259`）：过了保留期的已删文档会被**真的**删掉（分段 + 向量 + 文档行）。
+  #   默认关闭 —— "装好就有一个定时任务在删数据"是这类功能最不该有的默认值。
+  #   ★ 与审计留存清理（app.audit.retention，03:30）错开到 04:10，别同时压库。
   knowledge:
     restore-window-days: ${KNOWLEDGE_RESTORE_WINDOW_DAYS:7}
+    cleanup:
+      enabled: ${KNOWLEDGE_CLEANUP_ENABLED:false}
+      # 与 restore-window-days 同值即可：能恢复的窗口一过，内容就该腾出空间了。
+      retain-days: ${KNOWLEDGE_CLEANUP_RETAIN_DAYS:7}
+      batch-size: ${KNOWLEDGE_CLEANUP_BATCH_SIZE:50}
+      cron: "${KNOWLEDGE_CLEANUP_CRON:0 10 4 * * *}"
   ocr:
     # ══════════════════════════════════════════════════════════════════════════
     #  扫描件 OCR（第 9 周 0.3.1 · 12 §11）

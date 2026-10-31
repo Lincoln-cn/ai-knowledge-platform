@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.knowledge.domain;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -39,6 +40,15 @@ public interface DocumentRepository {
 
   /** 已软删的条数（与 {@link #findDeletedByKbId} 同一个谓词，`total` 与页内条数必须同口径）。 */
   long countDeletedByKbId(UUID kbId);
+
+  /**
+   * 跨库查「删除时间早于 {@code before}」的文档（`#259` 的超期清理用）。
+   *
+   * <p>★ 跨库而不是按库：清理是<strong>数据生命周期</strong>动作，不该要求运维先知道有哪些库。
+   *
+   * <p>★ 带 {@code limit}：一批一批删。一次把一个上百万行的库搬进内存，会把清理本身变成新的故障源 （而清理任务是"平时没人看"的那类，出问题时往往已经跑了一夜）。
+   */
+  List<Document> findDeletedBefore(Instant before, int limit);
 
   /**
    * 按库分页查文档（创建时间倒序）。★ 软删的不进列表。
