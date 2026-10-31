@@ -69,6 +69,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import pathlib
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -1599,11 +1600,25 @@ def judge_skips(report: ShapeReport, baseline: SkipBaseline | None, path: Path, 
             print(f"  提示：清单里 {len(stale)} 条已经不再跳过，改基线时一起删掉（清单必须随修复收缩）")
         return True
 
-    print(f"✓ 跳过数与基线一致（{total} 处）—— 闸门管的范围没有缩小")
-    # 数字相等不等于同一批：修好一处 + 新增一处也会让两个数相等。
+    # 数字相等不等于同一批：修好一处 + 新增一处也会让两个数相等（`#268`）。
+    # ★ 那时"跳过桶管的范围"其实换了 —— 旧的那一处在被比较、新的这一处没人看，而读数一模一样。
+    #   所以这不再是"提示"，是红：名单对不上就要说清新增的是哪一处。
     swapped = baseline.identities ^ current
     if swapped:
-        print(f"  提示：数量没变，但清单里有 {len(swapped)} 处身份对不上 —— 顺手看一眼是不是换了批")
+        stale = [identity for identity in baseline.identities if identity not in current]
+        fresh = [row for row in rows if row.identity not in baseline.identities]
+        print(f"✗ 跳过数与基线相同（{total} 处），但清单里有 {len(swapped)} 处身份对不上：")
+        for identity in stale:
+            print(f"    - 不再跳过：{identity[0]}  {identity[1]} {identity[2]}")
+        for row in fresh:
+            print(f"    - 新进入跳过桶：{row.file}:{row.line}  {row.method} {row.path} —— {row.why}")
+        print(
+            "  ⇒ 数量没变不代表没变化。新进入跳过桶的那几处等于『闸门不再看它』，"
+            "要么修解析器、要么说清理由再把基线换成新的清单。"
+        )
+        return False
+
+    print(f"✓ 跳过数与基线一致（{total} 处）—— 闸门管的范围没有缩小")
     return True
 
 
@@ -1618,8 +1633,8 @@ def dump_skips(report: ShapeReport) -> str:
 
 # ── 自检 ────────────────────────────────────────────────────────────────
 
-# 自检条数 = 归一 4 + 判据 5 + 形状 6 + 跳过基线 18
-SELF_CHECK_TOTAL = 33
+# 自检条数 = 归一 4 + 判据 5 + 形状 6 + 跳过基线 20
+SELF_CHECK_TOTAL = 35
 
 
 def self_check() -> int:
@@ -1782,11 +1797,28 @@ def self_check() -> int:
         expect("基线：读不出数字要退非 0", code != 0)
         expect("基线：读不出要说明原因", "没有 `跳过 N` 那一行" in out)
 
-        # ⑥ 数字相等但换了批（修好一处 + 新增一处）：退 0，但要提示"数量没变不等于同一批"
+        # ⑥ 数字相等但换了批（修好一处 + 新增一处）：**退非 0**（`#268`）—— 旧契约是"退 0 + 提示"，
+        #    那意味着"闸门不再看的那一处"换了人还照样绿；计数看不出区别，只有名单能
         root = fixture_tree(tmp / "swap", baseline_text=f"跳过 1\n#\n{manifest_line2}\n")
         code, out = run_fixture(root)
-        expect("基线：等量换批仍退 0", code == 0)
-        expect("基线：等量换批要提示清单对不上", "数量没变" in out)
+        expect("基线：等量换批要退非 0", code != 0)
+        expect("基线：等量换批要指出新进入跳过桶的那一处", "新进入跳过桶" in out)
+
+    # ── 跳过基线：数量相同但换了一批（`#268`）────────────────────────────────
+    def skip_report(*idents: str) -> ShapeReport:
+        rep = ShapeReport(routes=len(idents))
+        rep.skipped.extend((ident, "判不了（自检夹具）") for ident in idents)
+        return rep
+
+    same = SkipBaseline(1, frozenset({("handlers/a.ts", "GET", "/a")}))
+    expect(
+        "跳过基线：名单与数量都一致 ⇒ 通过",
+        judge_skips(skip_report("handlers/a.ts:1 GET /a"), same, pathlib.Path("unused.txt")) is True,
+    )
+    expect(
+        "跳过基线：数量相同但换了一条 ⇒ 必须红（修好一处 + 新增一处不能互相抵账）",
+        judge_skips(skip_report("handlers/b.ts:9 GET /b"), same, pathlib.Path("unused.txt")) is False,
+    )
 
     # 条数对不上 = 有分支没被执行到（夹具抛异常、提前 return 等），不能当作"通过"。
     if len(ran) != SELF_CHECK_TOTAL:
@@ -1799,7 +1831,7 @@ def self_check() -> int:
         for f in failures:
             print(f"  - {f}")
         return 1
-    print(f"✓ 自检通过（{len(ran)} 条：归一 4 · 判据 5 · 形状 6 · 跳过基线 18）")
+    print(f"✓ 自检通过（{len(ran)} 条：归一 4 · 判据 5 · 形状 6 · 跳过基线 20）")
     return 0
 
 

@@ -44,15 +44,15 @@ export const getAiList = () =>
  * 包袱，没有理由在新链路上继续背着。
  */
 export const detail = (row: { id: string }) =>
-  request<WorkflowGraph>({
+  request<{ graph: WorkflowGraph; updatedAt: string | null }>({
     method: 'GET',
     url: '/assistants/:appId/workflow/draft',
     path: { appId: row.id }
-  }).then((graph) => wrap(graph))
+  }).then((res) => wrap(res.graph))
 
 /** 保存草稿（旧 `addSubmit`，旧语义是"保存并发布"，这里只保存） */
 export const addSubmit = (row: { applicationId: string; graph: WorkflowGraph }) =>
-  request<WorkflowGraph>({
+  request<{ savedAt: string }>({
     method: 'PUT',
     url: '/assistants/:appId/workflow/draft',
     path: { appId: row.applicationId },

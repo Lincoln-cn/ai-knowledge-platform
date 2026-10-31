@@ -148,7 +148,10 @@ export const workflowRoutes: MockRoute[] = [
   [
     'GET',
     '/assistants/:appId/workflow/draft',
-    ({ path }) => cloneGraph(getWorkflowDraft(path.appId as string))
+    ({ path }) => ({
+      graph: cloneGraph(getWorkflowDraft(path.appId as string)),
+      updatedAt: new Date().toISOString()
+    })
   ],
 
   [
@@ -163,7 +166,7 @@ export const workflowRoutes: MockRoute[] = [
       }
       // 草稿允许不合规：这里不做校验，原样落盘（保存与发布是两回事）
       setWorkflowDraft(appId, graph)
-      return cloneGraph(getWorkflowDraft(appId))
+      return { savedAt: new Date().toISOString() }
     }
   ],
 
