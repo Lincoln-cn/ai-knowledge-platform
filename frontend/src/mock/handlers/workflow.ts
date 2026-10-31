@@ -12,8 +12,6 @@ import {
   knownModelIds,
   nodeTypeCatalog,
   setWorkflowDraft,
-  sampleInvalidGraph,
-  sampleValidGraph,
   workflowRecords,
   workflowVersions
 } from '../fixtures/workflow'
@@ -265,10 +263,11 @@ export const workflowRoutes: MockRoute[] = [
     ({ path }) => workflowRecords[path.appId as string] ?? []
   ],
 
-  // ---- 演示辅助：载入示例图（便于校验拦截演示） ----
-  ['GET', '/workflow/demo/invalid-graph', () => cloneGraph(sampleInvalidGraph)],
-  ['GET', '/workflow/demo/valid-graph', () => cloneGraph(sampleValidGraph)]
 ]
+
+// ★ `#260`：删掉 `/workflow/demo/{valid,invalid}-graph` 两条演示路由 —— 它们在 `src` 里
+//   零消费（页面从不请求它们，样例图由 fixture 直接给），属于 `#211` 同一种形状：
+//   mock 在替一个前端根本不要的能力作保。要恢复演示，正确做法是页面里显式调用契约端点。
 
 /** 供应用壳 publish-check 复用：只判「有没有一张能跑的图」，不重复图级校验 */
 export function workflowHasRunnableGraph(appId: string): {

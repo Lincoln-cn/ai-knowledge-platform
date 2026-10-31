@@ -128,13 +128,16 @@ jobs:
       #   （有接口的页面必须为「拉不到数据」准备过呈现 —— 漏了就是静默失败），
       #   表格空态只记账不判红（`el-table` 自带「暂无数据」，缺的是"下一步"，
       #   账在 #256）。两种结局都必须能红：漏账、以及修好后忘了删账。
-      - name: 静态闸门（10 道）
+      # ★ check_mock_endpoints.py 管「mock 替谁作保」：每条 mock 路由都必须在前端契约里出现过。
+      #   它防的是 `#211` 的形状 —— mock **真的实现**了一个契约里没有、后端也没有的端点，
+      #   于是 mock 模式下这条路能跑、开发时完全看不出"真后端没有它"。
+      - name: 静态闸门（11 道）
         working-directory: frontend
         run: |
           failed=()
           for g in verify_refs check_template_tags check_design check_error_codes \
                    check_workflow_node_types check_deeplink_segments check_role_subject_key \
-                   check_permission_catalog check_states check_pending_endpoints; do
+                   check_permission_catalog check_states check_pending_endpoints                    check_mock_endpoints; do
             echo "::group::${g}.py"
             if python "${g}.py"; then
               echo "✓ ${g}.py 通过"
@@ -145,7 +148,7 @@ jobs:
             echo "::endgroup::"
           done
           if [ ${#failed[@]} -gt 0 ]; then
-            echo "★ 失败 ${#failed[@]}/10：${failed[*]}"
+            echo "★ 失败 ${#failed[@]}/11：${failed[*]}"
             exit 1
           fi
           echo "10 道静态闸门全部通过"
