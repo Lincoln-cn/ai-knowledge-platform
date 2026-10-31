@@ -93,16 +93,18 @@ PAGE_ERROR_GAPS = {}
 #       账在 #256；每修好一个文件就删一条（清单必须随修复收缩）
 # ---------------------------------------------------------------------------
 TABLE_EMPTY_DEBT = {
-    "admin/components/PermissionList.vue": {"issue": "#256", "note": "权限列表空表格没有下一步"},
-    "admin/components/UserManage.vue": {"issue": "#256", "note": "用户列表空表格没有下一步"},
     "analytics/Index.vue": {"issue": "#256", "note": "指标表格（有数据才展示，倾向整块不渲染）"},
-    "assistants/components/ApiKeysPanel.vue": {"issue": "#256", "note": "密钥表空态没有「去创建」"},
-    "assistants/components/BundlePanel.vue": {"issue": "#256", "note": "知识包表空态没有下一步"},
-    "assistants/components/CredentialsPanel.vue": {"issue": "#256", "note": "凭证表空态没有下一步"},
-    "assistants/components/prompts/PromptTypeDialog.vue": {"issue": "#256", "note": "对话框内表格（旁边就有新增按钮，可不修）"},
-    "knowledge/components/QuestionPanel.vue": {"issue": "#256", "note": "问答对表空态没有下一步"},
-    "workflow/components/nodes/base-node/component/ApiInputFieldTable.vue": {"issue": "#256", "note": "对话框内表格（可不修）"},
-    "workflow/components/nodes/base-node/component/UserInputFieldTable.vue": {"issue": "#256", "note": "对话框内表格（可不修）"},
+}
+
+# ---------------------------------------------------------------------------
+# 豁免：有意的「不做空态」。豁免与债的区别是**有意的**，所以不需要 Issue 号，
+#       但必须写明理由；它们同样要能红（文件改名/不再含 el-table 就报错）。
+# ---------------------------------------------------------------------------
+TABLE_EMPTY_EXEMPT = {
+    "assistants/components/BundlePanel.vue": "校验结果里的依赖表 —— 有依赖才会出现这张表，空表没有意义",
+    "assistants/components/prompts/PromptTypeDialog.vue": "对话框内表格，旁边就是新增入口",
+    "workflow/components/nodes/base-node/component/ApiInputFieldTable.vue": "节点配置对话框内的表格",
+    "workflow/components/nodes/base-node/component/UserInputFieldTable.vue": "节点配置对话框内的表格",
 }
 
 
@@ -171,6 +173,7 @@ def main() -> int:
     # 只跟 import 会漏掉它们，账上就会挂着永远查不到的条目。
     table_debt = []
     seen_debt = set()
+    seen_exempt = set()
     for path in sorted(PAGES_ROOT.glob("**/*.vue")):
         text = read(path)
         tables = len(TABLE_RE.findall(text))
@@ -178,7 +181,7 @@ def main() -> int:
             continue
         slots = len(EMPTY_SLOT_RE.findall(text)) + len(TABLE_HINT_RE.findall(text))
         rel = path.relative_to(PAGES_ROOT).as_posix()
-        if slots == 0 and rel not in TABLE_EMPTY_DEBT:
+        if slots == 0 and rel not in TABLE_EMPTY_DEBT and rel not in TABLE_EMPTY_EXEMPT:
             problems.append(
                 f"{rel}：用了 {tables} 个 el-table 却没有任何 #empty / 带指引的 empty-text，也不在 TABLE_EMPTY_DEBT 上"
                 "（空表格只有「暂无数据」，没有下一步）"
@@ -188,11 +191,18 @@ def main() -> int:
         if rel in TABLE_EMPTY_DEBT:
             seen_debt.add(rel)
             table_debt.append((rel, tables, slots))
+        if rel in TABLE_EMPTY_EXEMPT:
+            seen_exempt.add(rel)
 
     # 账上条目必须真的被扫到 —— 否则文件改名/删除后，这条债会永远挂在账上
     for rel in TABLE_EMPTY_DEBT:
         if rel not in seen_debt:
             problems.append(f"{rel}：挂在 TABLE_EMPTY_DEBT 上，但扫不到这个文件（或它已没有 el-table）—— 请删掉这条")
+
+    # 豁免也一样要能红：文件改名/删掉后豁免会悄悄失效，然后新文件又没人管
+    for rel in TABLE_EMPTY_EXEMPT:
+        if rel not in seen_exempt:
+            problems.append(f"{rel}：挂在 TABLE_EMPTY_EXEMPT 上，但扫不到这个文件（或它已没有 el-table）—— 请删掉这条豁免")
 
     for rel, info in list(PAGE_ERROR_GAPS.items()) + list(TABLE_EMPTY_DEBT.items()):
         if not info.get("issue"):

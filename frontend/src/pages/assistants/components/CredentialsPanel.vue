@@ -39,7 +39,15 @@
       <!-- 密级字典读不到时只说一句，不把徽标画成机器码 -->
       <div v-if="dictHint" class="micro muted">{{ dictHint }}</div>
 
-      <el-table v-loading="loading" :data="list" size="small" empty-text="还没有生成过公开链接">
+      <el-table v-loading="loading" :data="list" size="small">
+        <!-- 空态给出口：公开链接是「分享给别人用」的唯一方式，空表要说去哪里生成 -->
+        <template #empty>
+          <div class="empty">
+            <div class="empty-title">还没有生成过公开链接</div>
+            <div>公开链接让外部用户免登录试用这个应用，按密级上限限定能看到的内容</div>
+            <el-button size="small" type="primary" @click="openCreate">生成分享链接</el-button>
+          </div>
+        </template>
         <el-table-column label="密级上限" width="176">
           <template #default="{ row }">
             <ClassificationBadge :level="row.maxClassification" :labels="classificationLabels" />

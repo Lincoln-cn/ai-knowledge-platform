@@ -25,7 +25,15 @@
     </div>
 
     <div class="panel" style="overflow: hidden">
-      <el-table v-loading="loading" :data="list" style="width: 100%" empty-text="暂无用户">
+      <el-table v-loading="loading" :data="list" style="width: 100%">
+        <!-- 空态给出口：一个用户都没有时「暂无用户」不说下一步 -->
+        <template #empty>
+          <div class="empty">
+            <div class="empty-title">还没有用户</div>
+            <div>账号归属在组织机构里维护，建好后在这里分配角色与重置密码</div>
+            <el-button size="small" type="primary" @click="openCreate">新增用户</el-button>
+          </div>
+        </template>
         <el-table-column prop="username" label="账号" min-width="120">
           <template #default="{ row }">
             <code class="micro">{{ row.username }}</code>

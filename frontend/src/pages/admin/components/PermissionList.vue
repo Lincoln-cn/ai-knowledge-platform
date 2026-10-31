@@ -18,7 +18,21 @@
     </div>
 
     <div class="panel" style="overflow: hidden">
-      <el-table v-loading="loading" :data="filtered" style="width: 100%" empty-text="暂无权限点">
+      <el-table v-loading="loading" :data="filtered" style="width: 100%">
+        <!-- 空态分两件事：搜不到 vs 一条都没有。权限点是代码里定义的目录，不是可增删的数据 -->
+        <template #empty>
+          <div class="empty">
+            <template v-if="keyword">
+              <div class="empty-title">没有匹配「{{ keyword }}」的权限点</div>
+              <div>换个关键词，或清空搜索看全部</div>
+              <el-button link size="small" type="primary" @click="keyword = ''">清空搜索</el-button>
+            </template>
+            <template v-else>
+              <div class="empty-title">还没有取到权限点</div>
+              <div>权限点由平台在代码里定义（前端 `permissions.ts` + 后端权限目录），不在这里新增</div>
+            </template>
+          </div>
+        </template>
         <el-table-column label="编码" min-width="220">
           <template #default="{ row }">
             <code class="micro">{{ row.code }}</code>
