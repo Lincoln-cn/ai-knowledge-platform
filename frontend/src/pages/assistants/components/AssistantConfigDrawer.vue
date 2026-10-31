@@ -155,6 +155,33 @@
           <span class="micro muted" style="margin-left: var(--space-xs)">默认 5</span>
         </el-form-item>
 
+        <!-- 查询理解（第 12 周 · 10 §8.1 / §6.3）：决定一次提问花几次模型调用 -->
+        <el-form-item label="改写条数">
+          <el-input-number v-model="form.retrieval.queryCount" :min="0" :max="5" />
+          <span class="micro muted" style="margin-left: var(--space-xs)">
+            0 = 不做这一层；1 = 只改写；默认 3。每多一条查询多一次检索，也更容易命中
+          </span>
+        </el-form-item>
+
+        <el-form-item label="拆分多意图">
+          <el-switch v-model="form.retrieval.decomposeEnabled" />
+          <span class="micro muted" style="margin-left: var(--space-xs)">
+            关掉它只是"按配置少做一件事"，不算降级（10 §6.3）；低配机器建议关掉
+          </span>
+        </el-form-item>
+
+        <el-form-item label="子问题上限">
+          <el-input-number
+            v-model="form.retrieval.maxSubQuestions"
+            :min="1"
+            :max="5"
+            :disabled="!form.retrieval.decomposeEnabled"
+          />
+          <span class="micro muted" style="margin-left: var(--space-xs)">
+            拆分开启时最多拆几个；关掉拆分后这一项不起作用
+          </span>
+        </el-form-item>
+
         <el-form-item label="无引用策略">
           <el-radio-group v-model="form.retrieval.noRefStrategy">
             <!-- ★ 同上：机器码（契约 NoRefStrategy） -->
@@ -238,7 +265,12 @@ const form = reactive({
     mode: 'HYBRID' as RetrievalMode,
     threshold: 0.6,
     topN: 5,
-    noRefStrategy: 'REFUSE' as RetrievalParams['noRefStrategy']
+    noRefStrategy: 'REFUSE' as RetrievalParams['noRefStrategy'],
+    // ★ 查询理解（10 §8.1）：后端 AssistantView.RetrievalView 一直回这三个字段，
+    //   但页面从第 12 周做完起就没有入口 ⇒ 用户只能吃平台默认值，改不了。
+    queryCount: 3,
+    decomposeEnabled: true,
+    maxSubQuestions: 3
   },
   prologue: '',
   multiTurn: true,
@@ -309,7 +341,15 @@ const fillForm = (a: Assistant) => {
   form.rolePrompt = a.rolePrompt
   form.promptIds = [...a.promptIds]
   form.kbIds = [...a.kbIds]
-  form.retrieval = { ...a.retrieval }
+  // ★ 查询理解三项在契约里是**可选**（第 12 周才加，老后端不回），而这里是无选项
+  //   ⇒ 显式兜底成与后端 RetrievalBody.toDraft() 一致的默认值（3 / true / 3），
+  //   否则保存时会把 undefined 发出去，语义变成"请后端按默认值重置"。
+  form.retrieval = {
+    ...a.retrieval,
+    queryCount: a.retrieval.queryCount ?? 3,
+    decomposeEnabled: a.retrieval.decomposeEnabled ?? true,
+    maxSubQuestions: a.retrieval.maxSubQuestions ?? 3
+  }
   form.prologue = a.prologue
   form.multiTurn = a.multiTurn
   form.thinkingEnabled = a.thinkingEnabled
