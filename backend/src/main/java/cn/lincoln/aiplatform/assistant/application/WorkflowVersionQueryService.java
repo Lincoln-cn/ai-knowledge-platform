@@ -2,18 +2,14 @@ package cn.lincoln.aiplatform.assistant.application;
 
 import cn.lincoln.aiplatform.assistant.domain.WorkflowVersion;
 import cn.lincoln.aiplatform.assistant.domain.WorkflowVersionRepository;
+import cn.lincoln.aiplatform.platform.access.UserDisplayNamePort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
@@ -32,33 +28,20 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 public class WorkflowVersionQueryService {
 
-  private static final Logger log = LoggerFactory.getLogger(WorkflowVersionQueryService.class);
-
-  /**
-   * 一次 {@code in (…)} 取这一页发布人的<strong>当前</strong>显示名。
-   *
-   * <p>★ 与 {@code FeedbackService#assigneeName}、{@code AuditLogAdapter.ACTOR_NAME}
-   * 是<strong>同一条读法</strong>（都是 {@code iam_user.display_name}），这里只是把单条换成批量 —— 别为一个"显示名字"新开一个 REST
-   * 端点： 那会让前端为了一个人名去要 {@code system:manage}，而版本列表的门槛是 {@code assistant:view}。 {@code deleted_at is
-   * null} 与那两处一致：软删的用户不再算"能解析到的人"。
-   */
-  private static final String ACTOR_NAMES =
-      "select id, display_name from iam_user where id in (:ids) and deleted_at is null";
-
   private final WorkflowDraftService drafts;
   private final WorkflowVersionRepository versions;
   private final ObjectMapper json;
-  private final NamedParameterJdbcTemplate jdbc;
+  private final UserDisplayNamePort displayNames;
 
   public WorkflowVersionQueryService(
       WorkflowDraftService drafts,
       WorkflowVersionRepository versions,
       ObjectMapper json,
-      NamedParameterJdbcTemplate jdbc) {
+      UserDisplayNamePort displayNames) {
     this.drafts = drafts;
     this.versions = versions;
     this.json = json;
-    this.jdbc = jdbc;
+    this.displayNames = displayNames;
   }
 
   /**
@@ -73,9 +56,9 @@ public class WorkflowVersionQueryService {
   public List<Version> list(UUID assistantId) {
     drafts.requireAssistant(assistantId);
     List<WorkflowVersion> rows = versions.history(assistantId);
-    // 整页一次查，不按行查：一个应用上百版就是上百次往返（见 publishedNames 的注释）
+    // 整页一次查，不按行查：一个应用上百版就是上百次往返（见 UserDisplayNamePort 的类注释）
     Map<UUID, String> names =
-        publishedNames(rows.stream().map(WorkflowVersion::publishedBy).toList());
+        displayNames.displayNamesOf(rows.stream().map(WorkflowVersion::publishedBy).toList());
     return rows.stream().map(row -> version(row, names)).toList();
   }
 
@@ -158,39 +141,6 @@ public class WorkflowVersionQueryService {
         row.publishedBy() == null ? null : names.get(row.publishedBy()),
         row.note(),
         nodeCount(row.graph()));
-  }
-
-  /**
-   * 把这一页的发布人 id 一次解析成当前显示名。**解析不到就给空值，不抛。**
-   *
-   * <p>★ 为什么批量：发布历史是整页读的，按行查就是 N+1 —— 一个应用上百版时，页面等的是上百次数据库往返。
-   *
-   * <p>★ 为什么 {@code catch} 到最宽：这个方法的产出只影响"名字这一列好看不好看"。让一次用户表查询的抖动 把整页发布历史变成 500，等于用装饰性信息换掉了主信息 ——
-   * 那是本末倒置。失败只记一条 {@code warn}（带 id 数量， 便于判断是不是整批都挂了），调用方按"全都没解析到"处理。
-   *
-   * @return id → 名字；没解析到的 id 不在表里
-   */
-  private Map<UUID, String> publishedNames(List<UUID> actors) {
-    List<UUID> ids = actors.stream().filter(Objects::nonNull).distinct().toList();
-    if (ids.isEmpty()) {
-      return Map.of();
-    }
-    Map<UUID, String> names = new HashMap<>();
-    try {
-      jdbc.query(
-          ACTOR_NAMES,
-          Map.of("ids", ids),
-          rs -> {
-            String name = rs.getString("display_name");
-            if (name != null && !name.isBlank()) {
-              names.put(rs.getObject("id", UUID.class), name);
-            }
-          });
-    } catch (RuntimeException lookupFailed) {
-      log.warn("发布人名字解析失败，本次按「未知用户」返回：待解析 {} 个 id", ids.size(), lookupFailed);
-      return Map.of();
-    }
-    return names;
   }
 
   /**
