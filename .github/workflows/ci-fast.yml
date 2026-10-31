@@ -160,3 +160,10 @@ jobs:
       #   ★ 判据：把 `retrieve_or_die` 改回 `or []` 的形状 ⇒ 这一步红。
       - name: 读数纪律自检（#231）
         run: python scripts/parse_corpus.py --self-check
+
+      # ★ 闸门自己的守卫也要能被断言（#223）：这三条守的是"别量错东西"，
+      #   而一条守卫错了的表现是静默 —— 永远为真等于没有，过严则把正确情形判成错。
+      #   离线、不需要浏览器、不连栈（playwright 在脚本里是延迟导入的）。
+      - name: 机器状态守卫自检（#223）
+        working-directory: frontend
+        run: python check_failure_visible_e2e.py --self-check

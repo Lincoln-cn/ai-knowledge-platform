@@ -21,25 +21,40 @@
    没有这一条，一个"永远失败"的实现也能让 ①② 绿；
 ④ 全程无未处理页面异常。
 
+━━━ ★★ 三处「机器状态」陷阱（2026-10-28 各红过一次，账在 #223） ━━━
+① **桩地址不能用 `localhost`**：本机 `localhost` 先解析 `::1`，而 `::1:11434` 是 **Docker 的 wslrelay**，
+   `POST /__stub/config` 落在那儿是 **404** ⇒ 注入与复原**双双静默失败**，闸门于是量了"一个正常的成功页面"。
+   ⇒ 一律 `AIP_STUB_URL`（默认 `http://127.0.0.1:11434`），与其余 `check_*.py` 同口径。
+② **不能"随便挑第一个 LOADED 的对话模型"**：本机还挂着 `qwen2.5-1.5b-本地`（指向 Ollama），
+   它打到桩上只会得到 `404 模型不存在` ⇒ 闸门量到的是"模型名不对"，不是"上游失败如何呈现"。
+   ⇒ 只挑 **apiBase 指向桩**的模型；没有就**建一个**（`baseModel=stub-plain`）并加载，跑完回收。
+③ **"起了个 vite" ≠ "前端接的是真后端"**：`USE_MOCK` 的默认值是 **true**（`src/config/env.ts`），
+   mock 模式下这一页**一条 `/api/v1` 请求都不发** ⇒ ①a/④ 假绿（没有真请求就没有错），
+   ①b/② 假红（mock 会话 handler 里没有这个 appId，页面只弹"应用不存在"，一个气泡都不发）。
+   ⇒ 先证明"页面真的在跟真后端说话"，否则 `SystemExit` 明说"本跑不算读数"。
+
 用法：
     python check_failure_visible_e2e.py                      # 默认 http://localhost:5280
     python check_failure_visible_e2e.py http://127.0.0.1:5280
+    AIP_STUB_URL=http://127.0.0.1:11434 python check_failure_visible_e2e.py   # 桩不在默认地址时
+    python check_failure_visible_e2e.py --self-check          # 离线自检：三处机器状态守卫自己有没有错
 退出码：0 = 全绿；1 = 有红。
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
-from playwright.sync_api import sync_playwright
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5280").rstrip("/")
 API = BASE + "/api/v1"
-STUB = "http://localhost:11434"
+STUB = os.environ.get("AIP_STUB_URL", "http://127.0.0.1:11434").rstrip("/")
 
 USER = "admin"
 PASSWORD = "admin"
@@ -90,20 +105,92 @@ def stub_config(payload: dict) -> bool:
         return False
 
 
-def seed_app() -> str:
+def _same_endpoint(left: str | None, right: str) -> bool:
+    """两个 apiBase 是不是同一个 host:port（路径不比：有的存 `/v1`，有的存到根）。"""
+    if not left:
+        return False
+    try:
+        a = urllib.parse.urlsplit(left)
+        b = urllib.parse.urlsplit(right)
+    except ValueError:
+        return False
+    return (a.hostname, a.port or 80) == (b.hostname, b.port or 80)
+
+
+def _pick_chat_model(token: str) -> tuple[str, str | None]:
+    """挑一个**打到桩上**的已加载对话模型；没有就用桩的模型名建一个。
+
+    ★ 为什么不"挑第一个 LOADED 的"（2026-10-28 实测）：本机还挂着一个指向 Ollama 的
+      `qwen2.5-1.5b-本地`，它打到桩上只会得到 `404 模型不存在` ⇒ 闸门量到的是"模型名不对"，
+      而它以为自己量的是"上游失败怎么呈现"。这类夹具漂移必须由夹具自己消掉。
+    返回 `(modelId, 新建的 id 或 None)` —— 新建的那个要在跑完回收。
+    """
+    status, payload = call("GET", "/models?size=50", token)
+    rows = (json.loads(payload).get("data") or {}).get("list") or [] if status == 200 else []
+    for row in rows:
+        if row.get("kind") != "CHAT" or row.get("status") != "LOADED":
+            continue
+        if _same_endpoint(row.get("apiBase"), STUB):
+            print(f"  已加载且指向桩的对话模型：{row.get('name')}（{row.get('baseModel')}）")
+            return row["id"], None
+
+    print(f"  [夹具] 没有指向 {STUB} 的已加载对话模型 ⇒ 建一个（baseModel=stub-plain）")
+    status, payload = call(
+        "POST",
+        "/models",
+        token,
+        {
+            "name": f"桩对话模型-{int(time.time())}",
+            "kind": "CHAT",
+            "supplier": "LOCAL_INFERENCE",
+            "baseModel": "stub-plain",
+            "apiBase": STUB + "/v1",
+        },
+    )
+    if status not in (200, 201):
+        raise SystemExit(f"建对话模型失败（{status}）：{payload[:300]}")
+    model_id = json.loads(payload)["data"]["id"]
+    status, payload = call("POST", f"/models/{model_id}/load", token, {})
+    if status not in (200, 202):
+        raise SystemExit(f"加载对话模型失败（{status}）：{payload[:300]}")
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        status, payload = call("GET", "/models?size=50", token)
+        for row in (json.loads(payload).get("data") or {}).get("list") or []:
+            if row.get("id") == model_id and row.get("status") == "LOADED":
+                return model_id, model_id
+        time.sleep(1)
+    raise SystemExit("新建的对话模型 120s 内没有进入 LOADED（本跑不算读数）")
+
+
+def _mock_mode_message(api_calls: list[str]) -> str | None:
+    """本次流程一条 `/api/v1` 请求都没发 ⇒ 页面在 mock 模式，返回该说的那句话；否则 None。
+
+    ★ 抽成纯函数的理由：这条判据自己必须能被断言（`--self-check`），否则它就是"看起来在守、
+      其实从没红过"的那一类守卫 —— 本工程的 `#223` 正是因为闸门对机器状态有假设才量错东西。
+    """
+    if api_calls:
+        return None
+    return (
+        "前端在 mock 模式（本次登录 + 打开会话页 0 条 /api/v1 请求）⇒ 界面侧判据量的是 mock，"
+        "本跑不算读数。要用真栈请以 VITE_USE_MOCK=false 重启前端。"
+    )
+
+
+def _discard_model(token: str, model_id: str | None) -> None:
+    if not model_id:
+        return
+    status, payload = call("DELETE", f"/models/{model_id}", token)
+    print(f"  [回收] 临时对话模型 {model_id} 删除结果 {status}（{payload[:80]}）")
+
+
+def seed_app() -> tuple[str, str | None]:
     status, payload = call("POST", "/auth/login", body={"username": USER, "password": PASSWORD})
     if status != 200:
         raise SystemExit(f"登录失败（{status}）：{payload[:200]}")
     token = json.loads(payload)["data"]["accessToken"]
 
-    status, payload = call("GET", "/models?size=50", token)
-    model_id = None
-    for row in (json.loads(payload).get("data") or {}).get("list") or []:
-        if row.get("kind") == "CHAT" and row.get("status") == "LOADED":
-            model_id = row["id"]
-            break
-    if model_id is None:
-        raise SystemExit("没有已加载的对话模型")
+    model_id, created_model = _pick_chat_model(token)
 
     status, payload = call("GET", "/knowledge-bases?size=50", token)
     kb_id = None
@@ -134,13 +221,13 @@ def seed_app() -> str:
     )
     if status not in (200, 201):
         raise SystemExit(f"建应用失败（{status}）：{payload[:300]}")
-    return json.loads(payload)["data"]["id"]
+    return json.loads(payload)["data"]["id"], created_model
 
 
 def main() -> int:
     print("== A3 真栈闸门（浏览器侧）：失败可见 + 可重试 ==")
 
-    app_id = seed_app()
+    app_id, created_model = seed_app()
     print(f"  已建应用 {app_id}")
 
     # ★★ 顺序是判据的一部分（第一版写反了，闸门因此跑了**两遍**）：
@@ -149,10 +236,13 @@ def main() -> int:
     #     第一次跑时桩还是正常的（`①b` 看到的是成功页面、自然没有"失败"字样 ⇒ 红），
     #     而 `problems` 保留了那一次的失败项 ⇒ 出现"同一条判据既 ✓ 又 [FAIL]"的怪相。
     #   ★ 教训：**闸门自己的前置顺序**也是判据的一部分；顺序错了，红会红在莫名其妙的地方。
-    check(
-        stub_config({"fail_rate": 1.0}),
-        "⓪ 桩已注入 100% 失败（`POST /__stub/config {fail_rate:1.0}`）",
-    )
+    #   ★★ 2026-10-28 追加：注入**失败**时直接退出（`#223`）。原版的处置是"记一条红然后照跑"，
+    #     于是后面三条红全是"在成功页面上找失败文案"的假红 —— 一条环境问题被放大成四条判据红。
+    if not stub_config({"fail_rate": 1.0}):
+        print(f"  ✗ 桩不可达或不接受注入（{STUB}/__stub/config）")
+        print("  ⇒ 注入没生效，后面的判据会量到「一个正常的成功页面」，本跑不算读数。")
+        return 1
+    check(True, "⓪ 桩已注入 100% 失败（`POST /__stub/config {fail_rate:1.0}`）")
 
     try:
         _run_under_failure(app_id)
@@ -161,6 +251,7 @@ def main() -> int:
         #   会让后面每一条都看到"上游全 500" —— 那会把"一次闸门崩溃"放大成"一整片红"。
         restored = stub_config({"fail_rate": 0.0})
         print(f"  [复原] 桩 fail_rate 已归零（{restored}）")
+        _discard_model(_login_token(), created_model)
 
     # ── ③ 对照：把注入关掉之后，**同一条链必须真的能成功** ──
     #   ★ 这不是"配置改回去了"就算 —— 要拿一次真实的问答读数。
@@ -195,11 +286,24 @@ def _login_token() -> str:
 
 def _run_under_failure(app_id: str) -> None:
     """在"桩必失败"的前提下，验界面侧的 ①②④。"""
+    # ★ 延迟导入：`--self-check` 要在没装 playwright 的机器上也能跑（CI 的静态 job 就不装）。
+    from playwright.sync_api import sync_playwright
+
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
         page = browser.new_page(viewport={"width": 1500, "height": 900})
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(f"PAGEERROR: {e}"))
+        # ★★ 第三处「机器状态」陷阱（2026-10-28 实测，账在 #223）：
+        #   前端 `USE_MOCK` 的默认值是 **true**（`src/config/env.ts`：`import.meta.env.VITE_USE_MOCK ?? 'true'`），
+        #   所以"起了个 vite"不等于"前端接的是真后端"。mock 模式下这一页**一条 `/api/v1` 请求都不发**，
+        #   于是：①a/④ 假绿（没有真请求就没有错），①b/② 假红（mock 的会话 handler 里没有这个 appId，
+        #   页面只弹一句"应用不存在"，一个气泡都不发）。⇒ 本闸门必须先证明"页面真的在跟真后端说话"。
+        api_calls: list[str] = []
+        page.on(
+            "request",
+            lambda r: api_calls.append(f"{r.method} {r.url}") if "/api/v1/" in r.url else None,
+        )
 
         page.goto(BASE + "/#/login", wait_until="networkidle")
         page.wait_for_timeout(600)
@@ -211,6 +315,13 @@ def _run_under_failure(app_id: str) -> None:
             bool(page.evaluate("() => localStorage.getItem('access_token') || ''")),
             "⓪ 登录真的成功了（localStorage 里有 access_token）",
         )
+
+        # ★ 没有这一条，mock 模式下的假红看起来与"产品真的有缺陷"一模一样。
+        mock_message = _mock_mode_message(api_calls)
+        if mock_message:
+            browser.close()
+            raise SystemExit(mock_message)
+        print(f"  [口径] 页面确实在跟真后端说话（本次流程 {len(api_calls)} 条 /api/v1 请求）")
 
         page.goto(BASE + f"/#/conversation?appId={app_id}", wait_until="networkidle")
         page.wait_for_timeout(2500)
@@ -261,5 +372,58 @@ def _run_under_failure(app_id: str) -> None:
         browser.close()
 
 
+def self_check() -> int:
+    """离线自检三处「机器状态」守卫本身（`#223`）。跑法：`python check_failure_visible_e2e.py --self-check`
+
+    ★ 为什么要有它：这三条守卫的作用是"让闸门别量错东西"，而一条守卫自己错了的表现是**静默**
+      —— 要么它永远为真（等于没有），要么它把正确的情形也判成错。只有把它们当被测对象才有读数。
+    不起浏览器、不连栈、不要 `playwright`。
+    """
+    failures: list[str] = []
+
+    def expect(ok: bool, what: str) -> None:
+        print(f"  {'✓' if ok else '✗'} {what}")
+        if not ok:
+            failures.append(what)
+
+    # ① 桩地址：默认值必须是 127.0.0.1 —— `localhost` 在本机会先解析 `::1`，那是 Docker 的 wslrelay
+    expect("localhost" not in STUB, f"① 桩地址不含 localhost（实得 {STUB}）")
+    expect(
+        os.environ.get("AIP_STUB_URL") is None or STUB == os.environ["AIP_STUB_URL"].rstrip("/"),
+        "① 桩地址可被 AIP_STUB_URL 覆盖且不留尾斜杠",
+    )
+
+    # ② 「指向桩的模型」判定：只比 host:port，不比较路径；空/坏值都不许当成命中
+    expect(
+        _same_endpoint(STUB + "/v1", STUB),
+        "② 同一 host:port、路径不同 ⇒ 判为指向桩",
+    )
+    expect(
+        not _same_endpoint("http://127.0.0.1:11435/v1", STUB),
+        "② 端口不同 ⇒ 判为不是桩（否则会挑到别的 ollama）",
+    )
+    expect(not _same_endpoint(None, STUB), "② apiBase 为空 ⇒ 判为不是桩")
+    expect(not _same_endpoint("not a url", STUB), "② 坏 URL ⇒ 判为不是桩，不抛异常")
+
+    # ③ mock 模式：有请求 ⇒ 放行；零请求 ⇒ 必须给出那句话（否则假红看起来像产品缺陷）
+    expect(
+        _mock_mode_message(["GET http://127.0.0.1:5280/api/v1/models"]) is None,
+        "③ 有 /api/v1 请求 ⇒ 不判 mock",
+    )
+    message = _mock_mode_message([])
+    expect(message is not None and "mock" in message, "③ 零请求 ⇒ 判 mock 并说明本跑不算读数")
+
+    print()
+    if failures:
+        print(f"自检失败 {len(failures)} 条：")
+        for item in failures:
+            print(f"  - {item}")
+        return 1
+    print("自检通过：三处机器状态守卫都在按预期工作。")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--self-check" in sys.argv:
+        sys.exit(self_check())
     sys.exit(main())
