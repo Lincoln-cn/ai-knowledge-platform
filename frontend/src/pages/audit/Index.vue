@@ -18,8 +18,9 @@
     <!-- ★ 这一条不是装饰：审计只接了一半的写入点（13 §7.3），页面必须说明，
          否则读到 0 条的人会以为是"没人操作过"，而真实原因可能是"这类动作还没接"。 -->
     <div class="notice info">
-      <b>今天接了九类动作：</b>改密级 · 改标签 · 删文档 · 从回收站恢复 · 彻底删除 · 导出应用 · 改角色权限 · 分享链接 · 撤销分享。
-      检索 / 查看 / 引用 / 分享<b>还没有接审计</b>（<code>13 §7.3</code>），所以这几类操作在这里查不到。
+      <b>今天接了 {{ ACTIONS.length }} 类动作：</b>改密级 · 改标签 · 删文档 · 从回收站恢复 · 彻底删除 · 导出应用 ·
+      改角色权限 · 分享链接 · 撤销分享 · 清理过期审计（这一条由系统写，操作人一列显示「系统」）。
+      检索 / 查看 / 引用<b>还没有接审计</b>（<code>13 §7.3</code>），所以这几类操作在这里查不到。
     </div>
 
     <div class="filters panel">
@@ -83,7 +84,7 @@
       <el-table-column label="操作人" width="140">
         <template #default="{ row }">
           <!-- ★ 是写那一刻的快照：与用户管理页里现在的名字可能不同，这正是审计要的 -->
-          {{ row.actorName || '（系统）' }}
+          {{ actorText(row.actorName) }}
         </template>
       </el-table-column>
       <el-table-column label="动作" width="170">
@@ -110,7 +111,7 @@
           <div class="empty-title">当前还没有任何审计记录</div>
           <!-- ★ 零记录本身是一条信息，比空白表格有用（#258 判据 4） -->
           <div class="micro muted">
-            这有两种可能：还没有人做过上面那九类操作，或者写入点没接上 ——
+            这有两种可能：还没有人做过上面那 {{ ACTIONS.length }} 类操作，或者写入点没接上 ——
             做一次「改密级」再看这里，如果仍然没有，那是接错了。
           </div>
         </div>
@@ -126,7 +127,7 @@
       <el-table v-loading="traceLoading" :data="traceRows" size="small">
         <el-table-column prop="at" label="时间" width="180" />
         <el-table-column label="操作人" width="120">
-          <template #default="{ row }">{{ row.actorName ?? '（系统）' }}</template>
+          <template #default="{ row }">{{ actorText(row.actorName) }}</template>
         </el-table-column>
         <el-table-column label="动作" width="150">
           <template #default="{ row }">{{ actionLabel(row.action) }}</template>
@@ -209,6 +210,16 @@ const query = reactive({
 })
 
 const actionLabel = (code: string) => ACTIONS.find((a) => a.value === code)?.label ?? code
+
+/**
+ * 操作人一列的文字。
+ *
+ * ★ 后端对"系统自己做的事"（留存期清理）写 `actor_id = null`、`actor_name = null`；
+ * 用户被删掉之后快照名还在，所以**空名字只可能来自系统**。
+ * ★ 两处渲染必须走同一个函数：早先一处用 `||`、一处用 `??`，空串在两者下结果不同 ——
+ * 同一张表在列表与追溯对话框里显示不一样，是最难被报上来的那类不一致。
+ */
+const actorText = (name: string | null | undefined) => name?.trim() || '（系统）'
 const resourceLabel = (type: string) => RESOURCES.find((r) => r.value === type)?.label ?? type
 
 const formatTime = (iso: string) => {
