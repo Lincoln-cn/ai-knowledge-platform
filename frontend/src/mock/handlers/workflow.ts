@@ -189,7 +189,9 @@ export const workflowRoutes: MockRoute[] = [
       const issues = validateGraph(graph, ctxFor())
       if (hasBlockingError(issues)) {
         const count = issues.filter((i) => i.level === 'ERROR').length
-        throw new ApiError(6001, `存在 ${count} 个阻断错误，无法发布`)
+        // ★ 与真后端同形状（`#260`）：明细随错误带走，界面才能逐条高亮到节点。
+        //   只给一句"存在 N 个阻断错误"，在 mock 模式下永远看不到真栈那种面板。
+        throw new ApiError(6001, `存在 ${count} 个阻断错误，无法发布`, undefined, issues)
       }
 
       const list = workflowVersions[appId] ?? (workflowVersions[appId] = [])

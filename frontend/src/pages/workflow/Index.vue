@@ -110,6 +110,7 @@ import { ElMessageBox, ClickOutside as vClickOutside } from 'element-plus'
 import Workflow from './components/Canvas.vue'
 import { MsgSuccess, MsgError } from '@/utils/message'
 import { pendingEndpointHint } from '@/lib/pendingEndpoint'
+import { issuesFromDetails } from '@/lib/publishIssues'
 import PublishHistory from '@/pages/workflow/components/common/PublishHistory.vue'
 import DropdownMenu from '@/pages/workflow/components/common/DropdownMenu.vue'
 import BackButton from '@/pages/workflow/components/back-button/index.vue'
@@ -355,10 +356,10 @@ function locateIssue(issue: WorkflowValidationIssue) {
  *
  * - `409 CONFLICT`：有人在同时发布 ⇒ 稍后重试就行，改图没有用；
  *   说成通用失败会让人去改一张本来没错的图。
- * - `6001 PUBLISH_CHECK_FAILED`：后端二次校验更严 ⇒ 明细摆进面板原文显示。
- *   ★ 后端的 400 包络里**没有**结构化 issues 数组（`ApiResponse.from(BusinessException)`
- *   把 `data` 置 null，明细被 `WorkflowPublishService` 摊成 message + hint 文本），
- *   所以这里展示文本、**不解析**：解析后端文案会在它改措辞时静默退化成空清单。
+ * - `6001 PUBLISH_CHECK_FAILED`：后端二次校验更严 ⇒ 明细摆进面板。
+ *   ★ `#260` 起后端把每条 issue 装进失败包络的 `data`（`ApiError.details`），所以走结构化面板、
+ *   点一行能定位到节点；**不解析 message 文本**（后端改措辞就会静默退化成空清单）。
+ *   只有当明细不是合格清单时，才退回"原文展示 message + hint"。
  * - 其余（网络 / 500 / 404）：说清"这次没有发布"，绝不让界面看起来像成功。
  */
 function handlePublishFailure(error: unknown) {
@@ -368,6 +369,14 @@ function handlePublishFailure(error: unknown) {
         return
     }
     if (code === ErrorCode.PUBLISH_CHECK_FAILED) {
+        // ★ `#260` 起后端把明细装进失败包络的 data（`ApiError.details`）。
+        //   收窄要**逐条校验**，不能 `as WorkflowValidationIssue[]` 就用 ——
+        //   形状不对时半张清单会渲染成空白行，比"只有文本"更难查。
+        const issues = issuesFromDetails((error as { details?: unknown } | null)?.details)
+        if (issues.length) {
+            publishIssues.value = issues
+            return
+        }
         const hint = (error as { hint?: unknown } | null)?.hint
         publishIssueSummary.value = [
             errorText(error) ?? '后端复核这张图还不能发布',

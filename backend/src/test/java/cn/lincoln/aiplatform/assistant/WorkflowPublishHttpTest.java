@@ -9,6 +9,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,6 +22,8 @@ import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * {@code #198} 第四块（发布编排版本）的真 HTTP 读数（真 PostgreSQL，不 mock 仓储）。
@@ -57,6 +61,8 @@ class WorkflowPublishHttpTest {
 
   private final HttpClient http = HttpClient.newHttpClient();
 
+  private final ObjectMapper mapper = new ObjectMapper();
+
   @LocalServerPort int port;
 
   @Autowired JdbcTemplate jdbc;
@@ -73,6 +79,24 @@ class WorkflowPublishHttpTest {
         .as("★ 400 要带上 issues 明细，而不是一句「校验失败」")
         .contains("EMPTY_GRAPH")
         .contains("流程里没有任何节点");
+
+    // ★ #260：明细不只是文本。data 必须是结构化的 issue 数组 —— 界面靠 code/nodeId 逐条高亮与跳转，
+    //   把它们压进一句话之后，"哪一条、落在哪个节点上"就只剩人去读自然语言。
+    Map<String, Object> body = mapper.readValue(response.body(), new TypeReference<>() {});
+    Object data = body.get("data");
+    assertThat(data)
+        .as("★ 失败时 data 里装的是那张清单（不是 null）：%s", response.body())
+        .isInstanceOf(List.class);
+    List<Map<String, Object>> issues = (List<Map<String, Object>>) data;
+    assertThat(issues).as("空图只该有一条 ERROR").hasSize(1);
+    assertThat(issues.get(0))
+        .as("字段名与前端契约 WorkflowValidationIssue 同名同义")
+        .containsEntry("level", "ERROR")
+        .containsEntry("code", "EMPTY_GRAPH")
+        .containsKey("message")
+        .containsKey("nodeId");
+    assertThat(issues.get(0).get("nodeId")).as("空图没有节点可指").isNull();
+
     assertThat(rowCount(app)).as("★ 校验不过不能留下任何行").isZero();
   }
 

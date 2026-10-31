@@ -125,7 +125,10 @@ client.interceptors.response.use(
       new ApiError(
         envelope?.code ?? status ?? -1,
         envelope?.message || fallback,
-        envelope?.hint
+        envelope?.hint,
+        // ★ 失败包络里的 data 也要带出去（`#260`）：发布校验的 400 把每条 issue 装在这里，
+        //   不带就等于"后端的明细到了边界又被丢了"，界面只能念一段自然语言。
+        envelope?.data
       )
     )
   }

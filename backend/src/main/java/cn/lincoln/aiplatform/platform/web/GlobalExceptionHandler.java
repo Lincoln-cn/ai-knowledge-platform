@@ -39,8 +39,12 @@ public class GlobalExceptionHandler {
   private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
   @ExceptionHandler(BusinessException.class)
-  public ResponseEntity<ApiResponse<Void>> onBusiness(BusinessException cause) {
-    return ResponseEntity.status(httpStatusOf(cause.code())).body(ApiResponse.from(cause));
+  public ResponseEntity<ApiResponse<?>> onBusiness(BusinessException cause) {
+    // ★ 两条路，而不是一条泛型路（#260）：没有明细时仍是 ApiResponse.from —— "失败没有数据体"是类型级约定；
+    //   有明细时走 fromWithDetails，data 里装那张清单（如发布前校验的每条 issue）。
+    ApiResponse<?> body =
+        cause.details() == null ? ApiResponse.from(cause) : ApiResponse.fromWithDetails(cause);
+    return ResponseEntity.status(httpStatusOf(cause.code())).body(body);
   }
 
   /**

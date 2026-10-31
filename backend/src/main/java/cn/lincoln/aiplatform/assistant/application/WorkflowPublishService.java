@@ -61,9 +61,11 @@ public class WorkflowPublishService {
     WorkflowValidationService.Graph checked = graph == null ? NO_GRAPH : graph;
     WorkflowValidationService.Result result = validations.validate(checked);
     if (!result.passed()) {
-      // ★ 400 + 校验明细：不引 assistant 域类型进 platform 的 handler（那会被模块边界闸门抓红），
-      //   明细进 message/hint 文本 —— 界面照样能把每条 issue 显示出来。
-      throw new BusinessException(ErrorCode.PUBLISH_CHECK_FAILED, summary(result), hint(result));
+      // ★ 400 + 结构化明细（#260）：明细装进 BusinessException.details，由 GlobalExceptionHandler
+      //   放进 ApiResponse.data —— 界面因此能逐条高亮到节点，而不是把我们拼好的一段话再念一遍。
+      //   明细的类型仍是本域的 Issue，platform 层只当 Object 透出，不认识它的形状。
+      throw new BusinessException(
+          ErrorCode.PUBLISH_CHECK_FAILED, summary(result), hint(result), result.issues());
     }
 
     int nodeCount = checked.nodes() == null ? 0 : checked.nodes().size();
