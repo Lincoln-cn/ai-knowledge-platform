@@ -87,7 +87,7 @@ class ContractDriftTest {
    */
   private static final List<MissingEndpoint> KNOWN_MISSING =
       List.of(
-          // ★ assistants（5）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置只剩编排 5 条（#198）
+          // ★ assistants（5）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置只剩编排 3 条（#198，从 9 条收缩而来）
           //   ★ 收藏两条（POST/DELETE /assistants/{*}/favorite）已随 #195 的收藏子项落地，故从欠账里摘掉
           //   ★ GET /assistants/tags 已随 #195 的标签子项落地（2026-10-24），同样摘掉
           //   ★ PUT /assistants/{*}/grants 与 PATCH /assistants/{*}/visibility 已随 #195 的共享写子项落地
