@@ -161,6 +161,11 @@ jobs:
       - name: 读数纪律自检（#231）
         run: python scripts/parse_corpus.py --self-check
 
+      # ★ 恢复演练记录的可核对性（#75 判据 ③）：模板里留「待补」是刻意的 —— 没填完一定红。
+      #   这条自检跑的是检查器自己（离线、不需要数据库），真正的演练记录在 deploy/restore-drill-record.md。
+      - name: 恢复演练记录自检（#75）
+        run: python scripts/restore_drill.py --self-check
+
       # ★ 闸门自己的守卫也要能被断言（#223）：这三条守的是"别量错东西"，
       #   而一条守卫错了的表现是静默 —— 永远为真等于没有，过严则把正确情形判成错。
       #   离线、不需要浏览器、不连栈（playwright 在脚本里是延迟导入的）。

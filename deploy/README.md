@@ -292,7 +292,9 @@ curl -sS -X POST "$AIP/api/v1/audit-logs/purge" -H "Authorization: Bearer $ADMIN
 ★ 清理失败只写 `log.error`（关键字「留存期清理失败」），**不会**让应用起不来 —— 所以打开之后请确认监控里有这个关键字，
 否则它失败了也不会有人知道。手动通道仍然保留：`dryRun` 先数后删，是给"马上要清一批"的场合用的。
 
-**恢复演练（判据 ③，0.5.x 交付物）**：从备份恢复到某个时点、记录实际耗时，写进 `CHANGELOG`。
+**恢复演练（判据 ③）**：清单、执行步骤与**记录模板**在 [`restore-drill-record.md`](restore-drill-record.md)；
+填完用 `python scripts/restore_drill.py check deploy/restore-drill-record.md` 验，检查器在快闸里（`--self-check`）。
+★ 模板里留「待补」是刻意的：没填完一定红 —— 把不完整的记录判成合规，比没有记录更糟。
 ★ **没演练过的备份不算备份** —— 它只是一堆文件。演练记录要能回答：恢复到哪个时刻、用了多久、
 恢复到新实例后应用能否直接起来（这一点比"文件能还原"更重要，因为它会暴露 Flyway 版本与备份时点的错位）。
 
