@@ -59,6 +59,11 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
   }
 
   @Override
+  public void delete(Document document) {
+    jpa.delete(document);
+  }
+
+  @Override
   public List<Document> findByKbId(UUID kbId, int offset, int limit, OrgAssignment orgFilter) {
     // 领域给 offset/limit；Spring Data 要「第几页、每页几条」。limit 恒 > 0（调用方已归一化）
     return jpa.findAll(filter(kbId, orgFilter), PageRequest.of(offset / limit, limit, sort()))

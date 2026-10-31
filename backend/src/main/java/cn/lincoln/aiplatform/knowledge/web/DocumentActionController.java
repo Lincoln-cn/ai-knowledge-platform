@@ -140,6 +140,21 @@ public class DocumentActionController {
     return ApiResponse.ok();
   }
 
+  /**
+   * 彻底删除（契约 `purgeDocument`，`#75` 判据 ④）—— 物理删除，**不可恢复**。
+   *
+   * <p>★ 用 `DELETE /{id}/purge` 而不是给 `DELETE /{id}` 加参数：一个是"从列表里消失"，一个是"这份材料不再存在"， 两种后果不该共用一个 URL
+   * —— 共用的时候，少传一个参数就会把第二种当成第一种执行。
+   *
+   * <p>★ 必须已经软删过（服务层校验）：否则 400「这份文档还在使用中」。
+   */
+  @DeleteMapping("/{id}/purge")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<Void> purge(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    documentService.purge(id, UUID.fromString(jwt.getSubject()));
+    return ApiResponse.ok();
+  }
+
   /** 改名请求体（契约 {@code renameDocument} 的 body）。 */
   record RenameBody(String name) {}
 

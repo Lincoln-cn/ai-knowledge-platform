@@ -536,6 +536,39 @@ public class DocumentService {
    *
    * <p>★ 向量化中不许删：在途任务正按段落写向量与进度，把行删掉之后它会写一堆孤儿数据。与其让用户面对一个 "删了但状态还在变"的文档，不如明确拒绝并说清等待。
    */
+  /**
+   * 彻底删除（物理删除，`#75` 判据 ④ · `02 §5.1.1`）。
+   *
+   * <p>★ <strong>必须先软删</strong>：软删是"从用户视野里消失"（可撤销的那一步在心里），彻底删除是"这份材料不再存在"。
+   * 让两条路各自独立，用户就有一次反悔的机会；直接物理删等于把两件事做成一件。
+   *
+   * <p>★ 为什么不是"删库里的行就完了"：分段与向量还在时，文档正文仍可被检索到（引用里出现一篇已不存在的文档）—— 所以这里与软删一样先删分段与向量，再删文档行。★
+   * 两者顺序不能反：先删文档行会让分段变成孤儿， 而孤儿分段在检索里<strong>照样命中</strong>（谓词按 kb_segment 查，不看文档是否还在）。
+   *
+   * <p>★ 审计记录<strong>不删</strong>：`pf_audit_log` 只允许追加（`13 §7.2` 第 3 条），
+   * 而且"这份材料被彻底删除了"本身就是最该留下的一条记录。这次动作写 {@code document.purge}。
+   *
+   * <p>★ 备份里仍然有：`deploy/README.md` 的备份策略保留 14 天日备 + 8 周周全备，
+   * 所以"彻底删除"的真实语义是"从生产库与检索里消失"，不是"从所有介质上不可恢复"。
+   */
+  @Transactional
+  public void purge(UUID documentId, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    if (document.deletedAt() == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "这份文档还在使用中，不能彻底删除", "先从文档列表里删除它（会进入待清理状态），确认不再需要之后再来彻底删除");
+    }
+    segments.deleteByDocumentId(documentId);
+    segmentEmbeddings.deleteByDocumentId(documentId);
+    documents.delete(document);
+    audit.record(
+        AuditAction.DOCUMENT_PURGE,
+        "DOCUMENT",
+        documentId.toString(),
+        currentUserId,
+        Map.of("name", document.name(), "kbId", document.kbId().toString()));
+  }
+
   @Transactional
   public void delete(UUID documentId, UUID currentUserId) {
     Document document = requireVisibleDocument(documentId);

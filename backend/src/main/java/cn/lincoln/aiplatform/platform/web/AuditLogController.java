@@ -93,6 +93,18 @@ public class AuditLogController {
   }
 
   /**
+   * 一个资源的全部记录（"这份文档到底被谁改过"—— 最常见的问法）。
+   *
+   * <p>★ 单独一个端点而不是让调用方自己传两个 filter：这个用法太常见，而且它的正确形状 （按资源 + 时间倒序）不该由调用方每次拼对。
+   */
+  @GetMapping("/by-resource")
+  @PreAuthorize("hasAuthority('system:manage')")
+  public ApiResponse<java.util.List<AuditRecordView>> byResource(
+      @RequestParam String resourceType, @RequestParam String resourceId) {
+    return ApiResponse.ok(auditQuery.byResource(normalizeType(resourceType), resourceId.trim()));
+  }
+
+  /**
    * 按留存期清理审计记录（`#75`）：删掉 {@code created_at < beforeAt} 的行。
    *
    * <p>★ 这是本控制器里**唯一**的可写映射，而且它不删具体哪一条 —— 语法上只能表达"清理到某个时间点为止"。

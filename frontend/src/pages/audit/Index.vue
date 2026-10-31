@@ -18,7 +18,7 @@
     <!-- ★ 这一条不是装饰：审计只接了一半的写入点（13 §7.3），页面必须说明，
          否则读到 0 条的人会以为是"没人操作过"，而真实原因可能是"这类动作还没接"。 -->
     <div class="notice info">
-      <b>今天接了七类动作：</b>改密级 · 改标签 · 删文档 · 导出应用 · 改角色权限 · 分享链接 · 撤销分享。
+      <b>今天接了八类动作：</b>改密级 · 改标签 · 删文档 · 彻底删除 · 导出应用 · 改角色权限 · 分享链接 · 撤销分享。
       检索 / 查看 / 引用 / 分享<b>还没有接审计</b>（<code>13 §7.3</code>），所以这几类操作在这里查不到。
     </div>
 
@@ -110,7 +110,7 @@
           <div class="empty-title">当前还没有任何审计记录</div>
           <!-- ★ 零记录本身是一条信息，比空白表格有用（#258 判据 4） -->
           <div class="micro muted">
-            这有两种可能：还没有人做过上面那七类操作，或者写入点没接上 ——
+            这有两种可能：还没有人做过上面那八类操作，或者写入点没接上 ——
             做一次「改密级」再看这里，如果仍然没有，那是接错了。
           </div>
         </div>
@@ -176,6 +176,7 @@ const ACTIONS = [
   { value: 'conversation.share', label: '生成分享链接' },
   { value: 'conversation.unshare', label: '撤销分享链接' },
   { value: 'document.delete', label: '删文档' },
+  { value: 'document.purge', label: '彻底删除' },
   { value: 'data.export', label: '导出应用' },
   { value: 'grant.change', label: '改角色权限' },
 ]

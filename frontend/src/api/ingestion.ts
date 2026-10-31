@@ -336,6 +336,16 @@ export const changeDocumentClassification = (
  * ★ 传空数组 = 不受标签限制（不是"等所有标签"）。
  * ★ 服务端在**同一个事务**里同步每个分段的标签列 —— 检索谓词读的是分段表，不同步就等于没改。
  */
+/**
+ * 彻底删除（物理删除，`#75` 判据 ④）—— **不可恢复**。
+ *
+ * ★ 与 `deleteDocument`（软删）分成两个函数、两个 URL：一个是"从列表里消失"，一个是"这份材料不再存在"。
+ * ★ 必须先软删，否则后端 400「这份文档还在使用中」。
+ * ★ 备份里仍然有（`deploy/README.md` 保留 14 天日备），所以它的语义是"从生产库与检索里消失"。
+ */
+export const purgeDocument = (id: string) =>
+  request<void>({ method: 'DELETE', url: '/documents/:id/purge', path: { id } })
+
 export const changeDocumentLabels = (id: string, labels: string[]) =>
   request<DocumentItem>({
     method: 'PATCH',

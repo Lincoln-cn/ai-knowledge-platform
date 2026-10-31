@@ -20,6 +20,14 @@ public interface DocumentRepository {
   Document save(Document document);
 
   /**
+   * 彻底删除（物理删除文档行）—— 只给「彻底删除」这一个动作（`#75` 判据 ④）。
+   *
+   * <p>★ 与 {@code save} 里的软删区分开：软删是<strong>业务动作</strong>（用户点"删除"），
+   * 物理删是<strong>数据生命周期动作</strong>（用户点"彻底删除"，且必须已经软删过一次）。 两个动作共用一个 {@code save} 会让"到底删没删掉"只能靠读代码判断。
+   */
+  void delete(Document document);
+
+  /**
    * 按库分页查文档（创建时间倒序）。★ 软删的不进列表。
    *
    * <p>★★ {@code orgFilter} 是 {@code #56} 的出口：{@link OrgAssignment#UNASSIGNED} 把

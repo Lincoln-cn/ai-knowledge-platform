@@ -10,6 +10,7 @@ export type AuditActionCode =
   | 'document.relabel'
   | 'conversation.share'
   | 'conversation.unshare'
+  | 'document.purge'
   | 'data.export'
   | 'grant.change'
 

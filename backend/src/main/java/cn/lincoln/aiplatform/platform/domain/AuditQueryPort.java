@@ -16,6 +16,13 @@ import java.util.UUID;
 public interface AuditQueryPort {
 
   /**
+   * 一个资源的全部记录（"这份文档到底被谁改过"—— 审计最常见的问法）。
+   *
+   * <p>★ 单独一个方法而不是让调用方自己传两个 filter：这个用法太常见，而且它的正确形状 （按资源 + 时间倒序）不该由每个调用方各拼一遍 —— 拼错一次就是"查出来是空的"。
+   */
+  java.util.List<AuditRecordView> byResource(String resourceType, String resourceId);
+
+  /**
    * 按条件查一页，**按时间倒序**（最近的先看到 —— 复盘时人总是从最近的那次变更往前找）。
    *
    * @param query 过滤条件；全部可空，都不给就是"全部"

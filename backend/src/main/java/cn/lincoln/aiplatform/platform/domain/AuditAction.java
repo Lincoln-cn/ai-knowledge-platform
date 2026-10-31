@@ -40,7 +40,8 @@ public enum AuditAction {
   CONVERSATION_SHARE("conversation.share"),
 
   /** 撤销会话分享链接（与生成成对：一条链接的生命周期两端都要能回答"谁做的"）。 */
-  CONVERSATION_UNSHARE("conversation.unshare");
+  CONVERSATION_UNSHARE("conversation.unshare"),
+  DOCUMENT_PURGE("document.purge");
 
   private final String code;
 
