@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.knowledge.application.DocumentService;
 import cn.lincoln.aiplatform.knowledge.application.DocumentView;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -108,6 +109,14 @@ public class DocumentActionController {
    *
    * <p>★ 升密时后端会顺手把相关会话的水位抬到新值（同一事务，{@code 13 §2.2}）；降密不动水位。 两条口径见 {@code 13 §2.4}。
    */
+  @PatchMapping("/{id}/labels")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<DocumentView> changeLabels(
+      @PathVariable UUID id, @RequestBody LabelsBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        documentService.changeLabels(id, body.labels(), UUID.fromString(jwt.getSubject())));
+  }
+
   @PatchMapping("/{id}/classification")
   @PreAuthorize("hasAuthority('knowledge:manage')")
   public ApiResponse<DocumentView> changeClassification(
@@ -144,4 +153,14 @@ public class DocumentActionController {
    * String} 字段会让「密级写错」变成服务层的一句业务异常 —— 两者的响应体形状不同，调用方要分两套处理。
    */
   record ClassificationBody(ClassificationLevel classification) {}
+
+  /**
+   * 标签请求体。
+   *
+   * <p>★ 用 {@code List<String>} 而不是 {@code Set<String>}：JSON 数组本身有序，服务端按到达顺序回显更自然；
+   * 归一（去空白、丢空串、去重）统一在 {@code Document.normalizeLabels} 里做，端点不做第二套。
+   *
+   * <p>★ {@code null} 与空数组等价，都表示"不受标签限制"（不是"等所有标签"）。
+   */
+  record LabelsBody(List<String> labels) {}
 }

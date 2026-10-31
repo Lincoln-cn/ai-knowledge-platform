@@ -12,7 +12,7 @@
     <!-- ★ 这一条不是装饰：审计只接了一半的写入点（13 §7.3），页面必须说明，
          否则读到 0 条的人会以为是"没人操作过"，而真实原因可能是"这类动作还没接"。 -->
     <div class="notice info">
-      <b>今天接了四类动作：</b>改密级 · 删文档 · 导出应用 · 改角色权限。
+      <b>今天接了五类动作：</b>改密级 · 改标签 · 删文档 · 导出应用 · 改角色权限。
       检索 / 查看 / 引用 / 分享<b>还没有接审计</b>（<code>13 §7.3</code>），所以这几类操作在这里查不到。
     </div>
 
@@ -90,7 +90,7 @@
           <div class="empty-title">当前还没有任何审计记录</div>
           <!-- ★ 零记录本身是一条信息，比空白表格有用（#258 判据 4） -->
           <div class="micro muted">
-            这有两种可能：还没有人做过上面那四类操作，或者写入点没接上 ——
+            这有两种可能：还没有人做过上面那五类操作，或者写入点没接上 ——
             做一次「改密级」再看这里，如果仍然没有，那是接错了。
           </div>
         </div>
@@ -118,9 +118,10 @@ import PageHeader from '@/components/PageHeader.vue'
 import { auditApi } from '@/api'
 import type { AuditRecord } from '@/api/audit'
 
-/** 只列**已经接线**的四类（与后端 AuditAction 一致）。没接的不列 —— 列了会被读成"能查到"。 */
+/** 只列**已经接线**的五类（与后端 AuditAction 一致）。没接的不列 —— 列了会被读成"能查到"。 */
 const ACTIONS = [
   { value: 'document.reclassify', label: '改文档密级' },
+  { value: 'document.relabel', label: '改文档标签' },
   { value: 'document.delete', label: '删文档' },
   { value: 'data.export', label: '导出应用' },
   { value: 'grant.change', label: '改角色权限' },

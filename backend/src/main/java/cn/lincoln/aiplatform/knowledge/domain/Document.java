@@ -703,9 +703,47 @@ public class Document {
     return orgId;
   }
 
-  /** 密级标签。★ 空列表 = 不受标签限制（绝大多数文档的默认状态）。 */
+  /** 密级标签（{@code 13 §6.3}）。★ 空列表 = 不受标签限制（绝大多数文档的默认状态）。 */
   public List<String> labels() {
     return labels == null ? List.of() : labels;
+  }
+
+  /**
+   * 换一套标签（`#26`）。
+   *
+   * <p>三条口径：**null ⇒ 空列表**（＝不受标签限制）、**逐项去空白后丢掉空串**、**去重**。 保留调用方给的顺序 ——
+   * 标签是集合，顺序不影响语义，但页面回显时按人填的顺序看更自然。
+   *
+   * <p>★ 分段列的同步<strong>不在</strong>这里做：与 {@link #changeClassification} 同一个理由 （分段是独立列，不是 generated
+   * 列），由应用层在同一个事务里逐段重打；漏了那一步的表现是 「界面改了标签、检索仍按旧标签过滤」—— 由 {@code aiplatform.segment.label-mismatch}
+   * 读数兜住。
+   */
+  public void changeLabels(List<String> labels, UUID by) {
+    this.labels = normalizeLabels(labels);
+    this.updatedBy = by;
+  }
+
+  /**
+   * 标签归一：null ⇒ 空列表、去首尾空白、丢空串、去重（保持首次出现顺序）。
+   *
+   * <p>★ 静态且公开：分段侧要按同一口径归一（{@code DocumentService#changeLabels} 逐段调它）， 两处不许各写一份 ——
+   * 写了两份，一份改了另一份不改就是"文档有标签、分段没有"。
+   */
+  public static List<String> normalizeLabels(List<String> labels) {
+    if (labels == null || labels.isEmpty()) {
+      return List.of();
+    }
+    java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>();
+    for (String raw : labels) {
+      if (raw == null) {
+        continue;
+      }
+      String trimmed = raw.trim();
+      if (!trimmed.isEmpty()) {
+        unique.add(trimmed);
+      }
+    }
+    return List.copyOf(unique);
   }
 
   /** 责任部门的原自由字符串（V27 之前的存档值；新文档恒为 null）。★ 只读 —— 它是回填的证据。 */

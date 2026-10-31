@@ -328,6 +328,21 @@ export const changeDocumentClassification = (
     body: { classification }
   })
 
+/**
+ * 换一套标签（`#26`）。
+ *
+ * ★ 与密级不同，标签**没有库上限**：库的 ceiling 只管密级（`13 §6.2`），标签之间是"相交才可见"。
+ * ★ 传空数组 = 不受标签限制（不是"等所有标签"）。
+ * ★ 服务端在**同一个事务**里同步每个分段的标签列 —— 检索谓词读的是分段表，不同步就等于没改。
+ */
+export const changeDocumentLabels = (id: string, labels: string[]) =>
+  request<DocumentItem>({
+    method: 'PATCH',
+    url: '/documents/:id/labels',
+    path: { id },
+    body: { labels }
+  })
+
 export const deleteDocument = (id: string) =>
   request<void>({ method: 'DELETE', url: '/documents/:id', path: { id } })
 

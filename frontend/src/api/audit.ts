@@ -7,6 +7,7 @@ import type { PageResult } from './types'
 export type AuditActionCode =
   | 'document.delete'
   | 'document.reclassify'
+  | 'document.relabel'
   | 'data.export'
   | 'grant.change'
 

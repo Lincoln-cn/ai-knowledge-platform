@@ -16,6 +16,9 @@ public enum AuditAction {
   /** 改文档密级（升或降，`detail` 里带 from/to）。 */
   DOCUMENT_RECLASSIFY("document.reclassify"),
 
+  /** 改文档标签（`detail` 里带 from/to 两份标签数组）。★ 与密级同级的安全变更：标签直接影响谁能检索到它。 */
+  DOCUMENT_RELABEL("document.relabel"),
+
   /** 导出数据（本批尚未接线，先占位以免将来名字被写歪）。 */
   DATA_EXPORT("data.export"),
 

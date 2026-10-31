@@ -489,6 +489,16 @@ public class Segment {
     return labels == null ? List.of() : labels;
   }
 
+  /**
+   * 换一套标签（`#26`）：**与所属文档一起改**，归一口径复用 {@link Document#normalizeLabels}。
+   *
+   * <p>★ 只碰标签列：与 {@link #reclassify} 一样不动 {@code embeddingStatus} / {@code contentHash} ——
+   * 标签是元数据，不进 embedding，也不改变"这段材料是什么"。
+   */
+  public void changeLabels(List<String> labels) {
+    this.labels = Document.normalizeLabels(labels);
+  }
+
   public Instant createdAt() {
     return createdAt;
   }

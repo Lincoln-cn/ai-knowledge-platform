@@ -470,6 +470,52 @@ public class DocumentService {
    *
    * <p>★ 只动聚合根的 {@code enabled} 位，不碰分段与向量：停用是「不参与检索」，不是删除 —— 重新启用后无需重新向量化。
    */
+  /**
+   * 换一套标签（`#26`）：文档列与**每一个分段列**在同一个事务里一起改。
+   *
+   * <p>三条口径：
+   *
+   * <ol>
+   *   <li><b>不校验库上限</b>：库的 ceiling 是密级的边界（`13 §6.2`），标签没有上限概念 ——
+   *       标签之间的可见性是"相交才算"，不存在"这个库不允许出现「人事资料」"这种事。
+   *   <li><b>不需要 {@code requireNotEmbedding}</b>：与改密级不同，标签<strong>不进 embedding</strong>、 也不进 {@code
+   *       search_text}（`V57` 只加了两列），所以向量化跑到一半改标签不会让向量与正文错配。 真要拦的话，用户会看到"正在向量化，改不了标签"而完全没有必要。
+   *   <li><b>同步分段列是必须的</b>：`LABEL_PREDICATE` 读的是 {@code kb_segment.labels}（不 join 回文档）。
+   *       只改文档列的症状是"界面改了标签、检索仍按旧标签过滤"，由 Gauge {@code aiplatform.segment.label-mismatch}
+   *       兜住（读数一涨就说明某条写入路径漏了）。
+   * </ol>
+   *
+   * <p>★ 留痕：`action = document.relabel`，`detail` 带改动前后的两份标签 —— 标签直接影响"谁能检索到它"， 与密级同级（`13 §七`）。
+   */
+  @Transactional
+  public DocumentView changeLabels(UUID documentId, List<String> labels, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    List<String> before = document.labels();
+    List<String> after = Document.normalizeLabels(labels);
+
+    document.changeLabels(after, currentUserId);
+    documents.save(document);
+
+    // ★ 分段必须在同一个事务里跟着改：谓词作用在分段表上（V57 的冗余列），
+    //   漏这一步的读数是 Gauge `aiplatform.segment.label-mismatch` 一涨，而不是某个页面报错。
+    List<Segment> affected = segments.findByDocumentId(documentId);
+    for (Segment segment : affected) {
+      segment.changeLabels(after);
+    }
+    if (!affected.isEmpty()) {
+      segments.saveAll(affected);
+    }
+
+    log.info("文档 {} 标签 {} → {}：同步了 {} 个分段", documentId, before, after, affected.size());
+    audit.record(
+        AuditAction.DOCUMENT_RELABEL,
+        "DOCUMENT",
+        documentId.toString(),
+        currentUserId,
+        Map.of("from", before, "to", after, "segments", affected.size()));
+    return DocumentView.from(documents.findById(documentId).orElse(document));
+  }
+
   @Transactional
   public DocumentView setEnabled(UUID documentId, boolean enabled, UUID currentUserId) {
     Document document = requireVisibleDocument(documentId);

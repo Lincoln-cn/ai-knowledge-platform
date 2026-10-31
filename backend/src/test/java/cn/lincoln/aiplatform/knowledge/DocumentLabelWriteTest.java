@@ -119,6 +119,13 @@ class DocumentLabelWriteTest {
     assertThat(mismatchGauge())
         .as("★ 漂移必须被读出来：读不出来就等于这条巡检不存在（Gauge 的 SQL 真的在看两张表）")
         .isEqualTo(segmentCount(docId));
+
+    // ★ 必须**复原**这次人为漂移：Gauge 是全局读数、测试类共享同一个库（Testcontainers 单例 +
+    //   单一 Spring 上下文），留着一条漂移会让后面任何"读数应为 0"的用例红在别人造的脏数据上
+    //   —— 这就是"测试之间通过数据库耦合"的典型形状。
+    jdbc.update(
+        "update kb_segment set labels = ?::text[] where document_id = ?::uuid", "{财务资料}", docId);
+    assertThat(mismatchGauge()).as("★ 复原之后读数必须回到 0 —— 这同时是「读数真的跟着数据变」的反向证据").isZero();
   }
 
   private double mismatchGauge() {
@@ -130,6 +137,30 @@ class DocumentLabelWriteTest {
         jdbc.queryForObject(
             "select count(*) from kb_segment where document_id = ?::uuid", Long.class, docId);
     return count == null ? 0 : count;
+  }
+
+  @Test
+  void changeLabelsNormalizesAndRewritesEverySegmentInOneGo() throws Exception {
+    String admin = accessToken("admin", "admin");
+    String kbId = createKb(admin, "改标签库", "SECRET");
+    String docId = register(admin, kbId, "标签可改.md", List.of("财务资料"));
+    documentService.finishParse(
+        UUID.fromString(docId), ParseResult.ok("# 第一章 总则\n\n本制度自发布之日起施行。"), adminId());
+
+    // 故意给脏输入：首尾空白、空串、重复 —— 归一必须在服务端一处做完
+    patch(
+        "/api/v1/documents/" + docId + "/labels",
+        "{\"labels\":[\" 人事资料 \",\"\",\"人事资料\",\"审计\"]}",
+        admin);
+
+    assertThat(documentLabels(docId))
+        .as("★ 归一：去首尾空白、丢空串、去重，但保持首次出现顺序")
+        .containsExactly("人事资料", "审计");
+    assertThat(segmentLabels(docId)).as("文档至少分出两段，否则这条断言是空转的").isNotEmpty();
+    assertThat(segmentLabels(docId))
+        .as("★ 每个分段都必须跟着改：谓词读 kb_segment.labels（V57 冗余列），只改文档列等于没改")
+        .allSatisfy(labels -> assertThat(labels).containsExactly("人事资料", "审计"));
+    assertThat(mismatchGauge()).as("★ 改完之后漂移读数必须仍是 0 —— 这条与上一条互为对照：漏同步会在这里涨起来").isZero();
   }
 
   // ────────────────────────── 辅助 ──────────────────────────
@@ -212,6 +243,19 @@ class DocumentLabelWriteTest {
             HttpResponse.BodyHandlers.ofString());
     assertThat(response.statusCode()).as("登录失败：%s", response.body()).isEqualTo(200);
     return jsonField(response.body(), "\"accessToken\"");
+  }
+
+  private String patch(String path, String body, String token) throws Exception {
+    HttpResponse<String> response =
+        http.send(
+            HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + token)
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                .build(),
+            HttpResponse.BodyHandlers.ofString());
+    assertThat(response.statusCode()).as("PATCH %s ⇒ %s", path, response.body()).isEqualTo(200);
+    return response.body();
   }
 
   private String post(String path, String body, String token) throws Exception {
