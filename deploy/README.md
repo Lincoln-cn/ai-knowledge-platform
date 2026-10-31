@@ -298,7 +298,32 @@ pg_restore -d "$TARGET_URL" --clean --if-exists /backup/aip-2026-10-31.dump
 
 ---
 
-## 八、OCR 的配置项（交付时可能要改的）
+## 八、启动时看什么：配置自检的那两行日志（`#227` / `#65`）
+
+后端起来时会跑一遍**配置自检**（`StartupSettingsWarningRunner`），只打日志、**不阻止启动**。
+交付/排障时先看这两行：
+
+```text
+✔ 配置自检通过：向量化并发 4 · 连接池 10 · 上下文窗口 80 · 向量预算 1200
+⚠️ 配置自检发现 1 项会在运行时以难查的方式出问题（服务仍会启动）：
+  · app.ingestion.embedding-concurrency=69 大于连接池上限 10：…（改法写在同一条里）
+```
+
+它检查的四项，都对应过一次**真实踩过的坑**：
+
+| 项 | 配错的后果 | 出处 |
+|---|---|---|
+| `app.ingestion.embedding-concurrency` > 连接池 | 一批文档一起入库时出现**与内容无关**的"向量化失败"（`Failed to obtain JDBC Connection`），排查时人会先怀疑模型和语料 | `#227`（现场 69 份一起跑、10 条假失败） |
+| `app.ingestion.embedding-concurrency` ≤ 0 | 文档永远停在"待向量化"，**没有任何报错** | `#227` 的闸门下限 |
+| `app.segmentation.context-window` < 0 | 入库与预览都直接抛 `IllegalArgumentException` | `#65` |
+| `context-window` > 0 但 `max-chars` 太小 | 窗口**看起来开着、实际一条都没进来**（预算让路） | `#65` |
+
+★ 为什么不 fail-fast：这几项属于"能起来但会以难查的方式坏"。让它起不来，会把一个
+**可修复的配置问题**升级成"服务挂了"；真正的硬约束（负窗口）由领域层在运行时守住。
+
+---
+
+## 九、OCR 的配置项（交付时可能要改的）
 
 全部走环境变量覆盖（`application.yml` 的 `app.ocr.*`）：
 
@@ -314,7 +339,7 @@ pg_restore -d "$TARGET_URL" --clean --if-exists /backup/aip-2026-10-31.dump
 
 ---
 
-## 九、开发机（Windows）怎么装
+## 十、开发机（Windows）怎么装
 
 与镜像路线**等价**的本地安装（本机实测过）：
 
@@ -329,7 +354,7 @@ scoop 会自动把 `TESSDATA_PREFIX` 指到上面那个目录 —— 所以开�
 
 ---
 
-## 十、诚实记账：哪些已验、哪些还没
+## 十一、诚实记账：哪些已验、哪些还没
 
 | 项 | 状态 |
 |---|---|
