@@ -66,6 +66,13 @@ jobs:
           python3 tools/check_release_metadata.py --self-test
           python3 tools/check_release_metadata.py
 
+      # ★ 桩的「行为注入」自检（#45）：桩原来只能造传输层故障（延迟 / 500），造不出"模型真的
+      #   泄露了系统提示词" ⇒ 安全闸门的金丝雀 K1 恒绿。这条自检先证明**造得出坏**，
+      #   再谈"闸门挡住了"；顺带钉住"注入只作用于生成调用、不改查询理解那一次的 JSON"。
+      #   不起 HTTP：桩的"坏"是回答文本的形状，与传输无关。
+      - name: 桩行为注入自检（#45）
+        run: python3 backend/tools/openai_stub.py --self-check
+
   # ─────────────────────────── ② 前端：类型 + 静态闸门 ───────────────────────────
   frontend-static:
     name: 前端 · 类型检查 + 静态闸门
