@@ -42,14 +42,17 @@ public class ChatHistoryService {
   private final ConversationRepository conversations;
   private final MessageRepository messages;
   private final SuggestionService suggestions;
+  private final ReferenceVisibility referenceVisibility;
 
   public ChatHistoryService(
       ConversationRepository conversations,
       MessageRepository messages,
-      SuggestionService suggestions) {
+      SuggestionService suggestions,
+      ReferenceVisibility referenceVisibility) {
     this.conversations = conversations;
     this.messages = messages;
     this.suggestions = suggestions;
+    this.referenceVisibility = referenceVisibility;
   }
 
   /**
@@ -71,7 +74,14 @@ public class ChatHistoryService {
     java.util.Map<java.util.UUID, java.util.List<String>> stored =
         suggestions.storedFor(page.stream().map(Message::id).toList());
     return page.stream()
-        .map(m -> ChatMessageView.of(m, stored.getOrDefault(m.id(), java.util.List.of())))
+        // ★ 引用要按「现在读它的人」收窄，不是按「当年问它的人」（#27 判据 ③）：
+        //   会话可共享、密级也会变 ⇒ 当时能引用不等于现在能读。见 ReferenceVisibility 的类注释。
+        .map(
+            m ->
+                ChatMessageView.of(
+                    m,
+                    stored.getOrDefault(m.id(), java.util.List.of()),
+                    referenceVisibility.visibleRefs(m)))
         .toList();
   }
 

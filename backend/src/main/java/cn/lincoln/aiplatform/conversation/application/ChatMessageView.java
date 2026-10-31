@@ -79,6 +79,37 @@ public record ChatMessageView(
   }
 
   /**
+   * <strong>引用已经收窄过</strong>的版本（{@code #27} 判据 ③）。
+   *
+   * <p>★ 为什么把 {@code refs} 提成参数而不是在 {@link #of(Message, List)} 里就地过滤：这个类是**纯映射**，
+   * 拿不到当前请求者的范围（那要么是线程上下文、要么是注入 —— 两者都会让一个 static 映射函数开始依赖运行时身份， 于是它就没法在单测里被确定性地断言）。收窄发生在 {@code
+   * ReferenceVisibility}，调用方把结果传进来。
+   *
+   * @param message 消息
+   * @param suggestions 推荐追问
+   * @param refs 已经按读者权限收窄过的引用（{@code null} 仍是 {@code null}）
+   */
+  public static ChatMessageView of(
+      Message message, List<String> suggestions, List<SourceRef> refs) {
+    TokenUsage usage = message.tokens();
+    Long duration = message.durationMs();
+    return new ChatMessageView(
+        message.id(),
+        message.conversationId(),
+        message.role().name(),
+        message.content(),
+        message.status(),
+        refsOf(refs),
+        suggestions,
+        message.feedback() == null ? null : message.feedback().name(),
+        usage == null ? 0 : usage.total(),
+        duration == null ? 0L : duration,
+        message.failReason(),
+        message.failHint(),
+        message.createdAt());
+  }
+
+  /**
    * 带推荐追问的版本（2026-10-18 起有值）。
    *
    * <p>★ 追问来自 {@code cv_message.artifacts} 的 JSON，由 {@code SuggestionService} 生成并落库；
