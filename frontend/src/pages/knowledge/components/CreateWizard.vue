@@ -333,6 +333,7 @@ import type {
 } from '@/api/ingestion'
 import { DOCUMENT_STATUS_LABELS, labelOf } from '@/constants/labels'
 import { useDictionary } from '@/composables/useDictionary'
+import { isUsableEmbeddingModel } from '@/lib/modelReadiness'
 
 const emit = defineEmits<{ created: [kb: KnowledgeBase] }>()
 
@@ -498,8 +499,13 @@ const open = async (presetCategory?: string) => {
   step.value = 0
   // ★ 每次打开都重读字典：管理员刚在「基础数据」里加过 / 停用过一项，建档的人要马上看到（判据 1、2）
   await Promise.all([loadCategories(), loadClassifications(), loadDocTypes(), loadOrgTree()])
-  const models = await modelsApi.listModels({ kind: 'EMBEDDING', size: 50 })
-  embeddingModels.value = models.list.filter((m) => m.status === 'LOADED' || m.status === 'NOT_LOADED')
+  // ★ 拉满一页（后端上限 100）。原来取 50：向量模型一旦超过 50 条，
+  //   排在后面的可用模型会被截掉，界面显示"没有可用的向量模型"——纯属分页假象。
+  const models = await modelsApi.listModels({ kind: 'EMBEDDING', size: 100 })
+  // 判据只在 `lib/modelReadiness.ts` 一处（工作台引导 + 本处共用）：
+  // 向量模型「登记了没预热」也算能用（本地 ONNX 首次调用懒加载）。这条长得像 bug，
+  // 所以不许各处各写一份 —— `#40` 的教训正是同一状态四处各写一份、漏改一处就是假绿。
+  embeddingModels.value = models.list.filter(isUsableEmbeddingModel)
   try {
     // 上传策略挂在已有库上；新库还没建，先用一个可见的库拿策略，拿不到就用默认提示
     const anyKb = await knowledgeApi.listKnowledgeBases({ page: 1, size: 1 })

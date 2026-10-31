@@ -17,8 +17,19 @@
       :data="list"
       size="small"
       :row-class-name="rowClass"
-      :empty-text="'暂无' + title"
     >
+      <!-- 空态说出下一步：能新增的字典直接给按钮；密级这种「新增要连库迁移」的
+           要把原因写出来，否则用户会反复点「新增」找不到入口 -->
+      <template #empty>
+        <div class="empty">
+          <div class="empty-title">还没有{{ title }}</div>
+          <template v-if="allowCreate">
+            <div>字典项是下拉选项的来源，先加一条才能在其他页面选到它</div>
+            <el-button size="small" type="primary" @click="openForm()">新增{{ title }}</el-button>
+          </template>
+          <div v-else class="micro muted">这类档位由数据库列固定，新增需要连表结构一起迁移 —— 见设计册的分类口径</div>
+        </div>
+      </template>
       <el-table-column label="展示名" min-width="150">
         <template #default="{ row }">
           <span class="lb">{{ row.label }}</span>

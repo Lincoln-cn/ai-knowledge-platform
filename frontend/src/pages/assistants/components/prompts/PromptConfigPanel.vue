@@ -22,6 +22,22 @@
 
     <!-- 六列对齐 workBench/markedSystem/markedConfig.vue 基准 -->
     <el-table v-loading="loading" :data="list" size="small">
+      <!-- 空态要说下一步：一条都没有时「暂无数据」不告诉用户该做什么；
+           搜索无结果与真的没有，是两件事，提示也该不同 -->
+      <template #empty>
+        <div class="empty">
+          <template v-if="keyword">
+            <div class="empty-title">没有匹配「{{ keyword }}」的提示词</div>
+            <div>换个关键词，或清空搜索看全部</div>
+            <el-button link size="small" type="primary" @click="clearKeyword">清空搜索</el-button>
+          </template>
+          <template v-else>
+            <div class="empty-title">还没有提示词</div>
+            <div>提示词决定应用以什么角色、用什么口径回答</div>
+            <el-button size="small" type="primary" @click="emit('create')">新建提示词</el-button>
+          </template>
+        </div>
+      </template>
       <el-table-column label="图标" width="60">
         <template #default="{ row }"><span class="icon">{{ row.icon }}</span></template>
       </el-table-column>
@@ -83,6 +99,12 @@ const keyword = ref(props.activeKeyword)
 
 watch(() => props.activeTypeId, (v) => (typeId.value = v))
 watch(() => props.activeKeyword, (v) => (keyword.value = v))
+
+/** 空态里的「清空搜索」—— 清输入框并让父级重新拉全量 */
+const clearKeyword = () => {
+  keyword.value = ''
+  emit('search', '')
+}
 </script>
 
 <style scoped>
