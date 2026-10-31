@@ -907,9 +907,21 @@ defineExpose({ open })
 
 .split-step {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  /* ★ 比例 + 最小可读宽度，**不用 280px 定值**（`#42`）：
+     定值只在某一次屏宽下"看着对"；左列多一个字段、或「分段长度」的提示文案换一行，
+     它就重新失衡，而且没有任何闸门会红。比例是可以被解释的基准。
+     260px 是下限而不是目标值 —— 低于它滑块刻度与单选项会挤在一起。 */
+  grid-template-columns: minmax(260px, 5fr) minmax(0, 7fr);
   gap: var(--space-md);
-  align-items: start;
+  align-items: stretch;
+}
+
+/* ★ 窄屏**换形态**，不是缩字号：两列在 1280 以下会挤到「刻度看不见、单选项折行」。
+   单列后预览区在表单下方，仍能边调边看（`#42` 判据 ②）。 */
+@media (max-width: 1280px) {
+  .split-step {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .split-left {
@@ -974,7 +986,11 @@ defineExpose({ open })
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
-  min-height: 360px;
+  /* ★ 高度由**视口**与内容决定，不写 360px（`#42` 判据 ③）：
+     空态只有一行说明，有预览时可能几十段 —— 一个定值不可能同时服务这两种。
+     70vh 是上限而不是目标：超大屏上不该让预览占满整屏。 */
+  max-height: 70vh;
+  min-height: 0;
 }
 
 /* 「已剔除 N 行页眉/页脚/页码/目录」—— 与预览头分开一点，避免看成标题的一部分 */
@@ -1015,7 +1031,10 @@ defineExpose({ open })
 
 .preview-list {
   flex: 1;
-  max-height: 320px;
+  /* ★ 不再写 max-height: 320px（`#42`）：列表是 flex 子项，谁给它高度由父容器决定。
+     写死高度会让「容器 70vh」这条上限失效 —— 两者会互相打架，实际生效的是小的那个。 */
+  min-height: 0;
+  overflow-y: auto;
   padding: var(--space-xs);
   display: flex;
   flex-direction: column;

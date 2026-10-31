@@ -1058,7 +1058,10 @@ onBeforeUnmount(() => {
 /* ── 详情壳 ── */
 .detail {
   display: grid;
-  grid-template-columns: 132px 1fr;
+  /* ★ 首列是**字段标签列**，宽度由标签文字自己决定（`max-content`），
+     不是 132px 定值（`#42`）：定值遇到「字符数」或「密级」这类更长的标签就会折行，
+     而折行后它与右边的内容不在同一基线，整块读起来是歪的。 */
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: var(--space-md);
   align-items: start;
 }
