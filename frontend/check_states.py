@@ -73,8 +73,15 @@ ERROR_SIGNALS = [
 
 API_CALL_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9]*Api\.[A-Za-z][A-Za-z0-9]*\(")
 IMPORT_RE = re.compile(r"""(?:from|import)\s+['"](\.[^'"]+)['"]""")
-TABLE_RE = re.compile(r"<el-table\b")
+# ★ `<el-table[\s>]` 而不是 `<el-table\b` —— `\b` 在 `-` 前面也成立，会把
+#   `<el-table-column` 当成第 N 张表，把表格计数虚高好几倍（读数错了判断就跟着错）。
+TABLE_RE = re.compile(r"<el-table[\s>:]")
 EMPTY_SLOT_RE = re.compile(r"#empty\b")
+# 第三种合法写法：区块级空态 —— 先判有没有数据，再决定渲染表格与否，
+# 表格下面跟一句 `class="empty"` 的说明（analytics 就是这样：`v-if="!rank.length"`）。
+# 这种写法比表格内 #empty 更好（连表头都不画），不该被判成缺口。
+BLOCK_EMPTY_RE = re.compile(r'v-if="!\s*[\w.\[\]]*\.length\s*"')
+BLOCK_EMPTY_CLASS_RE = re.compile(r'class="[^"]*\bempty\b')
 # 空表格的「下一步」有两种合法写法：`#empty` 插槽，或 `empty-text` 里直接写明动作。
 # ★ 只认插槽会把已经修好的东西继续挂在账上（账目虚挂 = 账目失效）。
 # 只认静态字符串；`'暂无' + title` 这种动态拼接按"没写引导"处理（保守）。
@@ -93,7 +100,6 @@ PAGE_ERROR_GAPS = {}
 #       账在 #256；每修好一个文件就删一条（清单必须随修复收缩）
 # ---------------------------------------------------------------------------
 TABLE_EMPTY_DEBT = {
-    "analytics/Index.vue": {"issue": "#256", "note": "指标表格（有数据才展示，倾向整块不渲染）"},
 }
 
 # ---------------------------------------------------------------------------
@@ -179,12 +185,14 @@ def main() -> int:
         tables = len(TABLE_RE.findall(text))
         if tables == 0:
             continue
-        slots = len(EMPTY_SLOT_RE.findall(text)) + len(TABLE_HINT_RE.findall(text))
+        # 三种合法写法：`#empty` 插槽 · 带动作的 `empty-text` · 区块级空态（v-if 判长度 + class="empty" 说明）
+        block_level = bool(BLOCK_EMPTY_RE.search(text) and BLOCK_EMPTY_CLASS_RE.search(text))
+        slots = len(EMPTY_SLOT_RE.findall(text)) + len(TABLE_HINT_RE.findall(text)) + (1 if block_level else 0)
         rel = path.relative_to(PAGES_ROOT).as_posix()
         if slots == 0 and rel not in TABLE_EMPTY_DEBT and rel not in TABLE_EMPTY_EXEMPT:
             problems.append(
-                f"{rel}：用了 {tables} 个 el-table 却没有任何 #empty / 带指引的 empty-text，也不在 TABLE_EMPTY_DEBT 上"
-                "（空表格只有「暂无数据」，没有下一步）"
+                f"{rel}：用了 {tables} 个 el-table 却没有任何空态写法（#empty / 带动作的 empty-text / 区块级说明），"
+                "也不在 TABLE_EMPTY_DEBT 上（空表格只有「暂无数据」，没有下一步）"
             )
         elif slots > 0 and rel in TABLE_EMPTY_DEBT:
             problems.append(f"{rel}：已有自定义空态，却还挂在 TABLE_EMPTY_DEBT 上 —— 请删掉这条")
@@ -227,13 +235,19 @@ def main() -> int:
         print(f"\n表格空态债（{len(table_debt)} 个文件，账在 #256 —— 修好一个删一条）：")
         for rel, tables, slots in table_debt:
             print(f"  · {rel:<58} 表格 {tables} · 空态 {slots}  {TABLE_EMPTY_DEBT[rel]['note']}")
+    else:
+        print("\n表格空态：无债")
+    if TABLE_EMPTY_EXEMPT:
+        print(f"\n有意不做空态（豁免 {len(TABLE_EMPTY_EXEMPT)} 个文件）：")
+        for rel, why in TABLE_EMPTY_EXEMPT.items():
+            print(f"  · {rel:<58}  {why}")
     if problems:
         print("\n有问题的条目：")
         for p in problems:
             print(f"  ✗ {p}")
         print("=" * 84)
         return 1
-    print("\n✓ 有接口的页面都为「拉不到数据」准备过呈现；表格空态债见上面的账（未修完不隐藏）")
+    print("\n✓ 有接口的页面都为「拉不到数据」准备过呈现；表格空态无债，豁免都写明了理由")
     print("=" * 84)
     return 0
 
