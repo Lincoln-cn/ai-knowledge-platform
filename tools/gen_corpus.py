@@ -909,18 +909,21 @@ def block_chars(block: tuple) -> int:
 
 
 def uniquify_snippet(ctx: DocContext, para: str, snippet: str) -> tuple[str, str]:
-    """让锚点句在全语料内唯一，返回同步改写后的 (para, snippet)。
+    """让锚点句带上本文档的限定，返回同步改写后的 (para, snippet)。
 
-    不同制度常共用同一台设备/同一个表单（如"高压开关柜"），若锚句只引用对象名，
-    两份文档就会产出逐字相同的 snippet ⇒ QA 的 expected_document 出现歧义。
-    这里给对象名加上本文档自己的主题限定，既保持自然语感，又保证跨文档唯一。
+    不同文档常共用同一台设备/同一个表单/同一个数值（如"高压开关柜"、"应急演练每年不少于1次"），
+    若锚句只引用对象名或数值，两份文档就会产出能互相匹配的片段 ⇒ QA 的 expected_document
+    出现歧义，读数会把它算成检索没命中（假阴性污染 B1）。
+
+    ★ 调用方**无条件**调用本函数（#232）：只给"撞车的那一份"加限定不够 ——
+    先到的那条留着裸句，而裸句仍是后到那份正文的子串，歧义照旧存在。
     """
     for name in ("obj1", "obj2", "obj3"):
         obj = ctx.base.get(name)
         if obj and obj in snippet and obj in para:
             new_snippet = snippet.replace(obj, f"{ctx.subject.short}所涉{obj}", 1)
             return para.replace(snippet, new_snippet, 1), new_snippet
-    new_snippet = f"{ctx.subject.short}：{snippet}"
+    new_snippet = f"就{ctx.subject.short}而言，{snippet}"
     return para.replace(snippet, new_snippet, 1), new_snippet
 
 
@@ -986,11 +989,14 @@ def build_document(
         maker, keyword_override = spec
         keyword, para, snippet, question, topic = maker(ctx)
         if used_snippets is not None:
-            if snippet in used_snippets:
-                para, snippet = uniquify_snippet(ctx, para, snippet)
+            # ★ 无条件加本文档限定（#232）：只在"撞车时"改后到者是不够的 —— 先到的那条留着
+            #   裸句，后到的那条带着限定，于是**裸句仍是另一份文档正文的子串**，问题照旧有歧义。
+            #   取证：SYN-017-4「申请自受理之日起13个工作日内办结」在 017/018 两份里都能命中，
+            #   而 018 那份当时并未被改写。
+            para, snippet = uniquify_snippet(ctx, para, snippet)
             if snippet in used_snippets:
                 raise AssertionError(
-                    f"{subject.title}: 锚点句去重后仍重复 -> {snippet}"
+                    f"{subject.title}: 锚点句加限定后仍重复 -> {snippet}"
                 )
             used_snippets.add(snippet)
         if keyword_override:

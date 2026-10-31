@@ -210,6 +210,26 @@ def main(argv: list[str] | None = None) -> int:
     if docs_without_qa:
         fail(f"{len(docs_without_qa)} 份文档没有任何问答对：{', '.join(docs_without_qa[:5])}")
 
+    # -- ★ 跨文档唯一（#232）--------------------------------------------------
+    # 上面那条只保证"两条问答不许用同一个期望片段"，但**模板句**能躲过它：
+    # 「相关记录保存期限不少于3年」不在任何其它 QA 里出现，却在多份文档正文里出现 ⇒
+    # "命中哪一份"本身没有对错，而读数会把它算成检索没命中（假阴性污染 B1）。
+    # 判据只能落在正文上：这个片段在**多少份文档**里出现过。
+    cross_hits: dict[str, list[str]] = {}
+    for row in qa_rows:
+        qid = str(row.get("id", ""))
+        snippet = squash(str(row.get("expected_snippet", "")))
+        if not qid or not snippet:
+            continue
+        names = [name for name, text in extracted.items() if snippet in text]
+        if len(names) > 1:
+            cross_hits[qid] = names
+    for qid, names in sorted(cross_hits.items()):
+        fail(
+            f"{qid}: 期望片段在 {len(names)} 份文档正文里都出现（问题缺少区分度，"
+            f"命中哪份都没有对错）-> {', '.join(sorted(names)[:3])}"
+        )
+
     # -- 汇总 -------------------------------------------------------------
     print(f"语料目录：{root}")
     print(f"文档：{len(docs)} 份 / 抽取合计 {total_chars:,} 字 / 格式 {formats}")
