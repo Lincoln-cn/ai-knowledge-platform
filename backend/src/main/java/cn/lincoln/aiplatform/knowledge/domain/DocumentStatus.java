@@ -92,7 +92,24 @@ public enum DocumentStatus {
    * @throws IllegalStateException 非法转移
    */
   public static void requireLegal(DocumentStatus from, DocumentStatus to, String action) {
+    requireLegal(from, to, action, null);
+  }
+
+  /**
+   * 同 {@link #requireLegal(DocumentStatus, DocumentStatus,
+   * String)}，但失败时把<strong>下一步</strong>也说清（{@code #229}）。
+   *
+   * <p>★ 为什么需要这个重载：只有状态矩阵时，文案会说「允许的来源状态是 [PENDING_EMBEDDING]」——
+   * 这句话在状态机层面是对的，在<strong>产品</strong>层面是死路：它没说「怎么才能回到那个状态」。 而「回到那个状态的办法」是另一个端点，属于调用方知道的事 ⇒
+   * 提示由调用方传进来， 状态矩阵本身不硬编码端点名（否则就是把端点分工又抄进领域）。
+   *
+   * @param nextStep 人可执行的下一步（中文，进异常消息）；null 或空白表示没有可说的，消息与三参版本完全一致
+   */
+  public static void requireLegal(
+      DocumentStatus from, DocumentStatus to, String action, String nextStep) {
     if (!to.canMoveFrom(from)) {
+      String tail =
+          nextStep == null || nextStep.isBlank() ? "，状态未改变）" : "，状态未改变；下一步：" + nextStep + "）";
       throw new IllegalStateException(
           "不能"
               + action
@@ -102,7 +119,7 @@ public enum DocumentStatus {
               + to
               + "」（允许的来源状态："
               + to.allowedSources()
-              + "，状态未改变）");
+              + tail);
     }
   }
 

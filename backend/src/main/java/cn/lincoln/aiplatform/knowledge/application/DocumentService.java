@@ -290,6 +290,13 @@ public class DocumentService {
    */
   public DocumentView startEmbedding(UUID documentId) {
     Document document = requireVisibleDocument(documentId);
+    // ★ #229：同一个用户意图（「把这份文档向量化」）在两个端点上不该有两种结果。
+    //   向量化失败的文档，用户会先点「开始向量化」，而这条路以前稳定 400（只接 PENDING_EMBEDDING 来源），
+    //   真正的入口是另一个端点 /retry —— 400 文案里也不提。
+    //   ⇒ 在这里委派给 retry：状态退回「待向量化」再跑，用户点哪个按钮都对。
+    if (document.status() == DocumentStatus.EMBEDDING_FAILED) {
+      return retry(documentId);
+    }
     runner.startAsync(documentId);
     // 回读一次：状态已由 startAsync 推进到「向量化中」，返回给前端的必须是推进后的状态
     return DocumentView.from(documents.findById(document.id()).orElse(document));

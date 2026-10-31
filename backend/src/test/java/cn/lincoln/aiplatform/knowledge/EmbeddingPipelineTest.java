@@ -138,6 +138,35 @@ class EmbeddingPipelineTest {
     assertThat(res.body()).as("要说清「为什么不给重试」以及「下一步做什么」").contains("原始文件").contains("重新上传");
   }
 
+  /**
+   * ★ {@code #229}：向量化失败的文档，用户点「开始向量化」也必须能救回来 —— 不必知道还有 {@code /retry} 这个端点。
+   *
+   * <p>实测反例（2026-10-28 真栈）：12 份 {@code EMBEDDING_FAILED} 调 {@code /embedding} ⇒ 12/12 全 400，
+   * 文案是「允许的来源状态：[PENDING_EMBEDDING]」—— 它说了"该在哪儿"，没说"怎么回去"。
+   *
+   * <p>★ 只断言<strong>「不再 400，状态重新进入「向量化中」」</strong>，不断言最终 SUCCEEDED： 最终成不成功取决于上游向量模型在不在（本机没有 {@code
+   * bge-m3} 时同类测试同样会停在 EMBEDDING_FAILED， 那是环境事实，不是这条判据要验的东西）。而"能否从失败态被推回"正是这条判据的全部内容。
+   */
+  @Test
+  void 向量化失败的文档点开始向量化也能跑起来() throws Exception {
+    String admin = token("admin", "admin");
+    String kbId = createKb(admin);
+    String docId = uploadDocx(admin, kbId, "structured.docx");
+    // 造一个「向量化失败」的文档：直接改库最省事（失败本身由 DocumentStateMachineTest 钉住）
+    jdbc.update(
+        "update kb_document set status = 'EMBEDDING_FAILED', fail_reason = ?, fail_hint = ?"
+            + " where id = ?::uuid",
+        "向量模型调用失败",
+        "检查模型配置",
+        docId);
+
+    HttpResponse<String> res = post("/api/v1/documents/" + docId + "/embedding", null, admin);
+    assertThat(res.statusCode()).as("开始向量化不该再是 400：" + res.body()).isEqualTo(200);
+    assertThat(res.body())
+        .as("★ 委派生效的证据：返回的视图已是「向量化中」，而不是停在失败态")
+        .contains("\"status\":\"EMBEDDING\"");
+  }
+
   /** 已完成的文档重试 ⇒ 明确拒绝（不是静默重跑一遍）。 */
   @Test
   void 已完成的文档重试被拒() throws Exception {

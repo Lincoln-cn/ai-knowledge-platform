@@ -138,6 +138,65 @@ class DocumentStateMachineTest {
 
   // ────────────────────────── 夹具 ──────────────────────────
 
+  /**
+   * ★ {@code #229}：向量化失败的文档被拒绝「开始向量化」时，文案里必须给出<strong>下一步</strong>。
+   *
+   * <p>为什么断言落在这里而不是 {@code requireLegal(EMBEDDING_FAILED, EMBEDDING, "开始向量化")}： 用户看到的那句 400 由
+   * {@code Document#startEmbedding} 产生，它知道自己拒绝的是哪份文档（能拼出 retry 的地址）；
+   * 通用守卫只知道状态矩阵。把端点名写进状态矩阵，等于把「端点分工」又抄回领域 —— 那正是 #229 的根因。
+   */
+  @Test
+  void 向量化失败的文档被拒时_文案指路去重试而不只是报状态() {
+    Document doc = segmented(4);
+    doc.startEmbedding();
+    doc.markEmbeddingFailed("向量模型调用失败", "检查模型配置");
+    assertThat(doc.status()).isEqualTo(DocumentStatus.EMBEDDING_FAILED);
+
+    assertThatThrownBy(doc::startEmbedding)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("重试")
+        .hasMessageContaining("/retry");
+  }
+
+  /** ★ 分段失败也指路（但指向"重新上传"），否则用户会对着一个永远不动的按钮反复点。 */
+  @Test
+  void 分段失败的文档被拒时_文案指出需要重新上传() {
+    Document doc = newDocument();
+    doc.recordParseFailure("解析结果为空：可能是空文档或文件损坏", "修复后重新上传", "");
+    assertThat(doc.status()).isEqualTo(DocumentStatus.SEGMENT_FAILED);
+
+    assertThatThrownBy(doc::startEmbedding)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("重试")
+        .hasMessageContaining("重新上传");
+  }
+
+  /**
+   * ★ 三参版本一字不改 —— 它被 8 处调用点共用，随手加一句"下一步"会让那些调用点也说错话。
+   *
+   * <p>这条是上一条的<strong>对照组</strong>：证明"下一步"是从调用方传进去的，不是守卫自带的。
+   */
+  @Test
+  void 通用守卫的三参版本不附带任何下一步() {
+    assertThatThrownBy(
+            () ->
+                DocumentStatus.requireLegal(
+                    DocumentStatus.EMBEDDING_FAILED, DocumentStatus.EMBEDDING, "开始向量化"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageNotContaining("下一步")
+        .hasMessageContaining("允许的来源状态");
+  }
+
+  /** 失败态故意不推进状态（{@code #229} 的委派在服务层，领域层不替它做主）。 */
+  @Test
+  void 被拒绝时状态不变() {
+    Document doc = segmented(4);
+    doc.startEmbedding();
+    doc.markEmbeddingFailed("向量模型调用失败", "检查模型配置");
+    assertThatThrownBy(doc::startEmbedding).isInstanceOf(IllegalStateException.class);
+    assertThat(doc.status()).isEqualTo(DocumentStatus.EMBEDDING_FAILED);
+  }
+
   static Document newDocument() {
     return new Document(
         UUID.randomUUID(),

@@ -389,11 +389,29 @@ public class Document {
    * 但还在跑」的自相矛盾。同时这也把「进度不回退」的规则限定在**同一轮**内 —— 否则跨轮的重置会被单调性挡住。
    */
   public void startEmbedding() {
-    DocumentStatus.requireLegal(status, DocumentStatus.EMBEDDING, "开始向量化");
+    DocumentStatus.requireLegal(status, DocumentStatus.EMBEDDING, "开始向量化", nextStepAfterReject());
     this.status = DocumentStatus.EMBEDDING;
     this.processedSegments = 0;
     this.failReason = null;
     this.failHint = null;
+  }
+
+  /**
+   * 被拒绝「开始向量化」时，告诉用户下一步该做什么（{@code #229}）。
+   *
+   * <p>★ 为什么按当前状态分档：`EMBEDDING_FAILED` 与 `SEGMENT_FAILED` 都能靠「重试」往前走， 但两者能走的距离不同 ——
+   * 向量化失败能自动重跑，分段失败必须重新上传原文件（本版不保留上传的字节， 见 {@code
+   * DocumentService#retry}）。对它们说同一句话，会让第二种用户反复点一个注定不动的按钮。
+   *
+   * <p>★ 为什么只有这两档有话说：`EMBEDDING`/`SUCCEEDED` 上被拒是「重复点击」，正确的下一步是「等」或「什么都不用做」， 硬塞一句操作指引反而误导。
+   */
+  private String nextStepAfterReject() {
+    return switch (status) {
+      case EMBEDDING_FAILED ->
+          "这份文档的向量化失败过，请点「重试」（或调用 POST /api/v1/documents/" + id + "/retry）—— 它会把状态退回「待向量化」再重新跑";
+      case SEGMENT_FAILED -> "这份文档的分段失败过，请点「重试」；若提示需要原文件，请重新上传";
+      default -> null;
+    };
   }
 
   /**
