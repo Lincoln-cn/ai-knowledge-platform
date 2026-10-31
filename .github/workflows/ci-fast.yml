@@ -146,7 +146,8 @@ jobs:
       #      而 ①② 仍然全绿（跳过占 30% 却永不报红的形状）。跳过小于基线不自动改文件，
       #      只提示"基线可以降到 N"—— 自动改基线等于让闸门自己给自己签字。
       #   ★ 它带自检，所以下面把它从循环里单拆出来、按「自检 + 实判」两步跑（其余 11 道仍在循环里）。
-      - name: 静态闸门（13 道）
+      #   ★ 同样单拆成两步的还有 `check_test_registration.py`（`#266`，2 步）—— 见下方 mock 实判之后。
+      - name: 静态闸门（15 道）
         working-directory: frontend
         run: |
           failed=()
@@ -170,7 +171,7 @@ jobs:
             echo "★ 失败 ${#failed[@]}/11：${failed[*]}"
             exit 1
           fi
-          echo "循环内 11 道静态闸门全部通过（另有 mock 响应形状自检 + 实判两步见下，合计 13 道）"
+          echo "循环内 11 道静态闸门全部通过（另有 mock 响应形状 2 步 + 测试文件登记 2 步见下，合计 15 道）"
 
       # ★ mock 响应形状**自检**（`#262`）。
       #   离线用例：契约 `{ a: string }` vs mock `return { a: 'x' }` 通过 / vs `return 'x'` 报红 /
@@ -189,6 +190,24 @@ jobs:
       - name: mock 响应形状实判（#262）
         working-directory: frontend
         run: python check_mock_endpoints.py
+
+      # ★ 第 14 道（`#266`）：**测试文件有没有真的被登记进 `npm test`**。
+      #   上面「单元断言」那一步是绿的，但它只说明**登记过的那些文件绿** ——
+      #   `src/lib/http-error.test.ts` 在仓库里躺了很久、`npm test` 从没跑过它，
+      #   两种情形在 CI 上的读数一模一样（都是 46 条通过）。`test` 脚本刻意逐个列文件
+      #   （目录发现在 0 条时是 exit 0 = 永不红），代价就是"新增测试要改两处"没有提示。
+      #   两道主判据互为反向：文件在但脚本里没有 ⇒ 红；脚本里有但文件不在 ⇒ 红。
+      #   ★ 它自己也能红：--self-check 在临时夹具上跑 7 条（全登记 / 漏一个 /
+      #     登记了不存在 / 脚本改回目录发现 / 空壳文件 / 缺 `test` 键 / `it(` 入口）。
+      - name: 测试文件登记自检（#266）
+        working-directory: frontend
+        run: python check_test_registration.py --self-check
+
+      # ★ 实判：扫 `src/**/*.test.ts` 与 `package.json` 的 `test` 脚本对账，
+      #   漏一个就 exit 1 并点名。新加测试文件必须同时改这两处 —— 这道闸门就是那句提醒。
+      - name: 测试文件登记实判（#266）
+        working-directory: frontend
+        run: python check_test_registration.py
 
       # ★ 第 11 道：**读数的纪律**（#231）。
       #   防的形状是「400 被读成命中 0 条」—— 后端 `topN` 上限 20、超限返 400，
