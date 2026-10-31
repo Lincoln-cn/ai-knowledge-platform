@@ -17,24 +17,30 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * 审计的动作面口径（`13 §7.4` · `#258`）。
+ * 审计的动作面口径（`13 §7.3` 的「动作覆盖」那格 · 读侧见 §7.4）。
  *
- * <p>这一册反复出现的失效形状是「**声明与实现各写一份**」：§7.3 的表说接了七类，枚举里悄悄多一类， 或者检索链路悄悄接上审计而表里没有一个字。两侧都读起来像"已经做了"。
+ * <p>这一册反复出现的失效形状是「**声明与实现各写一份**」：§7.3 的表写着"七个"，而枚举里已经是十一个 （`#198` 加 `workflow.publish`
+ * 时只改了枚举）；或者检索链路悄悄接上审计而表里没有一个字。两侧都读起来像"已经做了"。
  *
  * <p>于是这里用两条**能红**的断言把两侧咬住：
  *
  * <ol>
- *   <li>枚举里的动作码必须与 §7.4 登记的那份清单**逐个相等** —— 多一个没登记的要红，登记过的消失了也要红；
+ *   <li>枚举里的动作码必须与 §7.3 登记的那份清单**逐个相等** —— 多一个没登记的要红，登记过的消失了也要红；
  *   <li>检索 / 查看 / 引用这三类**读侧**实现类不许依赖 {@code AuditLogPort} —— 接上了就得先改 §7.4。
  * </ol>
  *
- * <p>★ 改动作面时，**两处一起改**：本测试的 {@link #CONNECTED} 与 `13 §7.4` 的表。只改一处就会红， 这是刻意的 ——
+ * <p>★ 改动作面时，**两处一起改**：本测试的 {@link #CONNECTED} 与 `13 §7.3` 的表。只改一处就会红， 这是刻意的 ——
  * 上一批欠账（`#40`）正是"同一状态四处各写一份"。
  */
-@DisplayName("审计动作面：枚举与 §7.4 的口径必须一致")
+@DisplayName("审计动作面：枚举与 §7.3 的口径必须一致")
 class AuditActionSurfaceTest {
 
-  /** `13 §7.4` 登记的动作码。改这里必须同时改那一节的表。 */
+  /**
+   * `13 §7.3`（「动作覆盖」那格，`13:517`）登记的动作码。改这里必须同时改那一节的行。
+   *
+   * <p>★ 顺序按**接入批次**排，不按字母序：这个清单读起来应当能回答"哪一批接的"，而字母序把这个信息抹掉了 （`grant.change` 排在 `data.export`
+   * 前面就是前者的印证）。比较用的是 {@code TreeSet}，顺序本身不参与断言。
+   */
   private static final List<String> CONNECTED =
       List.of(
           "document.delete",
@@ -46,7 +52,11 @@ class AuditActionSurfaceTest {
           "conversation.unshare",
           "document.purge",
           "document.restore",
-          "audit.purge");
+          "audit.purge",
+          // ★ 2026-10-31（#198 发布端点）：`workflow.publish` —— 把画布上正在改的图变成"线上正在跑的那一版"，
+          //   是一次面向使用者的行为切换。它此前只加在枚举里、没登记到 13，于是这条断言在 CI 上红了 ——
+          //   ★ 这正是该测试存在的理由：动作面每加一个码，§7.3 的表就要跟着改，两侧不许各写一份。
+          "workflow.publish");
 
   /** 读侧实现类：它们一旦依赖 `AuditLogPort`，就说明读侧审计已经接了，而 §7.4 说的是没接。 */
   private static final List<String> READ_SIDE_CLASSES =
@@ -56,13 +66,13 @@ class AuditActionSurfaceTest {
           "conversation/application/ChatHistoryService.java");
 
   @Test
-  @DisplayName("枚举里的动作码与 §7.4 登记的清单逐个相等")
+  @DisplayName("枚举里的动作码与 §7.3 登记的清单逐个相等")
   void theEnumMatchesTheDocumentedSurface() {
     Set<String> actual = new TreeSet<>();
     Arrays.stream(AuditAction.values()).map(AuditAction::code).forEach(actual::add);
 
     assertThat(actual)
-        .as("★ 动作面改动必须同时改 13 §7.4 的表：多出来的码会让读报表的人以为某类动作已经在记了")
+        .as("★ 动作面改动必须同时改 13 §7.3 的表：多出来的码会让读报表的人以为某类动作已经在记了")
         .isEqualTo(new TreeSet<>(CONNECTED));
   }
 

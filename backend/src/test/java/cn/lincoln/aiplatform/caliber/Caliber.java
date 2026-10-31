@@ -45,6 +45,13 @@ final class Caliber {
           "orgId: UUID",
           "departmentLegacy: String",
           "classification: ClassificationLevel",
+          // ★★ 2026-10-31（#26 / `13 §1.1` · `13 §8.3` 的 M2 验收项 · V57）：密级**标签**（正交于等级链的那一轴）。
+          //   ★ 为什么它不是"版本维度"、也不是"源系统授权依据"：标签是**平台内标注**的集合（"财务资料" / "人事资料"），
+          //     比较语义是「相交」而不是「不高于」；它回答"这份文档带哪些标记"，回答不了"来自哪一次上传"，
+          //     更不回答"源系统给了谁读权限"（后者是 #81 的 source_acl 一族，见 SOURCE_ACL_MARKERS）。
+          //   ★ 类型读作 `List`（ArchUnit 取简单名，声明是 `List<String>`）：基线记的是"有一个集合字段"，
+          //     元素类型换了不会漏掉，名字换了会红。
+          "labels: List",
           // ★★ 2026-10-16（#25）：密级的**排序列**（V21 的生成列，`classificationRank` 由 `classification` 派生）。
           //   ★ 为什么它不是"版本维度"、也不是"源系统授权依据"：它只是同一个密级字段的**可比较形式** ——
           //     值恒等于 `classification.ordinal()`（`ClassificationRankTest` 钉住这条），
@@ -69,12 +76,20 @@ final class Caliber {
           "deletedAt: Instant");
 
   /**
-   * {@code kb_document} 跑完全部迁移之后的列（{@code V13} 建表 + {@code V14/V18/V21/V27/V34} 增量）。
+   * {@code kb_document} 跑完全部迁移之后的列（{@code V13} 建表 + {@code V14/V18/V21/V27/V34/V55/V57} 增量）。
    *
    * <p>★ {@code V34} 的四列是<strong>同一个形状</strong>的两半：{@code scope_kind} / {@code scope_id} 是归属的
    * 种类与主体，{@code owner_id} 是传输者，而 {@code conversation_id} 是由前两者导出的<strong>生成列</strong> （{@code 13
    * §11.3}）—— 它不是 {@code Document} 上的字段（实体刻意不映射它，因为它是派生的）， 所以"实体字段数 ≠
-   * 列数"是<strong>对的</strong>，两处的差集今天 = {@code classification_rank} + {@code conversation_id}。
+   * 列数"是<strong>对的</strong>，两处的差集今天 = {@code classification_rank} + {@code conversation_id} +
+   * {@code revision} + {@code supersedes_id}。
+   *
+   * <p>★ <strong>后两列是 {@code #86} 的"留缝"</strong>（{@code V55}，口径 = {@code 02 §5.1.2}、 {@code 12
+   * §十三}）：{@code revision int not null default 1} 与可空、<strong>不加外键</strong>的 {@code supersedes_id
+   * uuid}。★★ 它们<strong>故意</strong>没有对应的实体字段 —— "只建列、无任何代码读写"是这条裁定的内容本身 （行为见证人 = {@code
+   * DocumentRevisionSeamTest}）。别看到列在基线里就以为实体也该有字段： 那正是把"留缝"读成"已实现"的第一步。
+   *
+   * <p>★ {@code labels}（{@code V57}，{@code #26} / {@code 13 §1.1}）是等级链之外的第二根轴，与版本无关。
    */
   static final java.util.List<String> DOCUMENT_COLUMNS =
       java.util.List.of(
@@ -106,7 +121,10 @@ final class Caliber {
           "scope_kind",
           "scope_id",
           "owner_id",
-          "conversation_id");
+          "conversation_id",
+          "revision",
+          "supersedes_id",
+          "labels");
 
   /**
    * {@code #81} 的禁用词：源系统授权依据的痕迹。
@@ -207,13 +225,23 @@ final class Caliber {
   // ────────────────────────── #86 · 文档版本 ──────────────────────────
 
   /**
-   * {@code #86} 的禁用词：知识库侧的"版本/修订"痕迹。
+   * {@code #86} 的禁用词：<strong>"真版本链"</strong>的痕迹（不是"版本这个词"）。
+   *
+   * <p>★★ 2026-10-31 收缩：{@code revision} 与 {@code supersedes} 两个词<strong>已从标记里移除</strong> —— {@code
+   * #86} 的裁定是「只留字段位置、不建版本链」，而 {@code V55} 已按裁定把 {@code kb_document.revision} / {@code
+   * supersedes_id} 两列建出来（{@code 02 §5.1.2}、{@code 12 §十三}）。
+   * 它们<strong>合法地</strong>出现在迁移目录里；再把它们当"越界标记"就是让断言与裁定直接冲突。
+   *
+   * <p>★ 收缩后剩下的四个词是<strong>只有"真做版本链"才会出现</strong>的：{@code superseded_by} 是"旧记录指向新记录" 的反向指针（{@code
+   * supersedes_id} 是正向的，一有反向指针就说明在做链，而不是留一列），{@code doc_version} / {@code version_chain} / {@code
+   * current_version} 是链的命名（无论是列名、表名还是脚本里的标识符）。 写代码时随手给某个东西起名叫 {@code current_version}
+   * 的那一刻，就是这条断言该红的那一刻。
    *
    * <p>★ 与 {@code 06} 的<strong>工作流版本</strong>区分开 —— 后者是产品能力（{@code as_assistant} 那一侧， 契约里确实有 {@code
    * version}），本条只管知识库侧（文档与引用）。所以断言只扫 {@code kb_} 前缀的表。
    */
   static final java.util.List<String> DOCUMENT_REVISION_MARKERS =
-      java.util.List.of("revision", "supersedes", "superseded_by", "doc_version");
+      java.util.List.of("superseded_by", "doc_version", "version_chain", "current_version");
 
   /**
    * {@code HitTestView.Trace} 的字段（{@code retrieval/application/HitTestView.java}，{@code 10 §7.1}

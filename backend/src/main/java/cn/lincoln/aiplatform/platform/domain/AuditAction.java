@@ -19,10 +19,10 @@ public enum AuditAction {
   /** 改文档标签（`detail` 里带 from/to 两份标签数组）。★ 与密级同级的安全变更：标签直接影响谁能检索到它。 */
   DOCUMENT_RELABEL("document.relabel"),
 
-  /** 导出数据（本批尚未接线，先占位以免将来名字被写歪）。 */
+  /** 导出数据（`#257` 判据②：`AssistantService#export` 已在同事务里记录，`13 §7.3`）。 */
   DATA_EXPORT("data.export"),
 
-  /** 授予/收回权限（本批尚未接线）。 */
+  /** 授予/收回权限（`RoleService#replacePermissions` 已接线；明细带 from/to 两份权限点清单）。 */
   GRANT_CHANGE("grant.change"),
 
   /**

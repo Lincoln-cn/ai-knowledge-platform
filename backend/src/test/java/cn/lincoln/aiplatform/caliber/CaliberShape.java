@@ -64,6 +64,13 @@ final class CaliberShape {
           "platform/V9__platform_enum_machine_codes.sql",
           "platform/V24__platform_dictionary.sql",
           "platform/V26__platform_kb_category_unify.sql",
+          // ★★ 2026-10-31（#267）：下面 27 个文件曾长期漏登，本清单停在 V34 那一批。
+          //   漏登的后果不是"少一行记录"，而是 tableColumns() / migrationText() 对它们静默少读一段；
+          //   而两条断言写的是"全量清单相等" ⇒ 两侧同时变旧、断言照样绿（V34 当年正是这样被发现的）。
+          //   ★ 现在由 MigrationInventoryTest 把这份清单与源码树逐个比对，漏登当场变红。
+          "platform/V54__platform_quota_seams.sql",
+          "platform/V56__platform_audit_log.sql",
+          "platform/V58__platform_audit_retention.sql",
           "identity/V3__identity_auth.sql",
           "identity/V4__identity_seed_demo_accounts.sql",
           "identity/V5__identity_login_lockout.sql",
@@ -74,6 +81,10 @@ final class CaliberShape {
           "identity/V28__identity_user_org_seed.sql",
           "modelcatalog/V8__modelcatalog_ai_model.sql",
           "modelcatalog/V11__modelcatalog_enum_machine_codes.sql",
+          "modelcatalog/V37__modelcatalog_embedding_max_chars.sql",
+          "modelcatalog/V38__modelcatalog_e5_max_chars.sql",
+          "modelcatalog/V45__modelcatalog_model_provider.sql",
+          "modelcatalog/V46__modelcatalog_model_provider_id.sql",
           "knowledge/V12__knowledge_knowledge_base.sql",
           "knowledge/V13__knowledge_document.sql",
           "knowledge/V14__knowledge_document_parsed_content.sql",
@@ -89,10 +100,30 @@ final class CaliberShape {
           "knowledge/V27__knowledge_document_org.sql",
           "knowledge/V31__knowledge_qa_pair.sql",
           "knowledge/V34__knowledge_document_scope.sql",
+          "knowledge/V55__knowledge_document_revision_seam.sql",
+          "knowledge/V57__knowledge_label_seam.sql",
           "assistant/V29__assistant_app.sql",
           "assistant/V30__assistant_access_credential.sql",
+          "assistant/V47__assistant_prompt_catalog.sql",
+          "assistant/V48__assistant_prompt_type_seed.sql",
+          "assistant/V50__assistant_favorite.sql",
+          "assistant/V51__assistant_grant.sql",
+          "assistant/V52__assistant_api_key.sql",
+          "assistant/V60__assistant_workflow_draft.sql",
+          "assistant/V61__assistant_workflow_version.sql",
+          "assistant/V62__assistant_workflow_record.sql",
           "conversation/V32__conversation.sql",
-          "conversation/V33__conversation_message.sql");
+          "conversation/V33__conversation_message.sql",
+          "conversation/V35__conversation_message_feedback.sql",
+          "conversation/V36__conversation_feedback.sql",
+          "conversation/V39__conversation_chat_settings.sql",
+          "conversation/V40__conversation_chat_settings_system_prompt.sql",
+          "conversation/V41__conversation_chat_settings_retrieval.sql",
+          "conversation/V42__conversation_chat_settings_history.sql",
+          "conversation/V43__conversation_chat_settings_suggestion_count.sql",
+          "conversation/V44__conversation_chat_settings_suggestion_enabled.sql",
+          "conversation/V49__message_feedback_state.sql",
+          "conversation/V53__conversation_share.sql");
 
   private CaliberShape() {}
 
@@ -176,6 +207,16 @@ final class CaliberShape {
       all.append(stripComments(read(file))).append('\n');
     }
     return all.toString();
+  }
+
+  /**
+   * 本清单的只读视图。
+   *
+   * <p>★ 只给 {@link MigrationInventoryTest} 用：那条断言把这份清单与<strong>磁盘上真实的迁移目录</strong>逐个比对，
+   * 任何"新加了迁移却忘了登记"都会当场变红。换言之，{@link #MIGRATION_FILES} 的正确性<b>不再依赖"下次记得"</b>。
+   */
+  static List<String> migrationFiles() {
+    return MIGRATION_FILES;
   }
 
   // ────────────────────────── 内部 ──────────────────────────
