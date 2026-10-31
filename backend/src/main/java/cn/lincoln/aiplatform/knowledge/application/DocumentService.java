@@ -95,6 +95,13 @@ public class DocumentService {
 
   private final Segmenter segmenter = new Segmenter();
 
+  /**
+   * 会话密级水位的补偿口（{@code #247} 判据 ①）：文档<b>升密</b>时把引用过它的会话抬到新密级。
+   *
+   * <p>★ 走平台端口而不是直接依赖 {@code conversation.domain}：模块边界由 {@code ModuleBoundaryTest} 守着（见端口 javadoc）。
+   */
+  private final cn.lincoln.aiplatform.platform.watermark.ConversationWatermarkPort watermark;
+
   public DocumentService(
       DocumentRepository documents,
       KnowledgeBaseService knowledgeBases,
@@ -107,7 +114,8 @@ public class DocumentService {
       OrgDirectoryPort orgDirectory,
       OrgCodeResolver orgCodes,
       ApplicationEventPublisher events,
-      BusinessMetrics metrics) {
+      BusinessMetrics metrics,
+      cn.lincoln.aiplatform.platform.watermark.ConversationWatermarkPort watermark) {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
     this.parser = parser;
@@ -120,6 +128,7 @@ public class DocumentService {
     this.orgCodes = orgCodes;
     this.events = events;
     this.metrics = metrics;
+    this.watermark = watermark;
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -367,6 +376,73 @@ public class DocumentService {
     document.setUpdatedBy(currentUserId);
     documents.save(document);
     reprefixSegments(document, currentUserId);
+    return DocumentView.from(documents.findById(documentId).orElse(document));
+  }
+
+  /**
+   * ★★ 变更文档密级（{@code #247}）—— 密级的<strong>唯一写入入口</strong>（除建档时的上传表单）。
+   *
+   * <h3>★ 为什么这件事必须在一个事务里</h3>
+   *
+   * <p>升密会牵动两处：文档行本身，以及<strong>引用过它的会话</strong>的 {@code max_classification}。后者是 {@code 13 §2.2}
+   * 的不变量（"会话密级 = 其引用集合的最大密级"）。分开写会出现一个任何人都看不见的中间态：文档已经是 {@code SECRET}，而会话仍按 {@code INTERNAL} 筛 ——
+   * 于是继续提问时那篇文档"看得见名字、检索不到正文"，像是索引出了问题。
+   *
+   * <h3>★ 降密不补偿，且这是刻意的</h3>
+   *
+   * <p>会话水位单调（只升不降，{@code #108}）。文档降密后水位停在旧的高档位：这是<strong>安全的严格方向</strong>（能看到的只会更少），
+   * 也如实记录了"这个会话的回答曾经引用过什么"。所以这里只对升密调补偿 —— 并且用一条测试钉住"降密后水位不变"，
+   * 免得将来有人把它当成"忘了补"而顺手补上（那会把水位往下拉，是真正的越权）。
+   *
+   * <h3>校验顺序（每条都有 400 的可读理由）</h3>
+   *
+   * <ol>
+   *   <li>文档可见（否则 404）—— 与所有写端点同一判定。
+   *   <li>密级必填。
+   *   <li>不高于所属库的 {@code maxClassification}（ceiling，{@code 13 §6}）—— 与建档同一口径，不能开一个绕过库上限的后门。
+   *   <li>正在向量化 ⇒ 拒绝：那期间分段的密级继承与向量都在动，此刻换密级会写出一半新一半旧的分段。
+   * </ol>
+   */
+  @Transactional
+  public DocumentView changeClassification(
+      UUID documentId, ClassificationLevel level, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    if (level == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "密级必填", "它决定召回前缀与安全过滤，不能有默认值；请从「公开 / 内部 / 秘密 / 机密」里选一个（13 §2）");
+    }
+    KnowledgeBaseView base = knowledgeBases.get(document.kbId());
+    if (!level.within(base.maxClassification())) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "文档密级（%s）高于知识库的密级上限（%s）—— 请提高库的上限，或改用更合适的库"
+              .formatted(label(level), label(base.maxClassification())),
+          "换一个不高于库上限的密级，或者先调高这个知识库的密级上限 —— 库上限是这个库允许装的最高密级（13 §6）");
+    }
+    requireNotEmbedding(document, "改密级");
+
+    ClassificationLevel previous = document.classification();
+    document.changeClassification(level, currentUserId);
+    documents.save(document);
+
+    // ★ ① 分段必须跟着重打（13 §2.4 第 1 步）：分段的 classification 是**独立列**（V22 冗余密级，
+    //   不是 generated 列），只改文档行会让旧分段仍停在低密 ⇒ 低 clearance 用户照样检索得到它，
+    //   而界面上那篇文档已经显示成"秘密"了 —— 升密看起来生效、实际没生效，正是本项目最怕的形状。
+    //   ★ 不需要重新向量化：密级是元数据，不进 embedding（13 §2.4 末段）。
+    List<Segment> affected = segments.findByDocumentId(documentId);
+    for (Segment segment : affected) {
+      segment.reclassify(level);
+    }
+    if (!affected.isEmpty()) {
+      segments.saveAll(affected);
+    }
+
+    // ★ ② 只有升密才补偿会话水位。降密/不变都不调 —— 理由见方法 javadoc 第 2 节。
+    if (level.ordinal() > previous.ordinal()) {
+      int raised = watermark.raiseForDocument(documentId, level);
+      log.info("文档 {} 密级 {} → {}：抬高了 {} 个会话的水位", documentId, previous, level, raised);
+    }
+    log.info("文档 {} 密级 {} → {}：重打了 {} 个分段的密级", documentId, previous, level, affected.size());
     return DocumentView.from(documents.findById(documentId).orElse(document));
   }
 

@@ -301,6 +301,26 @@ export const setDocumentEnabled = (id: string, enabled: boolean) =>
     body: { enabled }
   })
 
+/**
+ * 变更文档密级（#247）。
+ *
+ * ★ 与「知识库的密级上限」不是一回事：`maxClassification` 是库允许装的最高密级（ceiling），
+ *   这里改的是某一份文档自己的密级。两者都会被后端校验（文档密级不得高于库上限）。
+ *
+ * ★ 升密时后端会顺手把引用过这份文档的会话水位抬到新值（同一事务，#27 / 13 §2.2）；
+ *   降密则不动水位 —— 会话密级是单调的（只升不降），这是安全的严格方向。
+ */
+export const changeDocumentClassification = (
+  id: string,
+  classification: ClassificationLevel
+) =>
+  request<DocumentItem>({
+    method: 'PATCH',
+    url: '/documents/:id/classification',
+    path: { id },
+    body: { classification }
+  })
+
 export const deleteDocument = (id: string) =>
   request<void>({ method: 'DELETE', url: '/documents/:id', path: { id } })
 

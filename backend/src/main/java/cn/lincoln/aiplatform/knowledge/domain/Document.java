@@ -599,6 +599,36 @@ public class Document {
     this.orgId = orgId;
   }
 
+  /**
+   * ★★ 变更文档密级（{@code #247}）—— 给"入库时标错"的文档一个出口。
+   *
+   * <h3>为什么需要它</h3>
+   *
+   * <p>密级此前<strong>只在建档那一刻</strong>可设（上传表单），之后没有任何入口。标低了就只能删档重传 —— 与 {@code #150} 的 {@code orgId}
+   * 是同一个形状：<b>列得出来却处理不掉</b>。而标错的代价不是"不好看"：它同时决定密级 pre-filter 与 {@code #27} 的会话水位。
+   *
+   * <h3>★ 只改聚合根，两个副作用都在应用层</h3>
+   *
+   * <ol>
+   *   <li><strong>升密后要抬会话水位</strong>（{@code #247} 判据 ①）：引用过这篇文档的会话，其 {@code max_classification}
+   *       必须跟上，否则"会话水位 = 其引用集合的最大密级"（{@code 13 §2.2}）不再成立。这件事要查会话、写会话， <strong>跨聚合</strong>，不属于本对象。
+   *   <li><strong>降密什么都不用做</strong>：会话水位是单调的（只升不降），停在旧的高档位是安全的严格方向 —— 降密因此不需要补偿，只需要一条断言钉住"水位没动"。
+   * </ol>
+   *
+   * <p>★ 分段不在这里跟着改：{@code kb_segment.classification} 由文档继承（{@code #27} 的传播口径）， 它的重算属应用层与向量侧的编排。
+   *
+   * @param level 新的密级；★ 上限（不得高于所属知识库的 {@code maxClassification}）由服务层校验 —— 领域对象不知道"库"长什么样
+   * @param by 操作人（记进 {@code updated_by}）
+   * @throws IllegalArgumentException {@code level} 为 {@code null}
+   */
+  public void changeClassification(ClassificationLevel level, UUID by) {
+    if (level == null) {
+      throw new IllegalArgumentException("密级必填 —— 它决定召回前缀与安全过滤，不能有默认值（13 §2）");
+    }
+    this.classification = level;
+    this.updatedBy = by;
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {

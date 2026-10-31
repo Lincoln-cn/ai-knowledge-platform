@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.knowledge.web;
 
 import cn.lincoln.aiplatform.knowledge.application.DocumentService;
 import cn.lincoln.aiplatform.knowledge.application.DocumentView;
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -100,6 +101,25 @@ public class DocumentActionController {
   }
 
   /**
+   * ★ 变更文档密级（{@code #247}）。
+   *
+   * <p>★ 权限点 {code knowledge:manage}：密级同时决定召回前缀与安全过滤，是库管理者的动作。与「上传者」分开， 是因为上传者只会标自己看得见的文档，
+   * 而密级变更的影响面是<strong>所有引用过它的会话</strong>。
+   *
+   * <p>★ 升密时后端会顺手把相关会话的水位抬到新值（同一事务，{@code 13 §2.2}）；降密不动水位。 两条口径见 {@code 13 §2.4}。
+   */
+  @PatchMapping("/{id}/classification")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<DocumentView> changeClassification(
+      @PathVariable UUID id,
+      @RequestBody ClassificationBody body,
+      @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        documentService.changeClassification(
+            id, body.classification(), UUID.fromString(jwt.getSubject())));
+  }
+
+  /**
    * 删除（契约 {@code deleteDocument}）。
    *
    * <p>★ 文档软删、分段与向量真删（理由见 {@code DocumentService#delete}）：只软删文档会把它的内容 留在检索里 —— 列表看不见、检索答得出来。
@@ -116,4 +136,12 @@ public class DocumentActionController {
 
   /** 启用位请求体（契约 {@code setDocumentEnabled} 的 body，与知识库那条同形）。 */
   record EnabledBody(boolean enabled) {}
+
+  /**
+   * 密级变更请求体（{@code #247}）。
+   *
+   * <p>★ 用 {@link ClassificationLevel} 而不是 {@code String}：Jackson 会直接把非法取值判成 400， 而一个 {@code
+   * String} 字段会让「密级写错」变成服务层的一句业务异常 —— 两者的响应体形状不同，调用方要分两套处理。
+   */
+  record ClassificationBody(ClassificationLevel classification) {}
 }

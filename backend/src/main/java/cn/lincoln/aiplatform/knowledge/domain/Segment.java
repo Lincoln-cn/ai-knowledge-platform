@@ -387,6 +387,26 @@ public class Segment {
     this.embeddingStatus = SegmentEmbeddingStatus.PENDING_EMBEDDING;
   }
 
+  /**
+   * ★ 重打密级（{@code 13 §2.4} 第 1 步）—— 文档升/降密时，它的全部分段必须跟着走。
+   *
+   * <p>★ 与 {@link #moveTo} 的关键区别：<strong>向量状态不动</strong>。密级是元数据、不进 embedding （{@code 13 §2.4}
+   * 末段），所以重打密级<b>不需要重新向量化</b>；把它顺手标成 {@code PENDING_EMBEDDING} 会让一次纯元数据变更
+   * 触发整篇文档的重算，看起来"很保险"，实际是在浪费配额并让检索临时缺文档。
+   *
+   * <p>★ 为什么这一列必须单独改：{@code kb_segment.classification} 是 {@code V22} 加的<b>冗余列</b>（不是从文档生成的）。
+   * 只改文档行会留下"文档=秘密、分段=内部"，而检索谓词用的是<b>分段</b>那一列 ⇒ 低 clearance 用户照样检索得到。
+   *
+   * @param level 新的密级（继承自所属文档）
+   * @throws IllegalArgumentException {@code level} 为 {@code null}
+   */
+  public void reclassify(ClassificationLevel level) {
+    if (level == null) {
+      throw new IllegalArgumentException("分段密级不能为空（它继承所属文档的密级，13 §2.1）");
+    }
+    this.classification = level;
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {
