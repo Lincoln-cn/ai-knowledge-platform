@@ -265,10 +265,37 @@ export const workflowRoutes: MockRoute[] = [
     }
   ],
 
+  /*
+   * 运行记录列表。
+   *
+   * 契约是 `PageResult<WorkflowRecord>`（`src/api/workflow.ts:439`），字段 `{ list, total, page, size }`
+   * （`src/api/types.ts:25`）。原来这里 `return workflowRecords[appId] ?? []` 是**裸数组**：
+   * 页面在 mock 模式下按契约解构 `list` 只会拿到 `undefined` —— 与契约不符（Issue #263）。
+   * ★ 措辞注意：本注释**不要**写成"契约函数名 + 左括号"的形状 ——
+   *   `tools/check_contract_consumers.py` 用 `\b函数名\s*\(` 在 `frontend/src/**` 里找消费点，
+   *   注释里出现调用形状会被它当成"有人用了"，把这个端点的零消费登记冲掉（本轮实际踩到过一次）。
+   *   原来那条还是"闸门看不见"的：它落在
+   * `check_mock_endpoints.py` 的「返回表达式解析不出」跳过桶里，改坏了也 exit 0。
+   *
+   * 分页按契约的 `page` / `size` 切片，`total` 给过滤后的总条数（不是本页条数）。
+   * ★ mock 刻意**不实现** `WorkflowRecordQuery.status` 的过滤：演示数据量小，
+   *   全量可见比"看起来实现了筛选"更诚实；等真后端上了再对齐查询语义。
+   */
   [
     'GET',
     '/assistants/:appId/workflow/records',
-    ({ path }) => workflowRecords[path.appId as string] ?? []
+    ({ path, query }) => {
+      const all = workflowRecords[path.appId as string] ?? []
+      const pageNo = Number(query.page ?? 1)
+      const pageSize = Number(query.size ?? 20)
+      const start = (pageNo - 1) * pageSize
+      return {
+        list: all.slice(start, start + pageSize),
+        total: all.length,
+        page: pageNo,
+        size: pageSize
+      }
+    }
   ],
 
 ]

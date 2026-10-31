@@ -12,12 +12,17 @@
 #   ③ **新增跳过必须先说清「为什么解析不了」，不许只把数字调大。** 说不清理由，
 #      就去修解析器（`_MockShaper._infer` 那一层），让这一处能判。
 #
-# 当前读数（2026-10-31 · `23c8b84`）：mock 路由 140 条 · 一致 98 处 · 不一致 0 处 · 跳过 42 处。
-# 42/140 = 30% 的 mock 路由没被「形状」这一维管到。这个基线的意义是把 42 钉住，
-# 不是宣布 42 可以接受 —— 它只是「现在这么多，以后只能更少」。
+# 当前读数（2026-10-31 · 修 `#263` 之后）：mock 路由 140 条 · 一致 99 处 · 不一致 0 处 · 跳过 41 处。
+# 41/140 ≈ 29% 的 mock 路由没被「形状」这一维管到。这个基线的意义是把 41 钉住，
+# 不是宣布 41 可以接受 —— 它只是「现在这么多，以后只能更少」。
+#
+# 42 → 41 是 `#263` 那一处修出来的：`GET /assistants/:appId/workflow/records` 原来返裸数组
+# （契约是 `PageResult<WorkflowRecord>`），改回 `{ list, total, page, size }` 之后解析器能判形状了，
+# 于是它从跳过桶挪到"一致"。★ 那一处正是「跳过桶藏真缺陷」的样板：它在跳过桶里时
+# 改坏了闸门也是 exit 0，读数与"一致"完全一样。
 #
 # ── 数字 ──
-跳过 42
+跳过 41
 #
 src/mock/handlers/assistants.ts | POST | /assistants | 返回表达式解析不出：withOwnerName(created)
 src/mock/handlers/assistants.ts | POST | /assistants/import | 返回表达式解析不出：withOwnerName(created)
@@ -60,9 +65,8 @@ src/mock/handlers/workflow.ts | GET | /assistants/:appId/workflow/draft | 契约
 src/mock/handlers/workflow.ts | PUT | /assistants/:appId/workflow/draft | 契约里同一路径有多个返回类型
 src/mock/handlers/workflow.ts | GET | /assistants/:appId/workflow/versions | 契约里同一路径有多个返回类型
 src/mock/handlers/workflow.ts | POST | /assistants/:appId/workflow/debug | 判不了（mock 返回多分支联合，只部分分支与契约相符 —— 可能是守卫收窄）
-src/mock/handlers/workflow.ts | GET | /assistants/:appId/workflow/records | 返回表达式解析不出：workflowRecords[path.appId as string] ?? []
-# ── 上面 42 条各自的理由，按原因归类 ──
-# · 返回表达式解析不出 24 条：`return helper(...)` 的 helper 读了 handler 的形参
+# ── 上面 41 条各自的理由，按原因归类 ──
+# · 返回表达式解析不出 23 条：`return helper(...)` 的 helper 读了 handler 的形参
 #   （`withOwnerName(app)` / `withApp(conv)` / `findKb(path.id, token)`），或 `return item`
 #   这种循环里重新赋值的变量 —— 解析器只做同文件/夹具内的名字解析，不追形参流转。
 # · 判不了（mock 对象带展开/动态键）9 条：`{ ...x, [key]: v }` 无法证明契约必填键在不在。
