@@ -2383,3 +2383,33 @@ B6（150 段）与 B7（200 次）会明显拉长真栈 job；**三条重闸门�
 - 附件与消息的绑定（`13 §11.6` 第 17 周批次）。
 - `#268` 跳过桶名单化 · `#187` 判据 5 替代物 · `#83` 合规四件套（后两条等用户裁决）。
 
+#### 11.10.43 2026-11-01 配置面补两处入口 + 降级阶梯的配置态与降级态分开（`#64` 判据 2）
+
+**43.1 关账表**
+
+| 事项 | 提交 | 读数 |
+|---|---|---|
+| `#64` 判据 2：关掉分解是**配置**，不许记成 D3 降级 | `7832944` | `QueryUnderstandingServiceTest` 10/10 · `QueryUnderstandingParserTest` 18/18 · `MultiHopTest` 12/12；金丝雀退回旧条件 ⇒ 红在 `:63` |
+| 应用配置抽屉补查询理解三项（改写条数 / 拆分多意图 / 子问题上限） | `9850583` | `vue-tsc` 0 错 · `npm test` 56 pass · 六道前端闸门全 0 |
+| 知识库设置面板补同样三项（同一处缺口的另一半） | `618e86b` | 同上 |
+| 查询理解三项的**往返与边界**测试 | `47b8ca7` | `RetrievalHitTestTest` 11/11（62.79 s）；金丝雀 `queryCount` 不落库 ⇒ 红 |
+| 两处草稿夹具还按"字符串形状"发（整包四红） | `891b489` | `WorkflowRollbackHttpTest` 4/4 · `WorkflowVersionHttpTest` 6/6 · `WorkflowDraftHttpTest` 3/3 · `WorkflowPublishHttpTest` 5/5 |
+
+**43.2 三条判据（本轮学到的）**
+
+1. ★ **"配置态"与"降级态"必须分开**：关掉多跳 / 关掉分解 / `queryCount=1` 都是"按配置少做几件事"，
+   可以出现在 `degradeReason` 里，但 `degradeLevel` 必须留在 0。否则 `degradeRate` 的分母里混进配置态，
+   「质量下降」会被读成「配置如此」。同族断言两条：`MultiHopTest.disabledMultiHopIsRecordedAsConfiguration` ·
+   `QueryUnderstandingServiceTest.disablingDecompositionIsConfigurationNotDegradation`。
+2. ★ **"契约有字段"不等于"用户能配"**：`RetrievalParams` 的三项在后端、在契约、在 `RetrievalParamsView` 里
+   都存在了整整一周，而两个配置面板都没做 —— 用户只能吃平台默认值。
+   这是 `#79` 第三格（消费点）在**字段层**的同族：页面"调了这条端点"是真的，但"该配的字段一个没发"也是真的。
+3. ★ **改一个线上形状，要 grep 出所有按旧形状拼请求体的地方**：`#262` 把草稿端点从字符串改成对象时，
+   我只改了手上的那个测试类；另外两个类各自有一份同样的夹具，于是整包四红。
+   **夹具比生产代码更容易被当成"不重要的一行"。**
+
+**43.3 仍未做**
+
+- 端到端读数：改 `queryCount=1` 后检索确实只发一条查询（`HitTestPanel` 已能显示实测值，但真栈读数仍归 `#223` 那批）。
+- 编排应用（WORKFLOW）的检索参数在画布里没有入口 —— 归 `#198` 的后续项。
+- D2（去分解）仍是**预留档位**（`10 §6.3.1` 已写明触发条件与为什么现在不接）。
