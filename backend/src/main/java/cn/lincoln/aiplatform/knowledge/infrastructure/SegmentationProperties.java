@@ -14,6 +14,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param segmentLength 分块目标长度默认值（字符）
  * @param overlap 重叠字符数默认值
  * @param maxChars 向量模型字符上限回落值
+ * @param contextWindow 上下文窗口字符数默认值（{@code #65}；{@code 0} = 关闭）。★ 详见 {@code 12 §3.3.1}： <strong>只进
+ *     {@code search_text}，不进 {@code content}</strong> —— 正是这一点让它允许跨章节
  */
 @ConfigurationProperties(prefix = "app.segmentation")
-public record SegmentationProperties(int segmentLength, int overlap, int maxChars) {}
+public record SegmentationProperties(
+    int segmentLength, int overlap, int maxChars, int contextWindow) {}

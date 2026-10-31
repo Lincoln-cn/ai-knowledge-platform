@@ -3,8 +3,10 @@ package cn.lincoln.aiplatform.knowledge;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import cn.lincoln.aiplatform.knowledge.domain.ChunkSource;
 import cn.lincoln.aiplatform.knowledge.domain.PlannedSegment;
 import cn.lincoln.aiplatform.knowledge.domain.SearchText;
+import cn.lincoln.aiplatform.knowledge.domain.SegmentPlan;
 import cn.lincoln.aiplatform.knowledge.domain.Segmenter;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -326,5 +328,113 @@ class SegmenterTest {
     assertThatThrownBy(() -> plan(md, 0, 0, 500)).isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> plan(md, 100, -1, 500)).isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> plan(md, 100, 100, 500)).isInstanceOf(IllegalArgumentException.class);
+  }
+
+  // ────────────────────────── 8 · 上下文滑动窗口（#65 · 12 §3.3.1） ──────────────────────────
+
+  /**
+   * ★ 答案被章节边界劈开的那份文档：前半句在上一节末尾，后半句在下一节开头，中间没有共享文本。
+   *
+   * <p>这正是 {@code #65} 的几何关系 —— 与"多跳没生效"的症状相同（都是"答案缺失"），所以必须有一条用例单独钉住它。
+   */
+  private static final String SPLIT_BY_HEADING =
+      """
+      # 第三章 差旅费
+
+      差旅费报销须经部门负责人审批，审批时限
+
+      ## 3.1 时限
+
+      为五个工作日，超过时限由财务部督办。
+      """;
+
+  private List<PlannedSegment> planWithWindow(String markdown, int maxChars, int window) {
+    return segmenter
+        .plan(markdown, 500, 0, maxChars, DOC_TYPE, ORG_CODE, TITLE, ChunkSource.TEXT, window)
+        .segments();
+  }
+
+  /** ★ 判据 2 的结构保证：窗口关闭（{@code 0}）时，9 参版与 8 参版必须逐字段相等。 */
+  @Test
+  void 关窗口时与旧路径逐字段相等() {
+    List<PlannedSegment> legacy = plan(SPLIT_BY_HEADING, 500, 0, 1200);
+
+    assertThat(planWithWindow(SPLIT_BY_HEADING, 1200, 0))
+        .as("★ 不回归：窗口关闭必须是恒等变换（否则判据 2 只能靠运气）")
+        .isEqualTo(legacy);
+  }
+
+  /**
+   * ★★ 核心语义：窗口<b>跨章节</b>把上一节末尾并进下一节的 {@code search_text}，而 {@code content} 一个字都不动。
+   *
+   * <p>「跨章节」与 {@code 12 §3.3:201} 的旧口径不冲突 —— 那条管的是<b>正文重叠</b>（会稀释语义、会误导引用），
+   * 而窗口只进索引。两个"重叠"名义相同、去向不同，{@code 12 §3.3.1} 把这条分野写死了。
+   */
+  @Test
+  void 窗口把邻段并进索引文本_但绝不进正文() {
+    List<PlannedSegment> on = planWithWindow(SPLIT_BY_HEADING, 1200, 80);
+
+    assertThat(on).as("夹具前提：必须切成两段").hasSize(2);
+    PlannedSegment second = on.get(1);
+    assertThat(second.content()).as("★ 正文不含邻段的话（引用抽屉展示的是正文，混进来就是误导）").doesNotContain("审批时限");
+    assertThat(second.searchText()).as("★ 索引文本含上一节的末尾 —— 这就是'跨章节也能被召回'的来源").contains("审批时限");
+    assertThat(second.searchText()).as("本段自己的内容仍在").contains("为五个工作日");
+
+    assertThat(on.get(0).searchText())
+        .as("★ 双向：前一段也并入后一段的开头（表在下一节、说明在上一节是同一类几何）")
+        .contains("为五个工作日");
+  }
+
+  /** ★ 窗口不进 {@code contentHash}：哈希标识的是"本段自己的材料"，否则改一个窗口配置就会让全库向量判废。 */
+  @Test
+  void 窗口不改变contentHash() {
+    assertThat(planWithWindow(SPLIT_BY_HEADING, 1200, 80).get(1).contentHash())
+        .as("★ 同一段正文 ⇒ 同一哈希（窗口是索引侧的上下文，不是这份材料的身份）")
+        .isEqualTo(planWithWindow(SPLIT_BY_HEADING, 1200, 0).get(1).contentHash());
+  }
+
+  /** ★ 判据 3：窗口有界、并入量可读、负值拒绝。 */
+  @Test
+  void 窗口有界且有读数() {
+    assertThat(
+            segmenter
+                .plan(
+                    SPLIT_BY_HEADING, 500, 0, 1200, DOC_TYPE, ORG_CODE, TITLE, ChunkSource.TEXT, 80)
+                .contextWindowChars())
+        .as("★ 并入的字符数必须可读 —— 否则'这周答案变长了'没人能解释")
+        .isPositive();
+    assertThat(
+            segmenter
+                .plan(
+                    SPLIT_BY_HEADING, 500, 0, 1200, DOC_TYPE, ORG_CODE, TITLE, ChunkSource.TEXT, 0)
+                .contextWindowChars())
+        .isZero();
+
+    // ★ 有界：无论预算多紧，任何一段的 searchText 都不得超过 maxChars（超长会被 SEG-I1 拒整篇）
+    for (int maxChars : new int[] {120, 200, 300, 500, 1200}) {
+      SegmentPlan bounded =
+          segmenter.plan(
+              SPLIT_BY_HEADING, 500, 0, maxChars, DOC_TYPE, ORG_CODE, TITLE, ChunkSource.TEXT, 80);
+      assertThat(bounded.segments())
+          .as("★ 窗口必须在预算里让路：maxChars=" + maxChars + " 时仍不许超长")
+          .allSatisfy(seg -> assertThat(seg.searchText().length()).isLessThanOrEqualTo(maxChars));
+      assertThat(bounded.contextWindowChars())
+          .as("★ 并入量是真实装进去的字符数，不是配置值")
+          .isLessThanOrEqualTo(80 * bounded.segments().size());
+    }
+
+    assertThatThrownBy(
+            () ->
+                segmenter.plan(
+                    SPLIT_BY_HEADING,
+                    500,
+                    0,
+                    1200,
+                    DOC_TYPE,
+                    ORG_CODE,
+                    TITLE,
+                    ChunkSource.TEXT,
+                    -1))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 }

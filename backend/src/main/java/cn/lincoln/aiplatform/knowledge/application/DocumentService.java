@@ -767,6 +767,32 @@ public class DocumentService {
   // ────────────────────────── 入库即分块（批 2b） ──────────────────────────
 
   /**
+   * 上下文窗口并入量留痕（{@code #65} 判据 3）。
+   *
+   * <p>★ 为什么要这一行：窗口会让"同一句话被章节劈开"从召回不到变成召回得到，代价是进向量的文本变长 ——
+   * 两件事都会改变检索读数。没有这条日志时，"这周答案变长了/变准了"只能靠猜；有了它，能对着文档与周次解释。
+   *
+   * <p>★ 它是<b>日志</b>而不是 Prometheus 指标，这是如实记账：指标那边只有三条业务指标（{@code #73}）， 加一条"窗口字数"的分布会把{@code 08
+   * §4.10.1} 定的"只报结果指标"这条纪律搅浑。代价是它不能画曲线， 只能在排查时 grep（`上下文窗口：文档`）。
+   */
+  private void logWindowUsage(Document document, List<PlannedSegment> plan) {
+    if (plan.isEmpty()) {
+      return;
+    }
+    long withWindow =
+        plan.stream().filter(p -> p.searchText() != null && p.searchText().contains("\n")).count();
+    if (withWindow == 0) {
+      return;
+    }
+    log.info(
+        "上下文窗口：文档 {}（{}）{} 段中有 {} 段并入了邻段上下文",
+        document.id(),
+        document.name(),
+        plan.size(),
+        withWindow);
+  }
+
+  /**
    * 入库即分块：调 {@link Segmenter#plan} 分块并落库（第 7 周 · 0.2.2 批 2b）。
    *
    * <p>★ 参数口径（领域配置，不是常量）：
@@ -800,8 +826,11 @@ public class DocumentService {
               document.docType(),
               orgCodes.codeOf(document),
               document.name(),
-              document.ocrDerived() ? ChunkSource.OCR : ChunkSource.TEXT);
+              document.ocrDerived() ? ChunkSource.OCR : ChunkSource.TEXT,
+              segmentationProperties.contextWindow());
       List<PlannedSegment> plan = planned.segments();
+      // ★ 窗口并入量要留痕（#65 判据 3）：否则"这周答案变长了"没人能解释 —— 记段数与字符数
+      logWindowUsage(document, plan);
       if (planned.removedNoiseLines() > 0) {
         // ★ 剥离掉的噪声要**留痕**：否则"为什么这份文档少了一页内容"没人能解释（12 §2.4）
         log.info(

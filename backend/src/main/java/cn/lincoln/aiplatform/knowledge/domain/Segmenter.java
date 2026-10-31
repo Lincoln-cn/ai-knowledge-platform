@@ -127,6 +127,41 @@ public class Segmenter {
       String orgCode,
       String title,
       ChunkSource source) {
+    // ★ 8 参版 = 窗口关闭。既有调用方与全部既有测试走的都是它 ⇒ 输出逐字节不变（#65 判据 2）
+    return plan(markdown, segmentLength, overlap, maxChars, docType, orgCode, title, source, 0);
+  }
+
+  /**
+   * 产出有序分段计划 —— 外加<b>上下文滑动窗口</b>（{@code #65} · {@code 12 §3.3.1}）。
+   *
+   * <p>★★ <b>窗口只进 {@code search_text}，不进 {@code content}</b>。这一个决定同时买到三件事：
+   *
+   * <ol>
+   *   <li>它可以<b>跨章节</b>取邻块的尾/头 —— {@code 12 §3.3:201} 那条"不跨章节"的理由是「会把上一章尾巴混进
+   *       <b>正文</b>、稀释语义、误导引用」，而索引侧文本不会被展示、也不会被引用，那条理由不适用（{@code 12 §3.3.1} 的裁定）；
+   *   <li>引用编号、{@code charCount}、{@code content_hash} 全部只看本段正文 ⇒ <b>零副作用</b>；
+   *   <li>关掉窗口时它与今天完全一致（8 参版传 0）⇒ 判据 2 的"不回归"是结构保证，不靠运气。
+   * </ol>
+   *
+   * <p>★ 窗口<b>有界且让路</b>：先按 {@code segmentLength} 装箱（不变），再在「{@code maxChars − 前缀 − 分隔 − 本段正文」的剩余预算里装窗口，
+   * 装不下就少装或不装 —— 与 {@code 12 §3.3} 的"宁可少重叠，不可超长"同一条纪律（超长会被 {@code SEG-I1} 拒整篇）。
+   *
+   * @param contextWindow 窗口字符数上限（{@code 0} = 关闭）；取自 {@code app.segmentation.context-window}
+   * @throws IllegalArgumentException {@code contextWindow < 0}
+   */
+  public SegmentPlan plan(
+      String markdown,
+      int segmentLength,
+      int overlap,
+      int maxChars,
+      String docType,
+      String orgCode,
+      String title,
+      ChunkSource source,
+      int contextWindow) {
+    if (contextWindow < 0) {
+      throw new IllegalArgumentException("上下文窗口必须 ≥ 0（0 表示关闭），当前：" + contextWindow);
+    }
     if (segmentLength <= 0) {
       throw new IllegalArgumentException("分块长度必须为正数，当前：" + segmentLength);
     }
@@ -166,14 +201,30 @@ public class Segmenter {
 
     ChunkSource effective = source == null ? ChunkSource.TEXT : source;
     List<SegmentChunk> chunks = chunker.chunk(stripped.markdown(), target, overlap, effective);
-    List<PlannedSegment> plan = new ArrayList<>(chunks.size());
+    // 先把每段"进向量的正文"算出来（表格是行级陈述）—— 窗口要读邻段的这一份，不是原始 markdown 片段
+    List<String> bodies = new ArrayList<>(chunks.size());
     for (SegmentChunk chunk : chunks) {
+      bodies.add(chunk.isTable() ? tableRewriter.rewrite(chunk.content()) : chunk.content());
+    }
+    List<PlannedSegment> plan = new ArrayList<>(chunks.size());
+    int windowedChars = 0;
+    for (int index = 0; index < chunks.size(); index++) {
+      SegmentChunk chunk = chunks.get(index);
       String prefix = SearchText.prefix(docType, orgCode, title, chunk.titlePath());
       // ★ 表格分段：进检索文本的是**行级陈述**（判据 ③），而 content 保留原表（引用可溯源）
-      String body = chunk.isTable() ? tableRewriter.rewrite(chunk.content()) : chunk.content();
+      String body = bodies.get(index);
+      // ★ 窗口只改 searchText（见本方法重载的 javadoc）：预算 = 向量上限 − 前缀 − 分隔 − 本段正文
+      String window =
+          windowFor(
+              bodies,
+              index,
+              contextWindow,
+              maxChars - prefix.length() - SearchText.SEPARATOR.length() - body.length());
+      String indexed = window.isEmpty() ? body : body + "\n" + window;
+      windowedChars += window.length();
       // ★ 校验与落库必须是同一个字符串：把 ofSearchText 的产物直接当 searchText 用，
       //   避免「我验的和我要存的是两次独立拼装」这类只在边界上才暴露的漂移（SEG-I1 / SEG-I5）
-      String searchText = SegmentContent.ofSearchText(prefix, body, maxChars).text();
+      String searchText = SegmentContent.ofSearchText(prefix, indexed, maxChars).text();
       plan.add(
           new PlannedSegment(
               chunk.ordinal(),
@@ -189,7 +240,83 @@ public class Segmenter {
               chunk.isCode(),
               chunk.oversizedRisk()));
     }
-    return new SegmentPlan(plan, stripped.removedLines());
+    return new SegmentPlan(plan, stripped.removedLines(), windowedChars);
+  }
+
+  /**
+   * 给第 {@code index} 段取上下文窗口（{@code 12 §3.3.1}）。
+   *
+   * <p>★ <b>跨章节是刻意的</b>：上一节末尾「…见下表」与下一节开头「表 3 报销审批时限为 5 个工作日」本是一件事的两半， 而它们之间没有任何共享文本 ——
+   * 只在同章节内取窗口，这一半永远补不上（这正是 {@code #65} 的现象）。
+   *
+   * <p>★ 顺序是「前段尾 + 换行 + 后段头」，且互不重叠：窗口是给检索用的，不是给阅读用的。
+   *
+   * @param bodies 各段进向量的正文（已含表格改写），窗口只从这里取 —— 不从 markdown 原文取，否则会取到标题行
+   * @param index 当前段下标
+   * @param windowChars 窗口上限（{@code 0} = 关闭）
+   * @param budget 剩余预算（{@code ≤ 0} 表示本段已无余量 ⇒ 不装窗口，宁可少窗口不可超长）
+   * @return 窗口文本；无邻段或预算不足时返回空串
+   */
+  private static String windowFor(List<String> bodies, int index, int windowChars, int budget) {
+    if (windowChars <= 0 || budget <= 0) {
+      return "";
+    }
+    int limit = Math.min(windowChars, budget);
+    int half = Math.max(1, limit / 2);
+    String before = index > 0 ? tail(bodies.get(index - 1), half) : "";
+    String after =
+        index + 1 < bodies.size() ? head(bodies.get(index + 1), limit - before.length()) : "";
+    String joined = before.isEmpty() ? after : (after.isEmpty() ? before : before + "\n" + after);
+    return joined.length() <= limit ? joined : tail(joined, limit);
+  }
+
+  /** 取尾部至多 {@code max} 字，起点尽量落在句/行边界上（避免半句被当成上下文）。 */
+  private static String tail(String text, int max) {
+    if (text == null || text.isEmpty() || max <= 0) {
+      return "";
+    }
+    String piece = text.length() <= max ? text : text.substring(text.length() - max);
+    int boundary = firstBoundary(piece);
+    // 只在"边界落在前半段"时截断：落在后半段说明这段本来就从半句起，再截就几乎没内容了
+    if (boundary >= 0 && boundary < piece.length() / 2) {
+      piece = piece.substring(boundary + 1);
+    }
+    return piece.strip();
+  }
+
+  /** 取头部至多 {@code max} 字，终点尽量落在句/行边界上。 */
+  private static String head(String text, int max) {
+    if (text == null || text.isEmpty() || max <= 0) {
+      return "";
+    }
+    String piece = text.length() <= max ? text : text.substring(0, max);
+    int boundary = lastBoundary(piece);
+    if (boundary > piece.length() / 2) {
+      piece = piece.substring(0, boundary + 1);
+    }
+    return piece.strip();
+  }
+
+  private static int firstBoundary(String text) {
+    for (int i = 0; i < text.length(); i++) {
+      if (isBoundary(text.charAt(i))) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  private static int lastBoundary(String text) {
+    for (int i = text.length() - 1; i >= 0; i--) {
+      if (isBoundary(text.charAt(i))) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  private static boolean isBoundary(char c) {
+    return c == '\n' || c == '。' || c == '；' || c == '！' || c == '？';
   }
 
   private static boolean blank(String value) {
