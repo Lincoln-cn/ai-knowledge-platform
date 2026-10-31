@@ -4,6 +4,8 @@ import cn.lincoln.aiplatform.assistant.domain.WorkflowVersion;
 import cn.lincoln.aiplatform.assistant.domain.WorkflowVersionRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceException;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
@@ -50,5 +52,21 @@ public class WorkflowVersionRepositoryAdapter implements WorkflowVersionReposito
           e);
     }
     return version;
+  }
+
+  @Override
+  public List<WorkflowVersion> history(UUID assistantId) {
+    return versions.findByAssistantIdOrderByVersionDesc(assistantId);
+  }
+
+  /** ★ 原样透传 {@code findById}：<strong>不过滤应用</strong>，越权判定在应用层（见端口注释）。 */
+  @Override
+  public Optional<WorkflowVersion> findById(UUID id) {
+    return versions.findById(id);
+  }
+
+  @Override
+  public Optional<WorkflowVersion> findVersion(UUID assistantId, int version) {
+    return versions.findByAssistantIdAndVersion(assistantId, version);
   }
 }

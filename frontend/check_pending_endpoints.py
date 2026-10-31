@@ -55,14 +55,6 @@ PENDING = {
         "issue": "#198",
         "guard": "",
     },
-    "GET /assistants/{*}/workflow/versions": {
-        "issue": "#198",
-        "guard": "workflow/components/common/PublishHistory.vue getList 的 catch ⇒ 「查看发布历史」还没接后端（列表归空 + loading 收掉）",
-    },
-    "GET /assistants/{*}/workflow/versions/{*}": {
-        "issue": "#198",
-        "guard": "workflow/Index.vue previewVersion 的 catch ⇒ 「预览历史版本」还没接后端",
-    },
     "POST /assistants/{*}/workflow/versions/{*}/rollback": {
         "issue": "#198",
         "guard": "",

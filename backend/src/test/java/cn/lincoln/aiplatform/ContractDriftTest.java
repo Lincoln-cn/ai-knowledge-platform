@@ -94,10 +94,11 @@ class ContractDriftTest {
           //   ★ POST /assistants/import 与 /import/check 已随导入子项落地（2026-10-24）
           //   ★ GET/POST /assistants/{*}/api-keys 与 PATCH …/enabled 已随 API Key 子项落地（2026-10-24）
           //   ★ POST /assistants/{*}/workflow/publish 已随 #198 第四块落地（2026-10-31），从欠账里摘掉
+          //   ★ GET /assistants/{*}/workflow/versions 与 …/versions/{*} 已随 #198
+          // 第五块落地（2026-10-31），从欠账里摘掉
+          //     （列表只读、按 version 降序；详情返回发布时的图快照；两条都用 assistant:view）
           missing("POST", "/assistants/{*}/workflow/debug", "#198", "15–18 周"),
           missing("GET", "/assistants/{*}/workflow/records", "#198", "15–18 周"),
-          missing("GET", "/assistants/{*}/workflow/versions", "#198", "15–18 周"),
-          missing("GET", "/assistants/{*}/workflow/versions/{*}", "#198", "15–18 周"),
           missing("POST", "/assistants/{*}/workflow/versions/{*}/rollback", "#198", "15–18 周"),
           // ★ conversations（0）—— GET/PATCH/DELETE /conversations/{id} 已随 #187 落地，
           //   会话分享三条也已在 2026-10-25 落地（V53 + 公开面 /public/shares/{token}）
