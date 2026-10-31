@@ -1,16 +1,12 @@
 package cn.lincoln.aiplatform.assistant.web;
 
+import cn.lincoln.aiplatform.assistant.application.NodeTypeCatalog;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
-import java.io.IOException;
-import java.io.InputStream;
 import java.util.List;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import tools.jackson.core.type.TypeReference;
-import tools.jackson.databind.ObjectMapper;
 
 /**
  * 节点目录（契约 {@code GET /workflow/node-types}，{@code #198} 第二块）。
@@ -25,24 +21,16 @@ import tools.jackson.databind.ObjectMapper;
 @RequestMapping("/api/v1/workflow")
 public class WorkflowNodeTypeController {
 
-  private static final String RESOURCE = "workflow/node-types.json";
+  private final NodeTypeCatalog catalog;
 
-  private final ObjectMapper objectMapper;
-
-  public WorkflowNodeTypeController(ObjectMapper objectMapper) {
-    this.objectMapper = objectMapper;
+  public WorkflowNodeTypeController(NodeTypeCatalog catalog) {
+    this.catalog = catalog;
   }
 
   /** 全部节点（含未实现的）；未实现者 {@code implemented=false}，界面据此标「规划中」。 */
   @GetMapping("/node-types")
   @PreAuthorize("hasAuthority('assistant:view')")
-  public ApiResponse<List<NodeTypeMeta>> list() throws IOException {
-    try (InputStream in = new ClassPathResource(RESOURCE).getInputStream()) {
-      return ApiResponse.ok(objectMapper.readValue(in, new TypeReference<List<NodeTypeMeta>>() {}));
-    }
+  public ApiResponse<List<NodeTypeCatalog.NodeTypeMeta>> list() {
+    return ApiResponse.ok(catalog.all());
   }
-
-  /** 目录条目（契约 {@code NodeTypeMeta}）。 */
-  public record NodeTypeMeta(
-      String type, String label, String description, String category, boolean implemented) {}
 }

@@ -9,3 +9,8 @@
 #   理由是"画布读的是 mock 夹具" —— 那是**错的**。画布经 `api/legacy/setting.ts` 的 `addSubmit`
 #   真的在调它，只是门禁只扫 `api/*.ts` 顶层、看不见包装层。真正修的是门禁（`d00a94a` 之后），
 #   不是给它编一个理由。⇒ 判据：**"零消费"要先排除"看不见"，再谈"没接"。**
+
+# ★ 2026-10-31：`POST /workflow/validate` 后端已落（`#198` 第三块），页面还没接 ——
+#   今天发布走的是页面本地 `validateGraph` + mock 发布，接它会变成两套校验各说各的话。
+#   接线点定在「发布固化」那一块：发布动作改成先调它、按 issues 高亮节点。
+POST	/assistants/{}/workflow/validate	#198

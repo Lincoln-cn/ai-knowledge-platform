@@ -96,7 +96,6 @@ class ContractDriftTest {
           missing("POST", "/assistants/{*}/workflow/debug", "#198", "15–18 周"),
           missing("POST", "/assistants/{*}/workflow/publish", "#198", "15–18 周"),
           missing("GET", "/assistants/{*}/workflow/records", "#198", "15–18 周"),
-          missing("POST", "/assistants/{*}/workflow/validate", "#198", "15–18 周"),
           missing("GET", "/assistants/{*}/workflow/versions", "#198", "15–18 周"),
           missing("GET", "/assistants/{*}/workflow/versions/{*}", "#198", "15–18 周"),
           missing("POST", "/assistants/{*}/workflow/versions/{*}/rollback", "#198", "15–18 周"),
