@@ -167,16 +167,11 @@ export interface PreviewSegmentationResult {
   removedNoiseLines?: number
 }
 
-/** #11 暂存上传回执 */
-export interface StageUploadsResult {
-  uploadIds: string[]
-}
-
 /**
  * #11/#P1 导入请求。★ 两套形状并存，口径如下（后端 `RegisterDocumentsBody` 同步）：
  *
  * - `names` = **轻量建档**（只登记文档名，不带文件）—— 当前后端唯一消费的形态
- * - `uploadIds` = **暂存上传后的导入**（`stageUploads` 的产物）—— **后端尚未消费**，属欠账
+ * - `uploadIds` = 暂存上传后的导入形态 —— ★ 暂存上传端点已撤（`#211`：零消费方），本字段**没有生产者**
  *
  * ★ 至少给一种；**同时给时以 `names` 为准**。
  * 只传 `uploadIds` / `segmentationPlan` 而不传 `names` ⇒ 400（禁止「收下但不用」的静默忽略）。
@@ -187,7 +182,7 @@ export interface ImportDocumentsBody {
    */
   names?: string[]
   /**
-   * 暂存上传后的导入（`stageUploads` 产物）。★ 后端尚未消费 —— 只传它不传 `names` 会 400；
+   * 暂存上传后的导入形态。★ 暂存上传端点已撤（`#211`），本字段没有生产者；只传它不传 `names` 会 400；
    * 与 `names` 同传时以 `names` 为准。保留字段等上传链落地，**不代表它已生效**。
    */
   uploadIds?: string[]
@@ -395,18 +390,6 @@ export const reembedKnowledgeBase = (kbId: string) =>
     url: '/knowledge-bases/:kbId/reembed',
     path: { kbId }
   })
-
-/** #11 暂存上传：只落文件、不建文档，预览与导入共用这批 `uploadIds` */
-export const stageUploads = (kbId: string, files: File[]) => {
-  const form = new FormData()
-  files.forEach((file) => form.append('files', file))
-  return request<StageUploadsResult>({
-    method: 'POST',
-    url: '/knowledge-bases/:kbId/uploads',
-    path: { kbId },
-    body: form
-  })
-}
 
 /**
  * #11 导入建档。★ 当前后端只消费 `names`（轻量建档）；`uploadIds` / `segmentationPlan`

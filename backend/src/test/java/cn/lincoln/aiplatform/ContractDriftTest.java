@@ -109,7 +109,6 @@ class ContractDriftTest {
           // ★ files（1）—— 第 17 周随问答链路：附件上传（multipart）
           missing("POST", "/files", "#187", "17 周"),
           // ★ knowledge-bases（1）—— 建档/文档已落地；余下暂存上传一条，属 P1
-          missing("POST", "/knowledge-bases/{*}/uploads", "#211", "P1（出现消费方再做）"),
           // ★ workflow（1）—— 第 15 周 0.4.3 / M5.5：编排画布接契约的节点类型查询
           missing("GET", "/workflow/node-types", "#198", "15–16 周"));
 

@@ -1168,7 +1168,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | open Issue | **44 条**（`#211` 新立后） |
 | 本轮新增收口 | `#197` 上传策略（PR #210 / `4fe6829`）· `#208` 反馈沉淀写问答对（PR #209 / `83c6e8a`）· `#114` 03 册 SSE 示例订正（`ddbea51`）· `#79` 前端消费点读数工具关闭（`a925cdb`） |
 | 上传入口 | `GET /knowledge-bases/{kbId}/upload-policy` 已落（100 MB / 20 个 / 5 类扩展名）；`POST /knowledge-bases/{id}/documents` 仍是实际上传路径 |
-| 暂存上传 | `POST /knowledge-bases/{*}/uploads` 仍缺，但**零页面消费**；已从 `#197` 拆到 `#211`，`ContractDriftTest` 台账改指向 `#211`。在出现消费方之前不实现 |
+| 暂存上传 | ★ `POST /knowledge-bases/{*}/uploads` **已撤**（2026-10-31，`#211` 选项 A）：前端契约 `stageUploads`、mock 路由、`ContractDriftTest` 台账行、`check_pending_endpoints.py` 的账**四处一并删掉**。理由 = 零消费方，按「不造空转入口」；将来出现消费方（大文件分片 / 断点续传 / 上传队列）时，端点 / 契约 / 消费点**三格一起补** |
 | 反馈沉淀 | `FeedbackService` 经 `FeedbackPromotionPort` 调 `QaPairService.importPairs`，`(kbId, sourceRef=feedback:<messageId>)` 幂等；`#208` 已关闭 |
 | 验证 | #210：真栈 13/13 · 后端全量 997 例 · 7/7 checks；#208：`FeedbackHttpTest` 1/1 · `ContractDriftTest` 15/15；#114：`check_design.py` 9/9；#79：`check_contract_consumers.py --self-test` 通过 |
 | 下一会话 | 先读 `innerdoc/docs/交接-2026-10-24-上传策略与反馈沉淀.md`；优先从 `#195` 拆一个**有页面消费**的子项（收藏 / 标签 / API Key / grants 目前都缺存储），或单独做 `#187` 的分享/附件；不要接 `#198`（依赖 `#112`/`#113`） |
@@ -1294,14 +1294,14 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 
 **4. 功能级未完成（不挡 0.5.0，但"功能没做完"）**
 
-**4.1 契约有、后端无：12 条**（`ContractDriftTest.KNOWN_MISSING` = 9 + 1 + 1 + 1；收藏 / 标签 / 共享写 / 导入 / API Key / 会话分享共 13 条已落）
+**4.1 契约有、后端无：11 条**（`ContractDriftTest.KNOWN_MISSING` = 9 + 1 + 1；收藏 / 标签 / 共享写 / 导入 / API Key / 会话分享共 13 条已落；★ 2026-10-31 `#211` 撤掉 `POST /knowledge-bases/{*}/uploads` 一行 ⇒ 12 → 11）
 
 | 模块 | 条数 | 端点 | 页面消费 | 影响 / 处置 |
 |---|---|---|---|---|
 | workflow | **10** | `#198` 的 9 条 + `GET /workflow/node-types` | 画布只用本地状态；`workflowApi` **只在 `api/index.ts` 导出**，无页面引用 | 存草稿/校验/发布/回滚/记录全走不通。M5.5 排第 19 周起 |
 | conversation | **1** | `POST /files` | 会话页附件按钮 | 上传端点 404；即使上传，问答链路也不消费（`ChatController` 注释逐字）。`#187` 的 shares 三条已于 2026-10-25 落地，见 11.10.17 |
-| knowledge | **1** | `POST /knowledge-bases/{id}/uploads` | **无** | `#211`；零消费，按「不造空转入口」不做 |
-| **合计** | **12** | | | 均**不挡 0.5.0** |
+| knowledge | **0** | —（`POST /knowledge-bases/{id}/uploads` 已撤，`#211`） | — | 零消费方，契约与台账一并删；出现消费方时三格一起补 |
+| **合计** | **11** | | | 均**不挡 0.5.0** |
 
 **4.2 后端有、页面零消费：0 条**（`tools/check_contract_consumers.py` 2026-10-25 复跑：124 条契约端点 / 0 条零消费）
 
@@ -1930,7 +1930,7 @@ artifact 的 `backend.log` 里只有五条 Tomcat 层 NPE —— `MimeHeaders.re
 | A 组 | A2/A3/A4/A5/A8/A9 **✅** · **A1 🟡**（三个场景各自贯通，但缺**跨场景**读法）· **A6 🟡**（10 轮窗口有读数，**「指代」要真模型**）· **A7 🟡**（八处写入口带反证，缺三处） |
 | B 组 | **B1–B7 全 ⬜**；且 **B4/B5/B6/B7 的脚本不存在** —— `frontend/` 下 48 个 `check_*.py`，没有一条是 B4–B7 |
 | 前端四件 | F3 **✅** · **F1 随 M5.5** · **F2 首次引导全库 0 命中** · **F4 空态/错误态盘点未做** |
-| 端点 | 契约有后端无 **12 条**（`workflow` 10 + `POST /conversations/*/files` + `POST /knowledge-bases/*/uploads`）；后端有页面零消费 **0 条** |
+| 端点 | 契约有后端无 **11 条**（`workflow` 10 + `POST /conversations/*/files`）；后端有页面零消费 **0 条** |
 | 外部输入 | **P1 语料 0 份** · **真模型 0 个**（全部走桩）· 本机**无 Docker** |
 | Open Issue | **45 条**（`gh issue list --state open` 实测） |
 

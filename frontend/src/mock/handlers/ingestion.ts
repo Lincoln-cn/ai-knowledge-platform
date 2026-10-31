@@ -141,51 +141,6 @@ const UPLOAD_POLICY: UploadPolicy = {
 }
 
 /**
- * #11 暂存上传。只落文件元数据与可识别的正文占位，**不建文档**——
- * 预览与导入共用这批 `uploadIds`，用户在预览里改的切分计划才会被真正采纳。
- */
-interface StagedUpload {
-  id: string
-  kbId: string
-  name: string
-  size: number
-  text: string
-}
-const stagedUploads = new Map<string, StagedUpload>()
-
-/** 从请求体里抽文件元数据。真 FormData 优先；兼容测试直传的 { files: [{name,size}] } */
-function extractFiles(body: unknown): Array<{ name: string; size: number }> {
-  if (body && typeof body === 'object' && typeof (body as FormData).entries === 'function') {
-    const out: Array<{ name: string; size: number }> = []
-    for (const [, value] of (body as FormData).entries()) {
-      if (value && typeof value === 'object' && 'name' in value && 'size' in value) {
-        const f = value as File
-        out.push({ name: String(f.name || '未命名文件'), size: Number(f.size) || 0 })
-      }
-    }
-    return out
-  }
-  const raw = body as { files?: Array<{ name: string; size?: number }> } | null
-  if (raw?.files && Array.isArray(raw.files)) {
-    return raw.files.map((f) => ({ name: String(f.name ?? '未命名文件'), size: Number(f.size) || 0 }))
-  }
-  return []
-}
-
-/** 暂存文件的正文占位：按文件名生成可切分的文本，让预览真的"基于用户文件" */
-function stagedText(upload: StagedUpload): string {
-  if (upload.text) return upload.text
-  const base = upload.name.replace(/\.[^.]+$/, '')
-  return (
-    `「${base}」的内容提要。` +
-    `本文件共约 ${upload.size} 字节，按段落与语义边界切分后进入知识库。` +
-    `第一条说明适用范围与职责分工。第二条给出操作流程与质量要求。` +
-    `第三条约定例外情形的审批路径。第四条明确归档与保存期限。` +
-    `第五条说明本文件的解释权与生效日期。`
-  ).repeat(3)
-}
-
-/**
  * #11 把用户确认过的切分计划落成真实分段。
  * 这是"预览里的可编辑生效"的唯一通道 —— 不再只改本地数组。
  */
@@ -780,17 +735,17 @@ export const ingestionRoutes: MockRoute[] = [
         )
       }
 
-      // #11 优先走暂存 uploadIds —— 预览必须基于**用户自己的文件**，不是内置语料
-      let sourceText = input.content ?? ''
+      // #211：暂存上传端点已撤（零消费方），所以 uploadIds 形态**没有生产者**。
+      // 这里明确拒绝而不是静默忽略 —— 「收下但不用」会让预览看起来成功、内容却是另一样。
       if (input.uploadIds?.length) {
-        const parts: string[] = []
-        for (const uid of input.uploadIds) {
-          const up = stagedUploads.get(uid)
-          if (!up) throw new ApiError(ErrorCode.BAD_REQUEST, `暂存文件「${uid}」不存在或已过期`, '请重新选择文件后再试')
-          parts.push(stagedText(up))
-        }
-        sourceText = parts.join('\n')
-      } else if (input.documentId) {
+        throw new ApiError(
+          ErrorCode.BAD_REQUEST,
+          'uploadIds 形态已撤（#211 暂存上传无消费方）',
+          '预览请改用 documentId：先建档，再按该文档的解析产物预览'
+        )
+      }
+      let sourceText = input.content ?? ''
+      if (input.documentId) {
         const doc = documents.find((d) => d.id === input.documentId)
         // ★ 与真后端同口径：不存在/不可见 ⇒ 404（不泄漏存在性），不再"保持纯计算预览"的旧行为
         if (!doc) throw new ApiError(404, '文档不存在', '它可能已被删除，或你没有访问权限')
@@ -948,51 +903,7 @@ export const ingestionRoutes: MockRoute[] = [
     }
   ],
 
-  /* ── #11 暂存上传 · P1 上传策略 ── */
-
-  [
-    'POST',
-    '/knowledge-bases/:kbId/uploads',
-    ({ path, body, token }) => {
-      const kbId = path.kbId
-      gateKb(kbId, token, PERM.documentUpload, '知识库', kbId)
-
-      const files = extractFiles(body)
-      if (!files.length) {
-        throw new ApiError(ErrorCode.BAD_REQUEST, '未读到待上传的文件', '请重新选择文件后再试')
-      }
-      if (files.length > UPLOAD_POLICY.maxFileCount) {
-        throw new ApiError(
-          ErrorCode.BAD_REQUEST,
-          `一次最多上传 ${UPLOAD_POLICY.maxFileCount} 个文件`,
-          '请分批上传'
-        )
-      }
-
-      const uploadIds: string[] = []
-      for (const f of files) {
-        const ext = f.name.includes('.') ? f.name.slice(f.name.lastIndexOf('.')).toLowerCase() : ''
-        if (UPLOAD_POLICY.acceptedExtensions.length && ext && !UPLOAD_POLICY.acceptedExtensions.includes(ext)) {
-          throw new ApiError(
-            ErrorCode.BAD_REQUEST,
-            `不支持的文件类型「${ext}」`,
-            `支持：${UPLOAD_POLICY.acceptedExtensions.join(' / ')}`
-          )
-        }
-        if (f.size > UPLOAD_POLICY.maxFileSizeMB * 1024 * 1024) {
-          throw new ApiError(
-            ErrorCode.BAD_REQUEST,
-            `文件「${f.name}」超过 ${UPLOAD_POLICY.maxFileSizeMB}MB 上限`,
-            '请压缩或拆分后再传'
-          )
-        }
-        const id = `up_${Date.now().toString(36)}_${uploadIds.length}`
-        stagedUploads.set(id, { id, kbId, name: f.name, size: f.size, text: '' })
-        uploadIds.push(id)
-      }
-      return { uploadIds }
-    }
-  ],
+  /* ── P1 上传策略 ── */
 
   [
     'GET',

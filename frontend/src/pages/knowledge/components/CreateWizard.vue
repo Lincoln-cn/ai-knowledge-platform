@@ -470,7 +470,7 @@ const clientRequestId = ref('')
  *
  * ★ 走「建档即解析 + 入库即分块」这条真实链路（0.2.1/0.2.2）：上传即建档，预览按 documentId 做
  *   （预览与入库用同一个分块器，第 7 周判据 ④）。
- * ⚠️ 早先这里走的是 mock 时代的「暂存上传 uploadIds → 按暂存文件预览」，而 `/uploads` 至今未实现
+ * ⚠️ 早先这里走的是 mock 时代的「暂存上传 uploadIds → 按暂存文件预览」，而 `/uploads` 已在 `#211` 里连同契约一起撤掉（零消费方）
  *   ⇒ 真栈下预览必然 400，等于「创建知识库 + 生成预览」整条不可用。
  */
 const ingestedDocs = ref<DocumentItem[]>([])
