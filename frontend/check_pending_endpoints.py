@@ -45,10 +45,10 @@ PENDING = {
         "issue": "#198",
         "guard": "",
     },
-    "POST /assistants/{*}/workflow/publish": {
-        "issue": "#198",
-        "guard": "workflow/Index.vue publicHandle 原有 catch ⇒ 走「发布失败」提示（含取消发布对话框的字符串 reject 分支）",
-    },
+    # ★ 已落：POST /assistants/{*}/workflow/publish 随 #198 第四块后端交付（2026-10-31），
+    #   故从本账里摘掉 —— 后端台账（ContractDriftTest.KNOWN_MISSING）同一时刻摘的同一条。
+    #   ⚠️ 摘掉的是"端点缺失"这笔账，**不是**"页面已接发布"：前端仍无页面调用
+    #   `publishWorkflow`（只有 `frontend/src/api/workflow.ts` 的契约声明），那一格另有欠账。
     "GET /assistants/{*}/workflow/records": {
         "issue": "#198",
         "guard": "",

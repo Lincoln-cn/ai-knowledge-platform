@@ -87,14 +87,14 @@ class ContractDriftTest {
    */
   private static final List<MissingEndpoint> KNOWN_MISSING =
       List.of(
-          // ★ assistants（9）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置只剩编排 9 条（#198）
+          // ★ assistants（5）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置只剩编排 5 条（#198）
           //   ★ 收藏两条（POST/DELETE /assistants/{*}/favorite）已随 #195 的收藏子项落地，故从欠账里摘掉
           //   ★ GET /assistants/tags 已随 #195 的标签子项落地（2026-10-24），同样摘掉
           //   ★ PUT /assistants/{*}/grants 与 PATCH /assistants/{*}/visibility 已随 #195 的共享写子项落地
           //   ★ POST /assistants/import 与 /import/check 已随导入子项落地（2026-10-24）
           //   ★ GET/POST /assistants/{*}/api-keys 与 PATCH …/enabled 已随 API Key 子项落地（2026-10-24）
+          //   ★ POST /assistants/{*}/workflow/publish 已随 #198 第四块落地（2026-10-31），从欠账里摘掉
           missing("POST", "/assistants/{*}/workflow/debug", "#198", "15–18 周"),
-          missing("POST", "/assistants/{*}/workflow/publish", "#198", "15–18 周"),
           missing("GET", "/assistants/{*}/workflow/records", "#198", "15–18 周"),
           missing("GET", "/assistants/{*}/workflow/versions", "#198", "15–18 周"),
           missing("GET", "/assistants/{*}/workflow/versions/{*}", "#198", "15–18 周"),

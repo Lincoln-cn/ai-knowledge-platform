@@ -48,7 +48,18 @@ public enum AuditAction {
    *
    * <p>恢复也是"边界被移动"：内容重新进入检索面。删除有痕、恢复没痕，等于只记了一半。
    */
-  DOCUMENT_RESTORE("document.restore");
+  DOCUMENT_RESTORE("document.restore"),
+
+  /**
+   * 发布一个编排版本（`#198` 第四块）。
+   *
+   * <p>★ 为什么发布必须留痕：它把"画布上正在改的图"变成"线上正在跑的那一版"，是一次 <strong>面向使用者的行为切换</strong>。没有这条记录，事后无法回答"第 3
+   * 版是谁在什么时候推的"， 也无法把一次线上异常对齐到具体版本。
+   *
+   * <p>明细里带 {@code version} 与 {@code nodeCount}：前者是"哪一版"，后者是"这次改了多少" （只记版本号时，两个相邻版本差 1 个节点与差 20
+   * 个节点在审计里读起来一样）。图原文不进明细 —— 它已经完整存在 {@code as_workflow_version.graph}，抄进审计表只会让审计表膨胀且两处可能不一致。
+   */
+  WORKFLOW_PUBLISH("workflow.publish");
 
   private final String code;
 

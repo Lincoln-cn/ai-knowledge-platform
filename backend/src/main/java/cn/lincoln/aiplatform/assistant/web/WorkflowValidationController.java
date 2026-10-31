@@ -2,8 +2,6 @@ package cn.lincoln.aiplatform.assistant.web;
 
 import cn.lincoln.aiplatform.assistant.application.WorkflowValidationService;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -16,8 +14,8 @@ import tools.jackson.databind.JsonNode;
 /**
  * 发布前校验（{@code #198} 第三块；契约 {@code validateWorkflow}）。
  *
- * <p>★ 手动从 {@link JsonNode} 里取校验需要的字段，而不是把请求体绑成服务里的记录： 图里还带着 {@code position} / {@code config}
- * 等这一层不判的东西，绑成记录就得让它们跟着 fail-fast， 结果"多传一个字段"变成 400 —— 而校验端点最不该因为这件事拒绝。
+ * <p>★ 手动从 {@link JsonNode} 里取校验需要的字段（见 {@link WorkflowGraphReader}），而不是把请求体绑成服务里的记录： 图里还带着 {@code
+ * position} / {@code config} 等这一层不判的东西，绑成记录就得让它们跟着 fail-fast， 结果"多传一个字段"变成 400 —— 而校验端点最不该因为这件事拒绝。
  */
 @RestController
 @RequestMapping("/api/v1/assistants/{appId}/workflow")
@@ -34,27 +32,6 @@ public class WorkflowValidationController {
   @PreAuthorize("hasAuthority('assistant:edit')")
   public ApiResponse<WorkflowValidationService.Result> validate(
       @PathVariable UUID appId, @RequestBody JsonNode body) {
-    return ApiResponse.ok(validations.validate(graph(body.path("graph"))));
-  }
-
-  private static WorkflowValidationService.Graph graph(JsonNode node) {
-    List<WorkflowValidationService.Node> nodes = new ArrayList<>();
-    for (JsonNode item : node.path("nodes")) {
-      nodes.add(
-          new WorkflowValidationService.Node(
-              text(item, "id"), text(item, "type"), text(item, "title")));
-    }
-    List<WorkflowValidationService.Edge> edges = new ArrayList<>();
-    for (JsonNode item : node.path("edges")) {
-      edges.add(
-          new WorkflowValidationService.Edge(
-              text(item, "id"), text(item, "source"), text(item, "target")));
-    }
-    return new WorkflowValidationService.Graph(nodes, edges);
-  }
-
-  private static String text(JsonNode node, String field) {
-    JsonNode value = node.path(field);
-    return value.isString() ? value.asString() : null;
+    return ApiResponse.ok(validations.validate(WorkflowGraphReader.graph(body.path("graph"))));
   }
 }

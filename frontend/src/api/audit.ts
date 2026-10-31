@@ -17,6 +17,9 @@ export type AuditActionCode =
   // ★ 留存期清理自己写的那一条（`#75`）：动作发起者是系统（`actor_id` 为空），
   //   但它在页面上必须看得懂 —— 否则清理历史只能靠翻原始 code。
   | 'audit.purge'
+  // ★ 发布编排版本（`#198`）：它把画布上的图变成线上正在跑的那一版，
+  //   属于"行为切换"，所以必须留痕；明细里带 version 与 nodeCount。
+  | 'workflow.publish'
 
 /**
  * 一条审计记录。

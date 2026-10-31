@@ -19,7 +19,7 @@
          否则读到 0 条的人会以为是"没人操作过"，而真实原因可能是"这类动作还没接"。 -->
     <div class="notice info">
       <b>今天接了 {{ ACTIONS.length }} 类动作：</b>改密级 · 改标签 · 删文档 · 从回收站恢复 · 彻底删除 · 导出应用 ·
-      改角色权限 · 分享链接 · 撤销分享 · 清理过期审计（这一条由系统写，操作人一列显示「系统」）。
+      改角色权限 · 分享链接 · 撤销分享 · 发布编排版本 · 清理过期审计（这一条由系统写，操作人一列显示「系统」）。
       检索 / 查看 / 引用<b>还没有接审计</b>（<code>13 §7.3</code>），所以这几类操作在这里查不到。
     </div>
 
@@ -170,7 +170,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import { auditApi } from '@/api'
 import type { AuditRecord } from '@/api/audit'
 
-/** 只列**已经接线**的七类（与后端 AuditAction 一致）。没接的不列 —— 列了会被读成"能查到"。 */
+/** 只列**已经接线**的动作（与后端 AuditAction 逐个对应）。没接的不列 —— 列了会被读成"能查到"。 */
 const ACTIONS = [
   { value: 'document.reclassify', label: '改文档密级' },
   { value: 'document.relabel', label: '改文档标签' },
@@ -182,6 +182,7 @@ const ACTIONS = [
   { value: 'data.export', label: '导出应用' },
   { value: 'grant.change', label: '改角色权限' },
   { value: 'audit.purge', label: '清理过期审计' },
+  { value: 'workflow.publish', label: '发布编排版本' },
 ]
 
 const RESOURCES = [

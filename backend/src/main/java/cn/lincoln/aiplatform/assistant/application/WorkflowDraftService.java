@@ -65,7 +65,13 @@ public class WorkflowDraftService {
     return new Saved(saved.updatedAt());
   }
 
-  private void requireAssistant(UUID assistantId) {
+  /**
+   * 应用存不存在（不存在 ⇒ 404）。
+   *
+   * <p>★ 包内可见而不是 private：发布版本（{@link WorkflowPublishService}）要用同一句文案。 两处各写一遍 "应用不存在："
+   * 的那种重复，最后一定会有一边被改歪。
+   */
+  void requireAssistant(UUID assistantId) {
     if (assistants.findById(assistantId).isEmpty()) {
       throw new BusinessException(ErrorCode.NOT_FOUND, "应用不存在：" + assistantId, "它可能已被删除");
     }
