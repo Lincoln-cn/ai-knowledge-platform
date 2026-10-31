@@ -336,12 +336,14 @@ pg_restore -d "$TARGET_URL" --clean --if-exists /backup/aip-2026-10-31.dump
 交付/排障时先看这两行：
 
 ```text
-✔ 配置自检通过：向量化并发 4 · 连接池 10 · 上下文窗口 80 · 向量预算 1200
+✔ 配置自检通过：向量化并发 4 · 连接池 10 · 上下文窗口 80 · 向量预算 1200 · 恢复窗口 7 天 · 清理窗口 7 天
 ⚠️ 配置自检发现 1 项会在运行时以难查的方式出问题（服务仍会启动）：
   · app.ingestion.embedding-concurrency=69 大于连接池上限 10：…（改法写在同一条里）
 ```
 
-它检查的四项，都对应过一次**真实踩过的坑**：
+★ **"通过"那一行本身就是一份配置快照** —— 报障时先把它抄下来，比让人去翻环境变量快得多。
+
+它检查的六项，都对应过一次**真实踩过的坑**：
 
 | 项 | 配错的后果 | 出处 |
 |---|---|---|
@@ -349,6 +351,8 @@ pg_restore -d "$TARGET_URL" --clean --if-exists /backup/aip-2026-10-31.dump
 | `app.ingestion.embedding-concurrency` ≤ 0 | 文档永远停在"待向量化"，**没有任何报错** | `#227` 的闸门下限 |
 | `app.segmentation.context-window` < 0 | 入库与预览都直接抛 `IllegalArgumentException` | `#65` |
 | `context-window` > 0 但 `max-chars` 太小 | 窗口**看起来开着、实际一条都没进来**（预算让路） | `#65` |
+| `app.knowledge.cleanup.retain-days` < `app.knowledge.restore-window-days` | 回收站里「恢复」按钮**还亮着**，点下去 400 —— 内容已被清理作业删掉 | `#259` |
+| `app.knowledge.cleanup.retain-days` 配 0 或负 | **启动自检不报这一项**：清理作业自己按 1 天兜底。想关掉清理要改 `cleanup.enabled=false` —— 配 0 不等于关 | `#259` |
 
 ★ 为什么不 fail-fast：这几项属于"能起来但会以难查的方式坏"。让它起不来，会把一个
 **可修复的配置问题**升级成"服务挂了"；真正的硬约束（负窗口）由领域层在运行时守住。
