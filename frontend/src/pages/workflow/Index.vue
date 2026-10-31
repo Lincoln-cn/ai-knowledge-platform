@@ -377,8 +377,12 @@ function handlePublishFailure(error: unknown) {
             publishIssues.value = issues
             return
         }
+        // ★ `#260` 判据 2：走不到清单时**不要**退回「把文本念一遍」那条降级 —— 它永远成功
+        //   （message 总有字），于是「后端形状变了」这件事在界面上永远看不出来。
+        //   这里显式说出「这次没拿到解析得动的明细」，并保留原文，方便贴进 issue。
         const hint = (error as { hint?: unknown } | null)?.hint
         publishIssueSummary.value = [
+            '服务端返回了无法解析的校验明细（这次没有发布）—— 请把下面这段原文反馈给管理员。',
             errorText(error) ?? '后端复核这张图还不能发布',
             typeof hint === 'string' && hint.trim().length > 0 ? hint : ''
         ]

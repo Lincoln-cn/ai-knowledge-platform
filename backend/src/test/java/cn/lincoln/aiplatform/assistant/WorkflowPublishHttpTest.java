@@ -100,6 +100,46 @@ class WorkflowPublishHttpTest {
     assertThat(rowCount(app)).as("★ 校验不过不能留下任何行").isZero();
   }
 
+  /**
+   * ★ {@code #260} 判据 3 的正题：明细里能按 {@code nodeId} 指到<strong>具体那个节点</strong>。
+   *
+   * <p>空图那条只能证明"data 里有清单"，而空图恰好是所有 {@code nodeId} 都是 {@code null} 的情形 ——
+   * 用它来证明"界面能高亮到节点"是做不到的。这里造一张<strong>有一个能指认的节点</strong>的坏图： 开始节点连一个画布不认识的类型，于是 {@code
+   * UNKNOWN_TYPE} 这条 ERROR 必须带着 {@code nodeId = x1}。
+   *
+   * <p>★ 这张图同时会报 {@code NO_OUTPUT}（未知类型既不是输出节点，也没法往下走），所以断言写成 "在清单里按 code 找得到那一条"，而不是"第 0 条"——
+   * 断言不该依赖 error 的排列顺序。
+   */
+  @Test
+  void issuesPointAtTheNodeTheyAreAbout() throws Exception {
+    String admin = login("admin", "admin");
+    UUID app = createWorkflowApp(admin, "明细指到节点");
+
+    String ghostGraph =
+        "{\"nodes\":["
+            + "{\"id\":\"s1\",\"type\":\"START_NODE\",\"title\":\"开始\"},"
+            + "{\"id\":\"x1\",\"type\":\"GHOST_NODE\",\"title\":\"不存在的节点\"}"
+            + "],\"edges\":[{\"id\":\"e1\",\"source\":\"s1\",\"target\":\"x1\"}]}";
+
+    HttpResponse<String> response = publish(admin, app, ghostGraph, "未知类型");
+
+    assertThat(response.statusCode()).as("未知类型是会拦发布的 ERROR：%s", response.body()).isEqualTo(400);
+    Map<String, Object> body = mapper.readValue(response.body(), new TypeReference<>() {});
+    Object data = body.get("data");
+    assertThat(data).as("★ 失败时 data 是清单：%s", response.body()).isInstanceOf(List.class);
+
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> issues = (List<Map<String, Object>>) data;
+    Map<String, Object> unknownType =
+        issues.stream()
+            .filter(issue -> "UNKNOWN_TYPE".equals(issue.get("code")))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("清单里必须有 UNKNOWN_TYPE 这一条（实际：" + issues + "）"));
+    assertThat(unknownType.get("nodeId")).as("★ 这条明细指的是哪个节点：界面靠它 focusNode").isEqualTo("x1");
+
+    assertThat(rowCount(app)).as("校验不过不能留下任何行").isZero();
+  }
+
   @Test
   void consecutivePublishesTakeTheNextVersion() throws Exception {
     String admin = login("admin", "admin");
