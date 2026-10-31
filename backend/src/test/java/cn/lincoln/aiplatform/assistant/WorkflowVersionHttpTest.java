@@ -350,7 +350,8 @@ class WorkflowVersionHttpTest {
         token,
         "PUT",
         "/api/v1/assistants/" + app + "/workflow/draft",
-        "{\"graph\":\"" + jsonStringLiteral(graph) + "\"}");
+        // ★ 对象而不是字符串（#262）
+        "{\"graph\":" + graph + "}");
   }
 
   /** 详情响应里的图本身 —— 顺带钉住"没有 {graph: …} 包一层"。 */
@@ -427,10 +428,5 @@ class WorkflowVersionHttpTest {
 
   private String base() {
     return "http://localhost:" + port;
-  }
-
-  /** 把一段 JSON 变成能塞进 JSON 字符串字面量里的内容（只处理引号与反斜杠，够用了）。 */
-  private static String jsonStringLiteral(String json) {
-    return json.replace("\\", "\\\\").replace("\"", "\\\"");
   }
 }

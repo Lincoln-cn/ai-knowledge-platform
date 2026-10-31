@@ -247,15 +247,15 @@ class WorkflowRollbackHttpTest {
         send(token, "GET", "/api/v1/assistants/" + app + "/workflow/draft");
     assertThat(response.statusCode()).as("读草稿：%s", response.body()).isEqualTo(200);
     JsonNode data = json.readTree(response.body()).path("data");
-    assertThat(data.path("graph").isString())
-        .as("★ 草稿的 graph 今天是 JSON 字符串（既有形状，本块不改）：%s", response.body())
+    assertThat(data.path("graph").isObject())
+        .as("★ 草稿的 graph 是对象而不是字符串（#262）：页面拿到就能画，不必多一层 JSON.parse：%s", response.body())
         .isTrue();
     return data;
   }
 
-  /** 草稿里存的图，解析成 JSON 对象（便于与版本快照做结构比较）。 */
+  /** 草稿里存的图（#262 之后就是一个 JSON 对象，不必再解析一层）。 */
   private JsonNode draftGraph(String token, UUID app) throws Exception {
-    return json.readTree(draftData(token, app).path("graph").asString());
+    return draftData(token, app).path("graph");
   }
 
   private JsonNode publish(String token, UUID app, String graph, String note) throws Exception {
@@ -280,7 +280,10 @@ class WorkflowRollbackHttpTest {
         token,
         "PUT",
         "/api/v1/assistants/" + app + "/workflow/draft",
-        "{\"graph\":\"" + jsonStringLiteral(graph) + "\"}");
+        // ★ 对象而不是字符串（#262）：库里是 jsonb、线上是对象。
+        //   发字符串会被后端 400「草稿必须是图对象」—— 这条辅助方法以前发字符串是因为
+        //   后端字段曾经是 String，那个窗口已经关掉了。
+        "{\"graph\":" + graph + "}");
   }
 
   private int versionRowsInDb(UUID app) {
@@ -347,10 +350,5 @@ class WorkflowRollbackHttpTest {
 
   private String base() {
     return "http://localhost:" + port;
-  }
-
-  /** 把一段 JSON 变成能塞进 JSON 字符串字面量里的内容（只处理引号与反斜杠，够用了）。 */
-  private static String jsonStringLiteral(String json) {
-    return json.replace("\\", "\\\\").replace("\"", "\\\"");
   }
 }
