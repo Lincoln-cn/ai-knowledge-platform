@@ -359,6 +359,27 @@ pg_restore -d "$TARGET_URL" --clean --if-exists /backup/aip-2026-10-31.dump
 
 ---
 
+## 八之补、用户说"偶发一次失败"时先看这三行（`#216`）
+
+后端在**响应已提交之后**再抛异常时（SSE 最常见：写着写着炸了），框架自己也会炸一次（Tomcat 的
+`MimeHeaders` 被置空后 `removeHeader` 的 NPE），而那个 NPE 会**替换掉原始异常** ——
+用户看到"生成失败、没原因"，日志里也只剩"处理异常时又炸了一次"。
+
+所以 `OriginalExceptionLoggerResolver`（最高优先级）会在链路更前面把原始异常落日志，只记不处理。
+排障时按这个顺序 grep：
+
+```bash
+grep -c '请求处理抛异常（原始）' logs/ai-platform.log    # 原始异常被记下来的次数
+grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次数（期望 0）
+```
+
+- 前者 > 0、后者 = 0 ⇒ **一次普通异常**，按它带的类型与堆栈查即可；
+- 两者都 > 0 ⇒ 命中 `#216` 那条链路：原始异常在上一行，**别去看 NPE 那一行**（它只是遮罩）；
+- 前者 = 0、后者 > 0 ⇒ 意味着日志里出现了"没有原始异常"的 NPE —— 那说明这条路径绕过了
+  `DispatcherServlet`，属于要新开账的形状，不要就地改。
+
+---
+
 ## 九、OCR 的配置项（交付时可能要改的）
 
 全部走环境变量覆盖（`application.yml` 的 `app.ocr.*`）：
