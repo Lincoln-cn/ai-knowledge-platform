@@ -2283,3 +2283,37 @@ B6（150 段）与 B7（200 次）会明显拉长真栈 job；**三条重闸门�
 **39.5 仍未做**：`#198` 剩 `POST /workflow/debug`（前置是 `#113` 准入六条 + 执行引擎真跑图）·
 `#83` 合规四件套（需用户裁决）· 浏览器读数与 200 次长跑（`#223` 判据 4，需用户侧起服务）·
 `P1` 语料与真模型 API（用户两格）。
+
+#### 11.10.40 2026-11-01 会话附件真的进了检索 —— `attachmentIds` 从「收下不消费」变成一条链路
+
+**40.1 关账**
+
+| Issue | 处置 | 提交 | 读数 |
+|---|---|---|---|
+| `#187` 判据 4 | `cv_file` → 会话域 `kb_document` → 同步解析 → 同一轮检索出引用 | `13fcf9b` | `ConversationAttachmentRetrievalHttpTest` 1/1（61.66s）· `FileUploadHttpTest` 4/4 · `DocumentRegistrationTest` 6/6 · `DocumentParseTest` 10/10 · `ModuleBoundaryTest` 4/4 · `PlatformPurityTest` 2/2 · `RetrievalVectorScopeBoundaryTest` 4/4 · `SourceLabelsTest` 2/2 |
+
+链路：`ChatController`（登录面 NEW 分支，`startTurn` 之后 / `streamOf` 之前）→ `AttachmentRegistrar`（按 id + owner 取 `cv_file`，字节走 `FileStorePort#read`）→ `ConversationAttachmentPort`（端口在 `platform`、实现放 `knowledge`）→ `ConversationAttachmentRegistrar`（幂等建 `scope_kind='CONVERSATION'` 的 `kb_document` + **同步** `ParseRunner#run`）。检索侧一行未改 —— `13 §11.4.1` 早就接好了。
+
+**40.2 两处设计册没写的口径，落在这里**
+
+- `doc_type` = 「临时附件」。`V13` 里这一列 NOT NULL，会话附件必须有个值。★ 它**会进** `SearchText.prefix` 第一段与 `content_hash`；准确说法是「同会话内为常数项，且会话域只走全文一路」，不是「不进前缀」。第一版写「会话附件」被 `SourceLabelsTest` 挡下（那四个字归显示名常量独占）。
+- `classification` = 会话当前 `maxClassification()`，取等号。满足 `13 §11.5①` 的下限、不触发 §11.5② 的抬升 ⇒「密级抬升写侧只有一处」这条不变量没被破。
+
+**40.3 诚实边界**
+
+- 引用那一步有断言（SSE `refs` 帧 + `cv_message.reference_snapshot` 里能查到指向该文档、`kbId` 为空的条目），但前提是夹具把 `as_assistant.retrieval_threshold` 从表默认 `0.60` 设成 `0.00`。全文路给的是 `coverage`（命中查询词的比例），覆盖度低于阈值会被 `ChatService#retrieve` 整批丢掉 —— **这不是缺陷**（`JdbcSegmentSearchQuery` 的类注释写明了阈值不用 `ts_rank` 卡的理由），但「默认配置下附件一定出现在引用里」今天没有读数支撑，属阈值调节的另一条账。
+- 没断言：真模型答案内容、向量路（`CONVERSATION_SCOPE_IN_VECTOR_PATH=false` 刻意关着）、访客/分享面（`13 §11.7` 判据 2）。
+- 幂等键只能落 `(scope_id, name)` —— `kb_document` 还没有 attachment 映射列（属 `13 §11.6` 第 17 周批次）⇒ 同会话内「同名不同内容」会被当成同一份。
+- 判据 5（「端点被删 ⇒ UI 测试红」）**不按字面关**：仓库里没有浏览器级 UI 测试，替代物是 `check_pending_endpoints.py` + `check_contract_consumers.py` + 本批的真栈测试。把闸门读成 UI 测试正是本项目最贵的病。
+
+**40.4 三条判据（都能核对）**
+
+1. **「收下不消费」是一句自陈，不是证据** —— 注释说「形状兼容」与代码真的在乎这个字段，读数完全一样；只有「把它摘掉，断言变红」能区分（本批的反证：摘掉交给服务那一行 ⇒ `Expected size: 1 but was: 0`）。
+2. **端口要先有读者再开** —— `FileStorePort` 一开始只有 `store` 没有 `read`，理由写在 javadoc 里；这一批就是那个读者出现的时候。端口提前开 = `#78`/`#86` 同型的假缝。
+3. **准入链路上的解析不许异步** —— 附件是「同一轮就要被引用」的东西；异步解析会让第一轮永远搜不到，而症状只是「引用为空」（不报错）。
+
+**40.5 仍未做**
+
+- `POST /workflow/debug`（`#198` 最后一格，前置是 `#113` 的准入六条 + 执行引擎真跑图）。
+- 附件与消息的绑定关系（`13 §11.6` 第 17 周批次：`kb_document` 加 attachment 映射列）。
+- `#83` 合规四件套（需用户裁决是否进 0.5.0）。
