@@ -73,10 +73,6 @@ PENDING = {
         "issue": "#187",
         "guard": "conversation/components/Composer.vue onPickFiles 的 catch ⇒ 附件行内标 failed 并显示原因（不冒充上传成功）",
     },
-    "GET /workflow/node-types": {
-        "issue": "#198",
-        "guard": "workflow/components/common/DropdownMenu.vue onMounted 的 catch ⇒ 节点目录归空（画布仍可用）",
-    },
 }
 
 

@@ -105,10 +105,10 @@ class ContractDriftTest {
           // ★ feedbacks（6）—— 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）
           // ★ feedbacks（6）—— #194 已落：列表/统计/详情/办理/批量/重开
           // ★ files（1）—— 第 17 周随问答链路：附件上传（multipart）
-          missing("POST", "/files", "#187", "17 周"),
-          // ★ knowledge-bases（1）—— 建档/文档已落地；余下暂存上传一条，属 P1
-          // ★ workflow（1）—— 第 15 周 0.4.3 / M5.5：编排画布接契约的节点类型查询
-          missing("GET", "/workflow/node-types", "#198", "15–16 周"));
+          missing("POST", "/files", "#187", "17 周"));
+
+  // ★ knowledge-bases（1）—— 建档/文档已落地；余下暂存上传一条，属 P1
+  // ★ workflow（0）—— GET /workflow/node-types 已随节点目录落地（2026-10-31，`#198` 第二块）
 
   /**
    * 未实现清单的一条：欠账台账的<strong>逐条</strong>登记项。
