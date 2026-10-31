@@ -9,6 +9,8 @@ import jakarta.validation.constraints.NotNull;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -42,8 +44,9 @@ public class RoleController {
   @PutMapping("/{id}/permissions")
   @PreAuthorize("hasAuthority('system:manage')")
   public ApiResponse<RoleView> updatePermissions(
-      @PathVariable UUID id, @RequestBody PermissionsBody body) {
-    return ApiResponse.ok(roleService.updatePermissions(id, body.permissions()));
+      @PathVariable UUID id, @RequestBody PermissionsBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        roleService.updatePermissions(id, body.permissions(), UUID.fromString(jwt.getSubject())));
   }
 
   /** ★ 与权限点**分开**的端点：改范围不该让人重新确认一遍权限点（{@code 07 §3.2}）。 */

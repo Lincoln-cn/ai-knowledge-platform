@@ -16,6 +16,8 @@ import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.Segmenter;
 import cn.lincoln.aiplatform.knowledge.infrastructure.SegmentationProperties;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.platform.domain.AuditAction;
+import cn.lincoln.aiplatform.platform.domain.AuditLogPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.infrastructure.metrics.BusinessMetrics;
@@ -102,6 +104,13 @@ public class DocumentService {
    */
   private final cn.lincoln.aiplatform.platform.watermark.ConversationWatermarkPort watermark;
 
+  /**
+   * 审计留痕（{@code #257}）：删除与改密级都要写一条。
+   *
+   * <p>★ 与业务同事务（端口 javadoc 里写了理由）：审计写不进去时整笔回滚，避免"变更发生了却没有记录"。
+   */
+  private final AuditLogPort audit;
+
   public DocumentService(
       DocumentRepository documents,
       KnowledgeBaseService knowledgeBases,
@@ -115,7 +124,8 @@ public class DocumentService {
       OrgCodeResolver orgCodes,
       ApplicationEventPublisher events,
       BusinessMetrics metrics,
-      cn.lincoln.aiplatform.platform.watermark.ConversationWatermarkPort watermark) {
+      cn.lincoln.aiplatform.platform.watermark.ConversationWatermarkPort watermark,
+      AuditLogPort audit) {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
     this.parser = parser;
@@ -129,6 +139,7 @@ public class DocumentService {
     this.events = events;
     this.metrics = metrics;
     this.watermark = watermark;
+    this.audit = audit;
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -443,6 +454,14 @@ public class DocumentService {
       log.info("文档 {} 密级 {} → {}：抬高了 {} 个会话的水位", documentId, previous, level, raised);
     }
     log.info("文档 {} 密级 {} → {}：重打了 {} 个分段的密级", documentId, previous, level, affected.size());
+    // ★ ③ 留痕（`#257` / 13 §七）：与业务同事务 —— 审计写不进去时整笔回滚。否则会出现
+    //   "文档密级已经变了，但谁改的查不到"的静默变更，而这正是审计要防的东西。
+    audit.record(
+        AuditAction.DOCUMENT_RECLASSIFY,
+        "DOCUMENT",
+        documentId.toString(),
+        currentUserId,
+        Map.of("from", previous.name(), "to", level.name(), "segments", affected.size()));
     return DocumentView.from(documents.findById(documentId).orElse(document));
   }
 
@@ -479,6 +498,14 @@ public class DocumentService {
     segmentEmbeddings.deleteByDocumentId(documentId);
     document.markDeleted(Instant.now(), currentUserId);
     documents.save(document);
+    // ★ 留痕（`#257`）：删除是"让内容从用户视野里消失"，属等保 2.0 要追溯的动作。
+    //   与业务同事务 —— 删掉了却没有记录，是最不该出现的一种静默。
+    audit.record(
+        AuditAction.DOCUMENT_DELETE,
+        "DOCUMENT",
+        documentId.toString(),
+        currentUserId,
+        Map.of("name", document.name(), "kbId", document.kbId().toString()));
   }
 
   /** 拒绝在「向量化中」做会与在途任务打架的操作（改名 / 删除）。 */

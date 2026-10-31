@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.platform.web;
 
+import cn.lincoln.aiplatform.platform.domain.AuditWriteFailedException;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import java.util.stream.Collectors;
@@ -227,6 +228,23 @@ public class GlobalExceptionHandler {
   public ResponseEntity<ApiResponse<Void>> onDenied(AccessDeniedException cause) {
     return ResponseEntity.status(HttpStatus.FORBIDDEN)
         .body(ApiResponse.fail(ErrorCode.FORBIDDEN, "无权限", "请联系管理员为你的角色勾选该权限点"));
+  }
+
+  /**
+   * 审计写不进去（`#257` 判据 ④）⇒ <strong>500</strong>，且业务已随事务回滚。
+   *
+   * <p>★ 为什么不是 400：审计失败是服务端问题 —— 调用方重试不会成功、改参数也不会。落进 {@code IllegalStateException} 那组 400
+   * 里，会把运维问题伪装成"你传错了"，正是 `#228` 的同一种错误归类。
+   *
+   * <p>★ 提示必须说清"没有生效、别重试"：否则调用方看到 5xx 的第一反应是重试，而重试会再失败一次。
+   */
+  @ExceptionHandler(AuditWriteFailedException.class)
+  public ResponseEntity<ApiResponse<Void>> onAuditWriteFailed(AuditWriteFailedException cause) {
+    log.error("审计写入失败，业务已回滚", cause);
+    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+        .body(
+            new ApiResponse<>(
+                500, cause.getMessage(), null, "这次变更没有生效（审计与业务同事务）。请把时间点反馈给管理员 —— 重试不会成功"));
   }
 
   /**

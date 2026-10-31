@@ -246,8 +246,12 @@ public class AssistantController {
       "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/export")
   @PreAuthorize("hasAuthority('assistant:view')")
   public ApiResponse<AssistantBundleView> export(
-      @PathVariable UUID id, @RequestParam(defaultValue = "false") boolean includeDocuments) {
-    return ApiResponse.ok(assistants.export(id, includeDocuments));
+      @PathVariable UUID id,
+      @RequestParam(defaultValue = "false") boolean includeDocuments,
+      @AuthenticationPrincipal Jwt jwt) {
+    // ★ 带上操作人：导出是数据外流，审计要回答"谁把哪个应用导出去了"（#257）。
+    return ApiResponse.ok(
+        assistants.export(id, includeDocuments, UUID.fromString(jwt.getSubject())));
   }
 
   /** 删除（软删）。★ 内置应用不可删（它是平台示范应用）。 */

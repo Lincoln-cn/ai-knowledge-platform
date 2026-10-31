@@ -14,6 +14,8 @@ import cn.lincoln.aiplatform.platform.access.ScopeFilter;
 import cn.lincoln.aiplatform.platform.access.Subject;
 import cn.lincoln.aiplatform.platform.access.SubjectKind;
 import cn.lincoln.aiplatform.platform.access.Visibility;
+import cn.lincoln.aiplatform.platform.domain.AuditAction;
+import cn.lincoln.aiplatform.platform.domain.AuditLogPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ModelStatusPort;
@@ -110,6 +112,10 @@ public class AssistantService {
   private final ModelStatusPort modelStatus;
   private final SegmentSearchPort segmentSearch;
   private final GrantSubjectPort grantSubjects;
+
+  /** 审计（`#257`）：导出是数据外流动作，必须留痕。 */
+  private final AuditLogPort audit;
+
   private final PromptReferencePort promptReferences;
 
   public AssistantService(
@@ -120,7 +126,8 @@ public class AssistantService {
       ModelStatusPort modelStatus,
       SegmentSearchPort segmentSearch,
       GrantSubjectPort grantSubjects,
-      PromptReferencePort promptReferences) {
+      PromptReferencePort promptReferences,
+      AuditLogPort audit) {
     this.assistants = assistants;
     this.favorites = favorites;
     this.apiKeys = apiKeys;
@@ -128,6 +135,7 @@ public class AssistantService {
     this.modelStatus = modelStatus;
     this.segmentSearch = segmentSearch;
     this.grantSubjects = grantSubjects;
+    this.audit = audit;
     this.promptReferences = promptReferences;
   }
 
@@ -531,26 +539,53 @@ public class AssistantService {
    */
   @Transactional(readOnly = true)
   public AssistantBundleView export(UUID id, boolean includeDocuments) {
+    return export(id, includeDocuments, null);
+  }
+
+  /**
+   * 导出并留痕（`#257` 判据②，动作 {@code data.export}）。
+   *
+   * <p>★ <strong>这个方法不是只读事务</strong>：导出本身是读，但"谁导出了什么"要写一行审计 ——
+   * 数据外流是审计的第一等公民，而只读事务里写不进任何东西（PostgreSQL 会直接拒绝）。
+   *
+   * <p>★ {@code actorId} 可空：MCP / API Key 那类系统身份暂时没有 uuid，如实记 null 而不是编一个 —— 见 {@code
+   * AuditLogPort#record} 的口径。
+   */
+  @Transactional
+  public AssistantBundleView export(UUID id, boolean includeDocuments, UUID actorId) {
     Assistant assistant = requireVisible(id);
-    return new AssistantBundleView(
-        BUNDLE_FORMAT,
-        Instant.now(),
-        includeDocuments,
-        new AssistantBundleView.Config(
-            assistant.name(),
-            assistant.icon(),
-            assistant.description(),
-            assistant.type().name(),
-            assistant.modelId(),
-            assistant.kbIds(),
-            assistant.rolePrompt(),
-            assistant.promptIds(),
-            retrievalView(assistant),
-            assistant.multiTurn(),
-            assistant.thinkingEnabled(),
-            assistant.prologue(),
-            assistant.quickQuestions()),
-        dependenciesOf(assistant));
+    AssistantBundleView bundle =
+        new AssistantBundleView(
+            BUNDLE_FORMAT,
+            Instant.now(),
+            includeDocuments,
+            new AssistantBundleView.Config(
+                assistant.name(),
+                assistant.icon(),
+                assistant.description(),
+                assistant.type().name(),
+                assistant.modelId(),
+                assistant.kbIds(),
+                assistant.rolePrompt(),
+                assistant.promptIds(),
+                retrievalView(assistant),
+                assistant.multiTurn(),
+                assistant.thinkingEnabled(),
+                assistant.prologue(),
+                assistant.quickQuestions()),
+            dependenciesOf(assistant));
+    // ★ 先取好包、再记审计、最后才返回：审计写不进去时整个请求必须失败（#257 判据 ④）——
+    //   不能"包已经交出去了，才想起来记一笔"。
+    audit.record(
+        AuditAction.DATA_EXPORT,
+        "ASSISTANT",
+        id.toString(),
+        actorId,
+        java.util.Map.of(
+            "name", assistant.name(),
+            "includeDocuments", includeDocuments,
+            "dependencies", bundle.dependencies().size()));
+    return bundle;
   }
 
   // ────────────────────────── 导入（判据 ③ 的入口）──────────────────────────
