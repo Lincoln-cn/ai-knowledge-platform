@@ -87,6 +87,27 @@ class DocumentPurgeTest {
     assertThat(row.get("name")).isEqualTo("彻底删除-已软删.docx");
   }
 
+  /**
+   * 回收站：软删的进得来，在用的进不来（`#75` 判据 ④ 的"入口"那一半）。
+   *
+   * <p>★ 这条不是为了测分页：是为了证明「彻底删除有地方可点」这件事真的成立 —— 端点存在但列表看不见已删文档时，那个不可恢复的动作只能由运维用 curl 调。
+   */
+  @Test
+  void theRecycleBinListsSoftDeletedDocumentsOnly() throws Exception {
+    String admin = accessToken("admin", "admin");
+    String kbId = createKb(admin, "回收站库");
+    String gone = createDocument(admin, kbId, "回收站-已删.docx");
+    String kept = createDocument(admin, kbId, "回收站-在用.docx");
+    assertThat(delete("/api/v1/documents/" + gone, admin).statusCode()).isEqualTo(200);
+
+    HttpResponse<String> res = get("/api/v1/knowledge-bases/" + kbId + "/documents/deleted", admin);
+    assertThat(res.statusCode()).as("回收站查不了：%s", res.body()).isEqualTo(200);
+    assertThat(res.body()).contains("回收站-已删.docx");
+    assertThat(res.body()).as("在用的文档不该出现在回收站").doesNotContain("回收站-在用.docx");
+    assertThat(res.body()).contains("\"total\":1");
+    assertThat(kept).isNotBlank();
+  }
+
   @Test
   void purgingADocumentThatIsStillInUseIsRejected() throws Exception {
     String admin = accessToken("admin", "admin");
@@ -202,6 +223,18 @@ class DocumentPurgeTest {
             .uri(URI.create("http://127.0.0.1:" + port + path))
             .header("Content-Type", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(body == null ? "" : body))
+            .timeout(Duration.ofSeconds(20));
+    if (token != null) {
+      builder.header("Authorization", "Bearer " + token);
+    }
+    return http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+  }
+
+  private HttpResponse<String> get(String path, String token) throws Exception {
+    HttpRequest.Builder builder =
+        HttpRequest.newBuilder()
+            .uri(URI.create("http://127.0.0.1:" + port + path))
+            .GET()
             .timeout(Duration.ofSeconds(20));
     if (token != null) {
       builder.header("Authorization", "Bearer " + token);

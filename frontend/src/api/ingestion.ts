@@ -32,6 +32,8 @@ export interface DocumentItem {
   /** 失败时的下一步建议 */
   failHint: string | null
   createdAt: string
+  /** 软删时间（只有回收站列表里才有值；在用列表里恒为 undefined）。 */
+  deletedAt?: string
   updatedAt: string
   /**
    * 文种（合同/制度/报销规定…）。★ 建档必填三项之一（12 §5.1），
@@ -336,6 +338,19 @@ export const changeDocumentClassification = (
  * ★ 传空数组 = 不受标签限制（不是"等所有标签"）。
  * ★ 服务端在**同一个事务**里同步每个分段的标签列 —— 检索谓词读的是分段表，不同步就等于没改。
  */
+/**
+ * 回收站：本库**已软删**的文档（`#75` 判据 ④）。
+ *
+ * ★ 与 `listDocuments` 分成两个函数：主列表是用户日常看的那一屏，不该因为"已删"混进来而变糊。
+ */
+export const listDeletedDocuments = (kbId: string, query: { page?: number; size?: number } = {}) =>
+  request<PageResult<DocumentItem>>({
+    method: 'GET',
+    url: '/knowledge-bases/:kbId/documents/deleted',
+    path: { kbId },
+    query
+  })
+
 /**
  * 彻底删除（物理删除，`#75` 判据 ④）—— **不可恢复**。
  *

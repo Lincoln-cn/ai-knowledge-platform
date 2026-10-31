@@ -31,6 +31,9 @@
         <el-option label="已有归属" value="ASSIGNED" />
       </el-select>
       <el-button size="small" :icon="Refresh" :loading="loading" @click="manualRefresh">刷新</el-button>
+      <!-- ★ 回收站（`#75` 判据 ④）：彻底删除的入口。没有它，那个端点只能由运维用 curl 调 ——
+           "不可恢复的操作只有一个看不见的入口"本身就是风险。 -->
+      <el-button v-if="canManage" size="small" @click="openRecycle">回收站</el-button>
       <span class="grow" />
       <el-button v-if="canUpload" size="small" type="primary" @click="openUpload">+ 上传文档</el-button>
     </div>
@@ -198,6 +201,30 @@
         @current-change="fetchList"
       />
     </div>
+
+    <el-dialog v-model="recycleOpen" title="回收站（已删除的文档）" width="760px">
+      <p class="micro muted">
+        这里的文档已经不在列表里，但数据<b>还在库与索引之外</b>——彻底删除会把文档行、分段与向量一起移除，
+        <b>不可恢复</b>（备份里仍有一段时间的副本）。
+      </p>
+      <el-table v-loading="recycleLoading" :data="recycleRows" size="small">
+        <el-table-column prop="name" label="文档名" min-width="220" />
+        <el-table-column label="删除时间" width="170">
+          <template #default="{ row }">{{ row.deletedAt ? new Date(row.deletedAt).toLocaleString('zh-CN') : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="" width="120">
+          <template #default="{ row }">
+            <el-button link size="small" type="danger" @click="purge(row)">彻底删除</el-button>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <div class="empty">
+            <div class="empty-title">回收站是空的</div>
+            <div class="micro muted">被删除的文档会先来这里，确认不再需要之后再彻底删除。</div>
+          </div>
+        </template>
+      </el-table>
+    </el-dialog>
 
     <UploadDialog ref="uploadRef" :kb-id="kbId" @uploaded="onUploaded" />
     <ParseResultDialog ref="parseResultRef" />
@@ -645,6 +672,48 @@ const toggleEnabled = async (row: DocumentItem) => {
     await fetchList()
   } catch (error) {
     ElMessage.error(errText(error, '操作失败').reason)
+  }
+}
+
+/* ★ 回收站（`#75` 判据 ④）：让「彻底删除」有地方可点。
+   ★ 它消费两个端点：`listDeletedDocuments`（这个列表）与 `purgeDocument`（那一列的按钮）。
+   ★ 在设计上刻意**不做**"撤销删除"：软删之后能恢复需要把分段与向量一起重建（重新解析），
+     那是另一个功能的形状，做成一个按钮会让它听起来像"点一下就能回来"。 */
+const recycleOpen = ref(false)
+const recycleLoading = ref(false)
+const recycleRows = ref<DocumentItem[]>([])
+
+async function openRecycle() {
+  recycleOpen.value = true
+  recycleRows.value = []
+  recycleLoading.value = true
+  try {
+    const page = await ingestionApi.listDeletedDocuments(props.kbId, { page: 1, size: 100 })
+    recycleRows.value = page.list
+  } catch (error) {
+    ElMessage.error(errText(error, '回收站加载失败').reason)
+  } finally {
+    recycleLoading.value = false
+  }
+}
+
+async function purge(row: DocumentItem) {
+  try {
+    await ElMessageBox.confirm(
+      `彻底删除「${row.name}」会把文档、分段与向量一起移除，**不可恢复**（备份里还有一段时间内的副本）。确认？`,
+      '确认彻底删除',
+      { type: 'warning', confirmButtonText: '彻底删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await ingestionApi.purgeDocument(row.id)
+    ElMessage.success('已彻底删除')
+    recycleRows.value = recycleRows.value.filter((item) => item.id !== row.id)
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(errText(error, '彻底删除失败').reason)
   }
 }
 

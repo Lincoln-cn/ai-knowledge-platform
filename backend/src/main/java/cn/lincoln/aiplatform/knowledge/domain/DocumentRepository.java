@@ -28,6 +28,19 @@ public interface DocumentRepository {
   void delete(Document document);
 
   /**
+   * 按库分页查<strong>已软删</strong>的文档（删除时间倒序）—— 回收站视图（`#75` 判据 ④）。
+   *
+   * <p>★ 与 {@link #findByKbId} 分开两个方法，而不是加一个 `includeDeleted` 布尔：布尔参数在调用点上 读不出意图（本工程已经因为这种形状踩过
+   * `OrgAssignment` 那次），而且"看得见在用"与"看得见已删"是 两个不同的产品动作，混成一个查询之后总会有人在某一侧漏掉过滤。
+   *
+   * <p>★ 密级这一轴<strong>照样生效</strong>：已删的文档仍然带着它当时的密级，低 clearance 的用户不该 通过回收站看到比自己在用列表里能看到更高的内容。
+   */
+  List<Document> findDeletedByKbId(UUID kbId, int offset, int limit);
+
+  /** 已软删的条数（与 {@link #findDeletedByKbId} 同一个谓词，`total` 与页内条数必须同口径）。 */
+  long countDeletedByKbId(UUID kbId);
+
+  /**
    * 按库分页查文档（创建时间倒序）。★ 软删的不进列表。
    *
    * <p>★★ {@code orgFilter} 是 {@code #56} 的出口：{@link OrgAssignment#UNASSIGNED} 把

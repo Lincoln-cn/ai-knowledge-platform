@@ -83,6 +83,19 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
   }
 
   @Override
+  public List<Document> findDeletedByKbId(UUID kbId, int offset, int limit) {
+    return jpa.findAll(
+            deletedFilter(kbId),
+            PageRequest.of(offset / limit, limit, Sort.by(Sort.Direction.DESC, "deletedAt")))
+        .getContent();
+  }
+
+  @Override
+  public long countDeletedByKbId(UUID kbId) {
+    return jpa.count(deletedFilter(kbId));
+  }
+
+  @Override
   public Map<DocumentStatus, Long> countByStatus(UUID kbId) {
     // ★ 分组计数在库里做（见 JpaDocumentRepository 的注释）：取回来再数会在分页上限处静默算错
     // ★★ 密级条件与列表**同一条**（#25 判据 3：进度条分母与列表口径必须一致）
@@ -113,6 +126,21 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
    * <p>★ 归属那一轴（{@code #56}）：{@link OrgAssignment#UNASSIGNED} 用 {@code isNull(orgId)} ——
    * 它列的正是"回填时按名字匹配不上"的那批文档（{@code org_id} 为空、原值在 {@code department_legacy}）。
    */
+  /**
+   * 回收站的谓词：与 {@link #filter} 只差"软删"那一条 —— 其余（所属库 + 密级上限）**同源**。
+   *
+   * <p>★ 刻意不复用 {@code filter(kbId, ANY)} 再取反：那样等于把"软删"这一条从共用谓词里挪出去，
+   * 迟早有人在某一侧漏掉它。这里只写"必须已删"，其余照抄同一套表达式。
+   */
+  private Specification<Document> deletedFilter(UUID kbId) {
+    Short ceiling = ceilingRank();
+    return (root, query, cb) ->
+        cb.and(
+            cb.isNotNull(root.get("deletedAt")),
+            cb.equal(root.get("kbId"), kbId),
+            cb.lessThanOrEqualTo(root.get("classificationRank"), ceiling));
+  }
+
   private Specification<Document> filter(UUID kbId, OrgAssignment orgFilter) {
     Short ceiling = ceilingRank();
     // ★ 三态映射成二值：ANY ⇒ null（不加这一条谓词），其余 ⇒ Boolean（cb.isNull / cb.isNotNull）

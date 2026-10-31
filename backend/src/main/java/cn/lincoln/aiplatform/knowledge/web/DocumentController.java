@@ -102,6 +102,21 @@ public class DocumentController {
   }
 
   /**
+   * 回收站（契约 `listDeletedDocuments`，`#75` 判据 ④）—— 本库已软删的文档。
+   *
+   * <p>★ 与在用列表分成两个端点：`/documents?deleted=true` 那种写法会让"已删"混进主列表的分页与 total，
+   * 而主列表是用户日常看的那一屏，不该因为它多一档就变慢或变糊。
+   */
+  @GetMapping("/{kbId}/documents/deleted")
+  @PreAuthorize("hasAuthority('knowledge:view')")
+  public ApiResponse<PageResult<DocumentView>> listDeleted(
+      @PathVariable UUID kbId,
+      @RequestParam(required = false) Integer page,
+      @RequestParam(required = false) Integer size) {
+    return ApiResponse.ok(documentService.listDeleted(kbId, page, size));
+  }
+
+  /**
    * 库级入库进度（契约 {@code getIngestionProgress}）—— 库页面顶部进度条的<strong>唯一数据源</strong>。
    *
    * <p>★ 放在这里（而不是 {@code KnowledgeBaseController}）是因为它统计的是<strong>文档</strong>：

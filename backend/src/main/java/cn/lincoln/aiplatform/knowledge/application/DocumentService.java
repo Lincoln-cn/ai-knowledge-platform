@@ -173,6 +173,24 @@ public class DocumentService {
         found.stream().map(DocumentView::from).toList(), total, safePage, safeSize);
   }
 
+  /**
+   * 回收站：本库<strong>已软删</strong>的文档（删除时间倒序，`#75` 判据 ④）。
+   *
+   * <p>★ 它存在的唯一理由是让「彻底删除」有地方可点：在那之前那个端点只能由运维用 curl 调， 而"不可恢复的操作只有一个看不见的入口"本身就是风险。
+   *
+   * <p>★ 分页上限与在用列表共用 `MAX_PAGE_SIZE`，`total` 与页内条数同口径（同一份谓词）。
+   */
+  @Transactional(readOnly = true)
+  public PageResult<DocumentView> listDeleted(UUID kbId, Integer page, Integer size) {
+    knowledgeBases.get(kbId);
+    int safeSize = size == null ? 20 : Math.min(Math.max(1, size), MAX_PAGE_SIZE);
+    int safePage = page == null ? 1 : Math.max(1, page);
+    List<Document> found = documents.findDeletedByKbId(kbId, (safePage - 1) * safeSize, safeSize);
+    long total = documents.countDeletedByKbId(kbId);
+    return PageResult.of(
+        found.stream().map(DocumentView::from).toList(), total, safePage, safeSize);
+  }
+
   // ────────────────────────── 库级进度（第 8 周 · 0.3.0） ──────────────────────────
 
   /**
