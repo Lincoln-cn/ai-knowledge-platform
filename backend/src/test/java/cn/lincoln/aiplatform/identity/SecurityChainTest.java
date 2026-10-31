@@ -138,6 +138,11 @@ class SecurityChainTest {
    * <p>★ 2026-10-22（#193）：分析端点已经实现，这条改用**仍未实现**的 {@code /workflow/node-types} 作为样本；
    * 2026-10-22（#196）`/prompt-configs` 也已落地，不能再拿它当“未实现”样本。 已实现端点缺参数的情形由下一条用例守（400，不是 500）。
    *
+   * <p>★★ 2026-10-31（`#261`）：第三次过期 —— `#198` 把 {@code /workflow/node-types} 实现了，这条又红了一次。三次都
+   * 同一个原因：**样本是一个"迟早要变成已实现"的路径**。所以样本改成一条**永远不会被实现**的路径：它守的是 "Spring 的 {@code
+   * NoResourceFoundException} 不许被兜底 handler 改写成 500"，这个性质与"哪条业务端点还没做"无关 ——
+   * 拿业务端点当样本，等于让这条用例的有效期绑定在别人的排期上。
+   *
    * <p>根因是兜底的 {@code @ExceptionHandler(Exception.class)} 把 Spring 的 {@code
    * NoResourceFoundException} 也抓了 —— 它继承自 Exception。
    */
@@ -145,7 +150,7 @@ class SecurityChainTest {
   void 未实现的端点返回404而不是500() throws Exception {
     String accessToken = jsonField(login("admin", "admin").body(), "accessToken");
 
-    HttpResponse<String> res = get("/api/v1/workflow/node-types", accessToken);
+    HttpResponse<String> res = get("/api/v1/no-such-endpoint-404-probe", accessToken);
 
     assertThat(res.statusCode()).as("★ 未实现 ≠ 服务出错：返 500 会让'接口还没做'看起来像'后端崩了'").isEqualTo(404);
     assertThat(res.body()).contains("\"code\":404");

@@ -57,10 +57,51 @@ class ConversationStateSurvivesReloadTest {
   private static final UUID OWNER = UUID.fromString("1e000000-0000-4000-8000-0000000000aa");
 
   @Autowired ConversationRepository conversations;
-
   @Autowired MessageRepository messages;
 
   @Autowired ChatHistoryService history;
+
+  /**
+   * 以 OWNER 的<strong>身份</strong>读一次历史。
+   *
+   * <p>★★ 为什么这条用例必须装身份（`#27`，2026-10-31）：引用快照现在按<strong>"此刻读到它的人"</strong>收窄 （{@code
+   * ReferenceVisibility} → {@code ScopeFilter#canSeeClassification}）。而<b>没有任何身份</b>时 {@code
+   * AccessScopePort.currentScope()} 返回 {@link
+   * cn.lincoln.aiplatform.platform.access.ScopeFilter#nobody()} —— 密级上限为 {@code null} ⇒ {@code
+   * canSeeClassification} 恒 {@code false} ⇒ <strong>一条引用都看不见</strong>。
+   *
+   * <p>这<strong>不是</strong>产品缺陷（未认证的请求本来就不该读历史），而是这条用例过去在"没有读者"的前提下断言 "引用还在" ——
+   * 于是它证明的其实是"收窄那一步根本没跑"。装上身份之后，断言才真的在问"读回去还在不在"。
+   *
+   * <p>★ {@code clearance = INTERNAL} 对应下面那条引用的 {@code ClassificationLevel.INTERNAL}：收窄是**真的**在跑，
+   * 只是这次读的人看得见它。看不见的情形由 {@code ReferenceVisibilityTest} 与 {@code ChatHistoryHttpTest} 的越权用例守。
+   */
+  private PageResult<ChatMessageView> readAsOwner(UUID conversationId) {
+    var jwt =
+        org.springframework.security.oauth2.jwt.Jwt.withTokenValue("test-token")
+            .header("alg", "none")
+            .subject(OWNER.toString())
+            .claim("role", "KB_OPERATOR")
+            .claim("scope", "OWN")
+            .claim("clearance", "INTERNAL")
+            .build();
+    var auth =
+        new org.springframework.security.oauth2.server.resource.authentication
+            .JwtAuthenticationToken(jwt);
+    // ★★ 必须显式标记已认证：Spring Security 7 的 JwtAuthenticationToken 单参构造**不**调
+    //    setAuthenticated(true)（反编译 AbstractOAuth2TokenAuthenticationToken，setAuthenticated 出现 0
+    // 次）。
+    //    漏掉这一行，AccessScopeAdapter.currentJwt() 直接返回 null ⇒ 范围还是 nobody()，
+    //    测试"看起来装了身份"，实际什么都没装上（本轮实测：插桩打出 me=null, maxClassification=null）。
+    auth.setAuthenticated(true);
+    org.springframework.security.core.context.SecurityContextHolder.getContext()
+        .setAuthentication(auth);
+    try {
+      return history.list(conversationId, OWNER, -1, 20, null);
+    } finally {
+      org.springframework.security.core.context.SecurityContextHolder.clearContext();
+    }
+  }
 
   @Test
   void aGeneratingMessageStillReadsAsGeneratingWithItsPartialTextAfterAReload() {
@@ -107,7 +148,7 @@ class ConversationStateSurvivesReloadTest {
                 cn.lincoln.aiplatform.platform.access.ClassificationLevel.INTERNAL)));
     messages.save(assistant);
 
-    ChatMessageView read = history.list(conversationId, OWNER, -1, 20, null).list().get(0);
+    ChatMessageView read = readAsOwner(conversationId).list().get(0);
 
     assertThat(read.refs()).as("★★ A4/A2：引用快照必须随消息一起读回来 —— 刷新后丢它等于『溯源按钮消失』").hasSize(1);
     assertThat(read.refs().get(0)).as("★ 而且内容真的在（不是只留了一个空壳占位）").containsEntry("title", "第 3 条");
