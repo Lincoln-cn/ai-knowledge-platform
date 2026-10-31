@@ -51,10 +51,11 @@ PENDING = {
     #   编排页的「发布」现在先调 `validateWorkflow`、通过了才调 `publishWorkflow`
     #   （`pages/workflow/Index.vue` 的 `publicHandle`）。本账只收"后端还没有的端点"，
     #   这条已实现，所以只留说明、不新增条目。
-    "GET /assistants/{*}/workflow/records": {
-        "issue": "#198",
-        "guard": "",
-    },
+    # ★ 已落：GET /assistants/{*}/workflow/records 随 #198 第七块后端交付（2026-10-31），故从本账里摘掉
+    #   —— 与后端台账（ContractDriftTest.KNOWN_MISSING）同一时刻、同一条。
+    #   ★ 语义提醒（写给读代码的人）：这条端点**今天永远返回空列表** —— 运行记录表没有写入方
+    #   （执行引擎在 V1.0）。前端契约函数 `listWorkflowRecords` 与页面入口都还没接，
+    #   后者登记在 `tools/consumer-baseline.txt`。debug 那条仍未实现，不动。
     # ★ 已落：POST /assistants/{*}/workflow/versions/{*}/rollback 随 #198 第六块后端交付
     #   （2026-10-31），故从本账里摘掉 —— 与后端台账（ContractDriftTest.KNOWN_MISSING）同一时刻、
     #   同一条。★ 语义提醒（写给读代码的人）：这个回滚**只写草稿、不发布**，线上不受影响。

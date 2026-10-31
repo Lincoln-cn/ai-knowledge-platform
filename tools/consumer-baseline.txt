@@ -21,3 +21,13 @@
 #   那就连端点一起删 —— 但那时要先把 `WorkflowRollbackController` 与 `rollbackWorkflow` 一起摘。
 
 POST	/assistants/{}/workflow/versions/{}/rollback	#198
+
+# ★ 2026-10-31（编排第七块，`#198`）：`GET …/workflow/records` 的后端端点与领域表 `as_workflow_record`
+#   （V62）都已落地（真栈 6 条用例 + 金丝雀），前端契约函数 `listWorkflowRecords` 也早在 `api/workflow.ts` 里，
+#   但**页面入口还没接** —— 编排页今天没有「运行记录」视图，产物面板也不展示历史运行。
+#   ★ 销账方式与上一条**不同**：这条不是"等接入口"就够，而是**等写入方** ——
+#   运行记录表今天没有任何写入方（执行引擎在 V1.0，画布调试刻意不写它），
+#   **接上入口也只会看到一个永远空着的列表**。两条销账路都可：(a) 等执行引擎落地、接上「运行记录」
+#   视图后删本行；(b) 判定此刻这条端点不该存在（表空、没人写）⇒ 连端点、表、契约函数一起摘，
+#   但那时要先把 `WorkflowRecordController` / `WorkflowRecordQueryService` / V62 迁移一起删。
+GET	/assistants/{}/workflow/records	#198
