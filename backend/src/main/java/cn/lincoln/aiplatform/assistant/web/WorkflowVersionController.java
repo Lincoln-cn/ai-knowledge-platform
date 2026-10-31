@@ -38,6 +38,10 @@ public class WorkflowVersionController {
    * <p>★ 列表刻意不带图：图随历史线性膨胀，而列表要回答的是"有哪几版、谁发的、各几个节点"。 点开某一版看长什么样，是下面那个端点。
    *
    * <p>★ 从没发布过 ⇒ <b>200 + 空数组</b>，不是 404：「这个应用还没发布过」是正常状态。
+   *
+   * <p>★ 每项的 {@code publishedByName} 是<strong>读时</strong>解析的当前人名，可能与发布当时不同（改名）或为空（用户已删：
+   * 此时前端显示「（未知用户）」，仍带着 {@code publishedBy} 那个 uuid 供 {@code title} 用）。
+   * 版本行里<strong>不存名字</strong>，理由见 {@link WorkflowVersionQueryService.Version}。
    */
   @GetMapping
   @PreAuthorize("hasAuthority('assistant:view')")

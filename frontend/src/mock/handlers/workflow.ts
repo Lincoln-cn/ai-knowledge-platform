@@ -54,6 +54,7 @@ const toPublicVersion = (v: WorkflowVersion): WorkflowVersion => ({
   version: v.version,
   publishedAt: v.publishedAt,
   publishedBy: v.publishedBy,
+  publishedByName: v.publishedByName,
   note: v.note,
   nodeCount: v.nodeCount
 })
@@ -198,7 +199,10 @@ export const workflowRoutes: MockRoute[] = [
         version: nextVersion,
         note,
         publishedAt: new Date().toISOString(),
-        publishedBy: '当前用户',
+        // mock 里的「当前用户」就是 fixtures/identity.ts 的 u1（admin / 管理员）。
+        // 真栈这两格由服务端给：publishedBy 是 uuid，publishedByName 是读时现查的当前人名。
+        publishedBy: 'u1',
+        publishedByName: '管理员',
         nodeCount: graph.nodes.length,
         graph: cloneGraph(graph)
       }

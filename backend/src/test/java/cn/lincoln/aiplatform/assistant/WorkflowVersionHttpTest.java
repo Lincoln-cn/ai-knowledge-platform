@@ -38,7 +38,11 @@ import tools.jackson.databind.ObjectMapper;
  *       且列表不带 {@code graph}；
  *   <li>详情取回发布那一刻的图快照；发布后再改草稿，快照<strong>不动</strong>；
  *   <li>★ 别的应用的版本 id / 版本号都读不到（404），且 404 里<strong>没有图</strong>；
- *   <li>从没发布过 ⇒ <b>200 + 空数组</b>（不是 404）。
+ *   <li>从没发布过 ⇒ <b>200 + 空数组</b>（不是 404）；
+ *   <li>★ 列表里的 {@code publishedByName}
+ *       是<strong>读时</strong>解析的当前人名：发布之后改用户名，历史里立刻是新名（若名字在发布时被存进版本表，这条会红）；
+ *   <li>★ 发布人被软删 ⇒ 列表仍 <b>200</b>，该条 {@code publishedByName} 为 {@code null}（前端显示「（未知用户）」）、{@code
+ *       publishedBy} 仍是 uuid —— 不是 500，也不是把 uuid 当名字。
  * </ol>
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -220,7 +224,109 @@ class WorkflowVersionHttpTest {
     assertThat(data.size()).isZero();
   }
 
+  @Test
+  void historyResolvesPublisherNameAtReadTimeNotAtPublishTime() throws Exception {
+    String admin = login("admin", "admin");
+    UUID app = createWorkflowApp(admin, "发布人改名");
+
+    JsonNode published = publish(admin, app, TWO_NODE_GRAPH, "第一版");
+    String actorId = published.path("publishedBy").asString();
+    assertThat(actorId).as("发布响应仍回 uuid（本块没改发布响应）").isNotBlank();
+    String originalName = displayNameInDb(UUID.fromString(actorId));
+
+    JsonNode row = versionList(admin, app).path(0);
+    assertThat(row.path("publishedBy").asString()).as("id 仍原样回（前端放进 title）").isEqualTo(actorId);
+    assertThat(row.path("publishedByName").asString())
+        .as("★ 发布历史里给人看的是人名，不是 uuid")
+        .isEqualTo(originalName)
+        .isNotEqualTo(actorId);
+
+    // ★ 这条是「为什么不在版本表里加 published_name 列」的反证：名字是读时解析的，改完立刻生效。
+    String renamed = "改名后-" + UUID.randomUUID().toString().substring(0, 6);
+    jdbc.update("update iam_user set display_name = ? where id = ?::uuid", renamed, actorId);
+    try {
+      assertThat(versionList(admin, app).path(0).path("publishedByName").asString())
+          .as("★ 名字读时解析：发布之后改名，历史里立刻是新名（存快照的话这里还是旧名）")
+          .isEqualTo(renamed);
+    } finally {
+      jdbc.update("update iam_user set display_name = ? where id = ?::uuid", originalName, actorId);
+    }
+  }
+
+  @Test
+  void deletedPublisherShowsUnknownInsteadOfUuidOr500() throws Exception {
+    String admin = login("admin", "admin");
+    UUID app = createWorkflowApp(admin, "发布人已删");
+    publish(admin, app, TWO_NODE_GRAPH, "发布人随后被删");
+
+    // 直接造「发布过、但人已经不在了」的那一行：让新用户真的去发布，还得先有 assistant:edit 且能登录，
+    // 那测的是权限；这里要测的是「名字解析不到」这条分支。
+    UUID ghost =
+        createUser(admin, "ghost-" + UUID.randomUUID().toString().substring(0, 8), "将被删除的人");
+    jdbc.update(
+        "update as_workflow_version set published_by = ?::uuid"
+            + " where assistant_id = ?::uuid and version = 1",
+        ghost.toString(),
+        app.toString());
+    jdbc.update("update iam_user set deleted_at = now() where id = ?::uuid", ghost.toString());
+
+    HttpResponse<String> list =
+        send(admin, "GET", "/api/v1/assistants/" + app + "/workflow/versions");
+    assertThat(list.statusCode()).as("★ 发布人解析不到不能让整页发布历史 500：%s", list.body()).isEqualTo(200);
+
+    JsonNode row = json.readTree(list.body()).path("data").path(0);
+    assertThat(row.path("publishedBy").asString())
+        .as("id 仍要留着：前端把它挂进 title")
+        .isEqualTo(ghost.toString());
+    assertThat(row.has("publishedByName")).as("契约上这个字段始终在，null 才是「解析不到」：%s", list.body()).isTrue();
+    assertThat(row.path("publishedByName").isNull())
+        .as("★ 已删的用户 ⇒ null（前端显示「（未知用户）」），不是 500")
+        .isTrue();
+    assertThat(row.path("publishedByName").asString())
+        .as("★ 也不能把 uuid 塞进人名那一格")
+        .isNotEqualTo(ghost.toString());
+  }
+
   // ────────────────────────── helpers ──────────────────────────
+
+  /** 版本列表的 {@code data} 数组；顺手钉住 200。 */
+  private JsonNode versionList(String token, UUID app) throws Exception {
+    HttpResponse<String> list =
+        send(token, "GET", "/api/v1/assistants/" + app + "/workflow/versions");
+    assertThat(list.statusCode()).as("列表：%s", list.body()).isEqualTo(200);
+    return json.readTree(list.body()).path("data");
+  }
+
+  /** 用户表里的当前显示名 —— 断言「页面上的名字」与「库里的名字」是同一个。 */
+  private String displayNameInDb(UUID userId) {
+    return jdbc.queryForObject(
+        "select display_name from iam_user where id = ?::uuid", String.class, userId.toString());
+  }
+
+  /**
+   * 建一个用户（沿用 admin 的角色；这里不测权限，只测「名字能不能解析到」）。
+   *
+   * <p>★ 不传 {@code password}：走默认初始口令，免得踩密码策略 —— 这个用户根本不用登录。
+   */
+  private UUID createUser(String token, String username, String displayName) throws Exception {
+    String roleId =
+        jdbc.queryForObject(
+            "select role_id::text from iam_user where username = 'admin'", String.class);
+    HttpResponse<String> response =
+        send(
+            token,
+            "POST",
+            "/api/v1/users",
+            "{\"username\":\""
+                + username
+                + "\",\"displayName\":\""
+                + displayName
+                + "\",\"roleId\":\""
+                + roleId
+                + "\"}");
+    assertThat(response.statusCode()).as("建用户：%s", response.body()).isEqualTo(200);
+    return UUID.fromString(json.readTree(response.body()).path("data").path("id").asString());
+  }
 
   private JsonNode publish(String token, UUID app, String graph, String note) throws Exception {
     HttpResponse<String> response =

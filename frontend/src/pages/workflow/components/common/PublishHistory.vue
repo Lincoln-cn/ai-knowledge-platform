@@ -22,9 +22,11 @@
                                 <div class="grow">
                                     <!--
                                       字段映射到契约（api/workflow.ts 的 WorkflowVersion）：
-                                      `note` 发布说明 / `version` 版本号 / `publishedBy` 发布人 /
+                                      `note` 发布说明 / `version` 版本号 / `publishedByName` 发布人 /
                                       `publishedAt` 发布时间 / `nodeCount` 节点数。
                                       版本号 / 时间 / 作者 / 节点数都是数据 —— 走 .num（mono + 等宽数字）。
+                                      发布人显示的是**名字**，uuid 只进 title；名字解析不到（用户已删）时
+                                      显示「（未知用户）」—— 不回退显示那串 uuid，那对人没有意义。
                                     -->
                                     <h5 class="flex align-center">
                                         <el-tag size="small" effect="plain"
@@ -39,7 +41,7 @@
                                                 <UserFilled />
                                             </el-icon>
                                         </AppAvatar>
-                                        <span>{{ row.publishedBy }}</span>
+                                        <span :title="row.publishedBy">{{ row.publishedByName || '（未知用户）' }}</span>
                                         <span class="meta-sep">·</span>
                                         <span>{{ datetimeFormat(row.publishedAt) }}</span>
                                         <span class="meta-sep">·</span>

@@ -318,7 +318,18 @@ export interface WorkflowVersion {
   /** 递增版本号 */
   version: number
   publishedAt: string
+  /** 发布人用户 id（uuid）。界面上不显示它，只放进 `title` —— 同名的人靠它才分得开 */
   publishedBy: string
+  /**
+   * 发布人**现在**的显示名，服务端读列表时现查。
+   *
+   * ★ 刻意不是发布那一刻的快照：人名会改（改完要显示新名）、会软删（删完不该还挂着一个不存在的人），
+   * 所以版本行里只存 id。这一点与审计表相反 —— 审计要回答「那一刻是谁」，那边必须存快照。
+   *
+   * `null` = 现在解析不到（用户被删，或这次查询失败）⇒ 界面显示「（未知用户）」，
+   * **不要**退回显示 `publishedBy` 那个 uuid。
+   */
+  publishedByName: string | null
   /** 发布说明 */
   note: string
   nodeCount: number
