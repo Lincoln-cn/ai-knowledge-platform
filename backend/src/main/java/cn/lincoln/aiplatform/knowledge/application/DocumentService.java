@@ -18,6 +18,7 @@ import cn.lincoln.aiplatform.knowledge.infrastructure.SegmentationProperties;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.infrastructure.metrics.BusinessMetrics;
 import cn.lincoln.aiplatform.platform.org.OrgDirectoryPort;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.time.Instant;
@@ -85,6 +86,13 @@ public class DocumentService {
   /** 把"去解析这份字节"交给 {@link ParseRunner} —— 见 {@link DocumentUploaded}（不用直接依赖，避免构造环）。 */
   private final ApplicationEventPublisher events;
 
+  /**
+   * 指标旁路（{@code #73}）：入库失败要能被持续看到。
+   *
+   * <p>★ 它记在<b>状态真的被写成 FAILED 的那一行旁边</b>，不是记在"有人调了某方法"上 —— 后者会把"重试成功"也算成失败。
+   */
+  private final BusinessMetrics metrics;
+
   private final Segmenter segmenter = new Segmenter();
 
   public DocumentService(
@@ -98,7 +106,8 @@ public class DocumentService {
       EmbeddingRunner runner,
       OrgDirectoryPort orgDirectory,
       OrgCodeResolver orgCodes,
-      ApplicationEventPublisher events) {
+      ApplicationEventPublisher events,
+      BusinessMetrics metrics) {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
     this.parser = parser;
@@ -110,6 +119,7 @@ public class DocumentService {
     this.orgDirectory = orgDirectory;
     this.orgCodes = orgCodes;
     this.events = events;
+    this.metrics = metrics;
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -720,8 +730,10 @@ public class DocumentService {
           plan.size(), toSave.stream().mapToInt(Segment::charCount).sum());
     } catch (BusinessException e) {
       // ★ Segmenter 抛的可读异常 ⇒ SEGMENT_FAILED + 可读原因（不许堆栈、不许静默）
+      metrics.ingestionFailed(BusinessMetrics.IngestionStage.SEGMENT);
       document.recordFailure(DocumentStatus.SEGMENT_FAILED, e.getMessage(), e.hint());
     } catch (IllegalArgumentException e) {
+      metrics.ingestionFailed(BusinessMetrics.IngestionStage.SEGMENT);
       document.recordFailure(DocumentStatus.SEGMENT_FAILED, e.getMessage(), "请检查文档正文是否可正常解析");
     }
   }

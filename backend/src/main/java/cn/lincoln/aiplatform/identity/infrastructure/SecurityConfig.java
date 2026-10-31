@@ -77,6 +77,12 @@ public class SecurityConfig {
                     // 健康探针
                     .requestMatchers("/actuator/health", "/actuator/health/**")
                     .permitAll()
+                    // ★ 指标抓取（#73）：与 health 同档，因为 Prometheus 采集端只带 URL、不带令牌。
+                    //   代价是"匿名可读" ⇒ 两条前提写进了 pom 注释与 deploy/README：
+                    //   ① 指标标签里不许出现高基数/敏感维度 ② 生产必须靠网关或防火墙限制抓取来源。
+                    //   缺一条就该改走独立的管理端口（management.server.port）。
+                    .requestMatchers("/actuator/prometheus")
+                    .permitAll()
                     // ★ 登录、刷新、验证码必须免认证。刷新免认证是因为"令牌过期了才能刷新、
                     //   可刷新又要求令牌有效"本身就是循环的；验证码则是给"还没登录的人"用的
                     .requestMatchers(

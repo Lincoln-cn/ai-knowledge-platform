@@ -220,10 +220,18 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # ★ prometheus 是 #73 留缝的第一格：三条业务指标（上游不可达率 / 首字延迟 P95 /
+        #   入库失败率）由它导出。它与 health 同一档 permitAll ⇒ 匿名可读，
+        #   生产环境靠网关/防火墙限制抓取来源（deploy/README.md 写了口径）。
+        include: health,info,prometheus
   endpoint:
     health:
       show-details: when-authorized
+  metrics:
+    # ★ 延迟类指标要 P95/P99，不是只看平均值 —— 平均值会把"少数极慢请求"抹平。
+    distribution:
+      percentiles:
+        aiplatform.chat.first-token: 0.5,0.95,0.99
 
 logging:
   level:

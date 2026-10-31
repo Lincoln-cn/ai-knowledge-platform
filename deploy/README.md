@@ -221,7 +221,37 @@ python frontend/check_ocr_e2e.py
 
 ---
 
-## 六、OCR 的配置项（交付时可能要改的）
+## 六、指标抓取（Prometheus）与它的两条前提（`#73`）
+
+应用把三条业务指标导出在 **`GET /actuator/prometheus`**（Micrometer → Prometheus 文本格式）：
+
+| 指标 | 回答什么 | 建议阈值的出处 |
+|---|---|---|
+| `aiplatform_upstream_calls_total{outcome}` | 上游不可达率 | `08 §4.10.1` |
+| `aiplatform_chat_first_token_seconds`（P50/P95/P99） | 首字延迟（`B4` ≤10s 从此是持续读数） | 同上 |
+| `aiplatform_ingestion_failures_total{stage}` | 入库失败率（按解析/分段/向量化分） | 同上 |
+
+★ 这个端点**和 `/actuator/health` 同档免认证** —— 理由是 Prometheus 的采集端只带 URL、不带令牌。
+代价是"匿名可读"，所以**交付时必须满足下面两条，缺一条就该改走独立管理端口**：
+
+1. **标签里不许出现高基数或账号维度**（应用名 / 用户 / 会话 / 模型 id）。代码里由 `BusinessMetrics`
+   一处把关（它没有接受这类参数的入口），单测 `BusinessMetricsTest.noHighCardinalityTagsLeakIn` 钉住。
+2. **生产必须靠网关或防火墙限制抓取来源** —— 例如只允许监控网段访问 `/actuator/prometheus`。
+   若做不到，就把它挪到独立管理端口：
+   ```yaml
+   management:
+     server:
+       port: 9091          # 只绑管理网段
+   ```
+   挪端口后，`SecurityConfig` 里那条 permitAll 就只需保留 health 一条（两者是不同的端口，互不影响）。
+
+★ 还有一条**不是运维问题、是埋点问题**：没被记录过的指标**不会出现在导出里**（不是记成 0）。
+「查不到」与「一直是 0」在仪表盘上长得一样 ⇒ 如果某条曲线凭空消失了，先怀疑埋点被删/被跳过，
+不要先怀疑"没有流量"。
+
+---
+
+## 七、OCR 的配置项（交付时可能要改的）
 
 全部走环境变量覆盖（`application.yml` 的 `app.ocr.*`）：
 
@@ -237,7 +267,7 @@ python frontend/check_ocr_e2e.py
 
 ---
 
-## 七、开发机（Windows）怎么装
+## 八、开发机（Windows）怎么装
 
 与镜像路线**等价**的本地安装（本机实测过）：
 
@@ -252,7 +282,7 @@ scoop 会自动把 `TESSDATA_PREFIX` 指到上面那个目录 —— 所以开�
 
 ---
 
-## 八、诚实记账：哪些已验、哪些还没
+## 九、诚实记账：哪些已验、哪些还没
 
 | 项 | 状态 |
 |---|---|

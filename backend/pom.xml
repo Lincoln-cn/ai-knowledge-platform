@@ -177,6 +177,19 @@
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
 
+    <!-- ─── 指标导出（#73 留缝的第一格）：Prometheus 文本格式 ───
+         ★ 只引 registry，不引任何 exporter / agent —— 抓取由外部 Prometheus 负责。
+         ★ 端点挂在主端口 /actuator/prometheus（见 application.yml 的 management 段）。
+           它与 /actuator/health 同一档 permitAll（匿名可读），因此有两条前提：
+             ① 指标名与标签里**不许**出现高基数字段（应用名、会话 / 消息 id、模型 id 都不进标签）；
+             ② 生产环境必须由网关或主机防火墙限制抓取来源（deploy/README.md 已写）。
+           这两条缺一条，就应当改成独立管理端口（management.server.port）再放行。
+    -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
+
     <!-- ─── 文档解析（第 6 周 0.2.1 · 12 §一）：Tika 统一管线出 Markdown ───
          ★ 精准组合 = tika-core + 三个细粒度 parser 模块（不是聚合包、也不是纯 core）：
            - tika-core：MIME 嗅探 + ToMarkdownContentHandler（XHTML→Markdown 序列化器）
