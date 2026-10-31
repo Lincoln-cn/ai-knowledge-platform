@@ -20,6 +20,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -60,6 +61,12 @@ public class EmbeddingRunner {
   private final EmbeddingPort embeddingPort;
   private final EmbeddingProgressService progress;
 
+  /**
+   * 并发闸门（{@code #227}）：一次触发 70 份时，最多 N 份同时在跑。★ 没有它，69 个虚拟线程会 同时抢 Hikari 默认的 10 条连接，10 份以 {@code
+   * Failed to obtain JDBC Connection} 收场 —— 而那个 失败与文档内容无关，重试就过，用户只会以为「文件坏了」。
+   */
+  private final EmbeddingConcurrencyGate gate;
+
   /** 虚拟线程（{@code ADR-01}：IO 密集）。单例执行器随应用生命周期。 */
   private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -69,13 +76,15 @@ public class EmbeddingRunner {
       SegmentEmbeddingRepository embeddings,
       KnowledgeBaseRepository knowledgeBases,
       EmbeddingPort embeddingPort,
-      EmbeddingProgressService progress) {
+      EmbeddingProgressService progress,
+      EmbeddingConcurrencyGate gate) {
     this.documents = documents;
     this.segments = segments;
     this.embeddings = embeddings;
     this.knowledgeBases = knowledgeBases;
     this.embeddingPort = embeddingPort;
     this.progress = progress;
+    this.gate = gate;
   }
 
   /**
@@ -107,17 +116,19 @@ public class EmbeddingRunner {
     //     03:49:39.261「向量化完成：文档 a0c8ad68 共 4 段」← 前一轮（文档级）
     //     03:49:39.753「向量化失败：文档 a0c8ad68 —— 不能标记向量化完成：已完成 0 段、共 4 段」
     //   本机跑不出来（时序更快），所以它是那种「本机绿、CI 红」的竞态。
+    //   ★ 闸门放在**任务体内**（`gate.run`），不是提交前：提交前 acquire 会把第 N+1 个用户请求
+    //     卡在 HTTP 线程上等前面几份跑完 —— 那是把后台任务做成了前台排队（#227）。
     if (TransactionSynchronizationManager.isSynchronizationActive()) {
       TransactionSynchronizationManager.registerSynchronization(
           new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-              executor.submit(() -> run(documentId, modelId));
+              executor.submit(() -> gate.run(() -> run(documentId, modelId)));
             }
           });
     } else {
       // 没有事务在跑（测试与排障直接调）⇒ 立刻起，语义不变
-      executor.submit(() -> run(documentId, modelId));
+      executor.submit(() -> gate.run(() -> run(documentId, modelId)));
     }
   }
 
@@ -167,9 +178,44 @@ public class EmbeddingRunner {
     } catch (BusinessException e) {
       fail(documentId, e.getMessage(), e.hint());
     } catch (RuntimeException e) {
+      if (isResourceExhaustion(e)) {
+        // ★ 资源不足 ≠ 文档坏了（#227）：前者等一会儿重试就好，后者要人去改文件。
+        //   分开写，是因为「同一句话覆盖两种原因」正是本工程头号病（silent-failure）的形状：
+        //   用户按「文档有问题」去排查，永远查不到连接池。
+        log.warn("向量化失败（资源不足，不是文档问题）：文档 {} —— {}", documentId, e.getMessage());
+        fail(
+            documentId,
+            "向量化失败：数据库连接池被同时入库的任务占满（资源不足，不是文档的问题）",
+            "等一会儿重试即可；已完成的段不会重跑。批量入库时可在 app.ingestion.embedding-concurrency 调低并发");
+        return;
+      }
       log.warn("向量化失败：文档 {} —— {}", documentId, e.getMessage());
       fail(documentId, "向量化失败：" + e.getMessage(), "请确认模型服务可用后重试（重试只会重跑未完成的段）");
     }
+  }
+
+  /**
+   * 这个异常是不是「资源不足」（连接池打满、库不可达），而不是「这份文档有问题」？
+   *
+   * <p>★ 判据放窄：只认 Spring 的 {@link DataAccessResourceFailureException}（Hikari 等连接池拿不到 连接时抛的 {@code
+   * CannotGetJdbcConnectionException} 是它的子类）。别把任何 {@code DataAccessException} 都算进来 —— 唯一约束冲突、SQL
+   * 写错也是 DataAccessException，那类靠重试 好不了，归成"资源不足"会让用户无限重试。
+   *
+   * <p>包级可见：测试要验它的边界（{@code EmbeddingFailureClassificationTest}）。
+   *
+   * @param error 异常
+   * @return 是否资源不足
+   */
+  static boolean isResourceExhaustion(Throwable error) {
+    for (Throwable current = error; current != null; current = current.getCause()) {
+      if (current instanceof DataAccessResourceFailureException) {
+        return true;
+      }
+      if (current.getCause() == current) {
+        break;
+      }
+    }
+    return false;
   }
 
   // ────────────────────────── 内部 ──────────────────────────

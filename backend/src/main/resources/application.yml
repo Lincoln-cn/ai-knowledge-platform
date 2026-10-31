@@ -163,6 +163,15 @@ app:
     #   ★ 取值：PUBLIC / INTERNAL / SECRET / CONFIDENTIAL（13 §6.3 的 ceiling 口径）。
     external-api-ceiling: ${EGRESS_EXTERNAL_API_CEILING:INTERNAL}
 
+  ingestion:
+    # ★ 批量入库的向量化并发上限（#227）：一次触发 70 份时，最多这么多份同时在跑。
+    #   为什么要有它：虚拟线程是无限起的，而数据库连接池默认只有 10 条 —— 69 份同时抢 10 条
+    #   连接，10 份会以「Failed to obtain JDBC Connection」收场。那个失败与文档内容无关，
+    #   重试就过，但用户看到的是「向量化失败」，于是会去怀疑文件。
+    #   ★ 配 0 或负数会被当成 1（配 0 会让向量化永远不跑，且没有任何报错）。
+    #   ★ 调低只会变慢，不会失败；调高不会超过连接池上限，只会让更多的任务在排队。
+    embedding-concurrency: ${INGESTION_EMBEDDING_CONCURRENCY:4}
+
   segmentation:
     # 分块目标长度默认值。★ 与前端向导 CreateWizard.vue 的 segForm.segmentLength 默认值一致 ——
     #   否则用户在预览里看到的与入库得到的不同。
