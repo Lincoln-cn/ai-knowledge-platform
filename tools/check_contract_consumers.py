@@ -16,8 +16,13 @@
   或组件库间接调用，字符串命中/不命中都会误报。这里用**函数名**做第一版，
   仍然只报告不判红；等基线人工过一遍后再谈是否进 CI。
 
+★ 门禁（`#79`）：`--check` 拿 `tools/consumer-baseline.txt` 当基线 ——
+  **新增的零消费端点会红**；基线里那条现在有人用了 / 端点没了也会红（清单必须随修复收缩）。
+
 用法：
-  python tools/check_contract_consumers.py
+  python tools/check_contract_consumers.py            # 只读读数
+  python tools/check_contract_consumers.py --check     # 门禁：与基线比对，退 0/1
+  python tools/check_contract_consumers.py --baseline  # 按当前读数重排基线（人工过一遍再用）
   python tools/check_contract_consumers.py --json
   python tools/check_contract_consumers.py --self-test
 """
@@ -211,20 +216,129 @@ def self_test() -> int:
         if used is None or not used.consumers:
             print("SELF-TEST FAIL: 已消费端点 /fake/used 没有被识别")
             return 1
-    print("SELF-TEST OK: 假端点被列为零消费；已消费端点能找到调用点")
+    gate_failures = self_test_gate()
+    if gate_failures:
+        for item in gate_failures:
+            print(f"SELF-TEST FAIL（基线门禁）: {item}")
+        return 1
+    print("SELF-TEST OK: 假端点被列为零消费；已消费端点能找到调用点；基线门禁三向都能红")
     return 0
+
+
+BASELINE = ROOT / "tools/consumer-baseline.txt"
+ISSUE_RE = re.compile(r"#\d+")
+
+
+def read_baseline(path: Path = BASELINE) -> dict[tuple[str, str], str]:
+    """`METHOD<TAB>PATH<TAB>#issue` —— 键是 (method, path)，值是 Issue 号。"""
+    if not path.exists():
+        return {}
+    entries: dict[tuple[str, str], str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("	")
+        if len(parts) != 3:
+            raise SystemExit(f"基线格式错（应为 METHOD<TAB>PATH<TAB>#issue）：{line!r}")
+        entries[(parts[0].strip(), parts[1].strip())] = parts[2].strip()
+    return entries
+
+
+def check_against_baseline(rows, baseline: dict[tuple[str, str], str]) -> list[str]:
+    """两个方向都要红：**新增的零消费**、以及**基线里已经过期的**。"""
+    problems: list[str] = []
+    zero = {(row.endpoint.method, row.endpoint.path): row for row in rows if not row.consumers}
+
+    for key, row in zero.items():
+        if key not in baseline:
+            functions = ", ".join(call.function for call in row.calls) or "(无契约函数)"
+            problems.append(
+                f"{key[0]} {key[1]}：零消费且不在基线里（契约函数 {functions}）—— "
+                "要么给它接一个页面入口，要么登记进 tools/consumer-baseline.txt 并写清 Issue"
+            )
+
+    for key, issue in baseline.items():
+        if not ISSUE_RE.fullmatch(issue):
+            problems.append(f"{key[0]} {key[1]}：基线条目没有 Issue 号（{issue!r}）")
+        if key not in zero:
+            problems.append(
+                f"{key[0]} {key[1]}：基线里登记了零消费，但这次读数里它不零消费（或端点已不存在）—— "
+                "把基线这条删掉（清单必须随修复收缩）"
+            )
+    return problems
+
+
+def render_baseline(rows) -> str:
+    lines = [
+        "# 前端零消费端点的基线（`tools/check_contract_consumers.py --check` 读它）",
+        "# 格式：METHOD<TAB>PATH<TAB>#issue —— 每一条都要能说出「为什么现在可以零消费」",
+        "# ★ 接上入口或删掉端点之后，把对应行删掉；否则 --check 会红（清单必须随修复收缩）",
+        "",
+    ]
+    for row in rows:
+        if row.consumers:
+            continue
+        lines.append(f"{row.endpoint.method}	{row.endpoint.path}	#?")
+    return "\n".join(lines) + "\n"
+
+
+def self_test_gate() -> list[str]:
+    """门禁方向的自检：新增零消费要红、过期基线要红、有 Issue 号才收。"""
+    failures: list[str] = []
+
+    class _Row:
+        def __init__(self, method, path, consumers):
+            self.endpoint = type("E", (), {"method": method, "path": path})()
+            self.consumers = consumers
+            self.calls = []
+
+    zero_row = _Row("GET", "/ghost", [])
+    used_row = _Row("GET", "/used", ["pages/x.vue:1"])
+
+    problems = check_against_baseline([zero_row], {})
+    if not problems or "/ghost" not in problems[0]:
+        failures.append("新增零消费没有报")
+
+    problems = check_against_baseline([zero_row], {("GET", "/ghost"): "#1"})
+    if problems:
+        failures.append(f"登记了 Issue 的基线仍被报：{problems}")
+
+    problems = check_against_baseline([used_row], {("GET", "/used"): "#1"})
+    if not problems:
+        failures.append("基线过期（现在有人用了）没有报")
+
+    problems = check_against_baseline([zero_row], {("GET", "/ghost"): "issue-1"})
+    if not any("Issue 号" in item for item in problems):
+        failures.append("基线条目缺 Issue 号没有报")
+    return failures
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="前后端配对第三格：前端消费点只读读数")
     parser.add_argument("--json", action="store_true", help="输出 JSON")
     parser.add_argument("--self-test", action="store_true", help="内置反证")
+    parser.add_argument("--check", action="store_true", help="门禁：与基线比对，退 0/1")
+    parser.add_argument("--baseline", action="store_true", help="按当前读数重排基线（人工过一遍再用）")
     args = parser.parse_args()
 
     if args.self_test:
         return self_test()
 
     rows = build_report()
+    if args.baseline:
+        BASELINE.write_text(render_baseline(rows), encoding="utf-8", newline="\n")
+        print(f"已写入 {BASELINE.relative_to(ROOT)}：{sum(1 for r in rows if not r.consumers)} 条（记得逐条补 Issue 号）")
+        return 0
+    if args.check:
+        problems = check_against_baseline(rows, read_baseline())
+        if problems:
+            print(f"✗ 第三格门禁：{len(problems)} 条对不上\n")
+            for item in problems:
+                print(f"  - {item}")
+            return 1
+        print(f"✓ 第三格门禁通过：零消费 {sum(1 for r in rows if not r.consumers)} 条，全部在基线里且仍为零消费")
+        return 0
     zero = [row for row in rows if not row.consumers]
     if args.json:
         payload = [

@@ -147,6 +147,9 @@ jobs:
             fi
             echo "::endgroup::"
           done
+          # ★ 第三格门禁（`#79`）：契约与后端都有、但**页面零消费**的端点会红。
+          #   它防的是"后端那半能编译能过测试、闸门全绿，但点不动"——最难发现的那类遗漏。
+          #   基线在 `tools/consumer-baseline.txt`，向后端目录之外跑，所以单独一步。
           if [ ${#failed[@]} -gt 0 ]; then
             echo "★ 失败 ${#failed[@]}/11：${failed[*]}"
             exit 1
@@ -166,6 +169,11 @@ jobs:
 
       # ★ 恢复演练记录的可核对性（#75 判据 ③）：模板里留「待补」是刻意的 —— 没填完一定红。
       #   这条自检跑的是检查器自己（离线、不需要数据库），真正的演练记录在 deploy/restore-drill-record.md。
+      - name: 前后端配对第三格（#79）
+        run: |
+          python tools/check_contract_consumers.py --self-test
+          python tools/check_contract_consumers.py --check
+
       - name: 恢复演练记录自检（#75）
         run: python scripts/restore_drill.py --self-check
 

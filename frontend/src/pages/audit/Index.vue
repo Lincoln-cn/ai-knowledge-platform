@@ -5,6 +5,12 @@
       desc="谁在什么时候改了什么。只读 —— 审计记录只能追加，不能改也不能删。"
     >
       <template #actions>
+        <el-button
+          v-if="canPurge"
+          size="small"
+          :loading="purging"
+          @click="startPurge"
+        >清理过期记录</el-button>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="refresh">刷新</el-button>
       </template>
     </PageHeader>
@@ -91,7 +97,12 @@
       </el-table-column>
       <el-table-column label="明细" min-width="260">
         <template #default="{ row }">
-          <span class="detail">{{ row.detail || '—' }}</span>
+          <span class="detail">{{ detailText(row.detail) }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="" width="120" fixed="right">
+        <template #default="{ row }">
+          <el-button link size="small" @click="openTrace(row)">这个资源</el-button>
         </template>
       </el-table-column>
       <template #empty>
@@ -105,6 +116,34 @@
         </div>
       </template>
     </el-table>
+
+    <!-- ★ 追溯：某个资源的**全部**记录（"这份文档到底被谁改过"）。
+         它消费的是 `GET /audit-logs/by-resource` —— 否则那条端点就只是契约里的一行字。 -->
+    <el-dialog v-model="traceOpen" title="这个资源的全部记录" width="720px">
+      <p class="micro muted">
+        {{ traceType }} / {{ traceId }}
+      </p>
+      <el-table v-loading="traceLoading" :data="traceRows" size="small">
+        <el-table-column prop="at" label="时间" width="180" />
+        <el-table-column label="操作人" width="120">
+          <template #default="{ row }">{{ row.actorName ?? '（系统）' }}</template>
+        </el-table-column>
+        <el-table-column label="动作" width="150">
+          <template #default="{ row }">{{ actionLabel(row.action) }}</template>
+        </el-table-column>
+        <el-table-column label="明细" min-width="220">
+          <template #default="{ row }">{{ detailText(row.detail) }}</template>
+        </el-table-column>
+        <template #empty>
+          <div class="empty">
+            <div class="empty-title">这个资源还没有审计记录</div>
+            <div class="micro muted">
+              可能是它从没被改过，也可能是改动走的是还没接审计的动作（检索 / 查看 / 引用）。
+            </div>
+          </div>
+        </template>
+      </el-table>
+    </el-dialog>
 
     <div class="pager">
       <el-pagination
@@ -121,7 +160,10 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { PERM } from '@/constants/permissions'
+import { useSessionStore } from '@/stores/session'
 import { Refresh } from '@element-plus/icons-vue'
 import PageHeader from '@/components/PageHeader.vue'
 import { auditApi } from '@/api'
@@ -144,6 +186,7 @@ const RESOURCES = [
   { value: 'ROLE', label: '角色' },
 ]
 
+const session = useSessionStore()
 const rows = ref<AuditRecord[]>([])
 const total = ref(0)
 const loading = ref(false)
@@ -190,6 +233,86 @@ async function load() {
     loadError.value = e instanceof Error ? e.message : String(e)
   } finally {
     loading.value = false
+  }
+}
+
+const detailText = (detail: unknown) => {
+  if (detail == null || detail === '') return '—'
+  if (typeof detail === 'string') return detail
+  try {
+    return JSON.stringify(detail)
+  } catch {
+    return String(detail)
+  }
+}
+
+/* ── 追溯：一个资源的全部记录（消费 `GET /audit-logs/by-resource`） ── */
+const traceOpen = ref(false)
+const traceLoading = ref(false)
+const traceRows = ref<AuditRecord[]>([])
+const traceType = ref('')
+const traceId = ref('')
+
+async function openTrace(row: AuditRecord) {
+  traceType.value = row.resourceType
+  traceId.value = row.resourceId
+  traceRows.value = []
+  traceOpen.value = true
+  traceLoading.value = true
+  try {
+    traceRows.value = await auditApi.listAuditLogsByResource(row.resourceType, row.resourceId)
+  } catch (e) {
+    traceRows.value = []
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    traceLoading.value = false
+  }
+}
+
+/* ── 留存期清理：先试算再删（消费 `POST /audit-logs/purge`） ── */
+const purging = ref(false)
+const canPurge = computed(() => session.can(PERM.systemManage))
+
+async function startPurge() {
+  let input: string
+  try {
+    const res = await ElMessageBox.prompt(
+      '清理这个时间点之前的审计记录（ISO 日期，例如 2026-01-01）。' +
+        '会先试算有多少条，再让你确认 —— 审计只能追加，删掉不可恢复。',
+      '清理过期审计记录',
+      { confirmButtonText: '试算', cancelButtonText: '取消', inputPlaceholder: '2026-01-01' }
+    )
+    input = res.value
+  } catch {
+    return
+  }
+  const beforeAt = new Date(`${input.trim()}T00:00:00Z`)
+  if (Number.isNaN(beforeAt.getTime())) {
+    ElMessage.error('日期格式不对，请用 YYYY-MM-DD')
+    return
+  }
+  purging.value = true
+  try {
+    const dry = await auditApi.purgeAuditLogs(beforeAt.toISOString(), true)
+    if (dry.candidates === 0) {
+      ElMessage.info('这个时间点之前没有记录，不需要清理')
+      return
+    }
+    await ElMessageBox.confirm(
+      `将删除 ${dry.candidates} 条（截止 ${input.trim()}）。清理本身会写一条审计（audit.purge）。确认？`,
+      '确认清理',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+    const done = await auditApi.purgeAuditLogs(beforeAt.toISOString(), false)
+    ElMessage.success(`已清理 ${done.deleted} 条`)
+    await load()
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    // 用户点"取消"会走到这里：ElMessageBox 的取消以 reject 表达，不当错误报
+    if (reason.includes('cancel') || reason.includes('关闭')) return
+    ElMessage.error(reason)
+  } finally {
+    purging.value = false
   }
 }
 

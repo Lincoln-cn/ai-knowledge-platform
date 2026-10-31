@@ -56,18 +56,6 @@ public class AuditQueryAdapter implements AuditQueryPort {
     return new Result(rows, total == null ? 0 : total);
   }
 
-  @Override
-  public List<AuditRecordView> byResource(String resourceType, String resourceId) {
-    return jdbc.query(
-        "select "
-            + COLUMNS
-            + " from pf_audit_log where resource_type = ? and resource_id = ?"
-            + " order by created_at desc, id desc",
-        ROW_MAPPER,
-        resourceType,
-        resourceId);
-  }
-
   /**
    * 拼 where 子句与参数。
    *

@@ -24,8 +24,6 @@ public interface AuditQueryPort {
   Result page(Query query);
 
   /** 查单个资源的全部记录（"这份文档到底被人改过几次" —— 最常见的用法）。 */
-  java.util.List<AuditRecordView> byResource(String resourceType, String resourceId);
-
   /**
    * 按留存期清理：删掉 {@code created_at < beforeAt} 的记录，返回真正删掉的行数（`#75`）。
    *

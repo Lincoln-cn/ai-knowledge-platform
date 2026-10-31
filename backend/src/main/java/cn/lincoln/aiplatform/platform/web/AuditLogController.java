@@ -93,28 +93,6 @@ public class AuditLogController {
   }
 
   /**
-   * 一个资源的全部记录（"这份文档到底被谁改过"——最常见的问法）。
-   *
-   * <p>★ 单独一个端点而不是让调用方自己传两个 filter：这个用法太常见，且它的正确形状（按资源 + 时间倒序）不该由调用方每次拼对。
-   */
-  @GetMapping("/by-resource")
-  @PreAuthorize("hasAuthority('system:manage')")
-  public ApiResponse<java.util.List<AuditRecordView>> byResource(
-      @RequestParam String resourceType, @RequestParam String resourceId) {
-    return ApiResponse.ok(auditQuery.byResource(resourceType, resourceId));
-  }
-
-  /** 资源类别统一大写：库里存的是 {@code DOCUMENT}，前端传 {@code document} 时不该静默返回 0 条。 */
-  private static String normalizeType(String resourceType) {
-    String value = blankToNull(resourceType);
-    return value == null ? null : value.toUpperCase(Locale.ROOT);
-  }
-
-  private static String blankToNull(String value) {
-    return value == null || value.isBlank() ? null : value.trim();
-  }
-
-  /**
    * 按留存期清理审计记录（`#75`）：删掉 {@code created_at < beforeAt} 的行。
    *
    * <p>★ 这是本控制器里**唯一**的可写映射，而且它不删具体哪一条 —— 语法上只能表达"清理到某个时间点为止"。
@@ -164,4 +142,15 @@ public class AuditLogController {
    * @param deleted 实际删除行数（dryRun 时恒 0）
    */
   public record PurgeResult(Instant beforeAt, boolean dryRun, long candidates, long deleted) {}
+
+  /** 空串与全空白都当成"没传"—— 否则 `?action=` 会被当成"筛一个叫空串的动作"。 */
+  private static String blankToNull(String value) {
+    return value == null || value.isBlank() ? null : value.trim();
+  }
+
+  /** 资源类型统一大写：库里存的是 `DOCUMENT` / `ASSISTANT`，调用方写小写不该查不到。 */
+  private static String normalizeType(String resourceType) {
+    String value = blankToNull(resourceType);
+    return value == null ? null : value.toUpperCase(Locale.ROOT);
+  }
 }
