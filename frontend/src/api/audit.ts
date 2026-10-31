@@ -14,6 +14,9 @@ export type AuditActionCode =
   | 'document.restore'
   | 'data.export'
   | 'grant.change'
+  // ★ 留存期清理自己写的那一条（`#75`）：动作发起者是系统（`actor_id` 为空），
+  //   但它在页面上必须看得懂 —— 否则清理历史只能靠翻原始 code。
+  | 'audit.purge'
 
 /**
  * 一条审计记录。

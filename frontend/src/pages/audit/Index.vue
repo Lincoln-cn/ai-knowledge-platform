@@ -180,6 +180,7 @@ const ACTIONS = [
   { value: 'document.restore', label: '从回收站恢复' },
   { value: 'data.export', label: '导出应用' },
   { value: 'grant.change', label: '改角色权限' },
+  { value: 'audit.purge', label: '清理过期审计' },
 ]
 
 const RESOURCES = [
