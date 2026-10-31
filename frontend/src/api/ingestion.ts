@@ -34,6 +34,13 @@ export interface DocumentItem {
   createdAt: string
   /** 软删时间（只有回收站列表里才有值；在用列表里恒为 undefined）。 */
   deletedAt?: string
+  /**
+   * 回收站里这一条还能不能恢复（`#259`）。
+   *
+   * ★ 由**服务端**按保留窗口算好再出网：让前端自己算窗口等于把一条配置复制成两份，
+   * 而两份配置迟早不一致。非回收站场景恒为 false。
+   */
+  restorable?: boolean
   updatedAt: string
   /**
    * 文种（合同/制度/报销规定…）。★ 建档必填三项之一（12 §5.1），
@@ -358,6 +365,9 @@ export const listDeletedDocuments = (kbId: string, query: { page?: number; size?
  * ★ 必须先软删，否则后端 400「这份文档还在使用中」。
  * ★ 备份里仍然有（`deploy/README.md` 保留 14 天日备），所以它的语义是"从生产库与检索里消失"。
  */
+/** 从回收站恢复（`POST /documents/:id/restore`，`#259`）。保留期外服务端会 400。 */
+export const restoreDocument = (id: string) => request<DocumentItem>({ method: 'POST', url: `/documents/${id}/restore` })
+
 export const purgeDocument = (id: string) =>
   request<void>({ method: 'DELETE', url: '/documents/:id/purge', path: { id } })
 

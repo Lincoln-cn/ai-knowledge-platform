@@ -41,7 +41,14 @@ public enum AuditAction {
 
   /** 撤销会话分享链接（与生成成对：一条链接的生命周期两端都要能回答"谁做的"）。 */
   CONVERSATION_UNSHARE("conversation.unshare"),
-  DOCUMENT_PURGE("document.purge");
+  DOCUMENT_PURGE("document.purge"),
+
+  /**
+   * ★ 从回收站恢复（`#259`）。
+   *
+   * <p>恢复也是"边界被移动"：内容重新进入检索面。删除有痕、恢复没痕，等于只记了一半。
+   */
+  DOCUMENT_RESTORE("document.restore");
 
   private final String code;
 

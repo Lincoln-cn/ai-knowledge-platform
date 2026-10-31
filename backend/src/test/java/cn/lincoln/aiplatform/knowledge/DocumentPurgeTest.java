@@ -41,6 +41,8 @@ class DocumentPurgeTest {
 
   @Autowired JdbcTemplate jdbc;
 
+  @Autowired cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort segmentSearch;
+
   private final HttpClient http = HttpClient.newHttpClient();
 
   @Test
@@ -52,7 +54,7 @@ class DocumentPurgeTest {
     assertThat(delete("/api/v1/documents/" + doc.get("documentId"), admin).statusCode())
         .as("软删必须先成功")
         .isEqualTo(200);
-    // ★ 软删之后：文档行还在（deleted_at 非空），分段与向量已被软删删掉
+    // ★ 软删之后：文档行还在（deleted_at 非空），分段与向量**原样保留**（`#259`）
     assertThat(count("select count(*) from kb_document where id = ?::uuid", doc.get("documentId")))
         .as("软删只落聚合根：行应该还在")
         .isEqualTo(1);
@@ -88,16 +90,21 @@ class DocumentPurgeTest {
   }
 
   /**
-   * ★ 软删<b>不保留内容</b>：分段与向量在删除那一刻就物理删掉了（`02 §5.1.1` 的订正）。
+   * ★★ 软删<b>保留内容、但把它拿出检索面</b>（`#259`）。
    *
-   * <p>这条断言存在的理由不是"多测一条 SQL"，而是钉住一个**产品承诺的边界**： 「回收站」里那篇文档拿不回来 —— 界面上必须写「要恢复只能重新上传」。
-   * 如果哪天有人把分段改成软删（保住内容以便恢复），这条会红，him 会被迫先想清 "检索侧怎么保证已删文档不命中"，而不是顺手改一行。
+   * <p>这条断言此前是反的：当时删除会物理删分段与向量，断言"内容真的没了"。改成留内容之后， 同样的三处读数必须换成新的含义 —— 行还在（能恢复）· `deleted_at`
+   * 非空（标记在）· <b>检索里查不到</b>（否则就是"删了还能被答出来"，比不可恢复更糟）。
+   *
+   * <p>★ 第三条是这条用例真正的价值：`deleted_at` 只被写进库、没进谓词时，前两条照样绿。
    */
   @Test
-  void deletingADocumentAlsoRemovesItsSegmentsAndVectors() throws Exception {
+  void deletingADocumentKeepsContentButTakesItOutOfSearch() throws Exception {
     String admin = accessToken("admin", "admin");
-    String kbId = createKb(admin, "软删不保留内容库");
+    String kbId = createKb(admin, "软删保留内容库");
     Map<String, Object> doc = createDocumentWithSegments(admin, kbId, "软删-有分段.docx");
+    UUID kb = UUID.fromString(kbId);
+
+    assertThat(searchHits(kb)).as("删除之前应该搜得到这一条，否则后面的 0 不算证据").isEqualTo(1);
 
     assertThat(delete("/api/v1/documents/" + doc.get("documentId"), admin).statusCode())
         .isEqualTo(200);
@@ -109,13 +116,72 @@ class DocumentPurgeTest {
             count(
                 "select count(*) from kb_segment where document_id = ?::uuid",
                 doc.get("documentId")))
-        .as("★ 分段在软删时就物理删了 —— 所以回收站里的文档拿不回内容")
-        .isZero();
+        .as("★ 分段原样留在库里 —— 这是「恢复」不必重新解析、重新向量化的前提")
+        .isEqualTo(1);
     assertThat(
             count(
                 "select count(*) from vec_embedding_768 where id = ?::uuid", doc.get("segmentId")))
-        .as("★ 向量同理")
-        .isZero();
+        .as("★ 向量也留着：重新向量化的成本比重算一次哈希高得多")
+        .isEqualTo(1);
+    assertThat(searchHits(kb)).as("★ 删除之后检索必须查不到 —— 内容留着不等于仍然答得出来").isZero();
+  }
+
+  /** ★ 恢复：把内容放回检索面（`#259`），并留一条 `document.restore` 审计。 */
+  @Test
+  void restoringBringsTheContentBackIntoSearch() throws Exception {
+    String admin = accessToken("admin", "admin");
+    String kbId = createKb(admin, "回收站恢复库");
+    Map<String, Object> doc = createDocumentWithSegments(admin, kbId, "可恢复.docx");
+    UUID kb = UUID.fromString(kbId);
+    String id = String.valueOf(doc.get("documentId"));
+
+    assertThat(delete("/api/v1/documents/" + id, admin).statusCode()).isEqualTo(200);
+    assertThat(searchHits(kb)).isZero();
+
+    HttpResponse<String> res = post("/api/v1/documents/" + id + "/restore", admin);
+    assertThat(res.statusCode()).as("恢复失败：%s", res.body()).isEqualTo(200);
+    assertThat(res.body()).contains("可恢复.docx");
+
+    assertThat(
+            count("select count(*) from kb_document where id = ?::uuid and deleted_at is null", id))
+        .as("文档行回到在用状态")
+        .isEqualTo(1);
+    assertThat(count("select count(*) from kb_segment where document_id = ?::uuid", id))
+        .as("★ 分段从头到尾都在（删除时没动它们）—— 恢复只是让文档那一行的 deleted_at 归零")
+        .isEqualTo(1);
+    assertThat(searchHits(kb)).as("★ 恢复之后必须重新搜得到").isEqualTo(1);
+    assertThat(
+            count(
+                "select count(*) from pf_audit_log where resource_id = ? and action ="
+                    + " 'document.restore'",
+                id))
+        .as("恢复也是「边界被移动」：删除有痕、恢复没痕等于只记了一半")
+        .isEqualTo(1);
+  }
+
+  /** ★ 超过保留期不能恢复（默认 7 天；把删除时间回拨 30 天来模拟）。 */
+  @Test
+  void restoringBeyondTheWindowIsRejected() throws Exception {
+    String admin = accessToken("admin", "admin");
+    String kbId = createKb(admin, "回收站超期库");
+    UUID kb = UUID.fromString(kbId);
+    Map<String, Object> doc = createDocumentWithSegments(admin, kbId, "超期.docx");
+    String id = String.valueOf(doc.get("documentId"));
+
+    assertThat(delete("/api/v1/documents/" + id, admin).statusCode()).isEqualTo(200);
+    jdbc.update(
+        "update kb_document set deleted_at = now() - interval '30 days' where id = ?::uuid", id);
+
+    HttpResponse<String> res = post("/api/v1/documents/" + id + "/restore", admin);
+    assertThat(res.statusCode()).as("超期恢复必须是 400：%s", res.body()).isEqualTo(400);
+    assertThat(res.body()).as("拒绝理由要说清是保留期，而不是笼统的「不能恢复」").contains("保留期");
+    assertThat(
+            count(
+                "select count(*) from kb_document where id = ?::uuid and deleted_at is not null",
+                id))
+        .as("被拒绝时文档必须还留在回收站里")
+        .isEqualTo(1);
+    assertThat(searchHits(kb)).as("被拒绝时内容不许回到检索面").isZero();
   }
 
   /**
@@ -196,6 +262,29 @@ class DocumentPurgeTest {
     return Map.of("documentId", documentId, "segmentId", segmentId.toString());
   }
 
+  /**
+   * 用这条用例里的正文去检索，返回命中条数。
+   *
+   * <p>★ 走真实的 {@link cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort}（不是直接查 SQL）： 谓词在
+   * {@code JdbcSegmentSearchQuery.SECURITY_PREDICATE} 里，只有经过它才证明得了「软删不进检索面」。
+   */
+  private long searchHits(UUID kbId) {
+    UUID me = adminUserId();
+    return cn.lincoln.aiplatform.support.SecurityContexts.asUser(
+        me,
+        cn.lincoln.aiplatform.platform.access.ClassificationLevel.CONFIDENTIAL,
+        () ->
+            (long)
+                segmentSearch
+                    .fullText(
+                        new cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort.TextQuery(
+                            "彻底删除测试正文",
+                            new cn.lincoln.aiplatform.platform.retrieval.RetrievalScope(
+                                java.util.List.of(kbId), null, null, me),
+                            20))
+                    .size());
+  }
+
   private long count(String sql, Object... args) {
     Long value = jdbc.queryForObject(sql, Long.class, args);
     return value == null ? 0 : value;
@@ -259,6 +348,10 @@ class DocumentPurgeTest {
       builder.header("Authorization", "Bearer " + token);
     }
     return http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+  }
+
+  private HttpResponse<String> post(String path, String token) throws Exception {
+    return post(path, null, token);
   }
 
   private HttpResponse<String> get(String path, String token) throws Exception {

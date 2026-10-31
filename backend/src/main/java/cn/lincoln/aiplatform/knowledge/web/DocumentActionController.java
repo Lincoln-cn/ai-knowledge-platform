@@ -148,6 +148,18 @@ public class DocumentActionController {
    *
    * <p>★ 必须已经软删过（服务层校验）：否则 400「这份文档还在使用中」。
    */
+  /**
+   * ★ 从回收站恢复（`#259`）。
+   *
+   * <p>★ 用 POST 而不是 PATCH：这不是"改某个字段"，是让一份材料重新进入检索面 —— 有副作用、也有审计。
+   */
+  @PostMapping("/{id}/restore")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<DocumentView> restore(
+      @PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(documentService.restore(id, UUID.fromString(jwt.getSubject())));
+  }
+
   @DeleteMapping("/{id}/purge")
   @PreAuthorize("hasAuthority('knowledge:manage')")
   public ApiResponse<Void> purge(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {

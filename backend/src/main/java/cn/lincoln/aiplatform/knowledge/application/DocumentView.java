@@ -42,7 +42,11 @@ public record DocumentView(
     //   ★ 契约只加可选字段（07 §六 阶段 1）：老前端不认识它们也不受影响。
     //   ★ 0 = 不涉及 OCR（非 PDF / 纯文本 PDF）⇒ 界面据此不显示进度行，而不是显示一条恒为 0/0 的噪声。
     Integer ocrTotalPages,
-    Integer ocrDonePages) {
+    Integer ocrDonePages,
+    // ★ 回收站（`#259`）：删除时间与"还能不能恢复"。
+    //   restorable 由服务端按保留窗口算好再出网 —— 让前端自己算窗口，等于把一条配置复制成两份。
+    Instant deletedAt,
+    boolean restorable) {
 
   /** 契约 {@code DocumentStatus} 的出网形态 —— 与领域枚举同名，避免多一层映射。 */
   public enum DocumentStatusView {
@@ -56,6 +60,19 @@ public record DocumentView(
   }
 
   public static DocumentView from(Document document) {
+    return build(document, false);
+  }
+
+  /**
+   * 回收站里的视图：{@code restorable} 表示前端该不该把「恢复」点亮。
+   *
+   * <p>★ 刻意不叫 {@code fromDeleted} 再自己算窗口：窗口是策略（配置项），属于服务层； 视图只负责"照传"。
+   */
+  public static DocumentView fromDeleted(Document document, boolean restorable) {
+    return build(document, restorable);
+  }
+
+  private static DocumentView build(Document document, boolean restorable) {
     return new DocumentView(
         document.id().toString(),
         document.kbId().toString(),
@@ -78,6 +95,8 @@ public record DocumentView(
         document.labels(),
         document.parsedContent(),
         document.ocrTotalPages(),
-        document.ocrDonePages());
+        document.ocrDonePages(),
+        document.deletedAt(),
+        restorable);
   }
 }

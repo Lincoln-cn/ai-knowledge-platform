@@ -11,6 +11,7 @@ export type AuditActionCode =
   | 'conversation.share'
   | 'conversation.unshare'
   | 'document.purge'
+  | 'document.restore'
   | 'data.export'
   | 'grant.change'
 

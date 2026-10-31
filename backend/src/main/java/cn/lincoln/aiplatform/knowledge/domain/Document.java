@@ -564,6 +564,18 @@ public class Document {
     }
   }
 
+  /**
+   * ★ 从回收站恢复（`#259`）：把删除时间清掉，并把操作人记在 `updated_by` 上。
+   *
+   * <p>★ 只动聚合根这一行 —— 分段的软删由 {@code SegmentRepository#restoreByDocumentId} 在
+   * **同一个事务**里清掉（否则会出现"文档回到列表、内容检索不到"）。
+   */
+  public void restore(UUID by) {
+    this.deletedAt = null;
+    this.updatedBy = by;
+    this.updatedAt = Instant.now();
+  }
+
   public void markDeleted(Instant at, UUID by) {
     this.deletedAt = at;
     this.updatedBy = by;

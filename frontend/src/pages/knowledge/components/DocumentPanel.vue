@@ -204,8 +204,8 @@
 
     <el-dialog v-model="recycleOpen" title="回收站（已删除的文档）" width="760px">
       <p class="micro muted">
-        这些文档已从列表移除，<b>它们的分段与向量也已经删掉</b> —— 回收站只保留一条记录，不保留内容。
-        <b>要恢复只能重新上传</b>；下面的「彻底删除」会连记录一起移除（备份里仍有一段时间的副本）。
+        这些文档已从列表移除，内容与向量仍在库里，但<b>不会出现在检索结果里</b>。
+        保留期内可以「恢复」；超期后只能「彻底删除」（会连内容一起移除，备份里仍有一段时间的副本）。
       </p>
       <el-table v-loading="recycleLoading" :data="recycleRows" size="small">
         <el-table-column prop="name" label="文档名" min-width="220" />
@@ -214,6 +214,15 @@
         </el-table-column>
         <el-table-column label="" width="120">
           <template #default="{ row }">
+            <el-button
+              link
+              size="small"
+              type="primary"
+              :disabled="row.restorable === false"
+              :title="row.restorable === false ? '已超过保留期，只能彻底删除' : ''"
+              @click="restore(row)"
+              >恢复</el-button
+            >
             <el-button link size="small" type="danger" @click="purge(row)">彻底删除</el-button>
           </template>
         </el-table-column>
@@ -676,7 +685,9 @@ const toggleEnabled = async (row: DocumentItem) => {
 }
 
 /* ★ 回收站（`#75` 判据 ④）：让「彻底删除」有地方可点。
-   ★ 它消费两个端点：`listDeletedDocuments`（这个列表）与 `purgeDocument`（那一列的按钮）。
+   ★ 它消费三个端点：`listDeletedDocuments`（这个列表）· `restoreDocument`（保留期内把内容放回检索面）·
+   `purgeDocument`（不可恢复的那一步）。★ 「恢复」按钮的可用性来自服务端算好的 `restorable`
+   （`#259`）—— 前端不自己算窗口。
    ★ 在设计上刻意**不做**"撤销删除"：软删之后能恢复需要把分段与向量一起重建（重新解析），
      那是另一个功能的形状，做成一个按钮会让它听起来像"点一下就能回来"。 */
 const recycleOpen = ref(false)
@@ -697,10 +708,22 @@ async function openRecycle() {
   }
 }
 
+async function restore(row: DocumentItem) {
+  try {
+    await ingestionApi.restoreDocument(row.id)
+  } catch (error) {
+    ElMessage.error(errText(error, '恢复失败').reason)
+    return
+  }
+  ElMessage.success('已恢复 —— 内容重新进入检索')
+  recycleRows.value = recycleRows.value.filter((item) => item.id !== row.id)
+  await fetchList()
+}
+
 async function purge(row: DocumentItem) {
   try {
     await ElMessageBox.confirm(
-      `彻底删除「${row.name}」会把文档、分段与向量一起移除，**不可恢复**（备份里还有一段时间内的副本）。确认？`,
+      `彻底删除「${row.name}」会把文档、分段与向量一起移除，**不可恢复**（备份里还有一段时间内的副本）。想要「恢复」请用左边那个按钮。确认？`,
       '确认彻底删除',
       { type: 'warning', confirmButtonText: '彻底删除', cancelButtonText: '取消' }
     )

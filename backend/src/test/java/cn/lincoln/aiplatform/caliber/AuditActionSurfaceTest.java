@@ -45,6 +45,7 @@ class AuditActionSurfaceTest {
           "conversation.share",
           "conversation.unshare",
           "document.purge",
+          "document.restore",
           "audit.purge");
 
   /** 读侧实现类：它们一旦依赖 `AuditLogPort`，就说明读侧审计已经接了，而 §7.4 说的是没接。 */

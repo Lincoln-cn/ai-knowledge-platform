@@ -111,6 +111,9 @@ public class DocumentService {
    */
   private final AuditLogPort audit;
 
+  /** 回收站保留期（天）。0 = 关闭恢复（删除即不可恢复）。 */
+  private final int restoreWindowDays;
+
   public DocumentService(
       DocumentRepository documents,
       KnowledgeBaseService knowledgeBases,
@@ -125,7 +128,11 @@ public class DocumentService {
       ApplicationEventPublisher events,
       BusinessMetrics metrics,
       cn.lincoln.aiplatform.platform.watermark.ConversationWatermarkPort watermark,
-      AuditLogPort audit) {
+      AuditLogPort audit,
+      // ★ 回收站保留期（`#259`）：超过这个天数只能彻底删除。
+      //   读的是**天**而不是小时：留一个小时的恢复窗口等于没有窗口（用户第二天才想起来）。
+      @org.springframework.beans.factory.annotation.Value("${app.knowledge.restore-window-days:7}")
+          int restoreWindowDays) {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
     this.parser = parser;
@@ -140,6 +147,7 @@ public class DocumentService {
     this.metrics = metrics;
     this.watermark = watermark;
     this.audit = audit;
+    this.restoreWindowDays = Math.max(0, restoreWindowDays);
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -188,7 +196,10 @@ public class DocumentService {
     List<Document> found = documents.findDeletedByKbId(kbId, (safePage - 1) * safeSize, safeSize);
     long total = documents.countDeletedByKbId(kbId);
     return PageResult.of(
-        found.stream().map(DocumentView::from).toList(), total, safePage, safeSize);
+        found.stream().map(d -> DocumentView.fromDeleted(d, restorable(d))).toList(),
+        total,
+        safePage,
+        safeSize);
   }
 
   // ────────────────────────── 库级进度（第 8 周 · 0.3.0） ──────────────────────────
@@ -591,10 +602,16 @@ public class DocumentService {
   public void delete(UUID documentId, UUID currentUserId) {
     Document document = requireVisibleDocument(documentId);
     requireNotEmbedding(document, "删除");
-    segments.deleteByDocumentId(documentId);
-    segmentEmbeddings.deleteByDocumentId(documentId);
+    // ★★ 分段与向量**不再物理删**（`#259`）。此前这里删两行，于是回收站里那篇"已删除"的文档拿不回内容
+    //   ——「回收站」这个名字在撒谎。
+    //
+    //   ★ 为什么"留着不会让它仍然答得出来"：可见性由**文档那一处**决定 ——
+    //   `JdbcSegmentSearchQuery.VISIBLE_PREDICATE` 里就有 `d.deleted_at is null`，四条检索路都 join 了
+    //   `kb_document` 并共用同一个谓词。所以不必给分段再加一列软删标记：
+    //   同一个状态两处各写一份，正是 `#40` 要消除的那种形状（两处迟早不一致，而没人保证）。
     document.markDeleted(Instant.now(), currentUserId);
     documents.save(document);
+    log.info("文档 {} 已移入回收站（分段与向量保留，保留期 {} 天）", documentId, restoreWindowDays);
     // ★ 留痕（`#257`）：删除是"让内容从用户视野里消失"，属等保 2.0 要追溯的动作。
     //   与业务同事务 —— 删掉了却没有记录，是最不该出现的一种静默。
     audit.record(
@@ -603,6 +620,60 @@ public class DocumentService {
         documentId.toString(),
         currentUserId,
         Map.of("name", document.name(), "kbId", document.kbId().toString()));
+  }
+
+  /**
+   * ★★ 从回收站恢复（`#259`）。
+   *
+   * <h3>为什么需要它</h3>
+   *
+   * <p>在此之前 `delete` 会把分段与向量一起物理删掉，于是「回收站」里那篇文档<strong>拿不回内容</strong>， 界面只能写"要恢复需要重新上传"。误删的成本 =
+   * 重新上传 + 重新解析 + 重新向量化。
+   *
+   * <h3>★ 三条边界（每条都写死在代码里，而不是靠使用说明）</h3>
+   *
+   * <ol>
+   *   <li><strong>只在保留期内</strong>：超过 `app.knowledge.restore-window-days`（默认 7 天）⇒ 400。
+   *       窗口之外内容留着没有意义（那是数据留存问题，不是恢复问题），而且会让"删除"的语义随时间漂移；
+   *   <li><strong>没删的不能"恢复"</strong> ⇒ 400：那不是恢复，是掩耳盗铃；
+   *   <li><strong>文档行与分段必须在同一个事务里回来</strong>：只回文档行会出现"文档在列表里、内容却检索不到" ——
+   *       与它对称的那个错误（文档不在列表里、内容还能检索到）刚被 V59 修掉。
+   * </ol>
+   */
+  @Transactional
+  public DocumentView restore(UUID documentId, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    if (document.deletedAt() == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "这份文档没有删除，不需要恢复", "它就在文档列表里；若你看不到它，检查筛选条件或权限");
+    }
+    if (!restorable(document)) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "这份文档已超过回收站保留期（" + restoreWindowDays + " 天），不能恢复",
+          "超期后内容会被彻底清理（或已清理）；请重新上传该文档 —— 删除时间：" + document.deletedAt());
+    }
+    document.restore(currentUserId);
+    documents.save(document);
+    // ★ 分段与向量从来没有被删过（见 `delete` 的注释），所以"恢复"就是清掉文档那一行的 `deleted_at`
+    //   —— 一个字段的改变，让整篇材料重新进入检索面。这正是可见性只有一处来源的好处。
+    audit.record(
+        AuditAction.DOCUMENT_RESTORE,
+        "DOCUMENT",
+        documentId.toString(),
+        currentUserId,
+        Map.of("name", document.name(), "kbId", document.kbId().toString()));
+    log.info("文档 {} 已从回收站恢复（分段与向量一直在库里）", documentId);
+    return DocumentView.from(documents.findById(documentId).orElse(document));
+  }
+
+  /** 回收站里这份文档还能不能恢复（保留窗口内）。0 天 = 关闭恢复。 */
+  private boolean restorable(Document document) {
+    if (document.deletedAt() == null || restoreWindowDays <= 0) {
+      return false;
+    }
+    return Instant.now()
+        .isBefore(document.deletedAt().plus(java.time.Duration.ofDays(restoreWindowDays)));
   }
 
   /** 拒绝在「向量化中」做会与在途任务打架的操作（改名 / 删除）。 */
