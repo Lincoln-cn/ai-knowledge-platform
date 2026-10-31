@@ -33,6 +33,10 @@ public record DocumentView(
     String docType,
     String orgId,
     ClassificationLevel classification,
+    // ★ 标签（`#26`）：与密级同属**批级元数据**，但它此前只写在库与谓词里，**没进视图** ——
+    //   于是页面既显示不了、也改不了（改之前读不到现值，改之后看不到结果）。
+    //   缺失的表现是"后端支持标签、界面上完全没有"，正是 `#79` 第三格要抓的那类。
+    java.util.List<String> labels,
     String parsedContent,
     // ── 第 9 周（0.3.1）新增的**可选**出网字段：扫描件的逐页进度（12 §11.8）──
     //   ★ 契约只加可选字段（07 §六 阶段 1）：老前端不认识它们也不受影响。
@@ -71,6 +75,7 @@ public record DocumentView(
         //   而不是编一个部门名出来（那会让"没匹配上"这件事彻底看不见）
         document.orgId() == null ? null : document.orgId().toString(),
         document.classification(),
+        document.labels(),
         document.parsedContent(),
         document.ocrTotalPages(),
         document.ocrDonePages());

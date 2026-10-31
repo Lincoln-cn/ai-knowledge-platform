@@ -48,6 +48,12 @@ export interface DocumentItem {
   /** 密级。★ 建档必填三项之一，且必须 ≤ 所属库的 `maxClassification`（ceiling，13 §6） */
   classification?: ClassificationLevel
   /**
+   * 标签（`#26`）。空 / 缺省 = **不受标签限制**（绝大多数文档的默认状态），不是"等所有标签"。
+   * ★ 它跟 `classification` 一起构成"批级元数据"，但视图里曾经**没有它** ——
+   *   于是页面显示不了也改不了。返回它才能让「密级与标签」这个入口说真话。
+   */
+  labels?: string[]
+  /**
    * 解析出的 Markdown 正文（V14 列，0.2.1）。★ 冻结契约只加可选字段，故 `?`。
    * 失败时可能是**部分内容**（handler 已缓冲片段）—— 与 `failReason` 并存，
    * 不许把「解析失败」做成整篇丢弃（12 §2.1）。

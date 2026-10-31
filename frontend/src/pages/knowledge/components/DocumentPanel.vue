@@ -170,6 +170,7 @@
             <el-button v-if="canManage" link size="small" @click="toggleEnabled(row)">
               {{ row.enabled ? '停用' : '启用' }}
             </el-button>
+            <el-button v-if="canManage" link size="small" @click="openMeta(row)">密级与标签</el-button>
             <el-button v-if="canManage" link size="small" type="danger" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -233,6 +234,41 @@
         >确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- ★ `#79` 第三格：这两个端点在契约与后端都在，但页面没有入口 —— 有入口才算"接上了"。
+         密级的下拉走基础数据字典（`08 §十`），不在前端写死文案：那是管理员能改的数据。 -->
+    <el-dialog v-model="metaOpen" title="密级与标签" width="520px">
+      <div class="meta-body">
+        <div class="meta-row">
+          <span class="meta-label">文档</span>
+          <span>{{ metaForm.name }}</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">密级</span>
+          <el-select v-model="metaForm.classification" style="width: 200px" placeholder="选择密级">
+            <el-option v-for="c in classifications" :key="c.code" :label="c.label" :value="c.code" />
+          </el-select>
+        </div>
+        <p v-if="classificationHint" class="meta-hint">{{ classificationHint }}</p>
+        <div class="meta-row">
+          <span class="meta-label">标签</span>
+          <el-input
+            v-model="metaForm.labelsText"
+            style="width: 300px"
+            placeholder="用逗号分隔，例如：财务资料,合同"
+            clearable
+          />
+        </div>
+        <p class="meta-hint">
+          不填 = 不受标签限制（绝大多数文档的默认状态）；填了之后，只有带相交标签的角色才能检索到它。
+          改密级会同步改写该文档的全部分段，并把引用过它的会话密级水位抬到新值（降密不动水位）。
+        </p>
+      </div>
+      <template #footer>
+        <el-button @click="metaOpen = false">取消</el-button>
+        <el-button type="primary" :loading="metaSaving" @click="submitMeta">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -243,6 +279,7 @@ import { EditPen, Loading, Refresh, Search } from '@element-plus/icons-vue'
 import { ingestionApi, orgsApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { DocumentItem, DocumentStatus, IngestionProgress, OrgAssignment } from '@/api/ingestion'
+import type { ClassificationLevel } from '@/api/types'
 import type { OrgNodeView } from '@/api/orgs'
 import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
@@ -250,6 +287,7 @@ import GlobalProgress from './GlobalProgress.vue'
 import UploadDialog from './UploadDialog.vue'
 import ParseResultDialog from './ParseResultDialog.vue'
 import { DOCUMENT_STATUS_LABELS, labelOf } from '@/constants/labels'
+import { useDictionary } from '@/composables/useDictionary'
 
 const props = defineProps<{ kbId: string }>()
 const emit = defineEmits<{ gotoSegments: [documentId: string] }>()
@@ -257,6 +295,10 @@ const emit = defineEmits<{ gotoSegments: [documentId: string] }>()
 const session = useSessionStore()
 const canUpload = computed(() => session.can(PERM.documentUpload))
 const canManage = computed(() => session.can(PERM.knowledgeManage))
+
+/** 密级下拉的取值来自基础数据字典（`08 §十`）—— 不在前端写死，管理员能改 */
+const { items: classifications, hint: classificationHint, load: loadClassifications } =
+  useDictionary('CLASSIFICATION', '密级')
 
 const STATUSES: DocumentStatus[] = [
   'PENDING_PARSE',
@@ -494,6 +536,7 @@ onMounted(() => {
   refreshAll().then(schedule)
   // ★ `#150`：组织树只取一次（把 `orgId` 显示成人能读的部门名）。取不到不影响列表。
   void loadOrgTree()
+  void loadClassifications()
 })
 
 onBeforeUnmount(() => {
@@ -602,6 +645,67 @@ const toggleEnabled = async (row: DocumentItem) => {
     await fetchList()
   } catch (error) {
     ElMessage.error(errText(error, '操作失败').reason)
+  }
+}
+
+/* ★ `#79` 第三格：密级与标签的入口。
+   ★ 两个端点都在、契约也在，但**页面没有入口** —— 那正是"后端做完了、功能没做完"的藏身处。 */
+const metaOpen = ref(false)
+const metaSaving = ref(false)
+const metaOrigin = reactive<{ classification: string; labels: string[] }>({
+  classification: '',
+  labels: []
+})
+const metaForm = reactive<{
+  id: string
+  name: string
+  classification: string
+  labelsText: string
+}>({ id: '', name: '', classification: '', labelsText: '' })
+
+const parseLabels = (text: string): string[] =>
+  text
+    .split(/[,，、;；\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+const openMeta = async (row: DocumentItem) => {
+  metaForm.id = row.id
+  metaForm.name = row.name
+  metaForm.classification = row.classification ?? ''
+  metaForm.labelsText = (row.labels ?? []).join('，')
+  metaOrigin.classification = row.classification ?? ''
+  metaOrigin.labels = [...(row.labels ?? [])]
+  metaOpen.value = true
+  if (!classifications.value.length) await loadClassifications()
+}
+
+const submitMeta = async () => {
+  const labels = parseLabels(metaForm.labelsText)
+  const classificationChanged =
+    !!metaForm.classification && metaForm.classification !== metaOrigin.classification
+  const labelsChanged = labels.join('|') !== metaOrigin.labels.join('|')
+  if (!classificationChanged && !labelsChanged) {
+    ElMessage.info('没有改动')
+    metaOpen.value = false
+    return
+  }
+  metaSaving.value = true
+  try {
+    if (classificationChanged) {
+      await ingestionApi.changeDocumentClassification(
+        metaForm.id,
+        metaForm.classification as ClassificationLevel
+      )
+    }
+    if (labelsChanged) await ingestionApi.changeDocumentLabels(metaForm.id, labels)
+    ElMessage.success('已保存')
+    metaOpen.value = false
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(errText(error, '保存失败').reason)
+  } finally {
+    metaSaving.value = false
   }
 }
 
