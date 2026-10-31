@@ -188,6 +188,25 @@ function clearGraphData() {
   lf.value?.clearData()
 }
 
+/**
+ * 把视口移到某个节点并选中它。
+ *
+ * 发布前校验按 `nodeId` 报错，用户点清单里那一行就要能看见**画布上的哪个节点** ——
+ * 否则一张 20 个节点的图里，用户只能靠 `message` 自己猜。（`#198` 接真端点的那一批）
+ *
+ * 返回 `false` 表示画布上找不到这个 id（issues 可能来自另一张图），调用方要如实说出来，
+ * 不要静默什么也不做。
+ */
+function focusNode(nodeId: string): boolean {
+  const instance = lf.value
+  if (!instance || !nodeId) return false
+  const model = instance.getNodeModelById?.(nodeId)
+  if (!model) return false
+  instance.focusOn({ id: nodeId })
+  instance.selectElementById(nodeId)
+  return true
+}
+
 const validate = () =>
   lf.value
     ? Promise.all(
@@ -232,6 +251,7 @@ defineExpose({
   clearGraphData,
   renderGraphData,
   render,
+  focusNode,
   /** 用户主动点的「自动排版」 */
   autoLayout: () => autoLayout(lf.value)
 })

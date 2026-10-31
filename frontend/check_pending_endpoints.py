@@ -47,8 +47,10 @@ PENDING = {
     },
     # ★ 已落：POST /assistants/{*}/workflow/publish 随 #198 第四块后端交付（2026-10-31），
     #   故从本账里摘掉 —— 后端台账（ContractDriftTest.KNOWN_MISSING）同一时刻摘的同一条。
-    #   ⚠️ 摘掉的是"端点缺失"这笔账，**不是**"页面已接发布"：前端仍无页面调用
-    #   `publishWorkflow`（只有 `frontend/src/api/workflow.ts` 的契约声明），那一格另有欠账。
+    # ★ 同日补记：当时这里写着"前端仍无页面调用 `publishWorkflow`"，那条**已经不成立** ——
+    #   编排页的「发布」现在先调 `validateWorkflow`、通过了才调 `publishWorkflow`
+    #   （`pages/workflow/Index.vue` 的 `publicHandle`）。本账只收"后端还没有的端点"，
+    #   这条已实现，所以只留说明、不新增条目。
     "GET /assistants/{*}/workflow/records": {
         "issue": "#198",
         "guard": "",
