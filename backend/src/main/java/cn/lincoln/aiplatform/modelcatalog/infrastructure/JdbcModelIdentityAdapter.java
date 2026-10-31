@@ -3,6 +3,10 @@ package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -25,6 +29,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class JdbcModelIdentityAdapter implements RoutingEmbeddingAdapter.ModelIdentityPort {
 
+  private static final Logger log = LoggerFactory.getLogger(JdbcModelIdentityAdapter.class);
+
   private final JdbcTemplate jdbc;
 
   public JdbcModelIdentityAdapter(JdbcTemplate jdbc) {
@@ -46,9 +52,18 @@ public class JdbcModelIdentityAdapter implements RoutingEmbeddingAdapter.ModelId
       return baseModel;
     } catch (BusinessException rethrow) {
       throw rethrow;
-    } catch (Exception notFound) {
+    } catch (EmptyResultDataAccessException notFound) {
+      // ★ 只有「查不到这一行」才是「模型不存在」（#228）。queryForObject 查不到行时抛的正是这个子类。
       throw new BusinessException(
           ErrorCode.NOT_FOUND, "向量模型不存在：" + modelId, "它可能已被删除；请重新选择知识库绑定的向量模型");
+    } catch (DataAccessException unavailable) {
+      // ★★ 其余数据访问故障（连接池耗尽、超时、库不可达）一律**不吞**（#228）：
+      //   以前这里是 catch (Exception) ⇒ 把 CannotGetJdbcConnectionException 也变成「向量模型不存在」，
+      //   于是用户拿着一个明明 enabled/LOADED 的模型去"重新选择"—— 无效动作，且日志里不会冒出任何栈。
+      //   报错必须点名它实际断言的东西：「查不到这条记录」≠「查询根本没执行成」。
+      //   ⇒ 记一句人话 + 原样抛出（HTTP 落 500 兜底，日志里有栈）。不改成 4xx：这不是调用方能修的。
+      log.error("读取模型元数据失败：{} —— 这是数据库侧的问题（连接池/超时/不可达），不是模型配置错误", modelId, unavailable);
+      throw unavailable;
     }
   }
 }
