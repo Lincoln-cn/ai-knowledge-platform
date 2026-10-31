@@ -203,6 +203,13 @@ export interface ImportDocumentsBody {
   /** ★ 责任部门 = 组织机构的 id（见上文 uploadDocuments 的说明）。 */
   orgId?: string
   classification?: ClassificationLevel
+  /**
+   * 密级标签（`#26` 写侧）。批级，与上面三项同口径。
+   *
+   * ★ 不传 / 传空数组 = **不受标签限制**（绝大多数文档的默认状态），不是"等所有标签"。
+   *   检索侧的求交谓词早已接上：角色带了标签时，只有与文档标签相交才可见。
+   */
+  labels?: string[]
 }
 
 /** P1 上传回执：部分失败必须逐条给原因，不许只回一个总数 */

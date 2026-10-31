@@ -179,6 +179,7 @@ public class DocumentController {
             body.docType(),
             body.orgId(),
             body.classification(),
+            body.labels(),
             UUID.fromString(jwt.getSubject())));
   }
 
@@ -201,6 +202,7 @@ public class DocumentController {
    * @param docType 文种 ★ <b>必填</b>
    * @param orgId 责任部门（组织树里的部门 id）★ <b>必填</b> —— 它决定召回前缀里那段稳定 code
    * @param classification 密级 ★ <b>必填</b> —— 且必须 ≤ 库的 ceiling
+   * @param labels 密级标签（可选）—— 不传 / 传空 = 不受标签限制（#26 写侧；检索侧的求交谓词早已接上）
    */
   /**
    * ★ 带文件字节的建档（契约的 {@code uploadDocuments}）：multipart 上传 ⇒ <strong>建档即解析</strong>。
@@ -240,6 +242,7 @@ public class DocumentController {
             docType,
             parseOrgId(orgId),
             classification,
+            null,
             UUID.fromString(jwt.getSubject())));
   }
 
@@ -267,7 +270,8 @@ public class DocumentController {
       List<Map<String, Object>> segmentationPlan,
       String docType,
       UUID orgId,
-      ClassificationLevel classification) {
+      ClassificationLevel classification,
+      List<String> labels) {
 
     /** 暂存导入形态是否「出现」（字段传了就算，空数组也算 —— 出现即不许静默吞）。 */
     boolean stagedShapeRequested() {

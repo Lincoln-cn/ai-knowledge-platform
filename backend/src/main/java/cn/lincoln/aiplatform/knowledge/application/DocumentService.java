@@ -629,6 +629,8 @@ public class DocumentService {
    * @param docType 文种（批次级）★ 必填
    * @param orgId 责任部门（组织树里的一个部门）★ 必填 —— 它决定召回前缀里那段稳定 code
    * @param classification 密级（批次级）★ 必填
+   * @param labels 密级标签（批次级，{@code text[]}）—— 可空：空 = 不受标签限制（{@code #26} 写侧）。
+   *     一次导入把这批文档打成同一套标签；逐篇覆盖等单篇编辑端点
    */
   @Transactional
   public List<DocumentView> register(
@@ -638,6 +640,7 @@ public class DocumentService {
       String docType,
       UUID orgId,
       ClassificationLevel classification,
+      List<String> labels,
       UUID currentUserId) {
 
     // ★ 1 · 可见性继承库（写也 404）
@@ -694,6 +697,7 @@ public class DocumentService {
               docType,
               orgId,
               classification,
+              labels,
               currentUserId);
       // ★ 建档即解析 —— 但这一步**从同步改成了异步**（第 9 周 · 0.3.1）。
       //   为什么：扫描件的 OCR 实测每页约 3.6 秒（3 页约 11 秒），同步跑会把上传请求挂住十几秒到几分钟
@@ -860,7 +864,9 @@ public class DocumentService {
                 p,
                 currentUserId,
                 // ★ 密级强制继承文档（13 §2.1 ②）：分段不允许有自己独立的密级
-                document.classification()));
+                document.classification(),
+                // ★ 标签同理（#26）：谓词作用在分段表上，所以它必须冗余到这一列
+                document.labels()));
       }
       segments.saveAll(toSave);
 

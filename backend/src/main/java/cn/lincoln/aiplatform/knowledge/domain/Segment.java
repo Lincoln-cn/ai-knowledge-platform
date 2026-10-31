@@ -8,6 +8,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -133,6 +134,11 @@ public class Segment {
   @Column(name = "classification", nullable = false, length = 16)
   private ClassificationLevel classification;
 
+  /** 密级标签（{@code text[]}，`V57`）—— 冗余，理由与 {@link #classification} 逐字相同：谓词要能在分段表上直接生效。 */
+  @JdbcTypeCode(SqlTypes.ARRAY)
+  @Column(name = "labels")
+  private List<String> labels;
+
   @CreationTimestamp
   @Column(name = "created_at", nullable = false, updatable = false)
   private Instant createdAt;
@@ -174,7 +180,8 @@ public class Segment {
       UUID ownerId,
       PlannedSegment planned,
       UUID createdBy,
-      ClassificationLevel classification) {
+      ClassificationLevel classification,
+      List<String> labels) {
     if (id == null || documentId == null || scopeId == null) {
       throw new IllegalArgumentException("分段 id / 文档 id / 归属主体不能为空");
     }
@@ -208,6 +215,7 @@ public class Segment {
     this.scopeId = scopeId;
     this.ownerId = ownerId;
     this.classification = classification;
+    this.labels = labels == null ? List.of() : List.copyOf(labels);
     this.ordinal = planned.ordinal();
     this.title = clampTitle(planned.title());
     this.titlePath = planned.titlePath();
@@ -474,6 +482,11 @@ public class Segment {
   /** ★ 分段密级（继承所属文档，{@code 13 §2.1} ②）。检索的两条路都用它做密级谓词。 */
   public ClassificationLevel classification() {
     return classification;
+  }
+
+  /** 密级标签。★ 空 = 不受标签限制（今天由文档继承而来，分段不允许有自己的一套）。 */
+  public List<String> labels() {
+    return labels == null ? List.of() : labels;
   }
 
   public Instant createdAt() {

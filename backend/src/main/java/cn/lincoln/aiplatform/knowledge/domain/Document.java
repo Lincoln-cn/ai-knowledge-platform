@@ -8,6 +8,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -117,6 +118,16 @@ public class Document {
   private ClassificationLevel classification;
 
   /**
+   * 密级标签（{@code text[]}，`V57`）—— 与密级<strong>正交</strong>的那一维。
+   *
+   * <p>★ 空 = 不受标签限制；判定与 {@code ScopeFilter.canSeeClassification} 逐字对齐（三条豁免在那边）。
+   * 今天只有建档入口能写，编辑与巡检还没做（{@code #26}）。
+   */
+  @JdbcTypeCode(SqlTypes.ARRAY)
+  @Column(name = "labels")
+  private List<String> labels;
+
+  /**
    * ★★ 密级的<strong>排序口径</strong>（{@code V21} 的生成列）—— 列表/计数侧密级谓词的载体（{@code #25}）。
    *
    * <p>★ 库层是 {@code generated always as (case classification … ) stored}（与 {@code V22} 的 {@code
@@ -218,6 +229,13 @@ public class Document {
    * @param source 来源；null 时取 {@code local}（本地上传建档）
    * @param orgId 责任部门（组织树里的一个部门）★ 必填；null ⇒ 拒绝，文案指路"从组织树选"
    */
+
+  /**
+   * 不带标签的建档（既有调用方与测试用）—— 等价于 {@code labels = List.of()}。
+   *
+   * <p>★ 保留它不是为了省事：绝大多数文档确实没有标签（{@code #26} 的写侧先只覆盖建档入口）， 让它们全部改成传 {@code List.of()}
+   * 只会把"没有标签"这件事写成一个要靠人记得写的参数。
+   */
   public Document(
       UUID id,
       UUID kbId,
@@ -226,6 +244,19 @@ public class Document {
       String docType,
       UUID orgId,
       ClassificationLevel classification,
+      UUID createdBy) {
+    this(id, kbId, name, source, docType, orgId, classification, List.of(), createdBy);
+  }
+
+  public Document(
+      UUID id,
+      UUID kbId,
+      String name,
+      String source,
+      String docType,
+      UUID orgId,
+      ClassificationLevel classification,
+      List<String> labels,
       UUID createdBy) {
     if (id == null || kbId == null) {
       throw new IllegalArgumentException("文档 id 与所属知识库 id 不能为空");
@@ -257,6 +288,8 @@ public class Document {
     this.docType = docType.trim();
     this.orgId = orgId;
     this.classification = classification;
+    // ★ 标签是「可选的额外维度」：没填就是没有（不是"等所有标签"），空列表与 null 同义
+    this.labels = labels == null ? List.of() : List.copyOf(labels);
     // ★ 初值 = 未解析那一态，不是「成功」
     this.status = DocumentStatus.PENDING_PARSE;
     this.charCount = 0;
@@ -668,6 +701,11 @@ public class Document {
 
   public UUID orgId() {
     return orgId;
+  }
+
+  /** 密级标签。★ 空列表 = 不受标签限制（绝大多数文档的默认状态）。 */
+  public List<String> labels() {
+    return labels == null ? List.of() : labels;
   }
 
   /** 责任部门的原自由字符串（V27 之前的存档值；新文档恒为 null）。★ 只读 —— 它是回填的证据。 */
