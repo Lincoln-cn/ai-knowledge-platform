@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import tools.jackson.core.type.TypeReference;
@@ -44,6 +45,19 @@ class WorkflowNodeTypeTest {
     List<Object> types = load().stream().map(m -> m.get("type")).toList();
     assertThat(types).as("类型名不许重复（重复会让查表悄悄选中先出现的那个）").doesNotHaveDuplicates();
     assertThat(types).allSatisfy(t -> assertThat(t.toString()).matches("[A-Z][A-Z0-9_]*_NODE"));
+  }
+
+  @Test
+  void categoriesStayInsideTheMenuGroups() throws Exception {
+    // ★ 分组是菜单的骨架：取一个画布没定义过的分组名，节点会从菜单里"消失"（不在任何分组下，
+    //   也不报错）。这里把取值钉成白名单 —— 新增分组要同时改这一处和画布的分组定义。
+    Set<String> allowed = Set.of("基础", "生成", "检索", "交互", "逻辑", "扩展", "多模态");
+    for (Map<String, Object> row : load()) {
+      String category = String.valueOf(row.get("category"));
+      assertThat(allowed)
+          .as("未知分组「%s」（%s）：加分组要连画布一起改", category, row.get("type"))
+          .contains(category);
+    }
   }
 
   @Test
