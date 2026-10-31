@@ -23,6 +23,11 @@
 ★ 文档列表走**分页**（`list_documents`）：后端单页上限 100，语料 70 份时写死
   `?page=1&size=50` 会静默只看前 50 份（详见 `MAX_PAGE_SIZE` 的注释）。
 ★ `expected_snippet` 的比对是**去空白后**逐字子串（PDF 文本层会插空白）。
+★ 读数纪律（#231，2026-10-31）：检索一律走 `retrieve_or_die()`，非 200 **立即终止**。
+  绝不写 `(payload.get("data") or {}).get("items") or []` —— 后者的形状会把 400
+  （`topN > 20`）读成「命中 0 条」：脚本照常跑完、照常打印一个虚假读数。
+  命中项的文档名只在 `docName` 键上取（不是 `documentName`）：取错键得到空串，
+  症状与上一条相同。`--self-check` 在离线态下把这三条读数纪律钉住（CI 跑这条）。
 """
 
 from __future__ import annotations
@@ -93,6 +98,42 @@ def call(base: str, method: str, path: str, token: str | None = None, body: dict
         return e.code, json.loads(e.read().decode("utf-8") or "{}")
     except Exception as e:  # noqa: BLE001
         return -1, {"message": str(e)}
+
+
+def retrieve_or_die(base: str, token: str, body: dict) -> dict:
+    """检索一次，**非 200 立即终止**，返回 `data`（含 `items`）。
+
+    ★ 为什么不写成 `(payload.get("data") or {}).get("items") or []`（#231 的原始形状）：
+      后端 `topN` 上限是 20，超限返 **400**，而 400 的响应体里没有 `data` ⇒ 那个 `or []`
+      会把「请求被拒」读成「检索一条都没命中」，脚本照常跑完、照常打印
+      「命中 0/215」—— 一个**跑得通、不报错、完全虚假**的读数（B1 凭空归零）。
+    ★ 命中项的文档名字段是 `docName`，不是 `documentName`；取错键得到空串，
+      症状与上一条**一模一样**，所以键名也要在这里显式验一次。
+    """
+    status, payload = call(base, "POST", "/retrieval/test", token, body)
+    if status != 200:
+        fail_exit(
+            f"检索请求被拒（status={status}）：{str(payload.get('message'))[:200]}"
+            " —— 这不是「没命中」，是请求本身不合法（#231）"
+        )
+    data = payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        fail_exit(f"检索响应里没有 data.items：{str(payload)[:200]} —— 契约变了或键名读错了")
+    return data
+
+
+def doc_names_or_die(items: list) -> list[str]:
+    """取每个命中项的 `docName`；**一项都没有这个名字就终止**（键名错了不许静默成空串）。"""
+    names: list[str] = []
+    for item in items:
+        name = (item or {}).get("docName")
+        if not name:
+            fail_exit(
+                f"命中项里没有 docName 字段：{str(item)[:200]}"
+                " —— 别用 documentName 兜底，那会把「取错键」变成「没命中」（#231）"
+            )
+        names.append(str(name))
+    return names
 
 
 def upload(base: str, kb_id: str, token: str, path: pathlib.Path, meta: dict[str, str]):
@@ -301,16 +342,95 @@ def snippet_in(normalized_haystack: str, snippet: str) -> bool:
     return squash(snippet) in squash(normalized_haystack)
 
 
+def self_check() -> int:
+    """离线自检「读数纪律」（#231）—— 不需要任何服务，CI 里跑这一条即可。
+
+    三条纪律各自对应一种「跑得通、不报错、读数全错」的形状：
+    ① 非 200 ⇒ 必须终止（否则 400 被读成「命中 0 条」，B1 凭空归零）；
+    ② 命中项缺 `docName` ⇒ 必须终止（否则取错键得到空串，同样表现为「没命中」）；
+    ③ 空命中是**合法读数**（不是错误）—— 这条防的是把 ① 改成"一律报错"。
+
+    ★ 它检查的对象是**本文件里那两个函数的实现**，所以把 `retrieve_or_die` 改回
+      `or []` 的形状，这里就会红 —— 这就是本判据要的"能红的断言"。
+    """
+    global call, fail_exit
+    original = call
+    original_fail = fail_exit
+    failures: list[str] = []
+
+    def quiet_fail(_message: str) -> None:
+        """自检期间不打印 fail_exit 的正常输出 —— 那两行 ✗ 是**预期**的，打出来会让人以为自检挂了。"""
+        raise SystemExit(1)
+
+    def stub(status: int, payload: dict):
+        def inner(_base, _method, _path, _token=None, _body=None):
+            return status, payload
+
+        return inner
+
+    try:
+        call = stub(400, {"message": "TopN 应在 1～20 之间"})
+        fail_exit = quiet_fail
+        try:
+            retrieve_or_die("http://x", "t", {})
+        except SystemExit as e:
+            if e.code != 1:
+                failures.append(f"① 非 200 的退出码应是 1，实际 {e.code}")
+        else:
+            failures.append("① 非 200 没有终止 —— 400 会被读成「命中 0 条」（#231 的原始形状）")
+
+        # ★ 故意只给**错误键** `documentName`（且有值）：这样「用 documentName 兜底」的实现
+        #   会安静取出名字、自检就绿了 —— 那正是要防的形状，所以用例必须这么造。
+        call = stub(
+            200, {"data": {"items": [{"segmentId": "s1", "documentName": "文档A.md"}]}}
+        )
+        data = retrieve_or_die("http://x", "t", {})
+        try:
+            doc_names_or_die(data["items"])
+        except SystemExit as e:
+            if e.code != 1:
+                failures.append(f"② 缺 docName 的退出码应是 1，实际 {e.code}")
+        else:
+            failures.append("② 缺 docName 没有终止 —— 取错键会被读成「没命中」")
+
+        call = stub(200, {"data": {"items": []}})
+        if retrieve_or_die("http://x", "t", {})["items"] != []:
+            failures.append("③ 空命中应当是合法读数（返回空列表）")
+
+        call = stub(200, {"data": {"items": [{"docName": "文档A.md"}]}})
+        names = doc_names_or_die(retrieve_or_die("http://x", "t", {})["items"])
+        if names != ["文档A.md"]:
+            failures.append(f"③ 正常命中的文档名读错了：{names}")
+    finally:
+        call = original
+        fail_exit = original_fail
+
+    for line in failures:
+        print(f"  ✗ 自检失败：{line}")
+    if failures:
+        return 1
+    print("  自检通过：非 200 终止 · 缺 docName 终止 · 空命中是合法读数")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://localhost:5280")
     parser.add_argument("--keep", action="store_true", help="跑完保留知识库（默认删除）")
+    parser.add_argument(
+        "--self-check",
+        action="store_true",
+        help="只跑离线自检（读数纪律，不需要服务；CI 用这条）",
+    )
     parser.add_argument(
         "--corpus",
         default="corpus",
         help="语料目录（相对仓库根；默认 corpus，合成语料用 corpus/synthetic）",
     )
     args = parser.parse_args()
+    if args.self_check:
+        print("== 读数纪律自检（#231）==")
+        return self_check()
     base = args.base.rstrip("/")
 
     corpus_dir = pathlib.Path(args.corpus)
@@ -416,10 +536,8 @@ def main() -> int:
         qa_rows = [json.loads(l) for l in qa_path.read_text(encoding="utf-8").splitlines() if l.strip()]
         for row in qa_rows:
             doc = row.get("expected_document")
-            code, payload = call(
+            data = retrieve_or_die(
                 base,
-                "POST",
-                "/retrieval/test",
                 token,
                 {
                     "question": row["question"],
@@ -427,15 +545,17 @@ def main() -> int:
                     #   （`check_flow_walkthrough.py` 的注释记过这条）。这里只验"链路通 + 命中哪份文档"。
                     "mode": "HYBRID",
                     "threshold": 0,
+                    # ★ topN 上限是 20（超限 400）—— 见 `retrieve_or_die` 的说明，别为了
+                    #   "看得更全"往上调，调了就是一次被拒的请求
                     "topN": 5,
                     "kbIds": [kb_id],
                 },
             )
-            # ★★ 响应里的命中列表字段叫 `items`（实测：`data.items`）。此前读 `list`/`hits`
-            #   ⇒ **假 0 命中**，那会把"检索完全不通"当成结论，而实际上向量检索是通的
-            #   （实测 VECTOR / HYBRID 各 5 条命中，且命中的正是期望文档）。
-            hits = (payload.get("data") or {}).get("items") or []
-            names = [str((h or {}).get("docName") or (h or {}).get("documentName") or "") for h in hits]
+            # ★★ 命中列表在 `data.items`（`retrieve_or_die` 已验过非 200 与形状）。
+            #   文档名只在 `docName` 一个键上取，不再用 `documentName` 兜底 ——
+            #   兜底会让"取错键"表现为"没命中"，与 400 被读成 0 命中是同一个错（#231）。
+            hits = data["items"]
+            names = doc_names_or_die(hits)
             hit = doc in names if names else False
             joined = " ".join(str((h or {}).get("content") or "") for h in hits)
             in_text = snippet_in(joined, row["expected_snippet"]) if joined else False

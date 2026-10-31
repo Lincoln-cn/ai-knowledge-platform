@@ -12,6 +12,17 @@ export interface RetrievalParams {
   mode: RetrievalMode
   /** 相似度阈值。先过滤后取 TopN —— 顺序反了会把噪声带进上下文 */
   threshold: number
+  /**
+   * 取回条数，**服务端硬上限 20**（`#231`）。
+   *
+   * ★ 写读数脚本时最容易踩的两处，症状都是「命中 0 条」而不是报错：
+   *   · `topN > 20` ⇒ 后端返 **400**「TopN 应在 1～20 之间」，而 `body.data.items`
+   *     在 400 时不存在 ⇒ 脚本读到空数组 ⇒ 把一次被拒的请求读成「检索完全不通」
+   *     （B1 凭空归零）；
+   *   · 命中项的文档名字段是 `HitItem.docName`，不是 `documentName` ⇒
+   *     取错键得到空串，同样被读成「没命中」。
+   * ⇒ 读数脚本必须先判状态码、再用 `items`，不许写 `or []` 把 400 吃掉。
+   */
   topN: number
   /** 无引用时的策略 */
   noRefStrategy: NoRefStrategy
@@ -30,6 +41,7 @@ export interface HitItem {
   rank: number
   segmentId: string
   title: string
+  /** ★ 就是这个键名（不是 `documentName`）。读数脚本取错键 ⇒ 空串 ⇒ 被读成「命中 0 条」（#231） */
   docName: string
   kbName: string
   score: number
