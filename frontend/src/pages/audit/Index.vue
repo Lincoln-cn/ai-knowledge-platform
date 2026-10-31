@@ -51,6 +51,15 @@
         @keyup.enter="onFilterChange"
         @clear="onFilterChange"
       />
+      <el-input
+        v-model="query.actorId"
+        size="small"
+        placeholder="操作人 id（可选）"
+        style="width: 240px"
+        clearable
+        @keyup.enter="onFilterChange"
+        @clear="onFilterChange"
+      />
       <span class="micro muted">共 {{ total }} 条</span>
       <span class="grow" />
     </div>
@@ -144,6 +153,9 @@ const query = reactive({
   action: '',
   resourceType: '',
   resourceId: '',
+  // ★ 按人查：拿的是 iam_user.id（不是用户名）—— 名字会改，id 不会；与表里「操作人」那一列
+  //   显示的快照名字是两件事，所以输入框的占位写的是「操作人 id」
+  actorId: '',
   page: 1,
   size: 20,
 })
@@ -164,7 +176,8 @@ async function load() {
     const page = await auditApi.listAuditLogs({
       action: query.action || undefined,
       resourceType: query.resourceType || undefined,
-      resourceId: query.resourceId || undefined,
+      resourceId: query.resourceId.trim() || undefined,
+      actorId: query.actorId.trim() || undefined,
       page: query.page,
       size: query.size,
     })
