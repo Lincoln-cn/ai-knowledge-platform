@@ -26,6 +26,18 @@ public interface AuditQueryPort {
   /** 查单个资源的全部记录（"这份文档到底被人改过几次" —— 最常见的用法）。 */
   java.util.List<AuditRecordView> byResource(String resourceType, String resourceId);
 
+  /**
+   * 按留存期清理：删掉 {@code created_at < beforeAt} 的记录，返回真正删掉的行数（`#75`）。
+   *
+   * <p>★ 这个方法出现在**读**端口里是刻意的：审计的删除只有一种合法动作 ——「按时间清旧的」，而且它只能经由库里那个 {@code
+   * pf_audit_log_purge(before_at)} 函数执行（迁移 `V58`）；直接 {@code delete from pf_audit_log} 仍被只追加触发器挡住。
+   * 所以它不是"给调用方一个删审计的口子"，而是"一个参数被库函数校验过的维护动作"：截止时间不能为空、不能在未来。
+   *
+   * <p>★ 返回值是为了让调用方**把它写进审计**：清理本身也是一次对审计的变更 —— 谁清的、清到什么时候、删了多少行， 必须自己留痕（{@code
+   * AuditAction#AUDIT_PURGE}）。这也解释了为什么不返回 void。
+   */
+  long purgeOlderThan(Instant beforeAt);
+
   /** 过滤条件。{@code from} 含、{@code to} 不含（半开区间：相邻两天的查询不会重复算边界那一秒）。 */
   record Query(
       String action,

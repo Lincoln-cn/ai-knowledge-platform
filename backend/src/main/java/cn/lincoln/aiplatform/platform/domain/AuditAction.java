@@ -23,7 +23,14 @@ public enum AuditAction {
   DATA_EXPORT("data.export"),
 
   /** 授予/收回权限（本批尚未接线）。 */
-  GRANT_CHANGE("grant.change");
+  GRANT_CHANGE("grant.change"),
+
+  /**
+   * 按留存期清理审计记录（`#75`）。
+   *
+   * <p>★ 它是"对审计本身的变更"，所以必须自己留一条审计：一份只删不留痕的清理通道， 会把审计从"可追溯"变成"可选择性追溯"。
+   */
+  AUDIT_PURGE("audit.purge");
 
   private final String code;
 

@@ -58,8 +58,9 @@ export interface AuditLogQuery {
 /**
  * 按条件查一页审计记录（时间倒序）。
  *
- * ★ 只读端点。审计**没有**写与删的接口（`13 §7.2` 第 3 条），所以这个文件里不会出现
- * `method: 'POST'` —— 谁的代码里出现"删审计"，那一定是新加的东西，要单独审。
+ * ★ 审计**没有**写接口、也没有"删某一条"的接口（`13 §7.2` 第 3 条）。这个文件里唯一一处
+ * `method: 'POST'` 是 `purgeAuditLogs`，它语法上只能表达"清理到某个时间点为止"——
+ * 谁的代码里出现"删掉某条审计"，那一定是新加的东西，要单独审。
  */
 export const listAuditLogs = (query: AuditLogQuery = {}) =>
   request<PageResult<AuditRecord>>({ method: 'GET', url: '/audit-logs', query })
@@ -70,4 +71,31 @@ export const listAuditLogsByResource = (resourceType: string, resourceId: string
     method: 'GET',
     url: '/audit-logs/by-resource',
     query: { resourceType, resourceId },
+  })
+
+/** 留存期清理的结果。 */
+export interface AuditPurgeResult {
+  /** 截止时间（这个时间点之前的记录会被清掉） */
+  beforeAt: string
+  /** true 时只统计不删除 */
+  dryRun: boolean
+  /** 截止时间之前的行数（dryRun 时就是"会删掉多少"） */
+  candidates: number
+  /** 实际删除行数（dryRun 时恒 0） */
+  deleted: number
+}
+
+/**
+ * 按留存期清理审计（`#75`）：删掉 `beforeAt` 之前的记录。
+ *
+ * ★ 只能表达"清理到某个时间点为止"，没有"删掉某一条"的形状 —— 这是刻意的：
+ * 留存期是策略，不是编辑权。
+ *
+ * ★ 清理本身会写一条 `audit.purge`（删了几行、清到什么时候都在里面）。
+ */
+export const purgeAuditLogs = (beforeAt: string, dryRun = true) =>
+  request<AuditPurgeResult>({
+    method: 'POST',
+    url: '/audit-logs/purge',
+    body: { beforeAt, dryRun },
   })

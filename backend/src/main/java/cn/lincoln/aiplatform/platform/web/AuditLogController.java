@@ -1,13 +1,22 @@
 package cn.lincoln.aiplatform.platform.web;
 
+import cn.lincoln.aiplatform.platform.domain.AuditAction;
+import cn.lincoln.aiplatform.platform.domain.AuditLogPort;
 import cn.lincoln.aiplatform.platform.domain.AuditQueryPort;
 import cn.lincoln.aiplatform.platform.domain.AuditRecordView;
+import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -33,9 +42,11 @@ public class AuditLogController {
   private static final int MAX_PAGE_SIZE = 200;
 
   private final AuditQueryPort auditQuery;
+  private final AuditLogPort auditLog;
 
-  public AuditLogController(AuditQueryPort auditQuery) {
+  public AuditLogController(AuditQueryPort auditQuery, AuditLogPort auditLog) {
     this.auditQuery = auditQuery;
+    this.auditLog = auditLog;
   }
 
   /**
@@ -102,4 +113,55 @@ public class AuditLogController {
   private static String blankToNull(String value) {
     return value == null || value.isBlank() ? null : value.trim();
   }
+
+  /**
+   * 按留存期清理审计记录（`#75`）：删掉 {@code created_at < beforeAt} 的行。
+   *
+   * <p>★ 这是本控制器里**唯一**的可写映射，而且它不删具体哪一条 —— 语法上只能表达"清理到某个时间点为止"。
+   * 这样"删掉某人的某条记录"在这个接口里无法表达（要删就得写新的映射，那一步会被人看见）。
+   *
+   * <p>★ {@code dryRun=true} 只数不删：留存期这件事先要看"会删掉多少"，直接删是不可逆的。
+   *
+   * <p>★ 清理本身也写审计（{@code audit.purge}）：只有"留下痕迹的删除"才配出现在审计表上。
+   *
+   * @param beforeAt 截止时间（ISO-8601，必须早于现在）
+   * @param dryRun 只统计不删除
+   */
+  @PostMapping("/purge")
+  @PreAuthorize("hasAuthority('system:manage')")
+  public ApiResponse<PurgeResult> purge(
+      @RequestBody PurgeBody body, @AuthenticationPrincipal Jwt jwt) {
+    if (body == null || body.beforeAt() == null) {
+      // ★ 用 BusinessException 而不是 ResponseStatusException：本工程的 GlobalExceptionHandler 会把
+      //   未被识别的异常统一映射成 500（实测），而"少传一个字段"是调用方的问题，必须是 400。
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "留存期清理必须给出截止时间", "补上 beforeAt（ISO-8601），例如 2026-01-01T00:00:00Z");
+    }
+    AuditQueryPort.Query countQuery =
+        new AuditQueryPort.Query(null, null, null, null, null, body.beforeAt(), 1, 1);
+    long candidates = auditQuery.page(countQuery).total();
+    if (body.dryRun()) {
+      return ApiResponse.ok(new PurgeResult(body.beforeAt(), true, candidates, 0L));
+    }
+    long removed = auditQuery.purgeOlderThan(body.beforeAt());
+    UUID actorId = jwt == null ? null : UUID.fromString(jwt.getSubject());
+    auditLog.record(
+        AuditAction.AUDIT_PURGE,
+        "AUDIT_LOG",
+        "pf_audit_log",
+        actorId,
+        Map.of("beforeAt", body.beforeAt().toString(), "deleted", removed));
+    return ApiResponse.ok(new PurgeResult(body.beforeAt(), false, candidates, removed));
+  }
+
+  /** 清理的请求体。 */
+  public record PurgeBody(Instant beforeAt, boolean dryRun) {}
+
+  /**
+   * 清理结果。
+   *
+   * @param candidates 截止时间之前的行数（dryRun 时这就是"会删掉多少"）
+   * @param deleted 实际删除行数（dryRun 时恒 0）
+   */
+  public record PurgeResult(Instant beforeAt, boolean dryRun, long candidates, long deleted) {}
 }

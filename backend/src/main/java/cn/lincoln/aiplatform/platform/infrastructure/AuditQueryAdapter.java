@@ -90,6 +90,15 @@ public class AuditQueryAdapter implements AuditQueryPort {
     return sb.toString();
   }
 
+  @Override
+  public long purgeOlderThan(java.time.Instant beforeAt) {
+    // ★ 走库函数而不是 delete：截止时间的两条校验（非空、不在未来）在库里（V58），
+    //   应用层就算传错也只会在库侧报错，而不会变成"把审计删干净了"。
+    Long removed =
+        jdbc.queryForObject("select pf_audit_log_purge(?)", Long.class, Timestamp.from(beforeAt));
+    return removed == null ? 0L : removed;
+  }
+
   private static void and(StringBuilder sb, List<Object> args, String clause, Object value) {
     if (value == null || (value instanceof String s && s.isBlank())) {
       return;
