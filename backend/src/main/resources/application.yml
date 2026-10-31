@@ -67,6 +67,13 @@ spring:
       api-key: ${AI_API_KEY:ollama-local}
 
 app:
+  # 审计留存期清理（#75 判据 ② 的调度项）：默认关闭 —— 删审计不可逆，而"客户规定的留存期"
+  # 是客户事实、不是代码事实；由代码替客户拍一个天数然后开始删，比不删更危险
+  audit:
+    retention:
+      enabled: ${AUDIT_RETENTION_ENABLED:false}
+      retain-days: ${AUDIT_RETENTION_DAYS:365}
+      cron: "${AUDIT_RETENTION_CRON:0 30 3 * * *}"
   # ─── 业务示例数据（`db/seed`，默认关闭）───
   #
   # ★ 只有打开时才把 `classpath:db/seed` 追加进 Flyway 的 locations（见
