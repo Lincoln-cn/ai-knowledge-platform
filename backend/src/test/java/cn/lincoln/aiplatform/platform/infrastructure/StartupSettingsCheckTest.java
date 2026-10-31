@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.platform.infrastructure;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -85,5 +86,31 @@ class StartupSettingsCheckTest {
     assertThat(StartupSettingsCheck.problems(4, 10, 0, 150))
         .as("★ 窗口关着时，预算小与窗口无关 —— 这条规则不该报（否则用户会去查一个没开的功能）")
         .isEmpty();
+  }
+
+  @Test
+  @DisplayName("★ 清理窗口比恢复窗口短 —— 会删掉「还能点恢复」的内容，必须报")
+  void cleanupWindowShorterThanRestoreWindowIsReported() {
+    var problems = StartupSettingsCheck.problems(4, 10, 80, 1200, 7, 3);
+
+    assertThat(problems).hasSize(1);
+    assertThat(problems.get(0))
+        .as("要说清两个键的名字、以及用户会看到什么")
+        .contains("cleanup.retain-days=3")
+        .contains("restore-window-days=7")
+        .contains("恢复");
+  }
+
+  @Test
+  @DisplayName("两个窗口同值、或清理窗口更长，都不报（后者只是多占空间，不是错）")
+  void equalOrLongerCleanupWindowIsNotReported() {
+    assertThat(StartupSettingsCheck.problems(4, 10, 80, 1200, 7, 7)).isEmpty();
+    assertThat(StartupSettingsCheck.problems(4, 10, 80, 1200, 7, 30)).isEmpty();
+  }
+
+  @Test
+  @DisplayName("★ 四参老版本不产生这条新告警（默认等于没配，等价行为不变）")
+  void legacyFourArgOverloadStaysQuiet() {
+    assertThat(StartupSettingsCheck.problems(4, 10, 80, 1200)).isEmpty();
   }
 }

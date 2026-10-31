@@ -41,30 +41,47 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
   /** 向量预算（`app.segmentation.max-chars`）。 */
   private final int segmentMaxChars;
 
+  private final int restoreWindowDays;
+
+  private final int cleanupRetainDays;
+
   public StartupSettingsWarningRunner(
       @Value("${app.ingestion.embedding-concurrency:4}") int embeddingConcurrency,
       @Value("${spring.datasource.hikari.maximum-pool-size:10}") int poolSize,
       @Value("${app.segmentation.context-window:0}") int contextWindow,
-      @Value("${app.segmentation.max-chars:1200}") int segmentMaxChars) {
+      @Value("${app.segmentation.max-chars:1200}") int segmentMaxChars,
+      // ★ 回收站的两个窗口（`#259`）：分开两个键是因为它们回答不同的问题
+      //   （"用户还能撤回多久" vs "内容还能占多久"），但配错方向会互相打脸。
+      @Value("${app.knowledge.restore-window-days:7}") int restoreWindowDays,
+      @Value("${app.knowledge.cleanup.retain-days:7}") int cleanupRetainDays) {
     this.embeddingConcurrency = embeddingConcurrency;
     this.poolSize = poolSize;
     this.contextWindow = contextWindow;
     this.segmentMaxChars = segmentMaxChars;
+    this.restoreWindowDays = restoreWindowDays;
+    this.cleanupRetainDays = cleanupRetainDays;
   }
 
   @Override
   public void run(ApplicationArguments args) {
     List<String> problems =
         StartupSettingsCheck.problems(
-            embeddingConcurrency, poolSize, contextWindow, segmentMaxChars);
+            embeddingConcurrency,
+            poolSize,
+            contextWindow,
+            segmentMaxChars,
+            restoreWindowDays,
+            cleanupRetainDays);
 
     if (problems.isEmpty()) {
       log.info(
-          "配置自检通过：向量化并发 {} · 连接池 {} · 上下文窗口 {} · 向量预算 {}",
+          "配置自检通过：向量化并发 {} · 连接池 {} · 上下文窗口 {} · 向量预算 {} · 恢复窗口 {} 天 · 清理窗口 {} 天",
           embeddingConcurrency,
           poolSize,
           contextWindow,
-          segmentMaxChars);
+          segmentMaxChars,
+          restoreWindowDays,
+          cleanupRetainDays);
       return;
     }
 

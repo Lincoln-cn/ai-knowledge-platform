@@ -40,6 +40,24 @@ final class StartupSettingsCheck {
    */
   static List<String> problems(
       int embeddingConcurrency, int poolSize, int contextWindow, int segmentMaxChars) {
+    // 老的四参版本：保留窗口与清理窗口取同一个数（等于"没配"），因此不产生第七条告警。
+    return problems(embeddingConcurrency, poolSize, contextWindow, segmentMaxChars, 7, 7);
+  }
+
+  /**
+   * 带回收站两个窗口的版本（`#259`）。
+   *
+   * <p>★ 为什么单独报这一条：`restore-window-days` 与 `cleanup.retain-days` 是**两个键**， 默认都是 7
+   * 天。运维改一个忘一个，就会出现两个方向都看得见的错 —— 清理窗口更短 ⇒ 用户手里的 「恢复」按钮亮着，点下去 404/400（内容已经被删）；清理窗口更长 ⇒
+   * 按钮灰了，内容却还占着空间。 都不是崩溃，都是"看起来能用"。这正是启动自检该报的那一类。
+   */
+  static List<String> problems(
+      int embeddingConcurrency,
+      int poolSize,
+      int contextWindow,
+      int segmentMaxChars,
+      int restoreWindowDays,
+      int cleanupRetainDays) {
     List<String> problems = new ArrayList<>();
 
     if (embeddingConcurrency < 1) {
@@ -77,6 +95,16 @@ final class StartupSettingsCheck {
               + " 会被裁空 —— 窗口看起来开着、实际一条都没进来。建议 max-chars ≥ "
               + (WORST_CASE_PREFIX_CHARS + MIN_BODY_CHARS + contextWindow)
               + "。");
+    }
+
+    if (cleanupRetainDays < restoreWindowDays) {
+      problems.add(
+          "app.knowledge.cleanup.retain-days="
+              + cleanupRetainDays
+              + " 小于 app.knowledge.restore-window-days="
+              + restoreWindowDays
+              + "：回收站里还会显示「恢复」的文档，内容可能已经被清理作业删掉了"
+              + "（点下去得到 400/404）。两者要么同值，要么清理窗口不小于恢复窗口。");
     }
 
     return problems;

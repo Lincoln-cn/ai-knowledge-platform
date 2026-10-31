@@ -323,6 +323,8 @@ pg_restore -d "$TARGET_URL" --clean --if-exists /backup/aip-2026-10-31.dump
 | `KNOWLEDGE_CLEANUP_BATCH_SIZE` | `50` | 一次一批，别把整表搬进内存 |
 | `KNOWLEDGE_CLEANUP_CRON` | `0 10 4 * * *` | 每天 04:10（审计留存清理是 03:30，错开一小时） |
 
+★ 上面两个窗口（`RESTORE_WINDOW_DAYS` 与 `CLEANUP_RETAIN_DAYS`）是**两个键**：清理窗口短于恢复窗口时，启动自检会警告 —— 那意味着"还能点恢复"的文档内容已经被清理掉了（点下去 400/404）。两者同值即可。
+
 ★ 它删什么：**分段 + 向量 + 文档行**，顺序固定（先分段再文档行 —— 反过来会留孤儿分段，而孤儿分段照样命中），
 每条写一条 `document.purge` 审计（`detail.trigger = retention`，谁都没调，所以 `actor_id` 为空）。
 ★ 它**不**删审计记录：那是 `app.audit.retention` 那条作业的事。两条留期分开配，
