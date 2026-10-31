@@ -90,4 +90,18 @@ public interface DocumentRepository {
    * @return 状态 → 篇数（不含软删文档；某状态没有文档时该键缺席）
    */
   Map<DocumentStatus, Long> countByStatus(UUID kbId);
+
+  /**
+   * 按「会话 + 名字」找一条会话域文档（`#187` 判据 4 的幂等键）。
+   *
+   * <p>★ <strong>为什么幂等键是 (scope_id, name) 而不是 attachment_id</strong>：{@code kb_document} 今天没有 "附件 →
+   * 文档"的映射列，加那一列属于 {@code 13 §11.6} 里约定给会话虚拟执行目录那一批（第 17 周）的形状改动。
+   * 在同一次问答里重复提交同一份附件（前端重发、用户连点）是真实会发生的动作，没有幂等键就会在会话域里落出 两条同名文档、检索时同一段正文命中两次（引用列表看起来像"答错了两遍"）。
+   *
+   * <p>★ 代价如实写在口径里：<strong>同一次会话里两份同名但内容不同的附件会被当成同一份</strong>（后上传的不会 覆盖先来的）。这一条在"没有 attachment_id
+   * 映射列"的前提下无法做得更好，记在 {@code #187} 的报告里。
+   *
+   * <p>★ 只查 {@code scope_kind='CONVERSATION'}：库域文档的 {@code scope_id} 是 kb_id，语义不同，不许串。
+   */
+  Optional<Document> findConversationAttachment(UUID conversationId, String name);
 }

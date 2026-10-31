@@ -40,14 +40,28 @@ public class LocalFileStore implements FileStorePort {
     this.root = root.toAbsolutePath().normalize();
   }
 
+  /**
+   * 把键解析成一个<strong>落在根目录之内</strong>的绝对路径。
+   *
+   * <p>★ 键是 {@link #store} 自己生成的，理论上是安全的；但 {@code read} 的键来自数据库（{@code cv_file.storage_key}），
+   * 而数据库里的值可能被人改过 —— 所以<strong>读的那一侧照样要校验</strong>。一条 {@code ../../etc/passwd} 的存量行在这里会被拒绝，
+   * 而不是把宿主机的文件读进检索。
+   */
+  private Path resolveInsideRoot(String key) {
+    if (key == null || key.isBlank()) {
+      throw new IllegalStateException("存储键为空，拒绝读取");
+    }
+    Path target = root.resolve(key).normalize();
+    if (!target.startsWith(root) || target.equals(root)) {
+      throw new IllegalStateException("存储键解析后落在根目录之外，拒绝读取：" + key);
+    }
+    return target;
+  }
+
   @Override
   public String store(String originalName, byte[] content) {
     String key = UUID.randomUUID().toString().replace("-", "") + extensionOf(originalName);
-    Path target = root.resolve(key).normalize();
-    if (!target.startsWith(root)) {
-      // 键是自己生成的，走到这里说明实现被改了 —— 拒绝比"写到一个更奇怪的路径"好。
-      throw new IllegalStateException("存储键解析后落在根目录之外，拒绝写入：" + key);
-    }
+    Path target = resolveInsideRoot(key);
     try {
       Files.createDirectories(root);
       Files.write(target, content, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
@@ -56,6 +70,18 @@ public class LocalFileStore implements FileStorePort {
     }
     log.info("附件已落盘：键 {}，{} 字节", key, content.length);
     return key;
+  }
+
+  @Override
+  public byte[] read(String key) {
+    Path target = resolveInsideRoot(key);
+    try {
+      return Files.readAllBytes(target);
+    } catch (IOException cause) {
+      // ★ 不返回空数组：那会让"文件不在了"与"文件是空的"看起来一样（见 FileStorePort#read 的注释）
+      throw new IllegalStateException(
+          "文件读取失败（根目录 " + root + "，键 " + key + "，是否存在 " + Files.exists(target) + "）", cause);
+    }
   }
 
   /**

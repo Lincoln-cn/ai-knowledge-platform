@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.knowledge.infrastructure;
 
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
+import cn.lincoln.aiplatform.knowledge.domain.DocumentScopeKind;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
 import cn.lincoln.aiplatform.knowledge.domain.OrgAssignment;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
@@ -117,6 +118,24 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
       counts.put((DocumentStatus) row[0], ((Number) row[1]).longValue());
     }
     return counts;
+  }
+
+  /**
+   * 会话域文档的幂等查（`#187` 判据 4）。
+   *
+   * <p>★ <strong>刻意不带密级上限、也不带所属库</strong>：这是<strong>写侧</strong>的"我是不是已经登记过这一份"， 不是列表读取。带密级上限会让"低
+   * clearance 的人看起来没传过"变成"再传一份" ⇒ 同一段正文在会话域里落两行、 检索时命中两次。库域文档不在查询范围内（{@code scope_kind} 那条把语义隔开）。
+   */
+  @Override
+  public Optional<Document> findConversationAttachment(UUID conversationId, String name) {
+    Specification<Document> spec =
+        (root, query, cb) ->
+            cb.and(
+                cb.equal(root.get("scopeKind"), DocumentScopeKind.CONVERSATION),
+                cb.equal(root.get("scopeId"), conversationId),
+                cb.equal(root.get("name"), name),
+                cb.isNull(root.get("deletedAt")));
+    return jpa.findOne(spec);
   }
 
   // ────────────────────────── 内部 ──────────────────────────

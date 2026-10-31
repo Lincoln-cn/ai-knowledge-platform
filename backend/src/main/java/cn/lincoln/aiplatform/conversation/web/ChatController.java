@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.conversation.web;
 
+import cn.lincoln.aiplatform.conversation.application.AttachmentRegistrar;
 import cn.lincoln.aiplatform.conversation.application.ChatHistoryService;
 import cn.lincoln.aiplatform.conversation.application.ChatMessageView;
 import cn.lincoln.aiplatform.conversation.application.ChatMode;
@@ -98,6 +99,7 @@ public class ChatController {
   private final ChatHistoryService chatHistory;
   private final ConversationListService conversationList;
   private final ConversationFeedbackService conversationFeedback;
+  private final AttachmentRegistrar attachments;
 
   public ChatController(
       ChatService chatService,
@@ -106,7 +108,9 @@ public class ChatController {
       ChatStopService chatStop,
       ChatHistoryService chatHistory,
       ConversationListService conversationList,
-      ConversationFeedbackService conversationFeedback) {
+      ConversationFeedbackService conversationFeedback,
+      // ★ #187 判据 4：attachmentIds 的消费侧（见 AttachmentRegistrar 的类注释：它**不**进 ChatService.ChatRequest）
+      AttachmentRegistrar attachments) {
     this.chatService = chatService;
     this.assembler = assembler;
     this.publicChat = publicChat;
@@ -114,6 +118,7 @@ public class ChatController {
     this.chatHistory = chatHistory;
     this.conversationList = conversationList;
     this.conversationFeedback = conversationFeedback;
+    this.attachments = attachments;
   }
 
   /**
@@ -327,12 +332,24 @@ public class ChatController {
     // ★ 落库与归属判定走服务层（看不见 ⇒ 404）；它在写流之前发生，所以错误还能用包络返回
     // ★★ 按**模式**启动：REGENERATE 的问题来自库里（那一条回答之前最近的用户消息），
     //   所以必须用返回的 question，不能用请求体里的那个。
+    ChatMode mode = ChatMode.parse(body.mode());
     ChatService.StartedTurn started =
         chatService.startTurn(
             new ChatService.ChatRequest(
                 body.appId(), body.conversationId(), body.question(), userId),
-            cn.lincoln.aiplatform.conversation.application.ChatMode.parse(body.mode()),
+            mode,
             body.targetMessageId());
+    // ★★ #187 判据 4：`attachmentIds` 从「收下但不消费」变成「真进检索」（13 §11.4.1 / §11.2 第三域）。
+    //   ① 位置：startTurn **之后** —— 会话已经存在（首次问答由它创建），会话 id 取自这一轮的 PreparedTurn，
+    //      不从请求体再取一次（同 §11.4.1 的"域解析唯一一处"）。
+    //   ② 位置：streamOf **之前** —— 流一开，HTTP 状态码就已经发出去了，出问题就只能变成"流里一句错误文本"；
+    //      放在这里，附件不存在/不属于你还能是一个正常的 4xx 包络。
+    //   ③ 只在 NEW 上做：REGENERATE 的问题取自库里那条用户消息，附件语义不适用（前端也不传）。
+    //   ④ 记账：这一步抛错时 userMessage 已经落库（startTurn 里写的），与"参数校验失败走后置路径"同族；
+    //      本批不额外补偿删除 —— 那条消息能正常被历史和 REGENERATE 使用，且不会留下"永远生成不完"的助手消息。
+    if (mode == ChatMode.NEW) {
+      attachments.register(started.turn().conversationId(), userId, body.attachmentIds());
+    }
     return ResponseEntity.ok()
         .contentType(MediaType.TEXT_EVENT_STREAM)
         .body(

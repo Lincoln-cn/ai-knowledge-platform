@@ -884,6 +884,79 @@ public class DocumentService {
     return created;
   }
 
+  // ────────────────────────── 会话临时附件（#187 判据 4） ──────────────────────────
+
+  /**
+   * 登记一条<strong>会话临时附件</strong>文档（{@code 13 §11.2} 的第三域）—— 只落 {@code kb_document} 行。
+   *
+   * <p>★ <strong>为什么它不发布 {@link DocumentUploaded}</strong>：那个事件的消费者是 {@code ParseRunner} 的
+   * {@code @TransactionalEventListener(AFTER_COMMIT)}，它<strong>异步</strong>解析。附件这条路上同步性本身就是判据 ——
+   * 用户在"上传完立刻提问"这一秒里问的是这份附件，异步解析意味着<b>第一次问答必然检索不到</b>，而"检索不到"与 "附件里确实没有"在用户眼里完全一样（{@code
+   * silent-failure} 的形态）。所以解析由调用方 （{@code
+   * ConversationAttachmentRegistrar}）在本方法返回后<strong>同步</strong>驱动，取舍记在 {@code #187}。
+   *
+   * <p>★ <strong>幂等键 = (conversationId, name)</strong>：见 {@link
+   * DocumentRepository#findConversationAttachment} 的 javadoc —— 今天没有"附件 →
+   * 文档"的映射列，代价（同会话同名不同内容会被当成同一份）写在那里。
+   *
+   * <p>★ 这里<strong>不做</strong>可见性/密级判定：附件 id 属于谁、会话当前密级是多少，都是 {@code conversation} 模块的事实（{@code 13
+   * §11.5} 的"不许低于会话当前密级"由调用方取值后传进来）。知识模块只负责"按给定归属与 密级落一条形状合法的会话域文档"。
+   *
+   * @param conversationId 会话 id（= {@code scope_id}，也是生成列 {@code conversation_id} 的来源）
+   * @param ownerId 上传者（= {@code owner_id}；检索谓词第三支按它与会话 id 一起收窄）
+   * @param name 显示名（同一次会话内唯一，见幂等键）
+   * @param docType 文种（会话附件用一个固定常量，见 {@code ConversationAttachmentRegistrar}）
+   * @param classification 密级（调用方传会话当前密级 ⇒ 不会低于下限，也不会凭空抬升）
+   * @return 该附件的文档 id（已有则返回已有的那个）
+   */
+  @Transactional
+  public UUID registerConversationAttachment(
+      UUID conversationId,
+      UUID ownerId,
+      String name,
+      String docType,
+      ClassificationLevel classification) {
+
+    if (conversationId == null) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "会话必填", "附件必须属于某一次会话（13 §11.2 的第三域）");
+    }
+    if (ownerId == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "上传者必填", "会话附件的检索谓词按 owner_id 收窄，不能为空（13 §11.3）");
+    }
+    if (name == null || name.isBlank()) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "文件名必填", "会话附件要能出现在引用标题里，不能没有名字");
+    }
+    if (docType == null || docType.isBlank()) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "文种必填", "会话附件也要满足 doc_type 非空（V13）");
+    }
+    if (classification == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "密级必填", "会话附件的密级不许低于会话当前密级，由调用方传入（13 §11.5 ①）");
+    }
+
+    Document existing =
+        documents.findConversationAttachment(conversationId, name.trim()).orElse(null);
+    if (existing != null) {
+      // ★ 已登记过：返回同一条。**不重解析** —— 解析失败的行不会因为再问一次就自愈，
+      //   重试是另一件事（需要显式动作），不能让"再问一遍"变成隐式的重试。
+      return existing.id();
+    }
+
+    Document document =
+        Document.conversationAttachment(
+            UUID.randomUUID(), conversationId, ownerId, name, docType, classification);
+    documents.save(document);
+    log.info(
+        "会话附件登记：会话 {} · 文档 {}（{}）· 密级 {} · 文种 {}",
+        conversationId,
+        document.id(),
+        document.name(),
+        classification,
+        docType);
+    return document.id();
+  }
+
   // ────────────────────────── 解析落库（由 ParseRunner 在异步任务里调） ──────────────────────────
 
   /**

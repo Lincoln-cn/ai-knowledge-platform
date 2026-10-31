@@ -274,7 +274,6 @@ public class Document {
     if (classification == null) {
       throw new IllegalArgumentException("密级必填");
     }
-    this.id = id;
     this.kbId = kbId;
     // ★ 域的形状在**构造这一刻**就定下来（V34）：建档路径只产出库域文档，
     //   而库域的 scope_id 就是 kb_id、传输者就是建档人 —— 两者都是直接派生，不是新参数。
@@ -283,6 +282,79 @@ public class Document {
     this.scopeKind = DocumentScopeKind.KB;
     this.scopeId = kbId;
     this.ownerId = createdBy;
+    init(id, name, source, docType, orgId, classification, labels, createdBy);
+  }
+
+  /**
+   * 会话临时附件的建档（{@code 13 §11.2} 第三域 · {@code #187} 判据 4）。
+   *
+   * <h3>★ 为什么必须是一个<strong>显式工厂</strong>，而不是给构造器加三个可空参数</h3>
+   *
+   * <p>三个域里只有会话域是"有文档行、没有库行"：{@code kb_id} 必须为空、{@code scope_id} 是<strong>会话 id</strong>、
+   * 传输者是上传人。把它做成"可空参数"以后，每一个既有的建档调用点都多出三个能填错的格子，
+   * 而填错的后果是<strong>检索侧恒假</strong>（谁都看不见，且不报错）。工厂方法让"库域"与"会话域"在代码里是两个形状， 不是同一形状的两种取值。
+   *
+   * <h3>★★ 它刻意<strong>不</strong>校验的东西</h3>
+   *
+   * <ul>
+   *   <li><strong>{@code org_id} 为空</strong>：会话附件不属于任何部门（它跟着会话走）。库层 {@code org_id} 可空； 而分段前缀需要的组织码由
+   *       {@code OrgCodeResolver} 回落成占位符 {@code no-org}，不是这里补一个假部门。
+   *   <li><strong>密级的下限</strong>：{@code 13 §11.5} 说的是"附件密级不许低于会话当前密级"， 那条规则要读会话的当前值 ⇒ 只能在应用层（{@code
+   *       DocumentService#registerConversationAttachment} 的调用方） 拿会话实体做，不能塞进一个只认识自己的实体里。
+   * </ul>
+   *
+   * @param id 文档 id
+   * @param conversationId 会话 id（★ 落 {@code scope_id}，并由生成列派生 {@code conversation_id}）
+   * @param ownerId 上传人（★ 落 {@code owner_id}，检索谓词第三支要求它等于当前请求者）
+   * @param name 展示名（用户上传时的原始文件名）
+   * @param docType 文种（★ 列 NOT NULL；取值口径见 {@code ConversationAttachmentRegistrar#DOC_TYPE}）
+   * @param classification 密级（★ 由调用方按 {@code 13 §11.5} 取会话当前值）
+   * @return 尚未解析的会话域文档（{@code status = PENDING_PARSE}）
+   */
+  public static Document conversationAttachment(
+      UUID id,
+      UUID conversationId,
+      UUID ownerId,
+      String name,
+      String docType,
+      ClassificationLevel classification) {
+    if (id == null || conversationId == null || ownerId == null) {
+      throw new IllegalArgumentException("文档 id、会话 id 与上传人不能为空");
+    }
+    if (name == null || name.isBlank() || name.length() > 255) {
+      throw new IllegalArgumentException("文档名称必须是 1–255 字");
+    }
+    if (docType == null || docType.isBlank()) {
+      throw new IllegalArgumentException("文种必填");
+    }
+    if (classification == null) {
+      throw new IllegalArgumentException("密级必填");
+    }
+    Document document = new Document();
+    document.kbId = null;
+    document.scopeKind = DocumentScopeKind.CONVERSATION;
+    document.scopeId = conversationId;
+    document.ownerId = ownerId;
+    document.init(id, name, "local", docType, null, classification, List.of(), ownerId);
+    return document;
+  }
+
+  /**
+   * 两个域共享的字段初始化（域相关的四列不在这里，理由见 {@link #conversationAttachment}）。
+   *
+   * <p>★ 抽成一个方法而不是两个构造器全写一遍：这两段里有一半是"初值必须对"的东西 （{@code status = PENDING_PARSE}、三个计数为 0、{@code
+   * enabled = true}），复制一份以后总有一份先被改错。
+   */
+  private void init(
+      UUID id,
+      String name,
+      String source,
+      String docType,
+      UUID orgId,
+      ClassificationLevel classification,
+      List<String> labels,
+      UUID createdBy) {
+    this.id = id;
     this.name = name.trim();
     this.source = source == null || source.isBlank() ? "local" : source.trim();
     this.docType = docType.trim();
