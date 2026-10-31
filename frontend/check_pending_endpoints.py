@@ -45,14 +45,6 @@ PENDING = {
         "issue": "#198",
         "guard": "",
     },
-    "GET /assistants/{*}/workflow/draft": {
-        "issue": "#198",
-        "guard": "workflow/Index.vue getWokFlowDetail 的 catch ⇒ 「读取编排草稿」还没接后端（不伪造空图，避免保存时覆盖真草稿）",
-    },
-    "PUT /assistants/{*}/workflow/draft": {
-        "issue": "#198",
-        "guard": "workflow/Index.vue saveApplication 的 catch ⇒ 「在编排里保存」还没接后端（含每分钟定时保存）",
-    },
     "POST /assistants/{*}/workflow/publish": {
         "issue": "#198",
         "guard": "workflow/Index.vue publicHandle 原有 catch ⇒ 走「发布失败」提示（含取消发布对话框的字符串 reject 分支）",

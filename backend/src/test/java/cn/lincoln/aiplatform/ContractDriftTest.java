@@ -94,8 +94,6 @@ class ContractDriftTest {
           //   ★ POST /assistants/import 与 /import/check 已随导入子项落地（2026-10-24）
           //   ★ GET/POST /assistants/{*}/api-keys 与 PATCH …/enabled 已随 API Key 子项落地（2026-10-24）
           missing("POST", "/assistants/{*}/workflow/debug", "#198", "15–18 周"),
-          missing("GET", "/assistants/{*}/workflow/draft", "#198", "15–18 周"),
-          missing("PUT", "/assistants/{*}/workflow/draft", "#198", "15–18 周"),
           missing("POST", "/assistants/{*}/workflow/publish", "#198", "15–18 周"),
           missing("GET", "/assistants/{*}/workflow/records", "#198", "15–18 周"),
           missing("POST", "/assistants/{*}/workflow/validate", "#198", "15–18 周"),
