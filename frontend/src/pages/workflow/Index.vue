@@ -84,6 +84,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessageBox, ClickOutside as vClickOutside } from 'element-plus'
 import Workflow from './components/Canvas.vue'
 import { MsgSuccess, MsgError } from '@/utils/message'
+import { pendingEndpointHint } from '@/lib/pendingEndpoint'
 import PublishHistory from '@/pages/workflow/components/common/PublishHistory.vue'
 import DropdownMenu from '@/pages/workflow/components/common/DropdownMenu.vue'
 import BackButton from '@/pages/workflow/components/back-button/index.vue'
@@ -234,10 +235,16 @@ function renderGraphData(graph: WorkflowGraph) {
 
 /** 预览某一版：版本列表**不带图**，所以按需取该版的图（契约里的单版本接口） */
 function previewVersion(item: any) {
-    getVersionGraph(id, item.version).then((graph) => {
-        saveTime.value = item.publishedAt
-        renderGraphData(graph)
-    })
+    getVersionGraph(id, item.version)
+        .then((graph) => {
+            saveTime.value = item.publishedAt
+            renderGraphData(graph)
+        })
+        .catch((error: unknown) => {
+            // 同上（`#160`）：这个端点后端没实现，用户点「预览某一版」原本毫无反应。
+            const pending = pendingEndpointHint(error, '预览历史版本', '#198')
+            MsgError(pending ?? '预览历史版本失败，请稍后重试')
+        })
 }
 function checkVersion(item: any) {
     disablePublic.value = true
@@ -309,12 +316,21 @@ function getWokFlowDetail() {
     getAssistant(id).then((app) => {
         detail.value = { ...(detail.value ?? {}), name: app.name, applyName: app.name }
     })
-    getDetail({ id: id }).then((res) => {
-        const graph = res.data.data as WorkflowGraph
-        if (!graph?.nodes) return
-        detail.value = { ...(detail.value ?? {}), workFlow: null }
-        renderGraphData(graph)
-    })
+    getDetail({ id: id })
+        .then((res) => {
+            const graph = res.data.data as WorkflowGraph
+            if (!graph?.nodes) return
+            detail.value = { ...(detail.value ?? {}), workFlow: null }
+            renderGraphData(graph)
+        })
+        .catch((error: unknown) => {
+            // ★ 草稿端点后端没实现（`#198`）：进入编排页就会走到这里，原先无 catch ⇒
+            //   页面直接报一次未处理 rejection，而画布是空的 —— 看上去像「这个应用没有流程」（`#160`）。
+            //   ★ 刻意**不**伪造一张空图当降级：那样用户会在一张空画布上编辑并保存，
+            //   等端点真的实现时，第一次保存就把已有草稿覆盖成空图。
+            const pending = pendingEndpointHint(error, '读取编排草稿', '#198')
+            MsgError(pending ?? '读取编排草稿失败，请稍后重试')
+        })
 }
 function getGraphData() {
     return workflowRef.value?.getGraphData()
@@ -370,12 +386,21 @@ function saveApplication(bool?: boolean) {
     // 开场白属 start-node 的 config（已在图里）—— 旧代码把它们从 base-node 里
     // 抠出来写回应用，在新模型里是跨实体写入，不照搬。
     const graph = fromLogicFlow(getGraphData())
-    addSubmit({ applicationId: id, graph }).then(() => {
-        saveTime.value = new Date()
-        if (bool) {
-            MsgSuccess('保存成功')
-        }
-    })
+    addSubmit({ applicationId: id, graph })
+        .then(() => {
+            saveTime.value = new Date()
+            if (bool) {
+                MsgSuccess('保存成功')
+            }
+        })
+        .catch((error: unknown) => {
+            // ★ 这个端点后端还没实现（`#198`）。原先没有 catch ⇒ 这次 rejection 无人接，
+            //   页面上表现为「点了保存没反应」，用户既不知道失败也不知道为什么（`#160`）。
+            //   ★ 每分钟的定时保存与用户点保存走的是同一条路径，所以文案不带「你」——
+            //   自动保存失败时用户并没有做任何操作。
+            const pending = pendingEndpointHint(error, '在编排里保存', '#198')
+            MsgError(pending ?? '保存失败，请稍后重试')
+        })
 }
 </script>
 

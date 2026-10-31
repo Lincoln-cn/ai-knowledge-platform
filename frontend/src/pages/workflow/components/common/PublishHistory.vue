@@ -91,6 +91,8 @@ import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { getWorkFlowVersion } from '@/api/legacy/setting'
 import { datetimeFormat } from '@/utils/time'
+import { MsgError } from '@/utils/message'
+import { pendingEndpointHint } from '@/lib/pendingEndpoint'
 const route = useRoute();
 const id = route.params.appId as string
 
@@ -113,9 +115,21 @@ function refreshVersion(item: any) {
 }
 
 function getList() {
-    getWorkFlowVersion(id).then((res: any) => {
-        LogData.value = res.data.data
-    })
+    loading.value = true
+    getWorkFlowVersion(id)
+        .then((res: any) => {
+            LogData.value = res.data.data
+        })
+        .catch((error: unknown) => {
+            // ★ 端点后端没实现（`#198`）：原先无 catch ⇒ 列表永远空、loading 永远在转，
+            //   用户看到的是「发布历史是空的」而不是「这个功能还没接后端」（`#160`）。
+            LogData.value = []
+            const pending = pendingEndpointHint(error, '查看发布历史', '#198')
+            MsgError(pending ?? '发布历史加载失败，请稍后重试')
+        })
+        .finally(() => {
+            loading.value = false
+        })
 }
 
 onMounted(() => {
