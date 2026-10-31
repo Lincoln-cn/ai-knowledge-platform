@@ -187,6 +187,8 @@ const RESOURCES = [
   { value: 'DOCUMENT', label: '文档' },
   { value: 'ASSISTANT', label: '应用' },
   { value: 'ROLE', label: '角色' },
+  { value: 'CONVERSATION', label: '会话' },
+  { value: 'AUDIT_LOG', label: '审计记录' },
 ]
 
 const session = useSessionStore()

@@ -5,6 +5,7 @@
 
 动作码是三处各写一份的同一种知识：
 
+0. 后端每个 `audit.record(动作, "资源类型", ...)` 调用点里的**资源类型字面量**，与审计页的 `RESOURCES`；
 1. 后端 `AuditAction` 枚举（真正写进 `pf_audit_log.action` 的值）；
 2. 前端契约 `AuditActionCode`（TS 联合类型）；
 3. 审计页的筛选项列表 `ACTIONS`（人看到的标签）。
@@ -39,6 +40,10 @@ PAGE = ROOT / "src/pages/audit/Index.vue"
 
 CODE_RE = re.compile(r'"([a-z][a-z0-9]*\.[a-z][a-z0-9-]*)"')
 
+# ★ 资源类型：`audit.record(AuditAction.X, "DOCUMENT", …)` 的第二个参数（可能跨行写）。
+#   它是魔法字符串，散在十来个调用点上 —— 最容易漂、又最不会响的那类知识。
+RESOURCE_USE_RE = re.compile(r'record\(\s*[A-Za-z_.]+\s*,\s*"([A-Z_]+)"', re.S)
+
 
 def enum_codes(text: str) -> list[str]:
     """后端枚举里所有 `"资源.动作"` 字面量。"""
@@ -60,6 +65,46 @@ def page_codes(text: str) -> list[str]:
     if not match:
         return []
     return re.findall(r"value:\s*'([a-z][a-z0-9]*\.[a-z][a-z0-9-]*)'", match.group(1))
+
+
+def used_resources(source_root):
+    """后端所有 `audit.record(...)` 调用点用到的资源类型（去重排序）。"""
+    seen = set()
+    for path in sorted(source_root.rglob("*.java")):
+        seen.update(RESOURCE_USE_RE.findall(path.read_text(encoding="utf-8")))
+    return sorted(seen)
+
+
+def page_resources(text):
+    """审计页 `const RESOURCES = [...]` 里的 value（逐行解析，避开正则里的方括号转义）。"""
+    out = []
+    inside = False
+    for line in text.splitlines():
+        if 'const RESOURCES = [' in line:
+            inside = True
+            continue
+        if inside and line.strip() == ']':
+            break
+        if inside:
+            match = re.search("value: '([A-Z_]+)'", line)
+            if match:
+                out.append(match.group(1))
+    return out
+
+
+def resource_problems(used, page):
+    issues = []
+    if not used:
+        issues.append("后端一条 audit.record 都没解析到 —— 资源类型这条判据此刻是瞎的")
+    if not page:
+        issues.append("审计页 RESOURCES 一条都没解析到 —— 路径变了或格式改了")
+    if issues:
+        return issues
+    for code in sorted(set(used) - set(page)):
+        issues.append(f"审计页 RESOURCES 缺 '{code}'（后端会写这个资源类型 ⇒ 按它筛不出来，且显示原始英文）")
+    for code in sorted(set(page) - set(used)):
+        issues.append(f"审计页 RESOURCES 多 '{code}'（后端不会写这个资源类型 ⇒ 选它永远是空列表）")
+    return issues
 
 
 def problems(backend: list[str], contract: list[str], page: list[str]) -> list[str]:
@@ -106,6 +151,21 @@ def self_check() -> int:
     miss_page = problems(enum_codes(enum), contract_codes(contract), page_codes(bad_page))
     cases.append(("页面筛选项少一个 ⇒ 报", any("筛选项缺 'audit.purge'" in s for s in miss_page), miss_page))
 
+    res_used = sorted(
+        RESOURCE_USE_RE.findall('audit.record(AuditAction.X, "DOCUMENT", id, d)')
+        + RESOURCE_USE_RE.findall('audit.record(AuditAction.Y, "ROLE", id, null, d)'))
+    cases.append(("资源类型能解析", res_used == ["DOCUMENT", "ROLE"], res_used))
+    res_page = page_resources(
+        "const RESOURCES = [" + chr(10)
+        + "  { value: 'DOCUMENT', label: '文档' }," + chr(10)
+        + "  { value: 'ROLE', label: '角色' }," + chr(10)
+        + "]")
+    cases.append(
+        ("资源类型两端一致 ⇒ 无问题", resource_problems(res_used, res_page) == [], resource_problems(res_used, res_page)))
+    miss_res = resource_problems(
+        res_used, page_resources("const RESOURCES = [" + chr(10) + "  { value: 'DOCUMENT', label: '文档' }," + chr(10) + "]"))
+    cases.append(("页面缺一个资源类型 ⇒ 报", any("缺 'ROLE'" in i for i in miss_res), miss_res))
+
     blind = problems([], [], [])
     cases.append(("一条都解析不到 ⇒ 报（不许空集假绿）", len(blind) == 3, blind))
 
@@ -127,6 +187,7 @@ def main() -> int:
     contract = contract_codes(CONTRACT.read_text(encoding="utf-8"))
     page = page_codes(PAGE.read_text(encoding="utf-8"))
     issues = problems(backend, contract, page)
+    issues += resource_problems(used_resources(ENUM.parents[3]), page_resources(PAGE.read_text(encoding="utf-8")))
 
     if issues:
         print("✗ 审计动作码三处对不上：")
@@ -134,7 +195,9 @@ def main() -> int:
             print(f"  - {issue}")
         print("\n三处 = 后端 AuditAction 枚举 / src/api/audit.ts 的 AuditActionCode / pages/audit 的 ACTIONS。")
         return 1
-    print(f"✓ 审计动作码三处一致：{len(backend)} 个")
+    print(
+        f"✓ 审计动作码三处一致：{len(backend)} 个；"
+        f"资源类型两端一致：{len(used_resources(ENUM.parents[3]))} 种")
     return 0
 
 
