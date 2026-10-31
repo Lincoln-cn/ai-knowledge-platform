@@ -5,9 +5,10 @@ import com.tngtech.archunit.core.domain.JavaField;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.domain.JavaModifier;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -331,16 +332,52 @@ final class CaliberShape {
     return Pattern.compile("--[^\\n]*").matcher(sql).replaceAll("");
   }
 
+  /**
+   * 读一个迁移文件的原文。
+   *
+   * <p>★ 读<strong>源码树</strong>，不读 classpath（{@code #267} 判据 3，2026-11-01 改）。
+   *
+   * <p>为什么：{@code mvn test} 会 {@code process-resources}，但<strong>删文件不会从 {@code target/classes}
+   * 里消失</strong>。本机实测踩到过 —— {@code
+   * target/classes/db/migration/knowledge/V59__knowledge_segment_soft_delete.sql} 存在（构建残留），而 {@code
+   * src/main/resources} 里没有、{@code git} 也从未跟踪过它。 读 classpath
+   * 的话，这份残影会让"某个名字在迁移目录里一次都没出现过"这类否定断言<strong>读到一份仓库里并不存在的 SQL</strong> —— 本机绿/红与 CI
+   * 不一致，而且没有任何读数能指出原因。
+   *
+   * <p>★ 找不到就<strong>抛</strong>，不退回 classpath：退回等于把这个盲区重新打开，还多了一层"有时读源码、有时读残影"的不可预测。 清单与磁盘的一致性由
+   * {@link MigrationInventoryTest} 守（它读同一份源码目录），所以"这里找不到"只可能是清单错了或跑法不对， 两种都该当场报出来。
+   */
   private static String read(String relative) {
-    String resource = MIGRATION_ROOT + "/" + relative;
-    try (InputStream in = CaliberShape.class.getClassLoader().getResourceAsStream(resource)) {
-      if (in == null) {
-        throw new IllegalStateException("迁移文件不在 classpath 上：" + resource + " —— 本断言读的是资源，不是工作目录");
-      }
-      return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-    } catch (IOException e) {
-      throw new UncheckedIOException("读迁移文件失败：" + resource, e);
+    Path file = migrationSourceRoot().resolve(relative);
+    if (!Files.isRegularFile(file)) {
+      throw new IllegalStateException(
+          "找不到迁移源码文件：" + file.toAbsolutePath() + " —— 本断言读的是源码树，不读 classpath（#267 判据 3）");
     }
+    try {
+      return Files.readString(file, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new UncheckedIOException("读迁移源码文件失败：" + file.toAbsolutePath(), e);
+    }
+  }
+
+  /**
+   * 迁移目录的<strong>源码</strong>位置 —— 本类与 {@link MigrationInventoryTest} <strong>共用这一处</strong>。
+   *
+   * <p>两个候选覆盖两种真实跑法：① surefire 的 {@code user.dir} = {@code backend/}（CI 与本仓的 {@code cd backend &&
+   * mvn test}）；② {@code user.dir} = 仓库根（{@code mvn -f backend/pom.xml test}、IDE
+   * 默认）。都不是就<strong>直接失败并打印工作目录</strong> —— 不能"找不到就当空集"（那会让全部形状断言恒绿）。
+   */
+  static Path migrationSourceRoot() {
+    Path direct = Path.of("src", "main", "resources", MIGRATION_ROOT);
+    if (Files.isDirectory(direct)) {
+      return direct;
+    }
+    Path nested = Path.of("backend", "src", "main", "resources", MIGRATION_ROOT);
+    if (Files.isDirectory(nested)) {
+      return nested;
+    }
+    throw new IllegalStateException(
+        "找不到迁移源码目录（当前工作目录 = " + Path.of("").toAbsolutePath() + "）—— 本断言拒绝把「读不到」当成「空集」");
   }
 
   /** 供断言消息拼接：把一个集合渲染成稳定的多行文本（diff 在消息里就能看）。 */

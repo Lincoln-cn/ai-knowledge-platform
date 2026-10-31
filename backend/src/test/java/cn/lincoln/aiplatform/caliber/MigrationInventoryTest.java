@@ -31,8 +31,9 @@ import org.junit.jupiter.api.Test;
  * 不确定性）；反过来也成立：一个被删掉的迁移只要清单没跟着删，读 classpath 的实现会继续读到残留副本而<strong>静默绿</strong>。
  * 所以清单的正确性必须对照<strong>源码</strong>。
  *
- * <p>{@code target/classes} 里的那份残留也说明 {@code CaliberShape#read} 本身有同一个盲区（它读 classpath）—— 这一条记在
- * `#267` 里， 不在本类里解决。
+ * <p>★ 2026-11-01 起 {@code CaliberShape#read} 也改成读同一份源码目录（`#267` 判据 3）：本类与它<strong>共用 {@link
+ * CaliberShape#migrationSourceRoot()}</strong>， 所以"清单读哪里"与"内容读哪里"是同一个答案 —— 一个读源码、一个读 classpath
+ * 时，本机会因为构建残留而红在 CI 不会红的地方。
  *
  * <p>★ 本类<strong>不需要库、不需要 Spring</strong>：纯读文件树。
  */
@@ -56,7 +57,7 @@ class MigrationInventoryTest {
             新增迁移时同步这里；删除迁移时也要同步（本断言两侧都咬）。
             源码树（%s）：%s
             """,
-            migrationSourceRoot().toAbsolutePath(), onDisk)
+            CaliberShape.migrationSourceRoot().toAbsolutePath(), onDisk)
         .containsExactlyInAnyOrderElementsOf(onDisk);
   }
 
@@ -66,7 +67,7 @@ class MigrationInventoryTest {
    * <p>★ 只认 {@code .sql}：Flyway 只跑这种后缀，目录里的 {@code README} 之类不该进清单。
    */
   private static List<String> migrationsOnDisk() throws Exception {
-    Path base = migrationSourceRoot();
+    Path base = CaliberShape.migrationSourceRoot();
     try (Stream<Path> walk = Files.walk(base)) {
       return walk.filter(Files::isRegularFile)
           .filter(path -> path.getFileName().toString().endsWith(".sql"))
@@ -74,25 +75,5 @@ class MigrationInventoryTest {
           .sorted()
           .toList();
     }
-  }
-
-  /**
-   * 迁移目录的<strong>源码</strong>位置。
-   *
-   * <p>两个候选覆盖两种真实跑法：① surefire 的 {@code user.dir} = {@code backend/}（CI 与本仓的 {@code cd backend &&
-   * mvn test}）；② {@code user.dir} = 仓库根（{@code mvn -f backend/pom.xml test}、IDE 默认）。
-   * 两个都不是就<strong>直接失败并打印工作目录</strong> —— 不能"找不到就当空集"（那会让本断言恒绿）。
-   */
-  private static Path migrationSourceRoot() {
-    Path direct = Path.of("src", "main", "resources", "db", "migration");
-    if (Files.isDirectory(direct)) {
-      return direct;
-    }
-    Path nested = Path.of("backend", "src", "main", "resources", "db", "migration");
-    if (Files.isDirectory(nested)) {
-      return nested;
-    }
-    throw new IllegalStateException(
-        "找不到迁移源码目录（当前工作目录 = " + Path.of("").toAbsolutePath() + "）—— 本断言拒绝把「读不到」当成「空集」");
   }
 }
