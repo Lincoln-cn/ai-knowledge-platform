@@ -8,6 +8,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -128,7 +129,14 @@ class DocumentPurgeTest {
     assertThat(searchHits(kb)).as("★ 删除之后检索必须查不到 —— 内容留着不等于仍然答得出来").isZero();
   }
 
-  /** ★ 恢复：把内容放回检索面（`#259`），并留一条 `document.restore` 审计。 */
+  /**
+   * ★ 恢复（`#259` 判据 ①②）：把内容放回检索面，且**检索结果与删除前一致**。
+   *
+   * <p>★ 判据 ② 要的是「用固定的两条查询做对照，不是『能搜到就行』」—— 所以这里比较的是**分段 id 的序列**，不是命中条数。条数相等而内容
+   * 换了，同样是"恢复"没做到（例如恢复时重建了分段：旧的向量没了、新的 id 变了，看起来却都是 1 条）。
+   *
+   * <p>两条查询各自打在**不同分段**上：一条命中原始分段、一条命中额外的第二段 —— 单条查询只能证明"某一处还在"，证明不了"检索面回到了原来的样子"。
+   */
   @Test
   void restoringBringsTheContentBackIntoSearch() throws Exception {
     String admin = accessToken("admin", "admin");
@@ -136,9 +144,19 @@ class DocumentPurgeTest {
     Map<String, Object> doc = createDocumentWithSegments(admin, kbId, "可恢复.docx");
     UUID kb = UUID.fromString(kbId);
     String id = String.valueOf(doc.get("documentId"));
+    addSegment(String.valueOf(doc.get("documentId")), kbId, "另一份对照语句");
+
+    List<UUID> firstBefore = searchHitIds(kb, "彻底删除测试正文");
+    List<UUID> secondBefore = searchHitIds(kb, "另一份对照语句");
+    assertThat(firstBefore).as("删除之前第一条查询就该命中 —— 否则后面那个 0 不算证据").hasSize(1);
+    assertThat(secondBefore).as("删除之前第二条查询也该命中，且是另一条分段").hasSize(1);
+    assertThat(secondBefore.get(0))
+        .as("两条查询必须落在不同分段上，否则「对照」变成了同一条")
+        .isNotEqualTo(firstBefore.get(0));
 
     assertThat(delete("/api/v1/documents/" + id, admin).statusCode()).isEqualTo(200);
-    assertThat(searchHits(kb)).isZero();
+    assertThat(searchHitIds(kb, "彻底删除测试正文")).as("删除之后第一条查询必须落空").isEmpty();
+    assertThat(searchHitIds(kb, "另一份对照语句")).as("删除之后第二条查询必须落空").isEmpty();
 
     HttpResponse<String> res = post("/api/v1/documents/" + id + "/restore", admin);
     assertThat(res.statusCode()).as("恢复失败：%s", res.body()).isEqualTo(200);
@@ -150,8 +168,13 @@ class DocumentPurgeTest {
         .isEqualTo(1);
     assertThat(count("select count(*) from kb_segment where document_id = ?::uuid", id))
         .as("★ 分段从头到尾都在（删除时没动它们）—— 恢复只是让文档那一行的 deleted_at 归零")
-        .isEqualTo(1);
-    assertThat(searchHits(kb)).as("★ 恢复之后必须重新搜得到").isEqualTo(1);
+        .isEqualTo(2);
+    assertThat(searchHitIds(kb, "彻底删除测试正文"))
+        .as("★ 判据 ②：恢复之后第一条查询的结果必须与删除前**逐项相同**（连顺序一起比）")
+        .isEqualTo(firstBefore);
+    assertThat(searchHitIds(kb, "另一份对照语句"))
+        .as("★ 判据 ②：第二条查询同样要和删除前逐项相同 —— 单条查询相等可能是巧合")
+        .isEqualTo(secondBefore);
     assertThat(
             count(
                 "select count(*) from pf_audit_log where resource_id = ? and action ="
@@ -302,6 +325,53 @@ class DocumentPurgeTest {
    * <p>★ 走真实的 {@link cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort}（不是直接查 SQL）： 谓词在
    * {@code JdbcSegmentSearchQuery.SECURITY_PREDICATE} 里，只有经过它才证明得了「软删不进检索面」。
    */
+  /** 再给同一份文档加一条分段（含向量行），用来做「两条查询」的对照。 */
+  private UUID addSegment(String documentId, String kbId, String text) {
+    UUID segmentId = UUID.randomUUID();
+    jdbc.update(
+        "insert into kb_segment (id, document_id, kb_id, scope_kind, scope_id, ordinal, content,"
+            + " search_text, content_hash, char_count, enabled, embedding_status, created_at,"
+            + " updated_at, classification) values (?::uuid, ?::uuid, ?::uuid, 'KB', ?::uuid, 1, ?,"
+            + " ?, ?, ?, true, 'EMBEDDED', now(), now(), (select classification from kb_document"
+            + " where id = ?::uuid))",
+        segmentId,
+        documentId,
+        kbId,
+        kbId,
+        text,
+        text,
+        UUID.randomUUID().toString().replace("-", "")
+            + UUID.randomUUID().toString().replace("-", "").substring(0, 32),
+        text.length(),
+        documentId);
+    jdbc.update(
+        "insert into vec_embedding_768 (id, content, metadata, embedding)"
+            + " values (?, ?, ?::json, cast(array_fill(0.1::real, array[768]) as vector))",
+        segmentId,
+        text,
+        "{\"document_id\":\"" + documentId + "\",\"kb_id\":\"" + kbId + "\"}");
+    return segmentId;
+  }
+
+  /** 命中分段的 id 序列（**保序**）—— 比"条数"严格：条数相同而内容换了照样能抓出来。 */
+  private List<UUID> searchHitIds(UUID kbId, String question) {
+    UUID me = adminUserId();
+    return cn.lincoln.aiplatform.support.SecurityContexts.asUser(
+        me,
+        cn.lincoln.aiplatform.platform.access.ClassificationLevel.CONFIDENTIAL,
+        () ->
+            segmentSearch
+                .fullText(
+                    new cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort.TextQuery(
+                        question,
+                        new cn.lincoln.aiplatform.platform.retrieval.RetrievalScope(
+                            java.util.List.of(kbId), null, null, me),
+                        20))
+                .stream()
+                .map(cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort.Scored::segmentId)
+                .toList());
+  }
+
   private long searchHits(UUID kbId) {
     UUID me = adminUserId();
     return cn.lincoln.aiplatform.support.SecurityContexts.asUser(
