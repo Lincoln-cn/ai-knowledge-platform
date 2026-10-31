@@ -83,6 +83,15 @@ app:
       enabled: ${AUDIT_RETENTION_ENABLED:false}
       retain-days: ${AUDIT_RETENTION_DAYS:365}
       cron: "${AUDIT_RETENTION_CRON:0 30 3 * * *}"
+  # ─── 会话附件存储（`#187` 的 `POST /files`，08 §4.9）───
+  #
+  # ★ root 是**文件字节**的落盘根目录；元数据落 `cv_file`（`V63`）。相对路径按进程工作目录解析，
+  #   容器里请挂持久卷并配绝对路径（相对目录会随重启消失，表现为"附件记录在、点开是空的"）。
+  # ★ max-size-bytes 与 servlet.multipart.max-file-size 是两道不同的门：后者由容器先拦（超了给 413），
+  #   这一道给可读的 400 与下一步动作。两者都调大才真的放开 —— 只调这里会被 413 挡在前面。
+  files:
+    root: ${FILE_STORE_ROOT:data/files}
+    max-size-bytes: ${FILE_UPLOAD_MAX_BYTES:20971520}
   # ─── 业务示例数据（`db/seed`，默认关闭）───
   #
   # ★ 只有打开时才把 `classpath:db/seed` 追加进 Flyway 的 locations（见

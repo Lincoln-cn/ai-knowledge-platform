@@ -59,10 +59,11 @@ PENDING = {
     # ★ 已落：POST /assistants/{*}/workflow/versions/{*}/rollback 随 #198 第六块后端交付
     #   （2026-10-31），故从本账里摘掉 —— 与后端台账（ContractDriftTest.KNOWN_MISSING）同一时刻、
     #   同一条。★ 语义提醒（写给读代码的人）：这个回滚**只写草稿、不发布**，线上不受影响。
-    "POST /files": {
-        "issue": "#187",
-        "guard": "conversation/components/Composer.vue onPickFiles 的 catch ⇒ 附件行内标 failed 并显示原因（不冒充上传成功）",
-    },
+    # ★ 已落：POST /files 随 #187 后端交付（2026-11-01，V63 + FileStorePort），故从本账里摘掉
+    #   —— 与后端台账（ContractDriftTest.KNOWN_MISSING）同一时刻、同一条。
+    #   ★ 语义提醒（写给读代码的人）：它只**存字节 + 元数据**，返回的 id 今天没有任何消费方
+    #   （ChatController 收下 attachmentIds 但不用）⇒ 上传成功 **不等于**附件能参与问答。
+    #   那条边界写在 FileController 的类注释里。
 }
 
 

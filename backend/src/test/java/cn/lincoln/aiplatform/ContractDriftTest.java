@@ -103,13 +103,16 @@ class ContractDriftTest {
           //     ★ 摘它只说明"端点与表都在"，**不说明它能产出数据** —— 这张表今天没有任何写入方
           //     （执行引擎在 V1.0，画布调试刻意不写它），所以它在真实系统里永远返回空列表；
           //     这条"空"的性质写在 `WorkflowRecordQueryService` 的类注释与 V62 迁移的文件头里
-          missing("POST", "/assistants/{*}/workflow/debug", "#198", "15–18 周"),
-          // ★ conversations（0）—— GET/PATCH/DELETE /conversations/{id} 已随 #187 落地，
-          //   会话分享三条也已在 2026-10-25 落地（V53 + 公开面 /public/shares/{token}）
-          // ★ feedbacks（6）—— 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）
-          // ★ feedbacks（6）—— #194 已落：列表/统计/详情/办理/批量/重开
-          // ★ files（1）—— 第 17 周随问答链路：附件上传（multipart）
-          missing("POST", "/files", "#187", "17 周"));
+          missing("POST", "/assistants/{*}/workflow/debug", "#198", "15–18 周"));
+
+  // ★ conversations（0）—— GET/PATCH/DELETE /conversations/{id} 已随 #187 落地，
+  //   会话分享三条也已在 2026-10-25 落地（V53 + 公开面 /public/shares/{token}）
+  // ★ feedbacks（6）—— 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）
+  // ★ feedbacks（6）—— #194 已落：列表/统计/详情/办理/批量/重开
+  // ★ files（0）—— POST /files 已随 #187 落地（2026-11-01：V63 + FileStorePort + LocalFileStore）。
+  //   ★ 与 records 那条同型提醒：端点与表都在，但**没有消费方** —— ChatController 收下
+  //     attachmentIds 但不用，"传一份文档再问关于它的问题"今天走不通（绑定 + 落 kb_document
+  //     让附件进检索是下一批）。这条边界写在 FileController 类注释、FileRef 类注释与 V63 文件头里。
 
   // ★ knowledge-bases（1）—— 建档/文档已落地；余下暂存上传一条，属 P1
   // ★ workflow（0）—— GET /workflow/node-types 已随节点目录落地（2026-10-31，`#198` 第二块）

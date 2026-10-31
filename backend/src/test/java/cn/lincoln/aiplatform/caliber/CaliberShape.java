@@ -124,7 +124,8 @@ final class CaliberShape {
           "conversation/V43__conversation_chat_settings_suggestion_count.sql",
           "conversation/V44__conversation_chat_settings_suggestion_enabled.sql",
           "conversation/V49__message_feedback_state.sql",
-          "conversation/V53__conversation_share.sql");
+          "conversation/V53__conversation_share.sql",
+          "conversation/V63__conversation_file.sql");
 
   private CaliberShape() {}
 
