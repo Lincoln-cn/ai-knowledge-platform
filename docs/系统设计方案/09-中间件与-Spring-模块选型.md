@@ -300,6 +300,32 @@ postgres(pgvector)  +  应用  +  模型网关(JAiRouter)
 **已定**：**不留"直连例外"** —— 向量化与对话一样，统一走网关（§3.13 已确认它有 `POST /v1/embeddings`）。
 若某个向量模型只能直连，那应该先在网关里加一个 adapter，而不是在平台里开第二条链路。
 
+#### 3.13.7 密码算法也走同一个范式（国密留缝 · `#74`）
+
+本节前面反复用的那条论证 —— **"我们对上游的全部依赖就是一个 `base-url`，换供应商只改一处"** ——
+对**密码算法**同样成立，而且代价更不对等：国密（SM2/SM3/SM4）与密评在客户是政务、国企、金融时是**前置门槛**。
+
+**已落地的形状**（`#74`，只留缝、不实现 SM 系列）：
+
+| 层 | 位置 | 说明 |
+|---|---|---|
+| 端口 | `platform/domain/CryptoPort.java` | `digestHex` / `seal` / `open` —— **入参出参没有算法名** |
+| 实现 | `platform/infrastructure/AesGcmCryptoPort.java` | AES-256-GCM + SHA-256，**算法在全库只出现这一处** |
+| 装配 | `platform/infrastructure/CryptoConfig.java` | ★ **上国密时只改这里的 `@Bean` 一行**，调用点不动 |
+| 消费点 | `AuthService`（刷新令牌摘要）· `ApiKeyCipher`（模型 key 落库加密） | 都不再 import `javax.crypto` / `MessageDigest` |
+| 判据 | `CryptoPortBoundaryTest` | 两处原语的使用者集合**必须恰好等于**白名单（多一个要红，登记过的消失了也要红） |
+
+**三条边界必须写清，否则"留缝"会被读成"已经支持国密"**：
+
+1. ★ **签名侧不在这个端口里**：JWT 的签发与验签走官方 `spring-security-oauth2-jose`（`identity/infrastructure/SecurityConfig.java`），
+   换国密是"jose 能不能挂 SM2 的 `JWSAlgorithm`"的问题。端口里刻意没有 `sign`/`verify` ——
+   开一个永远不会被消费的方法，等于留一条没人走的路（同 `#78` 判据 ③ 的教训）。
+2. ★ **内容指纹 ≠ 安全摘要**：`knowledge/domain/SearchText.java` 的 `contentHash` 仍直接使用 `MessageDigest`，
+   因为它是**内容指纹**：换算法会让**全部历史分段哈希失效**并触发整库重算（`SEG-I7`）。
+   它属于"数据一致性"，不能跟着"密码算法合规"一起换 —— 这也是它被显式登记在白名单里、而不是被规则笼统放过
+   （或笼统禁止）的原因。
+3. **现在不实现 SM 系列**：没有客户需求时写它，等于写一份无人使用的代码。
+
 ### 3.14 网关 / 静态托管
 
 **不引 Spring Cloud Gateway**：单体不需要网关。反向代理 + 前端静态产物交给 **Nginx / Caddy**
