@@ -42,15 +42,35 @@
 刻意"宁可少报"：解析不出形状的一律**跳过并计数**，不猜。读数里会打出跳过多少条 ——
 跳过太多的闸门等于没管，这条读数就是给它的护栏。
 
+## 第三维：跳过数的基线
+
+第二维的"宁可少报"有一个代价：**跳过多少都不会红**。新增的 mock 写法
+（`?.` 链、解构、`as const`、新的 helper 形参流转）悄悄落进跳过桶时，
+读数从"一致 98 · 跳过 42"变成"一致 98 · 跳过 43"，闸门照样 exit 0 ——
+**变钝和正常读数一样**。`tools/mock-shape-skip-baseline.txt` 就是钉住这个数的钉子：
+
+- 跳过 > 基线 ⇒ 退 1，并逐条点名**新增的那几处**（文件:行号 + 原因）；
+- 跳过 < 基线 ⇒ 退 0，提示「基线可以降到 N 了」（**不自动改文件**：
+  自动改基线等于让闸门自己给自己签字）；
+- 跳过 == 基线 ⇒ 一行 OK 读数；
+- 基线文件缺失 / 读不出数字 ⇒ 退 1（**缺基线等于判据消失，不许当成 0**）。
+
 用法：
-    python check_mock_endpoints.py               # 判据（两维），退 0/1
-    python check_mock_endpoints.py --self-check  # 离线自检 15 条
+    python check_mock_endpoints.py               # 判据（三维），退 0/1
+    python check_mock_endpoints.py --self-check  # 离线自检 33 条
+    python check_mock_endpoints.py --dump-skips  # 打印当前跳过清单（改基线时照抄，别手写）
+
+环境变量 `AIPLANTFORM_CHECK_ROOT` 可以把被测的 `frontend/` 目录换成别处
+（`--self-check` 就靠它在临时夹具上真跑这四条分支，不碰真实仓库）。
 """
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1401,16 +1421,18 @@ def _run_shape_check(
     return report
 
 
-def check_shapes() -> ShapeReport:
+def check_shapes(root: Path = ROOT) -> ShapeReport:
     mock_texts: dict[str, str] = {}
-    for path in sorted(MOCK.parent.glob("**/*.ts")):
-        mock_texts[path.relative_to(ROOT).as_posix()] = path.read_text(encoding="utf-8")
+    mock_root = root / "src" / "mock"
+    for path in sorted(mock_root.glob("**/*.ts")):
+        mock_texts[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
     route_texts = {
         label: text for label, text in mock_texts.items() if label.startswith("src/mock/handlers/")
     }
     api_texts: dict[str, str] = {}
-    for path in sorted(API.glob("**/*.ts")):
-        api_texts[path.relative_to(ROOT).as_posix()] = path.read_text(encoding="utf-8")
+    api_dir = root / "src" / "api"
+    for path in sorted(api_dir.glob("**/*.ts")):
+        api_texts[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
     return _run_shape_check(mock_texts, route_texts, api_texts)
 
 
@@ -1441,13 +1463,173 @@ def report_shapes(report: ShapeReport) -> bool:
     return not report.inconsistent
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# 第三维：跳过数的基线（闸门不许自己变钝）
+# ══════════════════════════════════════════════════════════════════════════
+#
+# 第二维"宁可少报"，所以解析不出的都进跳过桶。桶里多了东西，闸门读数只从
+# "跳过 42" 变成 "跳过 43"，仍然 exit 0 —— **闸门变钝与正常读数一模一样**。
+# 基线文件（`tools/mock-shape-skip-baseline.txt`）把这根钉子钉住：
+# 数只能减；增一处就必须说清"为什么解析不了"。
+
+BASELINE_NAME = "mock-shape-skip-baseline.txt"
+ENV_ROOT = "AIPLANTFORM_CHECK_ROOT"
+
+
+def base_dir() -> Path:
+    """被测仓库的 `frontend/` 目录；`AIPLANTFORM_CHECK_ROOT` 可把它换成夹具根。"""
+    override = os.environ.get(ENV_ROOT, "").strip()
+    return Path(override).resolve() if override else ROOT
+
+
+def known_mock_only(root: Path = ROOT) -> dict[str, str]:
+    """刻意的例外只对本仓库的 mock 与契约成立；夹具根下不继承。
+
+    否则临时夹具里必然出现"登记了理由、但 mock 里没有这条路由"的陈旧红 ——
+    那条红的真正含义是"本仓库的路由变了"，与被测的跳过数无关。
+    """
+    return KNOWN_MOCK_ONLY if root.resolve() == ROOT else {}
+
+
+@dataclass(frozen=True)
+class SkipRow:
+    """一条跳过：身份是（文件, 方法, 路径），行号只用于点名、不参与比对。"""
+
+    file: str
+    line: int
+    method: str
+    path: str
+    why: str
+
+    @property
+    def identity(self) -> tuple[str, str, str]:
+        return (self.file, self.method, self.path)
+
+
+@dataclass(frozen=True)
+class SkipBaseline:
+    count: int
+    identities: frozenset[tuple[str, str, str]]
+
+
+def skip_rows(report: ShapeReport) -> list[SkipRow]:
+    rows: list[SkipRow] = []
+    for ident, why in report.skipped:
+        loc, method, path = ident.split(" ", 2)
+        file, line = loc.rsplit(":", 1)
+        rows.append(SkipRow(file, int(line), method, path, why))
+    return rows
+
+
+def parse_baseline(text: str) -> SkipBaseline | None:
+    """读 `跳过 N` 那一行；顺带收「文件 | 方法 | 路径 | 原因」清单。
+
+    清单用来指认"新增的那几处"：只靠一个数字说不出是哪一处变钝了。
+    清单里没有 `跳过 N` ⇒ 返回 None（**读不出数字就是判据消失，不许当成 0**）。
+    """
+    count: int | None = None
+    identities: set[tuple[str, str, str]] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("跳过"):
+            found = re.search(r"-?\d+", line)
+            if found:
+                count = int(found.group())
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) >= 3 and all(parts[:3]):
+            identities.add((parts[0], parts[1], parts[2]))
+    if count is None:
+        return None
+    return SkipBaseline(count, frozenset(identities))
+
+
+def load_baseline(path: Path) -> tuple[SkipBaseline | None, str]:
+    if not path.is_file():
+        return None, f"基线文件不存在：{path}"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:  # 权限 / 编码 / 占用：都算"读不出"，不是"0"
+        return None, f"基线文件读不出：{path}（{exc}）"
+    baseline = parse_baseline(text)
+    if baseline is None:
+        return None, f"基线文件里没有 `跳过 N` 那一行：{path}"
+    return baseline, ""
+
+
+def judge_skips(report: ShapeReport, baseline: SkipBaseline | None, path: Path, why: str = "") -> bool:
+    """跳过数这一维过没过；返回 False 就必须让脚本退非 0。"""
+    total = len(report.skipped)
+    if baseline is None:
+        print(f"✗ 跳过数的基线读不出：{why}")
+        print("  缺基线等于判据消失，不许当成 0 —— 去 tools/ 下把基线文件补回来。")
+        return False
+
+    rows = skip_rows(report)
+    current = {row.identity for row in rows}
+
+    if total > baseline.count:
+        print(f"✗ 跳过数比基线多了 {total - baseline.count} 处（基线 {baseline.count} · 现在 {total}）：")
+        new = [row for row in rows if row.identity not in baseline.identities]
+        if baseline.identities:
+            print(f"  新增的那几处（基线清单里对不上的 {len(new)} 处）：")
+            for row in new:
+                print(f"    - {row.file}:{row.line}  {row.method} {row.path} —— {row.why}")
+            if not new:
+                print("    （没有一处能对上清单里的新身份 —— 清单与数字不同步的话，先查基线文件本身）")
+        else:
+            print("  基线里只有数字、没有清单 —— 指认不出哪几处是新增，下面是当前全部跳过：")
+            for row in rows:
+                print(f"    - {row.file}:{row.line}  {row.method} {row.path} —— {row.why}")
+        print(
+            f"  ⇒ 要么修解析器（让它判得出这一处），要么说清「为什么这处解析不了」再把基线调到 {total} ——"
+            " 只调数字不说理由，等于让闸门少看一处还不留账。"
+        )
+        return False
+
+    if total < baseline.count:
+        print(
+            f"✓ 跳过数低于基线（基线 {baseline.count} · 现在 {total}）—— 基线可以降到 {total} 了"
+            "（脚本不自动改：自动改基线等于让闸门自己给自己签字）"
+        )
+        stale = [identity for identity in baseline.identities if identity not in current]
+        if stale:
+            print(f"  提示：清单里 {len(stale)} 条已经不再跳过，改基线时一起删掉（清单必须随修复收缩）")
+        return True
+
+    print(f"✓ 跳过数与基线一致（{total} 处）—— 闸门管的范围没有缩小")
+    # 数字相等不等于同一批：修好一处 + 新增一处也会让两个数相等。
+    swapped = baseline.identities ^ current
+    if swapped:
+        print(f"  提示：数量没变，但清单里有 {len(swapped)} 处身份对不上 —— 顺手看一眼是不是换了批")
+    return True
+
+
+def dump_skips(report: ShapeReport) -> str:
+    """把当前跳过清单打成基线文件的数据块（改基线时从这里抄，别手写）。"""
+    rows = skip_rows(report)
+    out = [f"跳过 {len(rows)}", "#"]
+    for row in rows:
+        out.append(f"{row.file} | {row.method} | {row.path} | {row.why}")
+    return "\n".join(out)
+
+
 # ── 自检 ────────────────────────────────────────────────────────────────
+
+# 自检条数 = 归一 4 + 判据 5 + 形状 6 + 跳过基线 18
+SELF_CHECK_TOTAL = 33
 
 
 def self_check() -> int:
     failures: list[str] = []
+    ran: list[str] = []
 
     def expect(name: str, ok: bool) -> None:
+        # 记下"跑过"：只在末尾报总数 33 条时列不清哪条没执行，所以数一遍真的调用了多少次。
+        # 目的一是防止某条分支只写在注释里，二是防止夹具异常让整段 `with` 提前退出。
+        ran.append(name)
         if not ok:
             failures.append(name)
 
@@ -1504,12 +1686,120 @@ def self_check() -> int:
     report = shape_case("() => mystery()", "{ a: string }")
     expect("形状：解析不出要进跳过计数、不许瞎报", len(report.skipped) == 1 and report.consistent == 0 and report.inconsistent == [])
 
+    # ── 第三维：跳过数的基线（四条分支都在临时夹具上真跑 `main`，不碰真实仓库）──
+    # 夹具 = 一个假的 `frontend/` + `tools/` 根：`AIPLANTFORM_CHECK_ROOT` 指过去，
+    # 于是 main() 里的三维判据原样跑一遍，而读的是下面这几个临时文件。
+    fixture_api = "\n".join(
+        [
+            "export const getThing = () => request<{ a: string }>({ method: 'GET', url: '/thing' })",
+            "export const getSkip = () => request<{ a: string }>({ method: 'GET', url: '/skipme' })",
+            "export const getSkip2 = () => request<{ a: string }>({ method: 'GET', url: '/skipme2' })",
+        ]
+    )
+    manifest_line = "src/mock/handlers/m.ts | GET | /skipme | 返回表达式解析不出：mystery(1)"
+    manifest_line2 = "src/mock/handlers/m.ts | GET | /skipme2 | 返回表达式解析不出：mystery(2)"
+
+    def fixture_tree(tmp: Path, extra_skip: bool = False, baseline_text: str | None = None) -> Path:
+        root = tmp / "frontend"
+        (root / "src" / "mock" / "handlers").mkdir(parents=True, exist_ok=True)
+        (root / "src" / "api").mkdir(parents=True, exist_ok=True)
+        mock = ["const mystery = (x) => x", "export const routes = ["]
+        mock.append("  ['GET', '/thing', () => ({ a: 'x' })],")
+        mock.append("  ['GET', '/skipme', () => mystery(1)],")
+        if extra_skip:
+            mock.append("  ['GET', '/skipme2', () => mystery(2)],")
+        mock.append("]")
+        (root / "src" / "mock" / "handlers" / "m.ts").write_text("\n".join(mock), encoding="utf-8")
+        (root / "src" / "api" / "c.ts").write_text(fixture_api, encoding="utf-8")
+        if baseline_text is not None:
+            base = tmp / "tools" / BASELINE_NAME
+            base.parent.mkdir(parents=True, exist_ok=True)
+            base.write_text(baseline_text, encoding="utf-8")
+        return root
+
+    def run_fixture(root: Path, extra_args: list[str] | None = None) -> tuple[int, str]:
+        env = dict(os.environ)
+        env[ENV_ROOT] = str(root)
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        proc = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), *(extra_args or [])],
+            capture_output=True,
+            env=env,
+            cwd=str(root),
+            timeout=120,
+        )
+        return proc.returncode, (proc.stdout + proc.stderr).decode("utf-8", "replace")
+
+    with tempfile.TemporaryDirectory(prefix="mock-skip-baseline-") as raw_tmp:
+        tmp = Path(raw_tmp)
+
+        # ① 跳过 == 基线
+        root = fixture_tree(tmp / "eq", baseline_text=f"跳过 1\n#\n{manifest_line}\n")
+        code, out = run_fixture(root)
+        expect("基线：跳过 == 基线要退 0", code == 0)
+        expect("基线：跳过 == 基线要打 OK 读数", "跳过数与基线一致（1 处）" in out)
+
+        # ①' 同一份夹具：`--dump-skips` 打出的就是基线数据块（改基线只能照抄它）
+        code, out = run_fixture(root, ["--dump-skips"])
+        expect("基线：--dump-skips 要打出现读数", code == 0 and "跳过 1" in out and "/skipme |" in out)
+
+        # ② 跳过 > 基线：多一条解析不出的路由，闸门必须红并点名那一处
+        root = fixture_tree(tmp / "over", extra_skip=True, baseline_text=f"跳过 1\n#\n{manifest_line}\n")
+        code, out = run_fixture(root)
+        expect("基线：跳过 > 基线要退非 0", code != 0)
+        expect("基线：要报出多了几处", "跳过数比基线多了 1 处（基线 1 · 现在 2）" in out)
+        new_section = out.split("新增的那几处", 1)[1] if "新增的那几处" in out else ""
+        expect(
+            "基线：要逐条点名新增（文件:行号 + 原因）",
+            "src/mock/handlers/m.ts:" in new_section and "/skipme2" in new_section and "mystery(2)" in new_section,
+        )
+        expect("基线：不许把旧的那处算成新增", "mystery(1)" not in new_section)
+        expect("基线：要给出两条出路（修解析器 / 说清理由再调基线）", "要么修解析器" in out and "把基线调到 2" in out)
+
+        # ③ 跳过 < 基线：退 0，但必须提示"基线可以降到 N 了"，且不许自己改文件
+        root = fixture_tree(
+            tmp / "under", baseline_text=f"跳过 2\n#\n{manifest_line}\n{manifest_line2}\n"
+        )
+        code, out = run_fixture(root)
+        expect("基线：跳过 < 基线要退 0", code == 0)
+        expect("基线：要提示基线可以降了", "基线可以降到 1 了" in out)
+        expect("基线：提示之后不许自动改文件", "自动改基线等于让闸门自己给自己签字" in out)
+        expect(
+            "基线：清单里不再跳过的条目要提示删掉",
+            (tmp / "under" / "tools" / BASELINE_NAME).read_text(encoding="utf-8").startswith("跳过 2"),
+        )
+
+        # ④ 基线文件缺失：退非 0（缺基线 = 判据消失，不许当成 0）
+        root = fixture_tree(tmp / "missing", baseline_text=None)
+        code, out = run_fixture(root)
+        expect("基线：文件缺失要退非 0", code != 0)
+        expect("基线：缺失要说明原因", "基线文件不存在" in out and "不许当成 0" in out)
+
+        # ⑤ 基线文件在、但读不出数字：同样退非 0
+        root = fixture_tree(tmp / "broken", baseline_text="# 只有注释，没有数字\n跳过待定\n")
+        code, out = run_fixture(root)
+        expect("基线：读不出数字要退非 0", code != 0)
+        expect("基线：读不出要说明原因", "没有 `跳过 N` 那一行" in out)
+
+        # ⑥ 数字相等但换了批（修好一处 + 新增一处）：退 0，但要提示"数量没变不等于同一批"
+        root = fixture_tree(tmp / "swap", baseline_text=f"跳过 1\n#\n{manifest_line2}\n")
+        code, out = run_fixture(root)
+        expect("基线：等量换批仍退 0", code == 0)
+        expect("基线：等量换批要提示清单对不上", "数量没变" in out)
+
+    # 条数对不上 = 有分支没被执行到（夹具抛异常、提前 return 等），不能当作"通过"。
+    if len(ran) != SELF_CHECK_TOTAL:
+        failures.append(
+            f"自检条数对不上：真的跑了 {len(ran)} 条、声明 {SELF_CHECK_TOTAL} 条 —— 有分支没被执行到"
+        )
+
     if failures:
         print("✗ 自检失败：")
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("✓ 自检通过（归一 4 条 · 判据 5 条 · 形状 6 条）")
+    print(f"✓ 自检通过（{len(ran)} 条：归一 4 · 判据 5 · 形状 6 · 跳过基线 18）")
     return 0
 
 
@@ -1517,16 +1807,22 @@ def main(argv: list[str]) -> int:
     if "--self-check" in argv:
         return self_check()
 
-    routes = mock_routes()
-    declared = contract_paths()
+    root = base_dir()
+    mock_dir = root / "src" / "mock" / "handlers"
+    api_dir = root / "src" / "api"
+    baseline_file = root.parent / "tools" / BASELINE_NAME
+    allow = known_mock_only(root)
+
+    routes = mock_routes(mock_dir)
+    declared = contract_paths(api_dir)
     if not routes:
-        print(f"✗ 在 {MOCK} 下一条路由都没解析到 —— 正则或目录结构变了，别让它安静通过")
+        print(f"✗ 在 {mock_dir} 下一条路由都没解析到 —— 正则或目录结构变了，别让它安静通过")
         return 1
 
     failed = False
-    found = problems(routes, declared)
-    found.extend(stale_allow(routes))
-    print(f"mock 路由 {len(routes)} 条 · 契约声明路径 {len(declared)} 个 · 刻意的例外 {len(KNOWN_MOCK_ONLY)} 条")
+    found = problems(routes, declared, allow=allow)
+    found.extend(stale_allow(routes, allow=allow))
+    print(f"mock 路由 {len(routes)} 条 · 契约声明路径 {len(declared)} 个 · 刻意的例外 {len(allow)} 条")
     if found:
         print(f"\n✗ {len(found)} 条 mock 路由在契约里没有对应声明：")
         for f in found:
@@ -1535,9 +1831,18 @@ def main(argv: list[str]) -> int:
     else:
         print("✓ 每条 mock 路由都能在契约里找到声明")
 
-    # 第二维与第一维各跑各的：一维红不影响另一维出读数（否则修完路径才看得到形状）。
+    report = check_shapes(root)
+    if "--dump-skips" in argv:
+        print(dump_skips(report))
+        return 0
+
+    # 三个维度各跑各的：一维红不影响另外两维出读数（否则修完路径才看得到形状）。
     print()
-    if not report_shapes(check_shapes()):
+    if not report_shapes(report):
+        failed = True
+
+    baseline, why = load_baseline(baseline_file)
+    if not judge_skips(report, baseline, baseline_file, why):
         failed = True
     return 1 if failed else 0
 
