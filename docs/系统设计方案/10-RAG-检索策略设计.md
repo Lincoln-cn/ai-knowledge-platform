@@ -490,10 +490,15 @@ flowchart TD
 | **D0** | 改写+扩展 + 分解 + 多跳（全开） | 一切正常 | `RetrievalService.java:209` `int degradeLevel = understood.degradeLevel();`（初值 0） |
 | **D1** | 去掉多跳 | 时间预算用掉 60% / 多跳判定失败 | `RetrievalService.java:271-272`（`budgetExhausted && degradeLevel < 1`）· `:293-294`（`hop.degradeReason() != null && degradeLevel < 1`） |
 | **D2** | 去掉分解（子问题合并为一个） | 查询理解超时 / 子问题校验全败 | ★ **无产生点 —— 预留档位，尚未接线**（见下） |
-| **D3** | 只做改写（单查询） | 扩展产出不可用 | `QueryUnderstandingService.java:155-158`（`parsed.understanding().totalQueries() == 1 && queryCount > 1`） |
+| **D3** | 只做改写（单查询） | 扩展产出不可用（★ **只在允许分解时算降级**） | `QueryUnderstandingService.java`（`totalQueries() == 1 && queryCount > 1 && decomposeEnabled`）；配置态（关掉分解，合并后只剩一条查询）**保持 D0**，与多跳的「关掉是配置」同口径 |
 | **D4** | ★ **原始问题单路检索** | 改写/扩展完全不可用 —— **这是永不低于的底线** | `QueryUnderstandingService.java:210-219` 的 `fallback(...)`（没有可用模型 / 调用失败 / 解析连续两次失败）· `RetrievalService.java:269`（所有查询路都失败 ⇒ 真栈重试一次）· `RetrievalService.java:346` |
 
 **每一步降级都必须可观测**（记 `degradeLevel` + 原因到日志与 `analytics`）。
+
+★ **配置态与降级态必须分开**（`#64` 的落点）：关掉多跳、关掉分解、`queryCount=1` 都是**按配置少做几件事**，
+不是"某条路坏了"。它们可以出现在 `degradeReason` 里（写清"按配置没开"），但 `degradeLevel` 必须留在 0 ——
+否则 `degradeRate` 的分母里混进配置态，「质量下降」会被读成「配置如此」。两条断言：`MultiHopTest.disabledMultiHopIsRecordedAsConfiguration` ·
+`QueryUnderstandingServiceTest.disablingDecompositionIsConfigurationNotDegradation`。
 否则表现是"这周的答案质量莫名下降"，而**没有任何地方记录当时降级了**。
 
 #### 6.3.1 ★ D2 是**预留档位**，不是"已经实现了但没触发"

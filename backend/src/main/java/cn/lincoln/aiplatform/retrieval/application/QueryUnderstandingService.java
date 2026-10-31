@@ -155,7 +155,10 @@ public class QueryUnderstandingService {
     int level = 0;
     String reason = parsed.events().isEmpty() ? null : String.join("；", parsed.events());
     // 解析成功但只产出一条查询 ⇒ 改写做成了、扩展没做成（10 §6.3 的 D3）
-    if (parsed.understanding().totalQueries() == 1 && queryCount > 1) {
+    // ★ 只在**允许分解**时才算降级：关掉分解是配置（`10 §6.3` 的 D2 形状），合并之后只剩一条查询
+    //   是配置的结果，不是"模型没做到"。两者都记成 D3 ⇒ degradeRate 的分母里混进配置态，
+    //   与多跳那条口径相反（`MultiHopTest.disabledMultiHopIsRecordedAsConfiguration`，`#64` 判据 2）。
+    if (parsed.understanding().totalQueries() == 1 && queryCount > 1 && decomposeEnabled) {
       level = 3;
       reason = "模型只产出 1 条查询（扩展未生效）" + (reason == null ? "" : "；" + reason);
     }
