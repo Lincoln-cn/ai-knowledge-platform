@@ -55,10 +55,9 @@ PENDING = {
         "issue": "#198",
         "guard": "",
     },
-    "POST /assistants/{*}/workflow/versions/{*}/rollback": {
-        "issue": "#198",
-        "guard": "",
-    },
+    # ★ 已落：POST /assistants/{*}/workflow/versions/{*}/rollback 随 #198 第六块后端交付
+    #   （2026-10-31），故从本账里摘掉 —— 与后端台账（ContractDriftTest.KNOWN_MISSING）同一时刻、
+    #   同一条。★ 语义提醒（写给读代码的人）：这个回滚**只写草稿、不发布**，线上不受影响。
     "POST /files": {
         "issue": "#187",
         "guard": "conversation/components/Composer.vue onPickFiles 的 catch ⇒ 附件行内标 failed 并显示原因（不冒充上传成功）",

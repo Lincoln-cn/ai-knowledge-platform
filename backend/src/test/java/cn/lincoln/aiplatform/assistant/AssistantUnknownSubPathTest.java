@@ -25,11 +25,11 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  *
  * <p>契约有 {@code POST /assistants/import}（与 {@code /import/check}），后端**后来补上了**（{@code #195} 的导入子项），
  * 所以它不再是"契约有、后端没有"的代表；现在的代表是 {@code #198} 的 {@code /assistants/{id}/workflow} 一族 ——
- * 那一族<strong>已经落到只剩 3 条</strong>留在 {@code ContractDriftTest.KNOWN_MISSING} 里： {@code POST
- * /workflow/debug}、{@code GET /workflow/records}、{@code POST /workflow/versions/{*}/rollback}。
+ * 那一族<strong>已经落到只剩 2 条</strong>留在 {@code ContractDriftTest.KNOWN_MISSING} 里： {@code POST
+ * /workflow/debug}、{@code GET /workflow/records}。
  *
- * <p>★ 是"已经落到只剩 3 条"，<strong>不是"本来就只有 3 条"</strong>：这一族原先登记的是 9 条，节点目录、
- * 草稿、校验、发布、版本列表/详情这些陆续落地后才收缩到这个数（每一次摘除都在 {@code ContractDriftTest} 的欠账清单里留了日期与批次）。 把它写成"3
+ * <p>★ 是"已经落到只剩 2 条"，<strong>不是"本来就只有 2 条"</strong>：这一族原先登记的是 9 条，节点目录、
+ * 草稿、校验、发布、版本列表/详情、版本回滚这些陆续落地后才收缩到这个数（每一次摘除都在 {@code ContractDriftTest} 的欠账清单里留了日期与批次）。 把它写成"2
  * 条"而不写这个来源，会让后来的人看不出这一族还在收缩。
  *
  * <p>★ <strong>400 在说假话</strong>：它的含义是"你的请求有问题"，而事实是"这个端点还没实现"。 排查的人会去查自己的参数，而不是查"这功能做了没有"。

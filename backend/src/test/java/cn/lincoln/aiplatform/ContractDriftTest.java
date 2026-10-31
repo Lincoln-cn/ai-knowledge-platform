@@ -87,7 +87,7 @@ class ContractDriftTest {
    */
   private static final List<MissingEndpoint> KNOWN_MISSING =
       List.of(
-          // ★ assistants（5）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置只剩编排 3 条（#198，从 9 条收缩而来）
+          // ★ assistants（5）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置只剩编排 2 条（#198，从 9 条收缩而来）
           //   ★ 收藏两条（POST/DELETE /assistants/{*}/favorite）已随 #195 的收藏子项落地，故从欠账里摘掉
           //   ★ GET /assistants/tags 已随 #195 的标签子项落地（2026-10-24），同样摘掉
           //   ★ PUT /assistants/{*}/grants 与 PATCH /assistants/{*}/visibility 已随 #195 的共享写子项落地
@@ -97,9 +97,12 @@ class ContractDriftTest {
           //   ★ GET /assistants/{*}/workflow/versions 与 …/versions/{*} 已随 #198
           // 第五块落地（2026-10-31），从欠账里摘掉
           //     （列表只读、按 version 降序；详情返回发布时的图快照；两条都用 assistant:view）
+          //   ★ POST /assistants/{*}/workflow/versions/{*}/rollback 已随 #198 第六块（本轮）落地（2026-10-31），
+          //     从欠账里摘掉 —— 至此"编排草稿 → 发布 → 版本 → 回滚"这条链在契约上**闭合**；
+          //     剩下的 debug / records 两条不动（★ 它们是画布调试与调用记录，属别的能力簇，
+          //     摘它们要等它们真的实现，不能顺手一起摘）
           missing("POST", "/assistants/{*}/workflow/debug", "#198", "15–18 周"),
           missing("GET", "/assistants/{*}/workflow/records", "#198", "15–18 周"),
-          missing("POST", "/assistants/{*}/workflow/versions/{*}/rollback", "#198", "15–18 周"),
           // ★ conversations（0）—— GET/PATCH/DELETE /conversations/{id} 已随 #187 落地，
           //   会话分享三条也已在 2026-10-25 落地（V53 + 公开面 /public/shares/{token}）
           // ★ feedbacks（6）—— 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）

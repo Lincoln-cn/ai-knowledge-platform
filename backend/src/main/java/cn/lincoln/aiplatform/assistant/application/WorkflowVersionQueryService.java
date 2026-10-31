@@ -86,8 +86,12 @@ public class WorkflowVersionQueryService {
    *
    * <p>★ 两条路都<strong>必须</strong>按应用收窄：主键那条读的是全局行，靠 {@code assistantId} 比一次； 版本号那条在查询里就带上了 {@code
    * assistant_id}。少了任何一边，"别的应用的版本"就能被读到 —— 那是跨应用读取，不是"多返一个字段"。
+   *
+   * <p>★ 包内可见（不加 {@code private}）是为了让 {@code WorkflowRollbackService}
+   * 复用<strong>同一处</strong>解析与<strong>同一句</strong> 404：回滚要回答的问题与"看某一版的图"完全一样（这一版在不在、是不是这个应用的），
+   * 两处各写一份，只要有一次只改了其中一处，"读到别人的版本"或"回滚到别人的版本"就会漏一个 —— 而这两条路上任何一条漏掉，区别只是先从哪个端点泄露。
    */
-  private WorkflowVersion require(UUID assistantId, String versionKey) {
+  WorkflowVersion require(UUID assistantId, String versionKey) {
     if (versionKey != null && !versionKey.isBlank()) {
       Optional<UUID> asId = asUuid(versionKey);
       if (asId.isPresent()) {
