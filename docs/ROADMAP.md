@@ -2238,3 +2238,48 @@ B6（150 段）与 B7（200 次）会明显拉长真栈 job；**三条重闸门�
 2. Spring Security 7 的 `JwtAuthenticationToken` **单参构造不调 `setAuthenticated(true)`**（反编译 `AbstractOAuth2TokenAuthenticationToken`，`setAuthenticated` 出现 0 次）⇒ 只 `new` 不标记，`currentScope()` 仍是 `nobody()`，测试"看起来装了身份"其实什么都没装。
 
 **38.3 仍未做**：`#198` 剩 `POST /workflow/debug` · `#267` 判据 3（`CaliberShape#read` 仍读 classpath）· `#260`（校验失败 400 不带结构化 `issues`）· `#83` 合规四件套（需用户裁决）· 各类浏览器读数与 200 次长跑（`#223` 判据 4，需用户侧环境）。
+
+#### 11.10.39 2026-11-01 失败包络能带明细了 —— 顺带把 `#267` 判据 3 做完
+
+> 与 37/38 同一条分支。本节的两条主线都不是"新功能"：一条是**失败的形状**（错要能指出错在哪），
+> 一条是**读数的来源**（断言读的是仓库，还是本机的构建残留）。
+
+**39.1 关账表**
+
+| 账 | 判据落在哪 | 读数 |
+|---|---|---|
+| `#260` 发布失败 400 带结构化 `issues` | `6b88da6`：`BusinessException.details`（`Object`）+ `ApiResponse.fromWithDetails` + `GlobalExceptionHandler` 按 `details == null` 二选一 + `WorkflowPublishService` 四参抛出 | `WorkflowPublishHttpTest` 断言 `data` 是 issue 数组、`[0].code=EMPTY_GRAPH` |
+| `#260` 判据 ② 面板消费清单、降级改显式提示 | `9006386`：`frontend/src/lib/publishIssues.ts` 逐字段收窄；`Index.vue` 走不到清单时首行固定写「服务端返回了无法解析的校验明细」 | `npm test` 56 pass（新增 6 条） |
+| `#260` 判据 ③ 能取到 `nodeId` | `9006386` 新增 `issuesPointAtTheNodeTheyAreAbout`（坏图 `GHOST_NODE`/`x1` ⇒ `UNKNOWN_TYPE.nodeId == "x1"`） | `WorkflowPublishHttpTest` 5/5 |
+| `#267` 判据 3 `CaliberShape#read` 读 classpath | `47982a6`：改读 `src/main/resources/db/migration`，与 `MigrationInventoryTest` **共用** `CaliberShape.migrationSourceRoot()`；找不到**抛**、不退回 classpath | 口径组 24/24 |
+
+**39.2 为什么 `details` 是 `Object`，而不是 `List<Issue>`**
+
+`platform` 层不认识 assistant 域的类型 —— 写成那个类型，模块边界闸门当场红，而且"平台层知道某个业务域的形状"
+本来就不该发生。明细怎么序列化是抛出方的事。
+
+同理**没有**让 `ApiResponse.from` 按实参泛型化：`ApiResponseTest` 用 `ApiResponse<Void> res = ApiResponse.from(e)`
+钉着"失败 `data` 为 null"。泛型化会把这条从**类型约定**退化成**调用方的自觉** —— 谁都可能宣告
+`ApiResponse<DocumentView>` 却塞进别的东西，编译器不再提醒。所以是两条路：无明细走 `from`，有明细走 `fromWithDetails`。
+
+**39.3 两条"能红"的读数（本节的验收方式）**
+
+1. 明细被丢掉 ⇒ 新用例红在 `WorkflowPublishHttpTest.java:129`，红字里能同时看到 `data:null` 与
+   `hint` 里那句「[UNKNOWN_TYPE] 画布上有未知类型：GHOST_NODE（**节点 x1**）」——
+   **文本里写着**、**字段里没有**，正是本条要修的东西。
+2. 迁移源码被移走（`target/classes` 里的副本仍在）⇒ `DocumentVersionAbsenceTest` 报
+   `找不到迁移源码文件：…V55__knowledge_document_revision_seam.sql —— 本断言读的是源码树，不读 classpath`。
+   ★ **改之前这条会绿**：旧实现读 classpath，构建残留让它"看得见一个仓库里已经不存在的迁移"。
+
+**39.4 三条判据（写给下一个人）**
+
+1. **"文本里有"不等于"字段里有"**：把清单拍平成一句自然语言之后，人还能读，程序不能 ——
+   而"程序不能用"这件事在界面上长得和"正常失败"一模一样（降级永远成功）。
+2. **降级路径必须自己会说话**：一条"解析失败就显示原文"的兜底，若原文永远存在，它就把
+   "形状漂移"永久伪装成"正常失败"。要么删掉，要么在降级里显式声明降级发生了。
+3. **断言读的必须是仓库里的东西**：`mvn test` 会 `process-resources`，但**删文件不会从 `target/classes` 消失**
+   ⇒ 任何读 classpath 的形状读数都可能在读构建残留。清单与内容必须同源（同一个 `migrationSourceRoot()`）。
+
+**39.5 仍未做**：`#198` 剩 `POST /workflow/debug`（前置是 `#113` 准入六条 + 执行引擎真跑图）·
+`#83` 合规四件套（需用户裁决）· 浏览器读数与 200 次长跑（`#223` 判据 4，需用户侧起服务）·
+`P1` 语料与真模型 API（用户两格）。
