@@ -120,7 +120,11 @@ def scan_backend(root: Path = BACKEND_DIR) -> list[Endpoint]:
 
 def scan_frontend_api(api_dir: Path = FRONTEND_API) -> list[ContractCall]:
     calls: list[ContractCall] = []
-    for path in sorted(api_dir.glob("*.ts")):
+    # ★ 也要扫 `api/legacy/*`：页面有两条调用路径 —— 直接调契约函数，或经 legacy 包装层
+    #   （`legacy/setting.ts` 的 `addSubmit` 就是 `PUT /workflow/draft`）。只扫顶层时，
+    #   走包装层的端点会被判成"零消费"，于是这条门禁会把"其实接上了"报成"没人用"。
+    candidates = list(api_dir.glob("*.ts")) + list((api_dir / "legacy").glob("*.ts"))
+    for path in sorted(candidates):
         if path.name in {"index.ts", "types.ts", "stream-types.ts"}:
             continue
         text = path.read_text(encoding="utf-8")
