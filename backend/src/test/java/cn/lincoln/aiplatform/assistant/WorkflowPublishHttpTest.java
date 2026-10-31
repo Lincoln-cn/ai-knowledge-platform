@@ -207,15 +207,13 @@ class WorkflowPublishHttpTest {
   /**
    * 保存草稿。
    *
-   * <p>★ body 用<strong>字符串</strong>形状（{@code {"graph":"<json>"}}），因为后端 {@code SaveBody} 的字段是 {@code
-   * String}；契约 {@code saveWorkflowDraft} 传的是对象 —— 两者今天并不一致（见提交说明里的自曝）。
+   * <p>★ body 是<strong>对象</strong>（{@code {"graph":{...}}}）—— 与契约 {@code saveWorkflowDraft} 一致。
+   * 这里曾经不得不发字符串形状，因为后端 {@code SaveBody} 的字段是 {@code String}（{@code #262}）；
+   * 改成对象之后，这条辅助方法才和画布真正走的形状一致 —— 否则本类验的是一条没人走的路。
    */
   private HttpResponse<String> saveDraft(String token, UUID app, String graph) throws Exception {
     return send(
-        token,
-        "PUT",
-        "/api/v1/assistants/" + app + "/workflow/draft",
-        "{\"graph\":\"" + jsonStringLiteral(graph) + "\"}");
+        token, "PUT", "/api/v1/assistants/" + app + "/workflow/draft", "{\"graph\":" + graph + "}");
   }
 
   /**
@@ -307,11 +305,6 @@ class WorkflowPublishHttpTest {
 
   private String base() {
     return "http://localhost:" + port;
-  }
-
-  /** 把一段 JSON 变成能塞进 JSON 字符串字面量里的内容（只处理引号与反斜杠，够用了）。 */
-  private static String jsonStringLiteral(String json) {
-    return json.replace("\\", "\\\\").replace("\"", "\\\"");
   }
 
   private static String stringField(String json, String field) {
