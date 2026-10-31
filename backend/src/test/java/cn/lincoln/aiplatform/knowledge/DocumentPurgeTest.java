@@ -88,6 +88,37 @@ class DocumentPurgeTest {
   }
 
   /**
+   * ★ 软删<b>不保留内容</b>：分段与向量在删除那一刻就物理删掉了（`02 §5.1.1` 的订正）。
+   *
+   * <p>这条断言存在的理由不是"多测一条 SQL"，而是钉住一个**产品承诺的边界**： 「回收站」里那篇文档拿不回来 —— 界面上必须写「要恢复只能重新上传」。
+   * 如果哪天有人把分段改成软删（保住内容以便恢复），这条会红，him 会被迫先想清 "检索侧怎么保证已删文档不命中"，而不是顺手改一行。
+   */
+  @Test
+  void deletingADocumentAlsoRemovesItsSegmentsAndVectors() throws Exception {
+    String admin = accessToken("admin", "admin");
+    String kbId = createKb(admin, "软删不保留内容库");
+    Map<String, Object> doc = createDocumentWithSegments(admin, kbId, "软删-有分段.docx");
+
+    assertThat(delete("/api/v1/documents/" + doc.get("documentId"), admin).statusCode())
+        .isEqualTo(200);
+
+    assertThat(count("select count(*) from kb_document where id = ?::uuid", doc.get("documentId")))
+        .as("软删只落聚合根：行应该还在（这是回收站能看到它的原因）")
+        .isEqualTo(1);
+    assertThat(
+            count(
+                "select count(*) from kb_segment where document_id = ?::uuid",
+                doc.get("documentId")))
+        .as("★ 分段在软删时就物理删了 —— 所以回收站里的文档拿不回内容")
+        .isZero();
+    assertThat(
+            count(
+                "select count(*) from vec_embedding_768 where id = ?::uuid", doc.get("segmentId")))
+        .as("★ 向量同理")
+        .isZero();
+  }
+
+  /**
    * 回收站：软删的进得来，在用的进不来（`#75` 判据 ④ 的"入口"那一半）。
    *
    * <p>★ 这条不是为了测分页：是为了证明「彻底删除有地方可点」这件事真的成立 —— 端点存在但列表看不见已删文档时，那个不可恢复的动作只能由运维用 curl 调。

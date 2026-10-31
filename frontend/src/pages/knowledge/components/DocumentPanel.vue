@@ -204,8 +204,8 @@
 
     <el-dialog v-model="recycleOpen" title="回收站（已删除的文档）" width="760px">
       <p class="micro muted">
-        这里的文档已经不在列表里，但数据<b>还在库与索引之外</b>——彻底删除会把文档行、分段与向量一起移除，
-        <b>不可恢复</b>（备份里仍有一段时间的副本）。
+        这些文档已从列表移除，<b>它们的分段与向量也已经删掉</b> —— 回收站只保留一条记录，不保留内容。
+        <b>要恢复只能重新上传</b>；下面的「彻底删除」会连记录一起移除（备份里仍有一段时间的副本）。
       </p>
       <el-table v-loading="recycleLoading" :data="recycleRows" size="small">
         <el-table-column prop="name" label="文档名" min-width="220" />
