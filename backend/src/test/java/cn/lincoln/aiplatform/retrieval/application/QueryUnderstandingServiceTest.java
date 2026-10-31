@@ -161,6 +161,9 @@ class QueryUnderstandingServiceTest {
     assertThat(outcome.understanding().subQuestionCount()).isEqualTo(1);
     assertThat(outcome.understanding().totalQueries()).isEqualTo(2);
     assertThat(outcome.degradeReason()).contains("分解已关闭");
+    // ★ 关掉分解是**配置**，不是降级（#64，与多跳的 disabledMultiHopIsRecordedAsConfiguration 同口径）：
+    //   若把"我们关掉了这功能"算进降级率，报表会把产品意图读成模型故障。
+    assertThat(outcome.degradeLevel()).as("关掉分解不许记进降级率").isZero();
   }
 
   // ────────────────────────── 夹具 ──────────────────────────
