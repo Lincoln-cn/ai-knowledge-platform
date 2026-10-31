@@ -241,8 +241,12 @@ export const workflowRoutes: MockRoute[] = [
       const hit = (workflowVersions[appId] ?? []).find((v) => v.version === version)
       if (!hit) throw new ApiError(404, `版本 v${version} 不存在`)
       // 回滚 = 生成新草稿，**不改动历史版本**
-      setWorkflowDraft(appId, cloneGraph(hit.graph))
-      return cloneGraph(hit.graph)
+      const graph = cloneGraph(hit.graph)
+      setWorkflowDraft(appId, graph)
+      // 返回形状对齐契约 `rollbackWorkflow`（src/api/workflow.ts:423）：{ graph, updatedAt, version }。
+      // 原来这里直接 `return cloneGraph(hit.graph)` 是裸图 —— 与契约不一致（Issue #262 抓到的唯一一处真形状差）。
+      // updatedAt 用这次写草稿的时刻（页面显示「已保存」用它），version 用被回滚到的那一版（页面提示「已回滚到 vN」用它）。
+      return { graph, updatedAt: new Date().toISOString(), version }
     }
   ],
 
