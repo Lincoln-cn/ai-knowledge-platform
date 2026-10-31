@@ -74,12 +74,11 @@ def load_script(package: Path) -> str | None:
 
 
 def registered_files(script: str) -> list[str]:
-    """从 `test` 脚本里抽出登记的文件路径，归一成 `src/...` 形状。**
+    """从 `test` 脚本里抽出登记的文件路径，归一成 `src/...` 形状。
 
-    ★ 反斜杠先换成 `/`：JSON 里写 `src\\\\lib\\\\a.test.ts` 也应当被认出来，
-      否则这条闸门会因为「登记写法换了个分隔符」而漏判（漏判的方向永远是安全的那一侧？不是 ——
-      它会让脚本里的那行字与扫描结果对不上，于是既报「文件没登记」又报「登记的文件不存在」，
-      两条噪音里藏着一条真问题）。
+    ★ 反斜杠先换成 `/`：JSON 里写成 `src\\\\lib\\\\a.test.ts` 指的是同一个文件。
+      不归一会**一个都抓不到**，而「一个都抓不到」会被判据 ③ 当成「脚本改回了目录发现」——
+      报出来的原因是错的（真原因是分隔符写法）。归一之后两种写法都按登记处理。
     """
     normalized = script.replace("\\", "/")
     return [m.group(1) for m in REGISTERED_RE.finditer(normalized)]
