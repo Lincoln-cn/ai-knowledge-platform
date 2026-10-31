@@ -17,6 +17,7 @@ export * as analyticsApi from './analytics'
 export * as streamApi from './stream'
 export * as promptsApi from './prompts'
 export * as workflowApi from './workflow'
+export * as auditApi from './audit'
 export * as dictionariesApi from './dictionaries'
 export * as orgsApi from './orgs'
 
