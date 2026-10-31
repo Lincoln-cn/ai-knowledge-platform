@@ -30,7 +30,17 @@ public enum AuditAction {
    *
    * <p>★ 它是"对审计本身的变更"，所以必须自己留一条审计：一份只删不留痕的清理通道， 会把审计从"可追溯"变成"可选择性追溯"。
    */
-  AUDIT_PURGE("audit.purge");
+  AUDIT_PURGE("audit.purge"),
+
+  /**
+   * 生成会话分享链接（`#258`：分享是最该留痕的一类动作 —— 它把一份内部内容变成"有链接就能看"）。
+   *
+   * <p>★ 明细里**只记令牌前 8 位**，不记完整令牌：令牌本身就是访问凭证，把它抄进审计表等于 让"能读审计的人"顺手拿到一批访问入口。
+   */
+  CONVERSATION_SHARE("conversation.share"),
+
+  /** 撤销会话分享链接（与生成成对：一条链接的生命周期两端都要能回答"谁做的"）。 */
+  CONVERSATION_UNSHARE("conversation.unshare");
 
   private final String code;
 

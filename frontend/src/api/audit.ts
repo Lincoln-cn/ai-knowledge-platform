@@ -8,6 +8,8 @@ export type AuditActionCode =
   | 'document.delete'
   | 'document.reclassify'
   | 'document.relabel'
+  | 'conversation.share'
+  | 'conversation.unshare'
   | 'data.export'
   | 'grant.change'
 
