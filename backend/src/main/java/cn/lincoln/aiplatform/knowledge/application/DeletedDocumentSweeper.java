@@ -2,12 +2,12 @@ package cn.lincoln.aiplatform.knowledge.application;
 
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
+import cn.lincoln.aiplatform.knowledge.domain.RetentionWindow;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingRepository;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.platform.domain.AuditAction;
 import cn.lincoln.aiplatform.platform.domain.AuditLogPort;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -73,7 +73,8 @@ public class DeletedDocumentSweeper {
 
   /** 截止时间：删除时间早于它的文档该被清理。关闭时返回 {@code null}（调用方据此跳过）。 */
   public Instant cutoff() {
-    return enabled ? clock.instant().minus(Duration.ofDays(retainDays)) : null;
+    // ★ 与回收站共用同一个口径（RetentionWindow）—— 边界（恰好等于截止时刻算过期）只有一处定义。
+    return enabled ? RetentionWindow.cutoff(clock.instant(), retainDays) : null;
   }
 
   /**

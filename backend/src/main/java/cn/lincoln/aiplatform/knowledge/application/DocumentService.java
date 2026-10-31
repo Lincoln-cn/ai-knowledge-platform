@@ -7,6 +7,7 @@ import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
 import cn.lincoln.aiplatform.knowledge.domain.OrgAssignment;
 import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
 import cn.lincoln.aiplatform.knowledge.domain.PlannedSegment;
+import cn.lincoln.aiplatform.knowledge.domain.RetentionWindow;
 import cn.lincoln.aiplatform.knowledge.domain.SearchText;
 import cn.lincoln.aiplatform.knowledge.domain.Segment;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentContent;
@@ -669,11 +670,12 @@ public class DocumentService {
 
   /** 回收站里这份文档还能不能恢复（保留窗口内）。0 天 = 关闭恢复。 */
   private boolean restorable(Document document) {
-    if (document.deletedAt() == null || restoreWindowDays <= 0) {
+    // ★ 口径只有一处：RetentionWindow（回收站列表/恢复 与 超期清理作业共用），
+    //   两处各写一遍 `plus`/`minus` 会在边界上分叉 —— 列表说"还能恢复"、恢复说"已过期"。
+    if (restoreWindowDays <= 0) {
       return false;
     }
-    return Instant.now()
-        .isBefore(document.deletedAt().plus(java.time.Duration.ofDays(restoreWindowDays)));
+    return RetentionWindow.within(document.deletedAt(), Instant.now(), restoreWindowDays);
   }
 
   /** 拒绝在「向量化中」做会与在途任务打架的操作（改名 / 删除）。 */
