@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.knowledge.application.DocumentService;
 import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
+import cn.lincoln.aiplatform.knowledge.infrastructure.SegmentLabelMismatchMetric;
 import cn.lincoln.aiplatform.support.PostgresImage;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -46,6 +48,9 @@ class DocumentLabelWriteTest {
   @LocalServerPort int port;
 
   @Autowired JdbcTemplate jdbc;
+
+  /** 标签一致性读数（`#26` 判据 ④）：Gauge 在抓取时求值，这里直接读它的值。 */
+  @Autowired MeterRegistry meterRegistry;
 
   /** 直接调"解析成功 ⇒ 立刻分块"那条生产路径，避免手写 SQL 造分段绕过要验的那一行。 */
   @Autowired DocumentService documentService;
@@ -95,6 +100,36 @@ class DocumentLabelWriteTest {
     assertThat(segmentLabels)
         .as("★ 对照组：没填标签时分段也不许凭空长出标签（写反的症状是所有人只看得到没标签的文档）")
         .allMatch(labels -> labels.isEmpty());
+  }
+
+  @Test
+  void theConsistencyGaugeReadsZeroAfterIngestionAndCatchesARealDrift() throws Exception {
+    String admin = accessToken("admin", "admin");
+    String kbId = createKb(admin, "一致性读数库", "SECRET");
+    String docId = register(admin, kbId, "标签漂移.md", List.of("财务资料"));
+    documentService.finishParse(
+        UUID.fromString(docId), ParseResult.ok("# 第一章 总则\n\n本制度自发布之日起施行。"), adminId());
+
+    assertThat(mismatchGauge()).as("★ 正常入库之后读数必须是 0：这个数不是 0 就说明写入点漏了某条路径").isZero();
+
+    // 手工制造一次漂移（模拟"将来某个只改文档列、忘了改分段列"的写入点）
+    jdbc.update(
+        "update kb_segment set labels = ?::text[] where document_id = ?::uuid", "{人事资料}", docId);
+
+    assertThat(mismatchGauge())
+        .as("★ 漂移必须被读出来：读不出来就等于这条巡检不存在（Gauge 的 SQL 真的在看两张表）")
+        .isEqualTo(segmentCount(docId));
+  }
+
+  private double mismatchGauge() {
+    return meterRegistry.get(SegmentLabelMismatchMetric.NAME).gauge().value();
+  }
+
+  private long segmentCount(String docId) {
+    Long count =
+        jdbc.queryForObject(
+            "select count(*) from kb_segment where document_id = ?::uuid", Long.class, docId);
+    return count == null ? 0 : count;
   }
 
   // ────────────────────────── 辅助 ──────────────────────────

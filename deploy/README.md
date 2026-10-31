@@ -230,6 +230,7 @@ python frontend/check_ocr_e2e.py
 | `aiplatform_upstream_calls_total{outcome}` | 上游不可达率 | `08 §4.10.1` |
 | `aiplatform_chat_first_token_seconds`（P50/P95/P99） | 首字延迟（`B4` ≤10s 从此是持续读数） | 同上 |
 | `aiplatform_ingestion_failures_total{stage}` | 入库失败率（按解析/分段/向量化分） | 同上 |
+| `aiplatform_segment_label_mismatch` | 标签冗余漂移条数（**应为 0**；`-1` = 这次查询没成功，不是「一致」） | `13 §6.4.1`（`#26` 判据 ④） |
 
 ★ 这个端点**和 `/actuator/health` 同档免认证** —— 理由是 Prometheus 的采集端只带 URL、不带令牌。
 代价是"匿名可读"，所以**交付时必须满足下面两条，缺一条就该改走独立管理端口**：
