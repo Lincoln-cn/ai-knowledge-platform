@@ -382,6 +382,63 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 
 ---
 
+## 八之补二、`app.*` 其余配置一览：改了会发生什么（`#272`）
+
+配置自检只覆盖数值与两个密钥（见上节）。下面这些不会被自检拦，但同样会改变行为 ——
+它们的共同点是**配错之后系统照常起、照常答，只是答案或代价不对**。
+
+表里的"默认"就是 `backend/src/main/resources/application.yml` 里的值；
+括号里是环境变量名。本节与 yml 同步维护：改 yml 的默认值，改法见 `#272` 那条自检。
+
+### 检索链路（`10 §6.2` 第 6 项）
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `app.retrieval.query-understanding-budget-ms`（`RETRIEVAL_QU_BUDGET_MS`） | 5000 | 单次"查询理解"调用的超时。CPU + 1.5B 上实测 4–5s，调小会在改写这一步就超时 |
+| `app.retrieval.total-budget-ms`（`RETRIEVAL_TOTAL_BUDGET_MS`） | 5000 | 检索总预算，每路开始前查余量；耗尽后**用已拿到的结果继续**（不是报错） |
+| `app.retrieval.hop-budget-ratio`（`RETRIEVAL_HOP_BUDGET_RATIO`） | 0.6 | 多跳的"该收手了"水位：用掉 60% 就不开新一轮 |
+| `app.retrieval.query-understanding-enabled`（`RETRIEVAL_QU_ENABLED`） | true | 关掉 = **主动单路**，`degradeLevel` 保持 0（这是配置，不是降级 —— `#64` 判据 2） |
+| `app.retrieval.query-understanding-retry-on-parse-failure`（`RETRIEVAL_QU_RETRY`） | true | 关掉可省一次模型调用（CPU 上 4–5s），代价是解析失败直接降级 |
+
+### 分段与入库
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `app.segmentation.segment-length`（`SEGMENT_LENGTH`） | 500 | 分块目标长度。★ 必须与前端向导 `CreateWizard.vue` 的默认值一致，否则预览与入库不同 |
+| `app.segmentation.overlap`（`SEGMENT_OVERLAP`） | 60 | 分块重叠，同上 |
+| `app.segmentation.max-chars`（`SEGMENT_MAX_CHARS`） | 1200 | 向量模型字符上限的**回落值**（库里的模型有 `contextWindow` 时以它为准） |
+| `app.segmentation.context-window`（`SEGMENT_CONTEXT_WINDOW`） | 80 | 索引侧上下文窗口，0 = 关。★ 它只进 `search_text` 不进 `content`；**换值（含 0↔非 0）要重新向量化存量文档** |
+| `app.ingestion.embedding-concurrency`（`INGESTION_EMBEDDING_CONCURRENCY`） | 4 | 批量入库时同时跑的份数。配 0 或负数按 1 算（配 0 会让向量化永不执行且不报错）；调高到超过连接池只会排队 |
+
+### 出站与文件
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `app.egress.external-api-ceiling`（`EGRESS_EXTERNAL_API_CEILING`） | INTERNAL | **外发闸门**：外部 API 供应商的模型允许处理到的最高密级。`SECRET`/`CONFIDENTIAL` 默认一律不发；调高等于允许把机密内容送出网 |
+| `app.files.root`（`FILE_STORE_ROOT`） | `data/files` | 附件字节的落盘根目录。★ 容器里请配绝对路径并挂持久卷 —— 相对目录会随重启消失，表现为"记录在、点开是空的" |
+| `app.files.max-size-bytes`（`FILE_UPLOAD_MAX_BYTES`） | 20971520 | 单个附件上限，超了给可读的 400。★ 与 `spring.servlet.multipart.max-file-size` 是两道门，**都调大才真的放开** |
+
+### 安全
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `app.security.jwt.secret`（`JWT_SECRET`） | 仓库里的示例值 | 拿到它就能伪造任意用户的令牌。★ 非本地环境必须覆盖，换完既有令牌全部失效（自检会提示） |
+| `app.model.api-key-secret`（`MODEL_API_KEY_SECRET`） | 仓库里的示例值 | 模型 API Key 的加密密钥。★ 拿到它 + 拿到库就能解回明文；换完已存密文解不开，需要在界面重录 |
+| `app.security.captcha.enabled`（`CAPTCHA_ENABLED`） | true | 等保要求登录带验证码；关掉只应出现在压测/自动化环境 |
+| `app.security.login-failure.max-attempts`（`LOGIN_MAX_ATTEMPTS`） | 3 | 登录失败几次后冻结账号（等保测评项） |
+| `app.security.public-rate-limit.capacity`（`PUBLIC_RATE_LIMIT_CAPACITY`） | 60 | 公开面（免登录）每分钟请求数。★ `enabled` 默认 true：安全开关漏配必须是"开着的" |
+
+### 定时任务与示例数据
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `app.audit.retention.enabled`（`AUDIT_RETENTION_ENABLED`） | false | 审计留存期清理。★ 默认关：删审计不可逆，"客户规定的留存期"是客户事实 |
+| `app.knowledge.cleanup.enabled`（`KNOWLEDGE_CLEANUP_ENABLED`） | false | 回收站超期清理，开启后过期的已删文档会被**真的**删掉（分段 + 向量 + 文档行） |
+| `app.knowledge.restore-window-days`（`KNOWLEDGE_RESTORE_WINDOW_DAYS`） | 7 | 回收站"还能恢复"的窗口；`cleanup.retain-days` 与它同值即可 |
+| `app.seed.sample-data`（`SEED_SAMPLE_DATA`） | false | 灌业务示例数据（迁移只跑一次）。★ 集成测试与它共用迁移，默认开着会让一批按条数断言的用例红 |
+| `app.embedding.local.enabled`（`LOCAL_ONNX_ENABLED`） | true | 进程内 ONNX 向量化。★ `model-name` 是**路由判据**：知识库登记的 `baseModel` 必须与它一致，否则会去连上游 11434 |
+| `app.chat.advisors.enabled`（`CHAT_ADVISORS_ENABLED`） | true | Spring AI advisor 链总开关。★ 只用于排障 —— 关着上线等于安全闸门不生效 |
+
 ## 九、OCR 的配置项（交付时可能要改的）
 
 全部走环境变量覆盖（`application.yml` 的 `app.ocr.*`）：
