@@ -147,7 +147,7 @@ jobs:
       #      只提示"基线可以降到 N"—— 自动改基线等于让闸门自己给自己签字。
       #   ★ 它带自检，所以下面把它从循环里单拆出来、按「自检 + 实判」两步跑（其余 11 道仍在循环里）。
       #   ★ 同样单拆成两步的还有 `check_test_registration.py`（`#266`，2 步）—— 见下方 mock 实判之后。
-      - name: 静态闸门（15 道 · 另有配置面字段 2 步 + 配置文档覆盖 2 步见下）
+      - name: 静态闸门（15 道 · 另有配置面字段 2 步 + 配置文档覆盖 2 步 + B7 续签 1 步见下）
         working-directory: frontend
         run: |
           failed=()
@@ -171,7 +171,7 @@ jobs:
             echo "★ 失败 ${#failed[@]}/11：${failed[*]}"
             exit 1
           fi
-          echo "循环内 11 道静态闸门全部通过（另有 mock 响应形状 2 步 + 测试文件登记 2 步 + 配置面字段 2 步 + 配置文档覆盖 2 步见下，合计 19 道）"
+          echo "循环内 11 道静态闸门全部通过（另有 mock 响应形状 2 步 + 测试文件登记 2 步 + 配置面字段 2 步 + 配置文档覆盖 2 步 + 测试专用类型 2 步 + B7 续签 1 步见下，合计 20 道）"
 
       # ★ mock 响应形状**自检**（`#262`）。
       #   离线用例：契约 `{ a: string }` vs mock `return { a: 'x' }` 通过 / vs `return 'x'` 报红 /
@@ -281,3 +281,10 @@ jobs:
       - name: 机器状态守卫自检（#223）
         working-directory: frontend
         run: python check_failure_visible_e2e.py --self-check
+
+      # ★ 令牌续签的语义在 B7 长跑里（#226）：`access-ttl` 30 分钟、200 轮要 27–31 分钟 ⇒
+      #   长跑**一定**跨过它。这条自检用假 `ask` 把三条语义跑一遍 —— 不需要真栈、不需要真模型，
+      #   所以"续签到底会不会发生"从"只能靠一次 30 分钟长跑证明"变成每次 push 都验。
+      - name: B7 续签语义自检（#226）
+        working-directory: frontend
+        run: python check_b7_stability.py --self-check
