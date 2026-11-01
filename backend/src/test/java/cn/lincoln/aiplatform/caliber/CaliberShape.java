@@ -69,7 +69,7 @@ final class CaliberShape {
           //   漏登的后果不是"少一行记录"，而是 tableColumns() / migrationText() 对它们静默少读一段；
           //   而两条断言写的是"全量清单相等" ⇒ 两侧同时变旧、断言照样绿（V34 当年正是这样被发现的）。
           //   ★ 现在由 MigrationInventoryTest 把这份清单与源码树逐个比对，漏登当场变红。
-          "platform/V54__platform_quota_seams.sql",
+          "platform/V59__platform_quota_seams.sql",
           "platform/V56__platform_audit_log.sql",
           "platform/V58__platform_audit_retention.sql",
           "identity/V3__identity_auth.sql",

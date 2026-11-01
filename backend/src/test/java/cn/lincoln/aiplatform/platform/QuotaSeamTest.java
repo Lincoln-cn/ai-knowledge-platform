@@ -43,7 +43,7 @@ class QuotaSeamTest {
           "db",
           "migration",
           "platform",
-          "V54__platform_quota_seams.sql");
+          "V59__platform_quota_seams.sql");
 
   @Test
   void noProductionCodeConsumesTheQuotaColumnsYet() throws IOException {

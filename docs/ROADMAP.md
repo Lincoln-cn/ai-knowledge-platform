@@ -3215,3 +3215,55 @@ run `41252289913`（head `891b489`）= **success**，`[INFO] Tests run: 1244, Fa
 3. **同一处差异要分方向判。** 三处不一致里两处是回退、一处是前进。若一律「以 HEAD 为准」或一律「以工作区为准」，都会丢东西 —— **逐文件看 diff 的方向，是一次不能省的活**。
 
 **62.4 仍未做。** 造成这次分叉的**成因没有定论**（仓库里三个 worktree 并存：`ai-plantform` / `ai-plantform-wt98` / `aip-sse`，而 `#49` 记的正是「并行子代理共用同一个工作树 ⇒ git 状态错乱」）。本节只把现场恢复到可提交状态，没有回答「下一次怎么防」—— 那条要等 `#49` 定处置。
+
+#### 11.10.69 2026-11-01 一条「缺席」断言在实现落地后必须改形状（`#247` × `#252` 撞车）
+
+> 触发：合并 `origin/main` 后跑口径整包，`DocumentClassificationMutationAbsenceTest` 红一条。它不是新缺陷，是**两条分支各自正确、合起来矛盾**。
+
+**69.1 两条支线各自都对**
+
+| 支线 | 提交 | 做了什么 |
+|---|---|---|
+| `main` | `57fdef4` / `fcac02f`（`#252`） | 钉一条「缺席」断言：`DocumentService` 里**不应**出现 `changeClassification` 一类的方法，出现即红，提醒同批落四问 |
+| 本分支 | `bf3fe29`（`#247`） | 实现 `changeClassification`：分段重打 · 升密同事务抬会话水位 · 审计留痕（`#247` 已 CLOSED，四条判据逐条核过） |
+
+合起来就是一条**永远为假的红** —— 而且它出现在一个 33 例的整包里，看起来像"我们改坏了什么"。
+
+**69.2 处置：把判据从「缺席」翻成「配套」，并做一次反证**
+
+- 方法改名 `classificationMutationCarriesItsCompanions`，四条断言：入口**仍在**（`hits` 非空）· 源码含 `segment.reclassify(` · 含 `raiseForDocument(` · 含 `AuditAction.DOCUMENT_RECLASSIFY`。
+- 反证（实测，非推断）：`sed -i '475d'` 删掉 `segment.reclassify(level);` ⇒ 红在「★ 分段必须跟着重打：V22 把密级冗余进了 segment，只改文档行 = 升密看着生效、低 clearance 用户照样检索得到」；还原后 `grep -c "segment.reclassify(level)"` = 1，`Tests run: 2, Failures: 0`。
+- ★ 反证本身踩了一个坑：第一次删行被 **spotless** 先拦住（`for (Segment segment : affected) {}` 被格式化成空块），`exit=1` 但**不是**断言红 ⇒ **「退出码非零」不等于「判据红了」**，反证必须读到具体断言名才算成立。
+
+**69.3 两条判据**
+
+1. **一条「缺席」断言的生命周期止于实现落地那一天。** 它做红的时候是对的（提醒四问），实现进来之后只剩「永远红」一种读数；而**「把闸门改成绿的」与「闸门坏了」读数完全一样**。所以实现落地的那一批必须同时回答：这条断言改成什么形状？不改就变成噪音，下次真红时没人看。
+2. **源码级守卫只能防「整段消失」。** `contains("reclassify(")` 拦不住「调用被注释掉、字符串还在」这种改法 —— 这层粗糙度本类明示接受（职责是重构时别静默删件）。行为正确性由 `DocumentClassificationTest` 4/4 与 `AuditTrailTest#reclassifyWritesAnAuditRowWithTheActorNameSnapshot` 承担，两层分工写进了类注释，免得后来人以为一条测试管两件事。
+
+#### 11.10.70 2026-11-01 迁移版本号是全局命名空间，不是按目录（两个 V54）
+
+> 触发：`-Dtest='cn.lincoln.aiplatform.*Test'` 报 **36 例 19 error**，全部是 `IllegalStateException: Failed to load ApplicationContext`。看起来像 19 个问题，其实是 **1 个**。
+
+**70.1 根因**
+
+```
+Caused by: org.flywaydb.core.api.FlywayException: Found more than one migration with version 54
+```
+
+| 文件 | 来源 | 提交 / 日期 |
+|---|---|---|
+| `knowledge/V54__knowledge_base_drop_count_columns.sql` | `origin/main` | `f7f3f10`（#236，10-29） |
+| `platform/V54__platform_quota_seams.sql` | 本分支 | `9f250d5`（#73，10-31） |
+
+两条支线各看自己目录：`knowledge` 的下一个是 V54、`platform` 的下一个也是 V54 —— 都"对"。
+
+**70.2 处置**
+
+把本分支那份改成 **V59**（全局空号：已有 43–58、60–63），并同步三处引用 —— `CaliberShape.java:72`（迁移清单）· `QuotaSeamTest.java:46`（"这份迁移必须在"的反证）· `08-后端模块与通用能力支撑.md:686`。
+
+**70.3 三条判据**
+
+1. **迁移号是全局的。** Flyway 的 `locations` 覆盖全部子目录，所以"平台目录下一个空号"这种算法一定会在多分支并行时撞车。找号要 `for d in */; do ls $d; done | grep -E "^V[0-9]+__" | sed -E 's/^(V[0-9]+)__.*/\1/' | sort -V`，不能只看自己那格。
+2. **撞号不在编译期红，只在上下文启动时红** —— 而且它会让**每一个** `@SpringBootTest` 都红一遍。19 个 error 里没有一个能指出真因，得往 `Caused by` 里捞。**"一片红"要先去重根因再谈条数**。
+3. **改号必须连带改「清单类」测试。** `CaliberShape`/`QuotaSeamTest` 都把文件名写成了字面量：只改名不改清单，下一次红的就是它们（而那条红长得很像"迁移丢了"）。
+4. **`target/` 里的旧文件名还活着。** 改号后重跑**仍然**报同一个错 —— 不是改漏了，而是 `mvn test` 的 resources 复制**只增不删**：`target/classes/db/migration/platform/V54__platform_quota_seams.sql` 留在原地，与新文件、与 `knowledge/V54` 三者并存。实测 `find target/classes/db/migration -name "V54*" -o -name "V59*"` 还翻出一个**源码里早就不存在**的 `knowledge/V59__knowledge_segment_soft_delete.sql`。`mvn clean` 之后 36/36 全绿。⇒ **"改了源码但读数没变"先怀疑构建产物没同步**；重命名/删除资源这一类，增量构建完全看不见。**本机读数是累积的，CI 读数是干净的** —— 两者不一致时不要先怀疑 CI。
