@@ -40,6 +40,13 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:15432/aiplatform}
     username: ${DB_USER:aiplatform}
     password: ${DB_PASSWORD:aiplatform}
+    # ★ 池上限显式写死（`#227` 处置建议 4）：不写就是 Hikari 的默认 10 ——「靠默认值工作」本身是债，
+    #   而且启动自检要拿池上限去和向量化并发比，那个数字不该来自库的默认值。
+    # ★ 与 app.ingestion.embedding-concurrency 的关系：并发大于池上限时，多出来的虚拟线程拿不到连接，
+    #   表现为**与文件内容无关**的「向量化失败」（#227 现场那 12 份假失败）。启动自检会为这个方向告警。
+    # ★ 调大之前先确认库端 max_connections 够：应用实例数 × 这里，才是库真正看到的连接数。
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
 
   jpa:
     hibernate:

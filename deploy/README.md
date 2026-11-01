@@ -409,6 +409,7 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.segmentation.max-chars`（`SEGMENT_MAX_CHARS`） | 1200 | 向量模型字符上限的**回落值**（库里的模型有 `contextWindow` 时以它为准） |
 | `app.segmentation.context-window`（`SEGMENT_CONTEXT_WINDOW`） | 80 | 索引侧上下文窗口，0 = 关。★ 它只进 `search_text` 不进 `content`；**换值（含 0↔非 0）要重新向量化存量文档** |
 | `app.ingestion.embedding-concurrency`（`INGESTION_EMBEDDING_CONCURRENCY`） | 4 | 批量入库时同时跑的份数。配 0 或负数按 1 算（配 0 会让向量化永不执行且不报错）；调高到超过连接池只会排队 |
+| `spring.datasource.hikari.maximum-pool-size`（`DB_POOL_SIZE`） | 10 | 连接池上限。★ 并发高于它时多出来的虚拟线程拿不到连接，表现为「与文件内容无关的向量化失败」（`#227`）；★ 调大前先看库端 `max_connections`：**实例数 × 这个数**才是库看到的连接数 |
 
 ### 出站与文件
 
