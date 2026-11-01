@@ -2424,6 +2424,12 @@ B6（150 段）与 B7（200 次）会明显拉长真栈 job；**三条重闸门�
 | `#237`（判据 3 + 判据 1 的代码半边） | `10f8afc`：`STOP_MIN_CHUNKS` 3→1 · `classify_stop` 三分类 · 两次都停晚必须红 · `--self-check` 11 条 · 接进 `ci.yml` | 自检 11/11 · 金丝雀改回 3 即红 · 快闸 `41253117205` success |
 | `#262` 的余波 | `891b489`：两处草稿夹具按新形状发对象 | `WorkflowVersionHttpTest` 6/6 · `WorkflowRollbackHttpTest` 4/4 |
 
+**44.1.1 整包读数**
+
+run `41252289913`（head `891b489`）= **success**，`[INFO] Tests run: 1244, Failures: 0, Errors: 0, Skipped: 3`。
+其后四个提交（`6657f52` 仅 docs · `d677119` 前端脚本 + 快闸配置 · `10f8afc` 前端脚本 + 真栈 workflow · 本提交仅 docs）
+**一行后端测试面都没动**，所以没有为它们单独重跑整包；这一点写在这里，免得下一个人以为"整包没跑全"。
+
 **44.2 三条判据**
 
 1. **契约里有字段 ≠ 用户能配**（`#269`）。`queryCount` / `decomposeEnabled` / `maxSubQuestions`
