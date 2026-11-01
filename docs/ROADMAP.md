@@ -2841,7 +2841,7 @@ run `41252289913`（head `891b489`）= **success**，`[INFO] Tests run: 1244, Fa
 
 | 项 | 内容 |
 |---|---|
-| 缺陷 | `00-总览与复现指南.md:135` 让人跑 `npm run build:prod`，`frontend/package.json` 里没有它；同行的 `Node 18+` 也过时（`node --test --experimental-strip-types` 要 22.6+） |
+| 缺陷 | `00-总览与复现指南.md:135` 让人跑 `build:prod`（当年写的是带 npm run 前缀的那条命令），`frontend/package.json` 里没有它；同行的 `Node 18+` 也过时（`node --test --experimental-strip-types` 要 22.6+） |
 | 闸门 | 新 `tools/check_doc_commands.py`：被跟踪的 `.md` 里 `npm run <x>` 逐个比对 scripts；快闸新增两步 |
 | 读数 | 实判「扫描 51 份 md，脚本 7 个」；自检 4/4；金丝雀 exit 1；快闸 `41280891438` 两步逐 step success |
 
