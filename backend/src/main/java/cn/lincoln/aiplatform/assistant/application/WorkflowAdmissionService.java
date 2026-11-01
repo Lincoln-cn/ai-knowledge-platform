@@ -27,6 +27,9 @@ public class WorkflowAdmissionService {
   /** 执行器唯一的硬性结构要求：图必须能停下来，因此不许有环。 */
   static final String CYCLE = "CYCLE";
 
+  /** 必填参数没配齐：结构没问题，但跑起来到这里一定会失败。 */
+  static final String MISSING_REQUIRED_CONFIG = "MISSING_REQUIRED_CONFIG";
+
   /** 规划中的节点类型：发布时只是警告，执行时是错误。 */
   static final String NOT_EXECUTABLE_TYPE = "NOT_EXECUTABLE_TYPE";
 
@@ -130,5 +133,77 @@ public class WorkflowAdmissionService {
   private static String label(WorkflowValidationService.Node node) {
     String title = node.title();
     return title == null || title.isBlank() ? node.id() : title;
+  }
+
+  /**
+   * 带参数判定的准入：结构层照旧，另按 {@link NodeConfigReader} 判"必填参数齐不齐"。
+   *
+   * <p>为什么要吃原始 {@code JsonNode}：{@link WorkflowValidationService.Node} 只带 id/type/title，
+   * 参数不在结构视图里（见 {@code #113} 与 {@code NodeConfigReader} 的类注释）。
+   */
+  public WorkflowValidationService.Result admission(
+      tools.jackson.databind.JsonNode raw, NodeConfigReader reader) {
+    WorkflowValidationService.Graph graph = toGraph(raw);
+    WorkflowValidationService.Result base = admission(graph);
+    List<WorkflowValidationService.Issue> issues = new ArrayList<>(base.issues());
+    if (raw != null && raw.get("nodes") != null && raw.get("nodes").isArray()) {
+      for (tools.jackson.databind.JsonNode node : raw.get("nodes")) {
+        NodeConfigReader.NodeConfig config = reader.read(node);
+        String type = node.get("type") == null ? null : node.get("type").asString();
+        String id = node.get("id") == null ? null : node.get("id").asString();
+        String missing = missingConfig(type, config);
+        if (missing != null) {
+          issues.add(
+              new WorkflowValidationService.Issue(
+                  "ERROR",
+                  MISSING_REQUIRED_CONFIG,
+                  "节点「" + (id == null ? type : id) + "」缺少必填参数：" + missing,
+                  "在执行前把它配上；空着跑会在这里中断，而不是在对话里报错",
+                  id));
+        }
+      }
+    }
+    boolean passed = issues.stream().noneMatch(issue -> "ERROR".equals(issue.level()));
+    return new WorkflowValidationService.Result(passed, List.copyOf(issues));
+  }
+
+  /** 已实现类型的必填参数。规划中的类型由 {@code NOT_EXECUTABLE_TYPE} 拦，这里不管。 */
+  private static String missingConfig(String type, NodeConfigReader.NodeConfig config) {
+    if (type == null) {
+      return null;
+    }
+    return switch (type) {
+      case "AI_CHAT_NODE", "QUESTION_NODE" -> config.hasModel() ? null : "modelId（模型）";
+      case "SEARCH_DATASET_NODE" -> config.hasSource() ? null : "kbIds 或 applicationId（检索范围）";
+      default -> null;
+    };
+  }
+
+  private static WorkflowValidationService.Graph toGraph(tools.jackson.databind.JsonNode raw) {
+    List<WorkflowValidationService.Node> nodes = new ArrayList<>();
+    List<WorkflowValidationService.Edge> edges = new ArrayList<>();
+    if (raw != null) {
+      if (raw.get("nodes") != null && raw.get("nodes").isArray()) {
+        for (tools.jackson.databind.JsonNode node : raw.get("nodes")) {
+          nodes.add(
+              new WorkflowValidationService.Node(
+                  text(node, "id"), text(node, "type"), text(node, "title")));
+        }
+      }
+      if (raw.get("edges") != null && raw.get("edges").isArray()) {
+        for (tools.jackson.databind.JsonNode edge : raw.get("edges")) {
+          edges.add(
+              new WorkflowValidationService.Edge(
+                  text(edge, "id"), text(edge, "source"), text(edge, "target")));
+        }
+      }
+    }
+    return new WorkflowValidationService.Graph(List.copyOf(nodes), List.copyOf(edges));
+  }
+
+  private static String text(tools.jackson.databind.JsonNode node, String field) {
+    return node.get(field) == null || !node.get(field).isString()
+        ? null
+        : node.get(field).asString();
   }
 }
