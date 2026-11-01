@@ -16,12 +16,22 @@
 
 ━━━ 先清掉桩上可能残留的注入 ━━━
 本 job 的闸门是顺序跑的，前面的 S1/S3 会往桩注入 `delay_ms` / `chunk_delay_ms`。**残留的延迟
-会把 B6 压成假红**（不是假绿，但同样是坏读数）⇒ 本脚本开头显式复位；复位不成功就**不算读数**
-（退出码 1 + 明确消息），而不是硬跑出一个自己都不信的数字。
+会把 B6 压成假红**（不是假绿，但同样是坏读数）⇒ 本脚本开头显式复位。
+
+★ 2026-10-28 起：桩**不再是必有**。11434 上可能直接是 Ollama（真上游）——
+那时根本没有注入口可残留 ⇒ 如实打一行「没有注入面可自证」，读数照算（不再"复位失败就不算读数"，
+否则一台干净机器永远跑不了这条闸门）。
+
+━━━ 向量后端用哪个（★ 一句话口径，别混） ━━━
+- **吞吐（本脚本）用本地 ONNX**：进程内推理，没有网络、没有第三方排队 ⇒ 它量的是"平台自己的入库能力"。
+- **召回准确度（B1/B3 的语料评测）才用 `bge-m3`**：那是模型能力的读数。
+⇒ 两个数字回答两个问题，**不许互相顶替**。夹具会先问 `GET /models/local-onnx` 它服务哪个名字，
+再按那个名字复用/新建向量模型；`⓪e` 这条判据就是钉住"本跑的向量化后端确实是本地 ONNX"。
 
 用法：
     python check_b6_ingest_throughput.py
     AIP_B6_LIMIT=3 AIP_B6_SECTIONS=150 python check_b6_ingest_throughput.py
+    AIP_EMBED_BASE_MODEL=bge-m3 AIP_EMBED_DIMENSION=768 python check_b6_ingest_throughput.py   # 有意走远端
 退出码：0 = 达标；1 = 有红 / 读数不可信 / 环境起不来。
 """
 
@@ -58,12 +68,20 @@ EMBED_DEADLINE = 900.0
 problems: list[str] = []
 
 
-def check(ok: bool, message: str) -> None:
+def check(ok: bool, message: str) -> bool:
+    """打印一条判据并**返回它**。
+
+    ★ 必须返回 bool：本脚本有一处 `if not check(...)` 是"落地失败就提前收工"的短路，
+      而 `check` 早先只打印、返回 `None` ⇒ `not None` 恒为真 ⇒ **这条闸门在拿到第一个读数之前
+      就自己 exit 1 了**（2026-10-28 首跑实测：解析已落地 `PENDING_EMBEDDING`、判据还是 ✓，
+      下面却直接 return 1）。这类"断言只打印不回报"的写法本身就是 silent-failure 的孪生形态。
+    """
     if ok:
         print(f"  ✓ {message}")
     else:
         print(f"  ✗ {message}")
         problems.append(message)
+    return ok
 
 
 def note(message: str) -> None:
@@ -196,7 +214,49 @@ def doc_row(token: str, kb_id: str, doc_id: str) -> dict:
     return {}
 
 
-def create_embedding_model(token: str) -> str:
+def local_onnx_status(token: str) -> dict:
+    """进程内 ONNX 的现状（`GET /models/local-onnx`）：`{enabled, mode, model, filesPresent, ready, …}`"""
+    _, body = call("GET", "/models/local-onnx", token)
+    return data_of(body)
+
+
+def ensure_embedding_model(token: str) -> tuple[str, str, bool]:
+    """取一个**真能算**的向量模型，返回 `(id, 说明, 是否本跑新建)`；优先复用已加载的那个。
+
+    ★★ 两条口径（2026-10-28 用户拍板，写在这里是因为很容易混）
+
+    ① **吞吐读数（本脚本）用本地 ONNX** —— 进程内推理，没有网络、没有第三方限流，
+       它量的才是"平台自己的入库能力"。换成一个远端向量服务，这个数字里就混进了别人的排队时间。
+    ② **召回准确度那一档才用 `bge-m3`** —— 那是**模型能力**的读数（B1/B3 的语料评测），
+       与吞吐不是一回事。★ 两种读数不许挤进一个数字：一个是"多快"，一个是"多准"。
+
+    ★ 为什么不是硬编码 `bge-m3/768`：后端按 `baseModel == 本地实现服务的那个名字` 路由
+      （`RoutingEmbeddingAdapter`），名字对不上就静默走去上游（而桩/上游早撤了）。
+      所以先问 `GET /models/local-onnx` 要它服务的名字，再按那个名字挑/建。
+    """
+    _, body = call("GET", "/models?kind=EMBEDDING&size=50", token)
+    rows = data_of(body).get("list") or []
+    onnx = local_onnx_status(token)
+    served = str(onnx.get("model") or "")
+    if onnx.get("ready"):
+        note(f"本地 ONNX 就绪：model={served} · {onnx.get('modelPath')}")
+    else:
+        note(f"本地 ONNX 不可用（{onnx.get('reason') or '未启用'}）⇒ 退回按环境变量建远端向量模型")
+
+    for row in rows:
+        if row.get("status") != "LOADED":
+            continue
+        if served and str(row.get("baseModel")) != served:
+            continue
+        note(
+            f"向量模型复用：{row.get('name')}（baseModel={row.get('baseModel')} · "
+            f"dim={row.get('dimension')} · {row.get('status')}）"
+        )
+        return str(row.get("id")), f"{row.get('name')} / {row.get('baseModel')}", False
+
+    base_model = os.environ.get("AIP_EMBED_BASE_MODEL") or served or "bge-m3"
+    raw_dimension = os.environ.get("AIP_EMBED_DIMENSION")
+    dimension = int(raw_dimension) if raw_dimension else (384 if served else 768)
     status, body = call(
         "POST",
         "/models",
@@ -205,14 +265,26 @@ def create_embedding_model(token: str) -> str:
             "name": f"B6向量-{int(time.time())}",
             "kind": "EMBEDDING",
             "supplier": "LOCAL_INFERENCE",
-            "baseModel": "bge-m3",
-            "dimension": 768,
+            "baseModel": base_model,
+            "dimension": dimension,
         },
     )
     model_id = str(data_of(body).get("id") or "")
     if status not in (200, 201) or not model_id:
         raise SystemExit(f"建向量模型失败（{status}）：{str(body)[:300]}")
-    return model_id
+    note(f"向量模型新建：{model_id}（baseModel={base_model} · dim={dimension}）")
+
+    status, body = call("POST", f"/models/{model_id}/load", token, {})
+    if status not in (200, 202):
+        raise SystemExit(f"加载向量模型失败（{status}）：{str(body)[:300]}")
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        _, listing = call("GET", "/models?kind=EMBEDDING&size=50", token)
+        for row in data_of(listing).get("list") or []:
+            if str(row.get("id")) == model_id and row.get("status") == "LOADED":
+                return model_id, f"{base_model}（新建）", True
+        time.sleep(0.5)
+    raise SystemExit(f"向量模型 {model_id} 在 120s 内没变成 LOADED —— 本跑不算读数")
 
 
 def create_kb(token: str, model_id: str) -> str:
@@ -238,11 +310,16 @@ def main() -> int:
     print(f"== B6 真栈闸门：入库吞吐 ≥{LIMIT:g} 段/秒（{BASE}）==")
 
     # ★ 第一步就是复位，而不是等到需要的时候 —— 残留的 delay_ms 会让这条闸门红在别人的夹具上。
-    if not stub_config({"delay_ms": 0, "chunk_delay_ms": 0, "fail_rate": 0.0}):
-        raise SystemExit(
-            f"桩不可达（{STUB}/__stub/config）⇒ 无法确认没有延迟注入 ⇒ 吞吐读数不可信，本跑不算"
+    #   ★ 2026-10-28 起：桩不再是"必有"。11434 上可能是 Ollama（真上游）——
+    #   那时**根本没有注入口可残留**，所以"复位失败"不等于"读数不可信"，
+    #   但也不能假装复位过：如实写一行"没有注入面可自证"。
+    if stub_config({"delay_ms": 0, "chunk_delay_ms": 0, "fail_rate": 0.0}):
+        note("桩已复位（delay_ms=0 · chunk_delay_ms=0 · fail_rate=0）")
+    else:
+        note(
+            f"桩不在（{STUB}/__stub/config 不可达）⇒ 本次上游不是桩，没有延迟注入面可残留；"
+            "吞吐读数照算，但「上游没被人为拖慢」这一格本跑无法自证"
         )
-    note("桩已复位（delay_ms=0 · chunk_delay_ms=0 · fail_rate=0）")
 
     token = login()
     stamp = str(int(time.time()))
@@ -250,11 +327,22 @@ def main() -> int:
     md_path = os.path.join(workdir, f"b6-{stamp}.md")
 
     model_id = ""
+    model_created = False
     kb_id = ""
     try:
-        model_id = create_embedding_model(token)
+        model_id, model_note, model_created = ensure_embedding_model(token)
         kb_id = create_kb(token, model_id)
-        note(f"夹具：库 {kb_id} · 向量模型 {model_id}")
+        note(f"夹具：库 {kb_id} · 向量模型 {model_id}（{model_note}）")
+
+        # ★ ⓪e：本跑的向量化后端到底是谁。红在这里说明"读数来自远端向量服务"，
+        #   那它就不是"平台自己的入库能力"——数字仍然有效，只是名字得换。
+        onnx = local_onnx_status(token)
+        served = str(onnx.get("model") or "")
+        check(
+            bool(onnx.get("ready")) and served in model_note,
+            f"⓪e 向量化后端 = 本地 ONNX（{served or '未启用'}；实得夹具 {model_note}）"
+            " —— 吞吐口径要求进程内推理，远端服务会把别人的排队时间算进我们的读数",
+        )
 
         chars = build_markdown(md_path, SECTIONS)
         note(f"夹具文档：{SECTIONS} 节 · {chars} 字")
@@ -335,7 +423,8 @@ def main() -> int:
     finally:
         if kb_id:
             call("DELETE", f"/knowledge-bases/{kb_id}", token)
-        if model_id:
+        # ★ 只删本跑新建的：复用的那个可能是别的夹具/走查在用的（本地 ONNX 那条通常只有一条 LOADED）
+        if model_id and model_created:
             call("DELETE", f"/models/{model_id}", token)
 
     if problems:
