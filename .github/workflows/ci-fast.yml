@@ -252,6 +252,18 @@ jobs:
           python tools/check_config_keys.py --self-check
           python tools/check_config_keys.py
 
+      # ★ 测试专用类型（#270）：主代码零引用、却只被测试 import 的类型。
+      #   `#270` 那次，ParseMetricsTest 量的是一份**生产没用上**的 NoiseStripper 实现 =>
+      #   报告上的读数（12/12）与线上行为（11/12）对不上。这条缺陷编译过、测试过、覆盖率更高，
+      #   只是量的不是线上那份代码。装配件（@Component / implements …Port）闸门自己豁免。
+      - name: 测试专用类型自检（#270）
+        working-directory: backend
+        run: python tools/check_test_only_types.py --self-check
+
+      - name: 测试专用类型实判（#270）
+        working-directory: backend
+        run: python tools/check_test_only_types.py
+
       # ★ 闸门自己的守卫也要能被断言（#223）：这三条守的是"别量错东西"，
       #   而一条守卫错了的表现是静默 —— 永远为真等于没有，过严则把正确情形判成错。
       #   离线、不需要浏览器、不连栈（playwright 在脚本里是延迟导入的）。

@@ -1,0 +1,22 @@
+# 测试专用类型基线（#270 闸门 backend/tools/check_test_only_types.py 读的就是这个文件）
+#
+# 一个类进了这份名单，意思只能是：
+#   「它确实只给测试用，而且我们知道为什么」—— 不是「先放这儿以后再说」。
+#
+# 格式：全限定类名 + 两个空格 + 「# 理由」（没写理由会直接报红）
+#
+#   cn.lincoln.aiplatform.xxx.SomeHelper  # #123：只在 XxxTest 里用的夹具构造器，生产不需要
+#
+# 三条规矩：
+#   1. 新增一行 = 承认「这个类永远不会被生产代码用」。想不清就别加，去改代码。
+#   2. 类被删掉或被主代码用上之后，这一行必须删掉（闸门会红，不删就会变成一张没人核对的历史名单）。
+#   3. 靠容器生效的装配件（@Component / @Configuration / @Bean / implements …Port）不进这份名单 ——
+#      它们「主代码里没人写名字」是常态，闸门自己会豁免。
+#
+# 2026-11-01（#270）现状：0 条。
+#   全量扫过一遍，测试 import 而主代码零引用的类只有 4 个，全是装配件：
+#     identity.infrastructure.UserDisplayNameAdapter   implements UserDisplayNamePort
+#     modelcatalog.infrastructure.ModelEgressAdapter   implements ModelEgressPort
+#     knowledge.infrastructure.FullTextIndex           @Component（启动时自检 zhparser）
+#     knowledge.infrastructure.SegmentLabelMismatchMetric  @Component（注册 Gauge）
+#   ⇒ `#270` 那种「同一件事两份实现」是个例，不是系统性问题。
