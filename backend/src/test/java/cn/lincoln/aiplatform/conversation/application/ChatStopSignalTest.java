@@ -142,5 +142,62 @@ class ChatStopSignalTest {
     assertThat(signal.agree(null)).as("★ null 不是'某个消息'，登记不到任何东西").isFalse();
     assertThat(signal.consume(null)).isFalse();
     assertThat(signal.isRequested(null)).isFalse();
+    assertThat(signal.settle(null)).as("★ null 也不是'某一轮'，取不到终态").isFalse();
+  }
+
+  /**
+   * ★★ #242 的核心不变量：<strong>终态取下之后到来的停止请求必须被拒收</strong>。
+   *
+   * <p>它挡的是真栈今天量到的那条：用户在第一帧（4 字）点停止，回执 {@code accepted=true}，而最终终态是 {@code GENERATED}、库里 54 字全文 ——
+   * 因为收尾路径已经取完快照、请求侧才认领成功。现在的形状是：收尾路径先 {@code settle} ⇒ 请求侧 {@code agree} 只能回 false（{@code
+   * accepted=false}），<strong>两边的答案不再能同时为真</strong>。
+   */
+  @Test
+  void aStopThatArrivesAfterTheTerminalIsSettledIsRefused() {
+    UUID messageId = UUID.randomUUID();
+
+    // 收尾路径先到：这一轮判成 COMPLETE（没有信号可读）
+    assertThat(signal.settle(messageId)).as("★ 没人认领过 ⇒ 收尾路径读到 false（COMPLETE）").isFalse();
+
+    // 请求侧后到（而且它先 request 再 agree，和 ChatStopService 的形状一致）
+    signal.request(messageId);
+    assertThat(signal.agree(messageId))
+        .as("★★ 终态已取下 ⇒ 必须拒收（accepted=false）—— 答应下来也改不动终态了")
+        .isFalse();
+
+    // 拒收之后不许留残留（否则下一轮同 id 一上来就被停）
+    assertThat(signal.isRequested(messageId)).as("★ 拒收必须连带清残留").isFalse();
+  }
+
+  /**
+   * ★★ #242 的另一侧：<strong>停止先到 ⇒ 收尾路径必定读到它</strong>（终态 {@code STOPPED}）。
+   *
+   * <p>两条合起来才是"{@code accepted=true} ⇔ 终态 {@code STOPPED}"：只测这一侧的话，一个"总是返回 true 的 agree"也能过。
+   */
+  @Test
+  void aStopThatArrivesBeforeTheTerminalWins() {
+    UUID messageId = UUID.randomUUID();
+
+    signal.request(messageId);
+    assertThat(signal.agree(messageId)).as("★ 终态还没取下 ⇒ 成交（accepted=true）").isTrue();
+    assertThat(signal.settle(messageId)).as("★★ 收尾路径必须读到它（⇒ ABORT ⇒ STOPPED）").isTrue();
+    assertThat(signal.settle(messageId)).as("★ 只读一次：信号是一次性事件").isFalse();
+  }
+
+  /**
+   * ★ 重新生成同一个 id ⇒ 上一轮"终态已取下"必须被 {@link ChatStopSignal#begin} 清掉。
+   *
+   * <p>否则同 id 的第二轮会一上来就"停不下来"：第一次 {@code agree} 就被拒收，而这一轮其实刚开始。
+   */
+  @Test
+  void beginClearsTheSettledTerminalSoAFreshRunCanBeStoppedAgain() {
+    UUID messageId = UUID.randomUUID();
+
+    assertThat(signal.settle(messageId)).isFalse();
+    signal.begin(messageId);
+
+    signal.request(messageId);
+    assertThat(signal.agree(messageId)).as("★ 新一轮必须能被停（上一轮的'终态已取下'不许漏过来）").isTrue();
+    assertThat(signal.settle(messageId)).isTrue();
   }
 }

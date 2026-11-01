@@ -48,6 +48,15 @@ _BASE_ARG = next((a for a in sys.argv[1:] if not a.startswith("--")), "http://lo
 BASE = _BASE_ARG.rstrip("/")
 API = BASE + "/api/v1"
 
+#: ★★ 流式那一跳**直连后端**，不走开发服务器代理（#237 诊断，2026-10-30）。
+#:   实测（run 40920861173）：同一条 54 字答案，客户端只看到"第 1 行 +0.02s → 空等 5.13s → 尾部一次到齐"，
+#:   相邻行间隔 `[0,0,0,0,5.13,0,…]` —— 帧在到达校验脚本之前就被攒住了。这一层若是 Vite 的 dev proxy，
+#:   那"停止能不能停在半路"测的其实是代理的攒包行为，与产品无关；所以流式这一跳绕开它，直连后端端口。
+#:   判据：这一跳如果开始呈现 ~0.3s 的帧间隔，就说明攒包在代理层；仍是一次到齐则说明在服务端。
+STREAM_API = (
+    (os.environ.get("AIP_STREAM_BASE") or "http://127.0.0.1:8080").rstrip("/") + "/api/v1"
+)
+
 #: 桩的根地址（注入帧间延迟用）。
 STUB = os.environ.get("AIP_STUB_URL", "http://127.0.0.1:11434").rstrip("/")
 #: 桩的 OpenAI 兼容根地址：新建对话模型时要写进 `apiBase`，否则上游请求无处可去。
@@ -89,12 +98,15 @@ FIXTURE_TEXT = """# 差旅与费用报销管理办法
 本办法由财务部门负责解释，自发布之日起施行。
 """
 
-#: 帧间延迟（毫秒）。桩按 4 个字符一片切正文，而**桩的答案只有 45 字左右** = 约 12 片 ⇒
+#: 帧间延迟（毫秒）。桩按 4 个字符一片切正文，而**桩的答案只有 45–54 字** = 约 12 片 ⇒
 #: 60ms 只有 0.72 秒的"正在吐"窗口，主线程在这段窗口里发停止请求**来不及**（实测 `accepted=false`，
 #: 终态是 GENERATED 而不是 STOPPED，见 2026-10-27 run `40514976243`）。
 #: 300ms ⇒ 约 3.6 秒窗口，比一次 HTTP 往返（真栈实测几十毫秒）宽两个数量级。
 #: ★ 不能设太小：停止请求是另一次 HTTP 往返，窗口比往返还短的话，请求到的时候这一轮已经收尾，
 #:   回执会是 `accepted=false`（= 停晚了），于是这条闸门变成在测"网络有多快"。
+#: ★★ 2026-10-30 追加（#237）：窗口够宽**不等于**能停住 —— 客户端看到的"帧"不是桩的帧：
+#:   后端会把若干 delta 合并成一帧（54 字实测只有约 3 帧、每帧 ~18 字）。所以触发条件必须是
+#:   **第一片正文**，不是"第 3 片"：等 3 片等于等整条答案到齐，节拍再慢也照样 `accepted=false`。
 CHUNK_DELAY_MS = 300
 
 #: 等到**第几片**正文再发停止（`#237`）。
@@ -274,7 +286,11 @@ def chat(token: str, body: dict) -> tuple[int, list[dict], str]:
 
 
 def chat_collect(
-    token: str, body: dict, deadline: float = 120.0, sink: list[dict] | None = None
+    token: str,
+    body: dict,
+    deadline: float = 120.0,
+    sink: list[dict] | None = None,
+    times: list[float] | None = None,
 ) -> list[dict]:
     """开一条 SSE 但**逐帧**收（停止测试要这条路径）。返回收到的帧（到流结束为止）。
 
@@ -291,7 +307,7 @@ def chat_collect(
         "Authorization": f"Bearer {token}",
     }
     req = urllib.request.Request(
-        API + "/conversations/chat",
+        STREAM_API + "/conversations/chat",
         data=json.dumps(body).encode("utf-8"),
         method="POST",
         headers=headers,
@@ -300,6 +316,9 @@ def chat_collect(
     resp = urllib.request.urlopen(req, timeout=deadline)
     try:
         for raw in resp:
+            # ★ 每一帧的到达时刻（#237 诊断用）：只靠"收到了几帧"分不清"边到边收"与"流结束才到齐"
+            if times is not None:
+                times.append(time.time())
             frame = parse_frame(raw.decode("utf-8", errors="replace"))
             if frame is not None:
                 frames.append(frame)
@@ -682,7 +701,10 @@ def main() -> int:
         if chunk_delay_injected:
             note(f"已向桩注入 chunk_delay_ms={CHUNK_DELAY_MS}（否则整段正文一次到齐，没有中间态可停）")
         else:
-            note("桩不接受 chunk_delay_ms ⇒ 停止只能停在零字或全字，本轮只断终态与不回 error")
+            # ★ 这里不再写"本轮只断终态"（那是自相矛盾，见 #237）：桩不认节拍时这一轮必然在
+            #   停止请求到达前就写完了，`accepted` 一定是 false ⇒ 下面那条断言会红。红得对 ——
+            #   "停不下来"正是这一步要测的行为，不该靠一句注记把它降级成"只是没测到"。
+            note("桩不接受 chunk_delay_ms ⇒ 停止必然迟到（accepted=false ⇒ 这一步会红）")
 
         def run_stop_round() -> dict:
             """跑一轮"边吐边停"，把这轮的读数原样交回来（判断留给外面，`#237`）。"""

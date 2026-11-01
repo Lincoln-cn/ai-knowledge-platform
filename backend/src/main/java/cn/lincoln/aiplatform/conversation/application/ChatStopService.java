@@ -126,9 +126,12 @@ public class ChatStopService {
     }
 
     // ── ④ 置上 → 登记：一个入口 `accept`，但它要求信号**已经被置上**（见该方法注释）──
-    // ★ 时序：先 `request`（把"用户点了停止"这件事置上），再 `accept`。
-    //   `accept` 返回 false 的含义只有一种：这一刻已经没有任何"待领"的信号 ⇒ 这一轮在我读到 GENERATING
-    //   之后、置信号之前**已经收尾**（收尾路径的 consume 早跑过了）⇒ 当场拒收，不留残留。
+    // ★ 时序：先 `request`（把"用户点了停止"这件事置上），再 `agree`。
+    //   `agree` 返回 false 的含义有两种，都表示"这一轮停不下来了"：
+    //     ① 这一刻已经没有任何"待领"的信号 ⇒ 这一轮在我读到 GENERATING 之后、置信号之前**已经收尾**；
+    //     ② 收尾路径已经**取下终态**（`ChatStopSignal#settle`，见 #242）⇒ 这时候答应下来也改不动终态。
+    //   两种都必须当场拒收、不留残留 —— 回 `accepted=true` 却被生成线程的 COMPLETE 覆盖，
+    //   是本项目最贵的一种谎（用户看到"已停止"，答案却写满了）。
     // ★ 为什么不能只 `request`（第一版）：那一刻收尾路径可能已经跑完，这个信号不会有人再消费
     //   ⇒ 它永远留在集合里，直到某天有人重发同一个消息 id（一种没有症状的泄漏）。
     // ★ 为什么也不能"置上再 consume 当收回"（第二版，真栈当场证伪）：生成线程先读走信号时，
@@ -136,7 +139,7 @@ public class ChatStopService {
     //   —— ConversationStopEndpointTest 断言 accepted=true，它抓住了这个错。
     stopSignal.request(messageId);
     if (!stopSignal.agree(messageId)) {
-      log.info("停止请求晚到了：助手消息 {} 在这一瞬已经收尾 ⇒ 当场拒收（不留残留）", messageId);
+      log.info("停止请求晚到了：助手消息 {} 的终态已取下或这一轮已收尾 ⇒ 当场拒收 accepted=false（不留残留）", messageId);
       return new Receipt(false, message.status());
     }
 

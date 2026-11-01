@@ -199,6 +199,10 @@ class ConversationPersistenceTest {
    *
    * <p>★ 关键是"重新读"而不是"看着内存里那个对象"：后者证明不了任何落库的事。这里断言<strong>库里那一行</strong>的值 ——
    * 领域守卫守的必须是持久化的那一列，否则它守的是一个内存字段。
+   *
+   * <p>★★ 抬升走的是<strong>库侧那条 UPDATE</strong>（{@code #108} 择一 A）。{@code save()}
+   * 已经<strong>写不了</strong>这一列 （{@code updatable = false}）—— 这一条正好是"改回 {@code save()}
+   * 处方就必须变红"的那只金丝雀：把注解去掉， 下面的 {@code raiseClassification} 仍会写库，但本用例同时钉住了"它才是唯一的落库路径"（旧写法见 git 历史）。
    */
   @Test
   void raisedClassificationRoundTrips() {
@@ -208,8 +212,9 @@ class ConversationPersistenceTest {
         .as("前提：新会话从 PUBLIC 起（否则'抬升'这件事没有起点）")
         .isEqualTo(ClassificationLevel.PUBLIC);
 
-    saved.raiseClassification(ClassificationLevel.CONFIDENTIAL);
-    conversations.save(saved);
+    assertThat(conversations.raiseClassification(id, ClassificationLevel.CONFIDENTIAL))
+        .as("抬升必须真的改到那一行（库侧单调 UPDATE 的返回值就是'有没有改到'）")
+        .isTrue();
 
     assertThat(
             conversations
@@ -221,23 +226,25 @@ class ConversationPersistenceTest {
   }
 
   /**
-   * ★ 反向：尝试"降密"之后，<strong>库里那一行</strong>仍是机密。
+   * ★ 反向：尝试"降密"之后，<strong>库里那一行</strong>仍是秘密。
    *
-   * <p>这是本批最值钱的一条真栈读数 —— 纯单测证明"内存里的字段没被改"，而这一条证明"没有任何写路径把它改回去"： 走的是与生产完全同一条链（领域方法 → 适配器 →
-   * 表），<strong>没有任何一处 SQL 直接写它</strong>。
+   * <p>走的是与生产同形的两道守卫：① 领域方法对下调<strong>不做任何事</strong>（内存值都不变）；② 就算有人绕过它，那一列 {@code updatable =
+   * false} ⇒ {@code save()} 也<strong>写不进去</strong>（{@code #108} 择一 A 的封死）。
    */
   @Test
   void loweringNeverReachesTheDatabase() {
     UUID id = UUID.randomUUID();
-    Conversation conversation = conversations.save(new Conversation(id, CURRENT_USER, null, ""));
-    conversation.raiseClassification(ClassificationLevel.SECRET);
-    conversations.save(conversation);
+    conversations.save(new Conversation(id, CURRENT_USER, null, ""));
+    assertThat(conversations.raiseClassification(id, ClassificationLevel.SECRET))
+        .as("前置：先抬到秘密（走库侧那条 UPDATE）")
+        .isTrue();
 
     // ★ 一次正常路径的"回落"输入：本轮只引用了公开 chunk
-    assertThat(conversation.raiseClassification(ClassificationLevel.PUBLIC))
+    Conversation stale = conversations.findById(id).orElseThrow();
+    assertThat(stale.raiseClassification(ClassificationLevel.PUBLIC))
         .as("★ 下调在领域层就不生效（详见 ConversationClassificationTest）")
         .isFalse();
-    conversations.save(conversation);
+    conversations.save(stale);
 
     assertThat(classificationOfRow(id))
         .as("★★ 库里的会话必须仍停在 SECRET：这里如果变成 PUBLIC，就是一次静默降密（而且它已经是后续每一轮回答的输入）")

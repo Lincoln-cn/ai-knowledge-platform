@@ -110,6 +110,10 @@ public class SpringAiChatAdapter {
    * <p>★ 只把 {@link UpstreamGateway.UpstreamUnreachableException} 包成业务失败：调用方在 {@code onDelta} 里抛的异常
    * （典型是用户点停止时的 {@code StopUpstream}）必须<strong>原样穿透</strong>，它代表"正常终止"，不是"上游坏了"。
    *
+   * <p>★★ 订阅方式是有讲究的（{@code #244}）：必须用无界请求的 {@code blockLast()}，<b>不能</b>用 {@code toIterable()} ——
+   * 后者按批预取，会把若干帧先读完再逐帧交出来，真栈上就表现成"答案在生成结束时一起到"。 这条曾经真实发生过：{@code ChatStreamHttpTest}
+   * 与端口层都逐帧，只有这里在攒。判据见 {@code SpringAiStreamDeltaTimingTest}（进程内 300ms 一帧的小上游，首末帧跨度必须 &gt; 600ms）。
+   *
    * @param reasoningEffort {@code null} = 这个模型不该带 {@code reasoning_effort}（{@code #185}）
    * @param onUsage {@code null} = 调用方不关心用量；上游没给 usage 时一次都不回调（不伪造 0）
    */
@@ -122,20 +126,23 @@ public class SpringAiChatAdapter {
       Consumer<String> onDelta,
       BiConsumer<Integer, Integer> onUsage) {
     NativeSpringAiChatModel model = modelOf(target, baseModel, timeout, reasoningEffort);
-    int chunks = 0;
+    int[] chunkCount = {0};
     try {
-      Iterable<ChatResponse> responses =
-          clientOf(model).prompt().messages(springMessages(messages)).stream()
-              .chatResponse()
-              .toIterable();
-      for (ChatResponse response : responses) {
-        String text = textOf(response);
-        if (text == null || text.isEmpty()) {
-          continue;
-        }
-        chunks++;
-        onDelta.accept(text);
-      }
+      // ★ 不要用 toIterable() 迭代（#244）：它按批预取 —— 先把一批帧读完，再逐帧交出来，
+      // 真栈上就表现成"整段答案在生成结束的一瞬间一起到"。blockLast() 用无界请求订阅，
+      // 每一帧在 doOnNext 里立刻交给调用方。
+      clientOf(model).prompt().messages(springMessages(messages)).stream()
+          .chatResponse()
+          .doOnNext(
+              response -> {
+                String text = textOf(response);
+                if (text == null || text.isEmpty()) {
+                  return;
+                }
+                chunkCount[0]++;
+                onDelta.accept(text);
+              })
+          .blockLast();
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw new BusinessException(
           ErrorCode.UPSTREAM_UNAVAILABLE,
@@ -148,7 +155,7 @@ public class SpringAiChatAdapter {
     if (onUsage != null && model.promptTokens() != null && model.completionTokens() != null) {
       onUsage.accept(model.promptTokens(), model.completionTokens());
     }
-    return chunks > 0;
+    return chunkCount[0] > 0;
   }
 
   /** 从一帧里取正文；usage 帧产不出元素（那一层已经滤掉），这里只防空。 */

@@ -196,6 +196,12 @@ public class RetrievalService {
               budget.queryUnderstandingBudgetMs());
     }
 
+    // ★★ #230：检索预算的时钟从这里开始 —— 它量的是"检索阶段净耗时"，不含查询理解。
+    //   此前这里沿用方法开头那个 startedAt（含查询理解）⇒ 查询理解只要不是瞬间返回，
+    //   "总预算"就在第 0 路被判耗尽（日志：检索预算 5000ms 已耗尽（已跑 0 路）），
+    //   整条链路静默降级成单路，B1 读数在两轮之间摆动 30 个百分点。
+    long retrievalStartedAt = System.nanoTime();
+
     int candidateLimit = Math.min(request.topNOrDefault() * OVERFETCH, CANDIDATE_LIMIT_CAP);
     Map<UUID, Double> vectorScores = new HashMap<>();
     Map<UUID, Double> textScores = new HashMap<>();
@@ -214,7 +220,7 @@ public class RetrievalService {
       List<List<UUID>> perQuery = new ArrayList<>();
       for (String query : queries) {
         // ★ 每一路开始前检查余量（10 §6.2 第 6 项）—— 耗尽就用已拿到的结果继续，不是失败
-        if (elapsedMs(startedAt) > budget.totalBudgetMs()) {
+        if (elapsedMs(retrievalStartedAt) > budget.totalBudgetMs()) {
           budgetExhausted = true;
           log.warn(
               "检索预算 {}ms 已耗尽（已跑 {} 路），按已完成的查询继续。"
@@ -284,7 +290,7 @@ public class RetrievalService {
                 mode,
                 scope,
                 candidateLimit,
-                startedAt,
+                retrievalStartedAt,
                 perSubQuestion,
                 vectorScores,
                 textScores)

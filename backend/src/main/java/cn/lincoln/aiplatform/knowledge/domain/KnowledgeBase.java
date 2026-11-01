@@ -103,18 +103,11 @@ public class KnowledgeBase implements OwnedResource {
   @Column(name = "client_request_id", length = 64)
   private String clientRequestId;
 
-  @Column(name = "document_count", nullable = false)
-  private int documentCount;
-
-  @Column(name = "segment_count", nullable = false)
-  private int segmentCount;
-
-  @Column(name = "char_count", nullable = false)
-  private long charCount;
-
-  /** 已有向量化内容 ⇒ 向量模型被锁定（KB-I4）。 */
-  @Column(name = "has_vectorized_content", nullable = false)
-  private boolean hasVectorizedContent;
+  // ★★ 2026-10-29（`#44` 择一 A）：这里原有四列 `document_count` / `segment_count` /
+  //   `char_count` / `has_vectorized_content`，已连库列一起删除（迁移 `knowledge/V54`）。
+  //   `#35` 之后读侧只走 `CountsPort#countsFor`（一条 SQL 四个子查询、按未软删文档现算），
+  //   这四列既没有读点、也没有第二条写路径（除种子回填）⇒ 它们只承诺了一个不存在的真值。
+  //   ★ 别再按"实体上有计数、省一次 count"的思路加回来：列表页的计数只有一个真源。
 
   // ────────────────────────── 检索参数（第 10 周 · 0.3.2）──────────────────────────
   // ★ 为什么挂在库上：mock 里那句话就是口径 ——「检索参数是知识库的一部分：读与写都先问同一个判定」
@@ -223,10 +216,6 @@ public class KnowledgeBase implements OwnedResource {
     this.updatedBy = createdBy;
     this.visibility = Visibility.PRIVATE;
     this.enabled = true;
-    this.documentCount = 0;
-    this.segmentCount = 0;
-    this.charCount = 0;
-    this.hasVectorizedContent = false;
     this.grantRows = new ArrayList<>();
   }
 
@@ -417,21 +406,9 @@ public class KnowledgeBase implements OwnedResource {
     return clientRequestId;
   }
 
-  public int documentCount() {
-    return documentCount;
-  }
-
-  public int segmentCount() {
-    return segmentCount;
-  }
-
-  public long charCount() {
-    return charCount;
-  }
-
-  public boolean hasVectorizedContent() {
-    return hasVectorizedContent;
-  }
+  // ★★ 2026-10-29（`#44`）：这里原有 documentCount() / segmentCount() / charCount() /
+  //   hasVectorizedContent() 四个访问器，已随库列一起删除（迁移 `knowledge/V54`）。
+  //   计数只从 `CountsPort#countsFor` 读（读时算）—— 领域对象不再持有计数快照。
 
   public RetrievalMode retrievalMode() {
     return retrievalMode;

@@ -57,6 +57,30 @@ public class ChatStopSignal {
   private final Set<UUID> decided = ConcurrentHashMap.newKeySet();
 
   /**
+   * ★★ 这一轮是否<strong>已经取下终态</strong>（{@code #242}，2026-10-30）。
+   *
+   * <h3>它补的是哪一条缺口</h3>
+   *
+   * <p>"这一轮停不停"由两个并发方决定：收尾路径（{@link #settle}）与请求侧（{@link #agree}）。在只有 {@code requested}/{@code
+   * decided} 两个集合时，两边各自读自己看到的东西，于是存在一个窗口： 收尾路径已经取完快照（判成 {@code COMPLETE}），请求侧才认领成功并回 {@code
+   * accepted=true} —— 用户被告知"已停止"，落库却是 {@code GENERATED}（真栈实测： 停止时只吐了 4/54 字，回执 {@code
+   * accepted=true}，最终终态 {@code GENERATED}、库里 54 字）。
+   *
+   * <p>⇒ 这里加一个<strong>共用闸门</strong>：两方都在 {@link #gate} 上同步，
+   *
+   * <ol>
+   *   <li>请求侧先到 ⇒ 信号在里面 ⇒ 收尾路径必定读到它（{@code ABORT} ⇒ {@code STOPPED}）；
+   *   <li>收尾路径先到 ⇒ 这个 id 被记进本集合 ⇒ 之后的请求侧一律<strong>拒收</strong>（{@code accepted=false}）， 而不是先答应再被覆盖。
+   * </ol>
+   *
+   * 于是 {@code accepted=true} 与"终态必为 {@code STOPPED}"重新等价 —— 回执不再是猜测。
+   */
+  private final Set<UUID> settledTerminal = ConcurrentHashMap.newKeySet();
+
+  /** 两个集合的唯一同步点（{@link #agree} / {@link #settle} / {@link #begin} 都必须经过它）。 */
+  private final Object gate = new Object();
+
+  /**
    * ★★ <strong>一轮生成开始：清掉这条消息 id 上的残留</strong>（{@code #143} 后半，2026-10-16）。
    *
    * <h3>它把哪一条"侥幸"变成机制</h3>
@@ -74,8 +98,12 @@ public class ChatStopSignal {
    */
   public void begin(UUID assistantMessageId) {
     if (assistantMessageId != null) {
-      requested.remove(assistantMessageId);
-      decided.remove(assistantMessageId);
+      synchronized (gate) {
+        requested.remove(assistantMessageId);
+        decided.remove(assistantMessageId);
+        // ★ 上一轮的"终态已取下"也必须清掉（#242）：同一 id 重新生成时，它又是一轮全新的、可以被停的生成。
+        settledTerminal.remove(assistantMessageId);
+      }
     }
   }
 
@@ -99,21 +127,59 @@ public class ChatStopSignal {
     if (assistantMessageId == null) {
       return false;
     }
-    // ★★ 三种状态，答案是"能不能成交"（幂等，且**顺序无关**）：
-    //   ① 已在 `decided` ⇒ 这个人已经认领过这次停止（重复请求）⇒ 成交，**不要重复认领**；
-    //   ② 还在 `requested` ⇒ 待领 ⇒ 认领：从 `requested` 移到 `decided`；
-    //   ③ 两边都没有 ⇒ 这一轮已经收尾了（收尾路径的 consume 早跑过，`begin` 也清过）⇒ 当场拒收。
-    //   ★ 为什么①必须挡在②前面：`decided` 与 `requested` 是**两个集合**，一个 id 不可能同时在两边
-    //   —— 但"重复请求"必须能分辨出来，否则第二次请求会走到③被误报成"晚到了"。
-    if (decided.contains(assistantMessageId)) {
+    synchronized (gate) {
+      // ★★ ⓪ 终态已经取下 ⇒ 一律拒收（`#242`）：这时候答应下来也改不动终态了。
+      //   宁可回 accepted=false（"这一轮已经收尾了"），也不能回 true 再被生成线程的 COMPLETE 覆盖 ——
+      //   回执与终态不一致是本项目最贵的一种谎（用户看到"已停止"，答案却写满了）。
+      if (settledTerminal.contains(assistantMessageId)) {
+        requested.remove(assistantMessageId);
+        decided.remove(assistantMessageId);
+        return false;
+      }
+      // ★★ 三种状态，答案是"能不能成交"（幂等，且**顺序无关**）：
+      //   ① 已在 `decided` ⇒ 这个人已经认领过这次停止（重复请求）⇒ 成交，**不要重复认领**；
+      //   ② 还在 `requested` ⇒ 待领 ⇒ 认领：从 `requested` 移到 `decided`；
+      //   ③ 两边都没有 ⇒ 这一轮已经收尾了（收尾路径的 consume 早跑过，`begin` 也清过）⇒ 当场拒收。
+      //   ★ 为什么①必须挡在②前面：`decided` 与 `requested` 是**两个集合**，一个 id 不可能同时在两边
+      //   —— 但"重复请求"必须能分辨出来，否则第二次请求会走到③被误报成"晚到了"。
+      if (decided.contains(assistantMessageId)) {
+        return true;
+      }
+      if (!requested.contains(assistantMessageId)) {
+        return false;
+      }
+      requested.remove(assistantMessageId);
+      decided.add(assistantMessageId);
       return true;
     }
-    if (!requested.contains(assistantMessageId)) {
+  }
+
+  /**
+   * ★★ <strong>收尾那一刻：既取下终态，又读一次停止信号</strong>（{@code #242}）。
+   *
+   * <p>它是 {@link #consume} 的加强版：先把这个 id 记进 {@link #settledTerminal}（此后 {@link #agree} 一律拒收），
+   * 再取走已认领的信号。两件事在 {@link #gate} 上做，因此与 {@link #agree} 之间<strong>没有窗口</strong>：
+   *
+   * <ul>
+   *   <li>本次返回 {@code true} ⇒ 这一轮的终态必定是 {@code ABORT}（{@code STOPPED}），且此前那一次 {@code agree} 已经回了
+   *       {@code accepted=true} —— 两者一起成立；
+   *   <li>本次返回 {@code false} ⇒ 之前没人认领过（或者认领发生在本次之后，那时 {@link #agree} 会拒收）。
+   * </ul>
+   *
+   * <p>★ 一个 id 上重复调用只第一次为真（与 {@link #consume} 同语义），因为 {@code ChatService} 的收尾路径可能被第二个入口读第二次， 但它读的是
+   * {@code terminalPath} 快照、不会再落到这里。
+   *
+   * @param assistantMessageId 助手消息 id（{@code null} ⇒ 无操作）
+   * @return 这一轮是否被请求过停止
+   */
+  public boolean settle(UUID assistantMessageId) {
+    if (assistantMessageId == null) {
       return false;
     }
-    requested.remove(assistantMessageId);
-    decided.add(assistantMessageId);
-    return true;
+    synchronized (gate) {
+      settledTerminal.add(assistantMessageId);
+      return decided.remove(assistantMessageId);
+    }
   }
 
   /**

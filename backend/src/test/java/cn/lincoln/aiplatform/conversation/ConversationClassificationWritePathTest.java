@@ -361,6 +361,38 @@ class ConversationClassificationWritePathTest {
     }
   }
 
+  // ────────────────────────── ④ 事件驱动不排期（#12 裁定 C+） ──────────────────────────
+
+  /**
+   * ★★ {@code #12} 裁定 C+：<strong>一条真的问答链跑完之后，{@code event_publication} 仍然是 0 行</strong>。
+   *
+   * <p>为什么值得写一条：本项目的 {@code event_publication} 表（{@code platform/V2}）与模块边界校验（{@code
+   * spring-modulith-starter-jpa} + {@code ApplicationModules.verify}）都留着，但<strong>一个 Modulith
+   * 监听者都没有</strong> —— 这张表只在"有监听者、且事件被投进总线"时才会有行。表恒空是"事件驱动还没上"的<strong>证据</strong>，
+   * 它本身不是缺陷；写下来的目的是防止它被读成"事件在走"（{@code ROADMAP} 里那句"等 M3 之后"就是这么过期的）。
+   *
+   * <p>★ <strong>它能红在哪</strong>：谁接上第一个消费者（例如给问答链加一条 {@code @ApplicationModuleListener}）， 这张表就开始有行 ⇒
+   * 本断言变红。届时按 {@code #12} 的处置把它改成"消费者到了"的读数，并把 {@code ROADMAP} 的"不排期"一并订正。
+   */
+  @Test
+  void oneFullQuestionChainStillLeavesTheEventPublicationTableEmpty() throws Exception {
+    seedChatModel();
+    // 与判据① 同一条理由：通用问答默认关检索，这里要先打开才会真的走完"检索 → 引用 → 落库"。
+    jdbc.update("update cv_chat_settings set retrieval_enabled = true");
+    String token = login();
+
+    HttpResponse<String> response =
+        postChat(token, "{\"question\":\"差旅住宿标准\",\"attachmentIds\":[],\"thinking\":false}");
+    assertThat(response.statusCode()).as("前提：这一条要的是一轮真的跑完的问答").isEqualTo(200);
+
+    Long published = jdbc.queryForObject("select count(*) from event_publication", Long.class);
+    assertThat(published)
+        .as(
+            "★★ #12 裁定 C+：机制与表留着，但没有任何 Modulith 监听者 ⇒ 表恒空。"
+                + "谁接了第一个消费者，这条会红 —— 那时按 #12 的处置改读数，并订正 ROADMAP 的「事件驱动不排期」")
+        .isZero();
+  }
+
   // ────────────────────────── 夹具与库读数 ──────────────────────────
 
   private static SourceRef ref(ClassificationLevel classification) {

@@ -44,7 +44,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  *   <li><strong>库侧那条语句的语义</strong>：只升 / 不降 / 相等幂等 / {@code null} 是"不变" / 会话不在 ⇒ {@code
  *       false}（顺序用例，不冒充并发）；
  *   <li><strong>领域方法与 SQL 的单调口径一致</strong>：两侧各自抬升<strong>同一序列</strong>（16 对 {@code (现值, 本轮)}）⇒
- *       终值与"是否真的抬升"都必须相同 —— 这是择一 (a) 的<strong>代价</strong>（口径要在 SQL 里再写一遍） 的处置读数；
+ *       "是否真的抬升"必须相同；库侧还要断言终值 = 两者的 max —— 这是择一 (a) 的<strong>代价</strong>（口径要在 SQL 里再写一遍） 的处置读数。★
+ *       领域侧只在内存里抬（那一列 {@code updatable = false}），所以它比的是<strong>规则</strong>；
  *   <li><strong>{@code #108} 正文那条示意 SQL 为什么不能照抄</strong>：{@code greatest} 比的是<strong>字典序</strong>，
  *       而它与密级次序不一致（PostgreSQL 实测）。
  * </ol>
@@ -55,8 +56,10 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * {@code save}"（即 {@code #108} 里那条坏路径）⇒ <strong>本类第 1、2 条用例必须变红</strong> （终值停在"最后提交的那一档"而不是 max）。★
  * 它们**不会**在语义用例（第 2、3 条）上变红 —— 那正是这条账的性质：单线程全绿、并发才错。
  *
- * <p>★ 另有一条<strong>反向</strong>读数 {@link #residualStaleEntityWriteBackIsStillPossible()}： 老的 {@code
- * save()} 写法今天仍能把陈旧实体写回去（本批没封死，两条封死路线都牵动既有领域单测）—— 它写下来是为了"谁封死了它会变红"，而不是把它当成口径（详见交付报告"待 Lead 裁决"）。
+ * <p>★★ <strong>封死读数</strong>（{@code #108} 择一 A，2026-10-29）：{@link
+ * #renameRacingAgainstRaiseCannotLowerTheWatermark()} 钉住 {@code max_classification} 的 {@code
+ * updatable = false} —— 把那条注解删掉它就变红。这也是原先那条"当前事实：{@code save()}
+ * 仍能把陈旧实体写回去"的读数被<strong>翻转</strong>成的形状。
  */
 @SpringBootTest
 @Testcontainers
@@ -148,10 +151,14 @@ class ConversationClassificationWriteTest {
    * ★★ <strong>领域方法与库侧 UPDATE 的单调口径逐对一致</strong>（{@code #108} 判据 2）。
    *
    * <p>择一 (a) 的代价是"口径要在 SQL 里再写一遍"——它的处置就是这条用例：两侧各自从 {@code PUBLIC} 抬升到 {@code current}、再抬升到 {@code
-   * refs}（16 对 {@code (现值, 本轮)} 全覆盖），然后比对 <strong>终值</strong>与<strong>"是否真的抬升了"</strong>。两者都必须相同。
+   * refs}（16 对 {@code (现值, 本轮)} 全覆盖），然后比对<strong>"是否真的抬升了"</strong>与<strong>库侧的终值</strong>。
+   *
+   * <p>★★ <strong>领域侧那一半只在内存里抬</strong>（{@code #108} 择一 A 封死之后 {@code max_classification} 是 {@code
+   * updatable = false}，{@code save()} 落不了这一列）⇒ 这一侧能验的只有<strong>规则</strong>，落库的终值由 {@code
+   * viaStatement} 那条路断言（它才是生产路径，调用点见 {@code ChatTurnWriter}）。
    *
    * <p>★ 它能红在哪：把那条 SQL 的 {@code where … in (严格更低的档)} 改坏（去掉、写成 {@code !=}、或把集合取反） ⇒ 某一对的结果与领域侧分叉 ⇒
-   * 立刻红。★ 领域侧那一半也不是"念一遍代码"：它真的写到库里再从库里读回来。
+   * 立刻红。
    */
   @ParameterizedTest
   @EnumSource(ClassificationLevel.class)
@@ -168,21 +175,18 @@ class ConversationClassificationWriteTest {
       }
       boolean raisedByStatement = conversations.raiseClassification(viaStatement, refs);
 
-      // ── 领域侧：同一序列，但走"内存里的领域方法 + save"（顺序调用，与并发无关）──
+      // ── 领域侧：同一序列，但只走内存里的领域方法（★ 不 save：那一列已 updatable = false）──
       Conversation entity = conversations.findById(viaDomain).orElseThrow();
       if (current != ClassificationLevel.PUBLIC) {
         assertThat(entity.raiseClassification(current)).as("前置：领域侧先把现值抬到 %s", current).isTrue();
-        conversations.save(entity);
       }
       boolean raisedByDomain = entity.raiseClassification(refs);
-      conversations.save(entity);
 
       assertThat(classificationOfRow(viaStatement))
-          .as("现值 %s、本轮 %s ⇒ 两侧的终值必须相同", current, refs)
-          .isEqualTo(classificationOfRow(viaDomain))
+          .as("现值 %s、本轮 %s ⇒ 库侧那条 UPDATE 的终值必须是两者的 max", current, refs)
           .isEqualTo(current.max(refs).name());
       assertThat(raisedByStatement)
-          .as("现值 %s、本轮 %s ⇒ '是否真的抬升'两侧也必须相同（相等幂等 / 下调在这两侧都必须是 false）", current, refs)
+          .as("现值 %s、本轮 %s ⇒ '是否真的抬升'两侧必须相同（相等幂等 / 下调在这两侧都必须是 false）", current, refs)
           .isEqualTo(raisedByDomain)
           .isEqualTo(refs.ordinal() > current.ordinal());
     }
@@ -218,41 +222,50 @@ class ConversationClassificationWriteTest {
         .isEqualTo("CONFIDENTIAL");
   }
 
-  // ────────────────────────── ⑤ 没封死的那一条（写下来，免得被读成已封死） ──────────────────────────
+  // ────────────────────────── ⑤ 封死之后：改名与抬升撞车也不回退水位 ──────────────────────────
 
   /**
-   * ★★ <strong>当前事实：老的 {@code save()} 写法仍能把陈旧实体写回去</strong>（本批<strong>没有</strong>封死它）。
+   * ★★ <strong>改名（{@code rename}）与抬升撞车之后，水位不回退</strong> —— {@code #108} 择一 A 的<strong>封死读数</strong>
+   * （金丝雀）。
    *
-   * <p>这条读数是刻意反着写的，理由与 {@code caliber} 那一族"钉住当前没做这件事"的用例同源： 本批把"抬升"的<strong>新入口</strong>做成库侧一条
-   * UPDATE（不接收实体 ⇒ 那条路不可能写陈旧值）， 但 {@code save(Conversation)} 仍然会写 {@code max_classification} 这一列 ⇒
-   * 调用方若沿用旧处方 （{@code findById} → 领域方法 → {@code save}）就<strong>原样把丢更新搬回来</strong>。
+   * <p>形状就是生产那两笔事务的交错：
    *
-   * <p>★ 为什么本批不封死：两条封死路线都牵动既有领域单测（① 列加 {@code updatable = false} —— 领域方法就再也落不了库，{@code
-   * ConversationPersistenceTest} 里两条"抬升落库"的读数要改成走新入口， 且内存对象会与库分叉；② 去掉实体上的可变字段——那要重写 18 条领域单测）。属**待
-   * Lead 裁决**，见交付报告。
+   * <ol>
+   *   <li>{@code ConversationListService#rename} 读到会话（此刻 {@code PUBLIC}），把实体拿在手上；
+   *   <li>另一笔事务（{@code ChatTurnWriter}）把同一会话抬到机密（库侧那条 UPDATE，不读实体）；
+   *   <li>改名那笔事务把<strong>陈旧实体</strong> {@code save()} 回去 —— 它内存里仍是 {@code PUBLIC}。
+   * </ol>
    *
-   * <p>★★ 这条断言的价值在于<strong>它会变红</strong>：谁把 {@code save()} 这条路封死了（两条路线之一）， 它立刻红 —— 那时把这条读数连同 {@code
-   * Conversation}/{@code ConversationRepository} 的类注释一起改掉。
+   * <p>旧实现下第 ③ 步会把水位写回（改名顺手降一档密级，而且不报错）。现在 {@code max_classification} 映射为 {@code updatable =
+   * false}：{@code save()} 的 UPDATE 里根本没有这一列 ⇒ 水位停在机密。
+   *
+   * <p>★★ <strong>它能红在哪</strong>：把 {@code Conversation#maxClassification} 上的 {@code updatable =
+   * false} 删掉 ⇒ 最后一条断言立刻读回 {@code SECRET}。★ 它同时证明"封死的只是那一列，不是 {@code save()}
+   * 本身"：标题必须真的改了（否则这条用例什么都没验）。
    */
   @Test
-  void residualStaleEntityWriteBackIsStillPossible() {
+  void renameRacingAgainstRaiseCannotLowerTheWatermark() {
     UUID id = newConversation();
 
-    // ① 一笔事务读到现值（PUBLIC）并把它留在手上 —— 这就是"陈旧"
-    Conversation stale = conversations.findById(id).orElseThrow();
+    // ① 改名那笔事务读到现值（PUBLIC）并留在手上 —— 这就是"陈旧"
+    Conversation renaming = conversations.findById(id).orElseThrow();
     // ② 另一笔事务把会话抬到机密（新的那条路：库侧单调 UPDATE）
     assertThat(conversations.raiseClassification(id, ClassificationLevel.CONFIDENTIAL)).isTrue();
-    // ③ 陈旧的那一份按"内存里的现值"判定 ⇒ 它认为自己可以抬升
-    assertThat(stale.raiseClassification(ClassificationLevel.SECRET))
-        .as("★ 领域守卫只看内存里的现值（它不知道库里已经升到机密了）⇒ 返回 true")
+    // ③ 陈旧的那一份按"内存里的现值"判定 ⇒ 它认为自己可以抬到秘密
+    assertThat(renaming.raiseClassification(ClassificationLevel.SECRET))
+        .as("★ 领域守卫只看内存里的现值（它不知道库里已经升到机密了）⇒ 返回 true —— 旧处方正是从这里把陈旧值写回去的")
         .isTrue();
-    conversations.save(stale);
+    renaming.rename("改名与抬升撞车的会话");
+    conversations.save(renaming);
 
+    assertThat(titleOfRow(id))
+        .as("★ 封死的是那一列，不是 save() 本身：标题必须真的落库（否则这条用例什么都没验）")
+        .isEqualTo("改名与抬升撞车的会话");
     assertThat(classificationOfRow(id))
         .as(
-            "★★ 当前事实（不是口径）：库里被写成了 SECRET，而真实 max 是 CONFIDENTIAL"
-                + " —— 旧的 save() 处方仍能把丢更新搬回来。谁封死了 save() 这条路，这条断言会红")
-        .isEqualTo("SECRET");
+            "★★ 改名之后水位必须仍是机密（陈旧实体内存里是 SECRET，真实 max 是 CONFIDENTIAL）"
+                + " —— 退回较低的那一档就是一次静默降密。把 updatable = false 删掉，这条立刻变红")
+        .isEqualTo("CONFIDENTIAL");
   }
 
   // ────────────────────────── 夹具 ──────────────────────────
@@ -310,5 +323,11 @@ class ConversationClassificationWriteTest {
   private String classificationOfRow(UUID id) {
     return jdbc.queryForObject(
         "select max_classification from cv_conversation where id = ?::uuid", String.class, id);
+  }
+
+  /** 纯 SQL 读标题（同上：用的是库里那一行，不是实体里的字段）。 */
+  private String titleOfRow(UUID id) {
+    return jdbc.queryForObject(
+        "select title from cv_conversation where id = ?::uuid", String.class, id);
   }
 }

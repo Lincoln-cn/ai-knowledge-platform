@@ -94,7 +94,7 @@
               </div>
               <span class="grow" />
               <el-switch
-                v-if="!consumer"
+                v-if="!consumer && canManage"
                 :model-value="kb.enabled"
                 size="small"
                 @click.stop
@@ -118,7 +118,7 @@
               <el-tag v-if="kb.embeddingLocked && !consumer" size="small" type="warning" effect="plain">向量已锁定</el-tag>
               <span class="grow" />
               <el-button v-if="canManage" link size="small" type="primary" @click.stop="openShare(kb)">共享</el-button>
-              <el-button v-if="!consumer" link size="small" type="danger" @click.stop="remove(kb)">删除</el-button>
+              <el-button v-if="!consumer && canManage" link size="small" type="danger" @click.stop="remove(kb)">删除</el-button>
             </div>
           </el-card>
 

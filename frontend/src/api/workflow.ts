@@ -276,7 +276,24 @@ export interface WorkflowRecord {
     enteredAt: string
     elapsedMs: number
     failReason?: string | null
+    /**
+     * 并行扇出时"这个节点属于哪条支路"（`#112`）。
+     *
+     * 没有它，并行支路里的同名节点分不清归属。V1.0 不做并行扇出 ⇒ 当前记录里恒为 `null`，
+     * 但**字段位置先留**：等引擎真支持并行再补，历史记录就永远补不回来了（同 `graphVersion` 的理由）。
+     */
+    parentNodeId?: string | null
   }>
+  /**
+   * 本次执行用的是**哪一版图**（`#112`）。
+   *
+   * ★ 为什么必须显式记：图发布是**可回滚的多版本**（`04 FR-04-08`），而"哪几版在什么时间发布"
+   * 不在执行记录里 —— 想靠 `startedAt` 反推要跨表比时间序，且并发发布会算错。
+   * 没有这个字段，改版之后历史记录就再也回答不了"当时跑的是哪一版"，观测也无法按图版本切片（`09 §5.3.2 ④`）。
+   *
+   * ★ 为什么是可选：本条落地前的存量记录没有它，必填会让旧数据变成脏数据（契约只加不删、不轻易收紧）。
+   */
+  graphVersion?: number
   /** 最终答复的摘要（截断）。完整答复在会话里，记录只做排查线索 */
   finalOutputPreview: string
   status: 'SUCCEEDED' | 'FAILED'

@@ -35,6 +35,12 @@ import org.hibernate.annotations.UpdateTimestamp;
  * ConversationRepository#raiseClassification}（一条 {@code update … where id = ? and
  * max_classification in (严格低于本轮 max 的那些档)}）， 它<strong>不读实体</strong> ⇒ "拿陈旧实体写回"这条路径在签名上就不存在。
  *
+ * <p>★★ <strong>2026-10-29（{@code #108} 择一 A 封死）</strong>：上面那句原来只对"调用哪个方法"成立 —— {@code save()} 仍然会写
+ * {@code max_classification} 这一列，于是"改名 / 软删把整实体保存回去"就原样把丢更新搬了回来。 现在那一列映射成 {@code updatable =
+ * false}：<strong>它只在 INSERT 时写，之后任何人 {@code save()} 都不带它</strong> ⇒ 抬升只有库侧那条 UPDATE
+ * 一条路，"陈旧实体回退水位"在<strong>映射层</strong>被物理封死。 回归读数见 {@code
+ * ConversationClassificationWriteTest}（改名与抬升竞争后水位不回退）。
+ *
  * <p>★★ <strong>"会不会被抬升"这条规则只有一处</strong>：{@link #strictlyLowerThan}。 内存里的 {@link
  * #raiseClassification} 与库侧那条 UPDATE 的 {@code where} <strong>同取它</strong> —— 于是"口径在 SQL
  * 里再写一遍"这个代价被压到"只有集合成员判定，没有第二份密级次序" （两侧一致由 {@code ConversationClassificationWriteTest} 的等价用例逐对钉住）。
@@ -44,13 +50,12 @@ import org.hibernate.annotations.UpdateTimestamp;
  * <ul>
  *   <li><strong>做</strong>：数据层（{@code V32} 的表 + 本实体 + {@link
  *       ConversationRepository}）与<strong>领域不变量</strong>。
- *   <li><strong>不做</strong>：服务层编排（创建会话 / 追加消息 / 落引用集合那一整条链）与 HTTP 端点 —— 它们的载体是第 17 周的 SSE
- *       问答链路（{@code 13 §8.3} 的 M4b 行）。★ <strong>写侧的"落库机制"已随 {@code #108} 落</strong>（见上一段： {@link
- *       ConversationRepository#raiseClassification}），但它的<strong>生产调用方仍未出现</strong>：
- *       "本轮引用集合的最高密级"这个值今天到不了落库那一刻（契约的 {@code SourceRef} 十个字段里<strong>没有</strong>
- *       classification，{@code 10 §8.2} 已裁定归因类字段走埋点），所以那一步要连带改检索侧的装配 —— 属第 17 周。
- *       这一点是<strong>刻意</strong>的：{@code #27} 判的是"表与领域口径现在落，消费者第 17 周接"， 而不是"先造一个空壳服务假装会话密级在工作"（那正是该
- *       Issue 点名的 A 类病）。
+ *   <li><strong>当时不做、现已落地</strong>：服务层编排（创建会话 / 追加消息 / 落引用集合那一整条链）与 HTTP 端点 —— 载体是第 17 周的 SSE
+ *       问答链路（{@code 13 §8.3} 的 M4b 行），今天已在 {@code ChatTurnWriter} / {@code ChatService} 上跑。★
+ *       <strong>写侧"落库机制"与"生产调用方"现在都已出现</strong>：{@link
+ *       ConversationRepository#raiseClassification}（{@code #108}）由 {@code ChatTurnWriter#finish}
+ *       在落终态的那个事务里调用，取值 = 本轮引用集合的最高密级（载体是 {@code SourceRef} 的第 11 个分量 {@code classification}，{@code
+ *       #27}）。只升不降由库侧那条 UPDATE 的 {@code where} 保证，调用方<strong>不做任何比较</strong> —— 在调用方比一次就多一处会漂的口径。
  *   <li><strong>不碰</strong>：{@code cv_message}（消息、引用快照、附件）—— 那是第 17 周的下一张表。
  * </ul>
  *
@@ -131,9 +136,16 @@ public class Conversation {
    *
    * <p>★ {@code nullable = false} + 默认 {@code PUBLIC}（库层 {@code default 'PUBLIC'}，实体侧由构造器保证）：
    * 新会话还没有引用过任何 chunk ⇒ 累计值就是最低档。这不是"宽松的默认值"，而是<strong>空引用集合的 max</strong>。
+   *
+   * <p>★★ <strong>{@code updatable = false}（{@code #108} 的封死，2026-10-29）</strong>：这一列<strong>只在
+   * INSERT 时写</strong>，之后<strong>任何</strong> {@code save()} 都不再带它。理由见 {@link #raiseClassification}：
+   * 落库那条路是一条库侧单调 UPDATE（不接收实体），而 <strong>改名 / 软删</strong>（{@code
+   * ConversationListService#rename/#delete}）走的是"读 → 改 → {@code save}" —— 那两处一旦能写这一列， 就会把
+   * <strong>读的时候</strong>的旧水位写回去（日志里看到的是一次普通改名，库里的密级却退了一档）。
+   * 封死之后，"陈旧实体写回"这条路径在<strong>映射层</strong>也不存在了，而不只是"签名上不推荐"。
    */
   @Enumerated(EnumType.STRING)
-  @Column(name = "max_classification", nullable = false, length = 16)
+  @Column(name = "max_classification", nullable = false, length = 16, updatable = false)
   private ClassificationLevel maxClassification;
 
   @CreationTimestamp
@@ -186,6 +198,12 @@ public class Conversation {
    * save()} 是"读 → 改 → 更新"，同事务之外的并发抬升会丢更新。 生产写入点是 {@link
    * ConversationRepository#raiseClassification}（库侧一条 UPDATE，<strong>不经过这个对象</strong>）；
    * 本方法仍然值钱，因为它是<strong>{@link #strictlyLowerThan} 那句规则的领域侧表达</strong>， 而那两处必须逐对一致（等价用例钉住）。
+   *
+   * <p>★★ <strong>封死之后本方法不再落库</strong>：{@code max_classification} 映射为 {@code updatable =
+   * false}，所以这里改完再 {@code save()} <strong>库里不会变</strong>（{@code #108} 择一 A）。 于是它只剩两个用途：① 表达 {@link
+   * #strictlyLowerThan} 那条规则（领域单测与等价用例读它）；② 给<strong>内存里</strong>刚建、还没 flush 的对象一个正确的水位。 ★
+   * <strong>别把它当成写入口</strong>：要落库就调 {@link
+   * ConversationRepository#raiseClassification}（它自己会返回"是否真的抬升了"）。
    *
    * <p>语义三条，缺一条都不算做到：
    *
@@ -307,8 +325,9 @@ public class Conversation {
   }
 
   /**
-   * ★★ 会话累计密级。★ 只读 —— 改它只有两条路，而它们是同一句规则的两侧：内存里的 {@link #raiseClassification} 与库侧的 {@link
-   * ConversationRepository#raiseClassification}（{@code #108}）。
+   * ★★ 会话累计密级。★ 只读 —— 落库那一条路只有 {@link ConversationRepository#raiseClassification}（库侧一条 UPDATE）；内存里的
+   * {@link #raiseClassification} 是同一句规则的另一侧，但<strong>已经不会经 {@code save()} 落库</strong>（{@code #108}
+   * 择一 A：那一列 {@code updatable = false}）。
    */
   public ClassificationLevel maxClassification() {
     return maxClassification;

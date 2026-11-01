@@ -32,8 +32,10 @@
 --   前缀刻意避开 `0000…`/`1000…`（V4 的角色与账号）与 `00000000-0000-4000-8000-…`（组织），
 --   免得"示例数据"与"身份基础数据"在 uuid 上看起来是同一族。
 --
--- ★ 计数列（`document_count` / `segment_count` / `char_count` / `char_length`）**不手写死值**：
---   全部由末尾的 UPDATE 从真实行算回来。手写常量会在改正文时静默过期，而列表页读的就是这几列。
+-- ★ 库（`kb_knowledge_base`）的计数列已删（`#44`，迁移 `knowledge/V54`）：列表页的计数由读侧
+--   现算（`KnowledgeBaseRepositoryAdapter#countsFor`）⇒ 示例数据既不必、也不该再写这个值。
+--   ★ 文档与分段表自己的 `char_count` / `segment_count` **仍是真实列**，照旧在下面按正文长度写入
+--     （它们是真读数，不是快照）。
 -- ════════════════════════════════════════════════════════════════════════════
 
 -- ── 0 · 两个模型占位（不加载、无密钥）────────────────────────────────────────
@@ -54,20 +56,19 @@ values ('5ee10000-0000-4000-8000-000000000001', '示例对话模型（待配置�
 -- ── 1 · 三个知识库（三种密级上限，正好覆盖可见性判定的三档）─────────────────
 insert into kb_knowledge_base (id, name, category, description, icon, import_type,
                                embedding_model_id, max_classification, enabled, owner_id,
-                               visibility, document_count, segment_count, char_count,
-                               has_vectorized_content, created_at, updated_at)
+                               visibility, created_at, updated_at)
 values ('5ee20000-0000-4000-8000-000000000001', '制度规范示例库', '制度规范',
         '示例数据：差旅、报销、值班等内部制度的片段，用来演示建库 → 上传 → 分段 → 检索。',
         '📘', 'LOCAL', '5ee10000-0000-4000-8000-000000000002', 'SECRET', true,
-        '10000000-0000-0000-0000-000000000001', 'PRIVATE', 0, 0, 0, false, now(), now()),
+        '10000000-0000-0000-0000-000000000001', 'PRIVATE', now(), now()),
        ('5ee20000-0000-4000-8000-000000000002', '产品手册示例库', '产品资料',
         '示例数据：产品功能说明的片段，用来演示「应用只绑一个库」时的检索边界。',
         '📗', 'LOCAL', '5ee10000-0000-4000-8000-000000000002', 'INTERNAL', true,
-        '10000000-0000-0000-0000-000000000001', 'PRIVATE', 0, 0, 0, false, now(), now()),
+        '10000000-0000-0000-0000-000000000001', 'PRIVATE', now(), now()),
        ('5ee20000-0000-4000-8000-000000000003', '行业标准示例库', '行业标准',
         '示例数据：公开标准的片段，密级上限 PUBLIC —— 用来对比「公开库」与「受限库」的可见性。',
         '📙', 'LOCAL', '5ee10000-0000-4000-8000-000000000002', 'PUBLIC', true,
-        '10000000-0000-0000-0000-000000000001', 'PRIVATE', 0, 0, 0, false, now(), now());
+        '10000000-0000-0000-0000-000000000001', 'PRIVATE', now(), now());
 
 -- ── 2 · 三份文档（已解析、待向量化）──────────────────────────────────────────
 -- ★ `department_legacy` 留空（V27：它不是从自由字符串迁来的）；部门走 `org_id` = 总部。
@@ -196,13 +197,3 @@ values ('5ee70000-0000-4000-8000-000000000001', '5ee20000-0000-4000-8000-0000000
 insert into as_assistant_prompt (assistant_id, prompt_config_id)
 values ('5ee70000-0000-4000-8000-000000000002', '5ee60000-0000-4000-8000-000000000001'),
        ('5ee70000-0000-4000-8000-000000000002', '5ee60000-0000-4000-8000-000000000002');
-
--- ── 6 · 计数列从真实行算回来（理由见文件头）────────────────────────────────
-update kb_knowledge_base k
-set document_count = (select count(*) from kb_document d
-                      where d.kb_id = k.id and d.deleted_at is null),
-    segment_count  = (select count(*) from kb_segment s where s.kb_id = k.id),
-    char_count     = (select coalesce(sum(s.char_count), 0) from kb_segment s where s.kb_id = k.id)
-where k.id in ('5ee20000-0000-4000-8000-000000000001',
-               '5ee20000-0000-4000-8000-000000000002',
-               '5ee20000-0000-4000-8000-000000000003');
