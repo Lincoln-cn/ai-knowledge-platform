@@ -6,6 +6,6 @@ export default [
     path: 'audit',
     name: 'audit',
     component: () => import('./Index.vue'),
-    meta: { title: '审计记录', permission: PERM.systemManage }
+    meta: { title: '审计记录', permission: PERM.auditView }
   }
 ] satisfies RouteRecordRaw[]

@@ -153,8 +153,15 @@ export function visiblePredicate(
  * 单条取数**与写操作前置**共用这一条（§3.3 硬规矩 1：写操作也要走，
  * 否则「看不见但能改」这种越权最难发现）。
  *
- * ⚠️ 看不见一律 **404，不是 403**（§3.3 硬规矩 3）—— 403 等于告诉对方"这个 id 存在"。
- * 所以"查不到"与"看不见"在这里合并成同一个应答，连报文都不区分。
+ * ## 两个维度必须分开（`#277`）
+ *
+ * - **缺权限点 ⇒ 403**：这个功能对他不可用，与具体是哪条数据无关。真后端的写接口
+ *   是 `@PreAuthorize` 先行 —— 它根本不会去看数据，所以答 403。
+ * - **有权限点但这条数据不在他的范围 ⇒ 404**：不暴露"这个 id 存在"（§3.3 硬规矩 3）。
+ *
+ * ★ 之前这里把两者合并成 404，于是 mock 下"没有 `knowledge:manage` 的人改知识库启停"
+ * 得到 404，而真后端给 403 —— **同一个动作两个读数**，而 mock 恰恰是用来提前发现
+ * 这类不一致的。合并的代价是"看不见"与"不许"在报文里再也分不开。
  */
 export function requireVisible<T extends ResourceLike>(
   resource: T | undefined,
@@ -163,6 +170,9 @@ export function requireVisible<T extends ResourceLike>(
   label: string,
   id: string
 ): T {
+  if (!subjects.permissions.has(action)) {
+    throw new ApiError(ErrorCode.FORBIDDEN, `没有访问${label}的权限`)
+  }
   if (!resource || !visibleTo(resource, subjects, action)) {
     throw new ApiError(ErrorCode.NOT_FOUND, `${label}「${id}」不存在`)
   }

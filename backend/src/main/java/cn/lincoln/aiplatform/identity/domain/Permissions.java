@@ -79,6 +79,20 @@ public final class Permissions {
   public static final String FEEDBACK_HANDLE = "feedback:handle";
   public static final String SYSTEM_MANAGE = "system:manage";
 
+  /**
+   * 查看审计记录（{@code #276}）。
+   *
+   * <p>★ 不复用 {@code
+   * system:manage}：查审计是"核对某个变更"的**只读**动作，与"改配置"不是一类；复用会把权限切成两半（要么能进系统管理、要么连审计也看不到）。真实组织里"审计员"就是独立岗位
+   * —— 他该能看全部操作留痕，但不该能改角色与字典。
+   *
+   * <p>★ 默认只给 ADMIN（见下方 {@code ALL}）；其它角色在角色管理里显式勾选。★ **不需要迁移**：ADMIN
+   * 的授权是"代码权威"，`PermissionCatalog.sync()` 每次启动按 {@code Permissions.of("ADMIN")} 差分补上 ——
+   * 但常量必须同时进两处：本类的 {@code ALL} 与 {@code PermissionCatalog.ITEMS}（后者是目录条目清单，缺它会被 {@code
+   * catalogCodes} 过滤掉，表现为 ADMIN 也 403）。
+   */
+  public static final String AUDIT_VIEW = "audit:view";
+
   /** 基础数据字典（密级 / 文种 / 提示词类型 / 库分类）—— 管理菜单「基础数据」。 */
   public static final String PLATFORM_DICT_MANAGE = "platform:dict:manage";
 
@@ -106,6 +120,7 @@ public final class Permissions {
           DASHBOARD_VIEW,
           FEEDBACK_HANDLE,
           SYSTEM_MANAGE,
+          AUDIT_VIEW,
           IDENTITY_ORG_MANAGE,
           PLATFORM_DICT_MANAGE);
 
