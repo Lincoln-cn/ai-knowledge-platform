@@ -81,8 +81,9 @@ class PdfPlaceholderNoiseTest {
     return Files.readAllBytes(out);
   }
 
+  /** 源文件里真写着占位行时：剥离后一条不剩，而图注与正文一个字都不少（`#51` 判据 1）。 */
   @Test
-  void 源文件带着占位行时剥离后一个都不剩而图注还在() throws Exception {
+  void placeholdersFromTheSourceFileAreAllGoneAndCaptionsStay() throws Exception {
     byte[] pdf =
         pdfWith(
             "Chapter 1 Overview",
@@ -108,7 +109,7 @@ class PdfPlaceholderNoiseTest {
   }
 
   @Test
-  void 源文本里没有占位行时解析链不会凭空造出来() throws Exception {
+  void theParseChainDoesNotInventPlaceholders() throws Exception {
     // ★ 这条钉的是取证结论本身：哪天换了 Tika 版本、它开始给图片插占位，这条会红。
     byte[] pdf =
         pdfWith("Chapter 1 Overview", "Figure 1: architecture overview", "Body paragraph.");
