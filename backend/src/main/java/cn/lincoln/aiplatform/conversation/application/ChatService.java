@@ -114,6 +114,17 @@ public class ChatService {
    */
   private static final long POLL_INTERVAL_MS = 25L;
 
+  /**
+   * 心跳线程<strong>连续</strong>抛异常多少次就按超时收网（≈ {@code 400 × 25ms = 10s}）。
+   *
+   * <p>★ 为什么不是"抛一次就退出"（改之前就是这样，只打一条 WARN）：这条线程是闲置超时的<strong>唯一驱动</strong>， 它一退出，超时兜底就静默失效 ——
+   * 症状正是"这一轮永远不收尾，而且没有任何错误"。所以先记一次、继续跑。
+   *
+   * <p>★ 为什么要有上限：异常若来自"装配器已收尾还调 heartbeat"这类不变量被破坏，循环会一直转； 400 × 25ms 远小于最小闲置超时（{@code
+   * ChatStreamProperties} 校验 {@code 心跳×3 <= 闲置}）， 所以这道上限不会抢在正常超时之前收网，只在"心跳这条线彻底坏了"时兜住。
+   */
+  private static final int HEARTBEAT_MAX_CONSECUTIVE_FAILURES = 400;
+
   /** 候选过采样倍数 —— 过滤（去重 / 缺展示信息）会砍掉几条，按 1× 取会"少给"引用。 */
   private static final int RETRIEVAL_OVERFETCH = 3;
 
@@ -476,70 +487,114 @@ public class ChatService {
     Run run = new Run(assembler, turn.assistantMessageId(), startedAtNanos, sink);
     // ★ 收尾入口在这里交出去（它只指向同一个 Run 的收尾方法，不含任何判据）
     terminalGate.onSecondTerminal(() -> finishTurn(turn, run, run.pathOf(), upstreamFailed(run)));
-    // ★ meta 先发：前端拿到 messageId 才谈得上"生成中停止"（契约注释原文）
-    assembler.begin();
-    run.pump();
-
-    // ★★ 检索必须在**调用线程**上跑，不能放进模型线程（第 17 周修掉的一个静默失效）
-    //
-    //   `retrieve` 读 `accessScope.currentScope().maxClassification()` 当密级上限，而
-    //   `currentScope()` 的两个来源**都是 ThreadLocal**：
-    //     · `AccessScopeAdapter.DELEGATED`（委派范围：公开面的冻结密级）
-    //     · `SecurityContextHolder`（登录面的 JWT）
-    //   把它们挪到模型线程上，两条都读不到 ⇒ `nobody()` ⇒ `ceiling == null` ⇒ `retrieve`
-    //   走"取不到身份（fail-closed）：一条都不给"那条分支 ⇒ **引用永远为空**。
-    //
-    //   ★ 症状极具误导性（本项目头号病）：模型照常回答、界面照常显示答案，**只是引用栏永远空着** ——
-    //     看起来像"这个知识库里确实没有相关内容"，而真相是"身份没跟过来"。它不会报任何错。
-    //   ★ 为什么放在 meta 之后：`meta` 是"能停止"的前提（前端要它的 messageId），别让一次检索拖慢它。
-    //   ★ 为什么放在起线程之前：装配器要求"引用先于第一个 delta"，而这里是**唯一**能读到正确范围的地方。
-    //
-    // ★★ #142 ③：**心跳线程必须在检索开始之前就起**（此前它在 retrieve 之后才起 ⇒ 检索期间一个字节都不发）。
-    //
-    //   检索可能很慢（长文档 / 多跳），而那段时间里既没有业务帧、也没有心跳帧 —— 前端的闲置计时一路涨到
-    //   阈值，用户看到的是"卡死"，服务端却什么都不知道（这条链路上的检索**不走** RetrievalService 的
-    //   5000ms 预算）。所以心跳的覆盖面必须是"这一轮从 meta 发出到 done 为止"，而不是"生成那一段"。
-    //
-    //   ★ 超时口径**没有**因此改变（这一点值得写清楚，免得下一个人以为这里动过语义）：
-    //     闲置超时的时钟是 `lastBusinessFrameAtNanos`，它在 `Run` 构造时就起算 ⇒ **检索耗时早就在这个预算里**
-    //     （修之前，检索超过 idleTimeout 的那一轮会在心跳线程起来后的第一圈就被判超时）。本行移动只改变了
-    //     "在检索期间就发现超时"还是"检索回来才发现"——两者收尾都是 IDLE_TIMEOUT，都拿不到模型的一个字。
-    //     而"检索要不要有自己的预算"是另一件事（`error.reason` 今天仍借"生成超时"那句文案），见交付报告。
-    Thread heartbeat = startHeartbeatThread(run);
-    RetrievalParams retrieval = effectiveRetrieval(turn);
-    List<SourceRef> refs =
-        retrieve(question, turn.kbIds(), turn.conversationId(), turn.modelId(), retrieval);
-    run.assembler.references(refs);
-    run.bindRefs(refs);
-    run.pump();
-
-    // ★★ `#185`：无引用策略的**生产消费点**。
-    //
-    //   此前 `assistant.retrieval_no_ref_strategy` 只在实体 / 视图 / 导出里出现，
-    //   问答链路零消费 ⇒ 用户选了「拒答」也照样自由回答（而且不会报错）。
-    //
-    //   ★ 拒答**不调用模型**：既省一次调用，也让"零引用 ⇒ 固定文案"这条承诺不被模型改写。
-    //   ★ 正文仍走 delta（`refs` 已经交进装配器，所以顺序 meta → refs → delta → done 不变）。
+    // ★★ 从 `begin` 到 `awaitTerminal` 的整段必须包在 try 里 —— 这一段里任何异常逃出去，就等于
+    //   "这一轮没有终态"：库里那条永远停在 GENERATING、界面永远转圈、而且**没有任何错误**。
+    //   2026-10-29 那次就是这个形状（上游 ollama 200 且答完，两条消息永久 GENERATING，线程也没了）。
+    //   ★ 收尾靠 `Run#terminalTaken` 的 CAS 去重，所以"正常路径已经收过尾"与"异常路径再收一次"
+    //     不会写出两次终态。
+    Thread heartbeat = null;
     Thread model = null;
-    if (refs.isEmpty() && retrieval.noRefStrategy() == NoRefStrategy.REFUSE) {
-      log.info(
-          "应用 {} 的无引用策略是 REFUSE，本轮零引用 ⇒ 直接回拒答文案，不调用模型（会话 {}）", turn.appId(), turn.conversationId());
-      try {
-        run.assembler.delta(NO_REF_REFUSAL);
-        run.pump();
-      } catch (UncheckedIOException disconnected) {
-        // ★ 与模型线程同一条处置：写不出去 ⇒ 交给收尾线程按 DISCONNECT 收，不要在这里抛穿
-        run.disconnected = true;
-        log.info("拒答文案写不出去（连接已断）：{}", disconnected.getMessage());
+    try {
+      // ★ meta 先发：前端拿到 messageId 才谈得上"生成中停止"（契约注释原文）
+      assembler.begin();
+      run.pump();
+
+      // ★★ 检索必须在**调用线程**上跑，不能放进模型线程（第 17 周修掉的一个静默失效）
+      //
+      //   `retrieve` 读 `accessScope.currentScope().maxClassification()` 当密级上限，而
+      //   `currentScope()` 的两个来源**都是 ThreadLocal**：
+      //     · `AccessScopeAdapter.DELEGATED`（委派范围：公开面的冻结密级）
+      //     · `SecurityContextHolder`（登录面的 JWT）
+      //   把它们挪到模型线程上，两条都读不到 ⇒ `nobody()` ⇒ `ceiling == null` ⇒ `retrieve`
+      //   走"取不到身份（fail-closed）：一条都不给"那条分支 ⇒ **引用永远为空**。
+      //
+      //   ★ 症状极具误导性（本项目头号病）：模型照常回答、界面照常显示答案，**只是引用栏永远空着** ——
+      //     看起来像"这个知识库里确实没有相关内容"，而真相是"身份没跟过来"。它不会报任何错。
+      //   ★ 为什么放在 meta 之后：`meta` 是"能停止"的前提（前端要它的 messageId），别让一次检索拖慢它。
+      //   ★ 为什么放在起线程之前：装配器要求"引用先于第一个 delta"，而这里是**唯一**能读到正确范围的地方。
+      //
+      // ★★ #142 ③：**心跳线程必须在检索开始之前就起**（此前它在 retrieve 之后才起 ⇒ 检索期间一个字节都不发）。
+      //
+      //   检索可能很慢（长文档 / 多跳），而那段时间里既没有业务帧、也没有心跳帧 —— 前端的闲置计时一路涨到
+      //   阈值，用户看到的是"卡死"，服务端却什么都不知道（这条链路上的检索**不走** RetrievalService 的
+      //   5000ms 预算）。所以心跳的覆盖面必须是"这一轮从 meta 发出到 done 为止"，而不是"生成那一段"。
+      //
+      //   ★ 超时口径**没有**因此改变（这一点值得写清楚，免得下一个人以为这里动过语义）：
+      //     闲置超时的时钟是 `lastBusinessFrameAtNanos`，它在 `Run` 构造时就起算 ⇒ **检索耗时早就在这个预算里**
+      //     （修之前，检索超过 idleTimeout 的那一轮会在心跳线程起来后的第一圈就被判超时）。本行移动只改变了
+      //     "在检索期间就发现超时"还是"检索回来才发现"——两者收尾都是 IDLE_TIMEOUT，都拿不到模型的一个字。
+      //     而"检索要不要有自己的预算"是另一件事（`error.reason` 今天仍借"生成超时"那句文案），见交付报告。
+      heartbeat = startHeartbeatThread(run);
+      RetrievalParams retrieval = effectiveRetrieval(turn);
+      List<SourceRef> refs =
+          retrieve(question, turn.kbIds(), turn.conversationId(), turn.modelId(), retrieval);
+      run.assembler.references(refs);
+      run.bindRefs(refs);
+      run.pump();
+
+      // ★★ `#185`：无引用策略的**生产消费点**。
+      //
+      //   此前 `assistant.retrieval_no_ref_strategy` 只在实体 / 视图 / 导出里出现，
+      //   问答链路零消费 ⇒ 用户选了「拒答」也照样自由回答（而且不会报错）。
+      //
+      //   ★ 拒答**不调用模型**：既省一次调用，也让"零引用 ⇒ 固定文案"这条承诺不被模型改写。
+      //   ★ 正文仍走 delta（`refs` 已经交进装配器，所以顺序 meta → refs → delta → done 不变）。
+      if (refs.isEmpty() && retrieval.noRefStrategy() == NoRefStrategy.REFUSE) {
+        log.info(
+            "应用 {} 的无引用策略是 REFUSE，本轮零引用 ⇒ 直接回拒答文案，不调用模型（会话 {}）",
+            turn.appId(),
+            turn.conversationId());
+        try {
+          run.assembler.delta(NO_REF_REFUSAL);
+          run.pump();
+        } catch (UncheckedIOException disconnected) {
+          // ★ 与模型线程同一条处置：写不出去 ⇒ 交给收尾线程按 DISCONNECT 收，不要在这里抛穿
+          run.disconnected = true;
+          log.info("拒答文案写不出去（连接已断）：{}", disconnected.getMessage());
+        }
+        run.modelDone.set(true);
+      } else {
+        model = startModelThread(turn, question, refs, run);
       }
-      run.modelDone.set(true);
-    } else {
-      model = startModelThread(turn, question, refs, run);
-    }
-    awaitTerminal(turn, run);
-    heartbeat.interrupt();
-    if (model != null) {
-      model.interrupt();
+      awaitTerminal(turn, run);
+    } catch (UncheckedIOException gone) {
+      // 写不出去 = 客户端已经走了：按 DISCONNECT 收尾，文案仍是「连接中断」（不冒充上游失败）
+      run.disconnected = true;
+      log.info(
+          "会话 {} 的助手消息 {} 事件写不出去（连接已断），按 DISCONNECT 收尾：{}",
+          turn.conversationId(),
+          turn.assistantMessageId(),
+          gone.getMessage());
+      finishTurn(turn, run, run.pathOf(), false);
+    } catch (Throwable unexpected) {
+      // ★★ 关键的一条：未预期异常也必须有终态。
+      //   处置口径 = 按"这一路生成失败"收（FAILED + 可查原因），而不是让消息停在 GENERATING。
+      //   ★ detail 里写清是服务端内部错误，别让用户照着"检查模型配置"去查一个代码缺陷；
+      //     完整堆栈进日志（logging.file.name 已落盘）。
+      run.upstream.set(ChatStreamPort.End.FAILED);
+      run.lastFailReason =
+          "服务端内部错误（"
+              + unexpected.getClass().getSimpleName()
+              + "）"
+              + (unexpected.getMessage() == null ? "" : "：" + unexpected.getMessage());
+      log.error(
+          "会话 {} 的助手消息 {} 生成中途异常，按失败收尾（本次异常不会让消息停在 GENERATING）",
+          turn.conversationId(),
+          turn.assistantMessageId(),
+          unexpected);
+      finishTurn(turn, run, run.pathOf(), true);
+      if (unexpected instanceof Error fatal) {
+        // Error（OOM 等）不吞：收完尾照样抛给上层，但终态已经落下了
+        throw fatal;
+      }
+    } finally {
+      // ★ 中断收尾放在 finally：异常路径同样要停掉这两条线程，否则它们会抱着这一轮的 Run 继续跑
+      if (heartbeat != null) {
+        heartbeat.interrupt();
+      }
+      if (model != null) {
+        model.interrupt();
+      }
     }
   }
 
@@ -696,8 +751,9 @@ public class ChatService {
     Thread thread =
         new Thread(
             () -> {
-              try {
-                while (!Thread.currentThread().isInterrupted() && !run.modelDone.get()) {
+              int consecutiveFailures = 0;
+              while (!Thread.currentThread().isInterrupted() && !run.modelDone.get()) {
+                try {
                   Thread.sleep(POLL_INTERVAL_MS);
                   long now = System.nanoTime();
                   if ((now - run.lastBusinessFrameAtNanos) / 1_000_000
@@ -710,16 +766,39 @@ public class ChatService {
                       >= properties.heartbeatIntervalMs()) {
                     run.heartbeat();
                   }
+                  consecutiveFailures = 0;
+                } catch (InterruptedException interrupted) {
+                  Thread.currentThread().interrupt();
+                  return;
+                } catch (UncheckedIOException disconnected) {
+                  // 心跳写不出去 ⇒ 连接没了：交给收尾线程按 DISCONNECT 收（它才能落库）
+                  log.info("心跳帧写不出去（连接已断）：{}", disconnected.getMessage());
+                  run.disconnected = true;
+                  run.upstreamStopped.set(true);
+                  return;
+                } catch (RuntimeException unexpected) {
+                  // ★★ 不许"记一条 WARN 就退出"（改之前就是那样）：这条线程是闲置超时的唯一驱动，
+                  //   它一退出，兜底就静默失效，而症状恰好是"永远不收尾、也没有任何错误"。
+                  //   处置 = 记一次、继续跑（兜底仍在）；连续失败到上限才按超时收网，并留 error 痕迹。
+                  consecutiveFailures++;
+                  if (consecutiveFailures == 1 || consecutiveFailures % 100 == 0) {
+                    log.warn(
+                        "心跳线程异常第 {} 次（本轮继续生成，闲置超时兜底仍在）：消息 {}",
+                        consecutiveFailures,
+                        run.messageId,
+                        unexpected);
+                  }
+                  if (consecutiveFailures >= HEARTBEAT_MAX_CONSECUTIVE_FAILURES) {
+                    log.error(
+                        "心跳线程连续失败 {} 次，按闲置超时收尾：消息 {}",
+                        consecutiveFailures,
+                        run.messageId,
+                        unexpected);
+                    run.timedOut = true;
+                    run.upstreamStopped.set(true);
+                    return;
+                  }
                 }
-              } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-              } catch (UncheckedIOException disconnected) {
-                // 心跳写不出去 ⇒ 连接没了：交给收尾线程按 DISCONNECT 收（它才能落库）
-                log.info("心跳帧写不出去（连接已断）：{}", disconnected.getMessage());
-                run.disconnected = true;
-                run.upstreamStopped.set(true);
-              } catch (RuntimeException unexpected) {
-                log.warn("心跳线程异常退出（本轮生成不受影响）", unexpected);
               }
             },
             "chat-heartbeat-" + run.messageId);
@@ -770,9 +849,10 @@ public class ChatService {
     }
     long durationMs = elapsedMs(run.startedAtNanos);
     try {
-      // ★ error 帧与 done 帧都由装配器产出（它按路径合成 reason/hint）——
-      //   本层不自己编文案，否则"界面上看到的原因"与"库里记的原因"会分叉
-      run.assembler.finish(path, durationMs);
+      // ★ error 帧与 done 帧都由装配器产出（文案用它那一份算法）——
+      //   本层不自己编文案，否则"界面上看到的原因"与"库里记的原因"会分叉（#224）
+      // ★ 上游失败时把 detail 交下去；用户停止 / 写连接失败时 upstreamFailed 为 false ⇒ detail 为 null
+      run.assembler.finish(path, durationMs, upstreamFailed ? run.lastFailReason : null);
       run.pump();
     } catch (UncheckedIOException gone) {
       log.info("终态帧写不出去（连接已断）：{} —— 库里仍会落终态", gone.getMessage());
@@ -808,6 +888,10 @@ public class ChatService {
         // 理论上到不了（finish 一定产出 done）；真到了说明终态出口被绕过了 —— 留痕而不是静默
         throw new IllegalStateException("收尾时没有 done 事件 —— 终态出口只能有一个（StreamAssembler#finish）");
       }
+      // ★★ 落库的失败文案与 error 帧出自**同一个函数**（#224）——
+      //   装配器已经算过一次（fed 到 wire），这里再算一次拿同一份结果，而不是各写一句
+      StreamAssembler.FailureText failure =
+          StreamAssembler.failureText(path, upstreamFailed ? run.lastFailReason : null);
       turns.finish(
           turn.assistantMessageId(),
           path,
@@ -816,8 +900,8 @@ public class ChatService {
           run.refsBound ? run.refs : null,
           done.tokens(),
           durationMs,
-          failReasonFor(path, upstreamFailed ? run.lastFailReason : null),
-          failHintFor(path));
+          failure.reason(),
+          failure.hint());
       log.info(
           "会话 {} 的助手消息 {} 收尾：{}（正文 {} 字，tokens {}，耗时 {}ms）",
           turn.conversationId(),
@@ -826,6 +910,18 @@ public class ChatService {
           run.assembler.text().length(),
           done.tokens().total(),
           durationMs);
+    } catch (RuntimeException persistFailed) {
+      // ★★ 最后一公里失败也必须留痕（改之前它会直接抛出去，而调用方多半已经"响应已提交"）：
+      //   症状是库里那条停在 GENERATING、界面永远转圈，日志里却什么都没有。
+      //   ★ 这里不再往外抛：终态落不下是"库这一侧"的失败，抛出去只会多一条同样的日志，
+      //     不会让状态变对；真正的兜底 = StaleGeneratingReconciler（读历史时把 10 分钟以上的
+      //     GENERATING 收敛成 FAILED）。
+      log.error(
+          "会话 {} 的助手消息 {} 终态落库失败（{}）：这条消息会停在 GENERATING，等读历史时的陈旧收敛兜底（StaleGeneratingReconciler）",
+          turn.conversationId(),
+          turn.assistantMessageId(),
+          path,
+          persistFailed);
     } finally {
       if (interrupted) {
         // ★ 恢复中断位放在最末：异常路径也必须恢复，否则打断方（停止 / 超时）丢失自己的语义
@@ -834,26 +930,8 @@ public class ChatService {
     }
   }
 
-  /** 失败原因：★ 与装配器发出去的 {@code error.reason} 同源（由它按路径合成）。 */
-  private static String failReasonFor(StreamTerminationPath path, String upstreamDetail) {
-    if (!path.errorPrecedesDone()) {
-      return null;
-    }
-    if (path == StreamTerminationPath.IDLE_TIMEOUT) {
-      return "生成超时";
-    }
-    // DISCONNECT 的两种来源：上游报错（有 detail）与连接断开（写失败，没有 detail）
-    return upstreamDetail == null ? "连接中断" : "生成失败：" + upstreamDetail;
-  }
-
-  /** 失败提示：与契约的 {@code error.hint} 同一条口径。 */
-  private static String failHintFor(StreamTerminationPath path) {
-    return switch (path) {
-      case COMPLETE, ABORT -> null;
-      case IDLE_TIMEOUT -> "可稍后重试；若持续超时请联系管理员";
-      case DISCONNECT -> "网络或服务异常，可重试";
-    };
-  }
+  // ★ 失败原因与提示不再在本层合成：唯一算法在 {@link StreamAssembler#failureText}
+  //   （#224 —— 之前这里各写一份，于是"库里可查的原因"与"线上那句连接中断"不同源）
 
   // ────────────────────────── 检索与提示词 ──────────────────────────
 
