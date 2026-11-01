@@ -2553,3 +2553,40 @@ run `41252289913`（head `891b489`）= **success**，`[INFO] Tests run: 1244, Fa
 - ★ 更根本的一条仍未做：**测试专用类型能长期存在，是因为没人问「这份代码什么时候会被生产调用」**。
   闸门只能挡住「悄悄多一份」，挡不住「它就是设计的一部分」（那属于 `#271` 那种产品判断）。
 
+#### 11.10.48 2026-11-01 快闸不跑 Java 测试 —— 一条新加的中文方法名让整包红了
+
+`#51` 那批新增的 `knowledge/PdfPlaceholderNoiseTest.java` 用了中文方法名。它在
+`TestNamingConventionTest` 的历史遗留清单之外（清单只登记定案时就存在的 43 个文件），
+于是 head `844c617` 的「架构 + 口径闸门」job **failure**，同一 job 里「口径闸门」那一步被 skip。
+**快闸（编译 + 静态闸门）当时是绿的** —— 它不跑 Java 测试。这就是这一节的由来。
+
+##### 48.1 因果是坐实的，不是猜的
+
+把其中一条临时改回中文，本机跑 `-Dtest=TestNamingConventionTest`：
+
+`Tests run: 2, Failures: 1` · `[测试方法名必须是 ASCII 标识符 … 清单外的文件即新增违规：[cn/lincoln/aiplatform/knowledge/PdfPlaceholderNoiseTest.java:112 → void 源文本里没有占位行时解析链不会凭空造出来(]]`
+
+复原后 `grep` 只剩 javadoc 里那处「凭空」。⇒ 与 job failure 对齐，不必等日志（当时整包还在跑，`gh run view --log-failed` 返回「still in progress」）。
+
+##### 48.2 改法
+
+`PdfPlaceholderNoiseTest` 两条与 `NoiseStripperTest` 我新加的五条全部改英文方法名；
+中文的「为什么」留在就地注释与新补的三条 javadoc 里。`NoiseStripperTest` 本在清单里、闸门不会拦，
+**但新代码写 ASCII 是定案规则本身** —— 「这个文件已经豁免了」不是理由。
+
+##### 48.3 读数
+
+`TestNamingConventionTest` 2/2 · `NoiseStripperTest` 13/13 · `PdfPlaceholderNoiseTest` 2/2 ·
+整包 run `41258612026`（head `5d6221e`）= **success**：
+两个 job 全绿，「架构 + 口径闸门」success，「后端 · 全量回归」`Tests run: 1251, Failures: 0, Errors: 0, Skipped: 3`。
+旧的 `41256874075`（`844c617`）已 `cancelled` —— 它的架构 job 已红，跑完整包也不会有新信息。
+
+##### 48.4 三条判据
+
+1. **快闸绿 ≠ 没红**：快闸只编不跑测试；动过测试代码就要跑一次 `-Dtest=cn.lincoln.aiplatform.*Test`
+   （顶层那 8 个类，含命名约定与契约漂移）。
+2. **豁免清单是给存量用的**：文件在清单里，只说明它过去几个方法名合法，不说明新加的方法名也合法 ——
+   闸门把「文件级豁免」当颗粒度，人就得把「新代码守规则」自己担起来。
+3. **要断言因果，就把它改坏一次**：这次没等日志（日志还拿不到），直接把那条改回中文本机跑，
+   拿到逐字红字；这比「大概是命名问题」有力，也不需要额外的时间成本。
+
