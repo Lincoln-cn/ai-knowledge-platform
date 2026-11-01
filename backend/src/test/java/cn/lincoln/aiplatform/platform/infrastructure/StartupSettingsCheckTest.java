@@ -136,10 +136,9 @@ class StartupSettingsCheckTest {
   @Test
   void replacedSecretsAreQuiet() {
     List<String> problems =
-        StartupSettingsCheck.secretProblems("Zm9vYmFyYmF6LXJhbmRvbS1zZWNyZXQtdmFsdWU=", "YW5vdGhlci1yYW5kb20tc2VjcmV0LXZhbHVlIQ==");
-    assertThat(problems)
-        .as("换过了就不该再吵 —— 只验『坏的会报』不验『好的不报』，规则写宽了也照样绿")
-        .isEmpty();
+        StartupSettingsCheck.secretProblems(
+            "Zm9vYmFyYmF6LXJhbmRvbS1zZWNyZXQtdmFsdWU=", "YW5vdGhlci1yYW5kb20tc2VjcmV0LXZhbHVlIQ==");
+    assertThat(problems).as("换过了就不该再吵 —— 只验『坏的会报』不验『好的不报』，规则写宽了也照样绿").isEmpty();
   }
 
   @Test
