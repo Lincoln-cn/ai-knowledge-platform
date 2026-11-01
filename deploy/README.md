@@ -434,6 +434,7 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.security.captcha.ttl` | `2m` | 验证码有效期。它只需要"够人输入一次"，往大调只是让人工等待更久 |
 | `app.security.login-failure.lock-duration`（`LOGIN_LOCK_DURATION`） | `30m` | 超过 `max-attempts` 之后账号冻结多久（等保测评项，与次数上限是一对） |
 | `app.security.public-rate-limit.window-seconds`（`PUBLIC_RATE_LIMIT_WINDOW_SECONDS`） | `60` | 限流的统计窗口。与 `capacity` 一起才成立：默认就是 **60 次 / 60 秒** |
+| `app.security.public-rate-limit.enabled`（`PUBLIC_RATE_LIMIT_ENABLED`） | `true` | 公开面限流总开关。★ 安全开关的默认值必须是"开着"的：漏配的环境不该静默退回无限流。★ 真栈读数见 `PublicRateLimitHttpTest`（它把 capacity 压到 3 来证"真的会 429"） |
 | `app.embedding.local.model-path`（`LOCAL_ONNX_MODEL_PATH`） | `models/multilingual-e5-small/model_quantized.onnx` | 进程内向量化的模型文件。★ 路径不对时它不会"降级成安静地失败"：该模型要么连上游、要么报错，先看 `app.embedding.local.enabled` 与 `model-name` |
 | `app.embedding.local.tokenizer-path`（`LOCAL_ONNX_TOKENIZER_PATH`） | `models/multilingual-e5-small/tokenizer.json` | 同上，分词器文件；两个文件必须成对存在 |
 
@@ -446,7 +447,9 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.knowledge.restore-window-days`（`KNOWLEDGE_RESTORE_WINDOW_DAYS`） | 7 | 回收站"还能恢复"的窗口；`cleanup.retain-days` 与它同值即可 |
 | `app.seed.sample-data`（`SEED_SAMPLE_DATA`） | false | 灌业务示例数据（迁移只跑一次）。★ 集成测试与它共用迁移，默认开着会让一批按条数断言的用例红 |
 | `app.embedding.local.enabled`（`LOCAL_ONNX_ENABLED`） | true | 进程内 ONNX 向量化。★ `model-name` 是**路由判据**：知识库登记的 `baseModel` 必须与它一致，否则会去连上游 11434 |
+| `app.embedding.local.model-name`（`LOCAL_ONNX_MODEL_NAME`） | `multilingual-e5-small` | ★★ **路由判据**：`RoutingEmbeddingAdapter` 按 `baseModel` 名分派，知识库里登记的名字必须与它一致，否则那条模型会去连上游 11434（而 11434 上可能根本没有这个模型） |
 | `app.chat.advisors.enabled`（`CHAT_ADVISORS_ENABLED`） | true | Spring AI advisor 链总开关。★ 只用于排障 —— 关着上线等于安全闸门不生效 |
+| `app.chat.guard.sensitive-words`（`CHAT_GUARD_SENSITIVE_WORDS`） | 空 | 问答输入/输出两侧的敏感词表（逗号分隔）。★ 默认空**不是**"没有这个功能"，而是"部署方按自己的合规要求填" —— 留着默认值上线等于这一层不设防 |
 
 ## 九、OCR 的配置项（交付时可能要改的）
 

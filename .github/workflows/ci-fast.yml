@@ -147,7 +147,7 @@ jobs:
       #      只提示"基线可以降到 N"—— 自动改基线等于让闸门自己给自己签字。
       #   ★ 它带自检，所以下面把它从循环里单拆出来、按「自检 + 实判」两步跑（其余 11 道仍在循环里）。
       #   ★ 同样单拆成两步的还有 `check_test_registration.py`（`#266`，2 步）—— 见下方 mock 实判之后。
-      - name: 静态闸门（15 道 · 另有配置面字段 2 步见下）
+      - name: 静态闸门（15 道 · 另有配置面字段 2 步 + 配置文档覆盖 2 步见下）
         working-directory: frontend
         run: |
           failed=()
@@ -171,7 +171,7 @@ jobs:
             echo "★ 失败 ${#failed[@]}/11：${failed[*]}"
             exit 1
           fi
-          echo "循环内 11 道静态闸门全部通过（另有 mock 响应形状 2 步 + 测试文件登记 2 步 + 配置面字段 2 步见下，合计 17 道）"
+          echo "循环内 11 道静态闸门全部通过（另有 mock 响应形状 2 步 + 测试文件登记 2 步 + 配置面字段 2 步 + 配置文档覆盖 2 步见下，合计 19 道）"
 
       # ★ mock 响应形状**自检**（`#262`）。
       #   离线用例：契约 `{ a: string }` vs mock `return { a: 'x' }` 通过 / vs `return 'x'` 报红 /
@@ -263,6 +263,17 @@ jobs:
       - name: 测试专用类型实判（#270）
         working-directory: backend
         run: python tools/check_test_only_types.py
+
+      # ★ 配置键"存在"与"有人告诉你它存在"是两件事（#272 判据 ②）：
+      #   一条没有任何部署文档提到的键，运维根本不知道能配，而它的错误形状恰恰是
+      #   "配错了不报错、只在某个场景里表现怪"。
+      - name: 配置文档覆盖自检（#272）
+        working-directory: backend
+        run: python tools/check_config_docs.py --self-check
+
+      - name: 配置文档覆盖实判（#272）
+        working-directory: backend
+        run: python tools/check_config_docs.py
 
       # ★ 闸门自己的守卫也要能被断言（#223）：这三条守的是"别量错东西"，
       #   而一条守卫错了的表现是静默 —— 永远为真等于没有，过严则把正确情形判成错。
