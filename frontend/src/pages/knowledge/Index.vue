@@ -95,6 +95,7 @@
               <span class="grow" />
               <el-switch
                 v-if="!consumer && canManage"
+                data-testid="kb-toggle-enabled"
                 :model-value="kb.enabled"
                 size="small"
                 @click.stop
