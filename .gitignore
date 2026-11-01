@@ -63,6 +63,8 @@ __pycache__/
 .build/
 .dsh-acl-recovery/
 .dsh-migration/
+# 后端的落盘日志目录（logging.file.name 的落点；滚动产物名里带日期，*.log / *.log.gz 都盖不住）
+backend/logs/
 screenshots/
 vue-tsc-*.txt
 .mimocode/
