@@ -1,0 +1,74 @@
+# mock 返回形状「跳过」的基线（`frontend/check_mock_endpoints.py` 第三维读它）
+#
+# 读法：`跳过 N` 是权威数字；下面每行 `文件 | 方法 | 路径 | 原因` 是当前跳过清单，
+# 用来在数字变大时指认「新增了哪一处」（行号不参与比对 —— 改上面的代码会让行号整体平移，
+# 按行号比对会把整份清单变成假新增）。改基线只能从脚本自己的 `--dump-skips` 输出里照抄，别手写。
+#
+# ★ 三条规矩（少了任何一条，这个文件就只是在给闸门自己签字）：
+#   ① 这个数**只能减，不能悄悄增**。跳过 = 解析不出 / 无从比对，闸门对它不报红 ——
+#      于是「闸门没管到」和「闸门管住了」读数一模一样，这个数就是唯一看得出区别的地方。
+#   ② 跳过数**减少之后要把基线改小**（清单必须随修复收缩）。脚本只会提示
+#      「基线可以降到 N 了」，绝不自动写文件 —— 自动改基线等于让闸门自己给自己签字。
+#   ③ **新增跳过必须先说清「为什么解析不了」，不许只把数字调大。** 说不清理由，
+#      就去修解析器（`_MockShaper._infer` 那一层），让这一处能判。
+#
+# 当前读数（2026-10-31 · 修 `#263` 之后）：mock 路由 140 条 · 一致 99 处 · 不一致 0 处 · 跳过 41 处。
+# 41/140 ≈ 29% 的 mock 路由没被「形状」这一维管到。这个基线的意义是把 41 钉住，
+# 不是宣布 41 可以接受 —— 它只是「现在这么多，以后只能更少」。
+#
+# 42 → 41 是 `#263` 那一处修出来的：`GET /assistants/:appId/workflow/records` 原来返裸数组
+# （契约是 `PageResult<WorkflowRecord>`），改回 `{ list, total, page, size }` 之后解析器能判形状了，
+# 于是它从跳过桶挪到"一致"。★ 那一处正是「跳过桶藏真缺陷」的样板：它在跳过桶里时
+# 改坏了闸门也是 exit 0，读数与"一致"完全一样。
+#
+# ── 数字 ──
+跳过 39
+#
+src/mock/handlers/assistants.ts | POST | /assistants | 返回表达式解析不出：withOwnerName(created)
+src/mock/handlers/assistants.ts | POST | /assistants/import | 返回表达式解析不出：withOwnerName(created)
+src/mock/handlers/assistants.ts | GET | /assistants/:id | 判不了（mock 对象带展开/动态键，缺键不能作证）
+src/mock/handlers/assistants.ts | PUT | /assistants/:id | 返回表达式解析不出：withOwnerName(app)
+src/mock/handlers/assistants.ts | PATCH | /assistants/:id/published | 返回表达式解析不出：withOwnerName(app)
+src/mock/handlers/assistants.ts | PATCH | /assistants/:id/visibility | 返回表达式解析不出：withOwnerName(app)
+src/mock/handlers/assistants.ts | PUT | /assistants/:id/grants | 返回表达式解析不出：withOwnerName(app)
+src/mock/handlers/assistants.ts | POST | /assistants/:id/favorite | 判不了（mock 对象带展开/动态键，缺键不能作证）
+src/mock/handlers/assistants.ts | DELETE | /assistants/:id/favorite | 判不了（mock 对象带展开/动态键，缺键不能作证）
+src/mock/handlers/assistants.ts | GET | /assistants/:appId/credentials | 返回表达式解析不出：ensureCredentials(path.appId)
+src/mock/handlers/assistants.ts | PATCH | /assistants/:appId/credentials/:id/enabled | 返回表达式解析不出：item
+src/mock/handlers/assistants.ts | POST | /assistants/:appId/credentials/:id/revoke | 返回表达式解析不出：item
+src/mock/handlers/assistants.ts | GET | /assistants/:appId/api-keys | 返回表达式解析不出：ensureApiKeys(path.appId)
+src/mock/handlers/assistants.ts | PATCH | /assistants/:appId/api-keys/:id/enabled | 返回表达式解析不出：item
+src/mock/handlers/conversations.ts | GET | /conversations/:id | 返回表达式解析不出：withApp(findConv(path.id, token))
+src/mock/handlers/conversations.ts | POST | /conversations/chat | 契约里没有这条端点（第一维登记过的例外不比形状）
+src/mock/handlers/conversations.ts | POST | /conversations | 返回表达式解析不出：addConversation({ id: `c${Date.now().toString(36)}`, title: …
+src/mock/handlers/conversations.ts | PATCH | /conversations/:id | 返回表达式解析不出：withApp(conv)
+src/mock/handlers/conversations.ts | POST | /messages/:messageId/feedback | 返回表达式解析不出：msg
+src/mock/handlers/conversations.ts | GET | /public/:token | 判不了（mock 返回多分支联合，只部分分支与契约相符 —— 可能是守卫收窄）
+src/mock/handlers/conversations.ts | GET | /public/:token/messages | 返回表达式解析不出：publicMessagesFor(gate)
+src/mock/handlers/identity.ts | POST | /users | 返回表达式解析不出：input.password ? result : { ...result, initialPassword: DEFA…
+src/mock/handlers/identity.ts | PUT | /users/:id | 返回表达式解析不出：stripPassword(user)
+src/mock/handlers/ingestion.ts | POST | /knowledge-bases/:kbId/documents | 契约里同一路径有多个返回类型
+src/mock/handlers/knowledge.ts | GET | /knowledge-bases/:id | 返回表达式解析不出：findKb(path.id, token)
+src/mock/handlers/knowledge.ts | PUT | /knowledge-bases/:id | 返回表达式解析不出：kb
+src/mock/handlers/knowledge.ts | PATCH | /knowledge-bases/:id/enabled | 返回表达式解析不出：kb
+src/mock/handlers/knowledge.ts | PUT | /knowledge-bases/:id/grants | 返回表达式解析不出：kb
+src/mock/handlers/orgs.ts | PUT | /orgs/:id | 判不了（mock 返回多分支联合，只部分分支与契约相符 —— 可能是守卫收窄）
+src/mock/handlers/orgs.ts | POST | /orgs/:id/move | 判不了（mock 返回多分支联合，只部分分支与契约相符 —— 可能是守卫收窄）
+src/mock/handlers/providers.ts | POST | /model-providers | 返回表达式解析不出：toPublic(created)
+src/mock/handlers/providers.ts | GET | /model-providers/:id | 返回表达式解析不出：toPublic(p)
+src/mock/handlers/providers.ts | PUT | /model-providers/:id | 返回表达式解析不出：toPublic(p)
+src/mock/handlers/providers.ts | PATCH | /model-providers/:id/enabled | 返回表达式解析不出：toPublic(p)
+src/mock/handlers/providers.ts | POST | /model-providers/:id/key | 返回表达式解析不出：toPublic(p)
+src/mock/handlers/providers.ts | DELETE | /model-providers/:id/key | 返回表达式解析不出：toPublic(p)
+src/mock/handlers/retrieval.ts | GET | /knowledge-bases/:kbId/retrieval | 返回表达式解析不出：findParams(path.kbId)
+src/mock/handlers/workflow.ts | GET | /assistants/:appId/workflow/versions | 契约里同一路径有多个返回类型
+src/mock/handlers/workflow.ts | POST | /assistants/:appId/workflow/debug | 判不了（mock 返回多分支联合，只部分分支与契约相符 —— 可能是守卫收窄）
+
+# ── 上面 41 条各自的理由，按原因归类 ──
+# · 返回表达式解析不出 23 条：`return helper(...)` 的 helper 读了 handler 的形参
+#   （`withOwnerName(app)` / `withApp(conv)` / `findKb(path.id, token)`），或 `return item`
+#   这种循环里重新赋值的变量 —— 解析器只做同文件/夹具内的名字解析，不追形参流转。
+# · 判不了（mock 对象带展开/动态键）9 条：`{ ...x, [key]: v }` 无法证明契约必填键在不在。
+# · 判不了（多分支联合）4 条：守卫收窄后各分支形状不同，缺键不能作证。
+# · 契约里同一路径有多个返回类型 4 条：契约自己没说死，无从比对。
+# · 契约里没有这条端点 1 条：`/conversations/chat` 是第一维登记过的 SSE 例外。

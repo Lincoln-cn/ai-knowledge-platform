@@ -87,6 +87,24 @@
             <el-radio-button value="FREE_ANSWER">自由回答</el-radio-button>
           </el-radio-group>
         </el-form-item>
+        <el-form-item label="改写条数">
+          <el-input-number v-model="retrieval.queryCount" :min="0" :max="5" :disabled="!canManage" />
+          <div class="hint micro">
+            0 = 不做这一层；1 = 只改写；默认 3。每多一条查询多一次检索 —— 低配机器往 1 调
+          </div>
+        </el-form-item>
+        <el-form-item label="拆分多意图">
+          <el-switch v-model="retrieval.decomposeEnabled" :disabled="!canManage" />
+          <div class="hint micro">关掉是"按配置少做一件事"，不算降级（10 §6.3）</div>
+        </el-form-item>
+        <el-form-item label="子问题上限">
+          <el-input-number
+            v-model="retrieval.maxSubQuestions"
+            :min="1"
+            :max="5"
+            :disabled="!canManage || !retrieval.decomposeEnabled"
+          />
+        </el-form-item>
         <el-form-item v-if="canManage">
           <el-button type="primary" :loading="savingRetrieval" @click="saveRetrieval">保存检索参数</el-button>
           <el-button @click="loadRetrieval">还原</el-button>
@@ -158,7 +176,12 @@ const retrieval = reactive<RetrievalParams>({
   mode: 'HYBRID',
   threshold: 0.6,
   topN: 5,
-  noRefStrategy: 'REFUSE'
+  noRefStrategy: 'REFUSE',
+  // ★ 查询理解三项（10 §8.1）：后端 `RetrievalParamsView` 一直回、`PUT` 一直收，
+  //   但这个面板从第 12 周起只做了前四项 ⇒ 库级参数永远等于平台默认值，界面上看不出来。
+  queryCount: 3,
+  decomposeEnabled: true,
+  maxSubQuestions: 3
 })
 
 /** P1 设置面板改动静默丢失：脏标记上报给页面壳，切 Tab 前确认 */
@@ -227,6 +250,10 @@ const loadRetrieval = async () => {
   retrieval.threshold = params.threshold
   retrieval.topN = params.topN
   retrieval.noRefStrategy = params.noRefStrategy
+  // 三项在契约里可选（老后端不回）⇒ 兜底成与后端默认同值，不让 undefined 进表单
+  retrieval.queryCount = params.queryCount ?? 3
+  retrieval.decomposeEnabled = params.decomposeEnabled ?? true
+  retrieval.maxSubQuestions = params.maxSubQuestions ?? 3
   takeSnapshot()
 }
 
@@ -237,7 +264,11 @@ const saveRetrieval = async () => {
       mode: retrieval.mode,
       threshold: retrieval.threshold,
       topN: retrieval.topN,
-      noRefStrategy: retrieval.noRefStrategy
+      noRefStrategy: retrieval.noRefStrategy,
+      // ★ 必须显式带上：不带就是"让后端按默认值重置"，与"用户没改它"不是一回事
+      queryCount: retrieval.queryCount,
+      decomposeEnabled: retrieval.decomposeEnabled,
+      maxSubQuestions: retrieval.maxSubQuestions
     })
     ElMessage.success('检索参数已保存')
     takeSnapshot()

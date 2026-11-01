@@ -17,7 +17,17 @@
     python scripts/parse_corpus.py                     # 默认 http://localhost:5280
     python scripts/parse_corpus.py --base http://127.0.0.1:5280
     python scripts/parse_corpus.py --keep              # 跑完不删知识库（默认删）
+    python scripts/parse_corpus.py --corpus corpus/synthetic   # 合成语料（tools/gen_corpus.py 生成）
 退出码：0 = 全部解析成功且问答对全部命中；1 = 有失败。
+
+★ 文档列表走**分页**（`list_documents`）：后端单页上限 100，语料 70 份时写死
+  `?page=1&size=50` 会静默只看前 50 份（详见 `MAX_PAGE_SIZE` 的注释）。
+★ `expected_snippet` 的比对是**去空白后**逐字子串（PDF 文本层会插空白）。
+★ 读数纪律（#231，2026-10-31）：检索一律走 `retrieve_or_die()`，非 200 **立即终止**。
+  绝不写 `(payload.get("data") or {}).get("items") or []` —— 后者的形状会把 400
+  （`topN > 20`）读成「命中 0 条」：脚本照常跑完、照常打印一个虚假读数。
+  命中项的文档名只在 `docName` 键上取（不是 `documentName`）：取错键得到空串，
+  症状与上一条相同。`--self-check` 在离线态下把这三条读数纪律钉住（CI 跑这条）。
 """
 
 from __future__ import annotations
@@ -35,16 +45,35 @@ import urllib.request
 USER = "admin"
 PASSWORD = "admin"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-DOCS = ROOT / "corpus" / "documents"
-QA = ROOT / "corpus" / "qa.jsonl"
+
+#: 后端 `DocumentService.MAX_PAGE_SIZE` 也是 100。
+#: ★★ 第一版把文档列表请求写死成 `?page=1&size=50`（`wait_parsed` / `trigger_embedding`
+#:   / `wait_embedded` 三处）⇒ 语料超过 50 份时只看到前 50 份：第 51 份起永远不会
+#:   被等、向量化也不会被触发，而**全程不报错**（"少看了文档"看起来和"都好了"一样）。
+MAX_PAGE_SIZE = 100
 
 # ★ 解析是**异步**的：轮询到终态，不用固定 sleep。
 #   本仓已有教训（`#170`）：固定等待是"间歇红"的常见来源。
 POLL_INTERVAL_SEC = 2
 POLL_TIMEOUT_SEC = 180
 
-# 解析终态。★ 非终态（PENDING/PARSING）继续等；FAILED 是终态但**算失败**。
-TERMINAL = {"PARSED", "PARSED_EMPTY", "FAILED", "READY", "DONE"}
+# 解析终态。★ 非终态（PENDING_PARSE / SEGMENTING）继续等；两个 *FAILED 是终态但**算失败**。
+#
+# ★★ 实测踩过：第一版沿用了一套**后端根本不发**的状态词（`PARSED` / `PARSED_EMPTY` / `FAILED`
+#    / `READY` / `DONE`），而 `DocumentStatus` 的七态是 `PENDING_PARSE` / `SEGMENTING` /
+#    `PENDING_EMBEDDING` / `EMBEDDING` / `SUCCEEDED` / `SEGMENT_FAILED` / `EMBEDDING_FAILED`
+#    ⇒ 每份文档都会「等满 180 秒再放弃」，而结论照样是绿的（4 份文档白等 6 分钟）。
+#    判据写错时**读数和正确时一样**，这是本项目头号病（`silent-failure`）的典型形状。
+PARSE_SETTLED = {
+    "PENDING_EMBEDDING",  # 解析+分段完成，等显式向量化
+    "EMBEDDING",  # 向量化在途
+    "SUCCEEDED",  # 全链路完成
+    "SEGMENT_FAILED",  # 解析/分段失败（终态，算失败）
+    "EMBEDDING_FAILED",  # 向量化失败（终态，算失败）
+}
+
+#: 向量化终态。★ `PENDING_EMBEDDING` 不是终态 —— 它是**等不到向量化**的那一态。
+EMBEDDING_SETTLED = {"SUCCEEDED", "SEGMENT_FAILED", "EMBEDDING_FAILED"}
 
 
 def fail_exit(message: str) -> None:
@@ -69,6 +98,42 @@ def call(base: str, method: str, path: str, token: str | None = None, body: dict
         return e.code, json.loads(e.read().decode("utf-8") or "{}")
     except Exception as e:  # noqa: BLE001
         return -1, {"message": str(e)}
+
+
+def retrieve_or_die(base: str, token: str, body: dict) -> dict:
+    """检索一次，**非 200 立即终止**，返回 `data`（含 `items`）。
+
+    ★ 为什么不写成 `(payload.get("data") or {}).get("items") or []`（#231 的原始形状）：
+      后端 `topN` 上限是 20，超限返 **400**，而 400 的响应体里没有 `data` ⇒ 那个 `or []`
+      会把「请求被拒」读成「检索一条都没命中」，脚本照常跑完、照常打印
+      「命中 0/215」—— 一个**跑得通、不报错、完全虚假**的读数（B1 凭空归零）。
+    ★ 命中项的文档名字段是 `docName`，不是 `documentName`；取错键得到空串，
+      症状与上一条**一模一样**，所以键名也要在这里显式验一次。
+    """
+    status, payload = call(base, "POST", "/retrieval/test", token, body)
+    if status != 200:
+        fail_exit(
+            f"检索请求被拒（status={status}）：{str(payload.get('message'))[:200]}"
+            " —— 这不是「没命中」，是请求本身不合法（#231）"
+        )
+    data = payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        fail_exit(f"检索响应里没有 data.items：{str(payload)[:200]} —— 契约变了或键名读错了")
+    return data
+
+
+def doc_names_or_die(items: list) -> list[str]:
+    """取每个命中项的 `docName`；**一项都没有这个名字就终止**（键名错了不许静默成空串）。"""
+    names: list[str] = []
+    for item in items:
+        name = (item or {}).get("docName")
+        if not name:
+            fail_exit(
+                f"命中项里没有 docName 字段：{str(item)[:200]}"
+                " —— 别用 documentName 兜底，那会把「取错键」变成「没命中」（#231）"
+            )
+        names.append(str(name))
+    return names
 
 
 def upload(base: str, kb_id: str, token: str, path: pathlib.Path, meta: dict[str, str]):
@@ -190,17 +255,14 @@ def trigger_embedding(base: str, kb_id: str, token: str) -> None:
     第一版漏了这一步，16 份文档全部停在 `PENDING_EMBEDDING` —— 看起来像"向量化坏了"，
     其实是**少点了一次按钮**。
 
-    ★ 只对 `PARSED` 触发：`PARSED_EMPTY` 没有分段，触发只会得到 400。
+    ★ 只对 `PENDING_EMBEDDING` 触发：`SEGMENT_FAILED` 没有分段，触发只会得到 400；
+    `SUCCEEDED` 已经向量化过（再触发是重复消费）。
     """
-    status, payload = call(base, "GET", f"/knowledge-bases/{kb_id}/documents?page=1&size=50", token)
-    if status != 200:
-        fail_exit(f"读文档列表失败（{status}）：{str(payload)[:200]}")
-    rows = (payload.get("data") or {}).get("list") or []
+    rows = list_documents(base, kb_id, token)
     triggered = 0
     for row in rows:
-        # ★ 解析完成后文档停在 `PENDING_EMBEDDING`（不是 `PARSED`）—— 第一版只认 `PARSED`，
-        #   结果"已触发 0 份"，看起来像接口不通，其实是判据写窄了。
-        if status_of(row).upper() not in {"PARSED", "PENDING_EMBEDDING"}:
+        # ★ 解析完成后文档停在 `PENDING_EMBEDDING`（不是 `PARSED`，那个状态词后端不存在）。
+        if status_of(row).upper() != "PENDING_EMBEDDING":
             continue
         st, body = call(base, "POST", f"/documents/{row['id']}/embedding", token, {})
         if st not in (200, 202):
@@ -217,16 +279,8 @@ def wait_embedded(base: str, kb_id: str, token: str) -> list[dict]:
     """
     deadline = time.time() + POLL_TIMEOUT_SEC
     while True:
-        status, payload = call(base, "GET", f"/knowledge-bases/{kb_id}/documents?page=1&size=50", token)
-        if status != 200:
-            fail_exit(f"读文档列表失败（{status}）：{str(payload)[:200]}")
-        rows = (payload.get("data") or {}).get("list") or []
-        busy = [
-            r
-            for r in rows
-            if status_of(r).upper()
-            not in {"EMBEDDED", "EMBEDDING_FAILED", "FAILED", "PARSED_EMPTY"}
-        ]
+        rows = list_documents(base, kb_id, token)
+        busy = [r for r in rows if status_of(r).upper() not in EMBEDDING_SETTLED]
         if not busy:
             return rows
         if time.time() > deadline:
@@ -239,25 +293,8 @@ def wait_parsed(base: str, kb_id: str, token: str) -> list[dict]:
     """轮询文档列表直到全部到终态（或超时）。★ 不用固定 sleep。"""
     deadline = time.time() + POLL_TIMEOUT_SEC
     while True:
-        status, payload = call(base, "GET", f"/knowledge-bases/{kb_id}/documents?page=1&size=50", token)
-        if status != 200:
-            fail_exit(f"读文档列表失败（{status}）：{str(payload)[:200]}")
-        rows = (payload.get("data") or {}).get("list") or []
-
-        def status_code(row: dict) -> str:
-            """取状态码。
-
-            ★★ 实测踩过：`status` 有时是对象 `{"code": …}`、有时是裸字符串 ⇒
-            第一版直接 `(r.get("status") or {}).get("code")` 在裸字符串上会抛
-            `AttributeError: 'str' object has no attribute 'get'`，整轮在上传完之后崩掉，
-            连"解析结果"都打不出来。
-            """
-            raw = row.get("status")
-            if isinstance(raw, dict):
-                return str(raw.get("code") or "")
-            return str(raw or "")
-
-        pending = [r for r in rows if status_code(r).upper() not in TERMINAL]
+        rows = list_documents(base, kb_id, token)
+        pending = [r for r in rows if status_of(r).upper() not in PARSE_SETTLED]
         if not pending:
             return rows
         if time.time() > deadline:
@@ -266,29 +303,150 @@ def wait_parsed(base: str, kb_id: str, token: str) -> list[dict]:
         time.sleep(POLL_INTERVAL_SEC)
 
 
+def list_documents(base: str, kb_id: str, token: str) -> list[dict]:
+    """**分页**读全量文档列表（不写死 size=50，见 MAX_PAGE_SIZE 的注释）。"""
+    rows: list[dict] = []
+    page = 1
+    while True:
+        status, payload = call(
+            base,
+            "GET",
+            f"/knowledge-bases/{kb_id}/documents?page={page}&size={MAX_PAGE_SIZE}",
+            token,
+        )
+        if status != 200:
+            fail_exit(f"读文档列表失败（{status}）：{str(payload)[:200]}")
+        data = payload.get("data") or {}
+        chunk = data.get("list") or []
+        rows.extend(chunk)
+        try:
+            total = int(data.get("total"))
+        except (TypeError, ValueError):
+            total = None
+        if not chunk or len(chunk) < MAX_PAGE_SIZE or (total is not None and len(rows) >= total):
+            return rows
+        page += 1
+
+
 def snippet_in(normalized_haystack: str, snippet: str) -> bool:
+    """去空白后子串比对（`corpus/README.md` 的 B3 判据口径）。
+
+    ★ 不能只把连续空白折叠成一个空格：PDF 文本层会在行尾和字间插入空白，
+      折叠后仍是"维护记录 表》"这种带空格的串，逐字比对必然失败。
+    """
     import re
 
-    def norm(t: str) -> str:
-        return re.sub(r"\s+", " ", t).strip()
+    def squash(text: str) -> str:
+        return re.sub(r"\s+", "", text)
 
-    return norm(snippet) in norm(normalized_haystack)
+    return squash(snippet) in squash(normalized_haystack)
+
+
+def self_check() -> int:
+    """离线自检「读数纪律」（#231）—— 不需要任何服务，CI 里跑这一条即可。
+
+    三条纪律各自对应一种「跑得通、不报错、读数全错」的形状：
+    ① 非 200 ⇒ 必须终止（否则 400 被读成「命中 0 条」，B1 凭空归零）；
+    ② 命中项缺 `docName` ⇒ 必须终止（否则取错键得到空串，同样表现为「没命中」）；
+    ③ 空命中是**合法读数**（不是错误）—— 这条防的是把 ① 改成"一律报错"。
+
+    ★ 它检查的对象是**本文件里那两个函数的实现**，所以把 `retrieve_or_die` 改回
+      `or []` 的形状，这里就会红 —— 这就是本判据要的"能红的断言"。
+    """
+    global call, fail_exit
+    original = call
+    original_fail = fail_exit
+    failures: list[str] = []
+
+    def quiet_fail(_message: str) -> None:
+        """自检期间不打印 fail_exit 的正常输出 —— 那两行 ✗ 是**预期**的，打出来会让人以为自检挂了。"""
+        raise SystemExit(1)
+
+    def stub(status: int, payload: dict):
+        def inner(_base, _method, _path, _token=None, _body=None):
+            return status, payload
+
+        return inner
+
+    try:
+        call = stub(400, {"message": "TopN 应在 1～20 之间"})
+        fail_exit = quiet_fail
+        try:
+            retrieve_or_die("http://x", "t", {})
+        except SystemExit as e:
+            if e.code != 1:
+                failures.append(f"① 非 200 的退出码应是 1，实际 {e.code}")
+        else:
+            failures.append("① 非 200 没有终止 —— 400 会被读成「命中 0 条」（#231 的原始形状）")
+
+        # ★ 故意只给**错误键** `documentName`（且有值）：这样「用 documentName 兜底」的实现
+        #   会安静取出名字、自检就绿了 —— 那正是要防的形状，所以用例必须这么造。
+        call = stub(
+            200, {"data": {"items": [{"segmentId": "s1", "documentName": "文档A.md"}]}}
+        )
+        data = retrieve_or_die("http://x", "t", {})
+        try:
+            doc_names_or_die(data["items"])
+        except SystemExit as e:
+            if e.code != 1:
+                failures.append(f"② 缺 docName 的退出码应是 1，实际 {e.code}")
+        else:
+            failures.append("② 缺 docName 没有终止 —— 取错键会被读成「没命中」")
+
+        call = stub(200, {"data": {"items": []}})
+        if retrieve_or_die("http://x", "t", {})["items"] != []:
+            failures.append("③ 空命中应当是合法读数（返回空列表）")
+
+        call = stub(200, {"data": {"items": [{"docName": "文档A.md"}]}})
+        names = doc_names_or_die(retrieve_or_die("http://x", "t", {})["items"])
+        if names != ["文档A.md"]:
+            failures.append(f"③ 正常命中的文档名读错了：{names}")
+    finally:
+        call = original
+        fail_exit = original_fail
+
+    for line in failures:
+        print(f"  ✗ 自检失败：{line}")
+    if failures:
+        return 1
+    print("  自检通过：非 200 终止 · 缺 docName 终止 · 空命中是合法读数")
+    return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://localhost:5280")
     parser.add_argument("--keep", action="store_true", help="跑完保留知识库（默认删除）")
+    parser.add_argument(
+        "--self-check",
+        action="store_true",
+        help="只跑离线自检（读数纪律，不需要服务；CI 用这条）",
+    )
+    parser.add_argument(
+        "--corpus",
+        default="corpus",
+        help="语料目录（相对仓库根；默认 corpus，合成语料用 corpus/synthetic）",
+    )
     args = parser.parse_args()
+    if args.self_check:
+        print("== 读数纪律自检（#231）==")
+        return self_check()
     base = args.base.rstrip("/")
 
-    print("== 语料解析与问答对核对 ==")
-    if not DOCS.is_dir():
-        fail_exit(f"找不到语料目录：{DOCS}")
+    corpus_dir = pathlib.Path(args.corpus)
+    if not corpus_dir.is_absolute():
+        corpus_dir = ROOT / corpus_dir
+    docs_dir = corpus_dir / "documents"
+    qa_path = corpus_dir / "qa.jsonl"
 
-    files = sorted(p for p in DOCS.iterdir() if p.is_file() and not p.name.startswith("_"))
+    print("== 语料解析与问答对核对 ==")
+    print(f"  语料目录：{corpus_dir}")
+    if not docs_dir.is_dir():
+        fail_exit(f"找不到语料目录：{docs_dir}")
+
+    files = sorted(p for p in docs_dir.iterdir() if p.is_file() and not p.name.startswith("_"))
     if not files:
-        fail_exit(f"{DOCS} 里没有文档")
+        fail_exit(f"{docs_dir} 里没有文档")
     print(f"  语料 {len(files)} 份：{[p.name for p in files]}")
 
     status, payload = call(base, "POST", "/auth/login", body={"username": USER, "password": PASSWORD})
@@ -373,15 +531,13 @@ def main() -> int:
             problems.append(f"{row.get('name')}：解析出 0 字符（无文字层？）")
 
     # ── 问答对核对：用标注问题检索，看命中是不是期望的那份文档 ──
-    if QA.exists():
+    if qa_path.exists():
         print("\n== 问答对核对（检索，HYBRID，threshold=0）==")
-        qa_rows = [json.loads(l) for l in QA.read_text(encoding="utf-8").splitlines() if l.strip()]
+        qa_rows = [json.loads(l) for l in qa_path.read_text(encoding="utf-8").splitlines() if l.strip()]
         for row in qa_rows:
             doc = row.get("expected_document")
-            code, payload = call(
+            data = retrieve_or_die(
                 base,
-                "POST",
-                "/retrieval/test",
                 token,
                 {
                     "question": row["question"],
@@ -389,15 +545,17 @@ def main() -> int:
                     #   （`check_flow_walkthrough.py` 的注释记过这条）。这里只验"链路通 + 命中哪份文档"。
                     "mode": "HYBRID",
                     "threshold": 0,
+                    # ★ topN 上限是 20（超限 400）—— 见 `retrieve_or_die` 的说明，别为了
+                    #   "看得更全"往上调，调了就是一次被拒的请求
                     "topN": 5,
                     "kbIds": [kb_id],
                 },
             )
-            # ★★ 响应里的命中列表字段叫 `items`（实测：`data.items`）。此前读 `list`/`hits`
-            #   ⇒ **假 0 命中**，那会把"检索完全不通"当成结论，而实际上向量检索是通的
-            #   （实测 VECTOR / HYBRID 各 5 条命中，且命中的正是期望文档）。
-            hits = (payload.get("data") or {}).get("items") or []
-            names = [str((h or {}).get("docName") or (h or {}).get("documentName") or "") for h in hits]
+            # ★★ 命中列表在 `data.items`（`retrieve_or_die` 已验过非 200 与形状）。
+            #   文档名只在 `docName` 一个键上取，不再用 `documentName` 兜底 ——
+            #   兜底会让"取错键"表现为"没命中"，与 400 被读成 0 命中是同一个错（#231）。
+            hits = data["items"]
+            names = doc_names_or_die(hits)
             hit = doc in names if names else False
             joined = " ".join(str((h or {}).get("content") or "") for h in hits)
             in_text = snippet_in(joined, row["expected_snippet"]) if joined else False

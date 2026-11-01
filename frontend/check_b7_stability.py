@@ -25,7 +25,12 @@
 起连续 77 条 `HTTP 401`，如果照实计成"未处理异常"，这条闸门量的就是"令牌有没有过期"。
 ⇒ 碰到 401 就**重新登录并重试该轮**，续签次数单独打印（续签之后仍 401 才计失败）。
 
+★ `--self-check`：用假 `ask` 把三条续签语义跑一遍（不续签 / 续签一次 / 续签后仍 401），
+  外加一条反向用法（`reauth=False` 时 401 必须计失败）。它不需要真栈、不需要真模型 ——
+  否则"续签到底会不会发生"只能靠一次 30 分钟长跑证明，实际上就是从来没验过（`#226` 判据 ②）。
+
 用法：
+    python check_b7_stability.py --self-check     # 离线：只验续签语义（快闸里跑这条）
     python check_b7_stability.py
     AIP_B7_ROUNDS=200 AIP_B7_LOG=/tmp/backend.log python check_b7_stability.py
 退出码：0 = 达标；1 = 有红 / 环境起不来。
@@ -285,6 +290,123 @@ def failure_kind(reading: dict) -> str:
     return ""
 
 
+def run_rounds(
+    rounds: int,
+    ask,
+    relogin,
+    token: str,
+    started: float,
+    pause: float = 0.0,
+    reauth: bool = True,
+) -> tuple[str, int, dict, list, list, list]:
+    """跑 N 轮，返回 (最后的 token, 续签次数, 失败分类, 失败样本, 耗时, 读数)。
+
+    ★ 为什么把这段抽成函数（`#226` 判据 ②）：续签逻辑埋在 `main()` 里，就**只能靠一次真模型长跑**
+      才能证明它工作 —— 而那条长跑要 30 分钟、要真模型，于是"会不会续签"实际上从没被验过。
+      抽出来之后 `--self-check` 用假 `ask` 就能把三条语义都跑一遍（含"不续签时会红"的反向用法）。
+
+    ★★ 401 的语义（`#226`）：`access-ttl` 30 分钟，200 轮真模型实测 27–31 分钟 ⇒ 长跑**一定**会跨过它。
+      第一次跑到 #124 起连续 77 条 401 就是这个。所以：
+      - 续签**前**的 401 ⇒ 续签并重试该轮，不计失败（那是量具的问题）；
+      - 续签**后**仍 401 ⇒ 照实计失败（不许被续签掩盖，否则修法本身变成新的遮蔽）；
+      - `reauth=False` 只给自检用：它必须是"401 计失败"的那条反向读数。
+    """
+    failures: dict[str, int] = {}
+    failing_rounds: list[str] = []
+    durations: list[float] = []
+    readings: list[dict] = []
+    reauths = 0
+
+    for index in range(1, rounds + 1):
+        question = f"第 {index} 问：请用一句话回答「{index} 加一等于几」。"
+        reading = ask(question, token)
+        if reading["http"] == 401 and reauth:
+            token = relogin()
+            reauths += 1
+            reading = ask(question, token)
+        durations.append(reading["seconds"])
+        readings.append(reading)
+        kind = failure_kind(reading)
+        if kind:
+            failures[kind] = failures.get(kind, 0) + 1
+            if len(failing_rounds) < 10:
+                failing_rounds.append(
+                    f"#{index} {kind} · {reading['seconds']:.2f}s · "
+                    f"error={reading['error'][:150]!r} · tail={reading['tail'][-200:]!r}"
+                )
+        if index % 20 == 0 or index == rounds:
+            elapsed = time.perf_counter() - started
+            ok_count = index - sum(failures.values())
+            print(
+                f"  … {index}/{rounds} 轮 · 成功 {ok_count} · 失败 {index - ok_count} · "
+                f"已用 {elapsed:.0f}s（均 {elapsed / index:.2f}s/轮）",
+                flush=True,
+            )
+        if pause:
+            time.sleep(pause)
+
+    return token, reauths, failures, failing_rounds, durations, readings
+
+
+def _reading(http: int = 200, status: str = "GENERATED", chars: int = 20, tokens: int = 12) -> dict:
+    return {
+        "http": http,
+        "error": "",
+        "tail": "",
+        "chars": chars,
+        "done_status": status,
+        "completion_tokens": tokens,
+        "seconds": 0.01,
+    }
+
+
+def self_check() -> int:
+    """`--self-check`：离线验续签语义（`#226` 判据 ②③）—— 不需要真模型、不需要真栈。"""
+    failures = 0
+
+    def case(name: str, ok: bool, detail: str = "") -> None:
+        nonlocal failures
+        print(f"  {'✓' if ok else '✗'} {name}{('' if ok else '：' + detail)}")
+        if not ok:
+            failures += 1
+
+    # ① 没有 401 ⇒ 一次都不续签、零失败
+    _, reauths, fails, _, _, _ = run_rounds(
+        5, lambda q, t: _reading(), lambda: "tok", "tok", time.perf_counter())
+    case("全程 200 ⇒ 续签 0 次、零失败", reauths == 0 and not fails, f"reauths={reauths} fails={fails}")
+
+    # ② 第 3 轮 401 ⇒ 续签一次并重试该轮，不计失败
+    calls = {"n": 0}
+
+    def ask_with_expiry(q, t):
+        calls["n"] += 1
+        return _reading(http=401) if calls["n"] == 3 else _reading()
+
+    _, reauths, fails, _, _, readings = run_rounds(
+        5, ask_with_expiry, lambda: "tok2", "tok", time.perf_counter())
+    case("401 一次 ⇒ 续签 1 次、零失败", reauths == 1 and not fails, f"reauths={reauths} fails={fails}")
+    case("续签后那一轮算成功（读数 5 条且都是 200）",
+         len(readings) == 5 and all(r["http"] == 200 for r in readings), f"readings={len(readings)}")
+
+    # ③ 续签之后仍然 401 ⇒ 必须计失败（不许被续签掩盖）
+    def ask_always_401(q, t):
+        return _reading(http=401)
+
+    _, reauths, fails, _, _, _ = run_rounds(
+        3, ask_always_401, lambda: "tok2", "tok", time.perf_counter())
+    case("续签后仍 401 ⇒ 每一轮都计失败", fails.get("HTTP 401") == 3, f"fails={fails}")
+
+    # ④ 反向用法：不续签时 401 必须计失败 —— 证明上面那条绿的是"续签"，不是"脚本永远绿"
+    _, reauths, fails, _, _, _ = run_rounds(
+        2, ask_always_401, lambda: "tok2", "tok", time.perf_counter(), reauth=False)
+    case("关掉续签 ⇒ 401 立刻计失败（这条绿说明闸门量的不是空）",
+         reauths == 0 and fails.get("HTTP 401") == 2, f"reauths={reauths} fails={fails}")
+
+    print("")
+    print("自检：" + ("通过" if failures == 0 else f"{failures} 条不过"))
+    return 0 if failures == 0 else 1
+
+
 def percentile(values: list[float], ratio: float) -> float:
     if not values:
         return 0.0
@@ -343,45 +465,16 @@ def main() -> int:
         conversation_id = create_conversation(token, app_id)
         note(f"夹具：应用 {app_id} · 会话 {conversation_id} · 模型 {model_id}")
 
-        failures: dict[str, int] = {}
-        failing_rounds: list[str] = []
-        durations: list[float] = []
-        readings: list[dict] = []
-        reauths = 0
         started = time.perf_counter()
 
-        for index in range(1, ROUNDS + 1):
-            question = f"第 {index} 问：请用一句话回答「{index} 加一等于几」。"
-            reading = ask_once(token, app_id, conversation_id, question)
-            if reading["http"] == 401:
-                # ★★ 令牌过期是**量具**的问题，不是产品红。
-                #   access-ttl = 30m（backend/src/main/resources/application.yml:121），
-                #   而 200 轮真模型实测要 27–31 分钟 ⇒ 长跑**一定会**跨过它。
-                #   第一次跑到 #124 起连续 77 条 401 就是这个（见 #225）：不续签的话，
-                #   「200 次 0 次未处理异常」会被一条 30 分钟的令牌过期判成红。
-                token = login()
-                reauths += 1
-                reading = ask_once(token, app_id, conversation_id, question)
-            durations.append(reading["seconds"])
-            readings.append(reading)
-            kind = failure_kind(reading)
-            if kind:
-                failures[kind] = failures.get(kind, 0) + 1
-                if len(failing_rounds) < 10:
-                    failing_rounds.append(
-                        f"#{index} {kind} · {reading['seconds']:.2f}s · "
-                        f"error={reading['error'][:150]!r} · tail={reading['tail'][-200:]!r}"
-                    )
-            if index % 20 == 0 or index == ROUNDS:
-                elapsed = time.perf_counter() - started
-                ok_count = index - sum(failures.values())
-                print(
-                    f"  … {index}/{ROUNDS} 轮 · 成功 {ok_count} · 失败 {index - ok_count} · "
-                    f"已用 {elapsed:.0f}s（均 {elapsed / index:.2f}s/轮）",
-                    flush=True,
-                )
-            if PAUSE:
-                time.sleep(PAUSE)
+        token, reauths, failures, failing_rounds, durations, readings = run_rounds(
+            ROUNDS,
+            ask=lambda question, tok: ask_once(tok, app_id, conversation_id, question),
+            relogin=login,
+            token=token,
+            started=started,
+            pause=PAUSE,
+        )
 
         total_seconds = time.perf_counter() - started
         failed_total = sum(failures.values())
@@ -466,4 +559,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--self-check" in sys.argv[1:]:
+        sys.exit(self_check())
     sys.exit(main())

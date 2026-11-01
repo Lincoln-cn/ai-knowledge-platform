@@ -37,6 +37,13 @@ public final class NoiseStripper {
   /** 目录页判定的最短连续行数（{@code 12 §2.4}：≥5 行）。 */
   public static final int TOC_MIN_RUN = 5;
 
+  /**
+   * 版权声明行的最大长度（{@code #271}）。
+   *
+   * <p>★ 这是一道<b>防误杀</b>的护栏，不是排版要求：真版权行都很短（实测最长 24 字）。长段落里出现 「©」或「版权所有」多半是正文在讨论版权，整段剥掉就是内容静默缺失。
+   */
+  public static final int COPYRIGHT_MAX_LENGTH = 120;
+
   /** 独立成行的页码：{@code 12} / {@code - 12 -} / {@code 第 3 页} / {@code 第 3 页 共 10 页} / 罗马数字。 */
   private static final Pattern PAGE_NUMBER =
       Pattern.compile(
@@ -52,16 +59,51 @@ public final class NoiseStripper {
       Pattern.compile(".*?[.．…·]{2,}[\\s.．，,、;；:：]*\\d{1,4}\\s*$");
 
   /**
-   * PDF 占位标记整行：{@code [PDF 1]} / {@code [ PDF 12 ]}（#51）。
+   * 解析器留下的**图片占位标记**（`#51`）：整行只有 `[PDF 1]` / `[pdf 12]` 这种方括号 + 格式名 + 序号。
    *
-   * <p>★★ 只认「整行只有这个标记」这一种形态：它进 {@code search_text} 会污染向量与全文索引，而对读者是零信息的（不是图注、不是表标题）。 行内的同形态（{@code
-   * 见附件[PDF 1]继续}）一律不动 —— 那可能是正文的一部分，剥了就是 {@code 12 §10.2} 风险 2 的误杀。
+   * <p>★★ 取证结论（2026-11-01，不是推断）：**我们这条链不产生它** —— 4 份夹具与一份自造的图文混排 PDF （PDFBox 画了图）解析后 {@code [PDF
+   * N]} 命中数都是 <b>0</b>，Tika 对嵌入式图片是「直接丢弃、不留标记」。 因此它只可能来自 <b>源 PDF 的文本层</b>（生成该 PDF 的工具把图写成了这行占位文字）。
    *
-   * <p>★ 为什么正则必须这么窄：真实图注/表标题长这样 —— {@code 图 1 系统架构}、{@code 表 2 参数}、{@code [图 1] 架构}。
-   * 按"含方括号就删"写会把它们一起删掉，那是另一种静默损失。
+   * <p>★ 为什么还是要剥：它一旦进 {@code search_text} 就同时污染向量与全文索引，而且**不会让任何闸门变红** （{@code 12 §10.2} 风险 2
+   * 的反面：内容里多了一点垃圾，然后没人发现）。
+   *
+   * <p>★ 边界（宁可漏剥，不许误杀）：
+   *
+   * <ul>
+   *   <li><b>只认整行</b>：{@code [PDF 1] 图注} 这种行内还有内容的**不动** —— 那多半是真图注；
+   *   <li><b>只认方括号 + PDF + 数字</b>：{@code 图 1} / {@code 表 1} / {@code Table 1} 这类图注表格标题**不动**；
+   *   <li><b>两种写法都认</b>：Tika 的 Markdown handler 会把方括号转义 —— 源文本 {@code [PDF 1]} 解析产物里是 {@code \[PDF
+   *       1\]}（实测）。只认裸形态的话，这条规则在生产上永远不生效。
+   *   <li>代码围栏内不动（与其余规则同口径）。
+   * </ul>
    */
-  private static final Pattern PDF_PLACEHOLDER =
-      Pattern.compile("^\\[\\s*(?i:pdf)\\s*\\d{1,4}\\s*]$");
+  private static final Pattern PARSER_PLACEHOLDER =
+      Pattern.compile("^\\\\?\\[\\s*(?:PDF|pdf|Pdf)\\s*\\d{1,3}\\s*\\\\?\\]$");
+
+  /**
+   * 版权声明行（`#271`）：整行、行首、短行。
+   *
+   * <p>★★ 判据（2026-11-01 用户拍板）：<b>算噪声，只在行首剥离</b>。
+   *
+   * <p>为什么要有它：版权行是"每份文档都有、可能每页都重复"的排版噪声，进了 {@code search_text}
+   * 既污染向量也污染引用文本；而它<b>不会让任何闸门变红</b>（{@code 12 §10.2} 风险 2 的反面）。 此前生产实现没有这条规则，于是实测表上 {@code
+   * noisy.docx} 恒为 11/12 —— 差的那一条就是它。
+   *
+   * <p>为什么<b>只认行首</b>：正文里合法出现"版权所有"的句子（例如「本文件版权所有，未经许可不得复制」）
+   * 行首不是版权标记，剥掉就是<b>删信息</b>；那比留下脏一行严重得多。三种行首形态是实测见过的：
+   *
+   * <ul>
+   *   <li>{@code © 2024 某某集团有限公司 版权所有}
+   *   <li>{@code Copyright (c) 2024 …}
+   *   <li>{@code 2024 某某集团有限公司 版权所有}（OCR 丢了 © 符号，只剩年份 + 结尾）
+   * </ul>
+   */
+  private static final Pattern COPYRIGHT_LINE =
+      Pattern.compile(
+          "^\\s*(?:©|\\(c\\)|（c）|copyright\\b).*$"
+              + "|^\\s*版权所有.*$"
+              + "|^\\s*(?:19|20)\\d{2}\\s+\\S.*版权所有\\s*$",
+          Pattern.CASE_INSENSITIVE);
 
   private static final String FENCE = "```";
 
@@ -107,6 +149,17 @@ public final class NoiseStripper {
 
     boolean[] drop = new boolean[lines.length];
 
+    // ① 图片占位标记（`#51`）：`[PDF 1]` 这种整行剥离。★ 先于其余规则 —— 它是"解析器/源文件留下的垃圾"，
+    //   而其余规则都是"排版噪声"，两者成因不同，混在一条分支里以后说不清是谁剥的。
+    for (int i = 0; i < lines.length; i++) {
+      if (inFence[i]) {
+        continue;
+      }
+      if (PARSER_PLACEHOLDER.matcher(lines[i].strip()).matches()) {
+        drop[i] = true;
+      }
+    }
+
     // ② 独立成行的页码
     for (int i = 0; i < lines.length; i++) {
       String trimmed = lines[i].strip();
@@ -115,9 +168,17 @@ public final class NoiseStripper {
       }
     }
 
-    // ②b 独立成行的 PDF 占位标记（#51）—— 只认整行，行内的一律不动（理由见 PDF_PLACEHOLDER）
+    // ②b 版权声明行（`#271`）：整行 + 行首 + 不超长。
+    //   ★ 必须先于 ③「跨页重复行」：它只出现 1 次时那条规则认不出来 —— `noisy.docx` 的 11/12
+    //     差的就是这一条（夹具基准把它记作 noiseLines，而生产实现此前没有这条规则）。
     for (int i = 0; i < lines.length; i++) {
-      if (!inFence[i] && PDF_PLACEHOLDER.matcher(lines[i].strip()).matches()) {
+      if (inFence[i]) {
+        continue;
+      }
+      String trimmed = lines[i].strip();
+      if (!trimmed.isEmpty()
+          && trimmed.length() < COPYRIGHT_MAX_LENGTH
+          && COPYRIGHT_LINE.matcher(trimmed).matches()) {
         drop[i] = true;
       }
     }

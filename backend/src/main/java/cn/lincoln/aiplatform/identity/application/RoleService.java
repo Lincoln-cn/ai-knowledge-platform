@@ -6,6 +6,8 @@ import cn.lincoln.aiplatform.identity.domain.RoleRepository;
 import cn.lincoln.aiplatform.identity.domain.UserRepository;
 import cn.lincoln.aiplatform.identity.infrastructure.PermissionCatalog;
 import cn.lincoln.aiplatform.platform.access.DataScope;
+import cn.lincoln.aiplatform.platform.domain.AuditAction;
+import cn.lincoln.aiplatform.platform.domain.AuditLogPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import java.util.ArrayList;
@@ -42,11 +44,22 @@ public class RoleService {
   private final UserRepository users;
   private final RolePermissionRepository rolePermissions;
 
+  /**
+   * 审计（`#257`）。
+   *
+   * <p>★ 授权变更必须留痕：这是"谁把看到什么的权利给了谁"，事后追责与等保检查都会问它。审计与写库同事务（见 {@link AuditLogPort#record}）。
+   */
+  private final AuditLogPort audit;
+
   public RoleService(
-      RoleRepository roles, UserRepository users, RolePermissionRepository rolePermissions) {
+      RoleRepository roles,
+      UserRepository users,
+      RolePermissionRepository rolePermissions,
+      AuditLogPort audit) {
     this.roles = roles;
     this.users = users;
     this.rolePermissions = rolePermissions;
+    this.audit = audit;
   }
 
   @Transactional(readOnly = true)
@@ -80,7 +93,7 @@ public class RoleService {
    * {@code RoleManage.vue} 的文案一致，必须一字不差 —— 前端原文展示后端 message，两处各写一套会变成"界面说 A、接口说 B"。
    */
   @Transactional
-  public RoleView updatePermissions(UUID roleId, List<String> codes) {
+  public RoleView updatePermissions(UUID roleId, List<String> codes, UUID actorId) {
     Role role = requireRole(roleId);
     rejectAdminRoleChange(role, "权限点");
 
@@ -101,8 +114,18 @@ public class RoleService {
       }
     }
 
+    List<String> before = new ArrayList<>(rolePermissions.findByRoleId(roleId));
+
     // 差分替换（不是先清空再插入）：清空窗口会让并发鉴权全部被拒
     rolePermissions.replaceAll(roleId, requested);
+
+    audit.record(
+        AuditAction.GRANT_CHANGE,
+        "ROLE",
+        roleId.toString(),
+        actorId,
+        java.util.Map.of(
+            "roleCode", role.code(), "from", before, "to", new ArrayList<>(requested)));
 
     log.info("角色 {} 的权限点已更新：{} 个", role.code(), requested.size());
     return view(role, new ArrayList<>(requested), users.countByRoleId(roleId));

@@ -1,5 +1,6 @@
 import { ApiError, ErrorCode } from '@/api/types'
 import type { ModelProviderInfo, ProviderKind } from '@/api/providers'
+import { toPublicProvider } from '@/lib/providerPublic'
 import type { MockRoute } from '../dispatch'
 import { models } from '../fixtures/models'
 
@@ -23,10 +24,15 @@ const providers: MockProvider[] = [
   }
 ]
 
-const toPublic = (p: MockProvider): ModelProviderInfo => {
-  const count = models.filter((m) => m.providerId === p.id).length
-  return { ...p, modelCount: count, hasApiKey: !!p.apiKey }
-}
+/**
+ * 内部记录 → 公开响应。
+ *
+ * ★ Issue #264：以前这里是 `{ ...p }`，会把下面的明文 `apiKey` 一起下发。
+ *   现在改走 `toPublicProvider`（显式挑字段，白名单），内部字段照旧保留
+ *   —— 夹具/种子里的 `apiKey` 仍供 mock 内部模拟调用，只是不出这个门。
+ */
+const toPublic = (p: MockProvider): ModelProviderInfo =>
+  toPublicProvider(p, models.filter((m) => m.providerId === p.id).length)
 
 export const providerRoutes: MockRoute[] = [
   [

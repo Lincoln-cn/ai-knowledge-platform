@@ -117,6 +117,35 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   private static final String CLASSIFICATION_PREDICATE = " and s.classification_rank <= ?";
 
   /**
+   * 标签谓词（Issue {@code #26}）—— 「**标签相交**才可见」，正交于密级那一维（{@code 13 §1.1}）。
+   *
+   * <p>★ 它为什么与 {@link #CLASSIFICATION_PREDICATE} 长得完全不像：等级链是偏序格（比"不高于"）， 标签是集合（比"相交"）。★
+   * <strong>千万别写成 `s.labels @&gt; ?`</strong>（包含方向反了）： 那要求「文档标签必须把我所有的标签都包含」，症状是所有打了标签的文档一起看不见。
+   *
+   * <p>★ 三条豁免逐字对齐 {@code ScopeFilter.canSeeClassification}（同一套语义不许写两遍）：
+   *
+   * <ol>
+   *   <li>{@code cardinality(?) = 0}：我的标签集为空 ⇒ <strong>不按标签限制</strong>。写成"必须相交"会让
+   *       绝大多数没配标签的角色**什么都看不到**；
+   *   <li>{@code s.labels is null} / {@code cardinality(s.labels) = 0}：文档没打标签 ⇒ 谁都能看
+   *       （标签是可选字段，没打标签不是"绝密"）；
+   *   <li>否则 {@code s.labels && ?}（数组交集）。
+   * </ol>
+   *
+   * <p>★ 参数写成 {@code cast(? as text[])}：与同一条谓词里那些 {@code cast(? as uuid)} 一个理由 —— 不带类型的 {@code ?}
+   * 会让 PG 在 {@code cardinality(?)} 上报 {@code could not determine data type of parameter}。
+   *
+   * <p>★ 今天 {@code kb_document.labels} / {@code kb_segment.labels} 恒为 NULL（{@code V57} 只把列落了），
+   * 所以这一支<strong>恒真、行为零变化</strong>。之所以现在就把语义接上：等将来有人开始写标签时， 过滤已经生效 —— 不会出现"写了标签却没人按它过滤"的空窗期（那是
+   * {@code #40} / {@code #160} / {@code #228} 反复出现的形状）。
+   */
+  private static final String LABEL_PREDICATE =
+      " and (cardinality(cast(? as text[])) = 0"
+          + " or s.labels is null"
+          + " or cardinality(s.labels) = 0"
+          + " or s.labels && cast(? as text[]))";
+
+  /**
    * ★★ <strong>安全谓词 = 可见性 + 三域 + 密级，四条查询用的都是这一份</strong> （{@code 13 §三} 闸门②：pre-filter，两路同谓词；{@code
    * 13 §11.3}：一个谓词，不是三个分支）。
    *
@@ -137,7 +166,8 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
           + " or (s.scope_kind = 'KB' and s.scope_id = cast(? as uuid))"
           + " or (s.scope_kind = 'CONVERSATION' and s.scope_id = cast(? as uuid)"
           + " and s.owner_id = cast(? as uuid)))"
-          + CLASSIFICATION_PREDICATE;
+          + CLASSIFICATION_PREDICATE
+          + LABEL_PREDICATE;
 
   private static final String JOINS =
       " from kb_segment s"
@@ -186,18 +216,23 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
 
   /**
    * 谓词的绑定值 —— ★ <strong>顺序必须与 {@link #securityPredicate(int)} 里的 {@code ?} 逐个对齐</strong> （共用库 id 列表
-   * → 个人库 → 会话 → 传输者 → 密级上限）。
+   * → 个人库 → 会话 → 传输者 → 密级上限 → 标签两次）。
    *
    * <p>★ 与 {@link #securityPredicate(int)} 是**成对**的两件事，所以它们挨着放：分开之后 "改了条件没改参数"会变成一次 SQL 参数错位 ——
    * 那种红会红在"看得见的内容不见了" （而不是"越权出现了"），最难查的一类。
+   *
+   * <p>★ 标签要绑**两次**（{@link #LABEL_PREDICATE} 里 {@code cardinality(?) = 0} 一次、交集一次）： 做成一个带 {@code ?}
+   * 的 SQL 片段配一次绑定是做不到的，JDBC 参数是按位置消耗的。
    */
   private static void bindSecurityPredicate(
-      List<Object> args, RetrievalScope scope, int clearanceRank) {
+      List<Object> args, RetrievalScope scope, int clearanceRank, String labels) {
     args.addAll(scope.sharedKbIds());
     args.add(scope.personalKbId());
     args.add(scope.conversationId());
     args.add(scope.ownerId());
     args.add(clearanceRank);
+    args.add(labels);
+    args.add(labels);
   }
 
   /**
@@ -213,6 +248,36 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   private int clearanceRank() {
     ClassificationLevel clearance = accessScope.currentScope().maxClassification();
     return clearance == null ? -1 : clearance.ordinal();
+  }
+
+  /**
+   * 当前请求者的密级标签集，转成 PG 的数组<strong>字面量</strong>（{@link #LABEL_PREDICATE} 里要绑两次）。
+   *
+   * <p>★ 为什么是字面量而不是 {@code String[]}：{@code JdbcTemplate} 会把数组对象原样交给 {@code setObject}，而 pgjdbc
+   * 对它报「不能转换一个 [Ljava.lang.String; 实例到类型 Types.ARRAY」 —— 实测（本条的第一版就是这么红的）。传"真数组"要 {@code
+   * createArrayOf}，位置参数没有那条通道； 而谓词里的 {@code cast(? as text[])} 已经把类型钉死，绑一个格式正确的字面量等价且可读。
+   *
+   * <p>★ 空集必须绑成 <strong>{@code {}}</strong>、不能绑 {@code null}：谓词第一支是 {@code cardinality(cast(? as
+   * text[])) = 0}，而 {@code cardinality(null)} 是 <strong>NULL</strong> （三值逻辑）⇒ {@code NULL = 0} 也是
+   * NULL ⇒ 整条 {@code and} 变 NULL ⇒ <strong>一条都不返回</strong>。 那正是"没配标签的角色什么都看不到"——{@code 13 §1.1}
+   * 点名要避免的症状。
+   */
+  private String labelArray() {
+    Set<String> labels = accessScope.currentScope().clLabels();
+    if (labels == null || labels.isEmpty()) {
+      return "{}";
+    }
+    StringBuilder literal = new StringBuilder("{");
+    boolean first = true;
+    for (String label : labels) {
+      if (!first) {
+        literal.append(',');
+      }
+      first = false;
+      // ★ 每个元素都加引号并转义：标签是人工填的中文短语，含逗号 / 引号时必须仍然算一个元素
+      literal.append('"').append(label.replace("\\", "\\\\").replace("\"", "\\\"")).append('"');
+    }
+    return literal.append('}').toString();
   }
 
   /**
@@ -305,7 +370,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     args.add(String.join("\n", lexemes));
     args.add(lexemes.size());
     // ★ 绑定值的位置约定：其余参数 → 三域 → 密级 → limit
-    bindSecurityPredicate(args, scope, clearanceRank());
+    bindSecurityPredicate(args, scope, clearanceRank(), labelArray());
     args.add(Math.max(1, query.limit()));
 
     String sql =
@@ -350,7 +415,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     }
     List<Object> args = new ArrayList<>();
     // ★ 绑定值的位置约定与另外三条路逐字一致：三域 → 密级 → limit
-    bindSecurityPredicate(args, scope, ceiling.ordinal());
+    bindSecurityPredicate(args, scope, ceiling.ordinal(), labelArray());
     args.add(limit);
     // ★ 排序必须确定：没有它，同一个问题两次访问可以返回不同的子集，而"可见集合收窄"那条判据
     //   会在 limit 截断处偶发红 —— 那种红会被误当成"密级过滤坏了"
@@ -373,7 +438,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     List<UUID> candidates = List.copyOf(candidateIds);
     List<Object> args = new ArrayList<>(candidates);
     // ★ 绑定值的位置约定与另外三条路逐字一致：候选 id → 三域 → 密级
-    bindSecurityPredicate(args, scope, clearanceRank());
+    bindSecurityPredicate(args, scope, clearanceRank(), labelArray());
     String sql =
         "select s.id"
             + JOINS
@@ -421,7 +486,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     List<Object> args = new ArrayList<>();
     args.add(toVectorLiteral(query.vector()));
     // ★ 绑定值的位置约定与另外三条路逐字一致：向量字面量 → 三域 → 密级 → (可选 model_id) → limit
-    bindSecurityPredicate(args, scope, clearanceRank());
+    bindSecurityPredicate(args, scope, clearanceRank(), labelArray());
     if (query.embeddingModelId() != null) {
       args.add(query.embeddingModelId().toString());
     }

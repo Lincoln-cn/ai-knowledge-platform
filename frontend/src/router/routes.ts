@@ -81,7 +81,10 @@ export const navGroups: NavGroup[] = [
       // ★ 组织机构独立成一个菜单项（用户口径）：它是**数据权限的载体**（共享给部门、按部门筛文档），
       //   与"账号/角色/权限点"不是一件事，也不该再往系统管理里堆 tab
       { path: '/org', label: '组织机构', icon: 'OfficeBuilding' },
-      { path: '/admin', label: '系统管理', icon: 'Setting' }
+      { path: '/admin', label: '系统管理', icon: 'Setting' },
+      // ★ 审计记录放「管理」而不是塞进系统管理的 tab：它是一张**只读的事实表**，
+      //   与"改配置"不是同一类动作；而且查审计的人常常是来核对某个变更，不该先去翻 tab
+      { path: '/audit', label: '审计记录', icon: 'Document' }
     ]
   }
 ]

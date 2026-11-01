@@ -335,7 +335,18 @@ export interface WorkflowVersion {
   /** 递增版本号 */
   version: number
   publishedAt: string
+  /** 发布人用户 id（uuid）。界面上不显示它，只放进 `title` —— 同名的人靠它才分得开 */
   publishedBy: string
+  /**
+   * 发布人**现在**的显示名，服务端读列表时现查。
+   *
+   * ★ 刻意不是发布那一刻的快照：人名会改（改完要显示新名）、会软删（删完不该还挂着一个不存在的人），
+   * 所以版本行里只存 id。这一点与审计表相反 —— 审计要回答「那一刻是谁」，那边必须存快照。
+   *
+   * `null` = 现在解析不到（用户被删，或这次查询失败）⇒ 界面显示「（未知用户）」，
+   * **不要**退回显示 `publishedBy` 那个 uuid。
+   */
+  publishedByName: string | null
   /** 发布说明 */
   note: string
   nodeCount: number
@@ -415,9 +426,19 @@ export const getWorkflowVersionGraph = (appId: string, version: number) =>
     path: { appId, version }
   })
 
-/** 回滚到某个历史版本（生成一份新的草稿，不动历史） */
+/**
+ * 回滚到某个历史版本：**把那一版的图写回草稿**，不发布、不动历史。
+ *
+ * ★ 返回**写回后的草稿**，页面拿到就能直接重画，不必再发一次 `getWorkflowDraft`：
+ *   - `graph`   是写回后的图（服务端从版本行里原样抄过来，没有二次加工）；
+ *   - `updatedAt` 是这次写草稿的时刻 —— 显示"已保存"用它，不要用本地 `Date.now()` 猜；
+ *   - `version` 是被回滚到的那一版 —— 写「已回滚到 v3」用它，不要再翻一次版本列表去猜。
+ *
+ * ★ ★ 回滚**不改变线上行为**：线上跑的仍是上一次发布的那一版，直到用户自己再点一次「发布」。
+ *   所以调用方不要把回滚当"切换线上"，也别在回滚成功后提示"已上线"。
+ */
 export const rollbackWorkflow = (appId: string, version: number) =>
-  request<{ graph: WorkflowGraph }>({
+  request<{ graph: WorkflowGraph; updatedAt: string; version: number }>({
     method: 'POST',
     url: '/assistants/:appId/workflow/versions/:version/rollback',
     path: { appId, version },

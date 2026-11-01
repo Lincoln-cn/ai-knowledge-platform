@@ -518,7 +518,8 @@ export const workflowVersions: Record<string, WorkflowVersionRecord[]> = {
       nodeCount: sampleValidGraph.nodes.length,
       note: '补充风险分流与三路回复',
       publishedAt: '2026-02-12T15:40:00Z',
-      publishedBy: '张三',
+      publishedBy: 'u3',
+      publishedByName: '李伟',
       graph: {
         nodes: sampleValidGraph.nodes.map((n) => ({ ...n, position: { ...n.position } })),
         edges: sampleValidGraph.edges.map((e) => ({ ...e }))
@@ -530,7 +531,8 @@ export const workflowVersions: Record<string, WorkflowVersionRecord[]> = {
       nodeCount: 3,
       note: '首次发布：线性「收集 → 检索 → 对话 → 回复」',
       publishedAt: '2026-02-10T09:18:00Z',
-      publishedBy: '张三',
+      publishedBy: 'u3',
+      publishedByName: '李伟',
       graph: {
         nodes: [
           {

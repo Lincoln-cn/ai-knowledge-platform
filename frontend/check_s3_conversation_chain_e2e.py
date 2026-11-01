@@ -43,7 +43,9 @@ import time
 import urllib.error
 import urllib.request
 
-BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5280").rstrip("/")
+#: 位置参数是站地址；旗标（`--self-check`）可以被放在任意位置，别被当成站地址。
+_BASE_ARG = next((a for a in sys.argv[1:] if not a.startswith("--")), "http://localhost:5280")
+BASE = _BASE_ARG.rstrip("/")
 API = BASE + "/api/v1"
 
 #: ★★ 流式那一跳**直连后端**，不走开发服务器代理（#237 诊断，2026-10-30）。
@@ -106,6 +108,41 @@ FIXTURE_TEXT = """# 差旅与费用报销管理办法
 #:   后端会把若干 delta 合并成一帧（54 字实测只有约 3 帧、每帧 ~18 字）。所以触发条件必须是
 #:   **第一片正文**，不是"第 3 片"：等 3 片等于等整条答案到齐，节拍再慢也照样 `accepted=false`。
 CHUNK_DELAY_MS = 300
+
+#: 等到**第几片**正文再发停止（`#237`）。
+#: ★ 原来是 3。第 3 片到达时，若分片在客户端被合并送达（或首片之后剩余分片一次到齐），
+#:   主线程看到的"第 3 片"其实已经是全文 ⇒ 再发停止就必然 `accepted=false`，
+#:   而 `accepted=false` 在这一步被当成红 ⇒ 闸门在测"这一轮有没有被合并送达"，不是在测停止语义。
+#:   1 片 = 只要还有剩余分片在途，停止就有意义；窗口由 `CHUNK_DELAY_MS` 保证。
+STOP_MIN_CHUNKS = 1
+
+#: 停晚了重试几次（`#237`）。一次就放弃会把"偶发"变成"必然红"，无限重试会把红变成绿。
+STOP_ATTEMPTS = 2
+
+
+def classify_stop(accepted: bool, done_status: str | None) -> str:
+    """把一次停止回执分成三种（`#237` 判据 3：读数不同就不许合并成一条断言）。
+
+    - ``accepted``：服务端收下了信号（消息当时仍在生成）
+    - ``late``：停晚了 —— 请求到达时这一轮已经收尾，`accepted=false` 是如实回执，**不是缺陷**
+    - ``not-applied``：这一轮还没收尾，服务端却回了 `accepted=false` —— **真缺陷**
+
+    区分靠的是"停止请求发出之后那一轮有没有收尾"：收尾了就是停晚了，没走完就是没收下。
+    """
+    if accepted:
+        return "accepted"
+    if done_status:
+        return "late"
+    return "not-applied"
+
+
+def stop_verdict(classification: str, done_status: str) -> str:
+    """给读数配一句人话 —— 只有 `accepted=False` 的话，排障的人只能猜。"""
+    if classification == "accepted":
+        return "服务端收下了停止信号（消息当时仍在生成）"
+    if classification == "late":
+        return f"停晚了：停止请求到达时这一轮已经收尾（终态 {done_status or '未知'}）"
+    return f"停止没有生效：这一轮没有收尾（终态 {done_status or '未收到 done 帧'}），服务端却回了 accepted=false"
 
 problems: list[str] = []
 
@@ -524,6 +561,43 @@ def list_messages(token: str, conversation_id: str) -> list[dict]:
 # ──────────────────────────────── 主链 ────────────────────────────────
 
 
+def self_check() -> int:
+    """离线自检（`#237` 判据 3）：三种回执分类、以及"两次都停晚必须红"这条纪律。
+
+    ★ 这条闸门的关键判断是「`accepted=false` 是不是缺陷」。它一旦永远判成绿，
+      真出现"停止不生效"的回归时就不会有人发现 —— 所以三种情形各有一条用例钉住。
+    """
+    failures: list[str] = []
+
+    def expect(ok: bool, message: str) -> None:
+        print(f"  {'✓' if ok else '✗'} {message}")
+        if not ok:
+            failures.append(message)
+
+    expect(classify_stop(True, "") == "accepted", "收下了 ⇒ accepted（还没跑完就已经收下）")
+    expect(classify_stop(True, "STOPPED") == "accepted", "收下了且终态 STOPPED ⇒ 仍是 accepted")
+    expect(classify_stop(False, "GENERATED") == "late", "没收下、这一轮已收尾 ⇒ late（停晚了，不是缺陷）")
+    expect(classify_stop(False, "STOPPED") == "late", "没收下但终态是 STOPPED（别的路径停的）⇒ 仍算 late")
+    expect(classify_stop(False, None) == "not-applied", "没收下、这一轮没走完 ⇒ not-applied（真缺陷）")
+    expect(classify_stop(False, "") == "not-applied", "空字符串同 None ⇒ not-applied")
+
+    expect("停晚了" in stop_verdict("late", "GENERATED"), "late 的读数里写清「停晚了」")
+    expect("没有生效" in stop_verdict("not-applied", ""), "not-applied 的读数里写清「没有生效」")
+    expect("收下" in stop_verdict("accepted", "STOPPED"), "accepted 的读数里写清「收下」")
+
+    # ★ 纪律：`late` 不许被当成绿（连试 STOP_ATTEMPTS 次都晚 ⇒ 停止语义没被验证）
+    expect(STOP_ATTEMPTS >= 2, f"停晚了至少重试 1 次（当前 STOP_ATTEMPTS={STOP_ATTEMPTS}）")
+    expect(STOP_MIN_CHUNKS == 1, f"等到第 1 片就停（当前 STOP_MIN_CHUNKS={STOP_MIN_CHUNKS}）")
+
+    if failures:
+        print("")
+        print(f"自检：红 —— {len(failures)} 条不成立")
+        return 1
+    print("")
+    print("自检：绿 —— 回执三分类与两条纪律都成立")
+    return 0
+
+
 def main() -> int:
     print("== S3 真栈闸门：终端用户那一整条链（流式 · 引用溯源 · 5 轮 · 停止 · 重生成 · 赞 · 评分）==")
 
@@ -632,103 +706,102 @@ def main() -> int:
             #   "停不下来"正是这一步要测的行为，不该靠一句注记把它降级成"只是没测到"。
             note("桩不接受 chunk_delay_ms ⇒ 停止必然迟到（accepted=false ⇒ 这一步会红）")
 
-        stop_frames: list[dict] = []
-        stop_error: list[str] = []
-        frame_times: list[float] = []
+        def run_stop_round() -> dict:
+            """跑一轮"边吐边停"，把这轮的读数原样交回来（判断留给外面，`#237`）。"""
+            frames: list[dict] = []
+            errors: list[str] = []
 
-        def reader() -> None:
-            try:
-                # ★ 帧写进共享列表（`sink=`），主线程才可能"边吐边看"—— 见 `chat_collect` 的说明
-                chat_collect(
-                    token,
-                    {"appId": app_id, "conversationId": conversation_id, "question": "请详细说明报销流程"},
-                    sink=stop_frames,
-                    times=frame_times,
-                )
-            except Exception as e:  # noqa: BLE001
-                stop_error.append(str(e))
+            def reader() -> None:
+                try:
+                    # ★ 帧写进共享列表（`sink=`），主线程才可能"边吐边看"—— 见 `chat_collect` 的说明
+                    chat_collect(
+                        token,
+                        {"appId": app_id, "conversationId": conversation_id, "question": "请详细说明报销流程"},
+                        sink=frames,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    errors.append(str(e))
 
-        started_at = time.time()
-        worker = threading.Thread(target=reader, daemon=True)
-        worker.start()
-        # 等**第一片**正文就停 —— 不是第 3 片。
-        #
-        # ★★ 触发条件 = **拿到 messageId（meta 帧）就停**，不等到正文（#237 / #244，2026-10-30）。
-        #   实测两条读数：
-        #     ① 等正文第 1 帧 ⇒ 测试实际是"帧有多粗"：真栈上一条 54 字答案的 14 个 delta 帧是
-        #        `[0,0,0,0,5.13,0,…]` 这样**攒到生成结束一次到齐**的（直连后端与经代理读数相同，
-        #        见 issue #244）⇒ 等第 1 帧 = 等全文 ⇒ 停止请求与收尾赛跑，`accepted` 一真一假；
-        #     ② 拿 messageId 的那一帧在第 1 行（+0.01s）就到 ⇒ 在这一刻停，余量是**整段生成时间**。
-        #   这条判据要测的是"停止 ⇒ 终态 STOPPED + 不发 error + 内容不丢"，不是"帧有多粗"；
-        #   后者归 #244（帧攒包）单独量，别让它继续污染这一步。
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            if str(meta_of(stop_frames).get("messageId") or ""):
+            worker = threading.Thread(target=reader, daemon=True)
+            worker.start()
+            # 等到第 `STOP_MIN_CHUNKS` 片就停 —— 剩余分片在途，停止才有意义（`#237`）
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                if len([f for f in frames if "text" in f]) >= STOP_MIN_CHUNKS:
+                    break
+                if errors:
+                    break
+                time.sleep(0.02)
+
+            meta_stop = meta_of(frames)
+            message_id = str(meta_stop.get("messageId") or "")
+            sent_before = text_of(frames)
+            stop_status, stop_payload = call(
+                "POST",
+                f"/conversations/{conversation_id}/messages/{message_id}/stop",
+                token,
+            )
+            stop_receipt = data_of(stop_payload)
+            worker.join(timeout=120)
+            return {
+                "frames": frames,
+                "errors": errors,
+                "message_id": message_id,
+                "sent_before": sent_before,
+                "stop_status": stop_status,
+                "accepted": stop_receipt.get("accepted") is True,
+                "done_status": str(done_of(frames).get("status") or ""),
+            }
+
+        stop_round: dict = {}
+        classification = ""
+        for attempt in range(1, STOP_ATTEMPTS + 1):
+            stop_round = run_stop_round()
+            classification = classify_stop(stop_round["accepted"], stop_round["done_status"] or None)
+            if classification != "late":
                 break
-            if stop_error:
-                break
-            time.sleep(0.02)
+            note(f"第 {attempt} 次停晚了（{stop_verdict(classification, stop_round['done_status'])}）—— 换一条新消息重来")
 
-        meta_stop = meta_of(stop_frames)
-        stop_message_id = str(meta_stop.get("messageId") or "")
-        sent_before = text_of(stop_frames)
-        frames_before = len([f for f in stop_frames if "text" in f])
+        stop_message_id = stop_round["message_id"]
+        sent_before = stop_round["sent_before"]
         check(bool(stop_message_id), f"停止前已拿到 messageId（实得 {stop_message_id}）")
-        # ★ 不要求"已经吐出正文"：在 meta 帧就停时它**本来就可能是 0 字** ——
-        #   硬要求非空等于把"停得早"判成失败（与要测的东西相反）。留住内容的判据在下面（库里 ≥ 已收到）。
-        note(f"停止时客户端已收 {len(sent_before)} 字 / {frames_before} 帧（在 meta 帧就停，可能为 0）")
+        check(bool(sent_before), f"停止前已吐出正文（{len(sent_before)} 字）")
+        check(stop_round["stop_status"] == 200, f"停止请求被接住（{stop_round['stop_status']}）")
+        # ★ 三种回执里只有 `not-applied` 是缺陷（`#237` 判据 3）：
+        #   `late` 说明这一轮在请求到达前已经收尾，`accepted=false` 是如实回执；
+        #   但**两次都晚**就不能算绿 —— 那意味着停止语义这一轮根本没被验证过。
+        check(
+            classification != "not-applied",
+            f"停止回执不矛盾（{stop_verdict(classification, stop_round['done_status'])}）",
+        )
+        check(
+            classification != "late",
+            f"停止语义真的被验证了（{STOP_ATTEMPTS} 次都没停晚）—— {stop_verdict(classification, stop_round['done_status'])}",
+        )
 
-        # ★ #237 诊断（2026-10-30）：只用"收到了几帧"分不清"边到边收"与"流结束才到齐"。
-        #   `第 1 帧 +X.XXs` < `停止请求 +Y.YYs` ⇒ 客户端确实边到边收（迟到的是别的环节）；
-        #   两者都挤在流尾、间隔全是 0.0x ⇒ 帧在到达客户端之前被攒住了，要往容器/代理那一层查。
-        first_at = (frame_times[0] - started_at) if frame_times else -1.0
-        send_at = time.time() - started_at
-        gaps = [round(b - a, 2) for a, b in zip(frame_times, frame_times[1:])][:6]
-        print(
-            f"  [诊断] 第 1 帧 +{first_at:.2f}s · 停止请求 +{send_at:.2f}s · 行数 {len(frame_times)}"
-            f" · 相邻行间隔（前 6 个）{gaps}"
-        )
-        print(f"  [诊断] 流式这一跳直连 {STREAM_API}（绕过开发服务器代理，见文件头 STREAM_API 的说明）")
-
-        stop_status, stop_payload = call(
-            "POST",
-            f"/conversations/{conversation_id}/messages/{stop_message_id}/stop",
-            token,
-        )
-        stop_receipt = data_of(stop_payload)
-        check(stop_status == 200, f"停止请求被接住（{stop_status}）")
-        note(
-            f"停止回执 accepted={stop_receipt.get('accepted')}"
-            f" · 停止时已收 {len(sent_before)} 字 / {frames_before} 帧（判据在下文：accepted 必须由终态兑现）"
-        )
-        worker.join(timeout=120)
-        check(not stop_error, f"流正常收尾（异常：{stop_error[:1]}）")
+        stop_frames = stop_round["frames"]
+        check(not stop_round["errors"], f"流正常收尾（异常：{stop_round['errors'][:1]}）")
         done_stop = done_of(stop_frames)
-        check(done_stop.get("status") == "STOPPED", f"终态 STOPPED（实得 {done_stop.get('status')}）")
-        # ★ 用户主动停止**不是故障**：契约明确"不发 error"。发了 error 就等于把用户意图记成一次失败，
-        #   而 A3（失败可见）的判据会因此永远混进噪声。
-        check(not error_frames(stop_frames), f"停止不产生 error 帧（实得 {len(error_frames(stop_frames))} 帧）")
+        if classification == "accepted":
+            check(done_stop.get("status") == "STOPPED", f"终态 STOPPED（实得 {done_stop.get('status')}）")
+            # ★ 用户主动停止**不是故障**：契约明确"不发 error"。发了 error 就等于把用户意图记成一次失败，
+            #   而 A3（失败可见）的判据会因此永远混进噪声。
+            check(not error_frames(stop_frames), f"停止不产生 error 帧（实得 {len(error_frames(stop_frames))} 帧）")
 
         sent_final = text_of(stop_frames)
         msgs_after_stop = list_messages(token, conversation_id)
         stopped_msg = next((m for m in msgs_after_stop if m.get("id") == stop_message_id), {})
         check(bool(stopped_msg), "停止后的消息能在列表里读到")
-        check(
-            stopped_msg.get("status") == "STOPPED",
-            f"库里记的是 STOPPED（实得 {stopped_msg.get('status')}）—— 不是 FAILED、也不是 GENERATED",
-        )
-        check(
-            # ★ `sent_final` 可能为空（在 meta 帧就停）—— 空串的 startswith 恒真，正是"没收到任何字就没得丢"。
-            str(stopped_msg.get("content") or "").startswith(sent_final),
-            f"已生成的内容留住了（库里 {len(str(stopped_msg.get('content') or ''))} 字 ≥ 已收到 {len(sent_final)} 字）",
-        )
-        # ★ 这一轮额外硬要求：**停止必须被接住**（accepted=True）。在 meta 帧就停留的是整段生成时间，
-        #   所以"late"不再是可接受读数 —— #244（帧攒包）修复之后这条才真正稳定；它若红，红在服务端。
-        check(
-            stop_receipt.get("accepted") is True,
-            f"停止被接住（accepted={stop_receipt.get('accepted')} · 停止时已收 {len(sent_before)} 字）",
-        )
-        if chunk_delay_injected:
+        if classification == "accepted":
+            check(
+                stopped_msg.get("status") == "STOPPED",
+                f"库里记的是 STOPPED（实得 {stopped_msg.get('status')}）—— 不是 FAILED、也不是 GENERATED",
+            )
+            check(
+                bool(sent_final) and str(stopped_msg.get("content") or "").startswith(sent_final),
+                f"已生成的内容留住了（库里 {len(str(stopped_msg.get('content') or ''))} 字 ≥ 已收到 {len(sent_final)} 字）",
+            )
+        if chunk_delay_injected and classification == "accepted":
             # ★ 这里**不再加一条"停在中间"的断言**：`accepted=True` 本身就是那条判据 ——
             #   服务端只有当消息仍是 GENERATING 时才置信号（`ChatStopService` 的 accepted 语义），
             #   而"仍是 GENERATING"= 这一轮还在吐。再写一句 `len > 0` 是同义反复，只会让绿看起来更多。
@@ -845,4 +918,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--self-check" in sys.argv:
+        sys.exit(self_check())
     sys.exit(main())

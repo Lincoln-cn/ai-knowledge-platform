@@ -28,9 +28,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class MessageController {
 
   private final MessageFeedbackService feedback;
+  private final cn.lincoln.aiplatform.conversation.application.ReferenceVisibility
+      referenceVisibility;
 
-  public MessageController(MessageFeedbackService feedback) {
+  public MessageController(
+      MessageFeedbackService feedback,
+      cn.lincoln.aiplatform.conversation.application.ReferenceVisibility referenceVisibility) {
     this.feedback = feedback;
+    this.referenceVisibility = referenceVisibility;
   }
 
   /**
@@ -53,9 +58,11 @@ public class MessageController {
       @PathVariable UUID messageId,
       @RequestBody FeedbackBody body,
       @AuthenticationPrincipal Jwt jwt) {
+    cn.lincoln.aiplatform.conversation.domain.Message rated =
+        feedback.rate(messageId, subjectOf(jwt), body == null ? null : body.type());
+    // ★ 与历史读同一条口径：回显里的引用也要按当前读者的密级收窄（#27 判据 ③）
     return ApiResponse.ok(
-        ChatMessageView.of(
-            feedback.rate(messageId, subjectOf(jwt), body == null ? null : body.type())));
+        ChatMessageView.of(rated, java.util.List.of(), referenceVisibility.visibleRefs(rated)));
   }
 
   /**

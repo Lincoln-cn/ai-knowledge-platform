@@ -59,9 +59,12 @@ public class QueryUnderstandingService {
    *
    * @param understanding 一定会有的可用形状（最差 = 原始问题单路）
    * @param degradeLevel {@code 10 §6.3} 的档位：<strong>0</strong>=正常、<strong>3</strong>=只做成了改写、
-   *     <strong>4</strong>=退回原始问题单路。★ D1（去多跳）/D2（去分解）属于第 14 / 配置项，不在这里产生
-   * @param degradeReason 为什么降级（{@code degradeLevel > 0} 时非空）—— ★ 没有它，"这周的答案为什么变差了"没人答得上来（{@code 10
-   *     §6.3} 的原话）
+   *     <strong>4</strong>=退回原始问题单路。★ D1（去多跳）/D2（去分解）属于第 14 / 配置项，不在这里产生； ★★ D2
+   *     <strong>今天没有任何产生点</strong>（预留档位，见 {@code 10 §6.3.1}）
+   * @param degradeReason 为什么降级 —— ★ 注意它<strong>不是</strong>「{@code degradeLevel > 0} 时才有值」：
+   *     正常路径上它是「这一层改动了什么」（截断 / 去重 / 兜底），以及「按配置没开启」这类<strong>配置态说明</strong> （例如 {@code queryCount=0}
+   *     时的「查询理解未开启」）。★ 两者混成同一个字段是刻意的：调用方只需要 "为什么这次的查询不是原样"；但<strong>配置态不许记进降级率</strong>（{@code 10
+   *     §6.3.1}）
    * @param truncated 子问题数或查询条数被截断过
    * @param parseFailed ★ 解析失败（重试后仍失败）—— 这个数单独计，它是"当前模型能不能胜任这一层"的实测数据
    * @param events 解析器改动了什么（去重 / 截断 / 兜底 / 合并）
@@ -152,7 +155,10 @@ public class QueryUnderstandingService {
     int level = 0;
     String reason = parsed.events().isEmpty() ? null : String.join("；", parsed.events());
     // 解析成功但只产出一条查询 ⇒ 改写做成了、扩展没做成（10 §6.3 的 D3）
-    if (parsed.understanding().totalQueries() == 1 && queryCount > 1) {
+    // ★ 只在**允许分解**时才算降级：关掉分解是配置（`10 §6.3` 的 D2 形状），合并之后只剩一条查询
+    //   是配置的结果，不是"模型没做到"。两者都记成 D3 ⇒ degradeRate 的分母里混进配置态，
+    //   与多跳那条口径相反（`MultiHopTest.disabledMultiHopIsRecordedAsConfiguration`，`#64` 判据 2）。
+    if (parsed.understanding().totalQueries() == 1 && queryCount > 1 && decomposeEnabled) {
       level = 3;
       reason = "模型只产出 1 条查询（扩展未生效）" + (reason == null ? "" : "；" + reason);
     }

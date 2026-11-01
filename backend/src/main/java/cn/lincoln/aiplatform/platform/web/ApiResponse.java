@@ -64,6 +64,21 @@ public record ApiResponse<T>(int code, String message, T data, String hint) {
     return new ApiResponse<>(e.code().code(), e.getMessage(), null, e.hint());
   }
 
+  /**
+   * 从<strong>带结构明细</strong>的业务异常构造：失败时 {@code data} 里装明细而不是 {@code null}（{@code #260}）。
+   *
+   * <p>★ 为什么单开一个方法，而不是让 {@link #from} 按实参泛型化：{@code from} 的返回类型是 {@code ApiResponse<T>}，{@code
+   * ApiResponseTest} 用它钉着 <em>"失败不省略 data 位、且 data 为 null"</em>
+   * 这条契约。如果让它按调用方的期望类型推断，那么"失败没有数据体"就从<strong>类型约定</strong>退化成 <strong>调用方的自觉</strong> —— 谁都可能宣告
+   * {@code ApiResponse<DocumentView>} 而实际塞进别的东西，编译器不会再提醒。
+   *
+   * <p>★ 明细原样透出、不在这一层做投影：怎么序列化是抛出方那个形状的事（这里是 {@code WorkflowValidationService.Issue} → {@code
+   * {level,code,message,hint,nodeId}}，与前端契约同名）。
+   */
+  public static ApiResponse<Object> fromWithDetails(BusinessException e) {
+    return new ApiResponse<>(e.code().code(), e.getMessage(), e.details(), e.hint());
+  }
+
   /** 契约判成功的方式：{@code code === 0}（前端 {@code ErrorCode.OK}）。 */
   public boolean isOk() {
     return code == ErrorCode.OK.code();

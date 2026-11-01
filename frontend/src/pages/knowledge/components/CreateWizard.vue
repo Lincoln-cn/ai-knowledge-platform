@@ -333,6 +333,7 @@ import type {
 } from '@/api/ingestion'
 import { DOCUMENT_STATUS_LABELS, labelOf } from '@/constants/labels'
 import { useDictionary } from '@/composables/useDictionary'
+import { isUsableEmbeddingModel } from '@/lib/modelReadiness'
 
 const emit = defineEmits<{ created: [kb: KnowledgeBase] }>()
 
@@ -469,7 +470,7 @@ const clientRequestId = ref('')
  *
  * ★ 走「建档即解析 + 入库即分块」这条真实链路（0.2.1/0.2.2）：上传即建档，预览按 documentId 做
  *   （预览与入库用同一个分块器，第 7 周判据 ④）。
- * ⚠️ 早先这里走的是 mock 时代的「暂存上传 uploadIds → 按暂存文件预览」，而 `/uploads` 至今未实现
+ * ⚠️ 早先这里走的是 mock 时代的「暂存上传 uploadIds → 按暂存文件预览」，而 `/uploads` 已在 `#211` 里连同契约一起撤掉（零消费方）
  *   ⇒ 真栈下预览必然 400，等于「创建知识库 + 生成预览」整条不可用。
  */
 const ingestedDocs = ref<DocumentItem[]>([])
@@ -498,8 +499,13 @@ const open = async (presetCategory?: string) => {
   step.value = 0
   // ★ 每次打开都重读字典：管理员刚在「基础数据」里加过 / 停用过一项，建档的人要马上看到（判据 1、2）
   await Promise.all([loadCategories(), loadClassifications(), loadDocTypes(), loadOrgTree()])
-  const models = await modelsApi.listModels({ kind: 'EMBEDDING', size: 50 })
-  embeddingModels.value = models.list.filter((m) => m.status === 'LOADED' || m.status === 'NOT_LOADED')
+  // ★ 拉满一页（后端上限 100）。原来取 50：向量模型一旦超过 50 条，
+  //   排在后面的可用模型会被截掉，界面显示"没有可用的向量模型"——纯属分页假象。
+  const models = await modelsApi.listModels({ kind: 'EMBEDDING', size: 100 })
+  // 判据只在 `lib/modelReadiness.ts` 一处（工作台引导 + 本处共用）：
+  // 向量模型「登记了没预热」也算能用（本地 ONNX 首次调用懒加载）。这条长得像 bug，
+  // 所以不许各处各写一份 —— `#40` 的教训正是同一状态四处各写一份、漏改一处就是假绿。
+  embeddingModels.value = models.list.filter(isUsableEmbeddingModel)
   try {
     // 上传策略挂在已有库上；新库还没建，先用一个可见的库拿策略，拿不到就用默认提示
     const anyKb = await knowledgeApi.listKnowledgeBases({ page: 1, size: 1 })
@@ -901,9 +907,21 @@ defineExpose({ open })
 
 .split-step {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  /* ★ 比例 + 最小可读宽度，**不用 280px 定值**（`#42`）：
+     定值只在某一次屏宽下"看着对"；左列多一个字段、或「分段长度」的提示文案换一行，
+     它就重新失衡，而且没有任何闸门会红。比例是可以被解释的基准。
+     260px 是下限而不是目标值 —— 低于它滑块刻度与单选项会挤在一起。 */
+  grid-template-columns: minmax(260px, 5fr) minmax(0, 7fr);
   gap: var(--space-md);
-  align-items: start;
+  align-items: stretch;
+}
+
+/* ★ 窄屏**换形态**，不是缩字号：两列在 1280 以下会挤到「刻度看不见、单选项折行」。
+   单列后预览区在表单下方，仍能边调边看（`#42` 判据 ②）。 */
+@media (max-width: 1280px) {
+  .split-step {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .split-left {
@@ -968,7 +986,11 @@ defineExpose({ open })
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
-  min-height: 360px;
+  /* ★ 高度由**视口**与内容决定，不写 360px（`#42` 判据 ③）：
+     空态只有一行说明，有预览时可能几十段 —— 一个定值不可能同时服务这两种。
+     70vh 是上限而不是目标：超大屏上不该让预览占满整屏。 */
+  max-height: 70vh;
+  min-height: 0;
 }
 
 /* 「已剔除 N 行页眉/页脚/页码/目录」—— 与预览头分开一点，避免看成标题的一部分 */
@@ -1009,7 +1031,10 @@ defineExpose({ open })
 
 .preview-list {
   flex: 1;
-  max-height: 320px;
+  /* ★ 不再写 max-height: 320px（`#42`）：列表是 flex 子项，谁给它高度由父容器决定。
+     写死高度会让「容器 70vh」这条上限失效 —— 两者会互相打架，实际生效的是小的那个。 */
+  min-height: 0;
+  overflow-y: auto;
   padding: var(--space-xs);
   display: flex;
   flex-direction: column;

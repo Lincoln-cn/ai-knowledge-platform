@@ -2,7 +2,7 @@ import { request } from '@/lib/http'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
-/** 三种检索模式。混合模式用 RRF 融合向量与全文结果 */
+/** 三种检索模式（取值域就是这三个；传别的值后端返 400「检索模式只支持 VECTOR / FULLTEXT / HYBRID」）。混合模式用 RRF 融合向量与全文结果 */
 export type RetrievalMode = 'VECTOR' | 'FULLTEXT' | 'HYBRID'
 
 /** 无引用时的策略（2.4 补录） */
@@ -12,6 +12,18 @@ export interface RetrievalParams {
   mode: RetrievalMode
   /** 相似度阈值。先过滤后取 TopN —— 顺序反了会把噪声带进上下文 */
   threshold: number
+  /**
+   * 取回条数，**合法区间是 `[1, 20]`**（`#231`）：越界后端返 400「TopN 应在 1～20 之间」。
+   * 界面的输入框一律 `:min="1" :max="20"`（助手配置、知识库设置、命中测试三处）。
+   *
+   * ★ 写读数脚本时最容易踩的两处，症状都是「命中 0 条」而不是报错：
+   *   · `topN > 20` ⇒ 后端返 **400**「TopN 应在 1～20 之间」，而 `body.data.items`
+   *     在 400 时不存在 ⇒ 脚本读到空数组 ⇒ 把一次被拒的请求读成「检索完全不通」
+   *     （B1 凭空归零）；
+   *   · 命中项的文档名字段是 `HitItem.docName`，不是 `documentName` ⇒
+   *     取错键得到空串，同样被读成「没命中」。
+   * ⇒ 读数脚本必须先判状态码、再用 `items`，不许写 `or []` 把 400 吃掉。
+   */
   topN: number
   /** 无引用时的策略 */
   noRefStrategy: NoRefStrategy
@@ -30,6 +42,7 @@ export interface HitItem {
   rank: number
   segmentId: string
   title: string
+  /** ★ 就是这个键名（不是 `documentName`）。读数脚本取错键 ⇒ 空串 ⇒ 被读成「命中 0 条」（#231） */
   docName: string
   kbName: string
   score: number

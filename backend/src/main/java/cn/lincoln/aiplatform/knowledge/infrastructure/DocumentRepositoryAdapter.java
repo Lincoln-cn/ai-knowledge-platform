@@ -2,11 +2,13 @@ package cn.lincoln.aiplatform.knowledge.infrastructure;
 
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
+import cn.lincoln.aiplatform.knowledge.domain.DocumentScopeKind;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
 import cn.lincoln.aiplatform.knowledge.domain.OrgAssignment;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import java.time.Instant;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +61,11 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
   }
 
   @Override
+  public void delete(Document document) {
+    jpa.delete(document);
+  }
+
+  @Override
   public List<Document> findByKbId(UUID kbId, int offset, int limit, OrgAssignment orgFilter) {
     // 领域给 offset/limit；Spring Data 要「第几页、每页几条」。limit 恒 > 0（调用方已归一化）
     return jpa.findAll(filter(kbId, orgFilter), PageRequest.of(offset / limit, limit, sort()))
@@ -78,6 +85,31 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
   }
 
   @Override
+  public List<Document> findDeletedByKbId(UUID kbId, int offset, int limit) {
+    return jpa.findAll(
+            deletedFilter(kbId),
+            PageRequest.of(offset / limit, limit, Sort.by(Sort.Direction.DESC, "deletedAt")))
+        .getContent();
+  }
+
+  @Override
+  public List<Document> findDeletedBefore(Instant before, int limit) {
+    // ★ 与回收站列表不同：这条**不按库、也不按密级**过滤 —— 清理不是某个人在读，
+    //   而是系统在按留存期执行策略。把当前调用者的 clearance 带进来，会让"运维清不动别人库里的旧文档"。
+    Specification<Document> spec =
+        (root, query, cb) ->
+            cb.and(cb.isNotNull(root.get("deletedAt")), cb.lessThan(root.get("deletedAt"), before));
+    return jpa.findAll(
+            spec, PageRequest.of(0, Math.max(1, limit), Sort.by(Sort.Direction.ASC, "deletedAt")))
+        .getContent();
+  }
+
+  @Override
+  public long countDeletedByKbId(UUID kbId) {
+    return jpa.count(deletedFilter(kbId));
+  }
+
+  @Override
   public Map<DocumentStatus, Long> countByStatus(UUID kbId) {
     // ★ 分组计数在库里做（见 JpaDocumentRepository 的注释）：取回来再数会在分页上限处静默算错
     // ★★ 密级条件与列表**同一条**（#25 判据 3：进度条分母与列表口径必须一致）
@@ -86,6 +118,24 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
       counts.put((DocumentStatus) row[0], ((Number) row[1]).longValue());
     }
     return counts;
+  }
+
+  /**
+   * 会话域文档的幂等查（`#187` 判据 4）。
+   *
+   * <p>★ <strong>刻意不带密级上限、也不带所属库</strong>：这是<strong>写侧</strong>的"我是不是已经登记过这一份"， 不是列表读取。带密级上限会让"低
+   * clearance 的人看起来没传过"变成"再传一份" ⇒ 同一段正文在会话域里落两行、 检索时命中两次。库域文档不在查询范围内（{@code scope_kind} 那条把语义隔开）。
+   */
+  @Override
+  public Optional<Document> findConversationAttachment(UUID conversationId, String name) {
+    Specification<Document> spec =
+        (root, query, cb) ->
+            cb.and(
+                cb.equal(root.get("scopeKind"), DocumentScopeKind.CONVERSATION),
+                cb.equal(root.get("scopeId"), conversationId),
+                cb.equal(root.get("name"), name),
+                cb.isNull(root.get("deletedAt")));
+    return jpa.findOne(spec);
   }
 
   // ────────────────────────── 内部 ──────────────────────────
@@ -108,6 +158,21 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
    * <p>★ 归属那一轴（{@code #56}）：{@link OrgAssignment#UNASSIGNED} 用 {@code isNull(orgId)} ——
    * 它列的正是"回填时按名字匹配不上"的那批文档（{@code org_id} 为空、原值在 {@code department_legacy}）。
    */
+  /**
+   * 回收站的谓词：与 {@link #filter} 只差"软删"那一条 —— 其余（所属库 + 密级上限）**同源**。
+   *
+   * <p>★ 刻意不复用 {@code filter(kbId, ANY)} 再取反：那样等于把"软删"这一条从共用谓词里挪出去，
+   * 迟早有人在某一侧漏掉它。这里只写"必须已删"，其余照抄同一套表达式。
+   */
+  private Specification<Document> deletedFilter(UUID kbId) {
+    Short ceiling = ceilingRank();
+    return (root, query, cb) ->
+        cb.and(
+            cb.isNotNull(root.get("deletedAt")),
+            cb.equal(root.get("kbId"), kbId),
+            cb.lessThanOrEqualTo(root.get("classificationRank"), ceiling));
+  }
+
   private Specification<Document> filter(UUID kbId, OrgAssignment orgFilter) {
     Short ceiling = ceilingRank();
     // ★ 三态映射成二值：ANY ⇒ null（不加这一条谓词），其余 ⇒ Boolean（cb.isNull / cb.isNotNull）

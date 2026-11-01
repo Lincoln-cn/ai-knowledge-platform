@@ -65,13 +65,19 @@ python deploy/verify_image_pg.py
 backend\mvn-jdk25.cmd -B -f backend/pom.xml package -DskipTests
 
 # 2) 构建镜像（★ 构建上下文是仓库根）
-docker build -f deploy/Dockerfile -t ai-knowledge-platform:0.3.1 .
+#    ★ 标签不要写死版本号（`#273`）：这里曾经写着 `:0.3.1`，而 pom 早已是 0.4.5 ——
+#    同一个病在 `Dockerfile` 的 `COPY` 行上也犯过（那份镜像直接构建不出来）。
+docker build -f deploy/Dockerfile -t ai-knowledge-platform:dev .
 
 # 3) 交付给内网：导出 → 拷贝 → 导入（离线这一步不需要任何网络）
-docker save ai-knowledge-platform:0.3.1 -o ai-knowledge-platform-0.3.1.tar
+docker save ai-knowledge-platform:dev -o ai-knowledge-platform.tar
 #   内网机器上：
-docker load -i ai-knowledge-platform-0.3.1.tar
+docker load -i ai-knowledge-platform.tar
 ```
+
+★ 「镜像里的 jar 名」与 `backend/pom.xml` 的 `artifactId-version` 对不对得上，由
+`deploy/check_image_manifest.py` 守（快闸里跑两步：自检 + 实判）。它同时钉住
+`ENTRYPOINT` 路径、`EXPOSE` 与 `application.yml` 的 `server.port` 默认值、以及「不以 root 跑」。
 
 ### ★★ 一个必须知道的构建坑：`.dockerignore` 不是"优化"，是"让构建能用"
 
@@ -221,7 +227,237 @@ python frontend/check_ocr_e2e.py
 
 ---
 
-## 六、OCR 的配置项（交付时可能要改的）
+## 六、指标抓取（Prometheus）与它的两条前提（`#73`）
+
+应用把三条业务指标导出在 **`GET /actuator/prometheus`**（Micrometer → Prometheus 文本格式）：
+
+| 指标 | 回答什么 | 建议阈值的出处 |
+|---|---|---|
+| `aiplatform_upstream_calls_total{outcome}` | 上游不可达率 | `08 §4.10.1` |
+| `aiplatform_chat_first_token_seconds`（P50/P95/P99） | 首字延迟（`B4` ≤10s 从此是持续读数） | 同上 |
+| `aiplatform_ingestion_failures_total{stage}` | 入库失败率（按解析/分段/向量化分） | 同上 |
+| `aiplatform_segment_label_mismatch` | 标签冗余漂移条数（**应为 0**；`-1` = 这次查询没成功，不是「一致」） | `13 §6.4.1`（`#26` 判据 ④） |
+
+★ 这个端点**和 `/actuator/health` 同档免认证** —— 理由是 Prometheus 的采集端只带 URL、不带令牌。
+代价是"匿名可读"，所以**交付时必须满足下面两条，缺一条就该改走独立管理端口**：
+
+1. **标签里不许出现高基数或账号维度**（应用名 / 用户 / 会话 / 模型 id）。代码里由 `BusinessMetrics`
+   一处把关（它没有接受这类参数的入口），单测 `BusinessMetricsTest.noHighCardinalityTagsLeakIn` 钉住。
+2. **生产必须靠网关或防火墙限制抓取来源** —— 例如只允许监控网段访问 `/actuator/prometheus`。
+   若做不到，就把它挪到独立管理端口：
+   ```yaml
+   management:
+     server:
+       port: 9091          # 只绑管理网段
+   ```
+   挪端口后，`SecurityConfig` 里那条 permitAll 就只需保留 health 一条（两者是不同的端口，互不影响）。
+
+★ 还有一条**不是运维问题、是埋点问题**：没被记录过的指标**不会出现在导出里**（不是记成 0）。
+「查不到」与「一直是 0」在仪表盘上长得一样 ⇒ 如果某条曲线凭空消失了，先怀疑埋点被删/被跳过，
+不要先怀疑"没有流量"。
+
+---
+
+## 七、备份与恢复（`#75` 判据 ①，数字是交付前提）
+
+★ 这一节回答的是「**数据留得住、删得掉、恢复得了**」里的第三问。前两问（留存期、软删 vs 彻底删除）
+的口径在 `02 §5.1.1`。
+
+| 项 | 口径 | 为什么是这个数 |
+|---|---|---|
+| **全量备份频率** | 每日 1 次（`pg_dump -Fc`，业务低峰） | 全量是"兜底"，不是"恢复手段" —— 单靠它 RPO 会到 24 小时 |
+| **增量（PITR）** | 开 **WAL 归档**（`archive_mode=on` + `archive_command` 推到独立存储） | 只有 WAL 能把 RPO 压到分钟级；`pgvector` 的向量也是普通表列，随 WAL 一起走 |
+| **RPO（能丢多少）** | **≤ 15 分钟** | 与 WAL 归档的推送间隔对齐 |
+| **RTO（多久能回来）** | **≤ 4 小时**（单机 + 离线交付的合理值） | 交付评审一定会问这两个数；给不出来等于没有备份方案 |
+| **保留** | 日备 **14 天** · 周全备 **8 周** · 归档 WAL **≥ 7 天** | 覆盖"周五改坏、下周一才发现"这种最常见的事故窗口 |
+| **存放** | 与应用主机**不同的介质**（NAS / 对象存储 / 内网备份机） | 备份和数据库在同一块盘上 = 没有备份 |
+
+**留存期清理（`#75` 判据 ②：留存期的数字要能被执行）**：审计记录是只追加的（`13 §7.2` 第 3 条），
+所以"到期清理"是一条**独立的维护动作**，不是普通的删除：
+
+```bash
+# ① 先数不删：会清掉多少条
+curl -sS -X POST "$AIP/api/v1/audit-logs/purge" -H "Authorization: Bearer $ADMIN_TOKEN"   -H 'Content-Type: application/json' -d '{"beforeAt":"2025-10-31T00:00:00Z","dryRun":true}'
+# ② 确认数量后再真删（这一步不可逆）
+curl -sS -X POST "$AIP/api/v1/audit-logs/purge" -H "Authorization: Bearer $ADMIN_TOKEN"   -H 'Content-Type: application/json' -d '{"beforeAt":"2025-10-31T00:00:00Z","dryRun":false}'
+```
+
+★ 三条前提：① 截止时间不能为空、不能在未来（库函数自己校验）；② 每次清理都会写一条 `audit.purge`
+（删了几行、清到什么时候），所以"清理"本身也在审计里；③ **先备份再清理** —— 清理不可逆，
+而备份的保留期（日 14 天 / 周 8 周）比审计的留存期（默认 12 个月）短得多，两者不能互相替代。
+**调度（`#75`，2026-10-31 落地）**：同一个动作也进了调度，默认**关闭** —— 删审计不可逆，而"客户规定多长留存期"
+是客户事实、不是代码事实，由代码替客户拍一个天数然后开始删，比不删更危险。
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `AUDIT_RETENTION_ENABLED` | `false` | 打开后每天 03:30 自动清理一次（排在 `pg_dump` 之后） |
+| `AUDIT_RETENTION_DAYS` | `365` | 保留天数；**低于 1 会被抬到 1**（0 天等于删光，那不叫保留期） |
+| `AUDIT_RETENTION_CRON` | `0 30 3 * * *` | 只在需要错峰时改 |
+
+★ 调度删的那条 `audit.purge` 多一个 `trigger=retention`，报表里能分开"人点的"与"调度删的"。
+★ 清理失败只写 `log.error`（关键字「留存期清理失败」），**不会**让应用起不来 —— 所以打开之后请确认监控里有这个关键字，
+否则它失败了也不会有人知道。手动通道仍然保留：`dryRun` 先数后删，是给"马上要清一批"的场合用的。
+
+**恢复演练（判据 ③）**：清单、执行步骤与**记录模板**在 [`restore-drill-record.md`](restore-drill-record.md)；
+填完用 `python scripts/restore_drill.py check deploy/restore-drill-record.md` 验，检查器在快闸里（`--self-check`）。
+★ 模板里留「待补」是刻意的：没填完一定红 —— 把不完整的记录判成合规，比没有记录更糟。
+★ **没演练过的备份不算备份** —— 它只是一堆文件。演练记录要能回答：恢复到哪个时刻、用了多久、
+恢复到新实例后应用能否直接起来（这一点比"文件能还原"更重要，因为它会暴露 Flyway 版本与备份时点的错位）。
+
+```bash
+# 全量（示例）
+pg_dump -Fc -f /backup/aip-$(date +%F).dump "$DATABASE_URL"
+# 恢复（示例：先建空库，再 restore，不要在跑着的库上覆盖）
+pg_restore -d "$TARGET_URL" --clean --if-exists /backup/aip-2026-10-31.dump
+```
+
+★ **一条与"删得掉"直接相关的提醒**：`pg_dump` 的备份里包含**软删的数据**（`deleted_at` 有值的行）——
+所以在实现彻底删除之前，"数据主体要求删除"这件事**连备份都过不去**。这不是遗漏，是 `#75` 第二段
+（0.5.x）要解决的问题，写在这里是为了不让它被读成"已经有删除能力了"。
+
+---
+
+## 七之补、回收站超期清理（`#259`）：默认关，开了才会真删
+
+删除文档之后内容只是**拿出检索面**（保留期内可「恢复」）。过了 `app.knowledge.restore-window-days`（默认 7 天）
+恢复会被拒绝，但内容仍占空间 —— 真正腾空间的是这条作业：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `KNOWLEDGE_CLEANUP_ENABLED` | `false` | **默认关闭**：装好就有一个定时任务在删数据，是这类功能最不该有的默认值 |
+| `KNOWLEDGE_CLEANUP_RETAIN_DAYS` | `7` | 与 `KNOWLEDGE_RESTORE_WINDOW_DAYS` 同值即可：能恢复的窗口一过就该腾空间 |
+| `KNOWLEDGE_CLEANUP_BATCH_SIZE` | `50` | 一次一批，别把整表搬进内存 |
+| `KNOWLEDGE_CLEANUP_CRON` | `0 10 4 * * *` | 每天 04:10（审计留存清理是 03:30，错开一小时） |
+
+★ 上面两个窗口（`RESTORE_WINDOW_DAYS` 与 `CLEANUP_RETAIN_DAYS`）是**两个键**：清理窗口短于恢复窗口时，启动自检会警告 —— 那意味着"还能点恢复"的文档内容已经被清理掉了（点下去 400/404）。两者同值即可。
+
+★ 它删什么：**分段 + 向量 + 文档行**，顺序固定（先分段再文档行 —— 反过来会留孤儿分段，而孤儿分段照样命中），
+每条写一条 `document.purge` 审计（`detail.trigger = retention`，谁都没调，所以 `actor_id` 为空）。
+★ 它**不**删审计记录：那是 `app.audit.retention` 那条作业的事。两条留期分开配，
+混成一条会让"业务数据的留存期"和"审计的留存期"互相拖住。
+
+## 八、启动时看什么：配置自检的那两行日志（`#227` / `#65`）
+
+后端起来时会跑一遍**配置自检**（`StartupSettingsWarningRunner`），只打日志、**不阻止启动**。
+交付/排障时先看这两行：
+
+```text
+✔ 配置自检通过：向量化并发 4 · 连接池 10 · 上下文窗口 80 · 向量预算 1200 · 恢复窗口 7 天 · 清理窗口 7 天 · 两个密钥都不是示例值
+⚠️ 配置自检发现 1 项会在运行时以难查的方式出问题（服务仍会启动）：
+  · app.ingestion.embedding-concurrency=69 大于连接池上限 10：…（改法写在同一条里）
+```
+
+★ **"通过"那一行本身就是一份配置快照** —— 报障时先把它抄下来，比让人去翻环境变量快得多。
+
+它检查的**八项**，都对应过一次**真实踩过的坑**：
+
+| 项 | 配错的后果 | 出处 |
+|---|---|---|
+| `app.ingestion.embedding-concurrency` > 连接池 | 一批文档一起入库时出现**与内容无关**的"向量化失败"（`Failed to obtain JDBC Connection`），排查时人会先怀疑模型和语料 | `#227`（现场 69 份一起跑、10 条假失败） |
+| `app.ingestion.embedding-concurrency` ≤ 0 | 文档永远停在"待向量化"，**没有任何报错** | `#227` 的闸门下限 |
+| `app.segmentation.context-window` < 0 | 入库与预览都直接抛 `IllegalArgumentException` | `#65` |
+| `context-window` > 0 但 `max-chars` 太小 | 窗口**看起来开着、实际一条都没进来**（预算让路） | `#65` |
+| `app.knowledge.cleanup.retain-days` < `app.knowledge.restore-window-days` | 回收站里「恢复」按钮**还亮着**，点下去 400 —— 内容已被清理作业删掉 | `#259` |
+| `app.knowledge.cleanup.retain-days` 配 0 或负 | **启动自检不报这一项**：清理作业自己按 1 天兜底。想关掉清理要改 `cleanup.enabled=false` —— 配 0 不等于关 | `#259` |
+| `app.security.jwt.secret` 还是仓库里的示例值 | 令牌**可以被任何人伪造** —— 这份值写在源码里，攻击者签出的令牌能过所有鉴权，而请求全都正常返回。生产必须设 `JWT_SECRET`（例如 `openssl rand -base64 32`），换完既有令牌全部失效、需要重新登录 | `#272` |
+| `app.model.api-key-secret` 还是仓库里的示例值 | 模型供应商的 API Key 在库里是这条密钥加密后的密文，示例值公开 ⇒ **拿到库就能解回明文 Key**（等于明文存库）。生产必须设 `MODEL_API_KEY_SECRET`；★ 换完已存密文解不开，要在界面上把每个供应商的 Key 重新录一遍 | `#272` |
+
+★ 为什么不 fail-fast：这几项属于"能起来但会以难查的方式坏"。让它起不来，会把一个
+**可修复的配置问题**升级成"服务挂了"；真正的硬约束（负窗口）由领域层在运行时守住。
+
+---
+
+## 八之补、用户说"偶发一次失败"时先看这三行（`#216`）
+
+后端在**响应已提交之后**再抛异常时（SSE 最常见：写着写着炸了），框架自己也会炸一次（Tomcat 的
+`MimeHeaders` 被置空后 `removeHeader` 的 NPE），而那个 NPE 会**替换掉原始异常** ——
+用户看到"生成失败、没原因"，日志里也只剩"处理异常时又炸了一次"。
+
+所以 `OriginalExceptionLoggerResolver`（最高优先级）会在链路更前面把原始异常落日志，只记不处理。
+排障时按这个顺序 grep：
+
+```bash
+grep -c '请求处理抛异常（原始）' logs/ai-platform.log    # 原始异常被记下来的次数
+grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次数（期望 0）
+```
+
+- 前者 > 0、后者 = 0 ⇒ **一次普通异常**，按它带的类型与堆栈查即可；
+- 两者都 > 0 ⇒ 命中 `#216` 那条链路：原始异常在上一行，**别去看 NPE 那一行**（它只是遮罩）；
+- 前者 = 0、后者 > 0 ⇒ 意味着日志里出现了"没有原始异常"的 NPE —— 那说明这条路径绕过了
+  `DispatcherServlet`，属于要新开账的形状，不要就地改。
+
+---
+
+## 八之补二、`app.*` 其余配置一览：改了会发生什么（`#272`）
+
+配置自检只覆盖数值与两个密钥（见上节）。下面这些不会被自检拦，但同样会改变行为 ——
+它们的共同点是**配错之后系统照常起、照常答，只是答案或代价不对**。
+
+表里的"默认"就是 `backend/src/main/resources/application.yml` 里的值；
+括号里是环境变量名。本节与 yml 同步维护：改 yml 的默认值，改法见 `#272` 那条自检。
+
+### 检索链路（`10 §6.2` 第 6 项）
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `app.retrieval.query-understanding-budget-ms`（`RETRIEVAL_QU_BUDGET_MS`） | 5000 | 单次"查询理解"调用的超时。CPU + 1.5B 上实测 4–5s，调小会在改写这一步就超时 |
+| `app.retrieval.total-budget-ms`（`RETRIEVAL_TOTAL_BUDGET_MS`） | 5000 | 检索总预算，每路开始前查余量；耗尽后**用已拿到的结果继续**（不是报错） |
+| `app.retrieval.hop-budget-ratio`（`RETRIEVAL_HOP_BUDGET_RATIO`） | 0.6 | 多跳的"该收手了"水位：用掉 60% 就不开新一轮 |
+| `app.retrieval.query-understanding-enabled`（`RETRIEVAL_QU_ENABLED`） | true | 关掉 = **主动单路**，`degradeLevel` 保持 0（这是配置，不是降级 —— `#64` 判据 2） |
+| `app.retrieval.query-understanding-retry-on-parse-failure`（`RETRIEVAL_QU_RETRY`） | true | 关掉可省一次模型调用（CPU 上 4–5s），代价是解析失败直接降级 |
+
+### 分段与入库
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `app.segmentation.segment-length`（`SEGMENT_LENGTH`） | 500 | 分块目标长度。★ 必须与前端向导 `CreateWizard.vue` 的默认值一致，否则预览与入库不同 |
+| `app.segmentation.overlap`（`SEGMENT_OVERLAP`） | 60 | 分块重叠，同上 |
+| `app.segmentation.max-chars`（`SEGMENT_MAX_CHARS`） | 1200 | 向量模型字符上限的**回落值**（库里的模型有 `contextWindow` 时以它为准） |
+| `app.segmentation.context-window`（`SEGMENT_CONTEXT_WINDOW`） | 80 | 索引侧上下文窗口，0 = 关。★ 它只进 `search_text` 不进 `content`；**换值（含 0↔非 0）要重新向量化存量文档** |
+| `app.ingestion.embedding-concurrency`（`INGESTION_EMBEDDING_CONCURRENCY`） | 4 | 批量入库时同时跑的份数。配 0 或负数按 1 算（配 0 会让向量化永不执行且不报错）；调高到超过连接池只会排队 |
+| `spring.datasource.hikari.maximum-pool-size`（`DB_POOL_SIZE`） | 10 | 连接池上限。★ 并发高于它时多出来的虚拟线程拿不到连接，表现为「与文件内容无关的向量化失败」（`#227`）；★ 调大前先看库端 `max_connections`：**实例数 × 这个数**才是库看到的连接数 |
+
+### 出站与文件
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `app.egress.external-api-ceiling`（`EGRESS_EXTERNAL_API_CEILING`） | INTERNAL | **外发闸门**：外部 API 供应商的模型允许处理到的最高密级。`SECRET`/`CONFIDENTIAL` 默认一律不发；调高等于允许把机密内容送出网 |
+| `app.files.root`（`FILE_STORE_ROOT`） | `data/files` | 附件字节的落盘根目录。★ 容器里请配绝对路径并挂持久卷 —— 相对目录会随重启消失，表现为"记录在、点开是空的" |
+| `app.files.max-size-bytes`（`FILE_UPLOAD_MAX_BYTES`） | 20971520 | 单个附件上限，超了给可读的 400。★ 与 `spring.servlet.multipart.max-file-size` 是两道门，**都调大才真的放开** |
+
+### 安全
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `app.security.jwt.secret`（`JWT_SECRET`） | 仓库里的示例值 | 拿到它就能伪造任意用户的令牌。★ 非本地环境必须覆盖，换完既有令牌全部失效（自检会提示） |
+| `app.model.api-key-secret`（`MODEL_API_KEY_SECRET`） | 仓库里的示例值 | 模型 API Key 的加密密钥。★ 拿到它 + 拿到库就能解回明文；换完已存密文解不开，需要在界面重录 |
+| `app.security.captcha.enabled`（`CAPTCHA_ENABLED`） | true | 等保要求登录带验证码；关掉只应出现在压测/自动化环境 |
+| `app.security.login-failure.max-attempts`（`LOGIN_MAX_ATTEMPTS`） | 3 | 登录失败几次后冻结账号（等保测评项） |
+| `app.security.public-rate-limit.capacity`（`PUBLIC_RATE_LIMIT_CAPACITY`） | 60 | 公开面（免登录）每分钟请求数。★ `enabled` 默认 true：安全开关漏配必须是"开着的" |
+| `app.security.jwt.issuer` | `http://ai-knowledge-platform.local` | 令牌里的 `iss`。★ 必须是 **URL 形式**：裸串会让 `Jwt.getIssuer()` 在读 `iss` 时抛转换异常。改它不影响已在手的令牌（已签出的照旧有效） |
+| `app.security.jwt.access-ttl` | `30m` | 访问令牌有效期（`08 §4.0` 的契约形状）。调大等于把"令牌泄露后的可利用窗口"一起调大 |
+| `app.security.jwt.refresh-ttl` | `7d` | 刷新令牌有效期 —— 决定"一次登录能撑多久不用再登" |
+| `app.security.captcha.ttl` | `2m` | 验证码有效期。它只需要"够人输入一次"，往大调只是让人工等待更久 |
+| `app.security.login-failure.lock-duration`（`LOGIN_LOCK_DURATION`） | `30m` | 超过 `max-attempts` 之后账号冻结多久（等保测评项，与次数上限是一对） |
+| `app.security.public-rate-limit.window-seconds`（`PUBLIC_RATE_LIMIT_WINDOW_SECONDS`） | `60` | 限流的统计窗口。与 `capacity` 一起才成立：默认就是 **60 次 / 60 秒** |
+| `app.security.public-rate-limit.enabled`（`PUBLIC_RATE_LIMIT_ENABLED`） | `true` | 公开面限流总开关。★ 安全开关的默认值必须是"开着"的：漏配的环境不该静默退回无限流。★ 真栈读数见 `PublicRateLimitHttpTest`（它把 capacity 压到 3 来证"真的会 429"） |
+| `app.embedding.local.model-path`（`LOCAL_ONNX_MODEL_PATH`） | `models/multilingual-e5-small/model_quantized.onnx` | 进程内向量化的模型文件。★ 路径不对时它不会"降级成安静地失败"：该模型要么连上游、要么报错，先看 `app.embedding.local.enabled` 与 `model-name` |
+| `app.embedding.local.tokenizer-path`（`LOCAL_ONNX_TOKENIZER_PATH`） | `models/multilingual-e5-small/tokenizer.json` | 同上，分词器文件；两个文件必须成对存在 |
+
+### 定时任务与示例数据
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `app.audit.retention.enabled`（`AUDIT_RETENTION_ENABLED`） | false | 审计留存期清理。★ 默认关：删审计不可逆，"客户规定的留存期"是客户事实 |
+| `app.knowledge.cleanup.enabled`（`KNOWLEDGE_CLEANUP_ENABLED`） | false | 回收站超期清理，开启后过期的已删文档会被**真的**删掉（分段 + 向量 + 文档行） |
+| `app.knowledge.restore-window-days`（`KNOWLEDGE_RESTORE_WINDOW_DAYS`） | 7 | 回收站"还能恢复"的窗口；`cleanup.retain-days` 与它同值即可 |
+| `app.seed.sample-data`（`SEED_SAMPLE_DATA`） | false | 灌业务示例数据（迁移只跑一次）。★ 集成测试与它共用迁移，默认开着会让一批按条数断言的用例红 |
+| `app.embedding.local.enabled`（`LOCAL_ONNX_ENABLED`） | true | 进程内 ONNX 向量化。★ `model-name` 是**路由判据**：知识库登记的 `baseModel` 必须与它一致，否则会去连上游 11434 |
+| `app.embedding.local.model-name`（`LOCAL_ONNX_MODEL_NAME`） | `multilingual-e5-small` | ★★ **路由判据**：`RoutingEmbeddingAdapter` 按 `baseModel` 名分派，知识库里登记的名字必须与它一致，否则那条模型会去连上游 11434（而 11434 上可能根本没有这个模型） |
+| `app.chat.advisors.enabled`（`CHAT_ADVISORS_ENABLED`） | true | Spring AI advisor 链总开关。★ 只用于排障 —— 关着上线等于安全闸门不生效 |
+| `app.chat.guard.sensitive-words`（`CHAT_GUARD_SENSITIVE_WORDS`） | 空 | 问答输入/输出两侧的敏感词表（逗号分隔）。★ 默认空**不是**"没有这个功能"，而是"部署方按自己的合规要求填" —— 留着默认值上线等于这一层不设防 |
+
+## 九、OCR 的配置项（交付时可能要改的）
 
 全部走环境变量覆盖（`application.yml` 的 `app.ocr.*`）：
 
@@ -237,7 +473,7 @@ python frontend/check_ocr_e2e.py
 
 ---
 
-## 七、开发机（Windows）怎么装
+## 十、开发机（Windows）怎么装
 
 与镜像路线**等价**的本地安装（本机实测过）：
 
@@ -252,7 +488,7 @@ scoop 会自动把 `TESSDATA_PREFIX` 指到上面那个目录 —— 所以开�
 
 ---
 
-## 八、诚实记账：哪些已验、哪些还没
+## 十一、诚实记账：哪些已验、哪些还没
 
 | 项 | 状态 |
 |---|---|

@@ -37,6 +37,7 @@
     python check_failure_visible_e2e.py                      # 默认 http://localhost:5280
     python check_failure_visible_e2e.py http://127.0.0.1:5280
     AIP_STUB_URL=http://127.0.0.1:11434 python check_failure_visible_e2e.py   # 桩不在默认地址时
+    python check_failure_visible_e2e.py --self-check          # 离线自检：三处机器状态守卫自己有没有错
 退出码：0 = 全绿；1 = 有红。
 """
 
@@ -50,7 +51,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from playwright.sync_api import sync_playwright
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5280").rstrip("/")
 API = BASE + "/api/v1"
@@ -163,6 +163,20 @@ def _pick_chat_model(token: str) -> tuple[str, str | None]:
     raise SystemExit("新建的对话模型 120s 内没有进入 LOADED（本跑不算读数）")
 
 
+def _mock_mode_message(api_calls: list[str]) -> str | None:
+    """本次流程一条 `/api/v1` 请求都没发 ⇒ 页面在 mock 模式，返回该说的那句话；否则 None。
+
+    ★ 抽成纯函数的理由：这条判据自己必须能被断言（`--self-check`），否则它就是"看起来在守、
+      其实从没红过"的那一类守卫 —— 本工程的 `#223` 正是因为闸门对机器状态有假设才量错东西。
+    """
+    if api_calls:
+        return None
+    return (
+        "前端在 mock 模式（本次登录 + 打开会话页 0 条 /api/v1 请求）⇒ 界面侧判据量的是 mock，"
+        "本跑不算读数。要用真栈请以 VITE_USE_MOCK=false 重启前端。"
+    )
+
+
 def _discard_model(token: str, model_id: str | None) -> None:
     if not model_id:
         return
@@ -272,6 +286,9 @@ def _login_token() -> str:
 
 def _run_under_failure(app_id: str) -> None:
     """在"桩必失败"的前提下，验界面侧的 ①②④。"""
+    # ★ 延迟导入：`--self-check` 要在没装 playwright 的机器上也能跑（CI 的静态 job 就不装）。
+    from playwright.sync_api import sync_playwright
+
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
         page = browser.new_page(viewport={"width": 1500, "height": 900})
@@ -300,12 +317,10 @@ def _run_under_failure(app_id: str) -> None:
         )
 
         # ★ 没有这一条，mock 模式下的假红看起来与"产品真的有缺陷"一模一样。
-        if not api_calls:
+        mock_message = _mock_mode_message(api_calls)
+        if mock_message:
             browser.close()
-            raise SystemExit(
-                "前端在 mock 模式（本次登录 + 打开会话页 0 条 /api/v1 请求）⇒ 界面侧判据量的是 mock，"
-                "本跑不算读数。要用真栈请以 VITE_USE_MOCK=false 重启前端。"
-            )
+            raise SystemExit(mock_message)
         print(f"  [口径] 页面确实在跟真后端说话（本次流程 {len(api_calls)} 条 /api/v1 请求）")
 
         page.goto(BASE + f"/#/conversation?appId={app_id}", wait_until="networkidle")
@@ -357,5 +372,58 @@ def _run_under_failure(app_id: str) -> None:
         browser.close()
 
 
+def self_check() -> int:
+    """离线自检三处「机器状态」守卫本身（`#223`）。跑法：`python check_failure_visible_e2e.py --self-check`
+
+    ★ 为什么要有它：这三条守卫的作用是"让闸门别量错东西"，而一条守卫自己错了的表现是**静默**
+      —— 要么它永远为真（等于没有），要么它把正确的情形也判成错。只有把它们当被测对象才有读数。
+    不起浏览器、不连栈、不要 `playwright`。
+    """
+    failures: list[str] = []
+
+    def expect(ok: bool, what: str) -> None:
+        print(f"  {'✓' if ok else '✗'} {what}")
+        if not ok:
+            failures.append(what)
+
+    # ① 桩地址：默认值必须是 127.0.0.1 —— `localhost` 在本机会先解析 `::1`，那是 Docker 的 wslrelay
+    expect("localhost" not in STUB, f"① 桩地址不含 localhost（实得 {STUB}）")
+    expect(
+        os.environ.get("AIP_STUB_URL") is None or STUB == os.environ["AIP_STUB_URL"].rstrip("/"),
+        "① 桩地址可被 AIP_STUB_URL 覆盖且不留尾斜杠",
+    )
+
+    # ② 「指向桩的模型」判定：只比 host:port，不比较路径；空/坏值都不许当成命中
+    expect(
+        _same_endpoint(STUB + "/v1", STUB),
+        "② 同一 host:port、路径不同 ⇒ 判为指向桩",
+    )
+    expect(
+        not _same_endpoint("http://127.0.0.1:11435/v1", STUB),
+        "② 端口不同 ⇒ 判为不是桩（否则会挑到别的 ollama）",
+    )
+    expect(not _same_endpoint(None, STUB), "② apiBase 为空 ⇒ 判为不是桩")
+    expect(not _same_endpoint("not a url", STUB), "② 坏 URL ⇒ 判为不是桩，不抛异常")
+
+    # ③ mock 模式：有请求 ⇒ 放行；零请求 ⇒ 必须给出那句话（否则假红看起来像产品缺陷）
+    expect(
+        _mock_mode_message(["GET http://127.0.0.1:5280/api/v1/models"]) is None,
+        "③ 有 /api/v1 请求 ⇒ 不判 mock",
+    )
+    message = _mock_mode_message([])
+    expect(message is not None and "mock" in message, "③ 零请求 ⇒ 判 mock 并说明本跑不算读数")
+
+    print()
+    if failures:
+        print(f"自检失败 {len(failures)} 条：")
+        for item in failures:
+            print(f"  - {item}")
+        return 1
+    print("自检通过：三处机器状态守卫都在按预期工作。")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--self-check" in sys.argv:
+        sys.exit(self_check())
     sys.exit(main())

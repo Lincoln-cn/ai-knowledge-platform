@@ -30,7 +30,15 @@
       <el-button size="small" style="margin-top: var(--space-xs)" @click="fetchList">重试</el-button>
     </div>
 
-    <el-table v-loading="loading" :data="filtered" size="small" class="qa-table" empty-text="还没有问答对">
+    <el-table v-loading="loading" :data="filtered" size="small" class="qa-table">
+      <!-- 空态给出口：没有问答对时只说「还没有」不告诉用户能做什么 -->
+      <template #empty>
+        <div class="empty">
+          <div class="empty-title">还没有问答对</div>
+          <div>问答对让检索优先命中人工确认过的答案</div>
+          <el-button v-if="canEdit" size="small" type="primary" @click="openCreate">新建问答对</el-button>
+        </div>
+      </template>
       <el-table-column label="问题" min-width="220">
         <template #default="{ row }">
           <div class="q-text">{{ row.question }}</div>

@@ -44,6 +44,28 @@ class QueryUnderstandingServiceTest {
     assertThat(outcome.parseFailed()).isFalse();
   }
 
+  /**
+   * 关掉分解（配置）**不是降级** —— 与多跳那条同口径（`#64` 判据 2）。
+   *
+   * <p>形状：两个子问题各自只给一条**相同**的查询 ⇒ 合并去重后只剩一条。改之前这里会被记成 D3「模型只产出 1 条查询（扩展未生效）」，而真正的原因是我把分解关了 —— 于是
+   * {@code degradeRate} 的分母里混进了配置态。
+   */
+  @Test
+  void disablingDecompositionIsConfigurationNotDegradation() {
+    String twoSubQuestions =
+        "{\"subQuestions\":["
+            + "{\"question\":\"差旅报销标准\",\"queries\":[\"差旅费标准\"]},"
+            + "{\"question\":\"住宿标准\",\"queries\":[\"差旅费标准\"]}]}";
+
+    QueryUnderstandingService.Outcome outcome =
+        service(ok(twoSubQuestions)).understand(QUESTION, 3, false, 3, 5000);
+
+    assertThat(outcome.degradeLevel()).as("★ 关掉分解是配置，不是降级 —— 不许记进 degradeRate（#64 判据 2）").isZero();
+    assertThat(outcome.understanding().totalQueries()).as("合并去重后只剩一条").isEqualTo(1);
+    assertThat(outcome.degradeReason()).as("但要说清是配置态").contains("分解已关闭");
+    assertThat(outcome.parseFailed()).as("配置态不是解析失败").isFalse();
+  }
+
   // ────────────────────────── ★ 判据③：三类失败都退到原始问题单路 ──────────────────────────
 
   @Test
@@ -161,6 +183,9 @@ class QueryUnderstandingServiceTest {
     assertThat(outcome.understanding().subQuestionCount()).isEqualTo(1);
     assertThat(outcome.understanding().totalQueries()).isEqualTo(2);
     assertThat(outcome.degradeReason()).contains("分解已关闭");
+    // ★ 关掉分解是**配置**，不是降级（#64，与多跳的 disabledMultiHopIsRecordedAsConfiguration 同口径）：
+    //   若把"我们关掉了这功能"算进降级率，报表会把产品意图读成模型故障。
+    assertThat(outcome.degradeLevel()).as("关掉分解不许记进降级率").isZero();
   }
 
   // ────────────────────────── 夹具 ──────────────────────────

@@ -157,7 +157,17 @@ class MessageFeedbackPersistenceTest {
     assertThat(refused)
         .as("★ 别人的消息不许评价 —— 与 HistoryService 同一条：看不见一律 404（不是 403，403 等于确认 id 存在）")
         .isNotNull();
-    assertThat(refused.getMessage()).doesNotContain("403");
+    // ★ 2026-11-01 订正：原来这里断言 `getMessage()` **不含 "403"**，而这条消息里带着被拒消息的 UUID
+    //   （`消息不存在或不属于当前用户：<uuid>`）—— UUID 末尾恰好是 "403" 时断言就红，CI 上真红过
+    //   一次（run 41290905766：`…e066c2a6-7d45-4813-adab-084e2f662403`）。用字符串去找状态码本来
+    //   就不是判据：要断言的是「这不是权限不足」，那就看 code 本身。
+    assertThat(refused.code())
+        .as("必须是 404 语义（NOT_FOUND），不是 403 —— 403 等于确认这个 id 存在")
+        .isEqualTo(cn.lincoln.aiplatform.platform.domain.ErrorCode.NOT_FOUND);
+    assertThat(refused.getMessage())
+        .as("文案也要说清是「不存在或不属于你」，而不是「没权限」")
+        .contains("不存在")
+        .doesNotContain("没有权限");
     assertThat(feedbackColumnOf(messageId)).as("★ 被拒的那一次**不许**在库里留下痕迹").isNull();
   }
 

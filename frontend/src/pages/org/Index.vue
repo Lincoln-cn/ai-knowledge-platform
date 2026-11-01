@@ -343,9 +343,18 @@ onMounted(load)
 <style scoped>
 .org-split {
   display: grid;
-  grid-template-columns: 360px 1fr;
+  /* ★ 比例 + 下限，不用 360px 定值（`#42`）：组织树要在「层级深」时才需要宽度，
+     固定 360px 在只有三层时是浪费、在七八层时又不够。280px 是下限（再窄缩进就没了）。 */
+  grid-template-columns: minmax(280px, 2fr) minmax(0, 5fr);
   gap: var(--space-md);
   align-items: start;
+}
+
+/* 窄屏换形态：树与详情并排会让树只剩两三层可见。 */
+@media (max-width: 1280px) {
+  .org-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .tree-panel,
 .detail-panel {

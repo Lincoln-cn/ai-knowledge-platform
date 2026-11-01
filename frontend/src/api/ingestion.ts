@@ -32,6 +32,15 @@ export interface DocumentItem {
   /** 失败时的下一步建议 */
   failHint: string | null
   createdAt: string
+  /** 软删时间（只有回收站列表里才有值；在用列表里恒为 undefined）。 */
+  deletedAt?: string
+  /**
+   * 回收站里这一条还能不能恢复（`#259`）。
+   *
+   * ★ 由**服务端**按保留窗口算好再出网：让前端自己算窗口等于把一条配置复制成两份，
+   * 而两份配置迟早不一致。非回收站场景恒为 false。
+   */
+  restorable?: boolean
   updatedAt: string
   /**
    * 文种（合同/制度/报销规定…）。★ 建档必填三项之一（12 §5.1），
@@ -47,6 +56,12 @@ export interface DocumentItem {
   orgId?: string
   /** 密级。★ 建档必填三项之一，且必须 ≤ 所属库的 `maxClassification`（ceiling，13 §6） */
   classification?: ClassificationLevel
+  /**
+   * 标签（`#26`）。空 / 缺省 = **不受标签限制**（绝大多数文档的默认状态），不是"等所有标签"。
+   * ★ 它跟 `classification` 一起构成"批级元数据"，但视图里曾经**没有它** ——
+   *   于是页面显示不了也改不了。返回它才能让「密级与标签」这个入口说真话。
+   */
+  labels?: string[]
   /**
    * 解析出的 Markdown 正文（V14 列，0.2.1）。★ 冻结契约只加可选字段，故 `?`。
    * 失败时可能是**部分内容**（handler 已缓冲片段）—— 与 `failReason` 并存，
@@ -167,16 +182,11 @@ export interface PreviewSegmentationResult {
   removedNoiseLines?: number
 }
 
-/** #11 暂存上传回执 */
-export interface StageUploadsResult {
-  uploadIds: string[]
-}
-
 /**
  * #11/#P1 导入请求。★ 两套形状并存，口径如下（后端 `RegisterDocumentsBody` 同步）：
  *
  * - `names` = **轻量建档**（只登记文档名，不带文件）—— 当前后端唯一消费的形态
- * - `uploadIds` = **暂存上传后的导入**（`stageUploads` 的产物）—— **后端尚未消费**，属欠账
+ * - `uploadIds` = 暂存上传后的导入形态 —— ★ 暂存上传端点已撤（`#211`：零消费方），本字段**没有生产者**
  *
  * ★ 至少给一种；**同时给时以 `names` 为准**。
  * 只传 `uploadIds` / `segmentationPlan` 而不传 `names` ⇒ 400（禁止「收下但不用」的静默忽略）。
@@ -187,7 +197,7 @@ export interface ImportDocumentsBody {
    */
   names?: string[]
   /**
-   * 暂存上传后的导入（`stageUploads` 产物）。★ 后端尚未消费 —— 只传它不传 `names` 会 400；
+   * 暂存上传后的导入形态。★ 暂存上传端点已撤（`#211`），本字段没有生产者；只传它不传 `names` 会 400；
    * 与 `names` 同传时以 `names` 为准。保留字段等上传链落地，**不代表它已生效**。
    */
   uploadIds?: string[]
@@ -203,6 +213,13 @@ export interface ImportDocumentsBody {
   /** ★ 责任部门 = 组织机构的 id（见上文 uploadDocuments 的说明）。 */
   orgId?: string
   classification?: ClassificationLevel
+  /**
+   * 密级标签（`#26` 写侧）。批级，与上面三项同口径。
+   *
+   * ★ 不传 / 传空数组 = **不受标签限制**（绝大多数文档的默认状态），不是"等所有标签"。
+   *   检索侧的求交谓词早已接上：角色带了标签时，只有与文档标签相交才可见。
+   */
+  labels?: string[]
 }
 
 /** P1 上传回执：部分失败必须逐条给原因，不许只回一个总数 */
@@ -301,6 +318,67 @@ export const setDocumentEnabled = (id: string, enabled: boolean) =>
     body: { enabled }
   })
 
+/**
+ * 变更文档密级（#247）。
+ *
+ * ★ 与「知识库的密级上限」不是一回事：`maxClassification` 是库允许装的最高密级（ceiling），
+ *   这里改的是某一份文档自己的密级。两者都会被后端校验（文档密级不得高于库上限）。
+ *
+ * ★ 升密时后端会顺手把引用过这份文档的会话水位抬到新值（同一事务，#27 / 13 §2.2）；
+ *   降密则不动水位 —— 会话密级是单调的（只升不降），这是安全的严格方向。
+ */
+export const changeDocumentClassification = (
+  id: string,
+  classification: ClassificationLevel
+) =>
+  request<DocumentItem>({
+    method: 'PATCH',
+    url: '/documents/:id/classification',
+    path: { id },
+    body: { classification }
+  })
+
+/**
+ * 换一套标签（`#26`）。
+ *
+ * ★ 与密级不同，标签**没有库上限**：库的 ceiling 只管密级（`13 §6.2`），标签之间是"相交才可见"。
+ * ★ 传空数组 = 不受标签限制（不是"等所有标签"）。
+ * ★ 服务端在**同一个事务**里同步每个分段的标签列 —— 检索谓词读的是分段表，不同步就等于没改。
+ */
+/**
+ * 回收站：本库**已软删**的文档（`#75` 判据 ④）。
+ *
+ * ★ 与 `listDocuments` 分成两个函数：主列表是用户日常看的那一屏，不该因为"已删"混进来而变糊。
+ */
+export const listDeletedDocuments = (kbId: string, query: { page?: number; size?: number } = {}) =>
+  request<PageResult<DocumentItem>>({
+    method: 'GET',
+    url: '/knowledge-bases/:kbId/documents/deleted',
+    path: { kbId },
+    query
+  })
+
+/**
+ * 彻底删除（物理删除，`#75` 判据 ④）—— **不可恢复**。
+ *
+ * ★ 与 `deleteDocument`（软删）分成两个函数、两个 URL：一个是"从列表里消失"，一个是"这份材料不再存在"。
+ * ★ 必须先软删，否则后端 400「这份文档还在使用中」。
+ * ★ 备份里仍然有（`deploy/README.md` 保留 14 天日备），所以它的语义是"从生产库与检索里消失"。
+ */
+/** 从回收站恢复（`POST /documents/:id/restore`，`#259`）。保留期外服务端会 400。 */
+export const restoreDocument = (id: string) => request<DocumentItem>({ method: 'POST', url: `/documents/${id}/restore` })
+
+export const purgeDocument = (id: string) =>
+  request<void>({ method: 'DELETE', url: '/documents/:id/purge', path: { id } })
+
+export const changeDocumentLabels = (id: string, labels: string[]) =>
+  request<DocumentItem>({
+    method: 'PATCH',
+    url: '/documents/:id/labels',
+    path: { id },
+    body: { labels }
+  })
+
 export const deleteDocument = (id: string) =>
   request<void>({ method: 'DELETE', url: '/documents/:id', path: { id } })
 
@@ -353,18 +431,6 @@ export const reembedKnowledgeBase = (kbId: string) =>
     url: '/knowledge-bases/:kbId/reembed',
     path: { kbId }
   })
-
-/** #11 暂存上传：只落文件、不建文档，预览与导入共用这批 `uploadIds` */
-export const stageUploads = (kbId: string, files: File[]) => {
-  const form = new FormData()
-  files.forEach((file) => form.append('files', file))
-  return request<StageUploadsResult>({
-    method: 'POST',
-    url: '/knowledge-bases/:kbId/uploads',
-    path: { kbId },
-    body: form
-  })
-}
 
 /**
  * #11 导入建档。★ 当前后端只消费 `names`（轻量建档）；`uploadIds` / `segmentationPlan`

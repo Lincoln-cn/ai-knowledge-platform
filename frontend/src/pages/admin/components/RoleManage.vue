@@ -322,9 +322,18 @@ onMounted(async () => {
 
 .layout {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  /* ★ 比例 + 最小可读宽度，不用 280px 定值（`#42`）：角色名长度不可控，
+     定值在换一批数据后就会失衡；240px 是下限（低于它角色名与状态标签会挤成两行）。 */
+  grid-template-columns: minmax(240px, 4fr) minmax(0, 8fr);
   gap: var(--space-sm);
   align-items: start;
+}
+
+/* 窄屏换形态：两栏在 1280 以下会把权限树挤到只剩两三列。 */
+@media (max-width: 1280px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .role-list {

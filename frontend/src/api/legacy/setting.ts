@@ -44,22 +44,29 @@ export const getAiList = () =>
  * 包袱，没有理由在新链路上继续背着。
  */
 export const detail = (row: { id: string }) =>
-  request<WorkflowGraph>({
+  request<{ graph: WorkflowGraph; updatedAt: string | null }>({
     method: 'GET',
     url: '/assistants/:appId/workflow/draft',
     path: { appId: row.id }
-  }).then((graph) => wrap(graph))
+  }).then((res) => wrap(res.graph))
 
 /** 保存草稿（旧 `addSubmit`，旧语义是"保存并发布"，这里只保存） */
 export const addSubmit = (row: { applicationId: string; graph: WorkflowGraph }) =>
-  request<WorkflowGraph>({
+  request<{ savedAt: string }>({
     method: 'PUT',
     url: '/assistants/:appId/workflow/draft',
     path: { appId: row.applicationId },
     body: { graph: row.graph }
   })
 
-/** 发布（旧 `workFlowPublish`）。发布说明由调用方给，空说明后端会拒 */
+/**
+ * 发布（旧 `workFlowPublish`）。发布说明由调用方给，空说明后端会拒。
+ *
+ * ★ 编排页的发布已改走契约函数 `api/workflow.ts` 的 `publishWorkflow`（同一端点，
+ *   但要拿回 `WorkflowVersion` 里的版本号与节点数）。这一条**暂时没有调用方**，
+ *   留着是因为 `docs/ROADMAP.md` 与 `09` 设计册仍按旧别名描述这一层；
+ *   真要删，得连同那两处一起改（不在本次改动范围内）。
+ */
 export const workFlowPublish = (row: {
   applicationId: string
   graph: WorkflowGraph

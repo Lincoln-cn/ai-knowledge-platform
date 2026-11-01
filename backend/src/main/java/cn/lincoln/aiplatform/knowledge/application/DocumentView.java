@@ -33,12 +33,20 @@ public record DocumentView(
     String docType,
     String orgId,
     ClassificationLevel classification,
+    // ★ 标签（`#26`）：与密级同属**批级元数据**，但它此前只写在库与谓词里，**没进视图** ——
+    //   于是页面既显示不了、也改不了（改之前读不到现值，改之后看不到结果）。
+    //   缺失的表现是"后端支持标签、界面上完全没有"，正是 `#79` 第三格要抓的那类。
+    java.util.List<String> labels,
     String parsedContent,
     // ── 第 9 周（0.3.1）新增的**可选**出网字段：扫描件的逐页进度（12 §11.8）──
     //   ★ 契约只加可选字段（07 §六 阶段 1）：老前端不认识它们也不受影响。
     //   ★ 0 = 不涉及 OCR（非 PDF / 纯文本 PDF）⇒ 界面据此不显示进度行，而不是显示一条恒为 0/0 的噪声。
     Integer ocrTotalPages,
-    Integer ocrDonePages) {
+    Integer ocrDonePages,
+    // ★ 回收站（`#259`）：删除时间与"还能不能恢复"。
+    //   restorable 由服务端按保留窗口算好再出网 —— 让前端自己算窗口，等于把一条配置复制成两份。
+    Instant deletedAt,
+    boolean restorable) {
 
   /** 契约 {@code DocumentStatus} 的出网形态 —— 与领域枚举同名，避免多一层映射。 */
   public enum DocumentStatusView {
@@ -52,6 +60,19 @@ public record DocumentView(
   }
 
   public static DocumentView from(Document document) {
+    return build(document, false);
+  }
+
+  /**
+   * 回收站里的视图：{@code restorable} 表示前端该不该把「恢复」点亮。
+   *
+   * <p>★ 刻意不叫 {@code fromDeleted} 再自己算窗口：窗口是策略（配置项），属于服务层； 视图只负责"照传"。
+   */
+  public static DocumentView fromDeleted(Document document, boolean restorable) {
+    return build(document, restorable);
+  }
+
+  private static DocumentView build(Document document, boolean restorable) {
     return new DocumentView(
         document.id().toString(),
         document.kbId().toString(),
@@ -71,8 +92,11 @@ public record DocumentView(
         //   而不是编一个部门名出来（那会让"没匹配上"这件事彻底看不见）
         document.orgId() == null ? null : document.orgId().toString(),
         document.classification(),
+        document.labels(),
         document.parsedContent(),
         document.ocrTotalPages(),
-        document.ocrDonePages());
+        document.ocrDonePages(),
+        document.deletedAt(),
+        restorable);
   }
 }

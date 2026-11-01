@@ -40,6 +40,13 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:15432/aiplatform}
     username: ${DB_USER:aiplatform}
     password: ${DB_PASSWORD:aiplatform}
+    # ★ 池上限显式写死（`#227` 处置建议 4）：不写就是 Hikari 的默认 10 ——「靠默认值工作」本身是债，
+    #   而且启动自检要拿池上限去和向量化并发比，那个数字不该来自库的默认值。
+    # ★ 与 app.ingestion.embedding-concurrency 的关系：并发大于池上限时，多出来的虚拟线程拿不到连接，
+    #   表现为**与文件内容无关**的「向量化失败」（#227 现场那 12 份假失败）。启动自检会为这个方向告警。
+    # ★ 调大之前先确认库端 max_connections 够：应用实例数 × 这里，才是库真正看到的连接数。
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
 
   jpa:
     hibernate:
@@ -67,6 +74,31 @@ spring:
       api-key: ${AI_API_KEY:ollama-local}
 
 app:
+  # 审计留存期清理（#75 判据 ② 的调度项）：默认关闭 —— 删审计不可逆，而"客户规定的留存期"
+  # 是客户事实、不是代码事实；由代码替客户拍一个天数然后开始删，比不删更危险
+  # 对话侧的 advisor 链总开关（Spring AI 的 SafeGuardAdvisor 等）：默认开。
+  # ★ 关掉只用于排障 —— 关着上线等于安全闸门不生效（12 §12）
+  chat:
+    advisors:
+      enabled: ${CHAT_ADVISORS_ENABLED:true}
+    # 安全闸门的敏感词表（逗号分隔，空 = 不拦）。
+    # ★ 默认空不是"忘了配"，而是"由部署方按自己的合规要求填"；填了才拦
+    guard:
+      sensitive-words: ${CHAT_GUARD_SENSITIVE_WORDS:}
+  audit:
+    retention:
+      enabled: ${AUDIT_RETENTION_ENABLED:false}
+      retain-days: ${AUDIT_RETENTION_DAYS:365}
+      cron: "${AUDIT_RETENTION_CRON:0 30 3 * * *}"
+  # ─── 会话附件存储（`#187` 的 `POST /files`，08 §4.9）───
+  #
+  # ★ root 是**文件字节**的落盘根目录；元数据落 `cv_file`（`V63`）。相对路径按进程工作目录解析，
+  #   容器里请挂持久卷并配绝对路径（相对目录会随重启消失，表现为"附件记录在、点开是空的"）。
+  # ★ max-size-bytes 与 servlet.multipart.max-file-size 是两道不同的门：后者由容器先拦（超了给 413），
+  #   这一道给可读的 400 与下一步动作。两者都调大才真的放开 —— 只调这里会被 413 挡在前面。
+  files:
+    root: ${FILE_STORE_ROOT:data/files}
+    max-size-bytes: ${FILE_UPLOAD_MAX_BYTES:20971520}
   # ─── 业务示例数据（`db/seed`，默认关闭）───
   #
   # ★ 只有打开时才把 `classpath:db/seed` 追加进 Flyway 的 locations（见
@@ -166,6 +198,15 @@ app:
     #   ★ 取值：PUBLIC / INTERNAL / SECRET / CONFIDENTIAL（13 §6.3 的 ceiling 口径）。
     external-api-ceiling: ${EGRESS_EXTERNAL_API_CEILING:INTERNAL}
 
+  ingestion:
+    # ★ 批量入库的向量化并发上限（#227）：一次触发 70 份时，最多这么多份同时在跑。
+    #   为什么要有它：虚拟线程是无限起的，而数据库连接池默认只有 10 条 —— 69 份同时抢 10 条
+    #   连接，10 份会以「Failed to obtain JDBC Connection」收场。那个失败与文档内容无关，
+    #   重试就过，但用户看到的是「向量化失败」，于是会去怀疑文件。
+    #   ★ 配 0 或负数会被当成 1（配 0 会让向量化永远不跑，且没有任何报错）。
+    #   ★ 调低只会变慢，不会失败；调高不会超过连接池上限，只会让更多的任务在排队。
+    embedding-concurrency: ${INGESTION_EMBEDDING_CONCURRENCY:4}
+
   segmentation:
     # 分块目标长度默认值。★ 与前端向导 CreateWizard.vue 的 segForm.segmentLength 默认值一致 ——
     #   否则用户在预览里看到的与入库得到的不同。
@@ -175,7 +216,24 @@ app:
     # 向量模型字符上限的回落值。① KB 绑定的向量模型有 contextWindow 则用它（近似）；
     #   ② 否则用这里的默认 1200 —— ★ 与前端 mock 的 MODEL_LIMIT = 1200 一致，避免 mock/真栈漂移。
     max-chars: ${SEGMENT_MAX_CHARS:1200}
+    # 上下文滑动窗口（#65 · 12 §3.3.1）—— 0 = 关闭。
+    #   ★ 它**只进 search_text（索引侧），不进 content**：所以允许跨章节、也不会污染引用正文。
+    #   ★ 一条硬约束：装上窗口会改变"同一句话被章节劈开"时能否被召回 —— 换值（含 0↔非 0）
+    #     需要重新向量化存量文档才能生效，因为 content_hash 只标识本段正文（不随窗口变）。
+    #     读数见日志 `上下文窗口：文档 … 并入 N 段 / M 字`。
+    context-window: ${SEGMENT_CONTEXT_WINDOW:80}
 
+  # ★ 回收站超期清理（`#259`）：过了保留期的已删文档会被**真的**删掉（分段 + 向量 + 文档行）。
+  #   默认关闭 —— "装好就有一个定时任务在删数据"是这类功能最不该有的默认值。
+  #   ★ 与审计留存清理（app.audit.retention，03:30）错开到 04:10，别同时压库。
+  knowledge:
+    restore-window-days: ${KNOWLEDGE_RESTORE_WINDOW_DAYS:7}
+    cleanup:
+      enabled: ${KNOWLEDGE_CLEANUP_ENABLED:false}
+      # 与 restore-window-days 同值即可：能恢复的窗口一过，内容就该腾出空间了。
+      retain-days: ${KNOWLEDGE_CLEANUP_RETAIN_DAYS:7}
+      batch-size: ${KNOWLEDGE_CLEANUP_BATCH_SIZE:50}
+      cron: "${KNOWLEDGE_CLEANUP_CRON:0 10 4 * * *}"
   ocr:
     # ══════════════════════════════════════════════════════════════════════════
     #  扫描件 OCR（第 9 周 0.3.1 · 12 §11）
@@ -223,17 +281,25 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # ★ prometheus 是 #73 留缝的第一格：三条业务指标（上游不可达率 / 首字延迟 P95 /
+        #   入库失败率）由它导出。它与 health 同一档 permitAll ⇒ 匿名可读，
+        #   生产环境靠网关/防火墙限制抓取来源（deploy/README.md 写了口径）。
+        include: health,info,prometheus
   endpoint:
     health:
       show-details: when-authorized
+  metrics:
+    # ★ 延迟类指标要 P95/P99，不是只看平均值 —— 平均值会把"少数极慢请求"抹平。
+    distribution:
+      percentiles:
+        aiplatform.chat.first-token: 0.5,0.95,0.99
 
 logging:
   level:
     cn.lincoln.aiplatform: DEBUG
   # ★★ 落盘日志（2026-10-29 加，起因见「通用问答卡住却没有任何日志可查」那一次排障）：
-  #   在此之前只有控制台输出 ⇒ 起服务的那个进程一旦不是"有人在看窗口"（比如被 agent 的后台
-  #   job 用 `2>&1` 接走了 stdout），日志就只活在内存里、随会话一起丢弃，事后"查运行日志"
+  #   在此之前只有控制台输出 ⇒ 起服务的那个进程一旦不是「有人在看窗口」（比如被 agent 的后台
+  #   job 用 `2>&1` 接走了 stdout），日志就只活在内存里、随会话一起丢弃，事后「查运行日志」
   #   根本没有可查的东西。落盘之后，收尾异常 / 模型线程异常 / 心跳异常都能事后取证。
   #   ★ 路径相对进程工作目录（scripts/aip-be-live.cmd 里先 cd backend）⇒ backend/logs/ai-platform.log，
   #     被 .gitignore 的 `*.log` 覆盖，不会进提交。

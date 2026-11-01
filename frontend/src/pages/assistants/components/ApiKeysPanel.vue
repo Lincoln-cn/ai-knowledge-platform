@@ -10,6 +10,14 @@
     </p>
 
     <el-table v-loading="loading" :data="list" size="small">
+      <!-- 空态给出口：没有 Key 时「暂无数据」不说下一步，而 Key 只在生成时显示一次 -->
+      <template #empty>
+        <div class="empty">
+          <div class="empty-title">还没有 API Key</div>
+          <div>应用靠它被外部调用；密钥只在生成时显示一次，请当场复制保存</div>
+          <el-button size="small" type="primary" :loading="creating" @click="regenerate">生成 API Key</el-button>
+        </div>
+      </template>
       <el-table-column label="API Key" min-width="220">
         <template #default="{ row }">
           <div class="token-line">

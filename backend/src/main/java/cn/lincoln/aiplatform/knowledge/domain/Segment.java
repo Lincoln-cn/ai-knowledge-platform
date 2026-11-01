@@ -8,6 +8,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -133,6 +134,11 @@ public class Segment {
   @Column(name = "classification", nullable = false, length = 16)
   private ClassificationLevel classification;
 
+  /** 密级标签（{@code text[]}，`V57`）—— 冗余，理由与 {@link #classification} 逐字相同：谓词要能在分段表上直接生效。 */
+  @JdbcTypeCode(SqlTypes.ARRAY)
+  @Column(name = "labels")
+  private List<String> labels;
+
   @CreationTimestamp
   @Column(name = "created_at", nullable = false, updatable = false)
   private Instant createdAt;
@@ -174,7 +180,8 @@ public class Segment {
       UUID ownerId,
       PlannedSegment planned,
       UUID createdBy,
-      ClassificationLevel classification) {
+      ClassificationLevel classification,
+      List<String> labels) {
     if (id == null || documentId == null || scopeId == null) {
       throw new IllegalArgumentException("分段 id / 文档 id / 归属主体不能为空");
     }
@@ -208,6 +215,7 @@ public class Segment {
     this.scopeId = scopeId;
     this.ownerId = ownerId;
     this.classification = classification;
+    this.labels = labels == null ? List.of() : List.copyOf(labels);
     this.ordinal = planned.ordinal();
     this.title = clampTitle(planned.title());
     this.titlePath = planned.titlePath();
@@ -387,6 +395,26 @@ public class Segment {
     this.embeddingStatus = SegmentEmbeddingStatus.PENDING_EMBEDDING;
   }
 
+  /**
+   * ★ 重打密级（{@code 13 §2.4} 第 1 步）—— 文档升/降密时，它的全部分段必须跟着走。
+   *
+   * <p>★ 与 {@link #moveTo} 的关键区别：<strong>向量状态不动</strong>。密级是元数据、不进 embedding （{@code 13 §2.4}
+   * 末段），所以重打密级<b>不需要重新向量化</b>；把它顺手标成 {@code PENDING_EMBEDDING} 会让一次纯元数据变更
+   * 触发整篇文档的重算，看起来"很保险"，实际是在浪费配额并让检索临时缺文档。
+   *
+   * <p>★ 为什么这一列必须单独改：{@code kb_segment.classification} 是 {@code V22} 加的<b>冗余列</b>（不是从文档生成的）。
+   * 只改文档行会留下"文档=秘密、分段=内部"，而检索谓词用的是<b>分段</b>那一列 ⇒ 低 clearance 用户照样检索得到。
+   *
+   * @param level 新的密级（继承自所属文档）
+   * @throws IllegalArgumentException {@code level} 为 {@code null}
+   */
+  public void reclassify(ClassificationLevel level) {
+    if (level == null) {
+      throw new IllegalArgumentException("分段密级不能为空（它继承所属文档的密级，13 §2.1）");
+    }
+    this.classification = level;
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {
@@ -454,6 +482,21 @@ public class Segment {
   /** ★ 分段密级（继承所属文档，{@code 13 §2.1} ②）。检索的两条路都用它做密级谓词。 */
   public ClassificationLevel classification() {
     return classification;
+  }
+
+  /** 密级标签。★ 空 = 不受标签限制（今天由文档继承而来，分段不允许有自己的一套）。 */
+  public List<String> labels() {
+    return labels == null ? List.of() : labels;
+  }
+
+  /**
+   * 换一套标签（`#26`）：**与所属文档一起改**，归一口径复用 {@link Document#normalizeLabels}。
+   *
+   * <p>★ 只碰标签列：与 {@link #reclassify} 一样不动 {@code embeddingStatus} / {@code contentHash} ——
+   * 标签是元数据，不进 embedding，也不改变"这段材料是什么"。
+   */
+  public void changeLabels(List<String> labels) {
+    this.labels = Document.normalizeLabels(labels);
   }
 
   public Instant createdAt() {

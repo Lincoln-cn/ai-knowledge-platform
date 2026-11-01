@@ -6,12 +6,15 @@ import cn.lincoln.aiplatform.conversation.domain.ConversationShare;
 import cn.lincoln.aiplatform.conversation.domain.ConversationShareRepository;
 import cn.lincoln.aiplatform.conversation.domain.Message;
 import cn.lincoln.aiplatform.conversation.domain.MessageRepository;
+import cn.lincoln.aiplatform.platform.domain.AuditAction;
+import cn.lincoln.aiplatform.platform.domain.AuditLogPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -39,14 +42,17 @@ public class ConversationShareService {
   private final ConversationRepository conversations;
   private final MessageRepository messages;
   private final ConversationShareRepository shares;
+  private final AuditLogPort audit;
 
   public ConversationShareService(
       ConversationRepository conversations,
       MessageRepository messages,
-      ConversationShareRepository shares) {
+      ConversationShareRepository shares,
+      AuditLogPort audit) {
     this.conversations = conversations;
     this.messages = messages;
     this.shares = shares;
+    this.audit = audit;
   }
 
   @Transactional
@@ -91,6 +97,24 @@ public class ConversationShareService {
                 expiresAt,
                 actorId,
                 now));
+    // ★ 分享是最该留痕的一类动作：它把一份内部内容变成"有链接就能看"。
+    //   明细只放令牌前 8 位 —— 完整令牌是访问凭证，抄进审计表等于给"能读审计的人"发入口。
+    audit.record(
+        AuditAction.CONVERSATION_SHARE,
+        "CONVERSATION",
+        conversationId.toString(),
+        actorId,
+        Map.of(
+            "scope",
+            scope,
+            "tokenPrefix",
+            prefixOf(share.token()),
+            "messageId",
+            messageId == null ? "" : messageId.toString(),
+            "maxClassification",
+            String.valueOf(share.maxClassification()),
+            "expiresAt",
+            expiresAt == null ? "" : expiresAt.toString()));
     return ConversationShareView.from(share);
   }
 
@@ -112,7 +136,26 @@ public class ConversationShareService {
             .orElseThrow(
                 () -> new BusinessException(ErrorCode.NOT_FOUND, "分享链接不存在", "它可能已被删除，或不属于这个会话"));
     share.revoke(Instant.now());
-    return ConversationShareView.from(shares.save(share));
+    ConversationShare revoked = shares.save(share);
+    audit.record(
+        AuditAction.CONVERSATION_UNSHARE,
+        "CONVERSATION",
+        conversationId.toString(),
+        actorId,
+        Map.of("scope", revoked.scope(), "tokenPrefix", prefixOf(revoked.token())));
+    return ConversationShareView.from(revoked);
+  }
+
+  /**
+   * 审计里只留令牌前 8 位。
+   *
+   * <p>八个字符足够把"这条审计记录"与"界面上那条链接"对上号（人复盘时手里有链接）， 又不足以单独构造出一个可用的公开地址。
+   */
+  private static String prefixOf(String token) {
+    if (token == null) {
+      return "";
+    }
+    return token.length() <= 8 ? token : token.substring(0, 8);
   }
 
   /**

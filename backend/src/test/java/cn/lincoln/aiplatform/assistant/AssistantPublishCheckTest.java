@@ -72,7 +72,17 @@ class AssistantPublishCheckTest {
 
   private final AssistantService service =
       new AssistantService(
-          assistants, favorites, apiKeys, scope, models, segments, grantSubjects, promptReferences);
+          assistants,
+          favorites,
+          apiKeys,
+          scope,
+          models,
+          segments,
+          grantSubjects,
+          promptReferences,
+          // ★ 这里是一张"用完就丢"的审计：本类测的是导出包的内容与依赖判定，不是留痕。
+          //   留痕由 DocumentAuditTest / #257 的集成测试覆盖 —— 在单测里塞一个真的会掩盖"忘了接"。
+          (action, resourceType, resourceId, actorId, detail) -> {});
 
   /** 建一个"各项都过"的简单应用；各用例只破坏其中一项。 */
   private Assistant publishable() {

@@ -20,6 +20,21 @@
       </div>
     </div>
 
+    <!--
+      「没有可用模型 → 去模型管理」（`ROADMAP §五` F2 的第一步）。
+      此前这句话只散落在局部：建库向导筛候选、应用发布前置、编排节点校验 ——
+      每一处只看自己那个动作，**没有一个地方回答「这个平台现在能不能干活」**。
+      全新用户看到的是一个信息密度很高的工作台，却不知道第一步缺什么。
+
+      判据全部在 `lib/modelReadiness.ts`（含「什么不该显示」两条）：
+      拉取失败不显示、用户修不了不显示。文案按缺哪一档分开 —— 缺对话是提问失败，
+      缺向量是建库/入库失败，两件事的下一步不一样（一个去加载模型，一个去登记）。
+    -->
+    <div v-if="readinessNotice" :class="['notice', readinessNotice.tone]">
+      {{ readinessNotice.text }} ——
+      <router-link to="/models" class="link">去模型管理</router-link>
+    </div>
+
     <!-- 指标条：消费者看「我的」口径，建设者/运营看平台口径（07 §五） -->
     <div v-if="consumer" class="stats panel">
       <div class="stat">
@@ -124,12 +139,36 @@
         </section>
       </template>
 
-      <!-- 从这里开始：入口按**权限**过滤，与侧栏同一套判据（避免点进去 403） -->
+      <!--
+        首次引导（`ROADMAP §五` F2）：还有没走完的步骤时显示「上手路径」+ 进度；
+        四步都做完就退回原来的入口列表 —— 引导条不许变成常驻横幅
+        （什么时候该消失的判据在 `lib/onboarding.ts`，不在模板里）。
+        两种形态都按权限过滤：不归他管的步骤整条不出现
+        （「你没有知识库」+ 无权建库 = 一个解不开的暗号）。
+      -->
       <section class="panel">
         <div class="panel-head">
-          <h2 class="h2">从这里开始</h2>
+          <h2 class="h2">{{ onboarding ? '上手路径' : '从这里开始' }}</h2>
+          <span v-if="onboarding" class="micro muted">
+            已完成 {{ onboarding.doneCount }}/{{ onboarding.totalCount }}
+          </span>
         </div>
-        <ul class="entries">
+        <ul v-if="onboarding" class="entries">
+          <li v-for="s in onboarding.steps" :key="s.key" class="step-row" :class="s.status">
+            <span
+              class="step-mark"
+              :title="
+                s.status === 'done' ? '已完成' : s.status === 'todo' ? '待完成' : '暂未读到读数'
+              "
+              >{{ s.status === 'done' ? '✓' : s.status === 'todo' ? '○' : '—' }}</span
+            >
+            <router-link :to="s.path" class="entry">
+              <span class="entry-name">{{ s.label }}</span>
+              <span class="entry-desc micro muted">{{ s.desc }}</span>
+            </router-link>
+          </li>
+        </ul>
+        <ul v-else class="entries">
           <li v-for="e in entries" :key="e.path" class="entry-row">
             <router-link :to="e.path" class="entry">
               <span class="entry-name">{{ e.label }}</span>
@@ -137,6 +176,16 @@
             </router-link>
           </li>
         </ul>
+        <!--
+          显示路径**不等于**取消入口：路径之外那两条（看运营数据、处理反馈）降级成一行文字链接。
+          少了这一行，一个还没建完库的管理员就再也找不到「处理反馈」了。
+        -->
+        <div v-if="onboarding && otherEntries.length" class="other-links">
+          <span class="micro muted">其他</span>
+          <router-link v-for="e in otherEntries" :key="e.path" :to="e.path" class="link">
+            {{ e.label }}
+          </router-link>
+        </div>
       </section>
     </div>
 
@@ -174,13 +223,21 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
-import { analyticsApi, conversationsApi, feedbackApi } from '@/api'
+import { analyticsApi, assistantsApi, conversationsApi, feedbackApi, knowledgeApi, modelsApi } from '@/api'
 import type { AnalyticsRange, AssistantRankItem, MeSummary, OverviewMetrics, QualityMetrics } from '@/api/analytics'
 import type { Conversation } from '@/api/conversations'
 import type { FeedbackItem, FeedbackStatus } from '@/api/feedback'
 import InstrumentCard, { type InstrumentRow, type InstrumentStatus } from '@/components/InstrumentCard.vue'
 import { PERM } from '@/constants/permissions'
 import { canReach } from '@/lib/reach'
+import { assessModelReadiness, modelReadinessNotice, type ModelReadiness } from '@/lib/modelReadiness'
+import {
+  buildOnboarding,
+  ONBOARDING_STEP_PATHS,
+  type OnboardingCounts,
+  type OnboardingStepKey,
+  type OnboardingView
+} from '@/lib/onboarding'
 import { useSessionStore } from '@/stores/session'
 import { FEEDBACK_STATUS_LABELS, labelOf } from '@/constants/labels'
 
@@ -203,6 +260,92 @@ const apps = ref<AssistantRankItem[]>([])
 const mySummary = ref<MeSummary | null>(null)
 const myConversations = ref<Conversation[]>([])
 const myFeedbacks = ref<FeedbackItem[]>([])
+
+/**
+ * 模型可用性。**单独加载、单独失败**（`null` = 不知道）。
+ *
+ * ★ 刻意不放进下面 `fetchAll` 的 `Promise.all`：引导条是锦上添花，
+ * 它拉不到不许连坐工作台的三块指标。同理，它在 `fetchAll` 里也只是被
+ * `void` 掉 —— 指标等它，等于让一个次要读数拖慢首屏。
+ */
+const modelReadiness = ref<ModelReadiness | null>(null)
+
+/**
+ * 「这个用户能不能自己把模型补上」—— 与 `buildEntries` 同一套双重过滤：
+ * `canReach` 判页面进得去（`/models` 要 `model:manage`），`session.can` 判动作做得了。
+ * 只判一条就是空承诺：看得到「去模型管理」，点进去 403。
+ */
+const canManageModels = () => canReach(router, '/models') && session.can(PERM.modelManage)
+
+const readinessNotice = computed(() => modelReadinessNotice(modelReadiness.value, canManageModels()))
+
+const loadModelReadiness = async () => {
+  // 修不了的人不拉：省两次请求。★ 判据本身仍在纯函数里，这里只是短路。
+  if (!canManageModels()) return
+  try {
+    // 按 kind 分两次各拉满一页（后端上限 100，见 `ModelService.MAX_PAGE_SIZE`）。
+    // 用 kind 过滤而不是拉全部再筛 —— 否则模型总数超过一页时会误报「缺」。
+    const [chatPage, embeddingPage] = await Promise.all([
+      modelsApi.listModels({ kind: 'CHAT', size: 100 }),
+      modelsApi.listModels({ kind: 'EMBEDDING', size: 100 })
+    ])
+    modelReadiness.value = assessModelReadiness([...chatPage.list, ...embeddingPage.list])
+  } catch {
+    // 「不知道」≠「没有」：拉不到就什么都别说（否则一个健康平台会顶着假故障提示）
+    modelReadiness.value = null
+  }
+}
+
+/**
+ * 首次引导（`ROADMAP §五` F2）：「建知识库 → 传文档 → 建应用 → 试问答」四步 + 进度。
+ * 判据（含"什么时候该消失"）在 `lib/onboarding.ts`，这里只负责取四个读数。
+ *
+ * 只对建设者：消费者有他自己的一组入口（`consumerEntries`），他不需要"先建个库"。
+ */
+const onboarding = ref<OnboardingView | null>(null)
+
+/** 「这一步归不归他管」—— 与入口列表同一套双重过滤（路由可达 + 动作权限） */
+const onboardingAllowed = (key: OnboardingStepKey): boolean => {
+  switch (key) {
+    case 'kb':
+      return canReach(router, '/knowledge') && session.can(PERM.knowledgeCreate)
+    case 'document':
+      return canReach(router, '/knowledge') && session.can(PERM.documentUpload)
+    case 'assistant':
+      return canReach(router, '/assistants') && session.can(PERM.assistantEdit)
+    case 'ask':
+      return canReach(router, '/conversation') && session.can(PERM.conversationView)
+  }
+}
+
+/** 单块失败不许连坐另外几块：`null` 就是"没测到"（判据会把它算成 unknown，不算未完成） */
+const settleCount = async <T>(fn: () => Promise<T>): Promise<T | null> => {
+  try {
+    return await fn()
+  } catch {
+    return null
+  }
+}
+
+const loadOnboarding = async () => {
+  if (consumer.value) return
+  const [kbPage, appPage, askPage] = await Promise.all([
+    // 取满一页：`documentCount` 要逐库求和，「传文档」才判得出来。
+    // ★ 超过 100 个库时求和会偏小 —— 但判据是「有没有 > 0」，只要前 100 个库里有文档就算做完。
+    settleCount(() => knowledgeApi.listKnowledgeBases({ page: 1, size: 100 })),
+    settleCount(() => assistantsApi.listAssistants({ page: 1, size: 1 })),
+    // `mine`：这一步问的是「**你**试过问答没有」，不是平台有没有人问过
+    settleCount(() => conversationsApi.listConversations({ mine: true, page: 1, size: 1 }))
+  ])
+  // ★ 用 `total` 而不是 `list.length`：`size: 1` 时 list 恒长 1，按它判会人人"已完成"
+  const counts: OnboardingCounts = {
+    kbCount: kbPage ? kbPage.total : null,
+    docCount: kbPage ? kbPage.list.reduce((n, kb) => n + (kb.documentCount ?? 0), 0) : null,
+    appCount: appPage ? appPage.total : null,
+    askCount: askPage ? askPage.total : null
+  }
+  onboarding.value = buildOnboarding(counts, onboardingAllowed)
+}
 
 const range = computed<AnalyticsRange>(() => {
   const to = dayjs()
@@ -239,6 +382,11 @@ const fetchAll = async () => {
     }
   } finally {
     loading.value = false
+    // 模型状态跟着「刷新」一起更新，但不参与上面的等待（互不连坐）。
+    // ★ 放在 finally 里：指标接口挂了也要刷新它 —— 两块的成败必须互不相干，
+    //   否则「后端只挂了统计接口」会连带让引导条停在旧读数上。
+    void loadModelReadiness()
+    void loadOnboarding()
   }
 }
 
@@ -307,6 +455,16 @@ const entries = computed(() =>
     (e) => canReach(router, e.path) && session.can(e.perm)
   )
 )
+
+/**
+ * 上手路径显示时，把**路径里已经有的入口**从入口列表里摘掉 —— 否则「建知识库」在页面上出现两次。
+ * 剩下的（看运营数据、处理反馈）不是首次引导的动作，但也不能因此消失：
+ * 显示路径不等于取消入口。它们降级成路径下方的一行文字链接。
+ */
+const otherEntries = computed(() => {
+  const inPath = new Set(ONBOARDING_STEP_PATHS)
+  return entries.value.filter((e) => !inPath.has(e.path))
+})
 
 /**
  * 机器回执的读数行 —— 消费者换「我的」读数（07 §五），建设者/运营用平台口径。
@@ -482,6 +640,51 @@ const fmtPct = (n: number | null | undefined) =>
 
 .entry-row:last-child .entry {
   border-bottom: none;
+}
+
+/*
+ * 上手路径：四步 + 状态标记。
+ * 标记只用文字与令牌色，不引彩色块 —— 四步不该长成一块仪表盘。
+ */
+.step-row {
+  display: flex;
+  align-items: flex-start;
+}
+
+.step-row .entry {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-row:last-child .entry {
+  border-bottom: none;
+}
+
+.step-mark {
+  flex-shrink: 0;
+  width: 2.4em;
+  padding: var(--space-xs) 0 var(--space-xs) var(--space-md);
+  color: var(--color-muted);
+  text-align: center;
+}
+
+.step-row.done .step-mark {
+  color: var(--color-accent);
+}
+
+/* 做完的一步退到次要色：剩下的还没做的才是要他看的 */
+.step-row.done .entry-name {
+  color: var(--color-muted);
+}
+
+/* 路径之外的其他入口：一行文字链接，不占一块 panel */
+.other-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-md);
+  border-top: 1px solid var(--color-rule-2);
 }
 
 .entry:hover {

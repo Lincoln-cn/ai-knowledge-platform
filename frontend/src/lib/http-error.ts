@@ -6,10 +6,15 @@
  *   真实原因是「后端进程没了」，说成「后端异常」会把排查引向「代码崩了」。
  */
 
-/** 我们的业务包络：必须同时有 code（number）与 message（string）。缺一或非 JSON 都不算 */
+/**
+ * 我们的业务包络：必须同时有 code（number）与 message（string）。缺一或非 JSON 都不算
+ *
+ * `data` 只是**带上**（`#260` 起失败包络可能装一张清单），不参与判定 ——
+ * 成功与失败都可能有它，判定条件仍只看 code/message。
+ */
 export function isApiEnvelope(
   body: unknown
-): body is { code: number; message: string; hint?: string } {
+): body is { code: number; message: string; hint?: string; data?: unknown } {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return false
   const b = body as { code?: unknown; message?: unknown }
   return typeof b.code === 'number' && typeof b.message === 'string'

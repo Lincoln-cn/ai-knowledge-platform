@@ -53,8 +53,18 @@ __pycache__/
 # 运行期产物（可重新生成，进仓库只会变成噪声）
 # ════════════════════════════════════════════════════════════════════════
 *.log
+# 滚动日志（logback 的 max-history 产物）—— 同样是运行期产物，*.log 盖不住 .log.gz
+*.log.gz
 # 重定向 stderr 出来的运行日志（起服务/跑闸门时的临时产物，同 *.log 一类）
 *.err
+# DSH / agent 运行期产物：审计快照、构建临时文件、ACL 恢复与迁移记录。
+# ★ 它们由工具生成、可重生成；本机 .build/ 已 549 MB —— 进仓库只会变成噪声。
+.audit/
+.build/
+.dsh-acl-recovery/
+.dsh-migration/
+# 后端的落盘日志目录（logging.file.name 的落点；滚动产物名里带日期，*.log / *.log.gz 都盖不住）
+backend/logs/
 screenshots/
 vue-tsc-*.txt
 .mimocode/

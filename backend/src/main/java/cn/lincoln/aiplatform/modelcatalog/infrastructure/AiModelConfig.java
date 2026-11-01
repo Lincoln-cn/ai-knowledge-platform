@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
+import cn.lincoln.aiplatform.platform.domain.CryptoPort;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -33,9 +34,12 @@ public class AiModelConfig {
    * API key 加解密器。
    *
    * <p>★ 显式建 bean 而不是 {@code @Component}：它的构造参数是密钥配置， 在这里一眼能看到"这东西手里有密钥"——扫包扫出来的安全感是假的。
+   *
+   * <p>★ 自 {@code #74} 起它收的是<strong>端口</strong>（{@code CryptoPort}），算法实现只在 {@code
+   * platform.infrastructure} 落地一次 —— 换国密时这个 bean 一行不改。
    */
   @Bean
-  ApiKeyCipher apiKeyCipher(ModelApiProperties properties) {
-    return new ApiKeyCipher(properties.apiKeySecret());
+  ApiKeyCipher apiKeyCipher(CryptoPort cryptoPort) {
+    return ApiKeyCipher.of(cryptoPort);
   }
 }

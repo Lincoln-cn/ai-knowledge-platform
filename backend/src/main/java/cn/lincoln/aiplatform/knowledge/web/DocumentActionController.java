@@ -2,7 +2,9 @@ package cn.lincoln.aiplatform.knowledge.web;
 
 import cn.lincoln.aiplatform.knowledge.application.DocumentService;
 import cn.lincoln.aiplatform.knowledge.application.DocumentView;
+import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -100,6 +102,33 @@ public class DocumentActionController {
   }
 
   /**
+   * ★ 变更文档密级（{@code #247}）。
+   *
+   * <p>★ 权限点 {code knowledge:manage}：密级同时决定召回前缀与安全过滤，是库管理者的动作。与「上传者」分开， 是因为上传者只会标自己看得见的文档，
+   * 而密级变更的影响面是<strong>所有引用过它的会话</strong>。
+   *
+   * <p>★ 升密时后端会顺手把相关会话的水位抬到新值（同一事务，{@code 13 §2.2}）；降密不动水位。 两条口径见 {@code 13 §2.4}。
+   */
+  @PatchMapping("/{id}/labels")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<DocumentView> changeLabels(
+      @PathVariable UUID id, @RequestBody LabelsBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        documentService.changeLabels(id, body.labels(), UUID.fromString(jwt.getSubject())));
+  }
+
+  @PatchMapping("/{id}/classification")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<DocumentView> changeClassification(
+      @PathVariable UUID id,
+      @RequestBody ClassificationBody body,
+      @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        documentService.changeClassification(
+            id, body.classification(), UUID.fromString(jwt.getSubject())));
+  }
+
+  /**
    * 删除（契约 {@code deleteDocument}）。
    *
    * <p>★ 文档软删、分段与向量真删（理由见 {@code DocumentService#delete}）：只软删文档会把它的内容 留在检索里 —— 列表看不见、检索答得出来。
@@ -111,9 +140,54 @@ public class DocumentActionController {
     return ApiResponse.ok();
   }
 
+  /**
+   * 彻底删除（契约 `purgeDocument`，`#75` 判据 ④）—— 物理删除，**不可恢复**。
+   *
+   * <p>★ 用 `DELETE /{id}/purge` 而不是给 `DELETE /{id}` 加参数：一个是"从列表里消失"，一个是"这份材料不再存在"， 两种后果不该共用一个 URL
+   * —— 共用的时候，少传一个参数就会把第二种当成第一种执行。
+   *
+   * <p>★ 必须已经软删过（服务层校验）：否则 400「这份文档还在使用中」。
+   */
+  /**
+   * ★ 从回收站恢复（`#259`）。
+   *
+   * <p>★ 用 POST 而不是 PATCH：这不是"改某个字段"，是让一份材料重新进入检索面 —— 有副作用、也有审计。
+   */
+  @PostMapping("/{id}/restore")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<DocumentView> restore(
+      @PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(documentService.restore(id, UUID.fromString(jwt.getSubject())));
+  }
+
+  @DeleteMapping("/{id}/purge")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<Void> purge(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    documentService.purge(id, UUID.fromString(jwt.getSubject()));
+    return ApiResponse.ok();
+  }
+
   /** 改名请求体（契约 {@code renameDocument} 的 body）。 */
   record RenameBody(String name) {}
 
   /** 启用位请求体（契约 {@code setDocumentEnabled} 的 body，与知识库那条同形）。 */
   record EnabledBody(boolean enabled) {}
+
+  /**
+   * 密级变更请求体（{@code #247}）。
+   *
+   * <p>★ 用 {@link ClassificationLevel} 而不是 {@code String}：Jackson 会直接把非法取值判成 400， 而一个 {@code
+   * String} 字段会让「密级写错」变成服务层的一句业务异常 —— 两者的响应体形状不同，调用方要分两套处理。
+   */
+  record ClassificationBody(ClassificationLevel classification) {}
+
+  /**
+   * 标签请求体。
+   *
+   * <p>★ 用 {@code List<String>} 而不是 {@code Set<String>}：JSON 数组本身有序，服务端按到达顺序回显更自然；
+   * 归一（去空白、丢空串、去重）统一在 {@code Document.normalizeLabels} 里做，端点不做第二套。
+   *
+   * <p>★ {@code null} 与空数组等价，都表示"不受标签限制"（不是"等所有标签"）。
+   */
+  record LabelsBody(List<String> labels) {}
 }

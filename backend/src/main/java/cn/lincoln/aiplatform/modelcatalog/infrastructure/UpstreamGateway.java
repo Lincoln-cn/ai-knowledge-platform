@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
 import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
+import cn.lincoln.aiplatform.platform.infrastructure.metrics.BusinessMetrics;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -56,11 +57,27 @@ public class UpstreamGateway {
   /** 默认 API key（Ollama 不校验，但请求头要带）。 */
   private final String defaultApiKey;
 
+  /** ★ 指标旁路（{@code #73}）：只记"这一次 HTTP 出去成功没有"，不记谁在调。 */
+  private final BusinessMetrics metrics;
+
+  @org.springframework.beans.factory.annotation.Autowired
   public UpstreamGateway(
       @Value("${spring.ai.openai.base-url:http://localhost:11434/v1}") String defaultBaseUrl,
-      @Value("${spring.ai.openai.api-key:ollama-local}") String defaultApiKey) {
+      @Value("${spring.ai.openai.api-key:ollama-local}") String defaultApiKey,
+      BusinessMetrics metrics) {
     this.defaultBaseUrl = trimTrailingSlash(defaultBaseUrl);
     this.defaultApiKey = defaultApiKey;
+    this.metrics = metrics;
+  }
+
+  /**
+   * 测试 / 无 Spring 上下文的构造器。
+   *
+   * <p>★ 它的指标落在一个不外导的 {@link BusinessMetrics#noop()} 上 —— 这些测试验的是 "路径、请求头、超时"，不是"指标有没有被导出"；后者由
+   * {@code BusinessMetricsEndpointTest} 对着真实启动的应用验。两件事分开，才不会因为"测试里随手 new 了一个"而让指标读数失真。
+   */
+  public UpstreamGateway(String defaultBaseUrl, String defaultApiKey) {
+    this(defaultBaseUrl, defaultApiKey, BusinessMetrics.noop());
   }
 
   // ────────────────────────── 目录 ──────────────────────────
@@ -483,10 +500,14 @@ public class UpstreamGateway {
           }
         }
       }
-      return sawFrame[0];
+      boolean streamed = sawFrame[0];
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.OK);
+      return streamed;
     } catch (UpstreamUnreachableException rethrow) {
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.UNREACHABLE);
       throw rethrow;
     } catch (java.io.IOException | InterruptedException | JacksonException failure) {
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.UNREACHABLE);
       if (failure instanceof InterruptedException) {
         Thread.currentThread().interrupt();
       }
@@ -566,14 +587,22 @@ public class UpstreamGateway {
                 + " 失败。响应片段："
                 + abbreviate(response.body()));
       }
-      return response.body();
+      String body = response.body();
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.OK);
+      return body;
     } catch (UpstreamUnreachableException e) {
+      // ★ 记账放在**唯一出口**（get / post / streamChatCompletion 三处），而不是每个业务方法各记一次：
+      //   散在业务方法上时，新加一条调用路径就会漏记，而"漏记"的表现是分母偏小 ——
+      //   不可达率被**算高**，看起来像上游更糟。这类偏差不会让人去查指标本身。
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.UNREACHABLE);
       throw e;
     } catch (IOException e) {
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.UNREACHABLE);
       throw new UpstreamUnreachableException(
           "网关不可达：连接 " + url + " 失败（" + e.getClass().getSimpleName() + "：" + e.getMessage() + "）",
           e);
     } catch (InterruptedException e) {
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.UNREACHABLE);
       Thread.currentThread().interrupt();
       throw new UpstreamUnreachableException("网关请求被中断：" + url, e);
     }
@@ -606,14 +635,19 @@ public class UpstreamGateway {
                 + " 失败。响应片段："
                 + abbreviate(response.body()));
       }
-      return response.body();
+      String body = response.body();
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.OK);
+      return body;
     } catch (UpstreamUnreachableException e) {
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.UNREACHABLE);
       throw e;
     } catch (IOException e) {
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.UNREACHABLE);
       throw new UpstreamUnreachableException(
           "网关不可达：连接 " + url + " 失败（" + e.getClass().getSimpleName() + "：" + e.getMessage() + "）",
           e);
     } catch (InterruptedException e) {
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.UNREACHABLE);
       Thread.currentThread().interrupt();
       throw new UpstreamUnreachableException("网关请求被中断：" + url, e);
     }

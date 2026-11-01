@@ -181,9 +181,15 @@ class DocumentManagementTest {
   // ────────────────────────── 删除 ──────────────────────────
 
   /**
-   * ★ 删除：文档软删（列表里消失），分段与向量<strong>真删</strong>。
+   * ★ 删除：文档软删（列表里消失），分段与向量<strong>保留</strong>但<strong>从检索面上消失</strong>。
    *
-   * <p>只软删文档的话，它的内容仍然能被检索到 —— 列表看不见、检索答得出来，是最难排查的一种。
+   * <p>★ 2026-10-31（`#259`）：本用例原来断言"分段与向量真删"。删除改成"进回收站、内容留着、恢复只需清 {@code deleted_at}"之后，那两条断言不再成立
+   * —— 而它们原本要守的性质（<strong>被删的东西不许再被检索到</strong>） 一点没变，只是承载体从"内容没了"换成了"检索谓词挡住它"。所以断言跟着换，性质不许换：
+   *
+   * <ul>
+   *   <li>分段/向量还在 —— 它们是真删（`#75` 超期清理）与彻底删除的活，不是普通删除的；
+   *   <li>★ 按<strong>检索侧的生产谓词</strong>数出来的分段必须是 0 —— 列表看不见、检索答得出来，是最难排查的一种。
+   * </ul>
    */
   @Test
   void 删除连带走掉分段与向量() throws Exception {
@@ -198,8 +204,9 @@ class DocumentManagementTest {
     assertThat(res.statusCode()).as("删除：" + res.body()).isEqualTo(200);
 
     assertThat(deletedAt(docId)).as("聚合根软删（保留行，02 §5.1）").isNotNull();
-    assertThat(segmentCountRows(docId)).as("分段真删（没有软删列）").isZero();
-    assertThat(vectorCount(docId)).as("★ 向量必须跟着删 —— 否则被删文档的内容仍能被检索到").isZero();
+    assertThat(segmentCountRows(docId)).as("分段与向量保留（回收站恢复要用；真删发生在超期清理与彻底删除）").isGreaterThan(0);
+    assertThat(searchableSegmentCount(docId)).as("★★ 但它必须从检索面上消失 —— 否则就是『列表看不见、检索答得出来』").isZero();
+    assertThat(vectorCount(docId)).as("向量保留（恢复后不必重新入库）").isGreaterThan(0);
 
     HttpResponse<String> list = get("/api/v1/knowledge-bases/" + kbId + "/documents", admin);
     assertThat(list.body()).as("已删文档不该出现在列表里").doesNotContain(docId);
@@ -646,6 +653,23 @@ class DocumentManagementTest {
     Integer count =
         jdbc.queryForObject(
             "select count(*) from kb_segment where document_id = ?::uuid", Integer.class, docId);
+    return count == null ? 0 : count;
+  }
+
+  /**
+   * 按<strong>检索侧的生产谓词</strong>数分段：{@code join kb_document} 且 {@code d.deleted_at is null}。
+   *
+   * <p>★ 为什么在测试里照抄这个 join，而不是"自己判断文档删没删"：{@code #259} 之后， "被删文档的分段进不进检索面"完全由 {@code
+   * JdbcSegmentSearchQuery.VISIBLE_PREDICATE} 一处决定。 测试里另写一份判断就是第二处口径 —— 两条会一起绿，然后一起错（`#40` 的形状）。
+   * 这里镜像谓词，是为了让**删掉谓词里那一句**时本用例变红。
+   */
+  private int searchableSegmentCount(String docId) {
+    Integer count =
+        jdbc.queryForObject(
+            "select count(*) from kb_segment s join kb_document d on d.id = s.document_id"
+                + " where s.document_id = ?::uuid and d.deleted_at is null",
+            Integer.class,
+            docId);
     return count == null ? 0 : count;
   }
 

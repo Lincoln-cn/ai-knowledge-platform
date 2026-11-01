@@ -62,6 +62,13 @@ MATRIX = [
     ("/org", ["admin"]),
     ("/settings/chat", ["admin"]),
     ("/conversation", ["admin", "zhangyun", "liwei", "chenjun"]),
+    # ★ 2026-11-01 补三条：A7 的"按钮不可见"在这三页由**路由门禁**承担（页面内没有第二个门），
+    #   所以它们必须出现在这张路由矩阵里 —— 否则"进不去"这件事从来没有被量过。
+    #   `/basedata` 的入口权限点就是 `platform:dict:manage`（`pages/basedata/route.ts` 的注释写明理由：
+    #   读接口登录即可，但那不构成"能进维护页"的理由）。
+    ("/basedata", ["admin"]),
+    ("/audit", ["admin"]),
+    ("/settings/providers", ["admin"]),
 ]
 
 # ── A7 写入口矩阵（按钮侧）──
@@ -91,6 +98,21 @@ WRITE_ENTRIES = [
     #   那样量的是"有没有选中"，不是"有没有权限"。
     ("/org", "组织机构 · 新增根部门", "新增根部门", "identity:org:manage", {"admin"}, {"admin"}, True),
     ("/models", "模型管理 · 添加模型", "添加模型", "model:manage", {"admin"}, {"admin"}, True),
+    # ★ 2026-11-01：A7 台账里一直缺的三处，前两处补在这里、第三处由上面的路由矩阵承担。
+    #
+    # 一、知识库「停用」不是按钮而是 `el-switch`（`pages/knowledge/Index.vue:96` 的
+    #     `v-if="!consumer && canManage"`）—— 文案里那个"停用"是确认框标题，不是可点元素。
+    #     所以这一行用**选择器形态**（`sel:` 前缀），选择器是 `data-testid`：
+    #     ★ 不按组件库类名选（`.el-switch`），R58 的教训是"选择器与组件库真实类名不一致 ⇒ 恒 0 命中"，
+    #     那种红/绿都读不出权限问题。`data-testid` 是我们自己写下的契约，组件库升级不会动它。
+    #
+    # 二、反馈「批量改状态」/「批量指派」由 `canHandle = session.can(PERM.feedbackHandle)` 守着
+    #     （`pages/feedback/Index.vue:60` 的 `<template v-if="canHandle">`）。这一页能进的只有
+    #     管理员与知识运营（路由矩阵已断），所以按钮侧量的是"这两个账号里它确实渲染"。
+    ("/knowledge", "知识库卡片 · 停用开关", "sel:[data-testid=kb-toggle-enabled]",
+     "knowledge:manage", {"admin", "zhangyun"}, None, True),
+    ("/feedback", "反馈处理 · 批量改状态", "批量改状态",
+     "feedback:handle", {"admin", "zhangyun"}, {"admin", "zhangyun"}, True),
 ]
 
 # ── 顶栏期望（同一矩阵的另一面：菜单不该出现进不去的项）──
@@ -111,6 +133,12 @@ NAV = {
         #   （目录漏登记，`check_permission_catalog.py` 现在钉着）。修完夹具后它按规则出现，
         #   期望矩阵必须跟上，否则红的是"菜单按规则出现"这件对的事。
         "对话设置",
+        # ★ 2026-11-01：`#258`（`5479733`）在「管理」组里加了「审计记录」页，但没同步这张期望矩阵
+        #   ⇒ 门禁把"菜单按规则出现了"报成红（86/87）。它是**只读**页，而
+        #   `src/pages/audit/route.ts` 今天借的是 `PERM.systemManage`（与"改配置"共用一颗点）——
+        #   ★ 借用本身是另一笔账：这颗点答的是"能不能改配置"，答不了"能不能看审计"，
+        #   按本项目口径「借用语义不相关的权限点 = 这个族还没有权限点」，记在 `#276`。
+        "审计记录",
     ],
     "zhangyun": ["工作台", "对话", "知识库", "应用市场", "应用管理", "运营看板", "反馈处理"],
     "liwei": ["工作台", "对话", "知识库", "应用市场", "应用管理", "提示词", "运营看板"],
@@ -281,7 +309,11 @@ def main() -> int:
                     try:
                         page.goto(base + "#" + route, wait_until="networkidle")
                         page.wait_for_timeout(1800 if "kb=kb4" in route else 1400)
-                        if exact:
+                        if button_text.startswith("sel:"):
+                            # ★ 选择器形态：给"不是按钮、没有文案"的写入口用（如 el-switch）。
+                            #   选择器一律是 `data-testid`，理由见 WRITE_ENTRIES 里那条注释。
+                            actual = page.locator(button_text[4:]).count()
+                        elif exact:
                             # ★ 精确匹配可及名称：`tab=settings` 那张表单里还有一颗「保存检索参数」，
                             #   而它是**恒在**的（没有 v-if）—— 用包含匹配会把"没权限"读成"有权限"。
                             actual = page.get_by_role("button", name=button_text, exact=True).count()

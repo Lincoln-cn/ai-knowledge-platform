@@ -178,7 +178,9 @@ public class SegmentService {
             document.docType(),
             orgCodes.codeOf(document),
             document.name(),
-            document.ocrDerived() ? ChunkSource.OCR : ChunkSource.TEXT);
+            document.ocrDerived() ? ChunkSource.OCR : ChunkSource.TEXT,
+            // ★ 上下文窗口（#65）：预览与入库必须同值 —— 否则"预览看着会召回、入库召回不到"
+            properties.contextWindow());
 
     List<PreviewSegment> result = new ArrayList<>(planned.segments().size());
     for (PlannedSegment p : planned.segments()) {

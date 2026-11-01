@@ -7,6 +7,7 @@ import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
 import cn.lincoln.aiplatform.knowledge.domain.OrgAssignment;
 import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
 import cn.lincoln.aiplatform.knowledge.domain.PlannedSegment;
+import cn.lincoln.aiplatform.knowledge.domain.RetentionWindow;
 import cn.lincoln.aiplatform.knowledge.domain.SearchText;
 import cn.lincoln.aiplatform.knowledge.domain.Segment;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentContent;
@@ -16,8 +17,11 @@ import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.knowledge.domain.Segmenter;
 import cn.lincoln.aiplatform.knowledge.infrastructure.SegmentationProperties;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.platform.domain.AuditAction;
+import cn.lincoln.aiplatform.platform.domain.AuditLogPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.infrastructure.metrics.BusinessMetrics;
 import cn.lincoln.aiplatform.platform.org.OrgDirectoryPort;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.time.Instant;
@@ -85,7 +89,31 @@ public class DocumentService {
   /** 把"去解析这份字节"交给 {@link ParseRunner} —— 见 {@link DocumentUploaded}（不用直接依赖，避免构造环）。 */
   private final ApplicationEventPublisher events;
 
+  /**
+   * 指标旁路（{@code #73}）：入库失败要能被持续看到。
+   *
+   * <p>★ 它记在<b>状态真的被写成 FAILED 的那一行旁边</b>，不是记在"有人调了某方法"上 —— 后者会把"重试成功"也算成失败。
+   */
+  private final BusinessMetrics metrics;
+
   private final Segmenter segmenter = new Segmenter();
+
+  /**
+   * 会话密级水位的补偿口（{@code #247} 判据 ①）：文档<b>升密</b>时把引用过它的会话抬到新密级。
+   *
+   * <p>★ 走平台端口而不是直接依赖 {@code conversation.domain}：模块边界由 {@code ModuleBoundaryTest} 守着（见端口 javadoc）。
+   */
+  private final cn.lincoln.aiplatform.platform.watermark.ConversationWatermarkPort watermark;
+
+  /**
+   * 审计留痕（{@code #257}）：删除与改密级都要写一条。
+   *
+   * <p>★ 与业务同事务（端口 javadoc 里写了理由）：审计写不进去时整笔回滚，避免"变更发生了却没有记录"。
+   */
+  private final AuditLogPort audit;
+
+  /** 回收站保留期（天）。0 = 关闭恢复（删除即不可恢复）。 */
+  private final int restoreWindowDays;
 
   public DocumentService(
       DocumentRepository documents,
@@ -98,7 +126,14 @@ public class DocumentService {
       EmbeddingRunner runner,
       OrgDirectoryPort orgDirectory,
       OrgCodeResolver orgCodes,
-      ApplicationEventPublisher events) {
+      ApplicationEventPublisher events,
+      BusinessMetrics metrics,
+      cn.lincoln.aiplatform.platform.watermark.ConversationWatermarkPort watermark,
+      AuditLogPort audit,
+      // ★ 回收站保留期（`#259`）：超过这个天数只能彻底删除。
+      //   读的是**天**而不是小时：留一个小时的恢复窗口等于没有窗口（用户第二天才想起来）。
+      @org.springframework.beans.factory.annotation.Value("${app.knowledge.restore-window-days:7}")
+          int restoreWindowDays) {
     this.documents = documents;
     this.knowledgeBases = knowledgeBases;
     this.parser = parser;
@@ -110,6 +145,10 @@ public class DocumentService {
     this.orgDirectory = orgDirectory;
     this.orgCodes = orgCodes;
     this.events = events;
+    this.metrics = metrics;
+    this.watermark = watermark;
+    this.audit = audit;
+    this.restoreWindowDays = Math.max(0, restoreWindowDays);
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -141,6 +180,27 @@ public class DocumentService {
     long total = documents.countByKbId(kbId, filter);
     return PageResult.of(
         found.stream().map(DocumentView::from).toList(), total, safePage, safeSize);
+  }
+
+  /**
+   * 回收站：本库<strong>已软删</strong>的文档（删除时间倒序，`#75` 判据 ④）。
+   *
+   * <p>★ 它存在的唯一理由是让「彻底删除」有地方可点：在那之前那个端点只能由运维用 curl 调， 而"不可恢复的操作只有一个看不见的入口"本身就是风险。
+   *
+   * <p>★ 分页上限与在用列表共用 `MAX_PAGE_SIZE`，`total` 与页内条数同口径（同一份谓词）。
+   */
+  @Transactional(readOnly = true)
+  public PageResult<DocumentView> listDeleted(UUID kbId, Integer page, Integer size) {
+    knowledgeBases.get(kbId);
+    int safeSize = size == null ? 20 : Math.min(Math.max(1, size), MAX_PAGE_SIZE);
+    int safePage = page == null ? 1 : Math.max(1, page);
+    List<Document> found = documents.findDeletedByKbId(kbId, (safePage - 1) * safeSize, safeSize);
+    long total = documents.countDeletedByKbId(kbId);
+    return PageResult.of(
+        found.stream().map(d -> DocumentView.fromDeleted(d, restorable(d))).toList(),
+        total,
+        safePage,
+        safeSize);
   }
 
   // ────────────────────────── 库级进度（第 8 周 · 0.3.0） ──────────────────────────
@@ -280,6 +340,13 @@ public class DocumentService {
    */
   public DocumentView startEmbedding(UUID documentId) {
     Document document = requireVisibleDocument(documentId);
+    // ★ #229：同一个用户意图（「把这份文档向量化」）在两个端点上不该有两种结果。
+    //   向量化失败的文档，用户会先点「开始向量化」，而这条路以前稳定 400（只接 PENDING_EMBEDDING 来源），
+    //   真正的入口是另一个端点 /retry —— 400 文案里也不提。
+    //   ⇒ 在这里委派给 retry：状态退回「待向量化」再跑，用户点哪个按钮都对。
+    if (document.status() == DocumentStatus.EMBEDDING_FAILED) {
+      return retry(documentId);
+    }
     runner.startAsync(documentId);
     // 回读一次：状态已由 startAsync 推进到「向量化中」，返回给前端的必须是推进后的状态
     return DocumentView.from(documents.findById(document.id()).orElse(document));
@@ -354,10 +421,131 @@ public class DocumentService {
   }
 
   /**
+   * ★★ 变更文档密级（{@code #247}）—— 密级的<strong>唯一写入入口</strong>（除建档时的上传表单）。
+   *
+   * <h3>★ 为什么这件事必须在一个事务里</h3>
+   *
+   * <p>升密会牵动两处：文档行本身，以及<strong>引用过它的会话</strong>的 {@code max_classification}。后者是 {@code 13 §2.2}
+   * 的不变量（"会话密级 = 其引用集合的最大密级"）。分开写会出现一个任何人都看不见的中间态：文档已经是 {@code SECRET}，而会话仍按 {@code INTERNAL} 筛 ——
+   * 于是继续提问时那篇文档"看得见名字、检索不到正文"，像是索引出了问题。
+   *
+   * <h3>★ 降密不补偿，且这是刻意的</h3>
+   *
+   * <p>会话水位单调（只升不降，{@code #108}）。文档降密后水位停在旧的高档位：这是<strong>安全的严格方向</strong>（能看到的只会更少），
+   * 也如实记录了"这个会话的回答曾经引用过什么"。所以这里只对升密调补偿 —— 并且用一条测试钉住"降密后水位不变"，
+   * 免得将来有人把它当成"忘了补"而顺手补上（那会把水位往下拉，是真正的越权）。
+   *
+   * <h3>校验顺序（每条都有 400 的可读理由）</h3>
+   *
+   * <ol>
+   *   <li>文档可见（否则 404）—— 与所有写端点同一判定。
+   *   <li>密级必填。
+   *   <li>不高于所属库的 {@code maxClassification}（ceiling，{@code 13 §6}）—— 与建档同一口径，不能开一个绕过库上限的后门。
+   *   <li>正在向量化 ⇒ 拒绝：那期间分段的密级继承与向量都在动，此刻换密级会写出一半新一半旧的分段。
+   * </ol>
+   */
+  @Transactional
+  public DocumentView changeClassification(
+      UUID documentId, ClassificationLevel level, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    if (level == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "密级必填", "它决定召回前缀与安全过滤，不能有默认值；请从「公开 / 内部 / 秘密 / 机密」里选一个（13 §2）");
+    }
+    KnowledgeBaseView base = knowledgeBases.get(document.kbId());
+    if (!level.within(base.maxClassification())) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "文档密级（%s）高于知识库的密级上限（%s）—— 请提高库的上限，或改用更合适的库"
+              .formatted(label(level), label(base.maxClassification())),
+          "换一个不高于库上限的密级，或者先调高这个知识库的密级上限 —— 库上限是这个库允许装的最高密级（13 §6）");
+    }
+    requireNotEmbedding(document, "改密级");
+
+    ClassificationLevel previous = document.classification();
+    document.changeClassification(level, currentUserId);
+    documents.save(document);
+
+    // ★ ① 分段必须跟着重打（13 §2.4 第 1 步）：分段的 classification 是**独立列**（V22 冗余密级，
+    //   不是 generated 列），只改文档行会让旧分段仍停在低密 ⇒ 低 clearance 用户照样检索得到它，
+    //   而界面上那篇文档已经显示成"秘密"了 —— 升密看起来生效、实际没生效，正是本项目最怕的形状。
+    //   ★ 不需要重新向量化：密级是元数据，不进 embedding（13 §2.4 末段）。
+    List<Segment> affected = segments.findByDocumentId(documentId);
+    for (Segment segment : affected) {
+      segment.reclassify(level);
+    }
+    if (!affected.isEmpty()) {
+      segments.saveAll(affected);
+    }
+
+    // ★ ② 只有升密才补偿会话水位。降密/不变都不调 —— 理由见方法 javadoc 第 2 节。
+    if (level.ordinal() > previous.ordinal()) {
+      int raised = watermark.raiseForDocument(documentId, level);
+      log.info("文档 {} 密级 {} → {}：抬高了 {} 个会话的水位", documentId, previous, level, raised);
+    }
+    log.info("文档 {} 密级 {} → {}：重打了 {} 个分段的密级", documentId, previous, level, affected.size());
+    // ★ ③ 留痕（`#257` / 13 §七）：与业务同事务 —— 审计写不进去时整笔回滚。否则会出现
+    //   "文档密级已经变了，但谁改的查不到"的静默变更，而这正是审计要防的东西。
+    audit.record(
+        AuditAction.DOCUMENT_RECLASSIFY,
+        "DOCUMENT",
+        documentId.toString(),
+        currentUserId,
+        Map.of("from", previous.name(), "to", level.name(), "segments", affected.size()));
+    return DocumentView.from(documents.findById(documentId).orElse(document));
+  }
+
+  /**
    * 启用/停用（契约 {@code setDocumentEnabled}）。
    *
    * <p>★ 只动聚合根的 {@code enabled} 位，不碰分段与向量：停用是「不参与检索」，不是删除 —— 重新启用后无需重新向量化。
    */
+  /**
+   * 换一套标签（`#26`）：文档列与**每一个分段列**在同一个事务里一起改。
+   *
+   * <p>三条口径：
+   *
+   * <ol>
+   *   <li><b>不校验库上限</b>：库的 ceiling 是密级的边界（`13 §6.2`），标签没有上限概念 ——
+   *       标签之间的可见性是"相交才算"，不存在"这个库不允许出现「人事资料」"这种事。
+   *   <li><b>不需要 {@code requireNotEmbedding}</b>：与改密级不同，标签<strong>不进 embedding</strong>、 也不进 {@code
+   *       search_text}（`V57` 只加了两列），所以向量化跑到一半改标签不会让向量与正文错配。 真要拦的话，用户会看到"正在向量化，改不了标签"而完全没有必要。
+   *   <li><b>同步分段列是必须的</b>：`LABEL_PREDICATE` 读的是 {@code kb_segment.labels}（不 join 回文档）。
+   *       只改文档列的症状是"界面改了标签、检索仍按旧标签过滤"，由 Gauge {@code aiplatform.segment.label-mismatch}
+   *       兜住（读数一涨就说明某条写入路径漏了）。
+   * </ol>
+   *
+   * <p>★ 留痕：`action = document.relabel`，`detail` 带改动前后的两份标签 —— 标签直接影响"谁能检索到它"， 与密级同级（`13 §七`）。
+   */
+  @Transactional
+  public DocumentView changeLabels(UUID documentId, List<String> labels, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    List<String> before = document.labels();
+    List<String> after = Document.normalizeLabels(labels);
+
+    document.changeLabels(after, currentUserId);
+    documents.save(document);
+
+    // ★ 分段必须在同一个事务里跟着改：谓词作用在分段表上（V57 的冗余列），
+    //   漏这一步的读数是 Gauge `aiplatform.segment.label-mismatch` 一涨，而不是某个页面报错。
+    List<Segment> affected = segments.findByDocumentId(documentId);
+    for (Segment segment : affected) {
+      segment.changeLabels(after);
+    }
+    if (!affected.isEmpty()) {
+      segments.saveAll(affected);
+    }
+
+    log.info("文档 {} 标签 {} → {}：同步了 {} 个分段", documentId, before, after, affected.size());
+    audit.record(
+        AuditAction.DOCUMENT_RELABEL,
+        "DOCUMENT",
+        documentId.toString(),
+        currentUserId,
+        Map.of("from", before, "to", after, "segments", affected.size()));
+    return DocumentView.from(documents.findById(documentId).orElse(document));
+  }
+
   @Transactional
   public DocumentView setEnabled(UUID documentId, boolean enabled, UUID currentUserId) {
     Document document = requireVisibleDocument(documentId);
@@ -378,14 +566,116 @@ public class DocumentService {
    *
    * <p>★ 向量化中不许删：在途任务正按段落写向量与进度，把行删掉之后它会写一堆孤儿数据。与其让用户面对一个 "删了但状态还在变"的文档，不如明确拒绝并说清等待。
    */
+  /**
+   * 彻底删除（物理删除，`#75` 判据 ④ · `02 §5.1.1`）。
+   *
+   * <p>★ <strong>必须先软删</strong>：软删是"从用户视野里消失"（可撤销的那一步在心里），彻底删除是"这份材料不再存在"。
+   * 让两条路各自独立，用户就有一次反悔的机会；直接物理删等于把两件事做成一件。
+   *
+   * <p>★ 为什么不是"删库里的行就完了"：分段与向量还在时，文档正文仍可被检索到（引用里出现一篇已不存在的文档）—— 所以这里与软删一样先删分段与向量，再删文档行。★
+   * 两者顺序不能反：先删文档行会让分段变成孤儿， 而孤儿分段在检索里<strong>照样命中</strong>（谓词按 kb_segment 查，不看文档是否还在）。
+   *
+   * <p>★ 审计记录<strong>不删</strong>：`pf_audit_log` 只允许追加（`13 §7.2` 第 3 条），
+   * 而且"这份材料被彻底删除了"本身就是最该留下的一条记录。这次动作写 {@code document.purge}。
+   *
+   * <p>★ 备份里仍然有：`deploy/README.md` 的备份策略保留 14 天日备 + 8 周周全备，
+   * 所以"彻底删除"的真实语义是"从生产库与检索里消失"，不是"从所有介质上不可恢复"。
+   */
+  @Transactional
+  public void purge(UUID documentId, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    if (document.deletedAt() == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "这份文档还在使用中，不能彻底删除", "先从文档列表里删除它（会进入待清理状态），确认不再需要之后再来彻底删除");
+    }
+    segments.deleteByDocumentId(documentId);
+    segmentEmbeddings.deleteByDocumentId(documentId);
+    documents.delete(document);
+    audit.record(
+        AuditAction.DOCUMENT_PURGE,
+        "DOCUMENT",
+        documentId.toString(),
+        currentUserId,
+        Map.of("name", document.name(), "kbId", document.kbId().toString()));
+  }
+
   @Transactional
   public void delete(UUID documentId, UUID currentUserId) {
     Document document = requireVisibleDocument(documentId);
     requireNotEmbedding(document, "删除");
-    segments.deleteByDocumentId(documentId);
-    segmentEmbeddings.deleteByDocumentId(documentId);
+    // ★★ 分段与向量**不再物理删**（`#259`）。此前这里删两行，于是回收站里那篇"已删除"的文档拿不回内容
+    //   ——「回收站」这个名字在撒谎。
+    //
+    //   ★ 为什么"留着不会让它仍然答得出来"：可见性由**文档那一处**决定 ——
+    //   `JdbcSegmentSearchQuery.VISIBLE_PREDICATE` 里就有 `d.deleted_at is null`，四条检索路都 join 了
+    //   `kb_document` 并共用同一个谓词。所以不必给分段再加一列软删标记：
+    //   同一个状态两处各写一份，正是 `#40` 要消除的那种形状（两处迟早不一致，而没人保证）。
     document.markDeleted(Instant.now(), currentUserId);
     documents.save(document);
+    log.info("文档 {} 已移入回收站（分段与向量保留，保留期 {} 天）", documentId, restoreWindowDays);
+    // ★ 留痕（`#257`）：删除是"让内容从用户视野里消失"，属等保 2.0 要追溯的动作。
+    //   与业务同事务 —— 删掉了却没有记录，是最不该出现的一种静默。
+    audit.record(
+        AuditAction.DOCUMENT_DELETE,
+        "DOCUMENT",
+        documentId.toString(),
+        currentUserId,
+        Map.of("name", document.name(), "kbId", document.kbId().toString()));
+  }
+
+  /**
+   * ★★ 从回收站恢复（`#259`）。
+   *
+   * <h3>为什么需要它</h3>
+   *
+   * <p>在此之前 `delete` 会把分段与向量一起物理删掉，于是「回收站」里那篇文档<strong>拿不回内容</strong>， 界面只能写"要恢复需要重新上传"。误删的成本 =
+   * 重新上传 + 重新解析 + 重新向量化。
+   *
+   * <h3>★ 三条边界（每条都写死在代码里，而不是靠使用说明）</h3>
+   *
+   * <ol>
+   *   <li><strong>只在保留期内</strong>：超过 `app.knowledge.restore-window-days`（默认 7 天）⇒ 400。
+   *       窗口之外内容留着没有意义（那是数据留存问题，不是恢复问题），而且会让"删除"的语义随时间漂移；
+   *   <li><strong>没删的不能"恢复"</strong> ⇒ 400：那不是恢复，是掩耳盗铃；
+   *   <li><strong>文档行与分段必须在同一个事务里回来</strong>：只回文档行会出现"文档在列表里、内容却检索不到" ——
+   *       与它对称的那个错误（文档不在列表里、内容还能检索到）刚被 V59 修掉。
+   * </ol>
+   */
+  @Transactional
+  public DocumentView restore(UUID documentId, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    if (document.deletedAt() == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "这份文档没有删除，不需要恢复", "它就在文档列表里；若你看不到它，检查筛选条件或权限");
+    }
+    if (!restorable(document)) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "这份文档已超过回收站保留期（" + restoreWindowDays + " 天），不能恢复",
+          "超期后内容会被彻底清理（或已清理）；请重新上传该文档 —— 删除时间：" + document.deletedAt());
+    }
+    document.restore(currentUserId);
+    documents.save(document);
+    // ★ 分段与向量从来没有被删过（见 `delete` 的注释），所以"恢复"就是清掉文档那一行的 `deleted_at`
+    //   —— 一个字段的改变，让整篇材料重新进入检索面。这正是可见性只有一处来源的好处。
+    audit.record(
+        AuditAction.DOCUMENT_RESTORE,
+        "DOCUMENT",
+        documentId.toString(),
+        currentUserId,
+        Map.of("name", document.name(), "kbId", document.kbId().toString()));
+    log.info("文档 {} 已从回收站恢复（分段与向量一直在库里）", documentId);
+    return DocumentView.from(documents.findById(documentId).orElse(document));
+  }
+
+  /** 回收站里这份文档还能不能恢复（保留窗口内）。0 天 = 关闭恢复。 */
+  private boolean restorable(Document document) {
+    // ★ 口径只有一处：RetentionWindow（回收站列表/恢复 与 超期清理作业共用），
+    //   两处各写一遍 `plus`/`minus` 会在边界上分叉 —— 列表说"还能恢复"、恢复说"已过期"。
+    if (restoreWindowDays <= 0) {
+      return false;
+    }
+    return RetentionWindow.within(document.deletedAt(), Instant.now(), restoreWindowDays);
   }
 
   /** 拒绝在「向量化中」做会与在途任务打架的操作（改名 / 删除）。 */
@@ -509,6 +799,8 @@ public class DocumentService {
    * @param docType 文种（批次级）★ 必填
    * @param orgId 责任部门（组织树里的一个部门）★ 必填 —— 它决定召回前缀里那段稳定 code
    * @param classification 密级（批次级）★ 必填
+   * @param labels 密级标签（批次级，{@code text[]}）—— 可空：空 = 不受标签限制（{@code #26} 写侧）。
+   *     一次导入把这批文档打成同一套标签；逐篇覆盖等单篇编辑端点
    */
   @Transactional
   public List<DocumentView> register(
@@ -518,6 +810,7 @@ public class DocumentService {
       String docType,
       UUID orgId,
       ClassificationLevel classification,
+      List<String> labels,
       UUID currentUserId) {
 
     // ★ 1 · 可见性继承库（写也 404）
@@ -574,6 +867,7 @@ public class DocumentService {
               docType,
               orgId,
               classification,
+              labels,
               currentUserId);
       // ★ 建档即解析 —— 但这一步**从同步改成了异步**（第 9 周 · 0.3.1）。
       //   为什么：扫描件的 OCR 实测每页约 3.6 秒（3 页约 11 秒），同步跑会把上传请求挂住十几秒到几分钟
@@ -588,6 +882,79 @@ public class DocumentService {
       }
     }
     return created;
+  }
+
+  // ────────────────────────── 会话临时附件（#187 判据 4） ──────────────────────────
+
+  /**
+   * 登记一条<strong>会话临时附件</strong>文档（{@code 13 §11.2} 的第三域）—— 只落 {@code kb_document} 行。
+   *
+   * <p>★ <strong>为什么它不发布 {@link DocumentUploaded}</strong>：那个事件的消费者是 {@code ParseRunner} 的
+   * {@code @TransactionalEventListener(AFTER_COMMIT)}，它<strong>异步</strong>解析。附件这条路上同步性本身就是判据 ——
+   * 用户在"上传完立刻提问"这一秒里问的是这份附件，异步解析意味着<b>第一次问答必然检索不到</b>，而"检索不到"与 "附件里确实没有"在用户眼里完全一样（{@code
+   * silent-failure} 的形态）。所以解析由调用方 （{@code
+   * ConversationAttachmentRegistrar}）在本方法返回后<strong>同步</strong>驱动，取舍记在 {@code #187}。
+   *
+   * <p>★ <strong>幂等键 = (conversationId, name)</strong>：见 {@link
+   * DocumentRepository#findConversationAttachment} 的 javadoc —— 今天没有"附件 →
+   * 文档"的映射列，代价（同会话同名不同内容会被当成同一份）写在那里。
+   *
+   * <p>★ 这里<strong>不做</strong>可见性/密级判定：附件 id 属于谁、会话当前密级是多少，都是 {@code conversation} 模块的事实（{@code 13
+   * §11.5} 的"不许低于会话当前密级"由调用方取值后传进来）。知识模块只负责"按给定归属与 密级落一条形状合法的会话域文档"。
+   *
+   * @param conversationId 会话 id（= {@code scope_id}，也是生成列 {@code conversation_id} 的来源）
+   * @param ownerId 上传者（= {@code owner_id}；检索谓词第三支按它与会话 id 一起收窄）
+   * @param name 显示名（同一次会话内唯一，见幂等键）
+   * @param docType 文种（会话附件用一个固定常量，见 {@code ConversationAttachmentRegistrar}）
+   * @param classification 密级（调用方传会话当前密级 ⇒ 不会低于下限，也不会凭空抬升）
+   * @return 该附件的文档 id（已有则返回已有的那个）
+   */
+  @Transactional
+  public UUID registerConversationAttachment(
+      UUID conversationId,
+      UUID ownerId,
+      String name,
+      String docType,
+      ClassificationLevel classification) {
+
+    if (conversationId == null) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "会话必填", "附件必须属于某一次会话（13 §11.2 的第三域）");
+    }
+    if (ownerId == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "上传者必填", "会话附件的检索谓词按 owner_id 收窄，不能为空（13 §11.3）");
+    }
+    if (name == null || name.isBlank()) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "文件名必填", "会话附件要能出现在引用标题里，不能没有名字");
+    }
+    if (docType == null || docType.isBlank()) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "文种必填", "会话附件也要满足 doc_type 非空（V13）");
+    }
+    if (classification == null) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "密级必填", "会话附件的密级不许低于会话当前密级，由调用方传入（13 §11.5 ①）");
+    }
+
+    Document existing =
+        documents.findConversationAttachment(conversationId, name.trim()).orElse(null);
+    if (existing != null) {
+      // ★ 已登记过：返回同一条。**不重解析** —— 解析失败的行不会因为再问一次就自愈，
+      //   重试是另一件事（需要显式动作），不能让"再问一遍"变成隐式的重试。
+      return existing.id();
+    }
+
+    Document document =
+        Document.conversationAttachment(
+            UUID.randomUUID(), conversationId, ownerId, name, docType, classification);
+    documents.save(document);
+    log.info(
+        "会话附件登记：会话 {} · 文档 {}（{}）· 密级 {} · 文种 {}",
+        conversationId,
+        document.id(),
+        document.name(),
+        classification,
+        docType);
+    return document.id();
   }
 
   // ────────────────────────── 解析落库（由 ParseRunner 在异步任务里调） ──────────────────────────
@@ -647,6 +1014,32 @@ public class DocumentService {
   // ────────────────────────── 入库即分块（批 2b） ──────────────────────────
 
   /**
+   * 上下文窗口并入量留痕（{@code #65} 判据 3）。
+   *
+   * <p>★ 为什么要这一行：窗口会让"同一句话被章节劈开"从召回不到变成召回得到，代价是进向量的文本变长 ——
+   * 两件事都会改变检索读数。没有这条日志时，"这周答案变长了/变准了"只能靠猜；有了它，能对着文档与周次解释。
+   *
+   * <p>★ 它是<b>日志</b>而不是 Prometheus 指标，这是如实记账：指标那边只有三条业务指标（{@code #73}）， 加一条"窗口字数"的分布会把{@code 08
+   * §4.10.1} 定的"只报结果指标"这条纪律搅浑。代价是它不能画曲线， 只能在排查时 grep（`上下文窗口：文档`）。
+   */
+  private void logWindowUsage(Document document, List<PlannedSegment> plan) {
+    if (plan.isEmpty()) {
+      return;
+    }
+    long withWindow =
+        plan.stream().filter(p -> p.searchText() != null && p.searchText().contains("\n")).count();
+    if (withWindow == 0) {
+      return;
+    }
+    log.info(
+        "上下文窗口：文档 {}（{}）{} 段中有 {} 段并入了邻段上下文",
+        document.id(),
+        document.name(),
+        plan.size(),
+        withWindow);
+  }
+
+  /**
    * 入库即分块：调 {@link Segmenter#plan} 分块并落库（第 7 周 · 0.2.2 批 2b）。
    *
    * <p>★ 参数口径（领域配置，不是常量）：
@@ -680,8 +1073,11 @@ public class DocumentService {
               document.docType(),
               orgCodes.codeOf(document),
               document.name(),
-              document.ocrDerived() ? ChunkSource.OCR : ChunkSource.TEXT);
+              document.ocrDerived() ? ChunkSource.OCR : ChunkSource.TEXT,
+              segmentationProperties.contextWindow());
       List<PlannedSegment> plan = planned.segments();
+      // ★ 窗口并入量要留痕（#65 判据 3）：否则"这周答案变长了"没人能解释 —— 记段数与字符数
+      logWindowUsage(document, plan);
       if (planned.removedNoiseLines() > 0) {
         // ★ 剥离掉的噪声要**留痕**：否则"为什么这份文档少了一页内容"没人能解释（12 §2.4）
         log.info(
@@ -711,7 +1107,9 @@ public class DocumentService {
                 p,
                 currentUserId,
                 // ★ 密级强制继承文档（13 §2.1 ②）：分段不允许有自己独立的密级
-                document.classification()));
+                document.classification(),
+                // ★ 标签同理（#26）：谓词作用在分段表上，所以它必须冗余到这一列
+                document.labels()));
       }
       segments.saveAll(toSave);
 
@@ -720,8 +1118,10 @@ public class DocumentService {
           plan.size(), toSave.stream().mapToInt(Segment::charCount).sum());
     } catch (BusinessException e) {
       // ★ Segmenter 抛的可读异常 ⇒ SEGMENT_FAILED + 可读原因（不许堆栈、不许静默）
+      metrics.ingestionFailed(BusinessMetrics.IngestionStage.SEGMENT);
       document.recordFailure(DocumentStatus.SEGMENT_FAILED, e.getMessage(), e.hint());
     } catch (IllegalArgumentException e) {
+      metrics.ingestionFailed(BusinessMetrics.IngestionStage.SEGMENT);
       document.recordFailure(DocumentStatus.SEGMENT_FAILED, e.getMessage(), "请检查文档正文是否可正常解析");
     }
   }

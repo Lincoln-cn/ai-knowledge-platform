@@ -12,8 +12,6 @@ import {
   knownModelIds,
   nodeTypeCatalog,
   setWorkflowDraft,
-  sampleInvalidGraph,
-  sampleValidGraph,
   workflowRecords,
   workflowVersions
 } from '../fixtures/workflow'
@@ -56,6 +54,7 @@ const toPublicVersion = (v: WorkflowVersion): WorkflowVersion => ({
   version: v.version,
   publishedAt: v.publishedAt,
   publishedBy: v.publishedBy,
+  publishedByName: v.publishedByName,
   note: v.note,
   nodeCount: v.nodeCount
 })
@@ -149,7 +148,10 @@ export const workflowRoutes: MockRoute[] = [
   [
     'GET',
     '/assistants/:appId/workflow/draft',
-    ({ path }) => cloneGraph(getWorkflowDraft(path.appId as string))
+    ({ path }) => ({
+      graph: cloneGraph(getWorkflowDraft(path.appId as string)),
+      updatedAt: new Date().toISOString()
+    })
   ],
 
   [
@@ -164,7 +166,7 @@ export const workflowRoutes: MockRoute[] = [
       }
       // 草稿允许不合规：这里不做校验，原样落盘（保存与发布是两回事）
       setWorkflowDraft(appId, graph)
-      return cloneGraph(getWorkflowDraft(appId))
+      return { savedAt: new Date().toISOString() }
     }
   ],
 
@@ -190,7 +192,9 @@ export const workflowRoutes: MockRoute[] = [
       const issues = validateGraph(graph, ctxFor())
       if (hasBlockingError(issues)) {
         const count = issues.filter((i) => i.level === 'ERROR').length
-        throw new ApiError(6001, `存在 ${count} 个阻断错误，无法发布`)
+        // ★ 与真后端同形状（`#260`）：明细随错误带走，界面才能逐条高亮到节点。
+        //   只给一句"存在 N 个阻断错误"，在 mock 模式下永远看不到真栈那种面板。
+        throw new ApiError(6001, `存在 ${count} 个阻断错误，无法发布`, undefined, issues)
       }
 
       const list = workflowVersions[appId] ?? (workflowVersions[appId] = [])
@@ -200,7 +204,10 @@ export const workflowRoutes: MockRoute[] = [
         version: nextVersion,
         note,
         publishedAt: new Date().toISOString(),
-        publishedBy: '当前用户',
+        // mock 里的「当前用户」就是 fixtures/identity.ts 的 u1（admin / 管理员）。
+        // 真栈这两格由服务端给：publishedBy 是 uuid，publishedByName 是读时现查的当前人名。
+        publishedBy: 'u1',
+        publishedByName: '管理员',
         nodeCount: graph.nodes.length,
         graph: cloneGraph(graph)
       }
@@ -239,8 +246,12 @@ export const workflowRoutes: MockRoute[] = [
       const hit = (workflowVersions[appId] ?? []).find((v) => v.version === version)
       if (!hit) throw new ApiError(404, `版本 v${version} 不存在`)
       // 回滚 = 生成新草稿，**不改动历史版本**
-      setWorkflowDraft(appId, cloneGraph(hit.graph))
-      return cloneGraph(hit.graph)
+      const graph = cloneGraph(hit.graph)
+      setWorkflowDraft(appId, graph)
+      // 返回形状对齐契约 `rollbackWorkflow`（src/api/workflow.ts:423）：{ graph, updatedAt, version }。
+      // 原来这里直接 `return cloneGraph(hit.graph)` 是裸图 —— 与契约不一致（Issue #262 抓到的唯一一处真形状差）。
+      // updatedAt 用这次写草稿的时刻（页面显示「已保存」用它），version 用被回滚到的那一版（页面提示「已回滚到 vN」用它）。
+      return { graph, updatedAt: new Date().toISOString(), version }
     }
   ],
 
@@ -259,16 +270,44 @@ export const workflowRoutes: MockRoute[] = [
     }
   ],
 
+  /*
+   * 运行记录列表。
+   *
+   * 契约是 `PageResult<WorkflowRecord>`（`src/api/workflow.ts:439`），字段 `{ list, total, page, size }`
+   * （`src/api/types.ts:25`）。原来这里 `return workflowRecords[appId] ?? []` 是**裸数组**：
+   * 页面在 mock 模式下按契约解构 `list` 只会拿到 `undefined` —— 与契约不符（Issue #263）。
+   * ★ 措辞注意：本注释**不要**写成"契约函数名 + 左括号"的形状 ——
+   *   `tools/check_contract_consumers.py` 用 `\b函数名\s*\(` 在 `frontend/src/**` 里找消费点，
+   *   注释里出现调用形状会被它当成"有人用了"，把这个端点的零消费登记冲掉（本轮实际踩到过一次）。
+   *   原来那条还是"闸门看不见"的：它落在
+   * `check_mock_endpoints.py` 的「返回表达式解析不出」跳过桶里，改坏了也 exit 0。
+   *
+   * 分页按契约的 `page` / `size` 切片，`total` 给过滤后的总条数（不是本页条数）。
+   * ★ mock 刻意**不实现** `WorkflowRecordQuery.status` 的过滤：演示数据量小，
+   *   全量可见比"看起来实现了筛选"更诚实；等真后端上了再对齐查询语义。
+   */
   [
     'GET',
     '/assistants/:appId/workflow/records',
-    ({ path }) => workflowRecords[path.appId as string] ?? []
+    ({ path, query }) => {
+      const all = workflowRecords[path.appId as string] ?? []
+      const pageNo = Number(query.page ?? 1)
+      const pageSize = Number(query.size ?? 20)
+      const start = (pageNo - 1) * pageSize
+      return {
+        list: all.slice(start, start + pageSize),
+        total: all.length,
+        page: pageNo,
+        size: pageSize
+      }
+    }
   ],
 
-  // ---- 演示辅助：载入示例图（便于校验拦截演示） ----
-  ['GET', '/workflow/demo/invalid-graph', () => cloneGraph(sampleInvalidGraph)],
-  ['GET', '/workflow/demo/valid-graph', () => cloneGraph(sampleValidGraph)]
 ]
+
+// ★ `#260`：删掉 `/workflow/demo/{valid,invalid}-graph` 两条演示路由 —— 它们在 `src` 里
+//   零消费（页面从不请求它们，样例图由 fixture 直接给），属于 `#211` 同一种形状：
+//   mock 在替一个前端根本不要的能力作保。要恢复演示，正确做法是页面里显式调用契约端点。
 
 /** 供应用壳 publish-check 复用：只判「有没有一张能跑的图」，不重复图级校验 */
 export function workflowHasRunnableGraph(appId: string): {

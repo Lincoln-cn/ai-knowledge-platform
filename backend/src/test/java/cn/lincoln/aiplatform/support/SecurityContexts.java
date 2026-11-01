@@ -59,7 +59,31 @@ public final class SecurityContexts {
     }
   }
 
+  /**
+   * 以给定的密级上限 <strong>与密级标签</strong>执行一段取数逻辑（Issue {@code #26} 起需要）。
+   *
+   * <p>★ 标签这一维与密级同源：都从<strong>令牌</strong>里读（{@code clLabels}）， 所以这里加的是同一个声明， 而不是另造一个"测试专用的范围对象"——
+   * 否则测出来的就不是生产那条解析路径。
+   *
+   * <p>★ {@code labels} 传空集是<strong>合法且常见</strong>的状态（绝大多数角色没配标签）， 它的语义是"不按标签限制"，不是"什么都看不到"。
+   */
+  public static <T> T asUserWithLabels(
+      UUID userId, ClassificationLevel clearance, java.util.Set<String> labels, Supplier<T> body) {
+    SecurityContext previous = SecurityContextHolder.getContext();
+    try {
+      SecurityContextHolder.setContext(contextFor(userId, clearance, labels));
+      return body.get();
+    } finally {
+      SecurityContextHolder.setContext(previous);
+    }
+  }
+
   private static SecurityContext contextFor(UUID userId, ClassificationLevel clearance) {
+    return contextFor(userId, clearance, java.util.Set.of());
+  }
+
+  private static SecurityContext contextFor(
+      UUID userId, ClassificationLevel clearance, java.util.Set<String> labels) {
     Jwt jwt =
         Jwt.withTokenValue("test-token")
             .header("alg", "none")
@@ -68,6 +92,7 @@ public final class SecurityContexts {
             // dataScope=ALL：本辅助只管"密级"这一维，数据范围不该顺手被放宽（要验范围的测试自己造令牌）
             .claim("scope", "ALL")
             .claim("clearance", clearance.name())
+            .claim("clLabels", java.util.List.copyOf(labels))
             .build();
     JwtAuthenticationToken authentication = new JwtAuthenticationToken(jwt);
     // ★★ 这一行是必须的，而且踩过：`new JwtAuthenticationToken(jwt)` 之后 `isAuthenticated()`

@@ -8,6 +8,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -117,6 +118,16 @@ public class Document {
   private ClassificationLevel classification;
 
   /**
+   * 密级标签（{@code text[]}，`V57`）—— 与密级<strong>正交</strong>的那一维。
+   *
+   * <p>★ 空 = 不受标签限制；判定与 {@code ScopeFilter.canSeeClassification} 逐字对齐（三条豁免在那边）。
+   * 今天只有建档入口能写，编辑与巡检还没做（{@code #26}）。
+   */
+  @JdbcTypeCode(SqlTypes.ARRAY)
+  @Column(name = "labels")
+  private List<String> labels;
+
+  /**
    * ★★ 密级的<strong>排序口径</strong>（{@code V21} 的生成列）—— 列表/计数侧密级谓词的载体（{@code #25}）。
    *
    * <p>★ 库层是 {@code generated always as (case classification … ) stored}（与 {@code V22} 的 {@code
@@ -218,6 +229,13 @@ public class Document {
    * @param source 来源；null 时取 {@code local}（本地上传建档）
    * @param orgId 责任部门（组织树里的一个部门）★ 必填；null ⇒ 拒绝，文案指路"从组织树选"
    */
+
+  /**
+   * 不带标签的建档（既有调用方与测试用）—— 等价于 {@code labels = List.of()}。
+   *
+   * <p>★ 保留它不是为了省事：绝大多数文档确实没有标签（{@code #26} 的写侧先只覆盖建档入口）， 让它们全部改成传 {@code List.of()}
+   * 只会把"没有标签"这件事写成一个要靠人记得写的参数。
+   */
   public Document(
       UUID id,
       UUID kbId,
@@ -226,6 +244,19 @@ public class Document {
       String docType,
       UUID orgId,
       ClassificationLevel classification,
+      UUID createdBy) {
+    this(id, kbId, name, source, docType, orgId, classification, List.of(), createdBy);
+  }
+
+  public Document(
+      UUID id,
+      UUID kbId,
+      String name,
+      String source,
+      String docType,
+      UUID orgId,
+      ClassificationLevel classification,
+      List<String> labels,
       UUID createdBy) {
     if (id == null || kbId == null) {
       throw new IllegalArgumentException("文档 id 与所属知识库 id 不能为空");
@@ -243,7 +274,6 @@ public class Document {
     if (classification == null) {
       throw new IllegalArgumentException("密级必填");
     }
-    this.id = id;
     this.kbId = kbId;
     // ★ 域的形状在**构造这一刻**就定下来（V34）：建档路径只产出库域文档，
     //   而库域的 scope_id 就是 kb_id、传输者就是建档人 —— 两者都是直接派生，不是新参数。
@@ -252,11 +282,86 @@ public class Document {
     this.scopeKind = DocumentScopeKind.KB;
     this.scopeId = kbId;
     this.ownerId = createdBy;
+    init(id, name, source, docType, orgId, classification, labels, createdBy);
+  }
+
+  /**
+   * 会话临时附件的建档（{@code 13 §11.2} 第三域 · {@code #187} 判据 4）。
+   *
+   * <h3>★ 为什么必须是一个<strong>显式工厂</strong>，而不是给构造器加三个可空参数</h3>
+   *
+   * <p>三个域里只有会话域是"有文档行、没有库行"：{@code kb_id} 必须为空、{@code scope_id} 是<strong>会话 id</strong>、
+   * 传输者是上传人。把它做成"可空参数"以后，每一个既有的建档调用点都多出三个能填错的格子，
+   * 而填错的后果是<strong>检索侧恒假</strong>（谁都看不见，且不报错）。工厂方法让"库域"与"会话域"在代码里是两个形状， 不是同一形状的两种取值。
+   *
+   * <h3>★★ 它刻意<strong>不</strong>校验的东西</h3>
+   *
+   * <ul>
+   *   <li><strong>{@code org_id} 为空</strong>：会话附件不属于任何部门（它跟着会话走）。库层 {@code org_id} 可空； 而分段前缀需要的组织码由
+   *       {@code OrgCodeResolver} 回落成占位符 {@code no-org}，不是这里补一个假部门。
+   *   <li><strong>密级的下限</strong>：{@code 13 §11.5} 说的是"附件密级不许低于会话当前密级"， 那条规则要读会话的当前值 ⇒ 只能在应用层（{@code
+   *       DocumentService#registerConversationAttachment} 的调用方） 拿会话实体做，不能塞进一个只认识自己的实体里。
+   * </ul>
+   *
+   * @param id 文档 id
+   * @param conversationId 会话 id（★ 落 {@code scope_id}，并由生成列派生 {@code conversation_id}）
+   * @param ownerId 上传人（★ 落 {@code owner_id}，检索谓词第三支要求它等于当前请求者）
+   * @param name 展示名（用户上传时的原始文件名）
+   * @param docType 文种（★ 列 NOT NULL；取值口径见 {@code ConversationAttachmentRegistrar#DOC_TYPE}）
+   * @param classification 密级（★ 由调用方按 {@code 13 §11.5} 取会话当前值）
+   * @return 尚未解析的会话域文档（{@code status = PENDING_PARSE}）
+   */
+  public static Document conversationAttachment(
+      UUID id,
+      UUID conversationId,
+      UUID ownerId,
+      String name,
+      String docType,
+      ClassificationLevel classification) {
+    if (id == null || conversationId == null || ownerId == null) {
+      throw new IllegalArgumentException("文档 id、会话 id 与上传人不能为空");
+    }
+    if (name == null || name.isBlank() || name.length() > 255) {
+      throw new IllegalArgumentException("文档名称必须是 1–255 字");
+    }
+    if (docType == null || docType.isBlank()) {
+      throw new IllegalArgumentException("文种必填");
+    }
+    if (classification == null) {
+      throw new IllegalArgumentException("密级必填");
+    }
+    Document document = new Document();
+    document.kbId = null;
+    document.scopeKind = DocumentScopeKind.CONVERSATION;
+    document.scopeId = conversationId;
+    document.ownerId = ownerId;
+    document.init(id, name, "local", docType, null, classification, List.of(), ownerId);
+    return document;
+  }
+
+  /**
+   * 两个域共享的字段初始化（域相关的四列不在这里，理由见 {@link #conversationAttachment}）。
+   *
+   * <p>★ 抽成一个方法而不是两个构造器全写一遍：这两段里有一半是"初值必须对"的东西 （{@code status = PENDING_PARSE}、三个计数为 0、{@code
+   * enabled = true}），复制一份以后总有一份先被改错。
+   */
+  private void init(
+      UUID id,
+      String name,
+      String source,
+      String docType,
+      UUID orgId,
+      ClassificationLevel classification,
+      List<String> labels,
+      UUID createdBy) {
+    this.id = id;
     this.name = name.trim();
     this.source = source == null || source.isBlank() ? "local" : source.trim();
     this.docType = docType.trim();
     this.orgId = orgId;
     this.classification = classification;
+    // ★ 标签是「可选的额外维度」：没填就是没有（不是"等所有标签"），空列表与 null 同义
+    this.labels = labels == null ? List.of() : List.copyOf(labels);
     // ★ 初值 = 未解析那一态，不是「成功」
     this.status = DocumentStatus.PENDING_PARSE;
     this.charCount = 0;
@@ -389,11 +494,29 @@ public class Document {
    * 但还在跑」的自相矛盾。同时这也把「进度不回退」的规则限定在**同一轮**内 —— 否则跨轮的重置会被单调性挡住。
    */
   public void startEmbedding() {
-    DocumentStatus.requireLegal(status, DocumentStatus.EMBEDDING, "开始向量化");
+    DocumentStatus.requireLegal(status, DocumentStatus.EMBEDDING, "开始向量化", nextStepAfterReject());
     this.status = DocumentStatus.EMBEDDING;
     this.processedSegments = 0;
     this.failReason = null;
     this.failHint = null;
+  }
+
+  /**
+   * 被拒绝「开始向量化」时，告诉用户下一步该做什么（{@code #229}）。
+   *
+   * <p>★ 为什么按当前状态分档：`EMBEDDING_FAILED` 与 `SEGMENT_FAILED` 都能靠「重试」往前走， 但两者能走的距离不同 ——
+   * 向量化失败能自动重跑，分段失败必须重新上传原文件（本版不保留上传的字节， 见 {@code
+   * DocumentService#retry}）。对它们说同一句话，会让第二种用户反复点一个注定不动的按钮。
+   *
+   * <p>★ 为什么只有这两档有话说：`EMBEDDING`/`SUCCEEDED` 上被拒是「重复点击」，正确的下一步是「等」或「什么都不用做」， 硬塞一句操作指引反而误导。
+   */
+  private String nextStepAfterReject() {
+    return switch (status) {
+      case EMBEDDING_FAILED ->
+          "这份文档的向量化失败过，请点「重试」（或调用 POST /api/v1/documents/" + id + "/retry）—— 它会把状态退回「待向量化」再重新跑";
+      case SEGMENT_FAILED -> "这份文档的分段失败过，请点「重试」；若提示需要原文件，请重新上传";
+      default -> null;
+    };
   }
 
   /**
@@ -513,6 +636,18 @@ public class Document {
     }
   }
 
+  /**
+   * ★ 从回收站恢复（`#259`）：把删除时间清掉，并把操作人记在 `updated_by` 上。
+   *
+   * <p>★ 只动聚合根这一行 —— 分段的软删由 {@code SegmentRepository#restoreByDocumentId} 在
+   * **同一个事务**里清掉（否则会出现"文档回到列表、内容检索不到"）。
+   */
+  public void restore(UUID by) {
+    this.deletedAt = null;
+    this.updatedBy = by;
+    this.updatedAt = Instant.now();
+  }
+
   public void markDeleted(Instant at, UUID by) {
     this.deletedAt = at;
     this.updatedBy = by;
@@ -581,6 +716,36 @@ public class Document {
     this.orgId = orgId;
   }
 
+  /**
+   * ★★ 变更文档密级（{@code #247}）—— 给"入库时标错"的文档一个出口。
+   *
+   * <h3>为什么需要它</h3>
+   *
+   * <p>密级此前<strong>只在建档那一刻</strong>可设（上传表单），之后没有任何入口。标低了就只能删档重传 —— 与 {@code #150} 的 {@code orgId}
+   * 是同一个形状：<b>列得出来却处理不掉</b>。而标错的代价不是"不好看"：它同时决定密级 pre-filter 与 {@code #27} 的会话水位。
+   *
+   * <h3>★ 只改聚合根，两个副作用都在应用层</h3>
+   *
+   * <ol>
+   *   <li><strong>升密后要抬会话水位</strong>（{@code #247} 判据 ①）：引用过这篇文档的会话，其 {@code max_classification}
+   *       必须跟上，否则"会话水位 = 其引用集合的最大密级"（{@code 13 §2.2}）不再成立。这件事要查会话、写会话， <strong>跨聚合</strong>，不属于本对象。
+   *   <li><strong>降密什么都不用做</strong>：会话水位是单调的（只升不降），停在旧的高档位是安全的严格方向 —— 降密因此不需要补偿，只需要一条断言钉住"水位没动"。
+   * </ol>
+   *
+   * <p>★ 分段不在这里跟着改：{@code kb_segment.classification} 由文档继承（{@code #27} 的传播口径）， 它的重算属应用层与向量侧的编排。
+   *
+   * @param level 新的密级；★ 上限（不得高于所属知识库的 {@code maxClassification}）由服务层校验 —— 领域对象不知道"库"长什么样
+   * @param by 操作人（记进 {@code updated_by}）
+   * @throws IllegalArgumentException {@code level} 为 {@code null}
+   */
+  public void changeClassification(ClassificationLevel level, UUID by) {
+    if (level == null) {
+      throw new IllegalArgumentException("密级必填 —— 它决定召回前缀与安全过滤，不能有默认值（13 §2）");
+    }
+    this.classification = level;
+    this.updatedBy = by;
+  }
+
   // ────────────────────────── 访问器 ──────────────────────────
 
   public UUID id() {
@@ -620,6 +785,49 @@ public class Document {
 
   public UUID orgId() {
     return orgId;
+  }
+
+  /** 密级标签（{@code 13 §6.3}）。★ 空列表 = 不受标签限制（绝大多数文档的默认状态）。 */
+  public List<String> labels() {
+    return labels == null ? List.of() : labels;
+  }
+
+  /**
+   * 换一套标签（`#26`）。
+   *
+   * <p>三条口径：**null ⇒ 空列表**（＝不受标签限制）、**逐项去空白后丢掉空串**、**去重**。 保留调用方给的顺序 ——
+   * 标签是集合，顺序不影响语义，但页面回显时按人填的顺序看更自然。
+   *
+   * <p>★ 分段列的同步<strong>不在</strong>这里做：与 {@link #changeClassification} 同一个理由 （分段是独立列，不是 generated
+   * 列），由应用层在同一个事务里逐段重打；漏了那一步的表现是 「界面改了标签、检索仍按旧标签过滤」—— 由 {@code aiplatform.segment.label-mismatch}
+   * 读数兜住。
+   */
+  public void changeLabels(List<String> labels, UUID by) {
+    this.labels = normalizeLabels(labels);
+    this.updatedBy = by;
+  }
+
+  /**
+   * 标签归一：null ⇒ 空列表、去首尾空白、丢空串、去重（保持首次出现顺序）。
+   *
+   * <p>★ 静态且公开：分段侧要按同一口径归一（{@code DocumentService#changeLabels} 逐段调它）， 两处不许各写一份 ——
+   * 写了两份，一份改了另一份不改就是"文档有标签、分段没有"。
+   */
+  public static List<String> normalizeLabels(List<String> labels) {
+    if (labels == null || labels.isEmpty()) {
+      return List.of();
+    }
+    java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>();
+    for (String raw : labels) {
+      if (raw == null) {
+        continue;
+      }
+      String trimmed = raw.trim();
+      if (!trimmed.isEmpty()) {
+        unique.add(trimmed);
+      }
+    }
+    return List.copyOf(unique);
   }
 
   /** 责任部门的原自由字符串（V27 之前的存档值；新文档恒为 null）。★ 只读 —— 它是回填的证据。 */

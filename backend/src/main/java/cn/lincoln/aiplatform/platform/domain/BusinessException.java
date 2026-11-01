@@ -21,15 +21,33 @@ public class BusinessException extends RuntimeException {
 
   private final ErrorCode code;
   private final String hint;
+  private final Object details;
 
   public BusinessException(ErrorCode code, String message) {
-    this(code, message, null);
+    this(code, message, null, null);
   }
 
   public BusinessException(ErrorCode code, String message, String hint) {
+    this(code, message, hint, null);
+  }
+
+  /**
+   * 带<strong>结构明细</strong>的业务异常（{@code #260}）。
+   *
+   * <p>★ 什么时候需要它：失败的原因是<strong>一张清单</strong>而不是一句话时（发布前校验的每条 issue）。 把清单压进 {@code message}/{@code
+   * hint} 的文本，界面就只能原样念一遍 —— 它没法高亮到具体节点，也没法点了跳过去。
+   *
+   * <p>★ 为什么是 {@code Object}：明细的类型属于<strong>抛出它的那一层</strong>（这里是 assistant 域的 {@code
+   * WorkflowValidationService.Issue}）。若在这里写成那个类型，{@code platform} 就要依赖 assistant 域 ——
+   * 模块边界闸门会当场抓红，而且"平台层认识某个业务域的形状"本来就不该发生。
+   *
+   * <p>★ 它不是"顺手带点信息"的口袋：没有明确结构就别填，{@code message} + {@code hint} 已经够用。
+   */
+  public BusinessException(ErrorCode code, String message, String hint, Object details) {
     super(message);
     this.code = code;
     this.hint = hint;
+    this.details = details;
   }
 
   public ErrorCode code() {
@@ -39,5 +57,10 @@ public class BusinessException extends RuntimeException {
   /** 可行动的下一步；没有具体建议时为 null。 */
   public String hint() {
     return hint;
+  }
+
+  /** 结构化明细（如校验清单）；没有时为 null —— 此时失败仍是"只有话、没有数据体"。 */
+  public Object details() {
+    return details;
   }
 }

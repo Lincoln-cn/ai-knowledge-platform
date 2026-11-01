@@ -14,14 +14,11 @@ import cn.lincoln.aiplatform.identity.infrastructure.CaptchaService;
 import cn.lincoln.aiplatform.identity.infrastructure.JwtTokenService;
 import cn.lincoln.aiplatform.identity.infrastructure.LoginFailureProperties;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.domain.CryptoPort;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -69,6 +66,9 @@ public class AuthService {
   private final LoginFailureProperties loginFailure;
   private final AuthSecurityRecorder securityRecorder;
 
+  /** ★ 摘要走端口（{@code #74}）：换国密时改实现，不改这里。 */
+  private final CryptoPort cryptoPort;
+
   public AuthService(
       UserRepository users,
       RoleRepository roles,
@@ -79,7 +79,8 @@ public class AuthService {
       CaptchaService captchaService,
       CaptchaProperties captchaProperties,
       LoginFailureProperties loginFailure,
-      AuthSecurityRecorder securityRecorder) {
+      AuthSecurityRecorder securityRecorder,
+      CryptoPort cryptoPort) {
     this.users = users;
     this.roles = roles;
     this.rolePermissions = rolePermissions;
@@ -90,6 +91,7 @@ public class AuthService {
     this.captchaProperties = captchaProperties;
     this.loginFailure = loginFailure;
     this.securityRecorder = securityRecorder;
+    this.cryptoPort = cryptoPort;
   }
 
   /** 发一张新验证码。 */
@@ -348,14 +350,11 @@ public class AuthService {
    *
    * <p>★ 这里用 sha256 而不是 bcrypt 是**有意的**：刷新令牌是 256 位随机值， 没有"可猜的密码空间"，不需要慢哈希；而每次刷新都要按哈希查一行 —— 用
    * bcrypt 会让这个查询无法走索引（每次全表扫一遍、逐个重算）。
+   *
+   * <p>★ 算法本身在 {@link CryptoPort} 后面（{@code #74}）：这一处只表达"要一个不可逆摘要"。
    */
-  private static String sha256(String value) {
-    try {
-      MessageDigest digest = MessageDigest.getInstance("SHA-256");
-      return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
-    } catch (NoSuchAlgorithmException e) {
-      throw new IllegalStateException("JVM 不支持 SHA-256", e);
-    }
+  private String sha256(String value) {
+    return cryptoPort.digestHex(value);
   }
 
   private record IssuedRefresh(String plainValue, RefreshToken entity) {}

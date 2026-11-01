@@ -259,7 +259,12 @@ class RetrievalHitTestTest {
         .contains("\"mode\":\"HYBRID\"")
         .contains("\"threshold\":0.6")
         .contains("\"topN\":5")
-        .contains("\"noRefStrategy\":\"REFUSE\"");
+        .contains("\"noRefStrategy\":\"REFUSE\"")
+        // ★ 查询理解三项（10 §8.1）：设置面板从第 12 周起只做了前四项，
+        //   这三项既读不出来也写不进去 —— 先在这里把「接口本来就是通的」钉住。
+        .contains("\"queryCount\":3")
+        .contains("\"decomposeEnabled\":true")
+        .contains("\"maxSubQuestions\":3");
 
     // Partial：只改 topN，其余必须保持原值
     String updated =
@@ -291,6 +296,46 @@ class RetrievalHitTestTest {
             send("PUT", "/api/v1/knowledge-bases/" + kbId + "/retrieval", "{\"topN\":0}", token)
                 .body())
         .contains("TopN 应在 1～20 之间");
+  }
+
+  /**
+   * 查询理解三项的往返 + 边界（{@code 10 §8.1}）。
+   *
+   * <p>为什么单独一条：这三项在页面上曾经<strong>没有入口</strong>（设置面板只做前四项）， 于是"接口通不通"从来没被验过。而 {@code queryCount=0}
+   * 是<strong>合法值</strong>（不做这一层）， 把下界收紧成 1 会让"关掉它"变成一个静默 400 —— 那正是这条要钉住的。
+   */
+  @Test
+  void queryUnderstandingParamsRoundTripAndKeepTheirBounds() throws Exception {
+    String token = token("admin", "admin");
+    String kbId = createKb(token);
+    String url = "/api/v1/knowledge-bases/" + kbId + "/retrieval";
+
+    // 改动其中一项，其余三项必须保持原值（Partial 的语义不许被打回默认）
+    assertThat(send("PUT", url, "{\"queryCount\":1}", token).body())
+        .as("1 = 只改写：省掉扩展那一路")
+        .contains("\"queryCount\":1")
+        .contains("\"decomposeEnabled\":true")
+        .contains("\"maxSubQuestions\":3");
+    assertThat(send("GET", url, null, token).body())
+        .as("★ 落库了，而不只是「这次回得对」")
+        .contains("\"queryCount\":1");
+
+    assertThat(send("PUT", url, "{\"decomposeEnabled\":false}", token).body())
+        .contains("\"decomposeEnabled\":false")
+        .contains("\"queryCount\":1");
+
+    assertThat(send("PUT", url, "{\"maxSubQuestions\":5}", token).body())
+        .contains("\"maxSubQuestions\":5");
+
+    // 边界：0 合法、6 与 0（子问题）不合法，且文案可读
+    assertThat(send("PUT", url, "{\"queryCount\":0}", token).body())
+        .as("★ 0 = 不做这一层，是合法配置，不许被当成越界")
+        .contains("\"queryCount\":0");
+    assertThat(send("PUT", url, "{\"queryCount\":6}", token).body()).contains("查询理解条数应在 0～5 之间");
+    assertThat(send("PUT", url, "{\"maxSubQuestions\":0}", token).body()).contains("子问题数应在 1～5 之间");
+    assertThat(send("GET", url, null, token).body())
+        .as("被拒的请求不许留下半个改动（0 那次成功、6 这次失败 ⇒ 仍应是 0）")
+        .contains("\"queryCount\":0");
   }
 
   // ────────────────────────── 夹具 ──────────────────────────

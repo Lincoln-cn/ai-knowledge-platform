@@ -66,6 +66,13 @@ jobs:
           python3 tools/check_release_metadata.py --self-test
           python3 tools/check_release_metadata.py
 
+      # ★ 桩的「行为注入」自检（#45）：桩原来只能造传输层故障（延迟 / 500），造不出"模型真的
+      #   泄露了系统提示词" ⇒ 安全闸门的金丝雀 K1 恒绿。这条自检先证明**造得出坏**，
+      #   再谈"闸门挡住了"；顺带钉住"注入只作用于生成调用、不改查询理解那一次的 JSON"。
+      #   不起 HTTP：桩的"坏"是回答文本的形状，与传输无关。
+      - name: 桩行为注入自检（#45）
+        run: python3 backend/tools/openai_stub.py --self-check
+
   # ─────────────────────────── ② 前端：类型 + 静态闸门 ───────────────────────────
   frontend-static:
     name: 前端 · 类型检查 + 静态闸门
@@ -95,6 +102,16 @@ jobs:
         working-directory: frontend
         run: npm run typecheck
 
+      # ★ 单元断言（不起服务、不绑端口 —— 沙箱与本机都能跑）。
+      #   ★★ 为什么在 `npm test` 里**显式列文件**而不是交给 `node --test` 的目录发现：
+      #   `.test.ts` 的自动发现与 Node 版本挂钩，猜错就是「0 条测试、exit 0」——
+      #   那是**一个永远不红的闸门**，比没有闸门更坏（R58：修闸门与改成绿的读数一样）。
+      #   代价是新增测试要同时加进那条命令；判据是「红得出来」，不是「省事」。
+      #   `--experimental-strip-types`：22.18+ 与 24 上是 no-op，22.6–22.17 上才是开关。
+      - name: 单元断言（node --test）
+        working-directory: frontend
+        run: npm test
+
       # ★★ 逐条记账、不遮蔽（issue #19）：用 shell 的 `set -e` 串起来，等于
       #   "第一个坏了就再也看不到后面几条"。判据没有弱化 —— 任一条红，本步最后照样 exit 1；
       #   变的是"红的时候能不能看见全貌"。
@@ -107,13 +124,37 @@ jobs:
       #     mock 的角色勾选目录。它防的是本会话实测到的形态：**权限点存在、但没有任何角色持有**
       #     ⇒ 写入口对包括管理员在内的所有人隐形，而页面与接口各自看起来都"正常"
       #     （`knowledge:qa:edit` 与 `conversation:settings` 就是这样隐形的）。
-      - name: 静态闸门（8 道）
+      # ★ check_states.py 管「空态/错误态」（ROADMAP §五 F4）：错误态是硬闸
+      #   （有接口的页面必须为「拉不到数据」准备过呈现 —— 漏了就是静默失败），
+      #   表格空态只记账不判红（`el-table` 自带「暂无数据」，缺的是"下一步"，
+      #   账在 #256）。两种结局都必须能红：漏账、以及修好后忘了删账。
+      # ★ check_audit_actions.py 管「审计动作码三处对齐」：后端 `AuditAction` 枚举 /
+      #   前端 `AuditActionCode` / 审计页筛选项，**以及** `audit.record(动作, "资源", …)` 里的资源类型
+      #   与审计页 `RESOURCES`。任一处漏一个都不报错 —— 契约漏不会有人发现，
+      #   筛选项漏是"那一类记录筛不出来、页面直接显示原始 code"；资源类型漏则按该资源筛永远空。
+      #   这就是 `#40` 的形状。
+      # ★ check_mock_endpoints.py 管「mock 替谁作保」，**三个维度**：
+      #   ① 路径（`#211`）：每条 mock 路由都必须在前端契约里出现过 ——
+      #      mock **真的实现**了一个契约里没有、后端也没有的端点，于是 mock 模式下这条路能跑、
+      #      开发时完全看不出"真后端没有它"。
+      #   ② 形状（`#262`）：mock handler **`return` 出去的那个值的顶层形状**必须与同路径契约函数的
+      #      返回类型字面量相符 —— 路径对、形状不对时页面拿到的东西是错的，而 ① 全绿。
+      #      `#262` 就是这么漏过去的：rollback 的 mock 回裸图，契约要 `{ graph, updatedAt, version }`。
+      #      解析不出的场景（展开对象、形参流转、多分支守卫）**跳过并计数**，不猜。
+      #   ③ 跳过数的**基线**（`tools/mock-shape-skip-baseline.txt`）：跳过**变大**会红 ——
+      #      否则新 mock 写法（`?.` 链、解构、新 helper 形参流转）只会让闸门悄悄少看几处，
+      #      而 ①② 仍然全绿（跳过占 30% 却永不报红的形状）。跳过小于基线不自动改文件，
+      #      只提示"基线可以降到 N"—— 自动改基线等于让闸门自己给自己签字。
+      #   ★ 它带自检，所以下面把它从循环里单拆出来、按「自检 + 实判」两步跑（其余 11 道仍在循环里）。
+      #   ★ 同样单拆成两步的还有 `check_test_registration.py`（`#266`，2 步）—— 见下方 mock 实判之后。
+      - name: 静态闸门（15 道 · 另有 8 组静态度量 step 见下：配置面字段 / 配置文档覆盖 / B7 续签 / 欠账册漂移 / 交付镜像清单 / 文档命令 等）
         working-directory: frontend
         run: |
           failed=()
           for g in verify_refs check_template_tags check_design check_error_codes \
                    check_workflow_node_types check_deeplink_segments check_role_subject_key \
-                   check_permission_catalog; do
+                   check_permission_catalog check_states check_pending_endpoints \
+                   check_audit_actions; do
             echo "::group::${g}.py"
             if python "${g}.py"; then
               echo "✓ ${g}.py 通过"
@@ -123,8 +164,151 @@ jobs:
             fi
             echo "::endgroup::"
           done
+          # ★ 第三格门禁（`#79`）：契约与后端都有、但**页面零消费**的端点会红。
+          #   它防的是"后端那半能编译能过测试、闸门全绿，但点不动"——最难发现的那类遗漏。
+          #   基线在 `tools/consumer-baseline.txt`，向后端目录之外跑，所以单独一步。
           if [ ${#failed[@]} -gt 0 ]; then
-            echo "★ 失败 ${#failed[@]}/8：${failed[*]}"
+            echo "★ 失败 ${#failed[@]}/11：${failed[*]}"
             exit 1
           fi
-          echo "8 道静态闸门全部通过"
+          echo "循环内 11 道静态闸门全部通过（另有下面这些成对的 step：mock 响应形状 2 · 测试文件登记 2 · 配置面字段 2 · 配置文档覆盖 2 · 测试专用类型 2 · 欠账册漂移 2 · 交付镜像清单 2 · 文档命令 2 · B7 续签 1）"
+
+      # ★ mock 响应形状**自检**（`#262`）。
+      #   离线用例：契约 `{ a: string }` vs mock `return { a: 'x' }` 通过 / vs `return 'x'` 报红 /
+      #   解析不出进跳过计数 / helper 间接缺键报红 / 缺必填键报红。没有这一步，
+      #   "闸门改成绿的"与"闸门坏了"读数一模一样（都是 exit 0）。
+      #   ★ 跳过数基线的四条分支也在这里离线跑（临时目录造夹具、不碰真实 mock/契约）：
+      #     等于基线 / 高于基线且点名新增 / 低于基线只提示可降 / 基线缺失或读不出数字。
+      #     末尾断言"跑过的条数 == 33"—— 分支写了却没被执行到时同样会红。
+      - name: mock 响应形状自检（#262）
+        working-directory: frontend
+        run: python check_mock_endpoints.py --self-check
+
+      # ★ mock 响应形状**实判**（`#262`）。同一个脚本里也把第 ① 维（路径）与第 ③ 维
+      #   （跳过数的基线）判完 —— 输出分别打印 一致 / 不一致（文件+行号+两侧形状）/ 跳过清单。
+      #   跳过数与基线的关系在这一步决出胜负：多了红、少了提示可降、缺基线红。
+      - name: mock 响应形状实判（#262）
+        working-directory: frontend
+        run: python check_mock_endpoints.py
+
+      # ★ 配置面字段（`#269`）：契约里的检索参数，两张配置面板都必须能配。
+      #   `queryCount` / `decomposeEnabled` / `maxSubQuestions` 在后端、在契约、在视图里都存在了一周，
+      #   而两个面板一个都没做 —— 用户只能吃平台默认值。那段时间所有闸门都是绿的：
+      #   端点闸门只看"端点在不在用"，mock 闸门只看"响应对不对"，**没有人管字段发没发出去**。
+      #   自检 5 条：全在 / 少一个 / 注释里写了不算 / 契约新增字段立刻要求页面跟上 / 例外清单过期。
+      - name: 配置面字段自检（#269）
+        working-directory: frontend
+        run: python check_config_surfaces.py --self-check
+
+      # 实判：字段名从契约现读（不写死清单），逐张面板比对。
+      - name: 配置面字段实判（#269）
+        working-directory: frontend
+        run: python check_config_surfaces.py
+
+      # ★ 第 14 道（`#266`）：**测试文件有没有真的被登记进 `npm test`**。
+      #   上面「单元断言」那一步是绿的，但它只说明**登记过的那些文件绿** ——
+      #   `src/lib/http-error.test.ts` 在仓库里躺了很久、`npm test` 从没跑过它，
+      #   两种情形在 CI 上的读数一模一样（都是 46 条通过）。`test` 脚本刻意逐个列文件
+      #   （目录发现在 0 条时是 exit 0 = 永不红），代价就是"新增测试要改两处"没有提示。
+      #   两道主判据互为反向：文件在但脚本里没有 ⇒ 红；脚本里有但文件不在 ⇒ 红。
+      #   ★ 它自己也能红：--self-check 在临时夹具上跑 7 条（全登记 / 漏一个 /
+      #     登记了不存在 / 脚本改回目录发现 / 空壳文件 / 缺 `test` 键 / `it(` 入口）。
+      - name: 测试文件登记自检（#266）
+        working-directory: frontend
+        run: python check_test_registration.py --self-check
+
+      # ★ 实判：扫 `src/**/*.test.ts` 与 `package.json` 的 `test` 脚本对账，
+      #   漏一个就 exit 1 并点名。新加测试文件必须同时改这两处 —— 这道闸门就是那句提醒。
+      - name: 测试文件登记实判（#266）
+        working-directory: frontend
+        run: python check_test_registration.py
+
+      # ★ 第 11 道：**读数的纪律**（#231）。
+      #   防的形状是「400 被读成命中 0 条」—— 后端 `topN` 上限 20、超限返 400，
+      #   而 400 的响应体里没有 `data`，于是 `(payload.get("data") or {}).get("items") or []`
+      #   会把一次被拒的请求读成「一条都没命中」：脚本照常跑完、照常打印「命中 0/215」，
+      #   B1/B3 读数**凭空归零**，而结果看起来与「检索完全不可用」一模一样。
+      #   `--self-check` 不需要任何服务：它把 `call()` 换成桩，验三条 ——
+      #   非 200 终止 / 命中项缺 `docName` 终止（取错键同样是「没命中」）/ 空命中是合法读数。
+      #   ★ 判据：把 `retrieve_or_die` 改回 `or []` 的形状 ⇒ 这一步红。
+      - name: 读数纪律自检（#231）
+        run: python scripts/parse_corpus.py --self-check
+
+      # ★ 恢复演练记录的可核对性（#75 判据 ③）：模板里留「待补」是刻意的 —— 没填完一定红。
+      #   这条自检跑的是检查器自己（离线、不需要数据库），真正的演练记录在 deploy/restore-drill-record.md。
+      - name: 前后端配对第三格（#79）
+        run: |
+          python tools/check_contract_consumers.py --self-test
+          python tools/check_contract_consumers.py --check
+
+      - name: 恢复演练记录自检（#75）
+        run: python scripts/restore_drill.py --self-check
+
+      # ★ `app.*` 配置键：代码里引用了、yml 里没声明 => Spring 用默认值静默起起来（silent-failure）。
+      #   读的是仓库里那一份（`git show HEAD:`），CI 下与工作树一致。
+      - name: 配置键声明自检（#75/#227）
+        working-directory: backend
+        run: |
+          python tools/check_config_keys.py --self-check
+          python tools/check_config_keys.py
+
+      # ★ 测试专用类型（#270）：主代码零引用、却只被测试 import 的类型。
+      #   `#270` 那次，ParseMetricsTest 量的是一份**生产没用上**的 NoiseStripper 实现 =>
+      #   报告上的读数（12/12）与线上行为（11/12）对不上。这条缺陷编译过、测试过、覆盖率更高，
+      #   只是量的不是线上那份代码。装配件（@Component / implements …Port）闸门自己豁免。
+      - name: 测试专用类型自检（#270）
+        working-directory: backend
+        run: python tools/check_test_only_types.py --self-check
+
+      - name: 测试专用类型实判（#270）
+        working-directory: backend
+        run: python tools/check_test_only_types.py
+
+      # ★ 配置键"存在"与"有人告诉你它存在"是两件事（#272 判据 ②）：
+      #   一条没有任何部署文档提到的键，运维根本不知道能配，而它的错误形状恰恰是
+      #   "配错了不报错、只在某个场景里表现怪"。
+      - name: 配置文档覆盖自检（#272）
+        working-directory: backend
+        run: python tools/check_config_docs.py --self-check
+
+      - name: 配置文档覆盖实判（#272）
+        working-directory: backend
+        run: python tools/check_config_docs.py
+
+      # ★ 闸门自己的守卫也要能被断言（#223）：这三条守的是"别量错东西"，
+      #   而一条守卫错了的表现是静默 —— 永远为真等于没有，过严则把正确情形判成错。
+      #   离线、不需要浏览器、不连栈（playwright 在脚本里是延迟导入的）。
+      - name: 机器状态守卫自检（#223）
+        working-directory: frontend
+        run: python check_failure_visible_e2e.py --self-check
+
+      # ★ 令牌续签的语义在 B7 长跑里（#226）：`access-ttl` 30 分钟、200 轮要 27–31 分钟 ⇒
+      #   长跑**一定**跨过它。这条自检用假 `ask` 把三条语义跑一遍 —— 不需要真栈、不需要真模型，
+      #   所以"续签到底会不会发生"从"只能靠一次 30 分钟长跑证明"变成每次 push 都验。
+      - name: B7 续签语义自检（#226）
+        working-directory: frontend
+        run: python check_b7_stability.py --self-check
+
+      # ★ 账目的漂移不会让任何闸门变红（#40）：账上写着 open，于是"剩余工作"被高估，
+      #   计划建在错的账上。窄版本判据 —— 一条未标完成的账提到某条路径，而那个文件已经在仓库里。
+      - name: 欠账册漂移自检（#40）
+        run: python tools/check_ledger_drift.py --self-check
+
+      - name: 欠账册漂移实判（#40）
+        run: python tools/check_ledger_drift.py
+      # ★ 交付镜像与 pom / yml 的对账（#273）：Dockerfile 里 COPY 的 jar 名曾经写死在
+      #   `0.0.1-SNAPSHOT`，而 pom 早已是 0.4.5 —— 镜像构建不出来，而 CI 从不构建它，
+      #   坏了很久没人知道。这里只判"两份文件里的名字还对不对得上"，不跑 docker build。
+      - name: 交付镜像清单自检（#273）
+        run: python deploy/check_image_manifest.py --self-check
+
+      - name: 交付镜像清单实判（#273）
+        run: python deploy/check_image_manifest.py
+
+      # ★ 文档里写的 npm 脚本必须真的存在：`00-总览与复现指南.md` 曾让人跑 `npm run build:prod`，
+      # 而 package.json 里没有它 —— 照指南复现的人第一条命令就红，作者与闸门都不会响。
+      - name: 文档命令自检
+        run: python tools/check_doc_commands.py --self-check
+
+      - name: 文档命令实判
+        run: python tools/check_doc_commands.py

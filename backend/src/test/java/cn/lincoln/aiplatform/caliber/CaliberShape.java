@@ -5,9 +5,10 @@ import com.tngtech.archunit.core.domain.JavaField;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.domain.JavaModifier;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -64,6 +65,13 @@ final class CaliberShape {
           "platform/V9__platform_enum_machine_codes.sql",
           "platform/V24__platform_dictionary.sql",
           "platform/V26__platform_kb_category_unify.sql",
+          // ★★ 2026-10-31（#267）：下面 27 个文件曾长期漏登，本清单停在 V34 那一批。
+          //   漏登的后果不是"少一行记录"，而是 tableColumns() / migrationText() 对它们静默少读一段；
+          //   而两条断言写的是"全量清单相等" ⇒ 两侧同时变旧、断言照样绿（V34 当年正是这样被发现的）。
+          //   ★ 现在由 MigrationInventoryTest 把这份清单与源码树逐个比对，漏登当场变红。
+          "platform/V59__platform_quota_seams.sql",
+          "platform/V56__platform_audit_log.sql",
+          "platform/V58__platform_audit_retention.sql",
           "identity/V3__identity_auth.sql",
           "identity/V4__identity_seed_demo_accounts.sql",
           "identity/V5__identity_login_lockout.sql",
@@ -74,6 +82,10 @@ final class CaliberShape {
           "identity/V28__identity_user_org_seed.sql",
           "modelcatalog/V8__modelcatalog_ai_model.sql",
           "modelcatalog/V11__modelcatalog_enum_machine_codes.sql",
+          "modelcatalog/V37__modelcatalog_embedding_max_chars.sql",
+          "modelcatalog/V38__modelcatalog_e5_max_chars.sql",
+          "modelcatalog/V45__modelcatalog_model_provider.sql",
+          "modelcatalog/V46__modelcatalog_model_provider_id.sql",
           "knowledge/V12__knowledge_knowledge_base.sql",
           "knowledge/V13__knowledge_document.sql",
           "knowledge/V14__knowledge_document_parsed_content.sql",
@@ -90,10 +102,31 @@ final class CaliberShape {
           "knowledge/V31__knowledge_qa_pair.sql",
           "knowledge/V34__knowledge_document_scope.sql",
           "knowledge/V54__knowledge_base_drop_count_columns.sql",
+          "knowledge/V55__knowledge_document_revision_seam.sql",
+          "knowledge/V57__knowledge_label_seam.sql",
           "assistant/V29__assistant_app.sql",
           "assistant/V30__assistant_access_credential.sql",
+          "assistant/V47__assistant_prompt_catalog.sql",
+          "assistant/V48__assistant_prompt_type_seed.sql",
+          "assistant/V50__assistant_favorite.sql",
+          "assistant/V51__assistant_grant.sql",
+          "assistant/V52__assistant_api_key.sql",
+          "assistant/V60__assistant_workflow_draft.sql",
+          "assistant/V61__assistant_workflow_version.sql",
+          "assistant/V62__assistant_workflow_record.sql",
           "conversation/V32__conversation.sql",
-          "conversation/V33__conversation_message.sql");
+          "conversation/V33__conversation_message.sql",
+          "conversation/V35__conversation_message_feedback.sql",
+          "conversation/V36__conversation_feedback.sql",
+          "conversation/V39__conversation_chat_settings.sql",
+          "conversation/V40__conversation_chat_settings_system_prompt.sql",
+          "conversation/V41__conversation_chat_settings_retrieval.sql",
+          "conversation/V42__conversation_chat_settings_history.sql",
+          "conversation/V43__conversation_chat_settings_suggestion_count.sql",
+          "conversation/V44__conversation_chat_settings_suggestion_enabled.sql",
+          "conversation/V49__message_feedback_state.sql",
+          "conversation/V53__conversation_share.sql",
+          "conversation/V63__conversation_file.sql");
 
   private CaliberShape() {}
 
@@ -178,6 +211,16 @@ final class CaliberShape {
       all.append(stripComments(read(file))).append('\n');
     }
     return all.toString();
+  }
+
+  /**
+   * 本清单的只读视图。
+   *
+   * <p>★ 只给 {@link MigrationInventoryTest} 用：那条断言把这份清单与<strong>磁盘上真实的迁移目录</strong>逐个比对，
+   * 任何"新加了迁移却忘了登记"都会当场变红。换言之，{@link #MIGRATION_FILES} 的正确性<b>不再依赖"下次记得"</b>。
+   */
+  static List<String> migrationFiles() {
+    return MIGRATION_FILES;
   }
 
   // ────────────────────────── 内部 ──────────────────────────
@@ -299,16 +342,52 @@ final class CaliberShape {
     return Pattern.compile("--[^\\n]*").matcher(sql).replaceAll("");
   }
 
+  /**
+   * 读一个迁移文件的原文。
+   *
+   * <p>★ 读<strong>源码树</strong>，不读 classpath（{@code #267} 判据 3，2026-11-01 改）。
+   *
+   * <p>为什么：{@code mvn test} 会 {@code process-resources}，但<strong>删文件不会从 {@code target/classes}
+   * 里消失</strong>。本机实测踩到过 —— {@code
+   * target/classes/db/migration/knowledge/V59__knowledge_segment_soft_delete.sql} 存在（构建残留），而 {@code
+   * src/main/resources} 里没有、{@code git} 也从未跟踪过它。 读 classpath
+   * 的话，这份残影会让"某个名字在迁移目录里一次都没出现过"这类否定断言<strong>读到一份仓库里并不存在的 SQL</strong> —— 本机绿/红与 CI
+   * 不一致，而且没有任何读数能指出原因。
+   *
+   * <p>★ 找不到就<strong>抛</strong>，不退回 classpath：退回等于把这个盲区重新打开，还多了一层"有时读源码、有时读残影"的不可预测。 清单与磁盘的一致性由
+   * {@link MigrationInventoryTest} 守（它读同一份源码目录），所以"这里找不到"只可能是清单错了或跑法不对， 两种都该当场报出来。
+   */
   private static String read(String relative) {
-    String resource = MIGRATION_ROOT + "/" + relative;
-    try (InputStream in = CaliberShape.class.getClassLoader().getResourceAsStream(resource)) {
-      if (in == null) {
-        throw new IllegalStateException("迁移文件不在 classpath 上：" + resource + " —— 本断言读的是资源，不是工作目录");
-      }
-      return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-    } catch (IOException e) {
-      throw new UncheckedIOException("读迁移文件失败：" + resource, e);
+    Path file = migrationSourceRoot().resolve(relative);
+    if (!Files.isRegularFile(file)) {
+      throw new IllegalStateException(
+          "找不到迁移源码文件：" + file.toAbsolutePath() + " —— 本断言读的是源码树，不读 classpath（#267 判据 3）");
     }
+    try {
+      return Files.readString(file, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new UncheckedIOException("读迁移源码文件失败：" + file.toAbsolutePath(), e);
+    }
+  }
+
+  /**
+   * 迁移目录的<strong>源码</strong>位置 —— 本类与 {@link MigrationInventoryTest} <strong>共用这一处</strong>。
+   *
+   * <p>两个候选覆盖两种真实跑法：① surefire 的 {@code user.dir} = {@code backend/}（CI 与本仓的 {@code cd backend &&
+   * mvn test}）；② {@code user.dir} = 仓库根（{@code mvn -f backend/pom.xml test}、IDE
+   * 默认）。都不是就<strong>直接失败并打印工作目录</strong> —— 不能"找不到就当空集"（那会让全部形状断言恒绿）。
+   */
+  static Path migrationSourceRoot() {
+    Path direct = Path.of("src", "main", "resources", MIGRATION_ROOT);
+    if (Files.isDirectory(direct)) {
+      return direct;
+    }
+    Path nested = Path.of("backend", "src", "main", "resources", MIGRATION_ROOT);
+    if (Files.isDirectory(nested)) {
+      return nested;
+    }
+    throw new IllegalStateException(
+        "找不到迁移源码目录（当前工作目录 = " + Path.of("").toAbsolutePath() + "）—— 本断言拒绝把「读不到」当成「空集」");
   }
 
   /** 供断言消息拼接：把一个集合渲染成稳定的多行文本（diff 在消息里就能看）。 */

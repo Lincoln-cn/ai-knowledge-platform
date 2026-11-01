@@ -17,8 +17,26 @@
       :data="list"
       size="small"
       :row-class-name="rowClass"
-      :empty-text="'暂无' + title"
     >
+      <!-- 空态说出下一步：能新增的字典直接给按钮；密级这种「新增要连库迁移」的
+           要把原因写出来，否则用户会反复点「新增」找不到入口 -->
+      <template #empty>
+        <!-- ★ 错误态与空态互斥（F4）：拉失败时这一格是"没拉到"，不是"没有"。
+             两者混在一起，用户会以为字典被清空 —— 而实际上重试一次就好。 -->
+        <div v-if="loadError" class="empty">
+          <div class="empty-title">「{{ title }}」没读出来</div>
+          <div class="micro muted">{{ loadError }}</div>
+          <el-button size="small" :icon="Refresh" @click="load">重试</el-button>
+        </div>
+        <div v-else class="empty">
+          <div class="empty-title">还没有{{ title }}</div>
+          <template v-if="allowCreate">
+            <div>字典项是下拉选项的来源，先加一条才能在其他页面选到它</div>
+            <el-button size="small" type="primary" @click="openForm()">新增{{ title }}</el-button>
+          </template>
+          <div v-else class="micro muted">这类档位由数据库列固定，新增需要连表结构一起迁移 —— 见设计册的分类口径</div>
+        </div>
+      </template>
       <el-table-column label="展示名" min-width="150">
         <template #default="{ row }">
           <span class="lb">{{ row.label }}</span>
@@ -118,6 +136,8 @@ const props = withDefaults(
 
 const list = ref<DictionaryItem[]>([])
 const loading = ref(false)
+/** 加载失败的原因（`null` = 没失败或还没拉过）。★ 与空态互斥渲染，见模板。 */
+const loadError = ref<string | null>(null)
 const saving = ref(false)
 const visible = ref(false)
 const editing = ref<DictionaryItem | null>(null)
@@ -143,8 +163,12 @@ const load = async () => {
   loading.value = true
   try {
     list.value = await dictionariesApi.listDictionaries(props.kind, true)
+    loadError.value = null
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '加载基础数据失败')
+    // ★ F4（2026-11-01）：失败**不能**只弹一个 toast 然后让表格空着 ——
+    //   空着会渲染成「还没有{{ title }}」，用户以为字典被清空了。错误态必须占住空态的位置。
+    list.value = []
+    loadError.value = error instanceof ApiError ? error.message : '加载基础数据失败'
   } finally {
     loading.value = false
   }

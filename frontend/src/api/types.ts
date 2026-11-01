@@ -65,6 +65,13 @@ export const ErrorCode = {
    * 它**不是** `UPSTREAM_UNAVAILABLE`：那个要人去查模型服务，这个只要等。
    */
   TOO_MANY_REQUESTS: 429,
+  /**
+   * 请求与资源当前状态冲突（`#198` 发布编排版本：取号后撞上唯一约束，重试一次仍冲突）。
+   *
+   * ★ 与 400 分开：400 的下一步动作是"改请求"，这个的下一步动作是"稍后重试" ——
+   * 合并成 400 会让人去改一个根本没错的请求体。码值与 HTTP 409 对齐（与 401/403/404/429 同族）。
+   */
+  CONFLICT: 409,
   /** 模型未加载完成等可重试状态 */
   MODEL_NOT_READY: 2001,
   /**
@@ -161,11 +168,20 @@ export interface OwnedResource {
 export class ApiError extends Error {
   readonly code: number
   readonly hint?: string
+  /**
+   * 失败包络里的 `data`（`#260`）。多数失败它是 `undefined`/`null` ——
+   * 只有在后端把明细装成清单时才有值（例：发布前校验的每条 issue）。
+   *
+   * ★ 类型是 `unknown` 而不是 `unknown[]`：这一层不认识任何业务形状。
+   *   谁要用它，谁自己按契约收窄（并且要处理"不是那个形状"的情况）。
+   */
+  readonly details?: unknown
 
-  constructor(code: number, message: string, hint?: string) {
+  constructor(code: number, message: string, hint?: string, details?: unknown) {
     super(message)
     this.name = 'ApiError'
     this.code = code
     this.hint = hint
+    this.details = details
   }
 }

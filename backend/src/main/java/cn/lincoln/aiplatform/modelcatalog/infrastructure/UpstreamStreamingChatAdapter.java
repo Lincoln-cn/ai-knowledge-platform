@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
+import cn.lincoln.aiplatform.platform.infrastructure.metrics.BusinessMetrics;
 import cn.lincoln.aiplatform.platform.model.ChatMessage;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import java.time.Duration;
@@ -43,8 +44,18 @@ public class UpstreamStreamingChatAdapter implements ChatStreamPort {
 
   private final ChatModelAdapter chat;
 
-  public UpstreamStreamingChatAdapter(ChatModelAdapter chat) {
+  /** 指标旁路（{@code #73}）：只记首字耗时，不记谁在问。 */
+  private final BusinessMetrics metrics;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public UpstreamStreamingChatAdapter(ChatModelAdapter chat, BusinessMetrics metrics) {
     this.chat = chat;
+    this.metrics = metrics;
+  }
+
+  /** 测试构造器：指标落在一个不外导的实例上（见 {@link BusinessMetrics#noop()} 的说明）。 */
+  public UpstreamStreamingChatAdapter(ChatModelAdapter chat) {
+    this(chat, BusinessMetrics.noop());
   }
 
   @Override
@@ -76,10 +87,26 @@ public class UpstreamStreamingChatAdapter implements ChatStreamPort {
       boolean thinking,
       Duration timeout,
       Callback callback) {
+    long startedAtNanos = System.nanoTime();
+    // ★ 首字 = 上游**第一个内容块**到达（不是"请求发出去了"，也不是"我们写出第一帧"）：
+    //   前者是 B4 要管的那段等待，后者只差一次本地 flush，把 HTTP 握手算成首字会低估真实体感。
+    //   ★ 用数组而不是 AtomicBoolean：本方法在一条线程上跑；用原子类会让人误以为这里有并发。
+    boolean[] firstChunk = {false};
     try {
       boolean streamed =
           chat.streamChat(
-              modelId, messages, thinking, timeout, callback::onChunk, callback::onUsage);
+              modelId,
+              messages,
+              thinking,
+              timeout,
+              chunk -> {
+                if (!firstChunk[0]) {
+                  firstChunk[0] = true;
+                  metrics.firstToken(System.nanoTime() - startedAtNanos);
+                }
+                callback.onChunk(chunk);
+              },
+              callback::onUsage);
       if (!streamed) {
         // ★ 上游 200 但一个 data 帧都没有：这是"它不支持 stream:true"或"回了空"。
         //   明确报失败而不是当成功收尾 —— 否则界面会显示"生成了 0 个字的答案"。

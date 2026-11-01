@@ -87,31 +87,35 @@ class ContractDriftTest {
    */
   private static final List<MissingEndpoint> KNOWN_MISSING =
       List.of(
-          // ★ assistants（9）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置只剩编排 9 条（#198）
+          // ★ assistants（5）—— 第 15 周 0.4.3（§3.1 记 M4）：应用配置只剩编排 1 条（#198，从 9 条收缩而来）
           //   ★ 收藏两条（POST/DELETE /assistants/{*}/favorite）已随 #195 的收藏子项落地，故从欠账里摘掉
           //   ★ GET /assistants/tags 已随 #195 的标签子项落地（2026-10-24），同样摘掉
           //   ★ PUT /assistants/{*}/grants 与 PATCH /assistants/{*}/visibility 已随 #195 的共享写子项落地
           //   ★ POST /assistants/import 与 /import/check 已随导入子项落地（2026-10-24）
           //   ★ GET/POST /assistants/{*}/api-keys 与 PATCH …/enabled 已随 API Key 子项落地（2026-10-24）
-          missing("POST", "/assistants/{*}/workflow/debug", "#198", "15–18 周"),
-          missing("GET", "/assistants/{*}/workflow/draft", "#198", "15–18 周"),
-          missing("PUT", "/assistants/{*}/workflow/draft", "#198", "15–18 周"),
-          missing("POST", "/assistants/{*}/workflow/publish", "#198", "15–18 周"),
-          missing("GET", "/assistants/{*}/workflow/records", "#198", "15–18 周"),
-          missing("POST", "/assistants/{*}/workflow/validate", "#198", "15–18 周"),
-          missing("GET", "/assistants/{*}/workflow/versions", "#198", "15–18 周"),
-          missing("GET", "/assistants/{*}/workflow/versions/{*}", "#198", "15–18 周"),
-          missing("POST", "/assistants/{*}/workflow/versions/{*}/rollback", "#198", "15–18 周"),
-          // ★ conversations（0）—— GET/PATCH/DELETE /conversations/{id} 已随 #187 落地，
-          //   会话分享三条也已在 2026-10-25 落地（V53 + 公开面 /public/shares/{token}）
-          // ★ feedbacks（6）—— 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）
-          // ★ feedbacks（6）—— #194 已落：列表/统计/详情/办理/批量/重开
-          // ★ files（1）—— 第 17 周随问答链路：附件上传（multipart）
-          missing("POST", "/files", "#187", "17 周"),
-          // ★ knowledge-bases（1）—— 建档/文档已落地；余下暂存上传一条，属 P1
-          missing("POST", "/knowledge-bases/{*}/uploads", "#211", "P1（出现消费方再做）"),
-          // ★ workflow（1）—— 第 15 周 0.4.3 / M5.5：编排画布接契约的节点类型查询
-          missing("GET", "/workflow/node-types", "#198", "15–16 周"));
+          //   ★ POST /assistants/{*}/workflow/publish 已随 #198 第四块落地（2026-10-31），从欠账里摘掉
+          //   ★ GET /assistants/{*}/workflow/versions 与 …/versions/{*} 已随 #198
+          // 第五块落地（2026-10-31），从欠账里摘掉
+          //     （列表只读、按 version 降序；详情返回发布时的图快照；两条都用 assistant:view）
+          //   ★ POST /assistants/{*}/workflow/versions/{*}/rollback 已随 #198 第六块落地（2026-10-31），
+          //     从欠账里摘掉 —— 至此"编排草稿 → 发布 → 版本 → 回滚"这条链在契约上**闭合**
+          //   ★ GET /assistants/{*}/workflow/records 已随 #198 第七块落地（2026-10-31），同样摘掉。
+          //     ★ 摘它只说明"端点与表都在"，**不说明它能产出数据** —— 这张表今天没有任何写入方
+          //     （执行引擎在 V1.0，画布调试刻意不写它），所以它在真实系统里永远返回空列表；
+          //     这条"空"的性质写在 `WorkflowRecordQueryService` 的类注释与 V62 迁移的文件头里
+          missing("POST", "/assistants/{*}/workflow/debug", "#198", "15–18 周"));
+
+  // ★ conversations（0）—— GET/PATCH/DELETE /conversations/{id} 已随 #187 落地，
+  //   会话分享三条也已在 2026-10-25 落地（V53 + 公开面 /public/shares/{token}）
+  // ★ feedbacks（6）—— 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）
+  // ★ feedbacks（6）—— #194 已落：列表/统计/详情/办理/批量/重开
+  // ★ files（0）—— POST /files 已随 #187 落地（2026-11-01：V63 + FileStorePort + LocalFileStore）。
+  //   ★ 与 records 那条同型提醒：端点与表都在，但**没有消费方** —— ChatController 收下
+  //     attachmentIds 但不用，"传一份文档再问关于它的问题"今天走不通（绑定 + 落 kb_document
+  //     让附件进检索是下一批）。这条边界写在 FileController 类注释、FileRef 类注释与 V63 文件头里。
+
+  // ★ knowledge-bases（1）—— 建档/文档已落地；余下暂存上传一条，属 P1
+  // ★ workflow（0）—— GET /workflow/node-types 已随节点目录落地（2026-10-31，`#198` 第二块）
 
   /**
    * 未实现清单的一条：欠账台账的<strong>逐条</strong>登记项。

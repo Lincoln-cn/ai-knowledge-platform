@@ -2,11 +2,10 @@ package cn.lincoln.aiplatform.knowledge;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.lincoln.aiplatform.knowledge.domain.NoiseStripper;
 import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
-import cn.lincoln.aiplatform.knowledge.infrastructure.NoiseStripper;
 import cn.lincoln.aiplatform.knowledge.infrastructure.OcrEngine;
 import cn.lincoln.aiplatform.knowledge.infrastructure.OcrProperties;
-import cn.lincoln.aiplatform.knowledge.infrastructure.StripResult;
 import cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser;
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,7 +39,6 @@ import tools.jackson.databind.ObjectMapper;
 class ParseMetricsTest {
 
   private final TikaMarkdownParser parser = new TikaMarkdownParser(ocrOff());
-  private final NoiseStripper stripper = new NoiseStripper();
 
   /**
    * ★ 单测用<strong>关掉 OCR</strong>的引擎：这些用例量的是"结构丢失率 / 误杀率"，而 OCR 是<strong>系统级依赖</strong> （装了
@@ -209,7 +207,7 @@ class ParseMetricsTest {
 
       ParseResult parsed = parser.parse(fixture(fixtureName), fixtureName);
       assertThat(parsed.success()).as("%s 必须解析成功", fixtureName).isTrue();
-      StripResult stripped = stripper.strip(parsed.markdown());
+      NoiseStripper.Result stripped = NoiseStripper.strip(parsed.markdown());
 
       int falseKills = 0;
       List<String> killed = new ArrayList<>();
@@ -284,6 +282,12 @@ class ParseMetricsTest {
     误杀行数 = 剥离后找不到的正文行；误杀率 = 误杀行数 / 正文总行数。
     噪声剥离列 = 被剥掉的噪声行 / 噪声总行数（反映剥离召回，越高越好）。
     ★ 规则阈值按 `12 §2.4` 保守取值（重复 ≥3 次 + 长度 <60 字 + 非结构行），宁可漏剥不误杀。
+    ★ **量的必须是生产实现**：本测试显式使用 `knowledge/domain/NoiseStripper`（生产链路
+    `Segmenter` 走的那一份），不读任何"零引用但看起来像生产"的实现 —— `#270` 之前这张表量的正是
+    后者，读数因此虚高一格。
+    ★ 版权声明行**算噪声**（`#271`，2026-11-01 用户拍板）：整行 + 行首剥离，`noisy.docx` 与
+    `noisy.pdf` 因此都是 12/12。判据是**夹具基准与单测断言不再相反** —— 此前单测要求它留下、
+    基准把它记作 noiseLines，两个方向同时"绿"。
     """;
   }
 

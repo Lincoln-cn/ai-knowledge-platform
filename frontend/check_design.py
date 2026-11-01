@@ -252,6 +252,47 @@ def ref_source_tag_problems() -> list[str]:
     return problems
 
 
+# ── 布局不许靠"猜宽度"（`#42`）─────────────────────────────────────────────
+#
+# ★ 为什么单独一条：`grid-template-columns: 280px 1fr` 在任何**一次**屏宽下都能
+#   看着对，但它没有基准 —— 左列多一个字段、标签换个长度，它就重新失衡，
+#   而且**没有任何闸门会红**（视觉问题从不高亮，只会在验收时被人一句"有点怪"带过）。
+#   找基准只有两条路：用令牌，或者用比例。定值两条都不是。
+#
+# 判据只抓两个形状（都在样式块里、且注释已剥掉）：
+#   ① `grid-template-columns:` 的**第一个分量**是裸 px
+#   ② `calc(100% - <N>px)` —— 它是在猜兄弟元素的宽度
+# ★ 不抓 `width: 24px` 这类：图标、分隔线、边框宽度本来就该是定值。
+#   一刀切会把几百处正确写法算成违规 ⇒ 闸门常红 ⇒ 没人再看（与 F4 同一条纪律）。
+GRID_FIRST_PX = re.compile(r"grid-template-columns\s*:\s*[0-9]+(?:\.[0-9]+)?px\b", re.I)
+CALC_SIBLING_PX = re.compile(r"calc\(\s*100%\s*-\s*[0-9]+(?:\.[0-9]+)?px", re.I)
+
+
+def layout_problems() -> list[str]:
+    """布局宽度不许靠猜 —— 返回问题清单（空 = 通过）。"""
+    problems: list[str] = []
+    for p in sorted(SRC.rglob("*")):
+        if not p.is_file() or p.suffix not in (".vue", ".css", ".scss"):
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if p.suffix in (".css", ".scss"):
+            css = strip_comments(text, scss=True)
+        else:
+            css = "\n".join(strip_comments(b, scss=True) for b in style_blocks(text))
+        rel = p.relative_to(ROOT).as_posix()
+        for m in GRID_FIRST_PX.finditer(css):
+            problems.append(
+                f"{rel}: `{m.group(0)}` —— 首列是裸 px 定值。"
+                "那个数没有基准：换一次内容（多一个字段 / 标签变长）就重新失衡（#42）"
+            )
+        for m in CALC_SIBLING_PX.finditer(css):
+            problems.append(
+                f"{rel}: `{m.group(0)}` —— 在猜兄弟元素的宽度。"
+                "用 grid 分量或 flex 让它自己分配（#42）"
+            )
+    return problems
+
+
 class Report:
     def __init__(self) -> None:
         self.per_file: dict[str, dict[str, int]] = {}
@@ -397,7 +438,16 @@ def main() -> int:
     else:
         print("  ✓ 判据结构性（缺 kbId = 会话域）· 标签按来源切换 · 跳转按钮只给知识库引用")
 
-    return 1 if (grand or tag_problems) else 0
+    # ── 布局宽度不许靠猜（`#42`） ──
+    layout = layout_problems()
+    print("\n── 布局宽度不许靠猜（首列定值 / calc 猜兄弟宽度）──")
+    if layout:
+        for problem in layout:
+            print("  ✗ " + problem)
+    else:
+        print("  ✓ 无裸 px 首列 · 无 calc(100% - Npx)")
+
+    return 1 if (grand or tag_problems or layout) else 0
 
 
 if __name__ == "__main__":

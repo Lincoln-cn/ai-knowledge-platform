@@ -1,0 +1,128 @@
+[
+  {
+    "type": "START_NODE",
+    "label": "开始",
+    "description": "流程入口：配置开场白与用户输入的接收方式",
+    "category": "基础",
+    "implemented": true
+  },
+  {
+    "type": "BASE_NODE",
+    "label": "基础节点",
+    "description": "只做数据传递的占位节点，用于整理连线",
+    "category": "基础",
+    "implemented": true
+  },
+  {
+    "type": "AI_CHAT_NODE",
+    "label": "AI 对话",
+    "description": "调用大模型生成回复，可带检索结果作为上下文",
+    "category": "生成",
+    "implemented": true
+  },
+  {
+    "type": "SEARCH_DATASET_NODE",
+    "label": "知识库检索",
+    "description": "在指定知识库里检索相关分段",
+    "category": "检索",
+    "implemented": true
+  },
+  {
+    "type": "QUESTION_NODE",
+    "label": "提问",
+    "description": "向用户追问一个问题并把回答带回流程",
+    "category": "交互",
+    "implemented": true
+  },
+  {
+    "type": "CONDITION_NODE",
+    "label": "条件判断",
+    "description": "按条件把流程分成两支",
+    "category": "逻辑",
+    "implemented": true
+  },
+  {
+    "type": "NUMBER_CONDITION_NODE",
+    "label": "数值条件",
+    "description": "按数值比较把流程分成多支",
+    "category": "逻辑",
+    "implemented": true
+  },
+  {
+    "type": "REPLY_NODE",
+    "label": "回复",
+    "description": "直接输出一段固定文案",
+    "category": "生成",
+    "implemented": true
+  },
+  {
+    "type": "FUNCTION_LIB_NODE",
+    "label": "函数库",
+    "description": "调用预先登记的公共函数",
+    "category": "扩展",
+    "implemented": false
+  },
+  {
+    "type": "FUNCTION_NODE",
+    "label": "函数",
+    "description": "在流程里直接写一段函数逻辑",
+    "category": "扩展",
+    "implemented": false
+  },
+  {
+    "type": "RERANKER_NODE",
+    "label": "重排",
+    "description": "对检索结果重新排序",
+    "category": "检索",
+    "implemented": false
+  },
+  {
+    "type": "APPLICATION_NODE",
+    "label": "应用调用",
+    "description": "调用另一个已发布的编排应用",
+    "category": "扩展",
+    "implemented": false
+  },
+  {
+    "type": "DOCUMENT_EXTRACT_NODE",
+    "label": "文档抽取",
+    "description": "从文档里抽取结构化字段",
+    "category": "检索",
+    "implemented": false
+  },
+  {
+    "type": "IMAGE_UNDERSTAND_NODE",
+    "label": "图像理解",
+    "description": "识别图片内容并输出文字描述",
+    "category": "多模态",
+    "implemented": false
+  },
+  {
+    "type": "FORM_NODE",
+    "label": "表单收集",
+    "description": "向用户收集多个字段",
+    "category": "交互",
+    "implemented": false
+  },
+  {
+    "type": "TEXT_TO_SPEECH_NODE",
+    "label": "语音合成",
+    "description": "把文本转成语音输出",
+    "category": "多模态",
+    "implemented": false
+  },
+  {
+    "type": "SPEECH_TO_TEXT_NODE",
+    "label": "语音识别",
+    "description": "把用户语音转成文本",
+    "category": "多模态",
+    "implemented": false
+  },
+  {
+    "type": "IMAGE_GENERATE_NODE",
+    "label": "图像生成",
+    "description": "按描述生成图片",
+    "category": "多模态",
+    "implemented": false
+  }
+]

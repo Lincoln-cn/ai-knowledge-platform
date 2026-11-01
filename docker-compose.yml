@@ -72,8 +72,15 @@ services:
   #
   #  ★ 模型数据落在项目内的 ./.ollama-data（已 ignore），而不是 Docker 命名 volume：
   #    本机 C 盘只剩 ~24GB，而命名 volume 默认在 C 盘；项目在 D 盘，放这里更安全。
-  #  ★ 本机 nvidia-smi 初始化失败（NVML Unknown Error）⇒ 走 CPU 推理，故不配 GPU 段。
-  #    有可用 GPU 时再按 ollama 官方文档加 deploy.resources.reservations.devices。
+  #  ★ 现在走 GPU 推理（2026-10-30 改）：本机 NVIDIA 驱动已可用
+  #    （GTX 1050 with Max-Q Design / 4096 MiB / driver 576.80 / CUDA 12.9），
+  #    Docker 侧 `nvidia` runtime 已注册，故加 deploy.resources.reservations.devices
+  #    把 GPU 透进容器。早期那条「nvidia-smi 初始化失败（NVML Unknown Error）⇒ 走 CPU」
+  #    的注释已过时，驱动升级后 GPU 可用。
+  #    实测（qwen2.5:1.5B，num_predict 64~128，warm）：CPU 10.35 tok/s → GPU 25.77 tok/s，
+  #    `ollama ps` 的 PROCESSOR 从 `100% CPU` 变成 `100% GPU`，显存占用约 1.2 GB / 4 GB。
+  #    ★ 显存只有 4 GB：同时只驻留一个模型（OLLAMA_MAX_LOADED_MODELS=1），
+  #      换大模型会部分卸载到 CPU（`ollama ps` 会显示 `xx% GPU`），这是显存上限而非配置错误。
   # ──────────────────────────────────────────────────────────────────────────
   ollama:
     image: ollama/ollama:latest
@@ -86,6 +93,16 @@ services:
     environment:
       # 模型在内存里驻留多久。探针会连发几十次请求，默认 5m 会让它反复重新加载
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-15m}
+      # 4 GB 显存放不下两个模型并行，串行加载反而更稳
+      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-1}
+    # GPU 透传：等价于 docker run --gpus all。没有 NVIDIA 卡/驱动时删掉这一段即可回退 CPU。
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
 volumes:
   pgdata:

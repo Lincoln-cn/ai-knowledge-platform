@@ -102,6 +102,21 @@ public class DocumentController {
   }
 
   /**
+   * 回收站（契约 `listDeletedDocuments`，`#75` 判据 ④）—— 本库已软删的文档。
+   *
+   * <p>★ 与在用列表分成两个端点：`/documents?deleted=true` 那种写法会让"已删"混进主列表的分页与 total，
+   * 而主列表是用户日常看的那一屏，不该因为它多一档就变慢或变糊。
+   */
+  @GetMapping("/{kbId}/documents/deleted")
+  @PreAuthorize("hasAuthority('knowledge:view')")
+  public ApiResponse<PageResult<DocumentView>> listDeleted(
+      @PathVariable UUID kbId,
+      @RequestParam(required = false) Integer page,
+      @RequestParam(required = false) Integer size) {
+    return ApiResponse.ok(documentService.listDeleted(kbId, page, size));
+  }
+
+  /**
    * 库级入库进度（契约 {@code getIngestionProgress}）—— 库页面顶部进度条的<strong>唯一数据源</strong>。
    *
    * <p>★ 放在这里（而不是 {@code KnowledgeBaseController}）是因为它统计的是<strong>文档</strong>：
@@ -179,6 +194,7 @@ public class DocumentController {
             body.docType(),
             body.orgId(),
             body.classification(),
+            body.labels(),
             UUID.fromString(jwt.getSubject())));
   }
 
@@ -201,6 +217,7 @@ public class DocumentController {
    * @param docType 文种 ★ <b>必填</b>
    * @param orgId 责任部门（组织树里的部门 id）★ <b>必填</b> —— 它决定召回前缀里那段稳定 code
    * @param classification 密级 ★ <b>必填</b> —— 且必须 ≤ 库的 ceiling
+   * @param labels 密级标签（可选）—— 不传 / 传空 = 不受标签限制（#26 写侧；检索侧的求交谓词早已接上）
    */
   /**
    * ★ 带文件字节的建档（契约的 {@code uploadDocuments}）：multipart 上传 ⇒ <strong>建档即解析</strong>。
@@ -240,6 +257,7 @@ public class DocumentController {
             docType,
             parseOrgId(orgId),
             classification,
+            null,
             UUID.fromString(jwt.getSubject())));
   }
 
@@ -267,7 +285,8 @@ public class DocumentController {
       List<Map<String, Object>> segmentationPlan,
       String docType,
       UUID orgId,
-      ClassificationLevel classification) {
+      ClassificationLevel classification,
+      List<String> labels) {
 
     /** 暂存导入形态是否「出现」（字段传了就算，空数组也算 —— 出现即不许静默吞）。 */
     boolean stagedShapeRequested() {
