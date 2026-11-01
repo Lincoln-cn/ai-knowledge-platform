@@ -28,6 +28,17 @@ final class StartupSettingsCheck {
   /** 主块至少要留下的字数：低于这个数，分段几乎只剩前缀。 */
   static final int MIN_BODY_CHARS = 120;
 
+  /**
+   * 仓库里那份**示例** JWT 密钥（`application.yml` 的默认值）。
+   *
+   * <p>★ 它与 yml 里的默认值必须逐字相同，由 {@code SampleSecretDefaultsTest} 读 `application.yml` 钉住 ——
+   * 改了一边忘了另一边，那条测试就红；否则这里会安静地失效， 而"自检安静地失效"比没有自检更坏（`#270` 的形状）。
+   */
+  static final String SAMPLE_JWT_SECRET = "ZGV2LW9ubHktc2VjcmV0LWtleS1kby1ub3QtdXNlLWluLXByb2Q=";
+
+  /** 见 {@link #SAMPLE_JWT_SECRET}。 */
+  static final String SAMPLE_API_KEY_SECRET = "ZGV2LW9ubHktYXBpLWtleS1zZWNyZXQtMzJieXRlcyE=";
+
   private StartupSettingsCheck() {}
 
   /**
@@ -105,6 +116,34 @@ final class StartupSettingsCheck {
               + restoreWindowDays
               + "：回收站里还会显示「恢复」的文档，内容可能已经被清理作业删掉了"
               + "（点下去得到 400/404）。两者要么同值，要么清理窗口不小于恢复窗口。");
+    }
+
+    return problems;
+  }
+
+  /**
+   * 两个**密钥**是不是还用着仓库里的示例值（`#272`）。
+   *
+   * <p>★ 为什么单列一个方法：上面那些是"配错了会坏"，这两条是"**没配就等于没有**" —— 它们不会让任何一次请求失败，只是在出事那天之前一直安静地好用。所以判据也简单到只有一句：
+   * 值等于示例值就报。不做"看起来像不像随机"的猜测：判据要能被解释，猜出来的判据会被关掉。
+   */
+  static List<String> secretProblems(String jwtSecret, String apiKeySecret) {
+    List<String> problems = new ArrayList<>();
+
+    if (SAMPLE_JWT_SECRET.equals(jwtSecret)) {
+      problems.add(
+          "app.security.jwt.secret 用的还是仓库里的示例值（默认值）：这份值写在源码里，"
+              + "任何人都能拿它签出合法令牌 —— 等于没有登录校验，而请求全都正常返回。"
+              + "生产必须用环境变量 JWT_SECRET 换成随机值（例如 `openssl rand -base64 32`），"
+              + "并预期换完之后既有令牌全部失效、需要重新登录一次。");
+    }
+
+    if (SAMPLE_API_KEY_SECRET.equals(apiKeySecret)) {
+      problems.add(
+          "app.model.api-key-secret 用的还是仓库里的示例值（默认值）：模型供应商的 API Key 在库里是这条密钥加密后的密文，"
+              + "而示例值公开 ⇒ 拿到数据库就能解回明文 Key（等于把 Key 明文存库）。"
+              + "生产必须用环境变量 MODEL_API_KEY_SECRET 换掉；"
+              + "★ 换完之后已存的密文解不开，需要在界面上把每个供应商的 Key 重新录一遍。");
     }
 
     return problems;

@@ -113,4 +113,42 @@ class StartupSettingsCheckTest {
   void legacyFourArgOverloadStaysQuiet() {
     assertThat(StartupSettingsCheck.problems(4, 10, 80, 1200)).isEmpty();
   }
+
+  @Test
+  void sampleSecretsAreReportedAsMissingConfiguration() {
+    List<String> problems =
+        StartupSettingsCheck.secretProblems(
+            StartupSettingsCheck.SAMPLE_JWT_SECRET, StartupSettingsCheck.SAMPLE_API_KEY_SECRET);
+
+    assertThat(problems).as("两个密钥都是示例值 ⇒ 两条，一条一条能改的话").hasSize(2);
+    assertThat(problems.get(0))
+        .as("要说清后果（可伪造令牌）与改法（环境变量名）")
+        .contains("app.security.jwt.secret")
+        .contains("JWT_SECRET")
+        .contains("合法令牌");
+    assertThat(problems.get(1))
+        .as("要说清后果（等于明文存库）与改法，以及换完的代价")
+        .contains("app.model.api-key-secret")
+        .contains("MODEL_API_KEY_SECRET")
+        .contains("重新录一遍");
+  }
+
+  @Test
+  void replacedSecretsAreQuiet() {
+    List<String> problems =
+        StartupSettingsCheck.secretProblems("Zm9vYmFyYmF6LXJhbmRvbS1zZWNyZXQtdmFsdWU=", "YW5vdGhlci1yYW5kb20tc2VjcmV0LXZhbHVlIQ==");
+    assertThat(problems)
+        .as("换过了就不该再吵 —— 只验『坏的会报』不验『好的不报』，规则写宽了也照样绿")
+        .isEmpty();
+  }
+
+  @Test
+  void onlyTheSampleOneIsReportedWhenTheOtherIsReplaced() {
+    List<String> problems =
+        StartupSettingsCheck.secretProblems(
+            "Zm9vYmFyYmF6LXJhbmRvbS1zZWNyZXQtdmFsdWU=", StartupSettingsCheck.SAMPLE_API_KEY_SECRET);
+
+    assertThat(problems).as("只该报没换的那条").hasSize(1);
+    assertThat(problems.get(0)).contains("app.model.api-key-secret");
+  }
 }

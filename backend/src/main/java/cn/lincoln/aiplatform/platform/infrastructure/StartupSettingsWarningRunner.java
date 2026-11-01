@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.platform.infrastructure;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +46,12 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
 
   private final int cleanupRetainDays;
 
+  /** JWT 签名密钥（默认值是仓库里的示例值，`#272`）。 */
+  private final String jwtSecret;
+
+  /** 模型 API Key 的加密密钥（默认值是仓库里的示例值，`#272`）。 */
+  private final String apiKeySecret;
+
   public StartupSettingsWarningRunner(
       @Value("${app.ingestion.embedding-concurrency:4}") int embeddingConcurrency,
       @Value("${spring.datasource.hikari.maximum-pool-size:10}") int poolSize,
@@ -53,29 +60,37 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
       // ★ 回收站的两个窗口（`#259`）：分开两个键是因为它们回答不同的问题
       //   （"用户还能撤回多久" vs "内容还能占多久"），但配错方向会互相打脸。
       @Value("${app.knowledge.restore-window-days:7}") int restoreWindowDays,
-      @Value("${app.knowledge.cleanup.retain-days:7}") int cleanupRetainDays) {
+      @Value("${app.knowledge.cleanup.retain-days:7}") int cleanupRetainDays,
+      // ★ 两个密钥只用来和"示例值"对比，不参与任何计算：值本身就是秘密，日志里一个字都不许打。
+      @Value("${app.security.jwt.secret:}") String jwtSecret,
+      @Value("${app.model.api-key-secret:}") String apiKeySecret) {
     this.embeddingConcurrency = embeddingConcurrency;
     this.poolSize = poolSize;
     this.contextWindow = contextWindow;
     this.segmentMaxChars = segmentMaxChars;
     this.restoreWindowDays = restoreWindowDays;
     this.cleanupRetainDays = cleanupRetainDays;
+    this.jwtSecret = jwtSecret;
+    this.apiKeySecret = apiKeySecret;
   }
 
   @Override
   public void run(ApplicationArguments args) {
     List<String> problems =
-        StartupSettingsCheck.problems(
-            embeddingConcurrency,
-            poolSize,
-            contextWindow,
-            segmentMaxChars,
-            restoreWindowDays,
-            cleanupRetainDays);
+        new ArrayList<>(
+            StartupSettingsCheck.problems(
+                embeddingConcurrency,
+                poolSize,
+                contextWindow,
+                segmentMaxChars,
+                restoreWindowDays,
+                cleanupRetainDays));
+    // ★ 密钥那两条单独算：它们不是"配错了会坏"，而是"没换就等于没有"（`#272`）。
+    problems.addAll(StartupSettingsCheck.secretProblems(jwtSecret, apiKeySecret));
 
     if (problems.isEmpty()) {
       log.info(
-          "配置自检通过：向量化并发 {} · 连接池 {} · 上下文窗口 {} · 向量预算 {} · 恢复窗口 {} 天 · 清理窗口 {} 天",
+          "配置自检通过：向量化并发 {} · 连接池 {} · 上下文窗口 {} · 向量预算 {} · 恢复窗口 {} 天 · 清理窗口 {} 天 · 两个密钥都不是示例值",
           embeddingConcurrency,
           poolSize,
           contextWindow,
