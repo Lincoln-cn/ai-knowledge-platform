@@ -428,6 +428,14 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.security.captcha.enabled`（`CAPTCHA_ENABLED`） | true | 等保要求登录带验证码；关掉只应出现在压测/自动化环境 |
 | `app.security.login-failure.max-attempts`（`LOGIN_MAX_ATTEMPTS`） | 3 | 登录失败几次后冻结账号（等保测评项） |
 | `app.security.public-rate-limit.capacity`（`PUBLIC_RATE_LIMIT_CAPACITY`） | 60 | 公开面（免登录）每分钟请求数。★ `enabled` 默认 true：安全开关漏配必须是"开着的" |
+| `app.security.jwt.issuer` | `http://ai-knowledge-platform.local` | 令牌里的 `iss`。★ 必须是 **URL 形式**：裸串会让 `Jwt.getIssuer()` 在读 `iss` 时抛转换异常。改它不影响已在手的令牌（已签出的照旧有效） |
+| `app.security.jwt.access-ttl` | `30m` | 访问令牌有效期（`08 §4.0` 的契约形状）。调大等于把"令牌泄露后的可利用窗口"一起调大 |
+| `app.security.jwt.refresh-ttl` | `7d` | 刷新令牌有效期 —— 决定"一次登录能撑多久不用再登" |
+| `app.security.captcha.ttl` | `2m` | 验证码有效期。它只需要"够人输入一次"，往大调只是让人工等待更久 |
+| `app.security.login-failure.lock-duration`（`LOGIN_LOCK_DURATION`） | `30m` | 超过 `max-attempts` 之后账号冻结多久（等保测评项，与次数上限是一对） |
+| `app.security.public-rate-limit.window-seconds`（`PUBLIC_RATE_LIMIT_WINDOW_SECONDS`） | `60` | 限流的统计窗口。与 `capacity` 一起才成立：默认就是 **60 次 / 60 秒** |
+| `app.embedding.local.model-path`（`LOCAL_ONNX_MODEL_PATH`） | `models/multilingual-e5-small/model_quantized.onnx` | 进程内向量化的模型文件。★ 路径不对时它不会"降级成安静地失败"：该模型要么连上游、要么报错，先看 `app.embedding.local.enabled` 与 `model-name` |
+| `app.embedding.local.tokenizer-path`（`LOCAL_ONNX_TOKENIZER_PATH`） | `models/multilingual-e5-small/tokenizer.json` | 同上，分词器文件；两个文件必须成对存在 |
 
 ### 定时任务与示例数据
 
