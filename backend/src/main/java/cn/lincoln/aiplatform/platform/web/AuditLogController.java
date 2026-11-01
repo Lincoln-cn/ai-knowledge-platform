@@ -62,7 +62,7 @@ public class AuditLogController {
    * @param size 每页条数，上限 {@value #MAX_PAGE_SIZE}
    */
   @GetMapping
-  @PreAuthorize("hasAuthority('system:manage')")
+  @PreAuthorize("hasAuthority('audit:view')")
   public ApiResponse<PageResult<AuditRecordView>> list(
       @RequestParam(required = false) String action,
       @RequestParam(required = false) String resourceType,
@@ -98,7 +98,7 @@ public class AuditLogController {
    * <p>★ 单独一个端点而不是让调用方自己传两个 filter：这个用法太常见，而且它的正确形状 （按资源 + 时间倒序）不该由调用方每次拼对。
    */
   @GetMapping("/by-resource")
-  @PreAuthorize("hasAuthority('system:manage')")
+  @PreAuthorize("hasAuthority('audit:view')")
   public ApiResponse<java.util.List<AuditRecordView>> byResource(
       @RequestParam String resourceType, @RequestParam String resourceId) {
     return ApiResponse.ok(auditQuery.byResource(normalizeType(resourceType), resourceId.trim()));

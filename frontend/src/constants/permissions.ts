@@ -38,6 +38,9 @@ export const PERM = {
   chatSettings: 'conversation:settings',
   systemManage: 'system:manage',
 
+  /** 审计记录查看（#276）。★ 与 `systemManage` 分开：审计员能看全部留痕，但不该能改角色与字典。 */
+  auditView: 'audit:view',
+
   // 管理菜单下的两块基础数据（07 §十 / 08 §十）
   orgManage: 'identity:org:manage',
   dictManage: 'platform:dict:manage'

@@ -30,6 +30,9 @@ export const permissions: PermissionItem[] = [
   //   默认只有 ADMIN（后端 `Permissions.java:74` 的注释与 `BY_ROLE_CODE` 一致）。
   { code: PERM.chatSettings, label: '配置对话设置', module: '对话' },
   { code: PERM.systemManage, label: '账号与权限', module: '系统' },
+  // ★ 审计记录查看（#276）：只读的事，与「能不能改配置」分开 —— 审计员该能看全部留痕，
+  //   但不该能改角色与字典。清理过期记录仍要 `system:manage`（删数据不可逆）。
+  { code: PERM.auditView, label: '审计记录查看', module: '系统' },
   { code: PERM.orgManage, label: '组织机构', module: '系统' },
   { code: PERM.dictManage, label: '基础数据', module: '系统' }
 ]

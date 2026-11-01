@@ -76,9 +76,14 @@ class AuditReadTest {
     assertThat(res.body()).as("★ 要返回空列表与 total=0，而不是让调用方去猜 null").contains("\"total\":0");
   }
 
-  /** 没有 {@code system:manage} 的人看不到审计（`13 §7.2` 第 1 条：审计比业务数据更敏感）。 */
+  /**
+   * 没有 {@code audit:view} 的人看不到审计（`13 §7.2` 第 1 条：审计比业务数据更敏感）。
+   *
+   * <p>★ 这个权限点是 {@code #276} 单开的：原先借用 {@code
+   * system:manage}，于是"只想让他看审计"必须连改配置一起给。现在知识运营（`KB_OPERATOR`）两样都没有 ⇒ 仍 403，但断言的对象从"系统管理"变成了"审计查看"。
+   */
   @Test
-  void auditRequiresSystemManage() throws Exception {
+  void auditRequiresAuditView() throws Exception {
     String operator = accessToken("zhangyun", "123456");
     HttpResponse<String> res = get("/api/v1/audit-logs", operator);
     assertThat(res.statusCode()).as("知识运营不该能读审计：%s", res.body()).isEqualTo(403);
