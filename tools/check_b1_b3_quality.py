@@ -118,10 +118,47 @@ class Client:
             return -1, {"message": str(e)}
 
     def login(self, user: str, password: str) -> str:
+        """登录，并把令牌与凭据留在实例上 —— 长跑的评测要能在 401 时自己换新令牌。"""
         status, body = self.call("POST", "/auth/login", payload={"username": user, "password": password})
         if status != 200:
             raise SystemExit(f"登录失败：{status} {body}")
-        return (body.get("data") or {}).get("accessToken") or ""
+        self._user = user
+        self._password = password
+        self._token = (body.get("data") or {}).get("accessToken") or ""
+        return self._token
+
+    def relogin(self) -> str:
+        if not getattr(self, "_user", ""):
+            raise SystemExit("没有留存凭据，无法自动重新登录")
+        print("  · 令牌失效，重新登录", flush=True)
+        return self.login(self._user, self._password)
+
+    def authed(self, method: str, path: str, payload: dict | None = None,
+               timeout: int = 120, retries: int = 2) -> tuple[int, dict]:
+        """带令牌调用，401 自动重新登录、瞬时失败自动重试。
+
+        ★ 为什么需要它：215 条全量评测要跑一个多小时，令牌会在中途过期 ——
+        第一版没处理，195 条里 178 条是 `401 未认证`，读数因此只剩 20 条有效。
+        一次长跑的读数被一个"跑得久"本身吞掉，是最没道理的一种失败。
+        """
+        last: tuple[int, dict] = (-1, {})
+        for attempt in range(retries + 1):
+            status, body = self.call(method, path, getattr(self, "_token", ""), payload, timeout)
+            if status == 401:
+                self.relogin()
+                continue
+            if status == 200:
+                return status, body
+            last = (status, body)
+            # 后端 400 里有一类是"向量化超时"，它是瞬时的，重试一次往往就好了
+            if status == 400 and "timeout" in json.dumps(body, ensure_ascii=False).lower() and attempt < retries:
+                time.sleep(2)
+                continue
+            if status == -1 and attempt < retries:
+                time.sleep(2)
+                continue
+            break
+        return last
 
     def upload(self, token: str, kb_id: str, path: Path, filename: str) -> tuple[int, dict]:
         boundary = "----b13" + uuid.uuid4().hex
@@ -296,10 +333,9 @@ def stage_eval(token: str, kb_id: str, args: argparse.Namespace) -> int:
     records: list[dict] = []
     started = time.time()
     for i, item in enumerate(qa, 1):
-        status, body = CLIENT.call(
+        status, body = CLIENT.authed(
             "POST",
             "/retrieval/test",
-            token,
             {
                 "question": item["question"],
                 "mode": args.mode,
