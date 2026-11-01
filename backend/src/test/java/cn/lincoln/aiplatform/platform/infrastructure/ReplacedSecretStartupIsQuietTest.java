@@ -33,9 +33,12 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
     properties = {
       "app.security.captcha.enabled=false",
       // 故意用仓库里的示例值：这正是"新部署照抄 defaults"时的真实状态。
-      // 随便一串"换过"的值即可：判据是"不等于仓库里的示例值"，不是密钥强度（强度是部署方的事）。
-      "app.security.jwt.secret=dGVzdC1vbmx5LWp3dC1zZWNyZXQtZm9yLXRoaXMtb25lLXRlc3Q=",
-      "app.model.api-key-secret=dGVzdC1vbmx5LWFwaS1rZXktc2VjcmV0LWZvci10aGUtc2FtZS10ZXN0"
+      // 随便一串"换过"的值即可，但**必须是合法 Base64 且解码后 32 字节**：
+      // `AesGcmCryptoPort` 与 `JwtProperties` 都是按这个形状校验的，长度不对会让整个上下文起不来
+      // —— 第一次提交用的就是一串"看着像密钥"的明文字符串，整包直接红在 Failed to load ApplicationContext。
+      // 判据是"不等于仓库里的示例值"，不是密钥强度（强度是部署方的事）。
+      "app.security.jwt.secret=cmVwbGFjZWQtand0LXNlY3JldC1kby1ub3QtdXNlLWluLXByb2QtMzhi",
+      "app.model.api-key-secret=cmVwbGFjZWQtYXBpLWtleS1zZWNyZXQtMzJieXRlcyE="
     })
 class ReplacedSecretStartupIsQuietTest {
 
