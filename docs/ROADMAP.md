@@ -2882,3 +2882,13 @@ run `41252289913`（head `891b489`）= **success**，`[INFO] Tests run: 1244, Fa
 
 - `WorkflowAdmissionService` **还没有调用方** —— `POST /workflow/debug` 需要执行引擎真跑图，接线在那一批。
 - `#113` 其余判据（节点必填配置齐全、单节点超时、并发上限）还没落。
+
+#### 11.10.60 2026-11-01 执行准入第二块：参数必填（`#113`）
+
+`NodeConfigReader`（`JsonNode` → `NodeConfig`）+ `WorkflowAdmissionService.admission(JsonNode, reader)` 追加 `MISSING_REQUIRED_CONFIG`：`AI_CHAT_NODE`/`QUESTION_NODE` 要 `modelId`，`SEARCH_DATASET_NODE` 要 `kbIds` 或 `applicationId`。读数：两个测试类 4/4 与 3/3；金丝雀各红 2 条；快闸 `41282867256`、`41283075078` 均 success。
+
+**判据一：结构视图不该装参数。** `WorkflowValidationService.Node` 只有 id/type/title，加 config 会让校验层承担参数语义；另开 reader 之后“哪些键必填”只有一个真源。
+
+**判据二：反证没红之前，「全绿」不构成任何证据。** 我第一次跑金丝雀时替换串已被 spotless 重排 ⇒ patch 静默没生效，我却把“4/4 通过”当成金丝雀的反面证据并写进了提交消息；后来按“改坏一次”重做（`hasSource` 恒 false ⇒ 2 红），`--amend` 订正。
+
+**判据三：`git checkout --` 被安全网挡下是好事。** 复原金丝雀改用 `cp` 备份 + 反向替换；顺带说明：这个仓库里“回退”必须可解释，而不是一条会静默丢改动的命令。
