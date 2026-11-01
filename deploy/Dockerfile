@@ -52,7 +52,12 @@ WORKDIR /app
 
 # ★ 只 COPY jar：构建上下文里还有源码、node_modules、target 下的其它产物，
 #   全 COPY 进来会让镜像体积与"镜像里有什么"一起失控。
-COPY backend/target/ai-knowledge-platform-0.0.1-SNAPSHOT.jar /app/app.jar
+# ★★ 这里用通配而不是写死版本号（`#273`）：写死的那一份曾经是 `0.0.1-SNAPSHOT`，
+#   而 `backend/pom.xml` 早已是 0.4.5 —— 于是这个镜像**构建不出来**，而 CI 从不构建它，
+#   所以坏了很久没人知道。通配让"版本号往前走了"不再需要同步改这里。
+#   代价是"artifactId 改名"这类漂移也会变静默，所以配了 `deploy/check_image_manifest.py`：
+#   它断言这个通配**确实匹配今天的 `artifactId-version.jar`**，绝不空转。
+COPY backend/target/ai-knowledge-platform-*.jar /app/app.jar
 RUN chown -R appuser:appuser /app
 USER appuser
 

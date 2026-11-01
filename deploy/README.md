@@ -65,13 +65,19 @@ python deploy/verify_image_pg.py
 backend\mvn-jdk25.cmd -B -f backend/pom.xml package -DskipTests
 
 # 2) 构建镜像（★ 构建上下文是仓库根）
-docker build -f deploy/Dockerfile -t ai-knowledge-platform:0.3.1 .
+#    ★ 标签不要写死版本号（`#273`）：这里曾经写着 `:0.3.1`，而 pom 早已是 0.4.5 ——
+#    同一个病在 `Dockerfile` 的 `COPY` 行上也犯过（那份镜像直接构建不出来）。
+docker build -f deploy/Dockerfile -t ai-knowledge-platform:dev .
 
 # 3) 交付给内网：导出 → 拷贝 → 导入（离线这一步不需要任何网络）
-docker save ai-knowledge-platform:0.3.1 -o ai-knowledge-platform-0.3.1.tar
+docker save ai-knowledge-platform:dev -o ai-knowledge-platform.tar
 #   内网机器上：
-docker load -i ai-knowledge-platform-0.3.1.tar
+docker load -i ai-knowledge-platform.tar
 ```
+
+★ 「镜像里的 jar 名」与 `backend/pom.xml` 的 `artifactId-version` 对不对得上，由
+`deploy/check_image_manifest.py` 守（快闸里跑两步：自检 + 实判）。它同时钉住
+`ENTRYPOINT` 路径、`EXPOSE` 与 `application.yml` 的 `server.port` 默认值、以及「不以 root 跑」。
 
 ### ★★ 一个必须知道的构建坑：`.dockerignore` 不是"优化"，是"让构建能用"
 
