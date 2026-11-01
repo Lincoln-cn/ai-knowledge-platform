@@ -3352,6 +3352,19 @@ Caused by: org.flywaydb.core.api.FlywayException: Found more than one migration 
 
 三处的真后端都有 `@PreAuthorize`（`KnowledgeBaseController:141-143` / 反馈 `:36` / `DictionaryController:58-79`），但 **mock 的写入口用 404 冒充 403**（`mock/policy.ts:159` 的 `requireVisible` 把"无权限"与"不存在"合并）。⇒ A7 的接口侧判据（`§11.10.16`「403 是权限，404 是存在性」）在 mock 上**永远为假**。记账，不在本批硬塞。
 
+**73.4.1 ★ 接口侧的真栈读数（2026-11-01，后端 18088 + 前端 5280 非 mock + 关验证码）**
+
+mock 取不到 403，那就去真栈取 —— 三条都拿到了：
+
+| 端点 | 调用者 | 结果 |
+|---|---|---|
+| `PATCH /knowledge-bases/{id}/enabled` | `liwei`（无 `knowledge:manage`） | **403**「无权限 / 请联系管理员为你的角色勾选该权限点」 |
+| 同上 | `admin`（有该点） | **200**（停用成功，随后已恢复 `enabled=true`） |
+| `PATCH /feedbacks/batch` | `liwei`（无 `feedback:handle`） | **403** |
+| `POST /dictionaries` | `liwei`（无 `platform:dict:manage`） | **403** |
+
+★ 第 2 行是**正向对照**，缺了它，上面三条 403 可能只是"这条链路整体坏了"的另一种读法（`§11.10.16` 已写下这条纪律）。★ 顺带记一个坑：`POST /feedbacks/batch` 返回 **405**（该路径只接受 GET/PATCH），所以"验 403"要先对方法，否则拿到的是"方法不允许"而不是"没权限"。
+
 **73.5 两条判据**
 
 1. **"页面内没有第二个门"的写入口，A7 必须落在路由矩阵上。** 硬给基础数据页加一个"权限点"是造门槛，不是验门槛 —— 它的门本来就在入口。
