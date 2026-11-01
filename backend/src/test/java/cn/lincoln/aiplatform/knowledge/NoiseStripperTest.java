@@ -36,6 +36,9 @@ import tools.jackson.databind.ObjectMapper;
  */
 class NoiseStripperTest {
 
+  /** 换行（测试里拼多行 Markdown 用；直接写转义在中文串旁边不好读）。 */
+  private static final String NL = "\n";
+
   /** 从夹具的逐页答案拼出"理想文本"（每页内部按 {@code \r\n} 分行，页与页之间接一个换行）。 */
   private static String scannedGroundTruth() throws Exception {
     ObjectMapper mapper = new ObjectMapper();
@@ -208,5 +211,59 @@ class NoiseStripperTest {
     assertThat(NoiseStripper.strip(null).markdown()).isEmpty();
     assertThat(NoiseStripper.strip("").removedLines()).isZero();
     assertThat(NoiseStripper.strip("   \n\n  ").removedLines()).isZero();
+  }
+
+  // ────────────────── 解析器占位标记（`#51`）──────────────────
+
+  @Test
+  void 整行的图片占位标记被剥掉() {
+    String md = "# 第一章" + NL + "[PDF 1]" + NL + "正文第一段" + NL + "[PDF 2]" + NL + "正文第二段";
+    NoiseStripper.Result r = NoiseStripper.strip(md);
+
+    assertThat(r.removedLines()).as("两条整行占位 ⇒ 剥 2 行").isEqualTo(2);
+    assertThat(r.markdown()).doesNotContain("[PDF");
+    assertThat(r.markdown()).as("正文一行不许少").contains("正文第一段").contains("正文第二段");
+  }
+
+  @Test
+  void 转义形态的占位标记也被剥掉() {
+    // ★ 这才是**生产上真正出现**的形态：Tika 的 Markdown handler 会把方括号转义，
+    // 源文本 "[PDF 1]" 解析出来的产物是 "\[PDF 1\]"。
+    // 只认裸形态的话，这条规则在线上永远不生效，而单元测试还会一路绿。
+    String md = "# 第一章" + NL + "\\[PDF 1\\]" + NL + "正文第一段" + NL + "\\[PDF 2\\]" + NL + "正文第二段";
+    NoiseStripper.Result r = NoiseStripper.strip(md);
+
+    assertThat(r.removedLines()).as("两条整行占位（转义形态）⇒ 剥 2 行").isEqualTo(2);
+    assertThat(r.markdown()).doesNotContain("PDF");
+    assertThat(r.markdown()).contains("正文第一段").contains("正文第二段");
+  }
+
+  @Test
+  void 行内还有内容的占位标记不剥() {
+    // ★ 宁可漏剥：`[PDF 1] 图 1 系统架构` 行内还有字，那多半是真图注被工具加了前缀
+    String md = "[PDF 1] 图 1 系统架构" + NL + "正文";
+    NoiseStripper.Result r = NoiseStripper.strip(md);
+
+    assertThat(r.removedLines()).isZero();
+    assertThat(r.markdown()).contains("[PDF 1] 图 1 系统架构");
+  }
+
+  @Test
+  void 图注与表格标题一个字都不许动() {
+    // ★ 防"删过头"：图注、表标题是最容易被顺手删掉的真信息（`#51` 判据 2）
+    String md = "图 1 系统架构" + NL + "表 1 参数表" + NL + "Table 2 Results" + NL + "[pdf 3]" + NL + "正文";
+    NoiseStripper.Result r = NoiseStripper.strip(md);
+
+    assertThat(r.removedLines()).as("只剥 `[pdf 3]` 这一行").isEqualTo(1);
+    assertThat(r.markdown()).contains("图 1 系统架构").contains("表 1 参数表").contains("Table 2 Results");
+  }
+
+  @Test
+  void 代码围栏里的占位形态不剥() {
+    String md = "```" + NL + "[PDF 1]" + NL + "```" + NL + "正文";
+    NoiseStripper.Result r = NoiseStripper.strip(md);
+
+    assertThat(r.removedLines()).as("围栏内是内容，不是噪声").isZero();
+    assertThat(r.markdown()).contains("[PDF 1]");
   }
 }

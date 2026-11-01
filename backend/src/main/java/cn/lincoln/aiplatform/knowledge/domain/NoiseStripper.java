@@ -51,6 +51,28 @@ public final class NoiseStripper {
   private static final Pattern TOC_LINE =
       Pattern.compile(".*?[.．…·]{2,}[\\s.．，,、;；:：]*\\d{1,4}\\s*$");
 
+  /**
+   * 解析器留下的**图片占位标记**（`#51`）：整行只有 `[PDF 1]` / `[pdf 12]` 这种方括号 + 格式名 + 序号。
+   *
+   * <p>★★ 取证结论（2026-11-01，不是推断）：**我们这条链不产生它** —— 4 份夹具与一份自造的图文混排 PDF （PDFBox 画了图）解析后 {@code [PDF
+   * N]} 命中数都是 <b>0</b>，Tika 对嵌入式图片是「直接丢弃、不留标记」。 因此它只可能来自 <b>源 PDF 的文本层</b>（生成该 PDF 的工具把图写成了这行占位文字）。
+   *
+   * <p>★ 为什么还是要剥：它一旦进 {@code search_text} 就同时污染向量与全文索引，而且**不会让任何闸门变红** （{@code 12 §10.2} 风险 2
+   * 的反面：内容里多了一点垃圾，然后没人发现）。
+   *
+   * <p>★ 边界（宁可漏剥，不许误杀）：
+   *
+   * <ul>
+   *   <li><b>只认整行</b>：{@code [PDF 1] 图注} 这种行内还有内容的**不动** —— 那多半是真图注；
+   *   <li><b>只认方括号 + PDF + 数字</b>：{@code 图 1} / {@code 表 1} / {@code Table 1} 这类图注表格标题**不动**；
+   *   <li><b>两种写法都认</b>：Tika 的 Markdown handler 会把方括号转义 —— 源文本 {@code [PDF 1]} 解析产物里是 {@code \[PDF
+   *       1\]}（实测）。只认裸形态的话，这条规则在生产上永远不生效。
+   *   <li>代码围栏内不动（与其余规则同口径）。
+   * </ul>
+   */
+  private static final Pattern PARSER_PLACEHOLDER =
+      Pattern.compile("^\\\\?\\[\\s*(?:PDF|pdf|Pdf)\\s*\\d{1,3}\\s*\\\\?\\]$");
+
   private static final String FENCE = "```";
 
   private NoiseStripper() {}
@@ -94,6 +116,17 @@ public final class NoiseStripper {
     }
 
     boolean[] drop = new boolean[lines.length];
+
+    // ① 图片占位标记（`#51`）：`[PDF 1]` 这种整行剥离。★ 先于其余规则 —— 它是"解析器/源文件留下的垃圾"，
+    //   而其余规则都是"排版噪声"，两者成因不同，混在一条分支里以后说不清是谁剥的。
+    for (int i = 0; i < lines.length; i++) {
+      if (inFence[i]) {
+        continue;
+      }
+      if (PARSER_PLACEHOLDER.matcher(lines[i].strip()).matches()) {
+        drop[i] = true;
+      }
+    }
 
     // ② 独立成行的页码
     for (int i = 0; i < lines.length; i++) {
