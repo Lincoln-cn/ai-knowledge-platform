@@ -71,10 +71,10 @@ class NoiseStripperTest {
         .doesNotContain("第 7 页 共 12 页")
         .doesNotContain("\nvii\n");
 
-    // ── ② 剥掉的行数：3 页眉 + 3 页脚 + 3 页码 + 6 目录行 ──
+    // ── ② 剥掉的行数：3 页眉 + 3 页脚 + 3 页码 + 6 目录行 + 1 版权行（`#271`） ──
     assertThat(result.removedLines())
         .as("★ 剥掉的行数必须记准（removedNoiseLines 要进切分预览，否则少的内容没人能解释）")
-        .isEqualTo(15);
+        .isEqualTo(16);
 
     // ── ③ 正文一行不动（这是更重要的那一半：误杀 = 内容静默缺失） ──
     assertThat(result.markdown())
@@ -90,8 +90,10 @@ class NoiseStripperTest {
         .contains("第一章 总则")
         .contains("1.1 制定目的");
 
-    // ── ⑤ 只出现一次的那行版权信息不属于噪声 ──
-    assertThat(result.markdown()).contains("2024 某某集团有限公司 版权所有");
+    // ── ⑤ 版权声明行算噪声（`#271` · 2026-11-01 拍板）：整行 + 行首剥离 ──
+    assertThat(result.markdown())
+        .as("★ 版权行进 search_text 会污染向量与引用文本；只认行首，正文里提到它不剥")
+        .doesNotContain("2024 某某集团有限公司 版权所有");
   }
 
   /**
@@ -128,11 +130,13 @@ class NoiseStripperTest {
             内部资料 请勿外传
             """);
 
-    assertThat(result.removedLines()).as("6 行目录被剔掉（★ 空行不打断；点线与页码之间夹着「，」也要认）").isEqualTo(6);
+    assertThat(result.removedLines())
+        .as("6 行目录 + 1 行版权（`#271`）被剔掉（★ 空行不打断；点线与页码之间夹着「，」也要认）")
+        .isEqualTo(7);
     assertThat(result.markdown())
         .as("★ 页眉/页脚在这一段里只出现 1 次 ⇒ 按「≥3 次」规则不该剥（三页场景由上一个用例覆盖）")
         .contains("某某集团内部管理制度")
-        .contains("2024 某某集团有限公司 版权所有");
+        .doesNotContain("2024 某某集团有限公司 版权所有");
     assertThat(result.markdown()).doesNotContain("第一章 总则 ..");
   }
 
@@ -267,5 +271,37 @@ class NoiseStripperTest {
 
     assertThat(r.removedLines()).as("围栏内是内容，不是噪声").isZero();
     assertThat(r.markdown()).contains("[PDF 1]");
+  }
+
+  // ────────────────── 版权声明行（`#271` · 2026-11-01 拍板：算噪声，只认行首）──────────────────
+
+  /**
+   * ★ 反证：正文里**提到**版权的那句话一行都不许少（`#271` 判据 2）。
+   *
+   * <p>规则只认行首，就是为了这一条 —— 「本文件版权所有，未经许可不得复制」在真文档里是合规声明， 剥掉它等于删信息；而它和首页那条 `© 2024 …` 常常在同一份文档里同时存在。
+   */
+  @Test
+  void aCopyrightSentenceInsideBodyTextIsKept() {
+    String md = "© 2024 某某集团有限公司 版权所有" + NL + "本文件版权所有，未经许可不得复制或传播。" + NL + "正文第一段";
+    NoiseStripper.Result r = NoiseStripper.strip(md);
+
+    assertThat(r.removedLines()).as("只剥行首那条版权行").isEqualTo(1);
+    assertThat(r.markdown()).doesNotContain("© 2024");
+    assertThat(r.markdown()).as("正文里的版权句不是噪声").contains("本文件版权所有，未经许可不得复制或传播。");
+  }
+
+  /** ★ 三种实测形态都要认（`#271`）：带 © / 英文 Copyright / OCR 丢了符号只剩年份。 */
+  @Test
+  void threeCopyrightLineFormsAreAllRemoved() {
+    String md =
+        "Copyright (c) 2024 Example Corp. All rights reserved."
+            + NL
+            + "2024 某某集团有限公司 版权所有"
+            + NL
+            + "正文";
+    NoiseStripper.Result r = NoiseStripper.strip(md);
+
+    assertThat(r.removedLines()).isEqualTo(2);
+    assertThat(r.markdown()).contains("正文").doesNotContain("Copyright").doesNotContain("版权所有");
   }
 }

@@ -37,6 +37,13 @@ public final class NoiseStripper {
   /** 目录页判定的最短连续行数（{@code 12 §2.4}：≥5 行）。 */
   public static final int TOC_MIN_RUN = 5;
 
+  /**
+   * 版权声明行的最大长度（{@code #271}）。
+   *
+   * <p>★ 这是一道<b>防误杀</b>的护栏，不是排版要求：真版权行都很短（实测最长 24 字）。长段落里出现 「©」或「版权所有」多半是正文在讨论版权，整段剥掉就是内容静默缺失。
+   */
+  public static final int COPYRIGHT_MAX_LENGTH = 120;
+
   /** 独立成行的页码：{@code 12} / {@code - 12 -} / {@code 第 3 页} / {@code 第 3 页 共 10 页} / 罗马数字。 */
   private static final Pattern PAGE_NUMBER =
       Pattern.compile(
@@ -72,6 +79,31 @@ public final class NoiseStripper {
    */
   private static final Pattern PARSER_PLACEHOLDER =
       Pattern.compile("^\\\\?\\[\\s*(?:PDF|pdf|Pdf)\\s*\\d{1,3}\\s*\\\\?\\]$");
+
+  /**
+   * 版权声明行（`#271`）：整行、行首、短行。
+   *
+   * <p>★★ 判据（2026-11-01 用户拍板）：<b>算噪声，只在行首剥离</b>。
+   *
+   * <p>为什么要有它：版权行是"每份文档都有、可能每页都重复"的排版噪声，进了 {@code search_text}
+   * 既污染向量也污染引用文本；而它<b>不会让任何闸门变红</b>（{@code 12 §10.2} 风险 2 的反面）。 此前生产实现没有这条规则，于是实测表上 {@code
+   * noisy.docx} 恒为 11/12 —— 差的那一条就是它。
+   *
+   * <p>为什么<b>只认行首</b>：正文里合法出现"版权所有"的句子（例如「本文件版权所有，未经许可不得复制」）
+   * 行首不是版权标记，剥掉就是<b>删信息</b>；那比留下脏一行严重得多。三种行首形态是实测见过的：
+   *
+   * <ul>
+   *   <li>{@code © 2024 某某集团有限公司 版权所有}
+   *   <li>{@code Copyright (c) 2024 …}
+   *   <li>{@code 2024 某某集团有限公司 版权所有}（OCR 丢了 © 符号，只剩年份 + 结尾）
+   * </ul>
+   */
+  private static final Pattern COPYRIGHT_LINE =
+      Pattern.compile(
+          "^\\s*(?:©|\\(c\\)|（c）|copyright\\b).*$"
+              + "|^\\s*版权所有.*$"
+              + "|^\\s*(?:19|20)\\d{2}\\s+\\S.*版权所有\\s*$",
+          Pattern.CASE_INSENSITIVE);
 
   private static final String FENCE = "```";
 
@@ -132,6 +164,21 @@ public final class NoiseStripper {
     for (int i = 0; i < lines.length; i++) {
       String trimmed = lines[i].strip();
       if (!trimmed.isEmpty() && !inFence[i] && PAGE_NUMBER.matcher(trimmed).matches()) {
+        drop[i] = true;
+      }
+    }
+
+    // ②b 版权声明行（`#271`）：整行 + 行首 + 不超长。
+    //   ★ 必须先于 ③「跨页重复行」：它只出现 1 次时那条规则认不出来 —— `noisy.docx` 的 11/12
+    //     差的就是这一条（夹具基准把它记作 noiseLines，而生产实现此前没有这条规则）。
+    for (int i = 0; i < lines.length; i++) {
+      if (inFence[i]) {
+        continue;
+      }
+      String trimmed = lines[i].strip();
+      if (!trimmed.isEmpty()
+          && trimmed.length() < COPYRIGHT_MAX_LENGTH
+          && COPYRIGHT_LINE.matcher(trimmed).matches()) {
         drop[i] = true;
       }
     }
