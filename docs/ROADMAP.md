@@ -2855,3 +2855,5 @@ run `41252289913`（head `891b489`）= **success**，`[INFO] Tests run: 1244, Fa
 
 - 只认 `npm run`；`python xxx.py`、`mvn -Dtest=…` 这类引用还没对账（历史文档大量引用临时脚本，一次只收一种形状）。
 - 复现指南里其余命令（`docker compose` / `mvn`）与真实入口的对应关系仍是人工维护。
+
+> **58.4 这一批为什么没有新的整包读数**（2026-11-01）：后端整包 `41280754803` 跑的是 `3c9a479`（`#77` 的留缝），此后 `5452121`（文档命令闸门）与本文档提交只动了 `tools/check_doc_commands.py`、`.github/workflows/ci-fast.yml`、两份 markdown —— **后端测试面一行没改**，所以没有为它们单独重跑整包。判据：一条提交要不要重跑整包，看它有没有动 `backend/src`（含 `resources`），不看它"看起来很重要"。
