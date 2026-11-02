@@ -127,7 +127,7 @@ jobs:
         run: |
           python tools/openai_stub.py --port 11999 > /tmp/stub.log 2>&1 &
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:11434/v1/models > /dev/null; then
+            if curl -sf http://localhost:11999/v1/models > /dev/null; then
               echo "桩服务就绪"
               exit 0
             fi
