@@ -1232,7 +1232,11 @@ class ChatStreamHttpTest {
           stopSignal,
           properties,
           modelEgress,
-          multiHop);
+          // ★ `#293`：ChatService 现在依赖的是 platform 的 HopDeciderPort，
+          //   不是 retrieval 的实现类型 —— 测试替身也该按端口给。
+          multiHop == null
+              ? null
+              : new cn.lincoln.aiplatform.retrieval.application.HopDeciderAdapter(multiHop));
       this.failAfterFrames = failAfterFrames;
       this.writeFailureFired = writeFailureFired;
       this.attemptedFrames = attemptedFrames;
