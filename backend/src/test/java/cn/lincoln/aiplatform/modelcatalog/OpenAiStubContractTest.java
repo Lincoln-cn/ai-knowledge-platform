@@ -38,9 +38,21 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  *       Ollama 不会告诉你它收到了什么， 而桩服务会。★ 注意它<em>只能</em>证明"框架发了没有"， 不能证明"上游认不认这个字段"（后者仍要在真模型上测）。
  * </ol>
  *
- * <p>桩服务不在时整体跳过（assumption），所以它进了测试套件也不会让 {@code mvn verify} 在没起桩的机器上变红。启动方式：
+ * <p>桩服务不在时整体跳过（assumption），所以它进了测试套件也不会让 {@code mvn verify} 在没起桩的机器上变红。
  *
- * <pre>python backend/tools/openai_stub.py</pre>
+ * <h3>★★ 起桩要**两件事都做**（`#291` 的教训）</h3>
+ *
+ * <pre>
+ * python backend/tools/openai_stub.py --port 11999      # ① 桩本身
+ * AI_BASE_URL=http://localhost:11999/v1 mvn test ...    # ② 让被测代码也连它
+ * </pre>
+ *
+ * <p>★ 只做 ① 会得到 {@code 404: model 'stub-plain' not found} —— 因为本类的 {@code STUB_ROOT} 只用于 **断言与
+ * reset**，真正发请求的是 Spring AI 的 {@code base-url}（{@code AI_BASE_URL}）。桩起着却仍报 404，
+ * 说明被测代码连的是**另一个**地址（开发机上常见：连到本机 ollama）。
+ *
+ * <p>★ 为什么端口是 11999 而不是 11434：**11434 是 Ollama 的默认端口**，同一个端口两个消费者时， "桩没起、ollama 在跑"表现为 404 ——
+ * 看起来像代码坏了。守卫在 {@code tools/check_stub_port.py}。
  */
 @SpringBootTest
 @Testcontainers
@@ -51,7 +63,7 @@ class OpenAiStubContractTest {
 
   /** 桩服务的根（不含 /v1）—— 它是 base-url 去掉末段后的地址。 */
   private static final String STUB_ROOT =
-      System.getenv().getOrDefault("AI_STUB_ROOT", "http://localhost:11434");
+      System.getenv().getOrDefault("AI_STUB_ROOT", "http://localhost:11999");
 
   private static final Pattern PATH_PATTERN = Pattern.compile("\"path\"\\s*:\\s*\"([^\"]+)\"");
 

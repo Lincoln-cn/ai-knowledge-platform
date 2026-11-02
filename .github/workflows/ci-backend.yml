@@ -147,7 +147,7 @@ jobs:
       - name: 起 OpenAI 桩服务（供契约测试用）
         working-directory: backend
         run: |
-          python tools/openai_stub.py --port 11434 > /tmp/stub.log 2>&1 &
+          python tools/openai_stub.py --port 11999 > /tmp/stub.log 2>&1 &
           for i in $(seq 1 30); do
             if curl -sf http://localhost:11434/v1/models > /dev/null; then
               echo "桩服务就绪"

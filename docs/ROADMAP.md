@@ -3692,3 +3692,27 @@ assertThat(refused.getMessage()).contains("不存在").doesNotContain("没有权
 ★ **闸门自带 `--self-check`（5 条）**，因为"修闸门"和"把闸门改成绿的"读数完全一样：正常页面不误报 · 三条全命中 · **手动打开的浮层不算 ①**（那是有意的交互）· **注释里提到这个病不算 ③**（我第一版就栽在这条上，把 `#289` 的改动注释读成了"页面在自述"）· **委派给子组件算有实质**（`<ProviderPanel />`；只看 `Index.vue` 会把"已经拆出去了"误判成"页面是空的"）。
 
 ★ 已接进 `.github/workflows/ci-fast.yml` 的静态闸门那一档（自检 + 扫全库各一步）。
+
+#### 11.10.86 2026-11-02 桩端口与 Ollama 抢 11434（`#291`）+ 存量模型绑上服务商
+
+**现象**：本机跑 `modelcatalog` 整包时 `OpenAiStubContractTest` / `UpstreamEmbeddingAdapterTest` 一族报 `404: model 'stub-plain' not found`，而桩明明起着。**探针实测**：`curl http://localhost:11999/v1/models` 200 ⇒ 桩活着，**是被测代码连的是另一个地址**。
+
+**根因**：`AI_STUB_ROOT` 默认 `http://localhost:11434` —— 而 **11434 是 Ollama 的默认端口**。同一个端口两个消费者：
+- 桩没起、ollama 在跑 ⇒ 测试打到真模型 ⇒ `404: model 'stub-plain' not found`（看起来像代码坏了）；
+- 桩起了、ollama 也在 ⇒ 谁先绑上谁赢，另一方的读数全是假。
+
+**处置**：
+1. 四个测试类的默认桩端口改 **11999**，CI 的 `openai_stub.py --port` 同步；
+2. 新增闸门 `tools/check_stub_port.py`：断言桩默认端口不是 `11434`、且 CI 与测试**用同一个端口**（否则测试连不上桩，症状是"连不上上游"）；
+3. `OpenAiStubContractTest` 的类注释补上**两件事都要做**：起桩（`--port 11999`）+ `AI_BASE_URL=http://localhost:11999/v1`。★ 只做前者会得到 404 —— 因为该类的 `STUB_ROOT` 只用于**断言与 reset**，真正发请求的是 Spring AI 的 `base-url`。
+
+**读数**：`AI_BASE_URL=http://localhost:11999/v1 mvn -o test -Dtest=OpenAiStubContractTest` ⇒ **6/6 绿**（此前 5 error）。
+
+★ **教训**：`404: model 'stub-plain' not found` 说的不是"代码坏了"，是"**被测代码连的不是你以为的那台**"。而**端口冲突是静默的** —— 它永远不会报"端口被占用"，只会让读数变成另一个东西的读数。
+
+**另一件（用户拍板）**：把存量模型批量绑到「本机 Ollama」—— 58 条模型的 `provider_id` 原本**全是空**（走"旧式直连"），而出站密级 / 认证方式 / 连通性检查都挂在这条路上。按 `base_model` 分批绑：
+- `bge-m3`（29）+ `qwen2.5:1.5b`（10）= **39 条已绑**（这两个 ollama 上确实有）；
+- `bge-small-zh-v1.5`（14）**不绑** —— ollama 上没有这个模型，绑上去只会把"指向不存在的上游"变成"绑在服务商上但加载失败"；
+- `multilingual-e5-small`（5）**不绑** —— 那是**进程内 ONNX**，不该挂到任何服务商上。
+
+读数：`GET /api/v1/models?providerId=c3df8f8f…` ⇒ **39**；样例的 `providerName` = 「本机 Ollama」。
