@@ -133,6 +133,19 @@ public class KnowledgeBase implements OwnedResource {
   @Column(name = "retrieval_no_ref_strategy", nullable = false, length = 16)
   private NoRefStrategy retrievalNoRefStrategy = NoRefStrategy.REFUSE;
 
+  /**
+   * 是否开启多跳迭代（{@code #283}）。默认<strong>关</strong>。
+   *
+   * <p>★ 它为什么必须落在这张表上：多跳原先只挂在 {@code HitTestQuery} 上 —— 用户能在命中测试里打开、
+   * 能看到效果，而真实问答一次都不会跑。**"界面上能开、问答里不用"比没有这个功能更糟**，因为它看起来有。
+   */
+  @Column(name = "retrieval_multi_hop_enabled", nullable = false)
+  private boolean retrievalMultiHopEnabled = false;
+
+  /** 多跳轮数上限（含首轮），1–3。默认 2 = 首轮 + 最多再检一轮（{@code 10 §3.4.2}）。 */
+  @Column(name = "retrieval_max_hops", nullable = false)
+  private short retrievalMaxHops = 2;
+
   // ── 查询理解（第 12 周 · 0.4.0，契约的三个**可选**字段，10 §8.1）──
 
   /** 查询理解条数：{@code 0} = 不做，{@code 1} = 只改写，≥2 = 改写 + 扩展。默认 3。 */
@@ -324,7 +337,9 @@ public class KnowledgeBase implements OwnedResource {
       NoRefStrategy noRefStrategy,
       Integer queryCount,
       Boolean decomposeEnabled,
-      Integer maxSubQuestions) {
+      Integer maxSubQuestions,
+      Boolean multiHopEnabled,
+      Integer maxHops) {
     if (mode != null) {
       this.retrievalMode = mode;
     }
@@ -344,6 +359,17 @@ public class KnowledgeBase implements OwnedResource {
     }
     if (noRefStrategy != null) {
       this.retrievalNoRefStrategy = noRefStrategy;
+    }
+    if (multiHopEnabled != null) {
+      this.retrievalMultiHopEnabled = multiHopEnabled;
+    }
+    if (maxHops != null) {
+      // ★ 上界与 `RetrievalParams.MAX_HOPS_CAP`、`HitTestQuery.MAX_HOPS_CAP`、库层 check 三处同值：
+      //   不一致的症状是"界面能填 5、后端静默收到 3"，而错误会出现在问答链路上、离配置很远。
+      if (maxHops < 1 || maxHops > 3) {
+        throw new IllegalArgumentException("多跳轮数应在 1～3 之间");
+      }
+      this.retrievalMaxHops = maxHops.shortValue();
     }
     if (queryCount != null) {
       // ★ 0 是合法值（不做查询理解），所以校验是 `0..5` 而不是 `1..5` —— 把它收紧成 1
@@ -409,6 +435,14 @@ public class KnowledgeBase implements OwnedResource {
   // ★★ 2026-10-29（`#44`）：这里原有 documentCount() / segmentCount() / charCount() /
   //   hasVectorizedContent() 四个访问器，已随库列一起删除（迁移 `knowledge/V54`）。
   //   计数只从 `CountsPort#countsFor` 读（读时算）—— 领域对象不再持有计数快照。
+
+  public boolean retrievalMultiHopEnabled() {
+    return retrievalMultiHopEnabled;
+  }
+
+  public int retrievalMaxHops() {
+    return retrievalMaxHops;
+  }
 
   public RetrievalMode retrievalMode() {
     return retrievalMode;

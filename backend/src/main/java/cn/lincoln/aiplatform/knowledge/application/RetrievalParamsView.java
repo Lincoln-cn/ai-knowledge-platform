@@ -24,4 +24,6 @@ public record RetrievalParamsView(
     NoRefStrategy noRefStrategy,
     int queryCount,
     boolean decomposeEnabled,
-    int maxSubQuestions) {}
+    int maxSubQuestions,
+    boolean multiHopEnabled,
+    int maxHops) {}

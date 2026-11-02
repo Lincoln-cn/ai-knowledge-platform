@@ -115,7 +115,16 @@ class AccessCredentialTest {
         List.of(),
         OWNER);
     assistant.applyRetrieval(
-        RetrievalMode.HYBRID, new BigDecimal("0.60"), 5, NoRefStrategy.REFUSE, 3, true, 3, OWNER);
+        RetrievalMode.HYBRID,
+        new BigDecimal("0.60"),
+        5,
+        NoRefStrategy.REFUSE,
+        3,
+        true,
+        3,
+        false,
+        2,
+        OWNER);
     assistant.bind(List.of(KB), List.of(), OWNER);
     assistant.publish(true, OWNER);
     return assistants.save(assistant);

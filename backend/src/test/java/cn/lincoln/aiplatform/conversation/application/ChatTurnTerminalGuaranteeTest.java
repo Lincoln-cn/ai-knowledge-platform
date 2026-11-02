@@ -136,7 +136,8 @@ class ChatTurnTerminalGuaranteeTest {
         },
         new ChatStopSignal(),
         PROPERTIES,
-        UNRESTRICTED_EGRESS);
+        UNRESTRICTED_EGRESS,
+        null);
   }
 
   // ────────────────────────── 替身 ──────────────────────────

@@ -70,11 +70,15 @@ public class AppBindingAdapter implements AppBindingPort {
         promptTexts(app.promptIds()),
         // ★ `#185`：应用级检索参数随绑定一起进问答链路。此前它们只存在于实体 / 视图 / 导出里，
         //   `ChatService` 读的是平台设置 ⇒ 配置页那几个控件全是装饰。
+        // ★★ `#283`：多跳那两格也必须走这条路 —— 它原先根本不在 `RetrievalParams` 里，
+        //   于是"命中测试能开多跳、真实问答永远不跑"。加字段不接这里，等于又造一次同样的假象。
         new RetrievalParams(
             app.retrievalMode(),
             app.retrievalThreshold().doubleValue(),
             app.retrievalTopN(),
-            app.retrievalNoRefStrategy()));
+            app.retrievalNoRefStrategy(),
+            app.retrievalMultiHopEnabled(),
+            app.retrievalMaxHops()));
   }
 
   /**

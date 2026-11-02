@@ -305,7 +305,8 @@ class AppRetrievalParamsTest {
             model,
             new ChatStopSignal(),
             ChatStreamProperties.defaults(),
-            UNRESTRICTED_EGRESS);
+            UNRESTRICTED_EGRESS,
+            null);
     AtomicInteger embeddingCalls = new AtomicInteger();
     if (wireEmbeddingPort) {
       service.setEmbeddingPort(

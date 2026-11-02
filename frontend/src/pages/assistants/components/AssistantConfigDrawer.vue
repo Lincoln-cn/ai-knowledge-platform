@@ -182,6 +182,23 @@
           </span>
         </el-form-item>
 
+        <el-form-item label="多跳迭代">
+          <el-switch v-model="form.retrieval.multiHopEnabled" />
+          <span class="micro muted" style="margin-left: var(--space-xs)">
+            命中不足时再检一轮（答案跨两段）。★ 每多一轮多一次模型调用 —— 首字延迟会变长，默认关（#283）
+          </span>
+        </el-form-item>
+
+        <el-form-item label="多跳轮数">
+          <el-input-number
+            v-model="form.retrieval.maxHops"
+            :min="1"
+            :max="3"
+            :disabled="!form.retrieval.multiHopEnabled"
+          />
+          <span class="micro muted" style="margin-left: var(--space-xs)"> 含首轮，1～3；默认 2 </span>
+        </el-form-item>
+
         <el-form-item label="无引用策略">
           <el-radio-group v-model="form.retrieval.noRefStrategy">
             <!-- ★ 同上：机器码（契约 NoRefStrategy） -->
@@ -270,7 +287,10 @@ const form = reactive({
     //   但页面从第 12 周做完起就没有入口 ⇒ 用户只能吃平台默认值，改不了。
     queryCount: 3,
     decomposeEnabled: true,
-    maxSubQuestions: 3
+    maxSubQuestions: 3,
+    // ★ 多跳（#283）：应用级也有一份，默认关 —— 与知识库级同样的口径（谁配谁生效，应用优先）
+    multiHopEnabled: false,
+    maxHops: 2
   },
   prologue: '',
   multiTurn: true,
@@ -348,7 +368,9 @@ const fillForm = (a: Assistant) => {
     ...a.retrieval,
     queryCount: a.retrieval.queryCount ?? 3,
     decomposeEnabled: a.retrieval.decomposeEnabled ?? true,
-    maxSubQuestions: a.retrieval.maxSubQuestions ?? 3
+    maxSubQuestions: a.retrieval.maxSubQuestions ?? 3,
+    multiHopEnabled: a.retrieval.multiHopEnabled ?? false,
+    maxHops: a.retrieval.maxHops ?? 2
   }
   form.prologue = a.prologue
   form.multiTurn = a.multiTurn

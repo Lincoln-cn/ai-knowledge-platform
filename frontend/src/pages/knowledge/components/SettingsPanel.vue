@@ -105,6 +105,21 @@
             :disabled="!canManage || !retrieval.decomposeEnabled"
           />
         </el-form-item>
+        <el-form-item label="多跳迭代">
+          <el-switch v-model="retrieval.multiHopEnabled" :disabled="!canManage" />
+          <div class="hint micro">
+            命中不足时再检一轮（答案跨两段）。★ 每多一轮多一次模型调用 —— 首字延迟会变长，默认关（#283）
+          </div>
+        </el-form-item>
+        <el-form-item label="多跳轮数">
+          <el-input-number
+            v-model="retrieval.maxHops"
+            :min="1"
+            :max="3"
+            :disabled="!canManage || !retrieval.multiHopEnabled"
+          />
+          <div class="hint micro">含首轮，1～3；默认 2（首轮 + 最多再检一轮）</div>
+        </el-form-item>
         <el-form-item v-if="canManage">
           <el-button type="primary" :loading="savingRetrieval" @click="saveRetrieval">保存检索参数</el-button>
           <el-button @click="loadRetrieval">还原</el-button>
@@ -181,7 +196,11 @@ const retrieval = reactive<RetrievalParams>({
   //   但这个面板从第 12 周起只做了前四项 ⇒ 库级参数永远等于平台默认值，界面上看不出来。
   queryCount: 3,
   decomposeEnabled: true,
-  maxSubQuestions: 3
+  maxSubQuestions: 3,
+  // ★ 多跳两项（#283）：以前只挂在命中测试那一侧的临时参数里，库级没有 ⇒ 对话链路永不跑多跳。
+  //   默认关 —— 升级不改变存量行为（判据 ③），要开的人自己承担每轮多一次模型调用。
+  multiHopEnabled: false,
+  maxHops: 2
 })
 
 /** P1 设置面板改动静默丢失：脏标记上报给页面壳，切 Tab 前确认 */
@@ -254,6 +273,8 @@ const loadRetrieval = async () => {
   retrieval.queryCount = params.queryCount ?? 3
   retrieval.decomposeEnabled = params.decomposeEnabled ?? true
   retrieval.maxSubQuestions = params.maxSubQuestions ?? 3
+  retrieval.multiHopEnabled = params.multiHopEnabled ?? false
+  retrieval.maxHops = params.maxHops ?? 2
   takeSnapshot()
 }
 
@@ -268,7 +289,9 @@ const saveRetrieval = async () => {
       // ★ 必须显式带上：不带就是"让后端按默认值重置"，与"用户没改它"不是一回事
       queryCount: retrieval.queryCount,
       decomposeEnabled: retrieval.decomposeEnabled,
-      maxSubQuestions: retrieval.maxSubQuestions
+      maxSubQuestions: retrieval.maxSubQuestions,
+      multiHopEnabled: retrieval.multiHopEnabled,
+      maxHops: retrieval.maxHops
     })
     ElMessage.success('检索参数已保存')
     takeSnapshot()

@@ -745,7 +745,9 @@ public class AssistantService {
         retrieval.noRefStrategy(),
         retrieval.queryCount(),
         retrieval.decomposeEnabled(),
-        retrieval.maxSubQuestions());
+        retrieval.maxSubQuestions(),
+        retrieval.multiHopEnabled(),
+        retrieval.maxHops());
   }
 
   private static AssistantType parseBundleType(String raw) {
@@ -819,6 +821,8 @@ public class AssistantService {
         retrieval.queryCount(),
         retrieval.decomposeEnabled(),
         retrieval.maxSubQuestions(),
+        retrieval.multiHopEnabled(),
+        retrieval.maxHops(),
         actorId);
     assistant.bind(draft.kbIds(), draft.promptIds(), actorId);
   }
@@ -870,7 +874,9 @@ public class AssistantService {
         assistant.retrievalNoRefStrategy().name(),
         assistant.retrievalQueryCount(),
         assistant.retrievalDecomposeEnabled(),
-        assistant.retrievalMaxSubQuestions());
+        assistant.retrievalMaxSubQuestions(),
+        assistant.retrievalMultiHopEnabled(),
+        assistant.retrievalMaxHops());
   }
 
   private PublishCheckResult.Item modelItem(UUID modelId) {
@@ -1012,7 +1018,9 @@ public class AssistantService {
         assistant.retrievalNoRefStrategy().name(),
         assistant.retrievalQueryCount(),
         assistant.retrievalDecomposeEnabled(),
-        assistant.retrievalMaxSubQuestions());
+        assistant.retrievalMaxSubQuestions(),
+        assistant.retrievalMultiHopEnabled(),
+        assistant.retrievalMaxHops());
   }
 
   private static AssistantType requireType(AssistantType type) {
@@ -1108,10 +1116,12 @@ public class AssistantService {
       String noRefStrategy,
       int queryCount,
       boolean decomposeEnabled,
-      int maxSubQuestions) {
+      int maxSubQuestions,
+      boolean multiHopEnabled,
+      int maxHops) {
 
     public static RetrievalDraft defaults() {
-      return new RetrievalDraft("HYBRID", 0.6, 5, "REFUSE", 3, true, 3);
+      return new RetrievalDraft("HYBRID", 0.6, 5, "REFUSE", 3, true, 3, false, 2);
     }
   }
 }

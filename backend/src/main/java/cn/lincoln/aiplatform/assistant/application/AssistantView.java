@@ -73,7 +73,9 @@ public record AssistantView(
       String noRefStrategy,
       int queryCount,
       boolean decomposeEnabled,
-      int maxSubQuestions) {}
+      int maxSubQuestions,
+      boolean multiHopEnabled,
+      int maxHops) {}
 
   /**
    * 由实体组装。
@@ -103,7 +105,9 @@ public record AssistantView(
             assistant.retrievalNoRefStrategy().name(),
             assistant.retrievalQueryCount(),
             assistant.retrievalDecomposeEnabled(),
-            assistant.retrievalMaxSubQuestions()),
+            assistant.retrievalMaxSubQuestions(),
+            assistant.retrievalMultiHopEnabled(),
+            assistant.retrievalMaxHops()),
         assistant.multiTurn(),
         assistant.thinkingEnabled(),
         assistant.prologue(),
