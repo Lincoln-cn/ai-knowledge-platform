@@ -122,6 +122,40 @@ final class StartupSettingsCheck {
   }
 
   /**
+   * 上游推理服务的**模型槽位**够不够（`#282`）。
+   *
+   * <p>★ 为什么值得一条启动自检：问答链路要<strong>两个模型同时驻留</strong> —— 一个算查询向量、一个生成答案。 槽位只有 1
+   * 时，两个模型会每轮互相卸载/加载，后果有两层：
+   *
+   * <ol>
+   *   <li>偶发的 {@code HTTP/1.1 header parser received no bytes}（上游接受连接后直接关掉），错误文案指向"连接上游失败"，
+   *       看起来像网络问题；
+   *   <li><strong>更贵的是</strong>每一轮问答都付一遍冷启动的代价 —— 这正是 B4 首字 25s 的真实来源（不是模型慢）。
+   * </ol>
+   *
+   * <p>★ 判据只认"部署者显式声明的值"：{@code -1} 表示没声明（走 Ollama 默认 = 3×GPU 数，通常够），不报。 不去猜宿主机/容器里到底设了几 ——
+   * 猜出来的判据会被关掉，而这条的价值恰恰是"照着配置名能改"。
+   *
+   * @param ollamaMaxLoadedModels {@code app.model.ollama.max-loaded-models}（{@code -1} = 未声明）
+   */
+  static List<String> modelSlotProblems(int ollamaMaxLoadedModels) {
+    List<String> problems = new ArrayList<>();
+    if (ollamaMaxLoadedModels <= 0) {
+      return problems;
+    }
+    if (ollamaMaxLoadedModels < 2) {
+      problems.add(
+          "app.model.ollama.max-loaded-models="
+              + ollamaMaxLoadedModels
+              + "：问答链路要**两个模型同时驻留**（向量模型算查询向量 + 对话模型生成答案），"
+              + "槽位只有 1 时它们每轮互相卸载/加载 —— 表现为偶发的『连接上游失败："
+              + "HTTP/1.1 header parser received no bytes』，以及每轮都付一遍冷启动（首字延迟被抬到十几秒）。"
+              + "改成 ≥2（显存装得下两个模型的量化版本即可，1.5B + bge-m3 ≈ 2GB）。");
+    }
+    return problems;
+  }
+
+  /**
    * 两个**密钥**是不是还用着仓库里的示例值（`#272`）。
    *
    * <p>★ 为什么单列一个方法：上面那些是"配错了会坏"，这两条是"**没配就等于没有**" —— 它们不会让任何一次请求失败，只是在出事那天之前一直安静地好用。所以判据也简单到只有一句：

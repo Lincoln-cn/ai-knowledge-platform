@@ -142,6 +142,34 @@ class StartupSettingsCheckTest {
   }
 
   @Test
+  void undeclaredModelSlotsAreQuiet() {
+    List<String> problems = StartupSettingsCheck.modelSlotProblems(-1);
+    assertThat(problems)
+        .as("★ -1 = 没声明 ⇒ 走 Ollama 自己的默认值（3 × GPU 数），不该报 —— 否则每个默认部署都被吓一次")
+        .isEmpty();
+  }
+
+  @Test
+  void twoOrMoreModelSlotsAreQuiet() {
+    assertThat(StartupSettingsCheck.modelSlotProblems(2)).as("两个槽位正好够问答链路").isEmpty();
+    assertThat(StartupSettingsCheck.modelSlotProblems(3)).as("三个更不会报").isEmpty();
+  }
+
+  @Test
+  void singleModelSlotIsReportedAndSaysHowToFixIt() {
+    List<String> problems = StartupSettingsCheck.modelSlotProblems(1);
+
+    assertThat(problems).as("★ 这一条就是 #282 的现场").hasSize(1);
+    String message = problems.get(0);
+    assertThat(message)
+        .as("要能照着改：报出配置名、后果、修法")
+        .contains("app.model.ollama.max-loaded-models=1")
+        .contains("两个模型同时驻留")
+        .contains("header parser received no bytes")
+        .contains("改成 ≥2");
+  }
+
+  @Test
   void onlyTheSampleOneIsReportedWhenTheOtherIsReplaced() {
     List<String> problems =
         StartupSettingsCheck.secretProblems(
