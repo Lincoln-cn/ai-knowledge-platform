@@ -458,6 +458,28 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.chat.advisors.enabled`（`CHAT_ADVISORS_ENABLED`） | true | Spring AI advisor 链总开关。★ 只用于排障 —— 关着上线等于安全闸门不生效 |
 | `app.chat.guard.sensitive-words`（`CHAT_GUARD_SENSITIVE_WORDS`） | 空 | 问答输入/输出两侧的敏感词表（逗号分隔）。★ 默认空**不是**"没有这个功能"，而是"部署方按自己的合规要求填" —— 留着默认值上线等于这一层不设防 |
 
+## 八之补三、把本机 Ollama 登记成服务商（`#288`，建议一开始就做）
+
+新建模型时，服务商下拉里有一条「**不绑定（旧式直连 / 默认上游）**」。选它，填上 `apiBase` 就能用 —— 但
+它会**悄悄少掉三件事**：出站密级（能不能出网）、认证方式、连通性检查，数据外发闸门也就没有供应商类别可判。
+代码侧 `ProviderKind` 早就准备好了（`OLLAMA("http://localhost:11434/v1", NONE, LOCAL, true)`），
+问题只是"从来没人走过那条路"—— 新装的实例里 `ai_model_provider` 是**空表**。
+
+所以装完之后，在界面上走一遍（或等价地 `POST /api/v1/model-providers`）：
+
+| 字段 | 值 |
+|---|---|
+| 名称 | 本机 Ollama |
+| 类别 | `OLLAMA` |
+| 服务地址 | `http://127.0.0.1:11434/v1`（★ **用 `127.0.0.1`，不要用 `localhost`**：容器的端口只绑 IPv4，而 Java 的 `localhost` 会先解析成 `::1`，症状是"连接上游失败 / ConnectException"） |
+| 认证方式 | `NONE` |
+| 出站 | `LOCAL`（不出网） |
+
+登记之后，新模型优先选它。★ **存量模型不用动**：它们的 `api_base` 是直填的，改绑服务商会让地址来源变一个，
+不属于这次调整的范围。
+
+---
+
 ## 九、OCR 的配置项（交付时可能要改的）
 
 全部走环境变量覆盖（`application.yml` 的 `app.ocr.*`）：
