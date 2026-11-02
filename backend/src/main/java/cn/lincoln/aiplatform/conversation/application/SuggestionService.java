@@ -411,8 +411,10 @@ public class SuggestionService {
       return;
     }
     if (generated.isEmpty()) {
+      log.info("并行追问没产出可用问题（消息 {}）", messageId);
       return;
     }
+    log.info("并行追问已生成 {} 条（消息 {}）", generated.size(), messageId);
     // ★ 这里没有 @Transactional：本方法由 ChatService 的异步任务调用，走 jdbc 的自动提交。
     //   落库只有一条 update，不需要跨语句一致性。
     persist(messageId, generated);

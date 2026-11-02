@@ -1379,7 +1379,14 @@ public class ChatService {
    */
   private void maybeGuessSuggestions(
       ChatTurnWriter.PreparedTurn turn, String question, List<SourceRef> refs) {
-    if (!parallelSuggestions || suggestions == null || refs.isEmpty()) {
+    if (!parallelSuggestions) {
+      return;
+    }
+    if (suggestions == null) {
+      log.warn("猜你想问的并行开关开着，但没有 SuggestionService（本轮只跳过追问，不影响回答）");
+      return;
+    }
+    if (refs.isEmpty()) {
       return;
     }
     StringBuilder context = new StringBuilder();

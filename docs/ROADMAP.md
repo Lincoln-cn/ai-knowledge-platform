@@ -3626,3 +3626,24 @@ assertThat(refused.getMessage()).contains("不存在").doesNotContain("没有权
 ★★ **B4 转绿的实证（`#282` 的兑现）**：换成 2 槽位 ollama 之后，`check_b4_b5_latency.py` 四轮读数 **0.90 / 0.92 / 0.82 / 1.17s**，B4/B5 两条都绿。而 §11.10.77 那天同一脚本的首字是 **25.37s**。⇒ **那 25 秒不是"模型慢"，是"每轮互相卸载/加载"**：`OLLAMA_MAX_LOADED_MODELS=1` 而一轮问答要两个模型（bge-m3 算向量 + qwen2.5 生成）。**一个配置项，24 秒。**
 
 ★ **教训（同族 §11.10.78 的三联读数）**：读数异常时先问"**是不是把两件事混在一次测量里了**"。那天把"上游慢"记成了模型能力问题，实际是**槽位数**问题；`#282` 的启动自检现在会在 `AIP_OLLAMA_MAX_LOADED_MODELS=1` 时告警。
+
+#### 11.10.83 2026-11-02 猜你想问可以和主回答并行（`#285`，开关默认关）
+
+**改了什么**：`SuggestionService` 加 `guessAndPersist(messageId, modelId, question, context)` 与 `guessPrompt(...)`；`ChatService.streamTurn` 在 `run.pump()` 之后调 `maybeGuessSuggestions(...)`，用独立虚拟线程跑，落库后前端 `done` 之后那次 `generate` 走幂等分支直接返回存量。配置项 `app.chat.suggestions.parallel`（`AIP_SUGGESTIONS_PARALLEL`，默认 `false`）。
+
+**为什么默认关**：串行版用的是「问 + 答前 400 字」，并行版只有「问 + 检索上下文」——**它没看到答案**，追问更容易偏；而且每次都多一次模型调用，和主回答抢同一个槽位。★ 这是**质量换速度**，不是一个纯优化 ⇒ 开关交给部署方，不替存量用户静默改行为。
+
+**判据的读数**：
+
+| 判据 | 结果 | 证据 |
+|---|---|---|
+| ① 开关关，行为逐字不变 | **PASS** | `check_285_parallel.py 关` —— 发完一轮、**从不请求 suggestions**，`artifacts` 仍是 `<null>` |
+| ② 开关开，不等 done 就落库 | **PASS** | 同一个脚本 `开` —— `artifacts` = `{"suggestions":["住宿标准具体是哪部分？","采购供应部的审批流程是怎样的？","系统留痕的具体操作步骤是什么？"]}`，全程没发过 suggestions 请求 |
+| ② 的时序 | **读数为证** | 日志 `并行追问已生成 3 条` 在 `22:10:43.397`，同一轮 `收尾 GENERATED 耗时 5270ms` 落在 `22:10:44` ⇒ **它在 done 之前就写进去了** |
+| ③ 零引用时不硬猜 | **PASS** | `maybeGuessSuggestions` 第三条 early-return；实测换一个零引用的应用时 `{"refs":[]}` ⇒ 不触发（见下方教训） |
+| ④ 单测覆盖两种取值 | **PASS** | `SuggestionServiceParallelTest` 4/4：开关关不调模型 / 上游失败不外抛 / 真的落在**同一条**助手消息的 `artifacts` / 喂模型的是「资料：」不是「答：」 |
+| ④ 的反证 | **红** | 把 `guessPrompt` 里的「资料：」改成「答：」⇒ 第 4 条立刻红（1 failure），还原后 4/4 绿 |
+
+★★ **教训（值得单列）**：第一次跑判据 ② 时选了一个"看起来没问题"的应用（`2ae51b87`），结果 `artifacts` 一直是 null，差点把它当成"并行分支没生效"。真因是**那个应用这一轮零引用**（`{"refs":[]}`）⇒ 命中「零引用不猜」这条 early-return。**判据本身没错，是夹具选错了。** 同族 §11.10.78：读数异常时先问"是不是把两件事混在一次测量里了"——这次是"把'开关没生效'与'这一轮没有引用'混成了一个读数"。
+
+★ **另一个坑**：`ChatService` 的 `if (!parallelSuggestions || suggestions == null || refs.isEmpty())` 一开始写成一行，导致三条原因**读数完全一样**（都是"什么都没发生"）。拆成三条各自 return 之后才定位到是哪一条 —— **多重 early-return 合并判断 = 丢掉诊断维度**。
