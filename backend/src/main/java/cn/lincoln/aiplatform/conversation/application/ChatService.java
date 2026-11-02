@@ -34,6 +34,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
@@ -201,6 +202,24 @@ public class ChatService {
   private final MultiHopService multiHop;
 
   /**
+   * 「猜你想问」的并行开关（`#285`）。
+   *
+   * <p>★ 为什么用 setter 而不是构造器参数：本类的两个构造器已经被 7 个"脱离容器"的测试直接调用， 再往构造器里加一格就要改 7 个文件 ——
+   * 而这一格是**可选能力**（`null` ⇒ 不猜）， 用 setter 注入能让"没注入 = 关"这件事在测试里天然成立。
+   *
+   * <p>★ 默认关的理由见 {@link SuggestionService#guessAndPersist}：它换质量换速度。
+   */
+  private SuggestionService suggestions;
+
+  /** 并行开关本身（`app.chat.suggestions.parallel`，默认 false）。 */
+  @Value("${app.chat.suggestions.parallel:false}")
+  private boolean parallelSuggestions;
+
+  /** 猜你想问的异步执行器：它的失败不能影响主回答，所以必须是独立线程（不能用调用方的线程）。 */
+  private java.util.concurrent.Executor suggestionExecutor =
+      java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+
+  /**
    * 多轮上下文的硬上限（条数，含用户与助手）。
    *
    * <p>★ 20 条 ≈ 10 轮问答，与 ROADMAP §2.2 A6 的「10 轮」对齐。 ★ 窗口口径的**最终定稿在 #65**（按轮数还是 token 预算）；这里是保守实现，
@@ -233,6 +252,17 @@ public class ChatService {
     this.properties = properties;
     this.modelEgress = modelEgress;
     this.multiHop = multiHop;
+  }
+
+  /**
+   * 注入「猜你想问」（`#285`）。
+   *
+   * <p>★ {@code required = false}：本类的单元测试都是直接 `new ChatService(...)`，不走容器 ⇒ 没有这个 setter
+   * 调用，`suggestions` 保持 `null`，并行分支天然关闭。
+   */
+  @Autowired(required = false)
+  public void setSuggestions(SuggestionService suggestions) {
+    this.suggestions = suggestions;
   }
 
   /**
@@ -551,6 +581,7 @@ public class ChatService {
       run.assembler.references(refs);
       run.bindRefs(refs);
       run.pump();
+      maybeGuessSuggestions(turn, question, refs);
 
       // ★★ `#185`：无引用策略的**生产消费点**。
       //
@@ -1336,6 +1367,49 @@ public class ChatService {
     return merged.entrySet().stream()
         .map(e -> new SegmentSearchPort.Scored(e.getKey(), e.getValue()))
         .toList();
+  }
+
+  /**
+   * 并行猜追问（`#285`）：回答还在生成时就用「问题 + 检索上下文」先猜。
+   *
+   * <p>★ 三条"不做什么"：**不阻塞主回答**（丢进独立线程）· **失败不影响这一轮**（吞掉，只记 warn）·
+   * **零引用时不猜**（没有资料可依据，猜出来的问题与用户将看到的内容无关）。
+   *
+   * <p>★ 落库后 {@link SuggestionService#generate} 的幂等分支会让前端 `done` 之后那次请求直接返回存量 —— 所以前端不需要知道这个开关存在。
+   */
+  private void maybeGuessSuggestions(
+      ChatTurnWriter.PreparedTurn turn, String question, List<SourceRef> refs) {
+    if (!parallelSuggestions || suggestions == null || refs.isEmpty()) {
+      return;
+    }
+    StringBuilder context = new StringBuilder();
+    refs.stream()
+        .limit(3)
+        .forEach(
+            ref ->
+                context
+                    .append(ref.docName())
+                    .append(" · ")
+                    .append(clip(ref.full(), 120))
+                    .append('\n'));
+    UUID messageId = turn.assistantMessageId();
+    UUID modelId = turn.modelId();
+    String contextText = context.toString();
+    suggestionExecutor.execute(
+        () -> {
+          try {
+            suggestions.guessAndPersist(messageId, modelId, question, contextText);
+          } catch (RuntimeException failure) {
+            log.warn("并行追问的任务本身抛了（消息 {}）：{}", messageId, failure.getMessage());
+          }
+        });
+  }
+
+  private static String clip(String text, int max) {
+    if (text == null) {
+      return "";
+    }
+    return text.length() <= max ? text : text.substring(0, max);
   }
 
   /** 按检索模式跑一次召回（{@code withMultiHop} 用；与 {@code retrieve} 的三路同口径）。 */

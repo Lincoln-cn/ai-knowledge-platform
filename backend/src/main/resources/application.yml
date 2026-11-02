@@ -85,6 +85,11 @@ app:
     # ★ 默认空不是"忘了配"，而是"由部署方按自己的合规要求填"；填了才拦
     guard:
       sensitive-words: ${CHAT_GUARD_SENSITIVE_WORDS:}
+    # 「猜你想问」的并行模式（`#285`）。默认 **false**：串行版等答案落库后再猜，质量好但要多等 10~20 秒；
+    # 并行版在回答开始生成时就用「问题 + 检索上下文」猜，快但**没看到答案**，追问更容易偏。
+    # ★ 开关只影响"什么时候算"，不影响前端：落库后 `SuggestionService.generate` 的幂等分支会直接返回存量。
+    suggestions:
+      parallel: ${AIP_SUGGESTIONS_PARALLEL:false}
   audit:
     retention:
       enabled: ${AUDIT_RETENTION_ENABLED:false}
