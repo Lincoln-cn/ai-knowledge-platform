@@ -249,7 +249,6 @@
       @saved="onSaved"
     />
 
-    <ProviderDrawer ref="providerRef" @changed="onProvidersChanged" />
   </div>
 </template>
 
@@ -263,7 +262,6 @@ import type { LocalOnnxStatus, ModelInfo, ModelKind, ModelStatus } from '@/api/m
 import { ApiError } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import ModelFormDialog from './components/ModelFormDialog.vue'
-import ProviderDrawer from './components/ProviderDrawer.vue'
 import { MODEL_STATUS_LABELS, SUPPLIER_LABELS, labelOf } from '@/constants/labels'
 
 const STATUSES: ModelStatus[] = ['NOT_LOADED', 'LOADING', 'LOADED', 'LOAD_FAILED']
@@ -606,10 +604,11 @@ watch(
 
 /* ── 操作 ── */
 const formRef = ref<InstanceType<typeof ModelFormDialog>>()
-const providerRef = ref<InstanceType<typeof ProviderDrawer>>()
 const editing = ref<ModelInfo | null>(null)
 
-const openProviders = () => providerRef.value?.open()
+// ★ 服务商不再是从模型页弹出来的一个抽屉：它有自己的页面（`/settings/providers`）。
+//   同一条功能只留一个落点 —— 否则「模型页的抽屉」与「配置页的列表」会各自漂移。
+const openProviders = () => router.push('/settings/providers')
 
 const openCreate = () => {
   editing.value = null
@@ -622,11 +621,6 @@ const openEdit = (model: ModelInfo) => {
 }
 
 const onSaved = () => {
-  fetchList().then(schedule)
-}
-
-/** 服务商增删改之后：模型卡上的服务商名/出网标记要跟着变 */
-const onProvidersChanged = () => {
   fetchList().then(schedule)
 }
 

@@ -1,11 +1,4 @@
 <template>
-  <el-drawer
-    v-model="visible"
-    title="模型服务商"
-    size="760px"
-    :close-on-click-modal="false"
-    @closed="reset"
-  >
     <div class="provider-page">
       <div class="notice info">
         服务商是<b>模型从哪来</b>的唯一登记处。密钥只写不回显；停用一个服务商后，引用它的模型不会被删除，
@@ -181,11 +174,10 @@
         <el-button size="small" type="primary" :loading="saving" @click="save">保存</el-button>
       </template>
     </el-dialog>
-  </el-drawer>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { providersApi } from '@/api'
@@ -200,7 +192,6 @@ import { ApiError } from '@/api/types'
 
 const emit = defineEmits<{ changed: [] }>()
 
-const visible = ref(false)
 const loading = ref(false)
 const list = ref<ModelProviderInfo[]>([])
 const testingId = ref('')
@@ -263,11 +254,6 @@ const editorRules: FormRules = {
   egress: [{ required: true, message: '请选择是否出网', trigger: 'change' }]
 }
 
-const open = async () => {
-  visible.value = true
-  await fetchList()
-}
-
 const fetchList = async () => {
   loading.value = true
   try {
@@ -277,13 +263,6 @@ const fetchList = async () => {
   } finally {
     loading.value = false
   }
-}
-
-const reset = () => {
-  quick.apiBase = ''
-  quick.apiKey = ''
-  editorVisible.value = false
-  editing.value = null
 }
 
 const openCreate = () => {
@@ -475,7 +454,10 @@ const quickBind = async () => {
   }
 }
 
-defineExpose({ open, fetchList })
+defineExpose({ fetchList })
+
+// 页面模式下没有"打开"这个动作：进页面就该看到列表。
+onMounted(fetchList)
 </script>
 
 <style scoped>
