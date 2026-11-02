@@ -116,14 +116,19 @@ public class ModelService {
 
   @Transactional(readOnly = true)
   public PageResult<ModelView> list(
-      String keyword, ModelKind kind, ModelStatus status, Integer page, Integer size) {
+      String keyword,
+      ModelKind kind,
+      ModelStatus status,
+      UUID providerId,
+      Integer page,
+      Integer size) {
     // ★ 空串等同不筛选（真前端会传 ?keyword=&page=1）—— 归一成 null，仓储侧不拼谓词
     String safeKeyword = (keyword == null || keyword.isBlank()) ? null : keyword.trim();
     int safeSize = size == null ? 20 : Math.min(Math.max(1, size), MAX_PAGE_SIZE);
     int safePage = page == null ? 1 : Math.max(1, page);
     List<Model> found =
-        models.search(safeKeyword, kind, status, (safePage - 1) * safeSize, safeSize);
-    long total = models.countSearch(safeKeyword, kind, status);
+        models.search(safeKeyword, kind, status, providerId, (safePage - 1) * safeSize, safeSize);
+    long total = models.countSearch(safeKeyword, kind, status, providerId);
     Map<UUID, ModelProvider> providerById =
         providers.findAll().stream()
             .collect(java.util.stream.Collectors.toMap(ModelProvider::id, p -> p));

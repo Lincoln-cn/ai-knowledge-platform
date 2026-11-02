@@ -682,12 +682,17 @@ class SpringAiChatAdapterTest {
 
     @Override
     public List<Model> search(
-        String keyword, ModelKind kind, ModelStatus status, int offset, int limit) {
+        String keyword,
+        ModelKind kind,
+        ModelStatus status,
+        UUID providerId,
+        int offset,
+        int limit) {
       throw new UnsupportedOperationException();
     }
 
     @Override
-    public long countSearch(String keyword, ModelKind kind, ModelStatus status) {
+    public long countSearch(String keyword, ModelKind kind, ModelStatus status, UUID providerId) {
       throw new UnsupportedOperationException();
     }
 

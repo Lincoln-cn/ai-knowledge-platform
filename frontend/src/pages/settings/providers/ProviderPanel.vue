@@ -5,40 +5,49 @@
         但<b>加载会失败并给出原因</b>（不会静默回退到默认上游）。
       </div>
 
-      <!-- 一键绑定 JAiRouter：本机网关，地址与密钥都留在服务端，前端只发一次 POST -->
+      <!--
+        一键绑定 JAiRouter（`#289` 打磨）：
+        ★ 措辞是「网络可达」不是「本机」—— 网关可以跑在另一台机器上，地址填到 /v1 这一层即可。
+        ★ 默认**收起**：它只对"有 JAiRouter 网关"的部署有用，不该和列表抢同一份视觉权重。
+      -->
       <section class="quick panel">
-        <div class="quick-hd">
+        <div class="quick-hd" role="button" tabindex="0" @click="quickOpen = !quickOpen" @keydown.enter="quickOpen = !quickOpen">
           <div>
-            <div class="quick-title">一键绑定 JAiRouter</div>
+            <div class="quick-title">
+              一键绑定 JAiRouter
+              <el-tag size="small" effect="plain" type="info" class="quick-tag">GATEWAY</el-tag>
+            </div>
             <p class="micro muted">
-              本机网关默认 <code>http://localhost:8080/v1</code>。绑定只是登记地址并探活；
+              地址填到 <code>/v1</code> 这一层，<b>网络可达即可</b>（不要求装在本机）。绑定只是登记地址并探活；
               之后在「添加模型」里选它即可。
             </p>
           </div>
-          <el-tag size="small" effect="plain" type="info">GATEWAY</el-tag>
+          <el-button link size="small" class="quick-toggle">{{ quickOpen ? '收起' : '展开' }}</el-button>
         </div>
-        <div class="quick-row">
-          <el-input
-            v-model="quick.apiBase"
-            size="small"
-            placeholder="http://localhost:8080/v1（留空用默认）"
-            clearable
-          />
-          <el-input
-            v-model="quick.apiKey"
-            size="small"
-            type="password"
-            show-password
-            placeholder="网关密钥（本地未校验可留空）"
-            clearable
-          />
-          <el-button size="small" type="primary" :loading="quickBusy" @click="quickBind">
-            绑定并探活
-          </el-button>
-        </div>
-        <p class="micro muted quick-hint">
-          探活失败不会创建服务商；地址重复时直接复用已有记录（幂等）。
-        </p>
+        <template v-if="quickOpen">
+          <div class="quick-row">
+            <el-input
+              v-model="quick.apiBase"
+              size="small"
+              placeholder="http://网关地址:8080/v1（留空用默认）"
+              clearable
+            />
+            <el-input
+              v-model="quick.apiKey"
+              size="small"
+              type="password"
+              show-password
+              placeholder="网关密钥（未校验可留空）"
+              clearable
+            />
+            <el-button size="small" type="primary" :loading="quickBusy" @click="quickBind">
+              绑定并探活
+            </el-button>
+          </div>
+          <p class="micro muted quick-hint">
+            探活失败不会创建服务商；地址重复时直接复用已有记录（幂等）。
+          </p>
+        </template>
       </section>
 
       <div class="list-hd">
@@ -59,7 +68,17 @@
             </el-tag>
             <el-tag v-if="!p.enabled" size="small" type="info" effect="dark">已停用</el-tag>
             <span class="grow" />
-            <span class="micro muted">{{ p.modelCount }} 个模型</span>
+            <!-- ★ 数字要能点开（`#289` 打磨）：写「3 个模型」却点不了，等于报了个数不给出处 -->
+            <el-button
+              v-if="p.modelCount > 0"
+              link
+              size="small"
+              class="micro"
+              @click="goProviderModels(p)"
+            >
+              {{ p.modelCount }} 个模型
+            </el-button>
+            <span v-else class="micro muted">0 个模型</span>
           </div>
 
           <dl class="pc-facts micro">
@@ -178,6 +197,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { providersApi } from '@/api'
@@ -191,12 +211,15 @@ import type {
 import { ApiError } from '@/api/types'
 
 const emit = defineEmits<{ changed: [] }>()
+const router = useRouter()
 
 const loading = ref(false)
 const list = ref<ModelProviderInfo[]>([])
 const testingId = ref('')
 
 const quick = reactive({ apiBase: '', apiKey: '' })
+// ★ 默认收起：这条只对"有 JAiRouter 网关"的部署有用，不该和列表抢同一份视觉权重。
+const quickOpen = ref(false)
 const quickBusy = ref(false)
 
 const KIND_LABEL: Record<ProviderKind, string> = {
@@ -454,6 +477,11 @@ const quickBind = async () => {
   }
 }
 
+/** 点「N 个模型」⇒ 去模型页，并把服务商作为筛选条件带上（不是"跳过去自己找"）。 */
+const goProviderModels = (p: ModelProviderInfo) => {
+  router.push({ path: '/models', query: { providerId: p.id } })
+}
+
 defineExpose({ fetchList })
 
 // 页面模式下没有"打开"这个动作：进页面就该看到列表。
@@ -476,6 +504,16 @@ onMounted(fetchList)
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-sm);
+  cursor: pointer;
+}
+
+.quick-tag {
+  margin-left: var(--space-2xs);
+  vertical-align: middle;
+}
+
+.quick-toggle {
+  flex: none;
 }
 
 .quick-title {

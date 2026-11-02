@@ -199,12 +199,17 @@ class OutboundPiiPassthroughTest {
 
     @Override
     public List<Model> search(
-        String keyword, ModelKind kind, ModelStatus status, int offset, int limit) {
+        String keyword,
+        ModelKind kind,
+        ModelStatus status,
+        UUID providerId,
+        int offset,
+        int limit) {
       return model.kind() == kind && model.status() == status ? List.of(model) : List.of();
     }
 
     @Override
-    public long countSearch(String keyword, ModelKind kind, ModelStatus status) {
+    public long countSearch(String keyword, ModelKind kind, ModelStatus status, UUID providerId) {
       return 0;
     }
 
