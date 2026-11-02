@@ -332,6 +332,9 @@ def stage_eval(token: str, kb_id: str, args: argparse.Namespace) -> int:
 
     records: list[dict] = []
     started = time.time()
+    # ★ 215 条 × 单条几秒 ≈ 十几分钟。此前**一条进度都不打**，
+    #   于是在外部看来和"卡死"完全一样（`#280` 那轮真的等了一个半小时）。
+    print(f"  开始：{len(qa)} 条，每 10 条报一次进度与预计剩余", flush=True)
     for i, item in enumerate(qa, 1):
         status, body = CLIENT.authed(
             "POST",
@@ -347,8 +350,15 @@ def stage_eval(token: str, kb_id: str, args: argparse.Namespace) -> int:
         )
         if status != 200:
             records.append({"id": item["id"], "error": f"{status} {str(body)[:120]}"})
+            print(f"  [{i}/{len(qa)}] {item['id']} 失败 {status}")
             continue
         hits = (body.get("data") or {}).get("items") or []
+
+        if i % 10 == 0 or i == len(qa):
+            spent = time.time() - started
+            per = spent / i
+            left = per * (len(qa) - i)
+            print(f"  [{i}/{len(qa)}] 已用 {spent/60:.1f} 分钟，预计还剩 {left/60:.1f} 分钟", flush=True)
         want_exact = item["expected_snippet"]
         want_loose = norm_loose(want_exact)
         want_core = core_of(want_exact)

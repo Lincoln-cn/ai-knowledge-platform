@@ -908,25 +908,6 @@ def block_chars(block: tuple) -> int:
     return 0
 
 
-def uniquify_snippet(ctx: DocContext, para: str, snippet: str) -> tuple[str, str]:
-    """让锚点句带上本文档的限定，返回同步改写后的 (para, snippet)。
-
-    不同文档常共用同一台设备/同一个表单/同一个数值（如"高压开关柜"、"应急演练每年不少于1次"），
-    若锚句只引用对象名或数值，两份文档就会产出能互相匹配的片段 ⇒ QA 的 expected_document
-    出现歧义，读数会把它算成检索没命中（假阴性污染 B1）。
-
-    ★ 调用方**无条件**调用本函数（#232）：只给"撞车的那一份"加限定不够 ——
-    先到的那条留着裸句，而裸句仍是后到那份正文的子串，歧义照旧存在。
-    """
-    for name in ("obj1", "obj2", "obj3"):
-        obj = ctx.base.get(name)
-        if obj and obj in snippet and obj in para:
-            new_snippet = snippet.replace(obj, f"{ctx.subject.short}所涉{obj}", 1)
-            return para.replace(snippet, new_snippet, 1), new_snippet
-    new_snippet = f"就{ctx.subject.short}而言，{snippet}"
-    return para.replace(snippet, new_snippet, 1), new_snippet
-
-
 def build_document(
     subject: C.Subject,
     index: int,
@@ -989,15 +970,19 @@ def build_document(
         maker, keyword_override = spec
         keyword, para, snippet, question, topic = maker(ctx)
         if used_snippets is not None:
-            # ★ 无条件加本文档限定（#232）：只在"撞车时"改后到者是不够的 —— 先到的那条留着
-            #   裸句，后到的那条带着限定，于是**裸句仍是另一份文档正文的子串**，问题照旧有歧义。
-            #   取证：SYN-017-4「申请自受理之日起13个工作日内办结」在 017/018 两份里都能命中，
-            #   而 018 那份当时并未被改写。
-            para, snippet = uniquify_snippet(ctx, para, snippet)
+            # ★★ 2026-11-03 改法（`#292`）：**不再改写句子**。
+            #
+            #   旧做法是给每句塞本文档的限定词（`f"{subject.short}所涉{obj}"` 或 `"就X而言，"`），
+            #   目的是让 anchor 全局唯一。代价是它假设"obj 是裸名词"，一旦 obj 是更长短语的一部分，
+            #   就产出「信息技术部是公司服务器上下架所涉服务器上下架的归口管理部门」这种病句
+            #   （34/215 条被改写，其中 6 条是「X所涉X」自我重复）。
+            #
+            #   现在的判据不靠"字符串唯一"：QA 标签是 (文档, 章节, 原句) 三元组，
+            #   评测时按"文档对 + 原句在同一段"判 B3 ⇒ 同一个句子出现在两份文档里也**不会**造成
+            #   假阴性（两份都算对，因为该片段确实同时支撑两边的答案）。
+            #   ⇒ 重复的锚点直接**跳过**，不改写、不报错。
             if snippet in used_snippets:
-                raise AssertionError(
-                    f"{subject.title}: 锚点句加限定后仍重复 -> {snippet}"
-                )
+                continue
             used_snippets.add(snippet)
         if keyword_override:
             keyword = keyword_override
