@@ -303,13 +303,13 @@ def stage_ingest(token: str, args: argparse.Namespace) -> str:
 def stage_embed(token: str, kb_id: str, args: argparse.Namespace) -> None:
     rows = documents_of(kb_id, token)
     todo = [r for r in rows if (r.get("status") or "") != "SUCCEEDED"]
-    print(f"  · 待向量化 {len(todo)}/{len(rows)} 份")
+    print(f"  · 待向量化 {len(todo)}/{len(rows)} 份", flush=True)
     started = time.time()
     for i, row in enumerate(todo, 1):
         doc_id = row.get("id")
         status, _ = CLIENT.call("POST", f"/documents/{doc_id}/embedding", token, {})
         if status != 200:
-            print(f"    ✗ {row.get('name')} 触发失败 {status}")
+            print(f"    ✗ {row.get('name')} 触发失败 {status}", flush=True)
             continue
         deadline = time.time() + 1800
         while time.time() < deadline:
@@ -319,7 +319,7 @@ def stage_embed(token: str, kb_id: str, args: argparse.Namespace) -> None:
             if st in {"SUCCEEDED", "EMBEDDING_FAILED", "SEGMENT_FAILED"}:
                 break
             time.sleep(2)
-        print(f"    [{i}/{len(todo)}] {row.get('name')} → {st}（{time.time() - started:.0f}s）")
+        print(f"    [{i}/{len(todo)}] {row.get('name')} → {st}（{time.time() - started:.0f}s）", flush=True)
         if st != "SUCCEEDED":
             print(f"      failReason={cur.get('failReason')} failHint={cur.get('failHint')}")
 
