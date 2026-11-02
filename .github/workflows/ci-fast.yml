@@ -275,6 +275,17 @@ jobs:
         working-directory: backend
         run: python tools/check_config_docs.py
 
+      # ★ `#289` 那个病的可核判据：一个"页面"如果正文全是说明文字、功能全在一个
+      #   自动弹出的浮层里，那它不是一个页面。判据很直白：**关掉浮层之后，页面上还剩什么？**
+      #   先跑自检（三条判据各自都要能红，`#223` 的纪律），再扫全库。
+      - name: 页面实质闸门 · 自检
+        working-directory: backend
+        run: python tools/check_page_substance.py --self-check
+
+      - name: 页面实质闸门 · 扫全库（#290）
+        working-directory: backend
+        run: python tools/check_page_substance.py
+
       # ★ 闸门自己的守卫也要能被断言（#223）：这三条守的是"别量错东西"，
       #   而一条守卫错了的表现是静默 —— 永远为真等于没有，过严则把正确情形判成错。
       #   离线、不需要浏览器、不连栈（playwright 在脚本里是延迟导入的）。
