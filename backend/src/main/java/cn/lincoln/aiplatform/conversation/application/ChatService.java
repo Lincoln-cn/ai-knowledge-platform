@@ -13,13 +13,13 @@ import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
+import cn.lincoln.aiplatform.platform.retrieval.HopDeciderPort;
 import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.retrieval.SourceLabels;
-import cn.lincoln.aiplatform.retrieval.application.MultiHopService;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -199,7 +199,7 @@ public class ChatService {
    * <p>★ 它原先只挂在命中测试上（{@code HitTestQuery}），落库的检索参数里根本没有多跳两格 —— 于是"命中测试能开、真实问答永远不跑"。{@code #283}
    * 把两格加进 {@code RetrievalParams} 并把判定接在这里，才让那个开关真的对问答生效。
    */
-  private final MultiHopService multiHop;
+  private final HopDeciderPort multiHop;
 
   /**
    * 「猜你想问」的并行开关（`#285`）。
@@ -243,7 +243,7 @@ public class ChatService {
       ChatStopSignal stopSignal,
       ChatStreamProperties properties,
       ModelEgressPort modelEgress,
-      MultiHopService multiHop) {
+      HopDeciderPort multiHop) {
     this.turns = turns;
     this.segmentSearch = segmentSearch;
     this.accessScope = accessScope;
@@ -282,7 +282,7 @@ public class ChatService {
       ChatStreamPort chatStream,
       ChatStopSignal stopSignal,
       ModelEgressPort modelEgress,
-      MultiHopService multiHop) {
+      HopDeciderPort multiHop) {
     this(
         turns,
         segmentSearch,
@@ -1329,20 +1329,20 @@ public class ChatService {
       String nextQuery;
       try {
         List<SegmentSearchPort.Card> cards = segmentSearch.load(merged.keySet());
-        MultiHopService.Outcome outcome = multiHop.decide(question, cards, 0L);
+        HopDeciderPort.Result outcome = multiHop.decide(question, cards, 0L);
         if (!outcome.usable()) {
-          log.info("多跳判定不可用（{}）⇒ 用已有 {} 条结果继续", outcome.decision().failure(), merged.size());
+          log.info("多跳判定不可用（{}）⇒ 用已有 {} 条结果继续", outcome.failure(), merged.size());
           break;
         }
-        if (outcome.decision().sufficient()) {
+        if (outcome.sufficient()) {
           log.info("多跳判定：已有命中已足够 ⇒ 不再检一轮（共 {} 条）", merged.size());
           break;
         }
-        if (!outcome.decision().hasNextQuery()) {
+        if (!outcome.hasNextQuery()) {
           log.info("多跳判定：需要更多信息但没给出下一查询 ⇒ 用已有 {} 条结果继续", merged.size());
           break;
         }
-        nextQuery = outcome.decision().nextQuery();
+        nextQuery = outcome.nextQuery();
       } catch (RuntimeException failure) {
         // §3.4.6：判定失败 ⇒ 用已有结果生成（不抛，免得"开了多跳反而更容易失败"）
         log.warn("多跳判定调用失败，用已有 {} 条结果继续：{}", merged.size(), failure.getMessage());
