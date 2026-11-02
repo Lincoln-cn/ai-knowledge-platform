@@ -52,8 +52,12 @@ const findAssistant = (id: string, token: string, action: string = PERM.assistan
     id
   )
 
-const modelNameOf = (modelId: string) =>
-  models.find((m) => m.id === modelId)?.name ?? ''
+/**
+ * 模型名。`modelId` 可空 —— 编排应用没有应用级模型（#281），
+ * 这时模型名是空串而不是「找不到模型」。
+ */
+const modelNameOf = (modelId?: string) =>
+  (modelId ? models.find((m) => m.id === modelId)?.name : '') ?? ''
 
 /**
  * 响应装饰：补 `ownerName`（#8）。广场卡片要显示「由谁分享」，只有 ownerId 这个 id

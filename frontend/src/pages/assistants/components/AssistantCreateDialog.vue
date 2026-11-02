@@ -60,16 +60,18 @@
           placeholder="一句话说明这个应用解决什么问题"
         />
       </el-form-item>
-      <el-form-item label="对话模型" prop="modelId">
+      <!-- ★ 编排应用没有应用级模型（模型在各 AI 节点里，见 #281）。
+           原来这一项对两种类型都显示且必填，于是「选编排」⇒ 自动选中一个模型 ⇒
+           提交带上 modelId ⇒ 后端 requireTypeModelPair 直接拒绝，编排应用一个都建不出来。 -->
+      <el-form-item v-if="form.type === 'SIMPLE'" label="对话模型" prop="modelId">
         <el-select v-model="form.modelId" placeholder="仅列出已加载的对话模型" style="width: 100%">
           <el-option v-for="m in chatModels" :key="m.id" :label="`${m.name}（已加载）`" :value="m.id" />
         </el-select>
-        <div class="hint micro">
-          {{ form.type === 'WORKFLOW'
-            ? '创建后进入编排画布配置流程；模型可作为 AI 节点默认值'
-            : '创建后进入配置页补全角色设定、知识库与检索参数' }}
-        </div>
+        <div class="hint micro">创建后进入配置页补全角色设定、知识库与检索参数</div>
       </el-form-item>
+      <div v-else class="hint micro workflow-hint">
+        创建后进入编排画布配置流程。编排应用没有应用级模型 —— 模型在各 AI 节点里逐个配置。
+      </div>
     </el-form>
     <template #footer>
       <el-button size="small" @click="visible = false">取消</el-button>
@@ -118,7 +120,17 @@ const rules: FormRules = {
   ],
   name: [{ required: true, message: '请输入应用名称', trigger: 'blur' }],
   description: [{ required: true, message: '请填写描述', trigger: 'blur' }],
-  modelId: [{ required: true, message: '请选择对话模型', trigger: 'change' }]
+  modelId: [
+    {
+      // ★ 必填只在简单应用成立。编排应用没有应用级模型（#281），把它设成必填
+      //   等于强制前端传一个后端一定会拒绝的值。
+      validator: (_rule, value: string, callback) => {
+        if (form.type === 'WORKFLOW' || value) callback()
+        else callback(new Error('请选择对话模型'))
+      },
+      trigger: 'change'
+    }
+  ]
 }
 
 /** 创建：open()；编辑基本信息：open(existing) —— 编辑时类型只读 */
@@ -134,7 +146,8 @@ const open = async (existing?: Assistant | null) => {
   visible.value = true
   const result = await modelsApi.listModels({ kind: 'CHAT', status: 'LOADED', size: 50 })
   chatModels.value = result.list
-  if (!form.modelId && result.list.length) form.modelId = result.list[0].id
+  // ★ 编排应用不预选模型：预选会让提交带上一个后端必然拒绝的 modelId（#281）
+  if (form.type === 'SIMPLE' && !form.modelId && result.list.length) form.modelId = result.list[0].id
 }
 
 const reset = () => {
@@ -169,7 +182,11 @@ const submit = async () => {
         name: form.name,
         icon: form.icon,
         description: form.description,
-        modelId: form.modelId,
+        // ★ 编排应用没有应用级模型（后端 Assistant.requireTypeModelPair 与库约束
+        //   chk_as_model_by_type 都钉着这一条）。切到「编排」时模型选择项是 v-if 隐藏的，
+        //   但 form.modelId 仍留着上一次「简单」的值 —— 把界面上的「不显示」当成「不用传」，
+        //   结果就是编排应用一个都建不出来（#281）。这里按类型收敛成 null。
+        modelId: form.type === 'SIMPLE' ? form.modelId : undefined,
         kbIds: [],
         rolePrompt: '',
         promptIds: [],
@@ -196,6 +213,12 @@ defineExpose({ open })
 </script>
 
 <style scoped>
+/* 编排应用那一段说明文字：与表单控件的行高对齐，不要看起来像一条被截断的字段 */
+.workflow-hint {
+  margin: -4px 0 var(--space-md) 0;
+  line-height: var(--leading-body);
+}
+
 .type-cards {
   display: grid;
   grid-template-columns: 1fr 1fr;

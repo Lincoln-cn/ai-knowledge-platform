@@ -114,7 +114,14 @@ export interface UpsertAssistantBody {
   icon: string
   description: string
   type: AssistantType
-  modelId: string
+  /**
+   * 对话模型。**编排应用不传** —— 它的模型在各节点里，后端 `requireTypeModelPair`
+   * 见到 WORKFLOW + 非 null 的 modelId 会直接拒绝（#281）。
+   *
+   * 这里从必填改成可选，与 `Assistant.modelId?: string` 对齐：原来写成必填，
+   * 调用方为了过类型检查只能硬塞一个字符串，编排应用就必然踩到后端的拒绝规则。
+   */
+  modelId?: string
   kbIds: string[]
   rolePrompt: string
   promptIds: string[]
