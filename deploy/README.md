@@ -457,6 +457,7 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.embedding.local.model-name`（`LOCAL_ONNX_MODEL_NAME`） | `multilingual-e5-small` | ★★ **路由判据**：`RoutingEmbeddingAdapter` 按 `baseModel` 名分派，知识库里登记的名字必须与它一致，否则那条模型会去连上游 11434（而 11434 上可能根本没有这个模型） |
 | `app.chat.advisors.enabled`（`CHAT_ADVISORS_ENABLED`） | true | Spring AI advisor 链总开关。★ 只用于排障 —— 关着上线等于安全闸门不生效 |
 | `app.chat.guard.sensitive-words`（`CHAT_GUARD_SENSITIVE_WORDS`） | 空 | 问答输入/输出两侧的敏感词表（逗号分隔）。★ 默认空**不是**"没有这个功能"，而是"部署方按自己的合规要求填" —— 留着默认值上线等于这一层不设防 |
+| `app.chat.suggestions.parallel`（`AIP_SUGGESTIONS_PARALLEL`） | false | 「猜你想问」的并行模式：开着时回答一开始生成就用「问题 + 检索上下文」猜，用户"看到完成"时 chips 已经在了；代价是**它没看到答案**，追问更容易偏，且每次都多一次模型调用、与主回答抢同一个模型槽位（`#285`）。★ 默认关 = 把速度留给愿意换的人 |
 
 ## 九、OCR 的配置项（交付时可能要改的）
 
