@@ -3798,3 +3798,25 @@ assertThat(refused.getMessage()).contains("不存在").doesNotContain("没有权
 ⇒ **§11.10.87 的结论「单靠重排达不到判据」只在 e5-small 的读数上成立，在 bge-m3 上不成立。** 那条结论的真实教训不是"重排没用"，而是 **"对照组选错时，结论可以完全反过来"**。
 
 ★ **21 条**（10.8%）是真正"正确段压根没进前 5"的部分 —— 它是 `#280` 之后的下一层（切分粒度 / 检索单元）。★ 注意旧语料 bge-m3 那一版也是 **21 条**（`.build/b13-m3-215b.json` 的 `rank_core=0` 计数），与干净语料的 21 条**完全相同** ⇒ 这 21 条与语料无关，是稳定的真缺口。
+
+#### 11.10.90 模块边界红了：问答不该直接 import 检索的实现类（`#293`）
+
+**CI 真红**（0.4.7 与 0.4.8 都红在同一条）：
+
+```
+Module 'conversation' depends on non-exposed type
+  cn.lincoln.aiplatform.retrieval.application.MultiHopService within module 'retrieval'!
+```
+
+**根因**：`#283` 让 `ChatService` 直接 `import` 了 `retrieval.application.MultiHopService`。而**在这条修复之前，`conversation` 对 `retrieval` 的依赖是零** —— 它用到的每一样东西（`AccessScopePort` / `ChatStreamPort` / `EmbeddingPort` / `ModelEgressPort` / `NoRefStrategy` / `SegmentSearchPort`）都在 `platform` 里。这次是我破了例。
+
+★ **我在本地没早发现的原因**：`ModuleBoundaryTest` 之前在本地跑过别的类，但 `mvn -o test -Dtest=...` 是**逐类跑**，架构闸门那一档要单独跑才看得到；而且我当时的判断只停在"`conversation → retrieval` 方向合法"（`l3MustNotDependOnL4` 只禁反向），**漏了 `@NamedInterface` 那一层**。⇒ 同族教训见 R63 记忆里那条：**"方向合法"与"类型被暴露"是两件事**。
+
+**处置**：不是把 `MultiHopService` 开成 `@NamedInterface`（那是"改闸门去迁就实现"，同族先例是 `platform.assistant.AppBindingPort` 的类注释），而是：
+- `platform/retrieval/HopDeciderPort`：只放**形状**（`Result` 四项：够不够 / 下一问 / 为什么没用上 / 耗时）；
+- `retrieval/application/HopDeciderAdapter`：**薄壳，只做类型搬运，零逻辑**；
+- `ChatService` 改注入端口；测试替身也按端口给。
+
+**读数**：`ModuleBoundaryTest` **4/4 绿**（此前 1 error）；修复同时 cherry-pick 到 `release/0.4.7`（`b8281ce`）。
+
+★ **一个可复用的判据**：新加一条跨模块依赖时，**先问"目标类型在 `platform` 里有没有端口"** —— 没有就加端口，不要直接 import 实现类。`platform.retrieval` 下已经有一整套先例（`SegmentSearchPort` / `NoRefStrategy`）。
