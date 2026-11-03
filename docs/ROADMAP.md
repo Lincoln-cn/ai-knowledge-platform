@@ -3820,3 +3820,31 @@ Module 'conversation' depends on non-exposed type
 **读数**：`ModuleBoundaryTest` **4/4 绿**（此前 1 error）；修复同时 cherry-pick 到 `release/0.4.7`（`b8281ce`）。
 
 ★ **一个可复用的判据**：新加一条跨模块依赖时，**先问"目标类型在 `platform` 里有没有端口"** —— 没有就加端口，不要直接 import 实现类。`platform.retrieval` 下已经有一整套先例（`SegmentSearchPort` / `NoRefStrategy`）。
+
+#### 11.10.91 导入端点被自己的新字段拒了：基本类型 + 旧包缺省 = 400「不是合法 JSON」（`#294`）
+
+**CI 真红**：`AssistantImportHttpTest.exportThenImportRoundTripsAndMissingReferencesAreExplicit`（1314 例里 **1 例**）。它断言「400 必须说清缺什么（模型未加载 + 知识库不可见）」，而实际响应是：
+
+```json
+{"code":400,"message":"请求体不是合法 JSON","hint":"请检查请求体是否为合法 JSON、字段名用双引号…"}
+```
+
+**根因**（`#283` 引入的回归）：`AssistantView.RetrievalView` 的两个新字段写成了**基本类型**
+`boolean multiHopEnabled, int maxHops`。导入端点会把**手写的 / 旧版本导出的** bundle JSON 反序列化成这个类型，而杰克逊 3 默认开着 `FAIL_ON_NULL_FOR_PRIMITIVES` ⇒ 字段缺席即 `null` ⇒
+
+```
+Cannot map `null` into type `boolean`
+(set `DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES` to 'false' to allow)
+```
+
+⇒ 整包被拒，并被映射成 `HttpMessageNotReadableException` 的通用文案「请求体不是合法 JSON」。
+
+★ **前七项一直是基本类型却没出过事**，只因为它们**从来都有值**；这两个是新增的、**旧包里必然缺席**的。⇒ 判据：**给一个会被外部 JSON 反序列化的 record 加字段时，先问"旧数据里有这一项吗"** —— 没有就必须用包装类型 + 显式缺省，不能用基本类型。
+
+★ **没有**选"把 `FAIL_ON_NULL_FOR_PRIMITIVES` 设成 false"：那会让**所有**基本类型字段静默接受 `null`，把一个具体的兼容问题扩大到全局 —— 这与"修闸门 ≠ 把闸门改成绿的"同族。
+
+**改法**：两个字段改 `Boolean` / `Integer`，紧凑构造器里归一（缺省 = 多跳关 + 2 轮，与库里两列的 `default` 一致）。
+
+**读数**：`AssistantImportHttpTest` **1/1 绿**（此前 1 failure）；修复已 cherry-pick 到 `release/0.4.7`（`0ed4961`）。
+
+★ **附带一条读数陷阱**：这条测试红了两轮（本地 + CI 各一次），而**报错文案指向的是"JSON 语法"**，真因却是"某个字段缺席"。⇒ **`HttpMessageNotReadableException` 的通用文案会把人引向错误方向** —— 查这类 400 时，先看 `target/surefire-reports/*.xml` 里的 `Caused by:`，别信响应体里的那句话。
