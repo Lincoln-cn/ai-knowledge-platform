@@ -66,6 +66,16 @@ public record AssistantView(
    * 省略会让前端回落到自己的硬编码值，而两边一旦不同，界面显示 3、实际按别的值检索。
    */
   @JsonInclude(JsonInclude.Include.NON_NULL)
+  /**
+   * 检索参数的外部形状。
+   *
+   * <p>★ 后两项是 {@link Boolean} / {@link Integer} 而**不是**基本类型（`#294`）：导入端点会把 外部 JSON 反序列化成这个类型，而杰克逊 3
+   * 默认开着 {@code FAIL_ON_NULL_FOR_PRIMITIVES} —— 旧版本导出的包里没有这两个字段 ⇒ {@code null} ⇒ {@code Cannot map
+   * `null` into type `boolean`}，整包被拒成 400「请求体不是合法 JSON」。
+   * 前七项一直是基本类型却没出过事，只因为**它们从来都有值**；这两个是新增的、旧包里必然缺席的。
+   *
+   * <p>⇒ 缺省即"用默认值"（多跳关、2 轮），由紧凑构造器归一。
+   */
   public record RetrievalView(
       String mode,
       double threshold,
@@ -74,8 +84,15 @@ public record AssistantView(
       int queryCount,
       boolean decomposeEnabled,
       int maxSubQuestions,
-      boolean multiHopEnabled,
-      int maxHops) {}
+      Boolean multiHopEnabled,
+      Integer maxHops) {
+
+    /** ★ 缺省归一：旧包没有这两项时，按"多跳关 + 2 轮"补齐，与库里的列默认值一致。 */
+    public RetrievalView {
+      multiHopEnabled = multiHopEnabled != null && multiHopEnabled;
+      maxHops = maxHops == null ? 2 : maxHops;
+    }
+  }
 
   /**
    * 由实体组装。
