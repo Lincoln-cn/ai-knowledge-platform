@@ -103,16 +103,21 @@ class ContractDriftTest {
           //     ★ 摘它只说明"端点与表都在"，**不说明它能产出数据** —— 这张表今天没有任何写入方
           //     （执行引擎在 V1.0，画布调试刻意不写它），所以它在真实系统里永远返回空列表；
           //     这条"空"的性质写在 `WorkflowRecordQueryService` 的类注释与 V62 迁移的文件头里
-          missing("POST", "/assistants/{*}/workflow/debug", "#198", "15–18 周"));
+          //   ★ 2026-11-04 拆账：`POST …/workflow/debug` 曾挂 #198，但 #198 的其余九条（node-types /
+          //     draft 的 GET+PUT / validate / publish / versions 的 GET 两条 / rollback / records）
+          //     全部在 2026-10-31 落地，只剩这一条；而它的实现前提是「把图真的跑一遍」，
+          //     即执行引擎，执行引擎按 `ROADMAP §九` 排 V1.0、且已记在 #113。
+          //     把它留在 #198 会让账单看起来像「编排还差十条端点」，与实际相反 ⇒ 改挂 #113。
+          missing("POST", "/assistants/{*}/workflow/debug", "#113", "V1.0（执行引擎）"));
 
   // ★ conversations（0）—— GET/PATCH/DELETE /conversations/{id} 已随 #187 落地，
   //   会话分享三条也已在 2026-10-25 落地（V53 + 公开面 /public/shares/{token}）
   // ★ feedbacks（6）—— 第 18 周 0.5.0：赞踩 + 反馈闭环（§3.1 记 M5，反馈处理后端 M5 实现）
   // ★ feedbacks（6）—— #194 已落：列表/统计/详情/办理/批量/重开
   // ★ files（0）—— POST /files 已随 #187 落地（2026-11-01：V63 + FileStorePort + LocalFileStore）。
-  //   ★ 与 records 那条同型提醒：端点与表都在，但**没有消费方** —— ChatController 收下
-  //     attachmentIds 但不用，"传一份文档再问关于它的问题"今天走不通（绑定 + 落 kb_document
-  //     让附件进检索是下一批）。这条边界写在 FileController 类注释、FileRef 类注释与 V63 文件头里。
+  //   ★ 2026-11-04 订正：**消费方也已落地** —— `AttachmentRegistrar` 把请求体里的 `attachmentIds`
+  //     解析成可检索的会话域文档，`ChatController.java:112/:342` 两处都接着它。
+  //     原注释写的「没有消费方 / 传一份文档再问走不通」已过时。
 
   // ★ knowledge-bases（1）—— 建档/文档已落地；余下暂存上传一条，属 P1
   // ★ workflow（0）—— GET /workflow/node-types 已随节点目录落地（2026-10-31，`#198` 第二块）

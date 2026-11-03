@@ -150,6 +150,11 @@ jobs:
           DB_URL: jdbc:postgresql://localhost:5432/aiplatform
           DB_USER: aiplatform
           DB_PASSWORD: aiplatform
+          # ★ 上游必须指向本 job 自己起的桩（11999），不能用 application.yml 的默认
+          #   `http://localhost:11434/v1`：那是 Ollama 的端口，CI 里没有它，症状是
+          #   「向量化失败：网关不可达：连接 http://localhost:11434/v1/embeddings 失败」
+          #   ⇒ S1 / S3 / 跨场景三条闸门全红在"夹具文档向量化失败"，而它们量的是别的东西。
+          AI_BASE_URL: http://localhost:11999/v1
         run: |
           # ★ 不写死版本号：pom 的 version 是发布切点，会随周次前进（0.4.5 …），
           #   写死只会在下一次版本对齐时把闸门变成"找不到 jar"。
