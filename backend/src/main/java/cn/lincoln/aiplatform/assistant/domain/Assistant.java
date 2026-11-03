@@ -117,6 +117,14 @@ public class Assistant implements OwnedResource {
   @Column(name = "retrieval_no_ref_strategy", nullable = false, length = 16)
   private NoRefStrategy retrievalNoRefStrategy = NoRefStrategy.REFUSE;
 
+  /** 是否开启多跳迭代（{@code #283}）。默认关 —— 开启后每轮多一次模型调用，是成本不是白拿。 */
+  @Column(name = "retrieval_multi_hop_enabled", nullable = false)
+  private boolean retrievalMultiHopEnabled = false;
+
+  /** 多跳轮数上限（含首轮），1–3。默认 2。 */
+  @Column(name = "retrieval_max_hops", nullable = false)
+  private short retrievalMaxHops = 2;
+
   @Column(name = "retrieval_query_count", nullable = false)
   private short retrievalQueryCount = 3;
 
@@ -269,6 +277,8 @@ public class Assistant implements OwnedResource {
       int queryCount,
       boolean decomposeEnabled,
       int maxSubQuestions,
+      boolean multiHopEnabled,
+      int maxHops,
       UUID updatedBy) {
     this.retrievalMode = mode;
     this.retrievalThreshold = threshold;
@@ -277,6 +287,11 @@ public class Assistant implements OwnedResource {
     this.retrievalQueryCount = (short) queryCount;
     this.retrievalDecomposeEnabled = decomposeEnabled;
     this.retrievalMaxSubQuestions = (short) maxSubQuestions;
+    if (maxHops < 1 || maxHops > 3) {
+      throw new IllegalArgumentException("多跳轮数应在 1～3 之间");
+    }
+    this.retrievalMultiHopEnabled = multiHopEnabled;
+    this.retrievalMaxHops = (short) maxHops;
     this.updatedBy = updatedBy;
   }
 
@@ -411,6 +426,14 @@ public class Assistant implements OwnedResource {
 
   public List<String> tags() {
     return List.of(tags);
+  }
+
+  public boolean retrievalMultiHopEnabled() {
+    return retrievalMultiHopEnabled;
+  }
+
+  public int retrievalMaxHops() {
+    return retrievalMaxHops;
   }
 
   public RetrievalMode retrievalMode() {

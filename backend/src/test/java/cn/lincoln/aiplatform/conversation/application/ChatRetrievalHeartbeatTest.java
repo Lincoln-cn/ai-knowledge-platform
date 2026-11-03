@@ -99,7 +99,8 @@ class ChatRetrievalHeartbeatTest {
             },
             new ChatStopSignal(),
             PROPERTIES,
-            UNRESTRICTED_EGRESS);
+            UNRESTRICTED_EGRESS,
+            null);
     RecordingSink sink = new RecordingSink();
 
     chatService.streamTurn(store.prepare(null, null, QUESTION, UUID.randomUUID()), QUESTION, sink);

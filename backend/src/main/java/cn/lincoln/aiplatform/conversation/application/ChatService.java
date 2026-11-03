@@ -13,6 +13,7 @@ import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
+import cn.lincoln.aiplatform.platform.retrieval.HopDeciderPort;
 import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
@@ -33,6 +34,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
@@ -182,7 +184,40 @@ public class ChatService {
    * 后者回答"我能读哪些"（谁能看），本端口回答"读到的东西允许发到这个模型吗"（能发到哪）。 两者<strong>正交</strong>：一个高密级分段可以合法地被本地模型读，但不得被发去外部
    * API。
    */
+  /**
+   * 多跳的触发阈值：命中数少于它就算"没答够"（与 {@code RetrievalService.HOP_MIN_HITS} 同值）。
+   *
+   * <p>★ 两处不一致的症状是"命中测试开了多跳、问答却没触发"，而两边都不会报错。
+   */
+  private static final int HOP_MIN_HITS = 3;
+
   private final ModelEgressPort modelEgress;
+
+  /**
+   * 多跳迭代（{@code #283}）。{@code null} = 不启用（测试与"没有检索"的构造路径）。
+   *
+   * <p>★ 它原先只挂在命中测试上（{@code HitTestQuery}），落库的检索参数里根本没有多跳两格 —— 于是"命中测试能开、真实问答永远不跑"。{@code #283}
+   * 把两格加进 {@code RetrievalParams} 并把判定接在这里，才让那个开关真的对问答生效。
+   */
+  private final HopDeciderPort multiHop;
+
+  /**
+   * 「猜你想问」的并行开关（`#285`）。
+   *
+   * <p>★ 为什么用 setter 而不是构造器参数：本类的两个构造器已经被 7 个"脱离容器"的测试直接调用， 再往构造器里加一格就要改 7 个文件 ——
+   * 而这一格是**可选能力**（`null` ⇒ 不猜）， 用 setter 注入能让"没注入 = 关"这件事在测试里天然成立。
+   *
+   * <p>★ 默认关的理由见 {@link SuggestionService#guessAndPersist}：它换质量换速度。
+   */
+  private SuggestionService suggestions;
+
+  /** 并行开关本身（`app.chat.suggestions.parallel`，默认 false）。 */
+  @Value("${app.chat.suggestions.parallel:false}")
+  private boolean parallelSuggestions;
+
+  /** 猜你想问的异步执行器：它的失败不能影响主回答，所以必须是独立线程（不能用调用方的线程）。 */
+  private java.util.concurrent.Executor suggestionExecutor =
+      java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
   /**
    * 多轮上下文的硬上限（条数，含用户与助手）。
@@ -207,7 +242,8 @@ public class ChatService {
       ChatStreamPort chatStream,
       ChatStopSignal stopSignal,
       ChatStreamProperties properties,
-      ModelEgressPort modelEgress) {
+      ModelEgressPort modelEgress,
+      HopDeciderPort multiHop) {
     this.turns = turns;
     this.segmentSearch = segmentSearch;
     this.accessScope = accessScope;
@@ -215,6 +251,18 @@ public class ChatService {
     this.stopSignal = stopSignal;
     this.properties = properties;
     this.modelEgress = modelEgress;
+    this.multiHop = multiHop;
+  }
+
+  /**
+   * 注入「猜你想问」（`#285`）。
+   *
+   * <p>★ {@code required = false}：本类的单元测试都是直接 `new ChatService(...)`，不走容器 ⇒ 没有这个 setter
+   * 调用，`suggestions` 保持 `null`，并行分支天然关闭。
+   */
+  @Autowired(required = false)
+  public void setSuggestions(SuggestionService suggestions) {
+    this.suggestions = suggestions;
   }
 
   /**
@@ -233,7 +281,8 @@ public class ChatService {
       AccessScopePort accessScope,
       ChatStreamPort chatStream,
       ChatStopSignal stopSignal,
-      ModelEgressPort modelEgress) {
+      ModelEgressPort modelEgress,
+      HopDeciderPort multiHop) {
     this(
         turns,
         segmentSearch,
@@ -241,7 +290,8 @@ public class ChatService {
         chatStream,
         stopSignal,
         ChatStreamProperties.defaults(),
-        modelEgress);
+        modelEgress,
+        multiHop);
   }
 
   /**
@@ -531,6 +581,7 @@ public class ChatService {
       run.assembler.references(refs);
       run.bindRefs(refs);
       run.pump();
+      maybeGuessSuggestions(turn, question, refs);
 
       // ★★ `#185`：无引用策略的**生产消费点**。
       //
@@ -1117,6 +1168,10 @@ public class ChatService {
         }
         default -> throw new IllegalArgumentException("未知的检索模式：" + retrieval.mode());
       }
+      // ★★ 多跳再检一轮（`#283`）。规则触发（与 `RetrievalService` 同口径 `§3.4.2`）：
+      //   最高分 < 阈值，或命中数 < HOP_MIN_HITS。★ 它是"要么更好、要么什么都没发生" ——
+      //   判定失败 / 没有下一查询 / 下一轮零命中，全部用已有结果继续（`§3.4.6`）。
+      hits = withMultiHop(question, scope, fetchLimit, retrieval, hits);
       if (hits.isEmpty()) {
         return List.of();
       }
@@ -1232,6 +1287,151 @@ public class ChatService {
     }
     log.info("本轮检索到 {} 条引用（上限 {}）", refs.size(), retrievalLimit);
     return refs;
+  }
+
+  /**
+   * 多跳迭代的最小实现（{@code #283}）：规则触发 → 判定 → 再检一轮 → 合并去重。
+   *
+   * <h3>★ 它必须"要么答得更好，要么什么都没发生"</h3>
+   *
+   * <p>{@code 10 §3.4.6} 列了三种失败：判定调用失败 / 下一轮检索失败 / 下一轮零新增。 三条的处置全是<strong>用已有结果继续</strong> ——
+   * 一次都不该让整轮问答失败，因为多跳是补救手段、不是主路。
+   *
+   * <p>★ 触发条件是<strong>规则判定</strong>（不额外调模型）：首轮最高分低于阈值，或命中数少于 {@value #HOP_MIN_HITS}（与 {@code
+   * RetrievalService.HOP_MIN_HITS} 同值）。判"够不够"才是模型那一次调用。
+   *
+   * <p>★★ 为什么这段要写在这里而不是复用 {@code RetrievalService.runMultiHop}：那条链与 {@code HitTestQuery} / 子问题配额 /
+   * {@code HopRun} 强耦合，而问答链路的召回是自己实现的 （{@code switch (retrieval.mode())} 三路 + {@code
+   * fuseHybrid}）。把它硬塞进来会把命中测试的一整套 记账类型拖进对话链路。⇒ 这里只保留 {@code §3.4.2} 的规则触发与 {@code §3.4.6} 的三条兜底。
+   *
+   * @param firstHits 首轮命中（已按分数排序）
+   * @return 合并后的命中（首轮顺序优先，新命中追加在后）
+   */
+  private List<SegmentSearchPort.Scored> withMultiHop(
+      String question,
+      RetrievalScope scope,
+      int fetchLimit,
+      RetrievalParams retrieval,
+      List<SegmentSearchPort.Scored> firstHits) {
+    if (multiHop == null || !retrieval.multiHopEnabled()) {
+      return firstHits;
+    }
+    double best = firstHits.isEmpty() ? 0.0 : firstHits.get(0).score();
+    boolean triggered = firstHits.size() < HOP_MIN_HITS || best < retrieval.threshold();
+    if (!triggered) {
+      log.info("多跳已开，但首轮命中充分（{} 条，最高分 {}）⇒ 不再检一轮", firstHits.size(), best);
+      return firstHits;
+    }
+    LinkedHashMap<UUID, Double> merged = new LinkedHashMap<>();
+    firstHits.forEach(hit -> merged.putIfAbsent(hit.segmentId(), hit.score()));
+    int maxHops = Math.max(1, retrieval.maxHops());
+    for (int round = 1; round < maxHops; round++) {
+      String nextQuery;
+      try {
+        List<SegmentSearchPort.Card> cards = segmentSearch.load(merged.keySet());
+        HopDeciderPort.Result outcome = multiHop.decide(question, cards, 0L);
+        if (!outcome.usable()) {
+          log.info("多跳判定不可用（{}）⇒ 用已有 {} 条结果继续", outcome.failure(), merged.size());
+          break;
+        }
+        if (outcome.sufficient()) {
+          log.info("多跳判定：已有命中已足够 ⇒ 不再检一轮（共 {} 条）", merged.size());
+          break;
+        }
+        if (!outcome.hasNextQuery()) {
+          log.info("多跳判定：需要更多信息但没给出下一查询 ⇒ 用已有 {} 条结果继续", merged.size());
+          break;
+        }
+        nextQuery = outcome.nextQuery();
+      } catch (RuntimeException failure) {
+        // §3.4.6：判定失败 ⇒ 用已有结果生成（不抛，免得"开了多跳反而更容易失败"）
+        log.warn("多跳判定调用失败，用已有 {} 条结果继续：{}", merged.size(), failure.getMessage());
+        break;
+      }
+      List<SegmentSearchPort.Scored> more;
+      try {
+        more = searchOnce(nextQuery, scope, fetchLimit, retrieval);
+      } catch (RuntimeException failure) {
+        log.warn("多跳第 {} 轮的检索失败，用已有 {} 条结果继续：{}", round + 1, merged.size(), failure.getMessage());
+        break;
+      }
+      int before = merged.size();
+      more.forEach(hit -> merged.putIfAbsent(hit.segmentId(), hit.score()));
+      int added = merged.size() - before;
+      log.info("多跳第 {} 轮：「{}」带来 {} 条新分段（累计 {} 条）", round + 1, nextQuery, added, merged.size());
+      if (added == 0) {
+        // §3.4.6 第三条：下一轮零新增 ⇒ 停止（再问下去只会更贵）
+        break;
+      }
+    }
+    return merged.entrySet().stream()
+        .map(e -> new SegmentSearchPort.Scored(e.getKey(), e.getValue()))
+        .toList();
+  }
+
+  /**
+   * 并行猜追问（`#285`）：回答还在生成时就用「问题 + 检索上下文」先猜。
+   *
+   * <p>★ 三条"不做什么"：**不阻塞主回答**（丢进独立线程）· **失败不影响这一轮**（吞掉，只记 warn）·
+   * **零引用时不猜**（没有资料可依据，猜出来的问题与用户将看到的内容无关）。
+   *
+   * <p>★ 落库后 {@link SuggestionService#generate} 的幂等分支会让前端 `done` 之后那次请求直接返回存量 —— 所以前端不需要知道这个开关存在。
+   */
+  private void maybeGuessSuggestions(
+      ChatTurnWriter.PreparedTurn turn, String question, List<SourceRef> refs) {
+    if (!parallelSuggestions || suggestions == null || refs.isEmpty()) {
+      return;
+    }
+    StringBuilder context = new StringBuilder();
+    refs.stream()
+        .limit(3)
+        .forEach(
+            ref ->
+                context
+                    .append(ref.docName())
+                    .append(" · ")
+                    .append(clip(ref.full(), 120))
+                    .append('\n'));
+    UUID messageId = turn.assistantMessageId();
+    UUID modelId = turn.modelId();
+    String contextText = context.toString();
+    suggestionExecutor.execute(
+        () -> {
+          try {
+            suggestions.guessAndPersist(messageId, modelId, question, contextText);
+          } catch (RuntimeException failure) {
+            log.warn("并行追问的任务本身抛了（消息 {}）：{}", messageId, failure.getMessage());
+          }
+        });
+  }
+
+  private static String clip(String text, int max) {
+    if (text == null) {
+      return "";
+    }
+    return text.length() <= max ? text : text.substring(0, max);
+  }
+
+  /** 按检索模式跑一次召回（{@code withMultiHop} 用；与 {@code retrieve} 的三路同口径）。 */
+  private List<SegmentSearchPort.Scored> searchOnce(
+      String query, RetrievalScope scope, int fetchLimit, RetrievalParams retrieval) {
+    return switch (retrieval.mode()) {
+      case VECTOR -> vectorHits(query, scope, fetchLimit);
+      case FULLTEXT ->
+          segmentSearch.fullText(new SegmentSearchPort.TextQuery(query, scope, fetchLimit));
+      case HYBRID -> {
+        List<SegmentSearchPort.Scored> fullTextHits =
+            segmentSearch.fullText(new SegmentSearchPort.TextQuery(query, scope, fetchLimit));
+        List<SegmentSearchPort.Scored> vectorHitsList;
+        try {
+          vectorHitsList = vectorHits(query, scope, fetchLimit);
+        } catch (RuntimeException vectorFailure) {
+          log.warn("多跳的混合检索里向量一路失败，只用全文那一路：{}", vectorFailure.getMessage());
+          vectorHitsList = List.of();
+        }
+        yield vectorHitsList.isEmpty() ? fullTextHits : fuseHybrid(fullTextHits, vectorHitsList);
+      }
+    };
   }
 
   /**

@@ -130,7 +130,8 @@ class ChatDebugTurnTest {
         model,
         new ChatStopSignal(),
         ChatStreamProperties.defaults(),
-        UNRESTRICTED_EGRESS);
+        UNRESTRICTED_EGRESS,
+        null);
   }
 
   private static final class RecordingThinkingPort implements ChatStreamPort {

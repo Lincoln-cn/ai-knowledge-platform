@@ -508,7 +508,9 @@ public class AssistantController {
       String noRefStrategy,
       Integer queryCount,
       Boolean decomposeEnabled,
-      Integer maxSubQuestions) {
+      Integer maxSubQuestions,
+      Boolean multiHopEnabled,
+      Integer maxHops) {
 
     AssistantService.RetrievalDraft toDraft() {
       AssistantService.RetrievalDraft defaults = AssistantService.RetrievalDraft.defaults();
@@ -519,7 +521,9 @@ public class AssistantController {
           noRefStrategy == null ? defaults.noRefStrategy() : noRefStrategy,
           queryCount == null ? defaults.queryCount() : queryCount,
           decomposeEnabled == null ? defaults.decomposeEnabled() : decomposeEnabled,
-          maxSubQuestions == null ? defaults.maxSubQuestions() : maxSubQuestions);
+          maxSubQuestions == null ? defaults.maxSubQuestions() : maxSubQuestions,
+          multiHopEnabled == null ? defaults.multiHopEnabled() : multiHopEnabled,
+          maxHops == null ? defaults.maxHops() : maxHops);
     }
   }
 

@@ -112,7 +112,16 @@ class AssistantPublishCheckTest {
         List.of("行政"),
         OWNER);
     assistant.applyRetrieval(
-        RetrievalMode.HYBRID, new BigDecimal("0.60"), 5, NoRefStrategy.REFUSE, 3, true, 3, OWNER);
+        RetrievalMode.HYBRID,
+        new BigDecimal("0.60"),
+        5,
+        NoRefStrategy.REFUSE,
+        3,
+        true,
+        3,
+        false,
+        2,
+        OWNER);
     assistant.bind(List.of(KB_OK), List.of(), OWNER);
     return assistants.save(assistant);
   }
@@ -228,7 +237,16 @@ class AssistantPublishCheckTest {
   void blocksWhenStoredRetrievalParamsAreOutOfRange() {
     Assistant app = publishable();
     app.applyRetrieval(
-        RetrievalMode.HYBRID, new BigDecimal("1.50"), 99, NoRefStrategy.REFUSE, 9, true, 3, OWNER);
+        RetrievalMode.HYBRID,
+        new BigDecimal("1.50"),
+        99,
+        NoRefStrategy.REFUSE,
+        9,
+        true,
+        3,
+        false,
+        2,
+        OWNER);
     assistants.save(app);
 
     PublishCheckResult.Item retrieval = itemOf(service.checkBeforePublish(app.id()), "retrieval");
@@ -251,7 +269,7 @@ class AssistantPublishCheckTest {
             app.rolePrompt(),
             List.of(KB_OK),
             List.of(),
-            new AssistantService.RetrievalDraft("HYBRID", 0.6, 99, "REFUSE", 3, true, 3),
+            new AssistantService.RetrievalDraft("HYBRID", 0.6, 99, "REFUSE", 3, true, 3, false, 2),
             true,
             false,
             "你好",

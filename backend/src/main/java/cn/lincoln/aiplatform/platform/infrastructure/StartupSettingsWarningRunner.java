@@ -52,6 +52,9 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
   /** 模型 API Key 的加密密钥（默认值是仓库里的示例值，`#272`）。 */
   private final String apiKeySecret;
 
+  /** 上游 Ollama 的模型槽位上限（`#282`）；`-1` = 未声明，走 Ollama 自己的默认值。 */
+  private final int ollamaMaxLoadedModels;
+
   public StartupSettingsWarningRunner(
       @Value("${app.ingestion.embedding-concurrency:4}") int embeddingConcurrency,
       @Value("${spring.datasource.hikari.maximum-pool-size:10}") int poolSize,
@@ -63,7 +66,10 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
       @Value("${app.knowledge.cleanup.retain-days:7}") int cleanupRetainDays,
       // ★ 两个密钥只用来和"示例值"对比，不参与任何计算：值本身就是秘密，日志里一个字都不许打。
       @Value("${app.security.jwt.secret:}") String jwtSecret,
-      @Value("${app.model.api-key-secret:}") String apiKeySecret) {
+      @Value("${app.model.api-key-secret:}") String apiKeySecret,
+      // ★ `#282`：问答要两个模型同时驻留；槽位只有 1 时每轮都在重新加载模型。
+      //   默认 -1 = 没声明（Ollama 默认 3×GPU 数，通常够），不报。
+      @Value("${app.model.ollama.max-loaded-models:-1}") int ollamaMaxLoadedModels) {
     this.embeddingConcurrency = embeddingConcurrency;
     this.poolSize = poolSize;
     this.contextWindow = contextWindow;
@@ -72,6 +78,7 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
     this.cleanupRetainDays = cleanupRetainDays;
     this.jwtSecret = jwtSecret;
     this.apiKeySecret = apiKeySecret;
+    this.ollamaMaxLoadedModels = ollamaMaxLoadedModels;
   }
 
   @Override
@@ -87,6 +94,8 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
                 cleanupRetainDays));
     // ★ 密钥那两条单独算：它们不是"配错了会坏"，而是"没换就等于没有"（`#272`）。
     problems.addAll(StartupSettingsCheck.secretProblems(jwtSecret, apiKeySecret));
+    // ★ 上游模型槽位（`#282`）：与上面那两组不同，它管的是"能不能稳定跑"，不是"安不安全"。
+    problems.addAll(StartupSettingsCheck.modelSlotProblems(ollamaMaxLoadedModels));
 
     if (problems.isEmpty()) {
       log.info(

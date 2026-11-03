@@ -37,6 +37,13 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class AnalyticsService {
 
+  /**
+   * 通用对话（{@code assistant_id} 为 null）在排行里的显示名。
+   *
+   * <p>★ 写成一个常量而不是散在 SQL 与前端：这行会成为用户截图里的一句话，两处各写一份迟早不一致。
+   */
+  static final String GENERIC_ASSISTANT_NAME = "通用对话（未绑定应用）";
+
   private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
   private static final int MAX_RANGE_DAYS = 366;
 
@@ -114,21 +121,35 @@ public class AnalyticsService {
     return points;
   }
 
-  /** 应用排行（只列区间内有提问的应用）。 */
+  /**
+   * 应用排行（只列区间内有提问的应用）。
+   *
+   * <p>★ <strong>通用对话也要有一行</strong>（{@code #284}）。原来这里是 {@code join as_assistant a on
+   * c.assistant_id = a.id} —— <em>内连</em>，于是 {@code assistant_id} 为 null 的通用对话被整个丢掉： 总量 SQL 不含
+   * assistant 条件（所以它算进去了），排行里却看不见它。两个数放在一页上读起来 像"对不上"，其实是同一个集合被切成两半、只显示了一半。
+   *
+   * <p>★ 用 {@code left join} 而不是 {@code union all}：前者一处改动、排序与 token/满意度口径自动一致； 后者要在两段 SQL
+   * 里各写一遍同一套聚合，迟早漂移。
+   *
+   * <p>★ 虚拟行的 id 用全零 UUID（契约里 {@code id} 是必填）：前端据此区分"这是一行真实应用"还是 "这是通用对话"，不需要再加一个布尔字段。
+   */
   @Transactional(readOnly = true)
   public List<AssistantRankItem> topAssistants(LocalDate from, LocalDate to, int limit) {
     Range range = range(from, to);
     int capped = Math.max(1, Math.min(limit, 50));
     return jdbc.query(
-        "select a.id, a.name, count(*) filter (where m.role = 'USER') as call_count,"
+        "select coalesce(a.id, cast('00000000-0000-0000-0000-000000000000' as uuid)) as id,"
+            + " coalesce(a.name, '"
+            + GENERIC_ASSISTANT_NAME
+            + "') as name, count(*) filter (where m.role = 'USER') as call_count,"
             + " coalesce(sum(case when m.role = 'ASSISTANT' then coalesce(m.prompt_tokens, 0) +"
             + " coalesce(m.completion_tokens, 0) else 0 end), 0) as token_count, 100.0 * count(*)"
             + " filter (where m.feedback = 'UP') / nullif(count(*) filter (where m.feedback is not"
-            + " null), 0) as satisfaction from as_assistant a join cv_conversation c on"
-            + " c.assistant_id = a.id and c.deleted_at is null join cv_message m on"
-            + " m.conversation_id = c.id where m.created_at >= ? and m.created_at < ? group by"
+            + " null), 0) as satisfaction from cv_conversation c left join as_assistant a on"
+            + " c.assistant_id = a.id join cv_message m on m.conversation_id = c.id"
+            + " where c.deleted_at is null and m.created_at >= ? and m.created_at < ? group by"
             + " a.id, a.name having count(*) filter (where m.role = 'USER') > 0 order by call_count"
-            + " desc, a.name asc limit ?",
+            + " desc, name asc limit ?",
         (rs, rowNum) ->
             new AssistantRankItem(
                 rs.getObject("id", UUID.class),

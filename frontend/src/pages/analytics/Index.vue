@@ -65,7 +65,16 @@
         <div v-loading="loading" class="block-body">
           <el-table :data="rank" size="small" :show-overflow-tooltip="true">
             <el-table-column type="index" label="#" width="44" />
-            <el-table-column prop="name" label="应用" min-width="140" />
+            <el-table-column prop="name" label="应用" min-width="140">
+              <template #default="{ row }">
+                <!-- ★ 通用对话是排行里的一行"虚拟应用"（assistant_id 为 null，后端用全零 UUID
+                     标出来）。给它一个弱化的标记，别让人以为它是一个真的应用（#284）。 -->
+                <span>{{ row.name }}</span>
+                <el-tag v-if="row.id === GENERIC_RANK_ID" size="small" effect="plain" class="generic-tag">
+                  未绑定
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column prop="callCount" label="调用数" width="90" align="right">
               <template #default="{ row }">
                 <span class="num">{{ fmtCount(row.callCount) }}</span>
@@ -174,6 +183,14 @@ const error = ref<string | null>(null)
 const overview = ref<OverviewMetrics | null>(null)
 const trend = ref<TrendPoint[]>([])
 const rank = ref<AssistantRankItem[]>([])
+
+/**
+ * 通用对话那一行的 id（全零 UUID，由后端 `AnalyticsService.topAssistants` 的 coalesce 产生）。
+ *
+ * ★ 它必须与后端常量同源 —— 但前端拿不到编译期常量，所以这里写死并在
+ *   `analytics` 的契约注释里指向后端。改一处要改两处，已由「两数对得上」这条读数守着。
+ */
+const GENERIC_RANK_ID = '00000000-0000-0000-0000-000000000000'
 const quality = ref<QualityMetrics | null>(null)
 
 const range = computed<AnalyticsRange>(() => {
@@ -226,6 +243,12 @@ const fmtMs = (n: number | null | undefined) => (n == null ? '—' : `${n.toLoca
 </script>
 
 <style scoped>
+/* 通用对话那一行的「未绑定」标记：弱化，别与真实应用的标签抢注意力 */
+.generic-tag {
+  margin-left: var(--space-xs);
+  transform: scale(0.9);
+}
+
 .kpi-row {
   display: grid;
   grid-template-columns: repeat(5, 1fr);

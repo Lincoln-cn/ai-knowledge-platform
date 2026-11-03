@@ -54,6 +54,16 @@ services:
     image: ollama/ollama:latest
     container_name: aip-deliver-ollama
     restart: unless-stopped
+    environment:
+      # ★★ 至少 2 个模型槽位（#282）。问答链路要**两个模型同时驻留**：
+      #    向量模型算查询向量 + 对话模型生成答案。槽位只有 1 时它们每轮互相卸载/加载，
+      #    后果是偶发的「连接上游失败：HTTP/1.1 header parser received no bytes」，
+      #    以及**每轮都付一遍冷启动**（首字延迟被抬到十几秒 —— 不是模型慢）。
+      #    ★ 写死在这里而不是靠 Ollama 默认值（3 × GPU 数）：无 GPU 时默认只有 3，
+      #      看起来够，但只要显卡被别的进程占了一部分就可能退化成 1，而退化是静默的。
+      OLLAMA_MAX_LOADED_MODELS: "2"
+      # 模型加载后保活多久。太短会让"隔几分钟问一次"每次都付冷启动。
+      OLLAMA_KEEP_ALIVE: "15m"
     volumes:
       # ★ 模型文件落在命名卷里，随容器生命周期保留；离线交付时把这个卷一起带走。
       - aip-ollama:/root/.ollama

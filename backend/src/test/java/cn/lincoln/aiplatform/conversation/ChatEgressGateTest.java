@@ -148,7 +148,13 @@ class ChatEgressGateTest {
       ModelEgressPort egress = modelId -> egressCeiling;
       ChatService service =
           new ChatService(
-              new RecordingStore(), search, new OpenScope(), model, new ChatStopSignal(), egress);
+              new RecordingStore(),
+              search,
+              new OpenScope(),
+              model,
+              new ChatStopSignal(),
+              egress,
+              null);
       service.streamTurn(
           new RecordingStore().prepare(null, null, QUESTION, UUID.randomUUID()), QUESTION, sink);
     }

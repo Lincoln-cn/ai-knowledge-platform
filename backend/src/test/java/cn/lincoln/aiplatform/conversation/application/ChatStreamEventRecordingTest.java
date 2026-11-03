@@ -686,7 +686,8 @@ class ChatStreamEventRecordingTest {
               new StreamDispatcher(model),
               stopSignal,
               PROPERTIES,
-              UNRESTRICTED_EGRESS);
+              UNRESTRICTED_EGRESS,
+              null);
     }
 
     private ChatService chatService() {

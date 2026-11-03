@@ -85,6 +85,11 @@ app:
     # ★ 默认空不是"忘了配"，而是"由部署方按自己的合规要求填"；填了才拦
     guard:
       sensitive-words: ${CHAT_GUARD_SENSITIVE_WORDS:}
+    # 「猜你想问」的并行模式（`#285`）。默认 **false**：串行版等答案落库后再猜，质量好但要多等 10~20 秒；
+    # 并行版在回答开始生成时就用「问题 + 检索上下文」猜，快但**没看到答案**，追问更容易偏。
+    # ★ 开关只影响"什么时候算"，不影响前端：落库后 `SuggestionService.generate` 的幂等分支会直接返回存量。
+    suggestions:
+      parallel: ${AIP_SUGGESTIONS_PARALLEL:false}
   audit:
     retention:
       enabled: ${AUDIT_RETENTION_ENABLED:false}
@@ -188,6 +193,19 @@ app:
     #    拿到它就能解开库里所有模型的 API key。
     #    生成自己的密钥：[Convert]::ToBase64String((1..32|%{Get-Random -Max 256}))
     api-key-secret: ${MODEL_API_KEY_SECRET:ZGV2LW9ubHktYXBpLWtleS1zZWNyZXQtMzJieXRlcyE=}
+
+    ollama:
+      # ★★ 上游 Ollama 的模型槽位上限（#282）。问答链路要**两个模型同时驻留**：
+      #    向量模型算查询向量 + 对话模型生成答案。槽位只有 1 时它们每轮互相卸载/加载，
+      #    后果是偶发的「连接上游失败：HTTP/1.1 header parser received no bytes」，
+      #    以及**每轮都付一遍冷启动**（B4 首字 25s 的真实来源 —— 不是模型慢）。
+      # ★ 默认 -1 = 未声明：这时走 Ollama 自己的默认值（3 × GPU 数，通常够），启动自检不报。
+      #   只有部署者显式写了 1，启动日志才会告警 —— 判据认"写下来的值"，不猜环境。
+      # ★ 环境变量用 AIP_ 前缀，**不叫** OLLAMA_MAX_LOADED_MODELS —— 那个名字是 Ollama 容器
+      #   自己读的（给它的调度器用），同一个名字在宿主机与容器里含义不同，混用会让
+      #   『我明明设了』和『应用读到的是别的值』同时成立。
+      max-loaded-models: ${AIP_OLLAMA_MAX_LOADED_MODELS:-1}
+
 
   egress:
     # ★★ 出站闸门（#72）：EXTERNAL_API 供应商的模型允许处理到的最高密级。

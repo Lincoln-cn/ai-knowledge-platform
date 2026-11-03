@@ -36,6 +36,14 @@ export interface RetrievalParams {
   decomposeEnabled?: boolean
   /** 子问题上限。缺省 3 */
   maxSubQuestions?: number
+
+  /* ↓ 第 14 周多跳（10-RAG-检索策略设计 §3.4 / §6.2 第 5 项）。★ `#283` 起**落库**：
+     知识库与应用各两列（`retrieval_multi_hop_enabled` / `retrieval_max_hops`），
+     对话链路真的读它。以前只在命中测试那侧当临时参数 —— 参数存在、生产链路不消费（同 `#65` 的形状） */
+  /** 是否开启多跳迭代；缺省 false —— 每轮多花一次模型调用，默认把这个成本留给想付的人 */
+  multiHopEnabled?: boolean
+  /** 多跳轮数上限（含首轮），1～3；缺省 2（= 首轮 + 最多再检一轮） */
+  maxHops?: number
 }
 
 export interface HitItem {
@@ -53,13 +61,6 @@ export interface HitTestRequest extends RetrievalParams {
   /** 限定检索的知识库；不传则用应用绑定的全部 */
   kbIds?: string[]
   question: string
-
-  /* ↓ 第 14 周多跳（10-RAG-检索策略设计 §3.4 / §6.2 第 5 项）。★ 只挂在命中测试这一侧：
-     它不落库、不是知识库检索参数（后端那两列还没有，见 KnowledgeBase.RetrievalParamsView） */
-  /** 是否开启多跳迭代；缺省 false —— 每轮多花一次模型调用，默认把这个成本留给想付的人 */
-  multiHopEnabled?: boolean
-  /** 多跳轮数上限（含首轮），1～3；缺省 2（= 首轮 + 最多再检一轮） */
-  maxHops?: number
 }
 
 /**

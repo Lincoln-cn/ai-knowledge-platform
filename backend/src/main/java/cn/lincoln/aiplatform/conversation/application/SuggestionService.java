@@ -378,6 +378,70 @@ public class SuggestionService {
     return new Row(raw.modelId(), raw.artifacts(), raw.answer(), raw.question());
   }
 
+  /**
+   * 并行版（`#285`）：**不等答案生成完**，用「问题 + 检索上下文」先猜，落在同一条助手消息的 `artifacts` 上。
+   *
+   * <h3>★ 它换掉的是什么、代价是什么</h3>
+   *
+   * <p>串行版（{@link #generate}）要等整条回答落库，然后把「问 + 答（前 400 字）」喂给模型 —— 追问质量好， 但用户要在"回答完成"之后**再等 10~20
+   * 秒**才看到 chips（1.5B 的速度）。并行版在回答开始生成时就问， 用户看到"完成"时 chips 已经在 ⇒ 快，但**它没看到答案**，只能从检索上下文猜 ⇒ 追问会更容易偏。
+   *
+   * <p>⇒ 所以这是一个**开关、默认关**（`app.chat.suggestions.parallel-enabled`）： 想快的人自己承担质量，默认的人拿到质量。★ 关掉时前端
+   * `done` 之后那一次 {@link #generate} 照旧生效 （{@link #generate} 是幂等的 —— 存量已落库就直接返回，不会重复调模型）。
+   *
+   * <p>★ 失败一律吞掉：追问是锦上添花，不该让一条正常回答因为 chips 生成失败而出现错误。
+   *
+   * @param messageId 助手消息 id（流开始时已建行，所以这里能直接落）
+   * @param modelId 本轮用的模型
+   * @param question 用户的原始问题
+   * @param context 检索到的资料摘要（标题 + 正文前缀）
+   */
+  public void guessAndPersist(UUID messageId, UUID modelId, String question, String context) {
+    int want = count();
+    if (want <= 0 || modelId == null || messageId == null) {
+      return;
+    }
+    List<String> generated = new ArrayList<>();
+    try {
+      String raw = chat.complete(modelId, guessPrompt(question, context, want), TIMEOUT);
+      log.debug("并行追问原始输出（消息 {}）：{}", messageId, raw);
+      generated.addAll(parse(raw, want));
+    } catch (RuntimeException failure) {
+      log.warn("并行追问生成失败（消息 {}）：{}", messageId, failure.getMessage());
+      return;
+    }
+    if (generated.isEmpty()) {
+      return;
+    }
+    // ★ 这里没有 @Transactional：本方法由 ChatService 的异步任务调用，走 jdbc 的自动提交。
+    //   落库只有一条 update，不需要跨语句一致性。
+    persist(messageId, generated);
+  }
+
+  /** 并行版提示词：与 {@link #prompt} 同一套格式纪律（编号写进指令、不占位），只是把「答」换成「资料」。 */
+  private String guessPrompt(String question, String context, int want) {
+    String system = policy == null ? null : policy.systemPrompt();
+    String clipped = context == null ? "" : context;
+    if (clipped.length() > ANSWER_CLIP) {
+      clipped = clipped.substring(0, ANSWER_CLIP);
+    }
+    StringBuilder sb = new StringBuilder();
+    if (system != null) {
+      sb.append(system).append("\n\n");
+    }
+    sb.append("你是问答助手。用户问了一个问题，下面是检索到的资料片段。")
+        .append("请写出 ")
+        .append(want)
+        .append(" 个用户接下来可能追问的问题。")
+        .append("\n要求：每个问题不超过 20 个字；用 1. 2. 3. 这样的编号开头；")
+        .append("每个问题单独一行；不要解释、不要引号、不要写「问：」「答：」。")
+        .append("\n\n问：")
+        .append(question)
+        .append("\n资料：")
+        .append(clipped);
+    return sb.toString();
+  }
+
   private void persist(UUID messageId, List<String> suggestions) {
     String json =
         "{\"suggestions\":["

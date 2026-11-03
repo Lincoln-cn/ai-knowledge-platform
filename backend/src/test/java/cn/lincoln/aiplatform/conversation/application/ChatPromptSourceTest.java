@@ -143,7 +143,8 @@ class ChatPromptSourceTest {
         stream,
         new ChatStopSignal(),
         new ChatStreamProperties(300L, 1200L, 60L, 200),
-        (ModelEgressPort) modelId -> ClassificationLevel.CONFIDENTIAL);
+        (ModelEgressPort) modelId -> ClassificationLevel.CONFIDENTIAL,
+        null);
   }
 
   private static final class RecordingStream implements ChatStreamPort {

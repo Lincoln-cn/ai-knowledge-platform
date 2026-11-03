@@ -349,7 +349,7 @@ pg_restore -d "$TARGET_URL" --clean --if-exists /backup/aip-2026-10-31.dump
 
 ★ **"通过"那一行本身就是一份配置快照** —— 报障时先把它抄下来，比让人去翻环境变量快得多。
 
-它检查的**八项**，都对应过一次**真实踩过的坑**：
+它检查的**九项**，都对应过一次**真实踩过的坑**：
 
 | 项 | 配错的后果 | 出处 |
 |---|---|---|
@@ -361,6 +361,7 @@ pg_restore -d "$TARGET_URL" --clean --if-exists /backup/aip-2026-10-31.dump
 | `app.knowledge.cleanup.retain-days` 配 0 或负 | **启动自检不报这一项**：清理作业自己按 1 天兜底。想关掉清理要改 `cleanup.enabled=false` —— 配 0 不等于关 | `#259` |
 | `app.security.jwt.secret` 还是仓库里的示例值 | 令牌**可以被任何人伪造** —— 这份值写在源码里，攻击者签出的令牌能过所有鉴权，而请求全都正常返回。生产必须设 `JWT_SECRET`（例如 `openssl rand -base64 32`），换完既有令牌全部失效、需要重新登录 | `#272` |
 | `app.model.api-key-secret` 还是仓库里的示例值 | 模型供应商的 API Key 在库里是这条密钥加密后的密文，示例值公开 ⇒ **拿到库就能解回明文 Key**（等于明文存库）。生产必须设 `MODEL_API_KEY_SECRET`；★ 换完已存密文解不开，要在界面上把每个供应商的 Key 重新录一遍 | `#272` |
+| `app.model.ollama.max-loaded-models` = 1 | 问答链路要**两个模型同时驻留**（向量模型算查询向量 + 对话模型生成答案）。槽位只有 1 时它们每轮互相卸载/加载 ⇒ ① 偶发「连接上游失败：`HTTP/1.1 header parser received no bytes`」（看起来像网络问题）② **每轮都付一遍冷启动**，首字延迟被抬到十几秒。改成 ≥2（1.5B + bge-m3 ≈ 2GB 显存） | `#282` |
 
 ★ 为什么不 fail-fast：这几项属于"能起来但会以难查的方式坏"。让它起不来，会把一个
 **可修复的配置问题**升级成"服务挂了"；真正的硬约束（负窗口）由领域层在运行时守住。
@@ -456,6 +457,7 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.embedding.local.model-name`（`LOCAL_ONNX_MODEL_NAME`） | `multilingual-e5-small` | ★★ **路由判据**：`RoutingEmbeddingAdapter` 按 `baseModel` 名分派，知识库里登记的名字必须与它一致，否则那条模型会去连上游 11434（而 11434 上可能根本没有这个模型） |
 | `app.chat.advisors.enabled`（`CHAT_ADVISORS_ENABLED`） | true | Spring AI advisor 链总开关。★ 只用于排障 —— 关着上线等于安全闸门不生效 |
 | `app.chat.guard.sensitive-words`（`CHAT_GUARD_SENSITIVE_WORDS`） | 空 | 问答输入/输出两侧的敏感词表（逗号分隔）。★ 默认空**不是**"没有这个功能"，而是"部署方按自己的合规要求填" —— 留着默认值上线等于这一层不设防 |
+| `app.chat.suggestions.parallel`（`AIP_SUGGESTIONS_PARALLEL`） | false | 「猜你想问」的并行模式：开着时回答一开始生成就用「问题 + 检索上下文」猜，用户"看到完成"时 chips 已经在了；代价是**它没看到答案**，追问更容易偏，且每次都多一次模型调用、与主回答抢同一个模型槽位（`#285`）。★ 默认关 = 把速度留给愿意换的人 |
 
 ## 九、OCR 的配置项（交付时可能要改的）
 

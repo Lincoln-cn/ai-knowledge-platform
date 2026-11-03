@@ -65,6 +65,8 @@ public class KnowledgeBaseRetrievalController {
             body.queryCount(),
             body.decomposeEnabled(),
             body.maxSubQuestions(),
+            body.multiHopEnabled(),
+            body.maxHops(),
             UUID.fromString(jwt.getSubject())));
   }
 
@@ -81,5 +83,7 @@ public class KnowledgeBaseRetrievalController {
       String noRefStrategy,
       Integer queryCount,
       Boolean decomposeEnabled,
-      Integer maxSubQuestions) {}
+      Integer maxSubQuestions,
+      Boolean multiHopEnabled,
+      Integer maxHops) {}
 }

@@ -21,6 +21,7 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
+import cn.lincoln.aiplatform.retrieval.application.MultiHopService;
 import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import java.io.BufferedReader;
@@ -1181,6 +1182,7 @@ class ChatStreamHttpTest {
         ChatStopSignal stopSignal,
         ChatStreamProperties properties,
         ModelEgressPort modelEgress,
+        MultiHopService multiHop,
         AtomicInteger failAfterFrames,
         CountDownLatch writeFailureFired,
         List<String> attemptedFrames) {
@@ -1192,6 +1194,7 @@ class ChatStreamHttpTest {
           stopSignal,
           properties,
           modelEgress,
+          multiHop,
           failAfterFrames,
           writeFailureFired,
           attemptedFrames);
@@ -1217,10 +1220,23 @@ class ChatStreamHttpTest {
         ChatStopSignal stopSignal,
         ChatStreamProperties properties,
         ModelEgressPort modelEgress,
+        MultiHopService multiHop,
         AtomicInteger failAfterFrames,
         CountDownLatch writeFailureFired,
         List<String> attemptedFrames) {
-      super(turns, segmentSearch, accessScope, chatStream, stopSignal, properties, modelEgress);
+      super(
+          turns,
+          segmentSearch,
+          accessScope,
+          chatStream,
+          stopSignal,
+          properties,
+          modelEgress,
+          // ★ `#293`：ChatService 现在依赖的是 platform 的 HopDeciderPort，
+          //   不是 retrieval 的实现类型 —— 测试替身也该按端口给。
+          multiHop == null
+              ? null
+              : new cn.lincoln.aiplatform.retrieval.application.HopDeciderAdapter(multiHop));
       this.failAfterFrames = failAfterFrames;
       this.writeFailureFired = writeFailureFired;
       this.attemptedFrames = attemptedFrames;
