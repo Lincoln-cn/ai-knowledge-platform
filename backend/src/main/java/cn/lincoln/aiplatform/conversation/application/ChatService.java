@@ -24,6 +24,7 @@ import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -1507,12 +1508,27 @@ public class ChatService {
   }
 
   /**
-   * 两路（或多组）命中的本地 RRF 融合（{@code #185}）。
+   * 两路（或多组）命中的本地融合（{@code #185}，★ 主序在 {@code #293} 由 RRF 改为 min-rank）。
    *
-   * <p>★ 刻意<b>不</b> import {@code retrieval} 模块的 {@code Rrf}：那是平台内部参考实现，问答链路与它 不该产生模块耦合。公式：{@code
-   * score(d) = Σ 1 / (k + rank_i(d))}，k=60，rank 从 1 起。
+   * <p>★ 刻意<b>不</b> import {@code retrieval} 模块的 {@code Rrf}：那是平台内部参考实现，问答链路与它 不该产生模块耦合。
    *
-   * <p>★ 融合后的 {@code score} 取该分段在各路中的<strong>最大原始分</strong>（用于阈值判定与界面展示）， 顺序按 RRF 分数。
+   * <h3>★★ 为什么主序不是 RRF（{@code #293} 的读数换来的）</h3>
+   *
+   * <p>RRF 的公式 {@code score(d) = Σ 1/(k + rank_i(d))}（k=60）有一个反直觉的后果： <b>"一路第 1、另一路没有" 只得 {@code
+   * 1/61 ≈ 0.0164}，而 "两路都第 5" 得 {@code 2/65 ≈ 0.0308}</b> ——
+   * 前者几乎只有后者的一半。当向量路对某条问句<b>没有区分度</b>时（长段、专有名词密集）， 它不是"补充"，而是<b>把全文路的正确排序稀释掉</b>。
+   *
+   * <p>实测（干净语料库 195 条里 {@code rank_core=0} 的 21 条，逐条跑三模式）： {@code SYN-004-2} 全文第 1 → 融合第 8；{@code
+   * SYN-054-3} 全文第 1 → 融合第 11； {@code SYN-032-2} 向量第 1 → 融合第 14。反例 5/21。读数见 {@code docs/ROADMAP.md
+   * §11.10.93}。
+   *
+   * <p>⇒ 主序改为 <b>{@code min(rank)}</b>：一条分段在任一路排得越靠前，融合后就越靠前。 这条性质是可检出的 ——
+   * "融合后的名次<b>不得</b>差于两路里较好的那一路"， 而 RRF 在结构上就会违反它。
+   *
+   * <p>★ RRF 没有被丢掉，它退为<b>同分裁决</b>：{@code bestRank} 相同的两个分段（比如"全文第 1 + 向量没中" 与 "两路都第 1"）再按 RRF 分数分先后
+   * —— 这样"两路都中"仍然比"只有一路中"靠前， 只是不再<b>压过</b>一路里的第一名。
+   *
+   * <p>★ 融合后的 {@code score} 仍取该分段在各路中的<strong>最大原始分</strong>（用于阈值判定与界面展示）。
    */
   private static List<SegmentSearchPort.Scored> fuseHybrid(
       List<SegmentSearchPort.Scored> routeA, List<SegmentSearchPort.Scored> routeB) {
@@ -1524,19 +1540,23 @@ public class ChatService {
     final int k = 60;
     Map<UUID, Double> rrfScore = new LinkedHashMap<>();
     Map<UUID, Double> displayScore = new LinkedHashMap<>();
+    // ★ 主序：该分段在**任一路**里最好的名次（1 起）。RRF 只做同分裁决。
+    Map<UUID, Integer> bestRank = new LinkedHashMap<>();
     for (List<SegmentSearchPort.Scored> route : routes) {
       int rank = 1;
       for (SegmentSearchPort.Scored hit : route) {
         rrfScore.merge(hit.segmentId(), 1.0 / (k + rank), Double::sum);
         displayScore.merge(hit.segmentId(), hit.score(), Math::max);
+        bestRank.merge(hit.segmentId(), rank, Math::min);
         rank++;
       }
     }
     List<SegmentSearchPort.Scored> fused = new ArrayList<>(rrfScore.size());
-    rrfScore.entrySet().stream()
-        .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
-        .forEach(
-            e -> fused.add(new SegmentSearchPort.Scored(e.getKey(), displayScore.get(e.getKey()))));
+    rrfScore.keySet().stream()
+        .sorted(
+            Comparator.<UUID>comparingInt(bestRank::get)
+                .thenComparing(Comparator.comparingDouble(rrfScore::get).reversed()))
+        .forEach(id -> fused.add(new SegmentSearchPort.Scored(id, displayScore.get(id))));
     return fused;
   }
 

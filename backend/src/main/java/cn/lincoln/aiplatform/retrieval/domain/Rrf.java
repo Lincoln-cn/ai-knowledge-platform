@@ -29,8 +29,16 @@ public final class Rrf {
   /**
    * 常数 60（{@code 03 §2.2} 的取值）。
    *
-   * <p>它的作用是把"第 1 名与第 2 名"的差距压平：{@code 1/61} vs {@code 1/62}。 于是"一路第 1 + 另一路没命中"（≈0.0164）会输给"两路都第
-   * 5"（≈2×0.0154） —— 这正是混合检索想要的性质。
+   * <p>它的作用是把"第 1 名与第 2 名"的差距压平：{@code 1/61} vs {@code 1/62}。
+   *
+   * <p>★★ <b>但它<b>不再</b>决定主序（{@code #293}）</b>。原注释写着「于是"一路第 1 + 另一路没命中" （≈0.0164）会输给"两路都第
+   * 5"（≈2×0.0154）—— 这正是混合检索想要的性质」。实测把这个"想要"
+   * 推翻了：当向量路对某条问句<b>没有区分度</b>时，它不是"补充"，而是<b>把全文路的正确排序稀释掉</b>。 读数（干净语料库 195 条里 {@code rank_core=0} 的
+   * 21 条，逐条跑三模式）： {@code SYN-004-2} 全文第 1 → 融合第 8；{@code SYN-054-3} 全文第 1 → 融合第 11； {@code
+   * SYN-032-2} 向量第 1 → 融合第 14。反例 5/21（见 {@code docs/ROADMAP.md §11.10.93}）。
+   *
+   * <p>⇒ {@code k} 仍然参与 <b>同分裁决</b>（{@link #fuse} 的次序第二关键字），但主序换成了 {@link
+   * #bestRank}（任一路里最好的名次）。这条性质是可检出的： <b>融合后的名次不得差于两路里较好的那一路</b> —— 而纯 RRF 在结构上就会违反它。
    */
   public static final int K = 60;
 
@@ -67,14 +75,30 @@ public final class Rrf {
 
     List<Fused> fused = new ArrayList<>(acc.size());
     acc.forEach((id, row) -> fused.add(new Fused(id, row.score, row.ranks)));
-    // ★ 同分时的次序不能随 HashMap 漂：先按"命中的路数多"（同样的分，两路命中比一路更可信），
-    //   再按插入序（LinkedHashMap 保证了"第一次出现在哪一路、哪个名次"这个自然顺序）。
-    //   没有这条，闸门会在同分样本上偶发红 —— 而那种红会被误当成"融合坏了"。
+    // ★★ 主序 = min-rank（`#293`），不是 RRF 分数：
+    //   一条分段在**任一路**排得越靠前，融合后就越靠前 —— 于是"一路第 1、另一路没中"
+    //   不会再输给"两路都第 5"。RRF 分数退为**同分裁决**：bestRank 相同的两个
+    //   （比如"全文第 1 + 向量没中" 与 "两路都第 1"）再按分数与命中路数分先后，
+    //   这样"两路都中"仍然比"只有一路中"靠前，只是不再压过一路里的第一名。
+    // ★ 同分时的次序不能随 HashMap 漂：再往后取"命中的路数多"（同样的分，两路命中比一路更可信），
+    //   LinkedHashMap 保证了最后一层是"第一次出现在哪一路、哪个名次"这个自然顺序。
+    //   没有这几条，闸门会在同分样本上偶发红 —— 而那种红会被误当成"融合坏了"。
     fused.sort(
-        Comparator.comparingDouble(Fused::score)
-            .reversed()
+        Comparator.comparingInt(Rrf::bestRank)
+            .thenComparing(Comparator.comparingDouble(Fused::score).reversed())
             .thenComparing(f -> -hitCount(f.ranks())));
     return fused;
+  }
+
+  /** 该分段在**任一路**里最好的名次（1 起）；只可能为 0 的情况是它一条都没被任何路命中（不会进 `fused`）。 */
+  private static int bestRank(Fused fused) {
+    int best = Integer.MAX_VALUE;
+    for (int rank : fused.ranks()) {
+      if (rank > 0 && rank < best) {
+        best = rank;
+      }
+    }
+    return best == Integer.MAX_VALUE ? Integer.MAX_VALUE : best;
   }
 
   private static int hitCount(int[] ranks) {

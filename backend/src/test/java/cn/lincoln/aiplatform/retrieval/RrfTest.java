@@ -50,6 +50,49 @@ class RrfTest {
   }
 
   @Test
+  void aSingleFirstPlaceIsNotBuriedByTwoMidRanks() {
+    UUID onlyFirstInOnePath = id("42");
+    UUID midInBothPaths = id("43");
+    UUID filler = id("44");
+    UUID filler2 = id("45");
+    UUID filler3 = id("46");
+    UUID filler4 = id("47");
+
+    // 全文路：42 第一，43 第五；向量路：43 第五，42 不在。
+    // ⇒ 纯 RRF 下 43 得 2/65 ≈ 0.0308、42 只得 1/61 ≈ 0.0164，43 会**压过** 42。
+    var fused =
+        Rrf.fuse(
+            List.of(
+                List.of(onlyFirstInOnePath, filler, filler2, filler3, midInBothPaths),
+                List.of(filler, filler2, filler3, filler4, midInBothPaths)));
+
+    // `#293` 的判据：融合后的名次**不得差于两路里较好的那一路**。
+    // 42 的最好名次是 1，43 的是 5 ⇒ 42 必须排在前面，哪怕它的 RRF 分只有 43 的一半。
+    // `#293` 的判据：融合后的名次**不得差于两路里较好的那一路**。
+    // 42 的最好名次是 1、43 的是 5 ⇒ 42 必须排在 43 前面，
+    // 哪怕 42 的 RRF 分（1/61 ≈ 0.0164）只有 43 的（2/65 ≈ 0.0308）一半。
+    // ★ 不断言「42 正好第一」：向量路第 1 的那些填充段与 42 的 bestRank 同为 1，
+    //   同分裁决给"两路都中"的更靠前 —— 那是**想要**的（它们排第一并不违反本判据）。
+    List<UUID> order = fused.stream().map(Rrf.Fused::segmentId).toList();
+    assertThat(order.indexOf(onlyFirstInOnePath))
+        .as("一路第 1 不能被两路都第 5 压过（`#293` 实测：SIN-004-2 全文第 1 → 融合第 8）")
+        .isLessThan(order.indexOf(midInBothPaths));
+    assertThat(
+            fused.stream()
+                .filter(f -> f.segmentId().equals(midInBothPaths))
+                .findFirst()
+                .orElseThrow()
+                .score())
+        .as("RRF 分数本身没变——它退为同分裁决，只用来分「最好名次相同」的那些")
+        .isGreaterThan(
+            fused.stream()
+                .filter(f -> f.segmentId().equals(onlyFirstInOnePath))
+                .findFirst()
+                .orElseThrow()
+                .score());
+  }
+
+  @Test
   void constantKFlattensTopTwoGap() {
     UUID first = id("04");
     UUID second = id("05");
