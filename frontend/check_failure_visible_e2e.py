@@ -229,25 +229,72 @@ def _apply_model_guard(api_base: str | None) -> None:
         raise SystemExit(message)
 
 
-def _pick_chat_model(token: str) -> tuple[str, str | None]:
-    """挑一个**打到桩上**的已加载对话模型；没有就用桩的模型名建一个。
+def _stub_model_catalog(base: str | None = None) -> set[str] | None:
+    """桩的模型目录 `GET /v1/models`（**动态查，不硬编码名字**）；取不到返回 None。
 
-    ★ 为什么不"挑第一个 LOADED 的"（2026-10-28 实测）：本机还挂着一个指向 Ollama 的
-      `qwen2.5-1.5b-本地`，它打到桩上只会得到 `404 模型不存在` ⇒ 闸门量到的是"模型名不对"，
-      而它以为自己量的是"上游失败怎么呈现"。这类夹具漂移必须由夹具自己消掉。
-    返回 `(modelId, 新建的 id 或 None)` —— 新建的那个要在跑完回收。
+    ★ 为什么要这层（#223 第四处陷阱，真栈实测）：`apiBase` 指向桩**还不够** ——
+      机器上一堆模型 `apiBase=…:11434/v1` 而 `baseModel=qwen2.5:1.5b`，桩不认识这个名字，
+      打上去只得到 `404 模型不存在` ⇒ 闸门量到的又是"模型名不对"，不是"上游失败怎么呈现"。
     """
-    status, payload = call("GET", "/models?size=50", token)
-    rows = (json.loads(payload).get("data") or {}).get("list") or [] if status == 200 else []
-    for row in rows:
-        if row.get("kind") != "CHAT" or row.get("status") != "LOADED":
-            continue
-        if _model_fixture_message(row.get("apiBase")) is None:
-            _apply_model_guard(row.get("apiBase"))
-            print(f"  已加载且指向桩的对话模型：{row.get('name')}（{row.get('baseModel')}）")
-            return row["id"], None
+    try:
+        with urllib.request.urlopen((base or STUB) + "/v1/models", timeout=5) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        return {item.get("id") for item in payload.get("data") or [] if item.get("id")}
+    except Exception:
+        return None
 
-    print(f"  [夹具] 没有指向 {STUB} 的已加载对话模型 ⇒ 建一个（baseModel=stub-plain）")
+
+def _base_model_message(base_model: str | None, catalog: set[str] | None) -> str | None:
+    """`baseModel` 必须在桩的模型目录里 —— 桩认得这个名字，才量得到"上游失败怎么呈现"。"""
+    if catalog is None:
+        return _env_problem(
+            f"桩的模型目录取不到（GET {STUB}/v1/models 没有 200）—— 证明不了 baseModel 在桩里",
+            f"请确认桩在跑且 {STUB}/v1/models 可访问。",
+        )
+    if not base_model:
+        return _env_problem(
+            "模型没有 baseModel ⇒ 证明不了桩认得这个名字",
+            "请给模型配上 baseModel（桩目录里的名字，如 stub-plain），或让闸门自建。",
+        )
+    if base_model not in catalog:
+        return _env_problem(
+            f"baseModel `{base_model}` 不在桩的模型目录里（桩只提供 {sorted(catalog)}）——"
+            f"桩上打这个名字只得到 `404 模型不存在`（#223 真栈实测），"
+            "闸门量到的会是「模型名不对」而不是「上游失败怎么呈现」",
+            "请把 baseModel 改成桩目录里的名字（如 stub-plain），或让闸门自建（它自己会建 stub-plain）。",
+        )
+    return None
+
+
+def _apply_base_model_guard(base_model: str | None, catalog: set[str] | None) -> None:
+    """陷阱② 的第二半前置守卫：baseModel 必须在桩的 `/v1/models` 目录里，否则**中断**（#223）。
+
+    ★ 与 `_apply_model_guard` 的分工：那条证"打到桩上"，这条证"桩认得这个名字"。
+      只有第一条时守卫放行了 `qwen2.5:1.5b`（指向桩、桩不认识）⇒ 还是量错东西。
+    """
+    message = _base_model_message(base_model, catalog)
+    if message:
+        raise SystemExit(message)
+
+
+def _pick_chat_model(token: str) -> tuple[str, str | None]:
+    """★ 只走**自建 stub-plain**，不借真实模型行（#223 第四处陷阱之后定）。
+
+    ★ 为什么不"挑第一个 LOADED 的"（2026-10-28 实测）：本机还挂着指向 Ollama 的
+      `qwen2.5-1.5b-本地`，它打到桩上只会得到 `404 模型不存在` ⇒ 闸门量到的是"模型名不对"。
+    ★★ 为什么连"挑指向桩的"也不行（2026-11-04 真栈实测，第四处陷阱）：一堆模型
+      `apiBase` 确实指向桩、`baseModel` 却是 `qwen2.5:1.5b` —— 桩不认识这个名字，
+      打上去还是 `404 模型不存在` ⇒ 还是量错东西。借来的行形状由别人决定、闸门控不住；
+      自建的形状完全由闸门决定（`baseModel=stub-plain` + `apiBase=STUB/v1`），跑完回收。
+    返回 `(modelId, 新建的 id)` —— 新建的那个要在跑完回收（`_discard_model`）。
+    """
+    # ★★ 第四类自证的前置（#223）：桩的模型目录**动态查**（不硬编码名字）——
+    #   目录取不到、或桩不认 stub-plain，都在建之前就中断，不许带病建夹具。
+    catalog = _stub_model_catalog()
+    print(f"  [夹具] 桩模型目录：{sorted(catalog) if catalog is not None else '（取不到）'}")
+    _apply_base_model_guard("stub-plain", catalog)
+
+    print(f"  [夹具] 自建桩对话模型（baseModel=stub-plain，apiBase={STUB}/v1）—— 不借真实模型行")
     status, payload = call(
         "POST",
         "/models",
@@ -278,10 +325,15 @@ def _pick_chat_model(token: str) -> tuple[str, str | None]:
         for row in (json.loads(payload).get("data") or {}).get("list") or []:
             if row.get("id") != model_id or row.get("status") != "LOADED":
                 continue
-            # ★★ 自证（#223）："建了"不等于"建对了" —— 后端可能改写 apiBase，
-            #   所以 LOADED 之后再过一遍守卫，不指向桩就中断，不许带着坏夹具去量界面。
+            # ★★ 自证（#223）："建了"不等于"建对了" —— 后端可能改写 apiBase/baseModel，
+            #   所以 LOADED 之后两道守卫各过一遍，不指向桩 / 桩不认这个名字就中断，
+            #   不许带着坏夹具去量界面。
             _apply_model_guard(row.get("apiBase"))
-            print(f"  [夹具] 临时桩模型已 LOADED 且指向桩（apiBase={row.get('apiBase')}）")
+            _apply_base_model_guard(row.get("baseModel"), catalog)
+            print(
+                f"  [夹具] 临时桩模型已 LOADED，自证通过"
+                f"（apiBase={row.get('apiBase')}，baseModel={row.get('baseModel')}）"
+            )
             return model_id, model_id
         time.sleep(1)
     raise SystemExit(_env_problem(
@@ -547,10 +599,10 @@ def self_check() -> int:
         ok = message is not None and "不是产品缺陷" in message and "本跑不算读数" in message
         expect(ok, f"{what}（实得 {message!r}）")
 
-    def expect_guard_blocks(guard, bad_input, what: str) -> None:
+    def expect_guard_blocks(guard, *bad_args, what: str) -> None:
         """喂**故意构造的坏条件** ⇒ 断言守卫真的中断（抛 `SystemExit`）—— 会红才算守卫。"""
         try:
-            guard(bad_input)
+            guard(*bad_args)
         except SystemExit as e:
             expect_env_message(str(e), what)
         else:
@@ -563,7 +615,7 @@ def self_check() -> int:
         "① 桩地址可被 AIP_STUB_URL 覆盖且不留尾斜杠",
     )
     expect(_stub_guard_message(True) is None, "① 好条件：注入成功 ⇒ 守卫放行（不误伤）")
-    expect_guard_blocks(_apply_stub_guard, False, "① 坏条件：注入失败 ⇒ 守卫中断并定性为环境问题")
+    expect_guard_blocks(_apply_stub_guard, False, what="① 坏条件：注入失败 ⇒ 守卫中断并定性为环境问题")
     message = _stub_guard_message(False)
     expect(
         message is not None and "localhost" in message and "::1" in message,
@@ -593,14 +645,49 @@ def self_check() -> int:
         ("http://localhost:11434/v1", "主机名是 localhost（会解析到 ::1 的 wslrelay）"),
         ("not a url", "坏 URL"),
     ):
-        expect_guard_blocks(_apply_model_guard, bad, f"② 坏条件：{why} ⇒ 守卫中断并定性为环境问题")
+        expect_guard_blocks(_apply_model_guard, bad, what=f"② 坏条件：{why} ⇒ 守卫中断并定性为环境问题")
+
+    # ── ②b 模型夹具的第二半（#223 第四处陷阱）：apiBase 指向桩**且** baseModel 在桩目录里 ──
+    #   （真栈实测：`qwen2.5-1.5b-gpu` 的 apiBase 确实指向桩，但 baseModel=qwen2.5:1.5b
+    #    桩不认识 ⇒ 打上去仍是 `404 模型不存在`，量到的还是"模型名不对"。）
+    catalog_ok = {"stub-plain", "stub-embed"}
+    expect(
+        _base_model_message("stub-plain", catalog_ok) is None,
+        "②b 好条件：baseModel 在桩目录里 ⇒ 守卫放行（不误伤）",
+    )
+    expect(
+        "404 模型不存在" in (_base_model_message("qwen2.5:1.5b", catalog_ok) or ""),
+        "②b 坏条件的解释点名「404 模型不存在」这条实测机制（别让人去查界面代码）",
+    )
+    expect_guard_blocks(
+        _apply_base_model_guard, "qwen2.5:1.5b", catalog_ok,
+        what="②b 坏条件：baseModel 不在桩目录里 ⇒ 守卫中断并定性为环境问题",
+    )
+    expect_guard_blocks(
+        _apply_base_model_guard, None, catalog_ok,
+        what="②b 坏条件：baseModel 为空 ⇒ 守卫中断并定性为环境问题",
+    )
+    expect_guard_blocks(
+        _apply_base_model_guard, "stub-plain", None,
+        what="②b 坏条件：桩的 /v1/models 取不到 ⇒ 守卫中断并定性为环境问题",
+    )
+    # ★ 真网络坏条件（与 ① 的死端口同一手法）：`_stub_model_catalog` 打到没人听的端口必须
+    #   返回 None —— 恒返回"目录 ok"会让第四类自证形同虚设（反证 F 实测抓不到，故补此条）。
+    #   注：反向破坏（恒返回 None）只造成误伤（假红 + 环境定性、不出假读数），不单列。
+    with socket.socket() as probe2:
+        probe2.bind(("127.0.0.1", 0))
+        dead2 = f"http://127.0.0.1:{probe2.getsockname()[1]}/v1/models"
+        expect(
+            _stub_model_catalog(base=dead2.replace("/v1/models", "")) is None,
+            f"②b 坏条件：桩目录没人听（{dead2}）⇒ _stub_model_catalog 返回 None（不许恒 ok、不许抛异常）",
+        )
 
     # ── ③ mock 模式（#223 陷阱③）：页面没发 /api/v1 ⇒ 本跑不算读数 ──
     expect(
         _mock_mode_message(["GET http://127.0.0.1:5280/api/v1/models"]) is None,
         "③ 好条件：有 /api/v1 请求 ⇒ 不判 mock（不误伤）",
     )
-    expect_guard_blocks(_apply_mock_guard, [], "③ 坏条件：零请求 ⇒ 守卫中断并定性为环境问题")
+    expect_guard_blocks(_apply_mock_guard, [], what="③ 坏条件：零请求 ⇒ 守卫中断并定性为环境问题")
     message = _mock_mode_message([])
     expect(message is not None and "mock" in message, "③ 零请求的解释点名 mock 模式")
     expect(
@@ -616,10 +703,12 @@ def self_check() -> int:
                 _stub_guard_message(False),
                 _restore_problem(False),
                 _model_fixture_message(None),
+                _base_model_message("qwen2.5:1.5b", catalog_ok),
+                _base_model_message("stub-plain", None),
                 _mock_mode_message([]),
             )
         ),
-        "判据④：四条命中消息全部以「【环境问题，不是产品缺陷】」开头",
+        "判据④：六条命中消息全部以「【环境问题，不是产品缺陷】」开头",
     )
 
     # ── 接线：守卫能红还不够 —— 它得真的被挂在测量路径上（否则"能红的守卫"照样没用）──
@@ -631,8 +720,16 @@ def self_check() -> int:
     )
     fixture_source = inspect.getsource(_pick_chat_model)
     expect(
-        "_model_fixture_message(" in fixture_source and "_apply_model_guard(" in fixture_source,
-        "接线：陷阱②守卫挂在夹具挑选与自建之后（自证 apiBase 指向桩）",
+        "_apply_model_guard(" in fixture_source and "_apply_base_model_guard(" in fixture_source,
+        "接线：陷阱②守卫挂在夹具自建之后（自证 apiBase 指向桩 + baseModel 在桩目录）",
+    )
+    expect(
+        "_stub_model_catalog(" in fixture_source and "_apply_base_model_guard(" in fixture_source,
+        "接线：②b 守卫挂在夹具自建路径上（动态查桩目录 + 自证 baseModel）",
+    )
+    expect(
+        "已加载且指向桩的对话模型" not in fixture_source,
+        "接线：只自建 stub-plain、不借真实模型行（借来的行就是第四处陷阱的来源）",
     )
 
     print()
