@@ -13,6 +13,7 @@ import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
+import java.sql.SQLTransientConnectionException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -198,8 +199,17 @@ public class EmbeddingRunner {
    * 这个异常是不是「资源不足」（连接池打满、库不可达），而不是「这份文档有问题」？
    *
    * <p>★ 判据放窄：只认 Spring 的 {@link DataAccessResourceFailureException}（Hikari 等连接池拿不到 连接时抛的 {@code
-   * CannotGetJdbcConnectionException} 是它的子类）。别把任何 {@code DataAccessException} 都算进来 —— 唯一约束冲突、SQL
-   * 写错也是 DataAccessException，那类靠重试 好不了，归成"资源不足"会让用户无限重试。
+   * CannotGetJdbcConnectionException} 是它的子类）、JDBC 的 {@link SQLTransientConnectionException}（Hikari
+   * 等不到连接时真正抛的就是它），以及**被 Hibernate/JPA 包了一层的那两种形状**。别把任何 {@code DataAccessException} 都算进来 ——
+   * 唯一约束冲突、SQL 写错也是 DataAccessException，那类靠重试 好不了，归成"资源不足"会让用户无限重试。
+   *
+   * <p>★ 后两根是按 `#227` 反证读数补的（2026-11-05）：闸门关掉、70 份一起跑时 40 份 EMBEDDING_FAILED 里 **25 份**报的是 「Could
+   * not open JPA EntityManager for transaction」—— Hibernate 把 Hikari 的超时包成了 {@code
+   * org.hibernate.exception.JDBCConnectionException}（再上一层是 {@code
+   * jakarta.persistence.PersistenceException}）， 两种都不是 Spring 的异常 ⇒
+   * 旧判据漏认，用户看到的那句话里没有任何"连接池"字样。测试的取证方法就是看这条链：根因那两层 仍在 cause 里（{@code Connection is not available,
+   * request timed out after …} / {@code Unable to acquire JDBC Connection}）。**不 import Hibernate
+   * 的类型**：knowledge 的应用层不该依赖 ORM 实现，而这两句措辞是 Hibernate 与 Hikari 各自的固定文案（改动它会同时让这里报红，正好提醒复核）。
    *
    * <p>包级可见：测试要验它的边界（{@code EmbeddingFailureClassificationTest}）。
    *
@@ -208,7 +218,14 @@ public class EmbeddingRunner {
    */
   static boolean isResourceExhaustion(Throwable error) {
     for (Throwable current = error; current != null; current = current.getCause()) {
-      if (current instanceof DataAccessResourceFailureException) {
+      if (current instanceof DataAccessResourceFailureException
+          || current instanceof SQLTransientConnectionException) {
+        return true;
+      }
+      String message = current.getMessage();
+      if (message != null
+          && (message.contains("Connection is not available")
+              || message.contains("Unable to acquire JDBC Connection"))) {
         return true;
       }
       if (current.getCause() == current) {
