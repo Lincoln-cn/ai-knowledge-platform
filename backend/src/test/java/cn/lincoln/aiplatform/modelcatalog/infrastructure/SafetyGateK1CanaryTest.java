@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -106,6 +107,41 @@ class SafetyGateK1CanaryTest {
     assertThat(response).as("判据①：桩 echo_system_prompt 必须逐字回 system 原文").isEqualTo(SYSTEM_PROMPT);
   }
 
+  /**
+   * ★ issue `#45` 判据④：`answer_override` 打开时，**要 JSON 的那次调用**收到的仍是正常 JSON。
+   *
+   * <p>为什么这条不能省：桩的三个行为注入键里，`answer_override` 是"逐字回指定文本"。如果它把**查询理解**（`wants_json` 那一路）也覆盖掉，检索阶段会先坏
+   * —— 那时金丝雀测的就不是"闸门拦不拦"，而是"桩把检索打坏了"。
+   *
+   * <p>★ 它同时是**判据①的对照**：先用生成调用证明"override 真的生效"（否则下面那条断言可能只是"什么都没配"），再证明"要 JSON
+   * 的那一路没被它碰到"。只测后者会漏掉"override 根本没生效"这一种假绿。
+   */
+  @Test
+  void answerOverrideDoesNotPoisonTheJsonCall() throws Exception {
+    try {
+      // ★ 必须显式关掉 echo_system_prompt：桩的判断顺序是 echo 先、answer_override 后（`openai_stub.py:682` 在 `:687`
+      // 之前），
+      // 留着它会让"override 生效了没有"这件事读不出来 —— 第一条断言就是为这个写的。
+      configureStubRaw("{\"echo_system_prompt\":false,\"answer_override\":\"见 [9]\"}");
+
+      assertThat(callStubDirectly())
+          .as("① 生成调用必须被 answer_override 覆盖 —— 否则下面那条断言是假绿")
+          .isEqualTo("见 [9]");
+
+      String jsonReply = callStubWithJsonRequest();
+      assertThat(jsonReply)
+          .as("② 要 JSON 的调用不许被 answer_override 污染（否则检索阶段先坏，金丝雀变成测桩）")
+          .doesNotContain("见 [9]")
+          .contains("subQuestions");
+      assertThatCode(() -> JSON.readTree(jsonReply))
+          .as("③ 拿回来的必须是能解析的 JSON")
+          .doesNotThrowAnyException();
+    } finally {
+      // 复原成 @BeforeAll 的配置，别让这条用例污染同类里其他用例。
+      configureStubRaw("{\"echo_system_prompt\":true,\"answer_override\":null}");
+    }
+  }
+
   // ────────────────────────── 被测链路 ──────────────────────────
 
   /**
@@ -173,14 +209,45 @@ class SafetyGateK1CanaryTest {
 
   /** POST /__stub/config 开 echo_system_prompt=true（桩会回第一个 system 消息原文）。 */
   private static void configureStubEchoSystemPrompt() throws Exception {
+    configureStubRaw("{\"echo_system_prompt\":true}");
+  }
+
+  /** POST /__stub/config 的通用入口 —— 直接给一段 JSON 配置体。 */
+  private static void configureStubRaw(String json) throws Exception {
     HttpRequest request =
         HttpRequest.newBuilder(URI.create("http://localhost:" + stubPort + "/__stub/config"))
             .header("Content-Type", "application/json")
-            .POST(
-                HttpRequest.BodyPublishers.ofString(
-                    "{\"echo_system_prompt\":true}", StandardCharsets.UTF_8))
+            .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
             .build();
     HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+  }
+
+  /**
+   * 直连桩，发一个**要 JSON** 的请求（形状取自真实的查询理解提示词：含 {@code json 对象} 与 {@code "properties"}， 两条命中桩的 {@code
+   * wants_json} 判定）。
+   */
+  private String callStubWithJsonRequest() throws Exception {
+    String prompt =
+        "你是检索系统的查询分析器。只输出一个 json 对象，结构："
+            + "{\"properties\":{\"subQuestions\":{\"type\":\"array\"}}}。用户问题：它是什么？";
+    String body =
+        "{\"model\":\"stub-plain\",\"messages\":[{\"role\":\"user\",\"content\":\""
+            + escapeJson(prompt)
+            + "\"}],\"response_format\":{\"type\":\"json_object\"}}";
+    HttpRequest request =
+        HttpRequest.newBuilder(URI.create(stubBaseUrl() + "/chat/completions"))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+            .timeout(Duration.ofSeconds(5))
+            .build();
+    HttpResponse<String> response =
+        HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+    return JSON.readTree(response.body())
+        .path("choices")
+        .path(0)
+        .path("message")
+        .path("content")
+        .asText();
   }
 
   // ────────────────────────── 辅助 ──────────────────────────
