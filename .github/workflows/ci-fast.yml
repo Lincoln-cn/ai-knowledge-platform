@@ -296,6 +296,18 @@ jobs:
         working-directory: backend
         run: python tools/check_stub_port.py
 
+      # ★ `#87`：质量指标今天只覆盖"检索对不对"，"答案对不对"（忠实度 / 噪声敏感度）
+      #   两个读数完全没有。这条闸门钉住三件事：两个读数在 13 册里有位置、有口径、
+      #   且**没有被偷偷实现**（`自动评测已启用` 必须为 0 —— 留缝不是做实体）。
+      #   先跑自检（每个判据都要能红），再扫全库。
+      - name: 质量指标闸门 · 自检（#87）
+        working-directory: backend
+        run: python tools/check_quality_metrics.py --self-check
+
+      - name: 质量指标闸门（#87）
+        working-directory: backend
+        run: python tools/check_quality_metrics.py
+
       # ★ 闸门自己的守卫也要能被断言（#223）：这三条守的是"别量错东西"，
       #   而一条守卫错了的表现是静默 —— 永远为真等于没有，过严则把正确情形判成错。
       #   离线、不需要浏览器、不连栈（playwright 在脚本里是延迟导入的）。
