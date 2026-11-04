@@ -1,4 +1,7 @@
 import { request } from '@/lib/http'
+// ★ 类型只在编译期存在（`import type`），不产生运行时依赖：models.ts 也 type-import 了本文件的 ProviderKind，
+//   两个方向都是类型 ⇒ 没有循环 require 的问题。
+import type { ModelReference } from './models'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
@@ -112,5 +115,24 @@ export const testProvider = (id: string) =>
 export const quickBindJairouter = (body: { apiBase?: string; apiKey?: string } = {}) =>
   request<QuickBindResult>({ method: 'POST', url: '/model-providers/quick-bind', body })
 
-export const deleteProvider = (id: string) =>
-  request<void>({ method: 'DELETE', url: '/model-providers/:id', path: { id } })
+/**
+ * 删除服务商（`#300`：先查后删）。
+ *
+ * ★ 下面还有模型时后端返回 **409**，`ApiError.details` 是引用面（模型数 + 模型名 + 这些模型各自被谁引用）。
+ * ★ `force=true` = 连模型一起删；但若这些模型**自己**还被应用/知识库/平台默认键用着，后端**仍然 409**
+ * —— 点"删服务商"不该把别人的应用弄坏。
+ *
+ * @param id 服务商 id
+ * @param force 明知它下面还有模型仍要删（一并删模型）
+ */
+export const deleteProvider = (id: string, force = false) =>
+  request<void>({
+    method: 'DELETE',
+    url: '/model-providers/:id',
+    path: { id },
+    query: force ? { force: true } : undefined
+  })
+
+/** 读服务商的引用面（`#300`）：它下面有哪些模型、这些模型被谁用着。 */
+export const getProviderReferences = (id: string) =>
+  request<ModelReference>({ method: 'GET', url: '/model-providers/:id/references', path: { id } })

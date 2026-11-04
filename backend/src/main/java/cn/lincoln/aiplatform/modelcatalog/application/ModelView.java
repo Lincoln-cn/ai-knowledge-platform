@@ -48,14 +48,25 @@ public record ModelView(
     @JsonInclude(JsonInclude.Include.NON_NULL) ProviderKind providerKind,
     @JsonInclude(JsonInclude.Include.NON_NULL) ProviderEgress egress,
     /** 旧式直连（没有 providerId）：界面要标出来，避免把“未绑定”读成“没配”。 */
-    boolean legacyDirect) {
+    boolean legacyDirect,
+    /**
+     * 引用数（{@code #300}）：应用 + 知识库 + 其下文档 + 平台默认键。{@code > 0} 时删除按钮必须禁用。
+     *
+     * <p>★ 它必须<strong>出现在列表里</strong>：界面在点删除之前就要知道"这个模型动不得"，等到点了才吃 409 已经晚了。 与 {@code apiKey}
+     * 不同它不是秘密 —— 它是删除守卫的读数。
+     */
+    long referenceCount) {
 
   /** 从聚合映射成视图。★ 不拷贝 apiKeyCipher / apiKeyIv —— 它们永远不出网。 */
   public static ModelView from(Model model) {
-    return from(model, null);
+    return from(model, null, 0);
   }
 
   public static ModelView from(Model model, ModelProvider provider) {
+    return from(model, provider, 0);
+  }
+
+  public static ModelView from(Model model, ModelProvider provider, long referenceCount) {
     return new ModelView(
         model.id(),
         model.name(),
@@ -75,6 +86,7 @@ public record ModelView(
         provider == null ? null : provider.name(),
         provider == null ? null : provider.kind(),
         provider == null ? null : provider.egress(),
-        model.providerId() == null);
+        model.providerId() == null,
+        referenceCount);
   }
 }

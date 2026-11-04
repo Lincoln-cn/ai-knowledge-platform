@@ -215,7 +215,15 @@
           </el-button>
 
           <!-- 内置模型不可删 —— 按钮直接不渲染，而不是渲染后报错 -->
-          <el-button v-if="!m.builtin" link size="small" type="danger" @click="remove(m)">删除</el-button>
+          <!-- ★ #300：有引用时按钮上先写出「N 处引用」—— 用户在看到弹框之前就知道这条删不干净；
+               点下去不是直接删，而是先列明细、再要求二次确认（禁止"点一下就没"）。 -->
+          <el-button
+            v-if="!m.builtin"
+            link
+            size="small"
+            type="danger"
+            @click="remove(m)"
+          >删除<span v-if="m.referenceCount">（{{ m.referenceCount }} 处引用）</span></el-button>
           <span v-else class="micro muted">内置模型不可删除</span>
         </div>
       </el-card>
@@ -253,6 +261,74 @@
       @saved="onSaved"
     />
 
+    <!--
+      ★ #300：有引用时**禁止直接删**，先列明细再二次确认。
+        这一层不是"给后端 409 配个好看的弹框"——它是让用户在点下去之前就有判断依据：
+        删掉这行会弄坏哪几个应用、哪几个库、多少篇文档、哪个平台默认键。
+    -->
+    <el-dialog
+      v-model="refDialog.visible"
+      title="这条模型还有引用"
+      width="560px"
+      :close-on-click-modal="!refDialog.deleting"
+    >
+      <div v-if="refDialog.loading" class="ref-loading">正在核对引用…</div>
+      <template v-else-if="refDialog.refs">
+        <p class="ref-lead">
+          「<b>{{ refDialog.model?.name }}</b>」仍被
+          <b>{{ refTotal }}</b> 处引用。直接删除会让下面这些功能失效：
+        </p>
+        <ul class="ref-list">
+          <li v-if="refDialog.refs.apps.length">
+            <span class="ref-key">应用</span>
+            <span class="ref-val">
+              {{ refDialog.refs.apps.map((a) => a.name).join('、') }}
+              <span class="micro muted">（删除后无法提问）</span>
+            </span>
+          </li>
+          <li v-if="refDialog.refs.knowledgeBases.length">
+            <span class="ref-key">知识库</span>
+            <span class="ref-val">
+              {{ refDialog.refs.knowledgeBases.map((k) => k.name).join('、') }}
+              <span class="micro muted">（检索与灌库都会失败）</span>
+            </span>
+          </li>
+          <li v-if="refDialog.refs.documents > 0">
+            <span class="ref-key">文档</span>
+            <span class="ref-val">
+              {{ refDialog.refs.documents.toLocaleString() }} 篇
+              <span class="micro muted">（这些库下的未删文档，向量将无法再被检索）</span>
+            </span>
+          </li>
+          <li v-if="refDialog.refs.defaultKeys.length">
+            <span class="ref-key">平台默认</span>
+            <span class="ref-val">
+              {{ refDialog.refs.defaultKeys.join('、') }}
+              <span class="micro muted">（新建应用/检索会取不到默认模型）</span>
+            </span>
+          </li>
+        </ul>
+        <div class="notice err ref-warn">
+          <el-icon><WarningFilled /></el-icon>
+          <span>
+            <b>强制删除不会自动改绑：</b>上面这些引用会留下一个指向已删模型的 id，
+            相关页面会开始报错，需要你事后逐个改绑。
+          </span>
+        </div>
+        <div v-if="refDialog.error" class="ref-error">{{ refDialog.error }}</div>
+      </template>
+
+      <template #footer>
+        <el-button :disabled="refDialog.deleting" @click="refDialog.visible = false">取消</el-button>
+        <el-button
+          type="danger"
+          :loading="refDialog.deleting"
+          :disabled="refDialog.loading"
+          @click="forceRemove"
+        >我了解后果，强制删除</el-button>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -262,7 +338,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, Loading, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { modelsApi, providersApi } from '@/api'
-import type { LocalOnnxStatus, ModelInfo, ModelKind, ModelStatus } from '@/api/models'
+import type { LocalOnnxStatus, ModelInfo, ModelKind, ModelReference, ModelStatus } from '@/api/models'
 import { ApiError } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import ModelFormDialog from './components/ModelFormDialog.vue'
@@ -693,7 +769,71 @@ const probe = async (model: ModelInfo) => {
   }
 }
 
+/**
+ * 引用面弹框（`#300`）。
+ *
+ * ★ 为什么不是"弹个 confirm 就够"：一句"还有引用，删不了"没有信息量 —— 用户不知道该先去改绑哪个应用。
+ *   这里把后端 409 里的明细（应用/库/文档/默认键）直接摊开，并且**把后果写在同一屏**：
+ *   "强制删除不会自动改绑，这些引用会悬空"。没有这句话，强制删除就只是"点两次的普通删除"。
+ */
+const refDialog = reactive({
+  visible: false,
+  loading: false,
+  deleting: false,
+  model: null as ModelInfo | null,
+  refs: null as ModelReference | null,
+  error: null as string | null
+})
+
+/** 弹框里那句"仍被 N 处引用"用的总数：与卡片上的 `referenceCount` 同一个口径。 */
+const refTotal = computed(() => {
+  const r = refDialog.refs
+  if (!r) return 0
+  return r.apps.length + r.knowledgeBases.length + r.documents + r.defaultKeys.length + r.models
+})
+
+/** 把 409 的 `details` 收窄成引用面；不是那个形状就返回 null（不能把 unknown 直接当真）。 */
+const asReference = (details: unknown): ModelReference | null => {
+  if (!details || typeof details !== 'object') return null
+  const maybe = details as Partial<ModelReference>
+  if (!Array.isArray(maybe.apps) || !Array.isArray(maybe.knowledgeBases)) return null
+  return {
+    apps: maybe.apps,
+    knowledgeBases: maybe.knowledgeBases,
+    documents: maybe.documents ?? 0,
+    defaultKeys: maybe.defaultKeys ?? [],
+    models: maybe.models ?? 0,
+    modelNames: maybe.modelNames ?? []
+  }
+}
+
+/**
+ * 打开引用面弹框。`known` 有值时直接用（409 带回来的那份，已经是最新的），
+ * 否则现拉一次 —— 列表里的 `referenceCount` 只说明"有"，说明不了"是谁"。
+ */
+const openReferenceDialog = async (model: ModelInfo, known?: ModelReference) => {
+  refDialog.model = model
+  refDialog.refs = known ?? null
+  refDialog.error = null
+  refDialog.visible = true
+  if (known) return
+  refDialog.loading = true
+  try {
+    refDialog.refs = await modelsApi.getModelReferences(model.id)
+  } catch (e) {
+    refDialog.error = e instanceof ApiError ? e.message : '读取引用失败，仍可尝试强制删除'
+  } finally {
+    refDialog.loading = false
+  }
+}
+
 const remove = async (model: ModelInfo) => {
+  // ★ #300：有引用 ⇒ 不弹删除确认，改弹引用面。用户必须先看到"哪几个应用会坏"，
+  //   再决定要不要强制 —— 这一步替掉了原来那句"删除后使用该模型的应用将无法提问"的空话。
+  if (model.referenceCount && model.referenceCount > 0) {
+    await openReferenceDialog(model)
+    return
+  }
   try {
     await ElMessageBox.confirm(
       `删除后使用该模型的应用将无法提问。确认删除「${model.name}」？`,
@@ -709,7 +849,31 @@ const remove = async (model: ModelInfo) => {
     ElMessage.success('已删除')
     await fetchList()
   } catch (e) {
+    // ★ 列表里的 referenceCount 可能是几分钟前的：这期间新绑定了一条应用 ⇒ 后端 409。
+    //   这时不能只说"删除失败"，要把明细接过来弹出来（否则用户永远不知道该改绑什么）。
+    const refs = e instanceof ApiError ? asReference(e.details) : null
+    if (refs) {
+      await openReferenceDialog(model, refs)
+      return
+    }
     ElMessage.error(e instanceof ApiError ? e.message : '删除失败')
+  }
+}
+
+/** 二次确认之后的强制删除。★ 后端不会替我们改绑任何行 —— 弹框里已经把后果写清楚了。 */
+const forceRemove = async () => {
+  const model = refDialog.model
+  if (!model) return
+  refDialog.deleting = true
+  try {
+    await modelsApi.deleteModel(model.id, true)
+    refDialog.visible = false
+    ElMessage.success(`已强制删除「${model.name}」，记得把上面列出的引用改绑到别的模型`)
+    await fetchList()
+  } catch (e) {
+    refDialog.error = e instanceof ApiError ? e.message : '强制删除失败'
+  } finally {
+    refDialog.deleting = false
   }
 }
 </script>
@@ -970,5 +1134,55 @@ const remove = async (model: ModelInfo) => {
 .pager {
   display: flex;
   justify-content: flex-end;
+}
+
+/* ── 引用面弹框（#300）──
+   版式：左边固定宽度的"类别"，右边是一整行名字。名字可能很长（应用名），
+   所以用 min-width: 0 + overflow-wrap，否则 flex 子项会被撑破而不是折行。 */
+.ref-loading {
+  padding: var(--space-md) 0;
+  color: var(--text-3);
+  font-size: 14px;
+}
+
+.ref-lead {
+  margin: 0 0 var(--space-sm);
+  line-height: 1.6;
+}
+
+.ref-list {
+  margin: 0 0 var(--space-sm);
+  padding: 0;
+  list-style: none;
+}
+
+.ref-list li {
+  display: flex;
+  gap: var(--space-sm);
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--line-2);
+}
+
+.ref-key {
+  flex: 0 0 68px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.ref-val {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.ref-warn {
+  margin-top: var(--space-sm);
+}
+
+.ref-error {
+  margin-top: var(--space-xs);
+  color: var(--danger, #d14343);
+  font-size: 13px;
 }
 </style>

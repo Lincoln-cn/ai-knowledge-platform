@@ -78,6 +78,7 @@ public class ModelService {
   private final CapabilityProber prober;
   private final UpstreamGateway gateway;
   private final LocalOnnxEmbedding localOnnx;
+  private final ModelReferencePort references;
   private final TransactionTemplate transactionTemplate;
 
   public ModelService(
@@ -88,6 +89,7 @@ public class ModelService {
       CapabilityProber prober,
       UpstreamGateway gateway,
       LocalOnnxEmbedding localOnnx,
+      ModelReferencePort references,
       PlatformTransactionManager transactionManager) {
     this.models = models;
     this.providers = providers;
@@ -96,6 +98,7 @@ public class ModelService {
     this.prober = prober;
     this.gateway = gateway;
     this.localOnnx = localOnnx;
+    this.references = references;
     this.transactionTemplate = new TransactionTemplate(transactionManager);
   }
 
@@ -132,13 +135,34 @@ public class ModelService {
     Map<UUID, ModelProvider> providerById =
         providers.findAll().stream()
             .collect(java.util.stream.Collectors.toMap(ModelProvider::id, p -> p));
+    // ★ 引用数一次查完（不做 N+1）：界面靠它在列表里就把"动不得的模型"标出来（#300）
+    Map<UUID, Long> refCounts = references.countsByModel(found.stream().map(Model::id).toList());
     return PageResult.of(
         found.stream()
-            .map(model -> ModelView.from(model, providerById.get(model.providerId())))
+            .map(
+                model ->
+                    ModelView.from(
+                        model,
+                        providerById.get(model.providerId()),
+                        refCounts.getOrDefault(model.id(), 0L)))
             .toList(),
         total,
         safePage,
         safeSize);
+  }
+
+  /**
+   * 读某个模型的引用面（{@code #300}）。
+   *
+   * <p>★ 前端"强制删除"弹框读它：先看到"哪 3 个应用、共 12 篇文档"，再决定要不要强制。没有它，用户只能盲点。
+   *
+   * @param id 模型 id；不存在 ⇒ 404
+   * @return 引用面；无引用时 {@link ModelReference#NONE}
+   */
+  @Transactional(readOnly = true)
+  public ModelReference referencesOf(UUID id) {
+    require(id);
+    return references.ofModel(id);
   }
 
   @Transactional(readOnly = true)
@@ -433,35 +457,56 @@ public class ModelService {
   }
 
   /**
-   * 删除模型。
+   * 删除模型（{@code #300} 起<strong>先查后删</strong>）。
    *
    * <p>★ 拒绝条件是「被应用/知识库引用」而不是「已加载」（{@code 08 §3.2} 连带修正）—— 否则加载过的模型永远删不掉（契约只有 load 没有 unload）。
    *
    * <p>★ {@code builtin=true} 拒绝 —— 内置模型硬编码不可删。
    *
+   * <p>★ 有引用 ⇒ <strong>{@code 409 CONFLICT}</strong>，响应体把引用面列清楚（哪几个应用、哪个库、共多少篇文档、哪个平台默认键）。
+   * 这是"先查后删"的全部意义：{@code 400} 不行 —— 请求本身没问题，是资源当前状态不允许， 两者混用会让前端无法区分"我传错了"和"它现在动不得"。
+   *
+   * <p>★ <strong>不做静默级联删除</strong>：删模型不会顺手改应用/知识库/默认键（其中两处也没法改： {@code
+   * kb_knowledge_base.embedding_model_id} 是 not null，{@code as_assistant} 的简单应用模型也是 not null）⇒
+   * 一旦删掉，引用就变成悬空指针。所以要么拦住，要么由用户<strong>明确</strong>用 {@code force} 接受后果。
+   *
+   * <p>★ {@code force=true} 的语义只有一个：<strong>明知有引用仍然删，后果自行承担</strong>（前端弹框会逐条列出后果）。
+   * 它<strong>不改变</strong>副作用 —— 仍然只是删这一行，不会顺手删应用/库。 判据：让用户看到的"强制"与它真正做的事一致。
+   *
    * <p>★ 删除时清掉启用位（{@code clearEnable()}）—— 删之前先把 enabled 关掉， 让"删了一半"的中间态里没有仍在对外服务的模型。
    *
-   * <p>⚠️ 「被应用/知识库引用」的检查留成钩子（第 5 周的 {@code assistant} / {@code knowledge} 表还没落）—— 当前直接通过，
-   * 两张表落地后在此处加引用计数查询。
+   * @param id 模型 id
+   * @param force 明知有引用仍要删（调用方必须已向用户展示过引用面）
    */
   @Transactional
-  public void delete(UUID id) {
+  public void delete(UUID id, boolean force) {
     Model model = require(id);
     if (model.builtin()) {
       throw new BusinessException(ErrorCode.BAD_REQUEST, "「" + model.name() + "」是内置模型，不可删除");
     }
 
-    // ★ 钩子：被应用/知识库引用时拒绝删除（第 5 周落地 assistant / knowledge 表后在此加查询）。
-    //   参考前端 mock/handlers/models.ts 的写法：
-    //   - 查 assistants 表里 modelId = id 的应用
-    //   - 查 knowledge_bases 表里 embeddingModelId = id 的知识库
-    //   - 任一非空则拒绝，并列出引用者名称
-    //   两张表是第 5 周的，当前没有引用方，直接通过。
-    //   CHANGELOG 0.1.3 已记此钩子。
+    ModelReference refs = references.ofModel(id);
+    if (refs.any() && !force) {
+      throw new BusinessException(
+          ErrorCode.CONFLICT,
+          "「" + model.name() + "」仍被 " + refs.total() + " 处引用，不能直接删除：" + refs.summary(),
+          "删掉它会让上面这些引用变成悬空指针（应用无法提问、知识库检索不到）。确认要删请用「强制删除」",
+          refs);
+    }
+    if (refs.any()) {
+      // ★ 强制删除必须留痕：事后要能回答"这个模型是被人强行删掉的，当时坏了什么"
+      log.warn(
+          "强制删除模型 {}（{}），仍有引用：{}（平台默认键 {}）",
+          model.name(),
+          model.id(),
+          refs.summary(),
+          refs.defaultKeys());
+    } else {
+      log.info("删除模型 {}（{}），已清启用位", model.name(), model.id());
+    }
 
     model.clearEnable();
     models.delete(model);
-    log.info("删除模型 {}（{}），已清启用位", model.name(), model.id());
   }
 
   // ────────────────────────── load 语义 ──────────────────────────
@@ -633,7 +678,12 @@ public class ModelService {
   private ModelView view(Model model) {
     ModelProvider provider =
         model.providerId() == null ? null : providers.findById(model.providerId()).orElse(null);
-    return ModelView.from(model, provider);
+    // ★ 单条视图也带上引用数：编辑/刷新后界面上的「N 处引用」与删除按钮的可用性必须和列表一致，
+    //   否则同一条模型在列表里删不掉、点进详情又"能删"了。
+    //   ★ 用与列表同一个计数方法（而不是 ofModel().total()）：后者的具名清单封顶 MAX_NAMES 条，
+    //     引用超过 20 条时两个视图会显示不同的数字。
+    Map<UUID, Long> counts = references.countsByModel(List.of(model.id()));
+    return ModelView.from(model, provider, counts.getOrDefault(model.id(), 0L));
   }
 
   /** 把初始化异常转成能写进 `loadError` 的可读原因（状态机拒绝空值）。 */

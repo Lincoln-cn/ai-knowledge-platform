@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import cn.lincoln.aiplatform.modelcatalog.application.ModelReferencePort;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelService;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelView;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
@@ -64,6 +65,7 @@ class ModelServiceContextWindowTest {
         mock(CapabilityProber.class),
         gateway,
         mock(cn.lincoln.aiplatform.modelcatalog.infrastructure.LocalOnnxEmbedding.class),
+        mock(ModelReferencePort.class),
         mock(PlatformTransactionManager.class));
   }
 
@@ -146,6 +148,7 @@ class ModelServiceContextWindowTest {
             mock(CapabilityProber.class),
             mock(UpstreamGateway.class),
             local,
+            mock(ModelReferencePort.class),
             mock(PlatformTransactionManager.class));
 
     ModelService.LocalOnnxStatus lazy = service.localOnnxStatus();

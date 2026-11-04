@@ -11,6 +11,8 @@ import static org.mockito.Mockito.when;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelProviderService;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelProviderService.ProviderDraft;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelProviderView;
+import cn.lincoln.aiplatform.modelcatalog.application.ModelReference;
+import cn.lincoln.aiplatform.modelcatalog.application.ModelReferencePort;
 import cn.lincoln.aiplatform.modelcatalog.application.ProviderTestResult;
 import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelProvider;
@@ -44,6 +46,7 @@ class ModelProviderServiceTest {
   @Mock ModelRepository models;
   @Mock UpstreamGateway gateway;
   @Mock ModelUpstreamResolver resolver;
+  @Mock ModelReferencePort references;
 
   private ModelProviderService service;
   private JairouterProperties jairouter;
@@ -58,7 +61,8 @@ class ModelProviderServiceTest {
             new ApiKeyCipher(Base64.getEncoder().encodeToString(secret)),
             gateway,
             resolver,
-            jairouter = new JairouterProperties());
+            jairouter = new JairouterProperties(),
+            references);
   }
 
   @Test
@@ -93,9 +97,12 @@ class ModelProviderServiceTest {
   void deleteRejectsProviderStillReferencedByModels() {
     ModelProvider provider = provider(true);
     when(providers.findById(provider.id())).thenReturn(Optional.of(provider));
-    when(models.countByProviderId(provider.id())).thenReturn(3L);
+    // 引用面：3 个模型挂在它下面，且这三个模型自己没人引用（否则会走到更严的 force 分支）
+    when(references.ofProvider(provider.id()))
+        .thenReturn(
+            new ModelReference(List.of(), List.of(), 0, List.of(), 3, List.of("m1", "m2", "m3")));
 
-    assertThatThrownBy(() -> service.delete(provider.id()))
+    assertThatThrownBy(() -> service.delete(provider.id(), false))
         .isInstanceOf(BusinessException.class)
         .hasMessageContaining("还有 3 个模型");
 
@@ -172,12 +179,12 @@ class ModelProviderServiceTest {
   void deleteTranslatesForeignKeyRaceIntoReadableConflict() {
     ModelProvider provider = provider(true);
     when(providers.findById(provider.id())).thenReturn(Optional.of(provider));
-    when(models.countByProviderId(provider.id())).thenReturn(0L);
+    when(references.ofProvider(provider.id())).thenReturn(ModelReference.NONE);
     doThrow(new DataIntegrityViolationException("fk_ai_model_provider"))
         .when(providers)
         .delete(provider);
 
-    assertThatThrownBy(() -> service.delete(provider.id()))
+    assertThatThrownBy(() -> service.delete(provider.id(), false))
         .as("★ count 与 delete 之间被并发绑定 ⇒ 外键 RESTRICT 不应该变成 500")
         .isInstanceOf(BusinessException.class)
         .hasMessageContaining("仍被模型引用");
