@@ -84,3 +84,4 @@ vue-tsc-*.txt
 *.local
 .env.local
 .env.*.local
+backend/data/

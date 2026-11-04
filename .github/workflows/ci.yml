@@ -125,9 +125,9 @@ jobs:
       - name: 起 OpenAI 桩服务（向量化与模型目录都打它）
         working-directory: backend
         run: |
-          python tools/openai_stub.py --port 11434 > /tmp/stub.log 2>&1 &
+          python tools/openai_stub.py --port 11999 > /tmp/stub.log 2>&1 &
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:11434/v1/models > /dev/null; then
+            if curl -sf http://localhost:11999/v1/models > /dev/null; then
               echo "桩服务就绪"
               exit 0
             fi
@@ -150,6 +150,11 @@ jobs:
           DB_URL: jdbc:postgresql://localhost:5432/aiplatform
           DB_USER: aiplatform
           DB_PASSWORD: aiplatform
+          # ★ 上游必须指向本 job 自己起的桩（11999），不能用 application.yml 的默认
+          #   `http://localhost:11434/v1`：那是 Ollama 的端口，CI 里没有它，症状是
+          #   「向量化失败：网关不可达：连接 http://localhost:11434/v1/embeddings 失败」
+          #   ⇒ S1 / S3 / 跨场景三条闸门全红在"夹具文档向量化失败"，而它们量的是别的东西。
+          AI_BASE_URL: http://localhost:11999/v1
         run: |
           # ★ 不写死版本号：pom 的 version 是发布切点，会随周次前进（0.4.5 …），
           #   写死只会在下一次版本对齐时把闸门变成"找不到 jar"。
@@ -309,7 +314,17 @@ jobs:
                    #   ★ 判据取 max 不取平均（§二 写的是上限）；1 轮冷启动 + 3 轮热态。
                    #   ★ B6（150 段）/ B7（200 次）**暂不并入**：一次引入三条重闸门会让本 job 同时红三处，
                    #     定位不了是哪条链坏的。等这条在 CI 站稳再谈（脚本已在仓库里，可手动跑）。
-                   check_b4_b5_latency)
+                   check_b4_b5_latency \\
+                   # ★ 画布在真后端上能不能把图渲染出来（`#21`）。
+                   #   ★ **为什么这条非有不可**：`#20`（画布一个节点都渲染不出来）在 main 上活了 9 天，
+                   #     而本 job 已有十几条闸门、前端另有三条画布闸门 —— 它们全绿是因为**没有一条去看画布
+                   #     在真后端上的样子**：前端那三条跑在 mock 上，图是夹具自带的 `as5`（9 个节点），
+                   #     验证的是"前端拿到一张图能不能画"，不是"真后端给的图能不能画"。
+                   #   ★ 种子图由脚本自己 `PUT /workflow/draft` 写入（幂等、不依赖手工建的应用、不给
+                   #     db/seed 加产品无关的夹具），断言"渲染出的节点数 == 图里的节点数"，不是 "> 0"。
+                   #   ★ `--self-check` 会把一个节点类型改成不存在的类型，此时本闸门必须非零退出
+                   #     （实测 3/5 红、退出码 1）—— 否则它只是一条恒绿的装饰。
+                   check_workflow_canvas)
           failed=()
           for g in "${gates[@]}"; do
             echo "::group::${g}.py"

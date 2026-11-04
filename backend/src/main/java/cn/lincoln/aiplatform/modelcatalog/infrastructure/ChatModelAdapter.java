@@ -69,7 +69,7 @@ public class ChatModelAdapter implements ChatPort {
   @Override
   public Optional<UUID> pickChatModel() {
     List<Model> candidates =
-        models.search(null, ModelKind.CHAT, ModelStatus.LOADED, 0, MAX_CANDIDATES_SCAN);
+        models.search(null, ModelKind.CHAT, ModelStatus.LOADED, null, 0, MAX_CANDIDATES_SCAN);
     // ★ 服务商停用 ⇒ 这个模型不可用（与 resolve 的 fail-closed 同一口径），不能挑到它。
     return candidates.stream()
         .filter(model -> upstream.egressOf(model).isPresent())

@@ -63,9 +63,10 @@ public class ModelController {
       @RequestParam(required = false) String keyword,
       @RequestParam(required = false) ModelKind kind,
       @RequestParam(required = false) ModelStatus status,
+      @RequestParam(required = false) UUID providerId,
       @RequestParam(required = false) Integer page,
       @RequestParam(required = false) Integer size) {
-    return ApiResponse.ok(modelService.list(keyword, kind, status, page, size));
+    return ApiResponse.ok(modelService.list(keyword, kind, status, providerId, page, size));
   }
 
   /**

@@ -34,6 +34,10 @@
         <el-option label="全部状态" value="" />
         <el-option v-for="s in STATUSES" :key="s" :label="labelOf(MODEL_STATUS_LABELS, s)" :value="s" />
       </el-select>
+      <el-select v-model="query.providerId" size="small" placeholder="全部服务商" style="width: 150px" @change="onFilterChange">
+        <el-option label="全部服务商" value="" />
+        <el-option v-for="p in providerOptions" :key="p.id" :label="p.name" :value="p.id" />
+      </el-select>
       <span class="micro muted">
         共 {{ total }} 个注册模型
         <template v-if="localOnnx?.enabled"> · 另有 1 个进程内 ONNX 向量模型</template>
@@ -249,7 +253,6 @@
       @saved="onSaved"
     />
 
-    <ProviderDrawer ref="providerRef" @changed="onProvidersChanged" />
   </div>
 </template>
 
@@ -258,12 +261,11 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, Loading, Refresh, WarningFilled } from '@element-plus/icons-vue'
-import { modelsApi } from '@/api'
+import { modelsApi, providersApi } from '@/api'
 import type { LocalOnnxStatus, ModelInfo, ModelKind, ModelStatus } from '@/api/models'
 import { ApiError } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import ModelFormDialog from './components/ModelFormDialog.vue'
-import ProviderDrawer from './components/ProviderDrawer.vue'
 import { MODEL_STATUS_LABELS, SUPPLIER_LABELS, labelOf } from '@/constants/labels'
 
 const STATUSES: ModelStatus[] = ['NOT_LOADED', 'LOADING', 'LOADED', 'LOAD_FAILED']
@@ -364,6 +366,8 @@ const query = reactive({
   keyword: (route.query.keyword as string) ?? '',
   kind: ((route.query.kind as string) ?? '') as ModelKind | '',
   status: ((route.query.status as string) ?? '') as ModelStatus | '',
+  // ★ 服务商页的「N 个模型」就是靠这个直达的：点了要能看到那 N 条，而不是"跳过来自己找"
+  providerId: (route.query.providerId as string) ?? '',
   page: Number(route.query.page) || 1
 })
 
@@ -374,10 +378,14 @@ const syncUrl = () => {
       ...(query.keyword ? { keyword: query.keyword } : {}),
       ...(query.kind ? { kind: query.kind } : {}),
       ...(query.status ? { status: query.status } : {}),
+      ...(query.providerId ? { providerId: query.providerId } : {}),
       ...(query.page > 1 ? { page: String(query.page) } : {})
     }
   })
 }
+
+/** 服务商下拉的候选（`#289` 打磨：服务商页点「N 个模型」跳过来时要能看见是哪个服务商） */
+const providerOptions = ref<{ id: string; name: string }[]>([])
 
 /** 全平台「加载中」的模型数 —— 跨页统计，不是只看当前页 */
 const globalLoadingCount = ref(0)
@@ -393,6 +401,7 @@ const fetchList = async () => {
       keyword: query.keyword || undefined,
       kind: query.kind || undefined,
       status: query.status || undefined,
+      providerId: query.providerId || undefined,
       page: query.page,
       size: pageSize.value
     })
@@ -555,6 +564,15 @@ const onVisibility = () => {
   Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()]).then(schedule)
 }
 
+/** 服务商下拉的候选（`#289` 打磨：从服务商页点「N 个模型」跳过来时，得能看出筛的是哪个） */
+const fetchProviders = async () => {
+  try {
+    providerOptions.value = (await providersApi.listProviders()).map((p) => ({ id: p.id, name: p.name }))
+  } catch {
+    // 候选拉不到不算致命：筛选条少一个选项，不影响列表本身
+  }
+}
+
 onMounted(() => {
   document.addEventListener('visibilitychange', onVisibility)
   // 首次渲染就按当前列数定页长，避免先按 12 拉一次再改成 15（会闪一下）
@@ -564,6 +582,7 @@ onMounted(() => {
     gridObserver.observe(gridEl.value)
   }
   Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()]).then(schedule)
+  fetchProviders()
 })
 
 onBeforeUnmount(() => {
@@ -589,16 +608,25 @@ watch(() => query.page, () => {
 // URL → 筛选/分页：浏览器前进/后退、页内改 hash 时界面跟随。
 // 值比较后再赋值，避免与 syncUrl 互写成环；只在真变了时才拉列表。
 watch(
-  () => [route.query.keyword, route.query.kind, route.query.status, route.query.page],
+  () => [route.query.keyword, route.query.kind, route.query.status, route.query.providerId, route.query.page],
   () => {
     const kw = route.query.keyword ? String(route.query.keyword) : ''
     const kind = route.query.kind ? String(route.query.kind) : ''
     const status = route.query.status ? String(route.query.status) : ''
+    const providerId = route.query.providerId ? String(route.query.providerId) : ''
     const pg = route.query.page ? Number(route.query.page) || 1 : 1
-    if (kw === query.keyword && kind === query.kind && status === query.status && pg === query.page) return
+    if (
+      kw === query.keyword &&
+      kind === query.kind &&
+      status === query.status &&
+      providerId === query.providerId &&
+      pg === query.page
+    )
+      return
     query.keyword = kw
     query.kind = kind as ModelKind | ''
     query.status = status as ModelStatus | ''
+    query.providerId = providerId
     query.page = pg
     fetchList().then(schedule)
   }
@@ -606,10 +634,11 @@ watch(
 
 /* ── 操作 ── */
 const formRef = ref<InstanceType<typeof ModelFormDialog>>()
-const providerRef = ref<InstanceType<typeof ProviderDrawer>>()
 const editing = ref<ModelInfo | null>(null)
 
-const openProviders = () => providerRef.value?.open()
+// ★ 服务商不再是从模型页弹出来的一个抽屉：它有自己的页面（`/settings/providers`）。
+//   同一条功能只留一个落点 —— 否则「模型页的抽屉」与「配置页的列表」会各自漂移。
+const openProviders = () => router.push('/settings/providers')
 
 const openCreate = () => {
   editing.value = null
@@ -622,11 +651,6 @@ const openEdit = (model: ModelInfo) => {
 }
 
 const onSaved = () => {
-  fetchList().then(schedule)
-}
-
-/** 服务商增删改之后：模型卡上的服务商名/出网标记要跟着变 */
-const onProvidersChanged = () => {
   fetchList().then(schedule)
 }
 

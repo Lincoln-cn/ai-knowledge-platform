@@ -49,6 +49,38 @@ class RrfTest {
         .isCloseTo(expected, org.assertj.core.data.Offset.offset(1e-9));
   }
 
+  /**
+   * ★★ 这一条钉的是<b>已知缺陷</b>，不是想要的行为。
+   *
+   * <p>{@code #293} 曾把主序改成 min-rank 来消除它，但全量 195 条上 B3 掉 3 条、B1 只涨 2 条 ⇒ **回退了**（读数与机制见 {@code
+   * Rrf#fuse} 的注释）。所以这里如实记录：纯 RRF 下 「一路第 1、另一路没中」**确实**会输给「两路都第 5」。
+   *
+   * <p>★ 留着它的价值：将来谁再想"顺手把主序换掉"，先看这条与 {@code §11.10.94} 的读数。 这个缺陷的**解在召回层**（池子里根本没有含答案词的段），不在融合层。
+   */
+  @Test
+  void pureRrfStillBuriesASingleFirstPlaceAndWeKnowIt() {
+    UUID onlyFirstInOnePath = id("42");
+    UUID midInBothPaths = id("43");
+    UUID filler = id("44");
+    UUID filler2 = id("45");
+    UUID filler3 = id("46");
+    UUID filler4 = id("47");
+
+    // 全文路：42 第一，43 第五；向量路：43 第五，42 不在。
+    // ⇒ 纯 RRF 下 43 得 2/65 ≈ 0.0308、42 只得 1/61 ≈ 0.0164，43 会**压过** 42。
+    var fused =
+        Rrf.fuse(
+            List.of(
+                List.of(onlyFirstInOnePath, filler, filler2, filler3, midInBothPaths),
+                List.of(filler, filler2, filler3, filler4, midInBothPaths)));
+
+    // ★ 现状（回退后）：43 排在 42 前面 —— 这就是我们要记录的缺陷。
+    List<UUID> order = fused.stream().map(Rrf.Fused::segmentId).toList();
+    assertThat(order.indexOf(midInBothPaths))
+        .as("纯 RRF 会把「一路第 1、另一路没中」压到「两路都第 5」之后 —— 已知缺陷，解在召回层")
+        .isLessThan(order.indexOf(onlyFirstInOnePath));
+  }
+
   @Test
   void constantKFlattensTopTwoGap() {
     UUID first = id("04");

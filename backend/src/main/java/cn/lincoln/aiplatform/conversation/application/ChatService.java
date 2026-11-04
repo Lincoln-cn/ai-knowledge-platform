@@ -24,6 +24,7 @@ import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -1379,7 +1380,14 @@ public class ChatService {
    */
   private void maybeGuessSuggestions(
       ChatTurnWriter.PreparedTurn turn, String question, List<SourceRef> refs) {
-    if (!parallelSuggestions || suggestions == null || refs.isEmpty()) {
+    if (!parallelSuggestions) {
+      return;
+    }
+    if (suggestions == null) {
+      log.warn("猜你想问的并行开关开着，但没有 SuggestionService（本轮只跳过追问，不影响回答）");
+      return;
+    }
+    if (refs.isEmpty()) {
       return;
     }
     StringBuilder context = new StringBuilder();
@@ -1500,12 +1508,32 @@ public class ChatService {
   }
 
   /**
-   * 两路（或多组）命中的本地 RRF 融合（{@code #185}）。
+   * 两路（或多组）命中的本地融合（{@code #185}，主序 {@code #293} 试过换成 min-rank，**已回退**）。
    *
-   * <p>★ 刻意<b>不</b> import {@code retrieval} 模块的 {@code Rrf}：那是平台内部参考实现，问答链路与它 不该产生模块耦合。公式：{@code
-   * score(d) = Σ 1 / (k + rank_i(d))}，k=60，rank 从 1 起。
+   * <p>★ 刻意<b>不</b> import {@code retrieval} 模块的 {@code Rrf}：那是平台内部参考实现，问答链路与它 不该产生模块耦合。
+   * 但两处的**口径必须一致** —— 改这里就同时改 {@code Rrf}，反之亦然。
    *
-   * <p>★ 融合后的 {@code score} 取该分段在各路中的<strong>最大原始分</strong>（用于阈值判定与界面展示）， 顺序按 RRF 分数。
+   * <h3>★★ 主序为什么是这个分数（{@code #293} 试过并回退）</h3>
+   *
+   * <p>RRF 的公式 {@code score(d) = Σ 1/(k + rank_i(d))}（k=60）有一个反直觉的后果： <b>"一路第 1、另一路没有" 只得 {@code
+   * 1/61 ≈ 0.0164}，而 "两路都第 5" 得 {@code 2/65 ≈ 0.0308}</b> ——
+   * 前者几乎只有后者的一半。当向量路对某条问句<b>没有区分度</b>时（长段、专有名词密集）， 它不是"补充"，而是<b>把全文路的正确排序稀释掉</b>。
+   *
+   * <p>实测（干净语料库 195 条里 {@code rank_core=0} 的 21 条，逐条跑三模式）： {@code SYN-004-2} 全文第 1 → 融合第 8；{@code
+   * SYN-054-3} 全文第 1 → 融合第 11； {@code SYN-032-2} 向量第 1 → 融合第 14。反例 5/21。读数见 {@code docs/ROADMAP.md
+   * §11.10.93}。
+   *
+   * <p>⇒ 试过把主序换成 <b>{@code min(rank)}</b>（一条分段在任一路排得越靠前，融合后就越靠前）：局部反例确实 5→4 条。 <b>但全量 195
+   * 条上它是亏的</b>：B1 前 5 core 86.2% → 87.2%（+2 条），B3 第 1 条 59.5% → 57.9%（−3 条）； {@code rank_core} 分布
+   * 1:116→113 · 2..5:49→55 · 0:21→19 —— 抬上来的是 {@code 2..5}，而**掉出第 1 的比进去的多**。
+   *
+   * <p>★ 机制：min-rank 抬上来的正是"某一路排第一、另一路没中"的段，而这类段多数是**别的文档的错段** （{@code §11.10.92}
+   * 已证明"只含实体名、不含答案词"的段恰是错的候选）。 于是它拿**已达标的 B1**（门槛 70%）去换**还差 22 点的 B3**（门槛 80%）——方向错了。
+   *
+   * <p>⇒ 融合稀释的病<b>仍然真实</b>，但改主序不是它的解：池子里没有正确的段，怎么排都没用。 下一步在**召回层**。见 {@code #293} 与 {@code ROADMAP
+   * §11.10.94}。
+   *
+   * <p>★ 融合后的 {@code score} 仍取该分段在各路中的<strong>最大原始分</strong>（用于阈值判定与界面展示）。
    */
   private static List<SegmentSearchPort.Scored> fuseHybrid(
       List<SegmentSearchPort.Scored> routeA, List<SegmentSearchPort.Scored> routeB) {
@@ -1526,10 +1554,9 @@ public class ChatService {
       }
     }
     List<SegmentSearchPort.Scored> fused = new ArrayList<>(rrfScore.size());
-    rrfScore.entrySet().stream()
-        .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
-        .forEach(
-            e -> fused.add(new SegmentSearchPort.Scored(e.getKey(), displayScore.get(e.getKey()))));
+    rrfScore.keySet().stream()
+        .sorted(Comparator.comparingDouble(rrfScore::get).reversed())
+        .forEach(id -> fused.add(new SegmentSearchPort.Scored(id, displayScore.get(id))));
     return fused;
   }
 

@@ -111,6 +111,8 @@ export interface BaseModelsQuery {
 export interface ModelQuery extends PageQuery {
   kind?: ModelKind
   status?: ModelStatus
+  /** 只列这个服务商下的模型（服务商页的「N 个模型」点进来时用，`#289` 打磨） */
+  providerId?: string
 }
 
 export interface UpsertModelBody {

@@ -19,7 +19,13 @@
             :value="p.id"
           />
         </el-select>
-        <div class="hint micro">
+        <!-- ★ 两条路要分开说（`#288`）：绑定服务商时讲"不用重复填"，不绑定时讲"你放弃了什么"。
+             同一句话贴给两条路 = 用户会无视它。 -->
+        <div v-if="!form.providerId" class="hint micro hint-warn">
+          这条路绕过了服务商：<b>出站密级（能不能出网）、认证方式、连通性检查都不生效</b>，
+          数据外发闸门也就没有供应商类别可判。建议先在「模型管理 → 服务商」登记一条，再回来选它。
+        </div>
+        <div v-else class="hint micro">
           绑定服务商后，服务地址与密钥由「模型管理 → 服务商」统一维护；这里不再重复填。
         </div>
       </el-form-item>
@@ -731,6 +737,11 @@ defineExpose({ load, submit, reset })
   color: var(--color-muted);
   line-height: var(--leading-body);
   margin-left: 0;
+}
+
+/* `#288`：不绑定服务商是一条**会悄悄少掉三件事**的路，所以它配一条橙色提示而不是灰字。 */
+.hint-warn {
+  color: var(--el-color-warning);
 }
 
 .provider-summary {
