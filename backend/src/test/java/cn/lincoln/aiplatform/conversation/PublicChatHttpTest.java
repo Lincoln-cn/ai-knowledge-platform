@@ -6,8 +6,10 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.doAnswer;
 
 import cn.lincoln.aiplatform.assistant.application.AccessCredentialService;
+import cn.lincoln.aiplatform.conversation.support.FakeChatPorts;
 import cn.lincoln.aiplatform.conversation.support.FakeChatStreamPorts;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
@@ -153,6 +155,12 @@ class PublicChatHttpTest {
    */
   @MockitoBean ChatStreamPort chatStreamPort;
 
+  /**
+   * 查询理解也走模型端口（{@code ChatPort#complete}）—— 同一「假模型不打真上游」口径（{@code #297}）： 桩的 {@code pickChatModel}
+   * 默认返回 {@code Optional.empty} ⇒ 查询理解立刻 D4 退回原句单路，不发任何上游请求。
+   */
+  @MockitoBean ChatPort chatPort;
+
   /** 撤销那一条用例要**走真实撤销路径**（服务层 → {@code forget}），而不是直接改库。 */
   @Autowired AccessCredentialService credentialService;
 
@@ -185,6 +193,7 @@ class PublicChatHttpTest {
    * 的默认方法不会自动调用真实默认实现，漏钉就会“模型根本没被调用”。
    */
   private void wireFakeModel() {
+    FakeChatPorts.wire(chatPort);
     doAnswer(
         invocation -> {
           answerWithFakeModel(

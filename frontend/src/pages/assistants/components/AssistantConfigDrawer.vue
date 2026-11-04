@@ -156,10 +156,10 @@
         </el-form-item>
 
         <!-- 查询理解（第 12 周 · 10 §8.1 / §6.3）：决定一次提问花几次模型调用 -->
-        <el-form-item label="改写条数">
+        <el-form-item label="查询理解条数">
           <el-input-number v-model="form.retrieval.queryCount" :min="0" :max="5" />
           <span class="micro muted" style="margin-left: var(--space-xs)">
-            0 = 不做这一层；1 = 只改写；默认 3。每多一条查询多一次检索，也更容易命中
+            0 = 不改写，用原句检索；1 = 只改写；默认 3。每多一条查询多一次检索，也更容易命中
           </span>
         </el-form-item>
 

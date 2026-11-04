@@ -72,13 +72,18 @@ public class AppBindingAdapter implements AppBindingPort {
         //   `ChatService` 读的是平台设置 ⇒ 配置页那几个控件全是装饰。
         // ★★ `#283`：多跳那两格也必须走这条路 —— 它原先根本不在 `RetrievalParams` 里，
         //   于是"命中测试能开多跳、真实问答永远不跑"。加字段不接这里，等于又造一次同样的假象。
+        // ★★ `#297`：查询理解那三格同理 —— 它们在 `V29` 就入库了，但问答链路从来没收过
+        //   （`retrieval_query_count` 只在 GET 回读里出现），"应用配了 3 条查询"一直是装饰。
         new RetrievalParams(
             app.retrievalMode(),
             app.retrievalThreshold().doubleValue(),
             app.retrievalTopN(),
             app.retrievalNoRefStrategy(),
             app.retrievalMultiHopEnabled(),
-            app.retrievalMaxHops()));
+            app.retrievalMaxHops(),
+            app.retrievalQueryCount(),
+            app.retrievalDecomposeEnabled(),
+            app.retrievalMaxSubQuestions()));
   }
 
   /**

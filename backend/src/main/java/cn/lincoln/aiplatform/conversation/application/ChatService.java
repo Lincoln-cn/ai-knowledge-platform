@@ -20,6 +20,9 @@ import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.retrieval.SourceLabels;
+import cn.lincoln.aiplatform.retrieval.application.QueryUnderstandingService;
+import cn.lincoln.aiplatform.retrieval.domain.QueryUnderstanding;
+import cn.lincoln.aiplatform.retrieval.domain.RrfQuotaJoiner;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -132,6 +135,17 @@ public class ChatService {
   private static final int RETRIEVAL_OVERFETCH = 3;
 
   /**
+   * 指代消解的「对话上文」取最近几条消息（{@code #297}）。
+   *
+   * <p>★ 2 轮 = 问 / 答 各 2 条（{@code 10 §3.4.3} 同口径）：上文是给<strong>改写</strong>用的，不是给模型的对话记忆 —— 更早的轮次对"它
+   * / 这个"这类指代帮不上，反而稀释提示词。
+   */
+  private static final int RECENT_CONTEXT_MESSAGES = 4;
+
+  /** 「对话上文」里答案截断字数（{@code #297}：问题全量、答案只取前 200 字）。 */
+  private static final int RECENT_CONTEXT_ANSWER_CLIP = 200;
+
+  /**
    * 零引用且应用选择「拒答」时的固定文案（{@code #185}）。
    *
    * <p>★ 它是<strong>产品承诺</strong>（{@code 02 FR-02-19-6} / {@code 10 §5}）：没有资料支持时，用户必须能区分
@@ -178,6 +192,25 @@ public class ChatService {
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   void setEmbeddingPort(EmbeddingPort embeddingPort) {
     this.embeddingPort = embeddingPort;
+  }
+
+  /**
+   * 查询理解（{@code #297}）—— 检索前先把问题改写 / 拆成子问题。
+   *
+   * <p>★ 与 {@link #setEmbeddingPort} 同一形状的 <b>setter 可选注入</b>：不改构造器参数列表（那两个构造器 被 7 个脱离容器的测试直接调用）。
+   * {@code null} = 未装配 ⇒ 走旧的单路检索，与 {@code queryCount=0} 同一条早退路径、行为逐字一致。
+   *
+   * <p>★★ 接进来的原因（{@code #297}）：此前查询理解只被检索测试页用（{@code RetrievalService}）， 问答链路四次检索全用原句 ⇒
+   * 追问「它要谁签字」拿"它要谁签字"去检索，答非所问； 且应用配置页那三个输入框（条数 / 拆分 / 子问题上限）存了从来没被问答消费过。
+   */
+  private QueryUnderstandingService queryUnderstanding;
+
+  /**
+   * @param queryUnderstanding 查询理解服务（可空 = 未装配 ⇒ 单路原句检索，与今天逐字一致）
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setQueryUnderstanding(QueryUnderstandingService queryUnderstanding) {
+    this.queryUnderstanding = queryUnderstanding;
   }
 
   /**
@@ -425,7 +458,8 @@ public class ChatService {
     long startedAt = System.nanoTime();
     ChatTurnWriter.PreparedTurn turn = turns.prepareDebug(appId, trimmed);
     RetrievalParams retrieval = effectiveRetrieval(turn);
-    List<SourceRef> refs = retrieve(trimmed, turn.kbIds(), null, turn.modelId(), retrieval);
+    // ★ 调试链路不写库、没有会话历史 ⇒ 对话上文传 null（#297 的指代消解只在正式链路生效）
+    List<SourceRef> refs = retrieve(trimmed, turn.kbIds(), null, turn.modelId(), retrieval, null);
 
     if (refuses(refs, retrieval)) {
       log.info("应用 {} 的调试命中零引用且策略为 REFUSE ⇒ 直接回拒答文案", appId);
@@ -577,8 +611,16 @@ public class ChatService {
       //     而"检索要不要有自己的预算"是另一件事（`error.reason` 今天仍借"生成超时"那句文案），见交付报告。
       heartbeat = startHeartbeatThread(run);
       RetrievalParams retrieval = effectiveRetrieval(turn);
+      // ★ 指代消解的对话上文（#297 判据 3）：最近 2 轮的「问 + 答前 200 字」，
+      //   只给查询理解那段提示词用（不进模型 prompt、不额外加 LLM 调用）。
       List<SourceRef> refs =
-          retrieve(question, turn.kbIds(), turn.conversationId(), turn.modelId(), retrieval);
+          retrieve(
+              question,
+              turn.kbIds(),
+              turn.conversationId(),
+              turn.modelId(),
+              retrieval,
+              recentContextOf(turn));
       run.assembler.references(refs);
       run.bindRefs(refs);
       run.pump();
@@ -1059,7 +1101,8 @@ public class ChatService {
       Collection<UUID> requestedKbIds,
       UUID conversationId,
       UUID modelId,
-      RetrievalParams retrieval) {
+      RetrievalParams retrieval,
+      String recentContext) {
     // ★★ 召回开关（通用问答）：未启用 ⇒ 一条都不检索，直接返回空。
     //
     //   为什么要有这一条：`requestedKbIds` 为空时会走 `RetrievalScope.shared` 支
@@ -1144,30 +1187,59 @@ public class ChatService {
       }
       List<SegmentSearchPort.Scored> hits;
       int fetchLimit = retrievalLimit * RETRIEVAL_OVERFETCH;
-      switch (retrieval.mode()) {
-        case VECTOR -> {
-          hits = vectorHits(question, scope, fetchLimit);
-        }
-        case HYBRID -> {
-          // ★ 两路并跑：全文那一路仍是主干，向量那一路只作补充。
-          //   向量路失败（RuntimeException）⇒ log.warn 后回退全文那一路，不许把整轮打死；
-          //   全文路失败仍走外层 catch ⇒ 零引用（VECTOR 模式的失败同理）。
-          List<SegmentSearchPort.Scored> fullTextHits =
-              segmentSearch.fullText(new SegmentSearchPort.TextQuery(question, scope, fetchLimit));
-          List<SegmentSearchPort.Scored> vectorHitsList;
-          try {
-            vectorHitsList = vectorHits(question, scope, fetchLimit);
-          } catch (RuntimeException vectorFailure) {
-            log.warn("混合检索的向量一路失败，本轮只用全文那一路继续：{}", vectorFailure.getMessage());
-            vectorHitsList = List.of();
+      // ★★ 查询理解（`#297`）：检索前先把问题改写 / 拆成子问题，按"子问题 × 查询"多路检索再融合。
+      //
+      //   ★ `queryCount=0`（或服务未装配）⇒ 一次 LLM 都不调，走旧 `switch`，行为与今天逐字一致 ——
+      //     这是判据 2（反证）的那一侧：改写日志零条、命中集合与改前逐条相同。
+      //   ★ 预算传 `0` = 用 `RetrievalBudgetProperties` 的配置（与检索测试页同一个来源，不另开配置键）。
+      //   ★ 多跳判定（`withMultiHop`）发生在改写**之后**：先有改写后的命中，再判"答够了没有"（`#283` 口径不变）。
+      if (retrieval.queryCount() > 0 && queryUnderstanding != null) {
+        QueryUnderstandingService.Outcome outcome =
+            queryUnderstanding.understand(
+                question,
+                retrieval.queryCount(),
+                retrieval.decomposeEnabled(),
+                retrieval.maxSubQuestions(),
+                0,
+                recentContext);
+        // ★ 判据 1/3 的读数就在这条日志里：它必须同时出现**原句**与**改写后的子问题 × 查询**，
+        //   否则"指代消解有没有拿上下文"根本无从核对（`#297` 的现象之一就是无从核对）。
+        log.info(
+            "查询理解改写（#297）：原句「{}」→ {}（D{}，耗时 {}ms）",
+            question,
+            describePaths(outcome.understanding()),
+            outcome.degradeLevel(),
+            outcome.elapsedMs());
+        hits = retrieveUnderstood(outcome.understanding(), question, scope, fetchLimit, retrieval);
+      } else {
+        switch (retrieval.mode()) {
+          case VECTOR -> {
+            hits = vectorHits(question, scope, fetchLimit);
           }
-          hits = vectorHitsList.isEmpty() ? fullTextHits : fuseHybrid(fullTextHits, vectorHitsList);
+          case HYBRID -> {
+            // ★ 两路并跑：全文那一路仍是主干，向量那一路只作补充。
+            //   向量路失败（RuntimeException）⇒ log.warn 后回退全文那一路，不许把整轮打死；
+            //   全文路失败仍走外层 catch ⇒ 零引用（VECTOR 模式的失败同理）。
+            List<SegmentSearchPort.Scored> fullTextHits =
+                segmentSearch.fullText(
+                    new SegmentSearchPort.TextQuery(question, scope, fetchLimit));
+            List<SegmentSearchPort.Scored> vectorHitsList;
+            try {
+              vectorHitsList = vectorHits(question, scope, fetchLimit);
+            } catch (RuntimeException vectorFailure) {
+              log.warn("混合检索的向量一路失败，本轮只用全文那一路继续：{}", vectorFailure.getMessage());
+              vectorHitsList = List.of();
+            }
+            hits =
+                vectorHitsList.isEmpty() ? fullTextHits : fuseHybrid(fullTextHits, vectorHitsList);
+          }
+          case FULLTEXT -> {
+            hits =
+                segmentSearch.fullText(
+                    new SegmentSearchPort.TextQuery(question, scope, fetchLimit));
+          }
+          default -> throw new IllegalArgumentException("未知的检索模式：" + retrieval.mode());
         }
-        case FULLTEXT -> {
-          hits =
-              segmentSearch.fullText(new SegmentSearchPort.TextQuery(question, scope, fetchLimit));
-        }
-        default -> throw new IllegalArgumentException("未知的检索模式：" + retrieval.mode());
       }
       // ★★ 多跳再检一轮（`#283`）。规则触发（与 `RetrievalService` 同口径 `§3.4.2`）：
       //   最高分 < 阈值，或命中数 < HOP_MIN_HITS。★ 它是"要么更好、要么什么都没发生" ——
@@ -1288,6 +1360,143 @@ public class ChatService {
     }
     log.info("本轮检索到 {} 条引用（上限 {}）", refs.size(), retrievalLimit);
     return refs;
+  }
+
+  /**
+   * 指代消解的「对话上文」（{@code #297}）：最近 2 轮的「问 + 答前 200 字」。
+   *
+   * <p>★ 它只进<strong>查询理解</strong>那段提示词（{@link QueryUnderstandingService} 的规则 1 消解指代与省略用）， 不进模型对话
+   * prompt —— 那边的历史另有 {@code historyBefore} 全量供给，两条口径互不干扰。
+   *
+   * <p>★ 走的是 {@link ChatTurnWriter#historyBefore}（时间正序、只取本轮之前、过滤空内容）：
+   * 与模型线程那条历史是<strong>同一读取途径</strong>，不另开查询口径。
+   *
+   * <p>★ 单轮 / 调试链路（无会话）⇒ 返回 {@code null} —— 与"没有上文"同一形状， 提示词随之与旧版逐字一致（{@code
+   * QueryUnderstandingService.prompt} 的无上文分支）。
+   *
+   * @param turn 本轮（只用 conversationId / userMessageId / multiTurn 三个分量）
+   * @return 对话上文文本；没有则 {@code null}
+   */
+  private String recentContextOf(ChatTurnWriter.PreparedTurn turn) {
+    if (!turn.multiTurn() || turn.conversationId() == null) {
+      return null;
+    }
+    List<cn.lincoln.aiplatform.platform.model.ChatMessage> previous =
+        turns.historyBefore(turn.conversationId(), turn.userMessageId(), RECENT_CONTEXT_MESSAGES);
+    if (previous.isEmpty()) {
+      return null;
+    }
+    StringBuilder context = new StringBuilder();
+    for (cn.lincoln.aiplatform.platform.model.ChatMessage message : previous) {
+      boolean userTurn =
+          message.role() == cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER;
+      // ★ 问题全量、答案只取前 200 字（r297 口径）：答案是给"它指什么"定位用的，不需要全文
+      context
+          .append(userTurn ? "问：" : "答：")
+          .append(
+              userTurn ? message.content() : clip(message.content(), RECENT_CONTEXT_ANSWER_CLIP))
+          .append('\n');
+    }
+    return context.toString();
+  }
+
+  /**
+   * 把改写结果渲染成日志可核对的一行（{@code #297}）：子问题 × 查询。
+   *
+   * <p>★ 判据 1 / 3 的读数就靠它：日志里必须同时出现<strong>原句</strong>（调用点打）与这里渲染的改写结果，
+   * 否则"改写结果是不是原句"、"指代消解有没有拿上下文"都无从核对（{@code #297} 的现象之一就是无从核对）。
+   */
+  private static String describePaths(QueryUnderstanding understanding) {
+    List<QueryUnderstanding.SubQuestion> subs = understanding.subQuestions();
+    StringBuilder rendered = new StringBuilder("[");
+    for (int i = 0; i < subs.size(); i++) {
+      QueryUnderstanding.SubQuestion sub = subs.get(i);
+      if (i > 0) {
+        rendered.append("；");
+      }
+      rendered.append("子问题 ").append(i + 1).append("「").append(sub.question()).append("」");
+      rendered.append(" = ").append(sub.queries());
+    }
+    return rendered.append(']').toString();
+  }
+
+  /**
+   * 多路检索（{@code #297}）：按「子问题 × 查询」召回 → 子问题内 RRF 融合 → 子问题间配额合并。
+   *
+   * <h3>★ 口径三条</h3>
+   *
+   * <ol>
+   *   <li><strong>子问题之间不许用一个全局 RRF 排名</strong>（{@code 10 §3.3.3}）：否则问题 A 的高分查询会把 B 的名额挤光 ⇒
+   *       "问了两件事只答一件"是<strong>功能没做到</strong>。⇒ 走 {@link RrfQuotaJoiner}（保底配额 + 全局分数补足）。
+   *   <li>子问题<strong>内</strong>多查询用 {@link #fuseHybrid(List)}（k=60 RRF，主序 = RRF 分，展示分 =
+   *       各路最大原始分，{@code #293} 口径）。
+   *   <li><strong>要么更好、要么什么都没发生</strong>（与 {@code #283} 多跳同一条纪律）：某一路召回失败只记 warn 并当空； 改写后全空 ⇒
+   *       退回<strong>原始问题</strong>单路召回；原始问题也零命中 ⇒ 空列表（调用方按"零命中"继续）。
+   * </ol>
+   *
+   * <p>★ 融合顺序 = {@link RrfQuotaJoiner.Result#selected()} 的顺序（子问题配额优先，全局 RRF 分只作补足）；
+   * 展示分取"该分段在各路中的最大原始分"（{@code Math::max} 归并，与 {@link #fuseHybrid} 同一口径）。
+   *
+   * @param understanding 改写结果（子问题 × 查询）
+   * @param question 原始问题（兜底那一路用）
+   * @return 排好序的命中；改写后与原句都零命中则空列表
+   */
+  private List<SegmentSearchPort.Scored> retrieveUnderstood(
+      QueryUnderstanding understanding,
+      String question,
+      RetrievalScope scope,
+      int fetchLimit,
+      RetrievalParams retrieval) {
+    List<List<SegmentSearchPort.Scored>> fusedByUnit =
+        new ArrayList<>(understanding.subQuestions().size());
+    java.util.Map<UUID, SegmentSearchPort.Scored> scoreOf = new java.util.LinkedHashMap<>();
+    for (QueryUnderstanding.SubQuestion sub : understanding.subQuestions()) {
+      List<List<SegmentSearchPort.Scored>> perQuery = new ArrayList<>(sub.queries().size());
+      for (String query : sub.queries()) {
+        try {
+          perQuery.add(searchOnce(query, scope, fetchLimit, retrieval));
+        } catch (RuntimeException pathFailed) {
+          // ★ 一路失败只废这一路：查询理解的价值就是"多路"，一路异常把整轮打死等于白改写
+          log.warn("查询理解的一路召回失败（查询「{}」），这一路按空处理：{}", query, pathFailed.getMessage());
+          perQuery.add(List.of());
+        }
+      }
+      List<SegmentSearchPort.Scored> fused =
+          perQuery.isEmpty()
+              ? List.of()
+              : (perQuery.size() == 1 ? perQuery.getFirst() : fuseHybrid(perQuery));
+      fusedByUnit.add(fused);
+      for (SegmentSearchPort.Scored hit : fused) {
+        // ★ 同一分段在多路里都出现时取分大的那条（与 fuseHybrid 的 displayScore 同一口径）
+        scoreOf.merge(
+            hit.segmentId(),
+            hit,
+            (kept, challenger) -> kept.score() >= challenger.score() ? kept : challenger);
+      }
+    }
+    // ── 子问题间配额合并（保底名额 + 全局 RRF 分补足；★ 不许全局 RRF 排名，10 §3.3.3）──
+    List<RrfQuotaJoiner.Unit> units = new ArrayList<>(fusedByUnit.size());
+    for (int i = 0; i < fusedByUnit.size(); i++) {
+      List<UUID> rankedIds =
+          fusedByUnit.get(i).stream().map(SegmentSearchPort.Scored::segmentId).toList();
+      units.add(new RrfQuotaJoiner.Unit(i, rankedIds));
+    }
+    RrfQuotaJoiner.Result joined = RrfQuotaJoiner.join(units, retrieval.topN());
+    List<SegmentSearchPort.Scored> hits = new ArrayList<>(joined.selected().size());
+    for (UUID id : joined.selected()) {
+      SegmentSearchPort.Scored hit = scoreOf.get(id);
+      if (hit != null) {
+        hits.add(hit);
+      }
+    }
+    // ★ 兜底：改写后的全部路都空 ⇒ 退回原始问题单路召回。
+    //   ★ 与 RetrievalService 的 ⑤b（只在 totalQueries > 1 时兜）相比这里更宽：本轮的命中
+    //     是"零引用继续"的唯一来源，改写把召回改没了是最坏的降级形状 —— 原句再试一次要么有货、要么什么都没发生。
+    if (hits.isEmpty()) {
+      log.warn("查询理解改写后的 {} 路召回全空，退回原始问题单路召回（原句「{}」）", understanding.totalQueries(), question);
+      hits = searchOnce(question, scope, fetchLimit, retrieval);
+    }
+    return hits;
   }
 
   /**
