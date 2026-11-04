@@ -69,26 +69,29 @@ public record AssistantView(
   /**
    * 检索参数的外部形状。
    *
-   * <p>★ 后两项是 {@link Boolean} / {@link Integer} 而**不是**基本类型（`#294`）：导入端点会把 外部 JSON 反序列化成这个类型，而杰克逊 3
-   * 默认开着 {@code FAIL_ON_NULL_FOR_PRIMITIVES} —— 旧版本导出的包里没有这两个字段 ⇒ {@code null} ⇒ {@code Cannot map
-   * `null` into type `boolean`}，整包被拒成 400「请求体不是合法 JSON」。
-   * 前七项一直是基本类型却没出过事，只因为**它们从来都有值**；这两个是新增的、旧包里必然缺席的。
+   * <p>★ 后五项是 {@link Integer} / {@link Boolean} 而**不是**基本类型（`#294` 的教训；`#283` 的多跳两项与 `#297` 的查询理解三项
+   * 各是同一批反序列化风险）：导入端点会把 外部 JSON 反序列化成这个类型，而杰克逊 3 默认开着 {@code FAIL_ON_NULL_FOR_PRIMITIVES} ——
+   * 旧版本导出的包里没有这些字段 ⇒ {@code null} ⇒ {@code Cannot map `null` into type `boolean`}， 整包被拒成
+   * 400「请求体不是合法 JSON」。 前四项一直是基本类型却没出过事，只因为**它们从来都有值**（老契约就有）；新增项在旧包里必然缺席。
    *
-   * <p>⇒ 缺省即"用默认值"（多跳关、2 轮），由紧凑构造器归一。
+   * <p>⇒ 缺省即"用默认值"（查询理解 3 / 开 / 3；多跳关、2 轮），由紧凑构造器归一，与库里的列默认值一致。
    */
   public record RetrievalView(
       String mode,
       double threshold,
       int topN,
       String noRefStrategy,
-      int queryCount,
-      boolean decomposeEnabled,
-      int maxSubQuestions,
+      Integer queryCount,
+      Boolean decomposeEnabled,
+      Integer maxSubQuestions,
       Boolean multiHopEnabled,
       Integer maxHops) {
 
-    /** ★ 缺省归一：旧包没有这两项时，按"多跳关 + 2 轮"补齐，与库里的列默认值一致。 */
+    /** ★ 缺省归一：旧包没有这几项时按库里的列默认值补齐（查询理解 3 / 开 / 3；多跳关、2 轮）。 */
     public RetrievalView {
+      queryCount = queryCount == null ? 3 : queryCount;
+      decomposeEnabled = decomposeEnabled == null ? Boolean.TRUE : decomposeEnabled;
+      maxSubQuestions = maxSubQuestions == null ? 3 : maxSubQuestions;
       multiHopEnabled = multiHopEnabled != null && multiHopEnabled;
       maxHops = maxHops == null ? 2 : maxHops;
     }

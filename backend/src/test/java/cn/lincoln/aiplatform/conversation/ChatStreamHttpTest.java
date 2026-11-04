@@ -15,9 +15,11 @@ import cn.lincoln.aiplatform.conversation.application.ChatStreamWriter;
 import cn.lincoln.aiplatform.conversation.application.ChatTurnStore;
 import cn.lincoln.aiplatform.conversation.application.ChatTurnWriter;
 import cn.lincoln.aiplatform.conversation.support.AssistantGeneratedTextWait;
+import cn.lincoln.aiplatform.conversation.support.FakeChatPorts;
 import cn.lincoln.aiplatform.conversation.support.FakeChatStreamPorts;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
@@ -180,9 +182,16 @@ class ChatStreamHttpTest {
   /** 替换生产 {@code ChatStreamPort}（含 @Primary 的 UpstreamStreamingChatAdapter），避免两个 @Primary 冲突。 */
   @MockitoBean ChatStreamPort chatStreamPort;
 
+  /**
+   * 查询理解也走模型端口（{@code ChatPort#complete}）—— 同一「假模型不打真上游」口径（{@code #297}）： 桩的 {@code pickChatModel}
+   * 默认返回 {@code Optional.empty} ⇒ 查询理解立刻 D4 退回原句单路，不发任何上游请求。
+   */
+  @MockitoBean ChatPort chatPort;
+
   /** 测试端口分发：有假模型用假的；没有就报错（本类所有用例都会先 set）。 */
   @org.junit.jupiter.api.BeforeEach
   void wireChatStreamPort() {
+    FakeChatPorts.wire(chatPort);
     doAnswer(
         invocation -> {
           ChatStreamPort port = requireFakeModel();
