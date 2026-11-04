@@ -1,9 +1,8 @@
-package cn.lincoln.aiplatform.retrieval;
+package cn.lincoln.aiplatform.platform.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import cn.lincoln.aiplatform.retrieval.domain.Rrf;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;

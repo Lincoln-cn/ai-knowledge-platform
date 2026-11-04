@@ -15,14 +15,14 @@ import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
 import cn.lincoln.aiplatform.platform.retrieval.HopDeciderPort;
 import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
+import cn.lincoln.aiplatform.platform.retrieval.QueryUnderstandingPort;
+import cn.lincoln.aiplatform.platform.retrieval.QueryUnderstandingPort.SubQuestion;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
+import cn.lincoln.aiplatform.platform.retrieval.RrfQuotaJoiner;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.retrieval.SourceLabels;
-import cn.lincoln.aiplatform.retrieval.application.QueryUnderstandingService;
-import cn.lincoln.aiplatform.retrieval.domain.QueryUnderstanding;
-import cn.lincoln.aiplatform.retrieval.domain.RrfQuotaJoiner;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -203,13 +203,13 @@ public class ChatService {
    * <p>★★ 接进来的原因（{@code #297}）：此前查询理解只被检索测试页用（{@code RetrievalService}）， 问答链路四次检索全用原句 ⇒
    * 追问「它要谁签字」拿"它要谁签字"去检索，答非所问； 且应用配置页那三个输入框（条数 / 拆分 / 子问题上限）存了从来没被问答消费过。
    */
-  private QueryUnderstandingService queryUnderstanding;
+  private QueryUnderstandingPort queryUnderstanding;
 
   /**
    * @param queryUnderstanding 查询理解服务（可空 = 未装配 ⇒ 单路原句检索，与今天逐字一致）
    */
   @org.springframework.beans.factory.annotation.Autowired(required = false)
-  void setQueryUnderstanding(QueryUnderstandingService queryUnderstanding) {
+  void setQueryUnderstanding(QueryUnderstandingPort queryUnderstanding) {
     this.queryUnderstanding = queryUnderstanding;
   }
 
@@ -1194,7 +1194,7 @@ public class ChatService {
       //   ★ 预算传 `0` = 用 `RetrievalBudgetProperties` 的配置（与检索测试页同一个来源，不另开配置键）。
       //   ★ 多跳判定（`withMultiHop`）发生在改写**之后**：先有改写后的命中，再判"答够了没有"（`#283` 口径不变）。
       if (retrieval.queryCount() > 0 && queryUnderstanding != null) {
-        QueryUnderstandingService.Outcome outcome =
+        QueryUnderstandingPort.Result outcome =
             queryUnderstanding.understand(
                 question,
                 retrieval.queryCount(),
@@ -1207,10 +1207,10 @@ public class ChatService {
         log.info(
             "查询理解改写（#297）：原句「{}」→ {}（D{}，耗时 {}ms）",
             question,
-            describePaths(outcome.understanding()),
+            describePaths(outcome.subQuestions()),
             outcome.degradeLevel(),
             outcome.elapsedMs());
-        hits = retrieveUnderstood(outcome.understanding(), question, scope, fetchLimit, retrieval);
+        hits = retrieveUnderstood(outcome.subQuestions(), question, scope, fetchLimit, retrieval);
       } else {
         switch (retrieval.mode()) {
           case VECTOR -> {
@@ -1365,14 +1365,14 @@ public class ChatService {
   /**
    * 指代消解的「对话上文」（{@code #297}）：最近 2 轮的「问 + 答前 200 字」。
    *
-   * <p>★ 它只进<strong>查询理解</strong>那段提示词（{@link QueryUnderstandingService} 的规则 1 消解指代与省略用）， 不进模型对话
+   * <p>★ 它只进<strong>查询理解</strong>那段提示词（查询理解那一层的规则 1 消解指代与省略用）， 不进模型对话
    * prompt —— 那边的历史另有 {@code historyBefore} 全量供给，两条口径互不干扰。
    *
    * <p>★ 走的是 {@link ChatTurnWriter#historyBefore}（时间正序、只取本轮之前、过滤空内容）：
    * 与模型线程那条历史是<strong>同一读取途径</strong>，不另开查询口径。
    *
    * <p>★ 单轮 / 调试链路（无会话）⇒ 返回 {@code null} —— 与"没有上文"同一形状， 提示词随之与旧版逐字一致（{@code
-   * QueryUnderstandingService.prompt} 的无上文分支）。
+   * 查询理解提示词的无上文分支）。
    *
    * @param turn 本轮（只用 conversationId / userMessageId / multiTurn 三个分量）
    * @return 对话上文文本；没有则 {@code null}
@@ -1406,11 +1406,10 @@ public class ChatService {
    * <p>★ 判据 1 / 3 的读数就靠它：日志里必须同时出现<strong>原句</strong>（调用点打）与这里渲染的改写结果，
    * 否则"改写结果是不是原句"、"指代消解有没有拿上下文"都无从核对（{@code #297} 的现象之一就是无从核对）。
    */
-  private static String describePaths(QueryUnderstanding understanding) {
-    List<QueryUnderstanding.SubQuestion> subs = understanding.subQuestions();
+  private static String describePaths(List<SubQuestion> subs) {
     StringBuilder rendered = new StringBuilder("[");
     for (int i = 0; i < subs.size(); i++) {
-      QueryUnderstanding.SubQuestion sub = subs.get(i);
+      SubQuestion sub = subs.get(i);
       if (i > 0) {
         rendered.append("；");
       }
@@ -1442,15 +1441,14 @@ public class ChatService {
    * @return 排好序的命中；改写后与原句都零命中则空列表
    */
   private List<SegmentSearchPort.Scored> retrieveUnderstood(
-      QueryUnderstanding understanding,
+      List<SubQuestion> subQuestions,
       String question,
       RetrievalScope scope,
       int fetchLimit,
       RetrievalParams retrieval) {
-    List<List<SegmentSearchPort.Scored>> fusedByUnit =
-        new ArrayList<>(understanding.subQuestions().size());
+    List<List<SegmentSearchPort.Scored>> fusedByUnit = new ArrayList<>(subQuestions.size());
     java.util.Map<UUID, SegmentSearchPort.Scored> scoreOf = new java.util.LinkedHashMap<>();
-    for (QueryUnderstanding.SubQuestion sub : understanding.subQuestions()) {
+    for (SubQuestion sub : subQuestions) {
       List<List<SegmentSearchPort.Scored>> perQuery = new ArrayList<>(sub.queries().size());
       for (String query : sub.queries()) {
         try {
@@ -1493,10 +1491,19 @@ public class ChatService {
     //   ★ 与 RetrievalService 的 ⑤b（只在 totalQueries > 1 时兜）相比这里更宽：本轮的命中
     //     是"零引用继续"的唯一来源，改写把召回改没了是最坏的降级形状 —— 原句再试一次要么有货、要么什么都没发生。
     if (hits.isEmpty()) {
-      log.warn("查询理解改写后的 {} 路召回全空，退回原始问题单路召回（原句「{}」）", understanding.totalQueries(), question);
+      log.warn("查询理解改写后的 {} 路召回全空，退回原始问题单路召回（原句「{}」）", totalQueries(subQuestions), question);
       hits = searchOnce(question, scope, fetchLimit, retrieval);
     }
     return hits;
+  }
+
+  /** 改写后一共几条检索查询（全是子问题的查询数之和，用于日志读数）。 */
+  private static int totalQueries(List<SubQuestion> subQuestions) {
+    int total = 0;
+    for (SubQuestion sub : subQuestions) {
+      total += sub.queries().size();
+    }
+    return total;
   }
 
   /**

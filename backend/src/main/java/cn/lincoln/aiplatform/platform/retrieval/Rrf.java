@@ -1,4 +1,4 @@
-package cn.lincoln.aiplatform.retrieval.domain;
+package cn.lincoln.aiplatform.platform.retrieval;
 
 import java.util.ArrayList;
 import java.util.Comparator;
