@@ -49,8 +49,16 @@ class RrfTest {
         .isCloseTo(expected, org.assertj.core.data.Offset.offset(1e-9));
   }
 
+  /**
+   * ★★ 这一条钉的是<b>已知缺陷</b>，不是想要的行为。
+   *
+   * <p>{@code #293} 曾把主序改成 min-rank 来消除它，但全量 195 条上 B3 掉 3 条、B1 只涨 2 条 ⇒ **回退了**（读数与机制见 {@code
+   * Rrf#fuse} 的注释）。所以这里如实记录：纯 RRF 下 「一路第 1、另一路没中」**确实**会输给「两路都第 5」。
+   *
+   * <p>★ 留着它的价值：将来谁再想"顺手把主序换掉"，先看这条与 {@code §11.10.94} 的读数。 这个缺陷的**解在召回层**（池子里根本没有含答案词的段），不在融合层。
+   */
   @Test
-  void aSingleFirstPlaceIsNotBuriedByTwoMidRanks() {
+  void pureRrfStillBuriesASingleFirstPlaceAndWeKnowIt() {
     UUID onlyFirstInOnePath = id("42");
     UUID midInBothPaths = id("43");
     UUID filler = id("44");
@@ -66,30 +74,11 @@ class RrfTest {
                 List.of(onlyFirstInOnePath, filler, filler2, filler3, midInBothPaths),
                 List.of(filler, filler2, filler3, filler4, midInBothPaths)));
 
-    // `#293` 的判据：融合后的名次**不得差于两路里较好的那一路**。
-    // 42 的最好名次是 1，43 的是 5 ⇒ 42 必须排在前面，哪怕它的 RRF 分只有 43 的一半。
-    // `#293` 的判据：融合后的名次**不得差于两路里较好的那一路**。
-    // 42 的最好名次是 1、43 的是 5 ⇒ 42 必须排在 43 前面，
-    // 哪怕 42 的 RRF 分（1/61 ≈ 0.0164）只有 43 的（2/65 ≈ 0.0308）一半。
-    // ★ 不断言「42 正好第一」：向量路第 1 的那些填充段与 42 的 bestRank 同为 1，
-    //   同分裁决给"两路都中"的更靠前 —— 那是**想要**的（它们排第一并不违反本判据）。
+    // ★ 现状（回退后）：43 排在 42 前面 —— 这就是我们要记录的缺陷。
     List<UUID> order = fused.stream().map(Rrf.Fused::segmentId).toList();
-    assertThat(order.indexOf(onlyFirstInOnePath))
-        .as("一路第 1 不能被两路都第 5 压过（`#293` 实测：SIN-004-2 全文第 1 → 融合第 8）")
-        .isLessThan(order.indexOf(midInBothPaths));
-    assertThat(
-            fused.stream()
-                .filter(f -> f.segmentId().equals(midInBothPaths))
-                .findFirst()
-                .orElseThrow()
-                .score())
-        .as("RRF 分数本身没变——它退为同分裁决，只用来分「最好名次相同」的那些")
-        .isGreaterThan(
-            fused.stream()
-                .filter(f -> f.segmentId().equals(onlyFirstInOnePath))
-                .findFirst()
-                .orElseThrow()
-                .score());
+    assertThat(order.indexOf(midInBothPaths))
+        .as("纯 RRF 会把「一路第 1、另一路没中」压到「两路都第 5」之后 —— 已知缺陷，解在召回层")
+        .isLessThan(order.indexOf(onlyFirstInOnePath));
   }
 
   @Test
