@@ -20,6 +20,8 @@ import java.util.UUID;
  *
  * @param contextWindow 对话模型：上下文窗口；向量模型为 null
  * @param dimension 向量模型：输出维度；对话模型为 null。维度与向量表绑定，改则需全量重灌
+ * @param apiBase 这条模型**实际会打到的**上游地址（服务商地址或旧式直连地址）。 ★ 它是"证明这台机器在量对的东西"的唯一凭据：`baseModel`
+ *     是名字，名字不说明请求发到哪 （`#223` 的陷阱② 就是"名字看着对、请求打到 Ollama"）。★ 与 `apiKeyCipher` 不同， 地址本身不是秘密，界面也该看得见。
  * @param loadError 加载失败的可读排查原因。★ <strong>仅 {@code LOAD_FAILED} 时有值</strong>， 其余状态为 null
  *     并省略字段（{@code NON_NULL} 标在组件上，与 {@code UserView.initialPassword} 同一写法 —— {@code status} 等字段为
  *     null 时契约要求字段在，不能整条 record 一起省掉）
@@ -38,6 +40,8 @@ public record ModelView(
     boolean builtin,
     String remark,
     @JsonInclude(JsonInclude.Include.NON_NULL) String loadError,
+    /** 实际打到的上游地址；见类注释的 `@param apiBase`。 */
+    @JsonInclude(JsonInclude.Include.NON_NULL) String apiBase,
     /** 绑定的服务商；null = 旧式直连 / 默认上游。 */
     @JsonInclude(JsonInclude.Include.NON_NULL) UUID providerId,
     @JsonInclude(JsonInclude.Include.NON_NULL) String providerName,
@@ -66,6 +70,7 @@ public record ModelView(
         model.builtin(),
         model.remark(),
         model.loadError(),
+        model.apiBase(),
         model.providerId(),
         provider == null ? null : provider.name(),
         provider == null ? null : provider.kind(),
