@@ -599,6 +599,42 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
         ids.toArray());
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>★ 一次查询取回"每个命中段的前后邻座"，不按段循环发 SQL —— 命中 20 段时循环版会发 20 条， 而这条 join 只发 1 条。判据：{@code (h.ordinal
+   * - ?)} 与 {@code (h.ordinal + ?)} 都是列表达式， planner 走 {@code uq_segment_doc_ordinal} 那个唯一索引。
+   */
+  @Override
+  public Map<UUID, List<String>> neighborTexts(Collection<UUID> segmentIds, int before, int after) {
+    if (segmentIds == null || segmentIds.isEmpty() || (before <= 0 && after <= 0)) {
+      return Map.of();
+    }
+    List<UUID> ids = List.copyOf(segmentIds);
+    String sql =
+        "select h.id as hit_id, s.content as content"
+            + " from kb_segment h"
+            + " join kb_segment s on s.document_id = h.document_id"
+            + "   and s.deleted_at is null and s.id <> h.id"
+            + "   and s.ordinal between h.ordinal - ? and h.ordinal + ?"
+            + " where h.id in ("
+            + placeholders(ids.size())
+            + ")"
+            + " order by h.id, s.ordinal";
+    Map<UUID, List<String>> byHit = new LinkedHashMap<>();
+    jdbc.query(
+        sql,
+        (rs) -> {
+          byHit
+              .computeIfAbsent(rs.getObject("hit_id", UUID.class), k -> new ArrayList<>())
+              .add(rs.getString("content"));
+        },
+        before,
+        after,
+        ids.toArray());
+    return byHit;
+  }
+
   // ────────────────────────── 内部 ──────────────────────────
 
   /**

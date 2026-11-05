@@ -249,6 +249,20 @@ public class ChatService {
   @Value("${app.chat.suggestions.parallel:false}")
   private boolean parallelSuggestions;
 
+  /**
+   * {@code #65} 的查询侧上下文窗口：命中段的<strong>邻座正文</strong>拼进"给模型的上下文"。
+   *
+   * <p>★ 缺省关 —— 凡是"在问答主链路上多一次数据库查询"的开关，缺省必须与不做这件事一致。
+   */
+  @Value("${app.chat.retrieval.neighbor-context.enabled:false}")
+  private boolean neighborContextEnabled;
+
+  @Value("${app.chat.retrieval.neighbor-context.before:1}")
+  private int neighborBefore;
+
+  @Value("${app.chat.retrieval.neighbor-context.after:1}")
+  private int neighborAfter;
+
   /** 猜你想问的异步执行器：它的失败不能影响主回答，所以必须是独立线程（不能用调用方的线程）。 */
   private java.util.concurrent.Executor suggestionExecutor =
       java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
@@ -648,7 +662,7 @@ public class ChatService {
         }
         run.modelDone.set(true);
       } else {
-        model = startModelThread(turn, question, refs, run);
+        model = startModelThread(turn, question, refs, neighborContextOf(refs), run);
       }
       awaitTerminal(turn, run);
     } catch (UncheckedIOException gone) {
@@ -733,7 +747,11 @@ public class ChatService {
    * @param refs 这一轮的引用（★ 调用方已按正确范围检索过）
    */
   private Thread startModelThread(
-      ChatTurnWriter.PreparedTurn turn, String question, List<SourceRef> refs, Run run) {
+      ChatTurnWriter.PreparedTurn turn,
+      String question,
+      List<SourceRef> refs,
+      java.util.Map<UUID, List<String>> neighborTexts,
+      Run run) {
     // ★★ `#168`：历史在**本方法（调用方线程）**里读好再传进去。
     //   理由与同文件检索那条注释逐字相同：访问范围是 ThreadLocal，新建的模型线程上它是空的。
     //   读历史本身只按 conversationId 取（归属在 prepare 阶段已经判过），不依赖范围。
@@ -754,7 +772,7 @@ public class ChatService {
         withCurrent.add(
             new cn.lincoln.aiplatform.platform.model.ChatMessage(
                 cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER,
-                promptOf(question, refs, systemPromptOrNull(turn))));
+                promptOf(question, refs, systemPromptOrNull(turn), neighborTexts)));
         history = List.copyOf(withCurrent);
       }
     }
@@ -778,7 +796,7 @@ public class ChatService {
                 if (messages.isEmpty()) {
                   chatStream.stream(
                       turn.modelId(),
-                      promptOf(question, refs, systemPromptOrNull(turn)),
+                      promptOf(question, refs, systemPromptOrNull(turn), neighborTexts),
                       turn.thinkingEnabled(),
                       Duration.ofMillis(properties.idleTimeoutMs()),
                       run);
@@ -1885,6 +1903,73 @@ public class ChatService {
   }
 
   private static String promptOf(String question, List<SourceRef> refs, String systemPrompt) {
+    return promptOf(question, refs, systemPrompt, java.util.Map.of());
+  }
+
+  /**
+   * 取本轮引用的<strong>上下文邻居</strong>（{@code #65} 的查询侧那一半）。
+   *
+   * <p>★★ 开关缺省是<strong>关</strong>（{@code app.chat.retrieval.neighbor-context.enabled=false}）—— 与
+   * {@code #297} 的 {@code queryCount=0}、{@code #283} 的 {@code multiHopEnabled=false} 同一条判据：
+   * <strong>凡是在问答主链路上增加一次数据库查询或模型调用的开关，缺省必须与"不做这件事"一致</strong>。
+   *
+   * <p>★ 它不是"多召回"：邻居段<strong>不进检索排序</strong>、<strong>不产生新引用</strong>， 只被拼进"给模型的上下文"（见四参 {@link
+   * #promptOf}）。这两件事混在一起， B1/B3 的读数就再也解释不清了。
+   */
+  /**
+   * 把契约里的字符串 {@code segmentId} 转成 UUID，转不动就返回 {@code null}。
+   *
+   * <p>★ 不抛：引用是渲染用的，为了一个格式不对的深链 id 让整轮问答失败不值得。
+   */
+  private static UUID uuidOrNull(String text) {
+    if (text == null || text.isBlank()) {
+      return null;
+    }
+    try {
+      return UUID.fromString(text);
+    } catch (IllegalArgumentException notAUuid) {
+      return null;
+    }
+  }
+
+  private java.util.Map<UUID, List<String>> neighborContextOf(List<SourceRef> refs) {
+    if (!neighborContextEnabled || refs.isEmpty() || segmentSearch == null) {
+      return java.util.Map.of();
+    }
+    // ★ 契约里的 `segmentId` 是字符串（`stream-types.ts` 的权威口径），而端口要 UUID ⇒ 在这里转一次。
+    //   转不动的值直接跳过（不抛）：引用是渲染用的，为了一个格式不对的深链 id 让整轮问答失败不值得。
+    List<UUID> ids = new java.util.ArrayList<>();
+    for (SourceRef ref : refs) {
+      UUID id = uuidOrNull(ref.segmentId());
+      if (id != null && !ids.contains(id)) {
+        ids.add(id);
+      }
+    }
+    if (ids.isEmpty()) {
+      return java.util.Map.of();
+    }
+    try {
+      return segmentSearch.neighborTexts(ids, neighborBefore, neighborAfter);
+    } catch (RuntimeException e) {
+      // ★ 邻居只是"锦上添花"：取不到就让本轮退化成不开这个开关的行为，绝不因此让问答失败。
+      log.warn("取上下文邻居失败（#65）⇒ 本轮按不取邻居继续：{}", e.toString());
+      return java.util.Map.of();
+    }
+  }
+
+  /**
+   * 带<strong>上下文邻居</strong>的组装（{@code #65} 的查询侧那一半）。
+   *
+   * <p>★★ 邻居段<strong>不产生新引用</strong>：{@code refs} 的条数、编号、{@code full} 一律不变 （{@code 12
+   * §3.2}：重叠区不算独立内容，引用编号指向主块）。它们只进"给模型看的上下文"， 且每条都标注出它属于哪个引用编号 —— 否则模型会把邻座的内容当成另一个来源引用错。
+   *
+   * <p>★ 开关不开时 {@code neighbors} 为空，本方法的输出与三参版<strong>逐字一致</strong>。
+   */
+  private static String promptOf(
+      String question,
+      List<SourceRef> refs,
+      String systemPrompt,
+      java.util.Map<UUID, List<String>> neighbors) {
     // ★ 初始提示词拼在**问题之前**，而不是作为一条 system 消息：
     //   `ChatMessage.Role` 只有 USER/ASSISTANT（它的 javadoc 明确写「system 由提示词承担」），
     //   所以"系统口径"在这个工程里本来就住在 prompt 文本里。
@@ -1903,6 +1988,20 @@ public class ChatService {
           .append('\n')
           .append(ref.full() == null ? "" : ref.full())
           .append('\n');
+      // ★ 邻座正文（#65）：它的段 id 是"主块的邻座"，所以正文里不占新编号 —— 只在本条引用
+      //   内部标一句"相邻段落"。★ 这句措辞很关键：模型看到无编号的正文时，倾向自己编一个
+      //   `[N+1]` 去引用它，那会让引用条数与正文编号对不上（O5 的 dangling_refs 就是这么来的）。
+      UUID refSegment = uuidOrNull(ref.segmentId());
+      List<String> around =
+          refSegment == null ? List.of() : neighbors.getOrDefault(refSegment, List.of());
+      if (!around.isEmpty()) {
+        prompt.append("（与上段相邻的段落，仅供理解上下文，不单独编号）\n");
+        for (String text : around) {
+          if (text != null && !text.isBlank()) {
+            prompt.append(text.strip()).append('\n');
+          }
+        }
+      }
     }
     return prompt.toString();
   }

@@ -465,6 +465,9 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.chat.advisors.enabled`（`CHAT_ADVISORS_ENABLED`） | true | Spring AI advisor 链总开关。★ 只用于排障 —— 关着上线等于安全闸门不生效 |
 | `app.chat.guard.sensitive-words`（`CHAT_GUARD_SENSITIVE_WORDS`） | 空 | 问答输入/输出两侧的敏感词表（逗号分隔）。★ 默认空**不是**"没有这个功能"，而是"部署方按自己的合规要求填" —— 留着默认值上线等于这一层不设防 |
 | `app.chat.suggestions.parallel`（`AIP_SUGGESTIONS_PARALLEL`） | false | 「猜你想问」的并行模式：开着时回答一开始生成就用「问题 + 检索上下文」猜，用户"看到完成"时 chips 已经在了；代价是**它没看到答案**，追问更容易偏，且每次都多一次模型调用、与主回答抢同一个模型槽位（`#285`）。★ 默认关 = 拿质量换给愿意换速度的人 |
+| `app.chat.retrieval.neighbor-context.enabled`（`AIP_NEIGHBOR_CONTEXT_ENABLED`） | false | 查询侧的**上下文窗口**（`#65`）：把命中段的**邻座正文**一并拼进"给模型的上下文"，用于补上被硬分段边界劈开的那半句（"…见下表" / 表在下一节）。★ **不产生新引用**：`SourceRef` 的条数、编号、`full` 一律不变，邻居段只标一句"与上段相邻，仅供理解上下文，不单独编号"。★ 默认关 = 凡是主链路上多一次数据库查询的开关，缺省必须与不做这件事一致 |
+| `app.chat.retrieval.neighbor-context.before`（`AIP_NEIGHBOR_CONTEXT_BEFORE`） | 1 | 往上取几个邻座段（`0` = 不往上取） |
+| `app.chat.retrieval.neighbor-context.after`（`AIP_NEIGHBOR_CONTEXT_AFTER`） | 1 | 往下取几个邻座段（`0` = 不往下取） |
 
 ## 八之补三、把本机 Ollama 登记成服务商（`#288`，建议一开始就做）
 
