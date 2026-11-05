@@ -4055,3 +4055,79 @@ Cannot map `null` into type `boolean`
 - **条件分支的执行**（`1.0.0`）：`CONDITION_NODE` / `NUMBER_CONDITION_NODE` 在校验层仍然合法（画布能画、能存草稿），但**发布会被拒**（因为它们不在 4 节点白名单里）。
 - **检查点 L2 / L3**（`1.0.0`）：本版只做 L1（执行记录与业务同事务）。
 - **借"统一"把检索链改成图**：`09 §5.3.3` 已写明不做 —— `RetrievalService.hitTest` 的十步**不属于解释器范围**，谁把它"收敛"进执行器就是在重写半年积累的检索语义。
+
+### 11.14 `#304` 解析任务在连接池耗尽时根本没被创建
+
+#### 11.14.1 现象与它为什么难查
+
+用户观察到的形态是「文档一直停在『待解析』，既没成功也没失败」。这个形态看起来像
+"解析超时"或"解析很慢"，而实际上**解析任务从未创建**。
+
+★ 关键在于：**库里区分不了「等着解析」与「任务从没起来」**。两种情况都是
+`status = PENDING_PARSE` + `fail_reason` 为空。所以无论看数据库还是看界面，
+看到的都是同一行；`failParse(...)` 也无从谈起 —— 它要在一个从未执行的方法里被调用。
+
+#### 11.14.2 根因（字节码级实证，不是推断）
+
+`ParseRunner.onUploaded` 原本是 `@TransactionalEventListener(phase = AFTER_COMMIT)`。
+`javap` 查 `spring-modulith-events-core-2.1.1.jar` 得：
+
+```
+CompletionRegisteringAdvisor$CommitListenerMethodMatcher.matches
+    → 命中 @TransactionalEventListener + phase == AFTER_COMMIT
+CompletionRegisteringMethodInterceptor.invoke
+    → DefaultEventPublicationRegistry.markProcessing(event, listenerId)   ← 先执行
+    → ... proceed()                                                      ← 后执行
+```
+
+★ **`markProcessing` 会开一个新事务、更新 `event_publication` 行（需要数据库连接），
+而它发生在 `proceed()` 之前**。连接池耗尽时那一步抛
+`CannotCreateTransactionException` —— 异常在代理外层抛出，**方法体从未被执行**。
+
+⇒ 事件的"事务后监听"语义本身没问题，问题是**登记这个动作要先拿连接**，
+而连接池耗尽正是最需要它工作的时候。这是典型的"为记录一件事而要求一件
+比那件事更稀缺的资源"。
+
+#### 11.14.3 改法：把"排队"与"拿连接"解耦
+
+| 步骤 | 原做法 | 新做法 |
+|---|---|---|
+| 监听 | `@TransactionalEventListener(AFTER_COMMIT)` | 普通 `@EventListener`（同步于 `publishEvent`、跑在上传事务内） |
+| 何时排队 | 框架代理决定 | `TransactionSynchronizationManager.registerSynchronization(...).afterCommit()` |
+| 排队动作 | 代理内 `proceed()` | 纯内存的 `executor.submit(...)` |
+
+★ **#18 的语义没有退让**：任务仍然在上传事务**提交之后**才起跑（`afterCommit`），
+事务回滚 ⇒ `afterCommit` 不触发 ⇒ 任务不起跑。起跑的仍是"已落库的行"。
+
+★ 方法体只做"注册回调"一件事、且整体 `try/catch`：它同步跑在上传事务里，
+任何外抛的异常都会把上传一起回滚 —— 那是把"解析没起来"换成"上传直接失败"，更坏。
+捕获后只留痕：文档行已落定（`parse_expected_at` 已写），没排队的任务由超期回收器兜底。
+
+#### 11.14.4 兜底：让"任务没起来"在库里可查
+
+- `V70__knowledge_document_parse_expected_at.sql` 加 `kb_document.parse_expected_at`。
+  ★ 这一列**同时承担"区分两类文档"的职责**：有值 = 这份文档**该**被解析；
+  **NULL = 只登记元数据、不期望解析**。没有它，"没解析"这件事无法被查询表达。
+- `StuckPendingParseReaper`（`@Scheduled`，默认 10 分钟一轮）扫
+  `status = PENDING_PARSE AND parse_expected_at < now() - 阈值` 的文档标成可重试。
+
+★ 与 `#303` 的 `StuckSegmentingReaper` 分工：那个管"已经开始解析、卡在分段"，
+这个管"还没开始解析"。两者都靠"在跑登记表"区分"卡住"与"只是慢"。
+
+#### 11.14.5 判据与读数
+
+| 判据 | 读数 |
+|---|---|
+| ① 连接池耗尽时任务仍被创建 | `ParseRunnerEventListenerTest` 4/4 |
+| ② 超期文档被回收器标成可重试 | `StuckPendingParseReaperTest` 7/7 |
+| ③ 回收后能重新解析成功 | `PendingParseRecoveryTest` 3/3（62s） |
+| ④ **反证**：关掉回收器 ⇒ 超期文档一直不动 | `PendingParseCounterEvidenceTest` 1/1（74s）：超期 1 小时的 `PENDING_PARSE`、阈值 1 分钟，关掉回收器 8 秒后仍 `status=PENDING_PARSE`、`fail_reason=(无)` ⇒ 是回收器在起作用，不是别的东西把它修好了 |
+
+#### 11.14.6 不做
+
+- **不改成"上传时同步解析"** —— 那会把大文件解析的耗时刻进上传请求（`#303` 已证明
+  解析是 CPU 密集、每份占一条连接），是拿一个问题换两个。
+- **不引入外部消息队列** —— 当前的缺口是"排队这一步要拿连接"，不是"没有 MQ"；
+  换成 MQ 只是把同一个依赖平移到了另一个组件。
+- **不保留 `@TransactionalEventListener` 作为"还在用"的证据** —— 类注释里写清
+  为什么不用它（含 `javap` 的两行证据），比留着代码更可靠。
