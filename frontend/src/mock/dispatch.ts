@@ -40,17 +40,17 @@ export type MockRoute = [method: HttpMethod, pattern: string, handler: MockHandl
  * 新增领域只加一个文件，不需要改本文件 —— 也不会有多个模块并行开发时
  * 争抢同一个注册表的问题。
  *
- * ★ `import.meta.glob` 是 vite 编译期 API，node:test 下不存在 ⇒ 防御性走空：
- *   单测直接 import 各 handler 的 `*Routes` 数组断言，不走这里的聚合。
+ * ★★★ 这一行**必须**写成 `import.meta.glob(<字面量>)(...)` 的直接调用形式。
+ *   它是 vite 的**编译期宏**：vite 在静态分析阶段把这一处替换成"文件路径 → 模块"的映射。
+ *   一旦改成间接调用（`const f = import.meta.glob; f('./handlers/*.ts', …)`），
+ *   静态分析认不出这是宏 ⇒ **不替换** ⇒ 运行时拿到的是未定义的函数 ⇒ 路由表为空
+ *   ⇒ **所有接口都变成「mock 未实现该接口」**（页面能打开、登录点不动、12 个浏览器闸门全红）。
+ *   2026-11-05 真的这么坏过一次（`#301` 为了照顾 node:test 把直接调用改成了间接调用）。
+ *
+ * ★ 别为 node:test 加防御：单测直接 import 各 handler 的 `*Routes` 数组断言，
+ *   **不会** import 本文件，所以这里不需要"node:test 下不存在"的兜底。
  */
-type GlobFn = (
-  pattern: string,
-  options?: { eager?: boolean }
-) => Record<string, Record<string, unknown>>
-const globFn = (import.meta as ImportMeta & { glob?: GlobFn }).glob
-const discovered: Record<string, Record<string, unknown>> = globFn
-  ? globFn('./handlers/*.ts', { eager: true })
-  : {}
+const discovered = import.meta.glob<Record<string, unknown>>('./handlers/*.ts', { eager: true })
 
 function collectRoutes(): MockRoute[] {
   const routes: MockRoute[] = []
