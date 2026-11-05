@@ -2,7 +2,7 @@
 """建库向导布局闸门（issue #42 四条判据）。
 
 用法：
-    python check_kb_wizard_layout.py [BASE]        # 正证，默认 http://localhost:5283/
+    python check_kb_wizard_layout.py [BASE]        # 正证，默认 http://localhost:5280/
     python check_kb_wizard_layout.py --self-check  # 闸门自证：注入 calc(100% - 320px) 必须红
 
 判据（#42 原文逐条落地）：
@@ -31,7 +31,7 @@ WIZARD = SRC / "components" / "CreateWizard.vue"
 #   —— 那条在本机跑得通、在 ubuntu runner 上必炸
 #   （`BrowserType.launch: Failed to launch chromium because executable doesn't exist at …`），
 #   而 `channel=` 在两边都能找到浏览器（runner 自带 Chrome）。
-DEFAULT_BASE = "http://localhost:5283/"
+DEFAULT_BASE = "http://localhost:5280/"
 
 # 判据① 的病灶正则：calc(100% - Npx) 一律算「猜兄弟宽度」
 CALC_RE = re.compile(r"calc\(\s*100%\s*-\s*\d+(?:\.\d+)?px\s*\)")

@@ -162,33 +162,40 @@ def ensure_chat_model(token: str) -> tuple[str, bool]:
     ★ 为什么要自己兜（2026-10-27 S3 首跑就挂在这一步，日志逐字「没有已加载的对话模型（共 0 个）」）：
       `ci.yml` 里**没有任何 seed 步骤**，真库启动时一个模型都没有。而"没有模型"与
       "模型加载坏了"在读数上长得一样 —— 前者是夹具没搭好，后者才是产品缺陷。
+
+    ★ 三条都要，第二、三条是 2026-11-05 补的（同一次 CI 红的根因）：
+      ① 上面那条（没有 seed、自己兜一个）；
+      ② **必须校验 `apiBase` 指向本任务桩**。库里常有一条用户自己配的真实模型行（`LOADED` 且
+         指向 Ollama），"有 LOADED 就复用"会让这次提问打到 Ollama 上 ⇒ 桩一条 chat 请求都收不到，
+         判据 ②b「绑定的提示词正文进了上游请求体」变成永远量不到（不是产品缺陷，是夹具连错了机器）。
+         这与 `check_b4_b5_latency.py` 里"换模型 A/B 会静默选错行"是同一个病；
+      ③ 只挑 `LOADED` 且 `apiBase` 对得上的；都对不上就**新建一个 `stub-plain`**（不借用真实行）。
     """
     _, payload = call("GET", "/models?kind=CHAT&size=50", token)
     rows = data_of(payload).get("list") or []
     for row in rows:
-        if row.get("status") == "LOADED":
+        if row.get("status") == "LOADED" and (
+            str(row.get("apiBase") or "").rstrip("/") == STUB_API_BASE.rstrip("/")
+        ):
             return str(row["id"]), False
-    if rows:
-        model_id, created = str(rows[0]["id"]), False
-    else:
-        status, payload = call(
-            "POST",
-            "/models",
-            token,
-            {
-                "name": f"{SOFTWARE_NAME}-对话-{int(time.time())}",
-                "kind": "CHAT",
-                "supplier": "LOCAL_INFERENCE",
-                # ★ `stub-plain` + 桩的 `apiBase`：与 `check_query_understanding_e2e.py` 同款造法
-                "baseModel": "stub-plain",
-                "apiBase": STUB_API_BASE,
-            },
-        )
-        if status not in (200, 201):
-            raise SystemExit(f"建对话模型失败（{status}）：{payload[:300]}")
-        model_id, created = str(data_of(payload).get("id") or ""), True
-        if not model_id:
-            raise SystemExit(f"建对话模型没返回 id：{payload[:300]}")
+    status, payload = call(
+        "POST",
+        "/models",
+        token,
+        {
+            "name": f"{SOFTWARE_NAME}-对话-{int(time.time())}",
+            "kind": "CHAT",
+            "supplier": "LOCAL_INFERENCE",
+            # ★ `stub-plain` + 桩的 `apiBase`：与 `check_query_understanding_e2e.py` 同款造法
+            "baseModel": "stub-plain",
+            "apiBase": STUB_API_BASE,
+        },
+    )
+    if status not in (200, 201):
+        raise SystemExit(f"建对话模型失败（{status}）：{payload[:300]}")
+    model_id, created = str(data_of(payload).get("id") or ""), True
+    if not model_id:
+        raise SystemExit(f"建对话模型没返回 id：{payload[:300]}")
     status, payload = call("POST", f"/models/{model_id}/load", token, {})
     if status not in (200, 202):
         raise SystemExit(f"加载对话模型失败（{status}）：{payload[:300]}")
@@ -203,10 +210,20 @@ def ensure_chat_model(token: str) -> tuple[str, bool]:
 
 
 def ensure_embedding_model(token: str) -> tuple[str, bool]:
-    """取一个可用的向量模型；没有就建一个。返回 `(id, created)`。"""
+    """取一个**指向本任务桩**的向量模型；没有就建一个。返回 `(id, created)`。
+
+    ★ 两条都必须做，`#291` 一族踩过两次：
+      ① 新建时**必须写 `apiBase`** —— 不写就走 `application.yml` 的默认（11434，Ollama 的端口），
+         在 CI 上表现为「网关不可达：连接 http://127.0.0.1:11434/v1/embeddings 失败」，
+         而那两条判据量的是别的东西；
+      ② 复用前**必须校验它的 `apiBase` 真的指向桩** —— 库里常有一条真实模型行（用户自己配的
+         Ollama），"找到就用"会把这次闸门连到那台上，读数与夹具都不可信。
+         这与 `check_b4_b5_latency.py` 里"换模型 A/B 会静默选错行"是同一个病。
+    """
     _, payload = call("GET", "/models?kind=EMBEDDING&size=50", token)
     for row in data_of(payload).get("list") or []:
-        return str(row["id"]), False
+        if str(row.get("apiBase") or "").rstrip("/") == STUB_API_BASE.rstrip("/"):
+            return str(row["id"]), False
     status, payload = call(
         "POST",
         "/models",
@@ -216,6 +233,7 @@ def ensure_embedding_model(token: str) -> tuple[str, bool]:
             "kind": "EMBEDDING",
             "supplier": "LOCAL_INFERENCE",
             "baseModel": "bge-m3",
+            "apiBase": STUB_API_BASE,
             "dimension": 768,
         },
     )
