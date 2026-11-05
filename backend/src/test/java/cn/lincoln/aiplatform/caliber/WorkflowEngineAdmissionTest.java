@@ -20,14 +20,15 @@ import org.junit.jupiter.api.Test;
  * <p>三条断言：
  *
  * <ol>
- *   <li>{@code workflow} 模块里**只有** {@code package-info.java}；
- *   <li>{@code src/main/java} 里没有 {@code NodeExecutor} 一类执行引擎符号；
+ *   <li>{@code workflow} 模块里**只有** {@code package-info.java}（执行引擎不在这里，落在 {@code
+ *       assistant/application}，与编排配置面同处）；
+ *   <li>★ {@code #113} 六条判据**各有会红的行为测试在验**（准入表逐行换成 "谁在哪条测试里验"）；
  *   <li>{@code 09 §5.3.4} 那张准入表**还在**（被删/被搬走 ⇒ 红）。
  * </ol>
  *
- * <p>引擎真正落地时这三条会红 —— ★ 那时正确的动作**不是删断言**，而是把准入表逐行换成 "谁在哪条测试里验"，再回来改这里。
+ * <p>执行引擎落地后，原「{@code src/main/java} 里没有 {@code NodeExecutor} 符号」那条已按注释**换成对六条判据的行为测试断言**（而不是删掉）。
  */
-@DisplayName("执行引擎：准入判据仍在册，而实现尚未开始")
+@DisplayName("执行引擎：#113 六条判据各有行为测试（准入表逐行有读数）")
 class WorkflowEngineAdmissionTest {
 
   private static final Path WORKFLOW_ROOT =
@@ -59,21 +60,34 @@ class WorkflowEngineAdmissionTest {
   }
 
   @Test
-  @DisplayName("src/main/java 里没有 NodeExecutor / 执行计划一类符号")
-  void thereIsNoExecutionEngineSymbolYet() throws IOException {
-    List<String> offenders = new java.util.ArrayList<>();
-    try (Stream<Path> walk = Files.walk(MAIN_ROOT)) {
-      for (Path file : walk.filter(p -> p.toString().endsWith(".java")).toList()) {
-        String source = Files.readString(file, StandardCharsets.UTF_8);
-        if (source.contains("NodeExecutor")
-            || source.contains("ExecutionPlan")
-            || source.contains("WorkflowInterpreter")) {
-          offenders.add(MAIN_ROOT.relativize(file).toString());
-        }
-      }
-    }
+  @DisplayName("执行引擎已落地：#113 六条判据各有行为测试在验（准入表逐行有读数）")
+  void eachAdmissionCriterionHasItsOwnBehaviouralTest() throws IOException {
+    Path testRoot = Path.of("src", "test", "java");
+    // ★ 准入表（09 §5.3.4）逐行 → 谁在哪条测试里验。执行引擎符号今天落在
+    //   assistant/application（WorkflowCompiler / NodeExecutor / LinearWorkflowExecutor /
+    //   WorkflowNodeContext），所以这里不再是「符号缺席」，而是「六条判据各有会红的行为测试」。
+    assertCovered(testRoot, "WorkflowCompilerTest.java", "判据1 · 只编译不跑（图 → 执行计划）");
+    assertCovered(
+        testRoot, "WorkflowInterruptPublishTest.java", "判据2/6 · 含中断点（人工介入）的图必须拒绝发布（先红后绿）");
+    assertCovered(
+        testRoot, "WorkflowValidationServiceTest.java", "判据2 · PLANNED_TYPE 升 ERROR + 中断点 + 环检测");
+    assertCovered(testRoot, "FlowStateTest.java", "判据3 · KeyUpdate 状态语义（REPLACE/APPEND）");
+    assertCovered(testRoot, "LinearWorkflowExecutorL1Test.java", "判据4 · L1 检查点：每节点执行记录与业务同事务");
+    assertCovered(
+        testRoot, "LinearWorkflowExecutorTest.java", "判据5 · NodeExecutor 注册表按 type 分发 + 只跑线性 4 节点");
+  }
 
-    assertThat(offenders).as("★ 执行引擎的符号出现了 ⇒ 先补 `09 §5.3.4`，尤其是「图 → 执行计划 → 执行」的只编译不跑测试").isEmpty();
+  private static void assertCovered(Path testRoot, String fileName, String criterion)
+      throws IOException {
+    assertThat(testExists(testRoot, fileName))
+        .as("★ 准入判据「%s」必须有行为测试 %s 在验 —— 删掉它 = 这条判据失去读数（#113 的根因就是判据没有可核对的读数）", criterion, fileName)
+        .isTrue();
+  }
+
+  private static boolean testExists(Path testRoot, String fileName) throws IOException {
+    try (Stream<Path> walk = Files.walk(testRoot)) {
+      return walk.anyMatch(p -> p.getFileName().toString().equals(fileName));
+    }
   }
 
   @Test

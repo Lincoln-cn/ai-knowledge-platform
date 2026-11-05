@@ -71,7 +71,7 @@ class WorkflowAdmissionServiceTest {
   }
 
   @Test
-  void aPlannedTypeBlocksExecutionAlthoughPublishingWouldOnlyWarn() {
+  void aPlannedTypeBlocksBothPublishingAndExecution() {
     // 末尾补一个 REPLY_NODE：不补的话发布这一层会因为「没有输出节点」先红，
     // 那样这条用例就证明不了「区别在类型上」—— 这正是第一版踩的坑。
     WorkflowValidationService.Graph planned =
@@ -85,8 +85,18 @@ class WorkflowAdmissionServiceTest {
     WorkflowValidationService.Result publishable = validation.validate(planned);
     WorkflowValidationService.Result runnable = admission.admission(planned);
 
-    assertThat(publishable.passed()).as("发布这一层允许规划中的类型，只给警告 —— 这是它和准入的分界").isTrue();
-    assertThat(runnable.passed()).as("执行这一层遇到未实现的类型必须拒绝").isFalse();
+    // 新语义（#113 判据 2）：implemented=false = 本版本不支持 ⇒ PLANNED_TYPE 由 WARNING 升为 ERROR，
+    // 发布这一层现在也直接拒绝（收紧前这里断言 isTrue，即"发布只警告、准入才拦"的旧分界）。
+    assertThat(publishable.passed())
+        .as(
+            "发布这一层现在也拒绝规划中的类型（PLANNED_TYPE 升 ERROR）—— 旧分界『发布只警告、准入才拦』已被 #113 收紧"
+                + "（收紧前这里断言的是 isTrue）")
+        .isFalse();
+    assertThat(publishable.issues())
+        .as("发布层用 PLANNED_TYPE 点名这个本版本不支持的类型")
+        .filteredOn(issue -> "PLANNED_TYPE".equals(issue.code()))
+        .hasSize(1);
+    assertThat(runnable.passed()).as("执行这一层遇到未实现的类型同样拒绝").isFalse();
     assertThat(runnable.issues())
         .filteredOn(issue -> WorkflowAdmissionService.NOT_EXECUTABLE_TYPE.equals(issue.code()))
         .singleElement()

@@ -1,11 +1,7 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import org.springframework.stereotype.Service;
 
 /**
@@ -62,72 +58,10 @@ public class WorkflowAdmissionService {
                 node.id()));
       }
     }
-    issues.addAll(cycles(graph));
+    // 环检测（CYCLE）已上移到 WorkflowValidationService（发布层，04 BR-04-02 禁止成环），
+    // 由上方 base = validation.validate(graph) 继承进来，这里不再重复报，否则一条环会被记两次。
     boolean passed = issues.stream().noneMatch(issue -> "ERROR".equals(issue.level()));
     return new WorkflowValidationService.Result(passed, List.copyOf(issues));
-  }
-
-  /** 只报环，不报别的 —— 结构与可达性归 {@link WorkflowValidationService}。 */
-  private static List<WorkflowValidationService.Issue> cycles(
-      WorkflowValidationService.Graph graph) {
-    Map<String, List<String>> next = new HashMap<>();
-    for (WorkflowValidationService.Node node : graph.nodes()) {
-      if (node != null && node.id() != null) {
-        next.computeIfAbsent(node.id(), key -> new ArrayList<>());
-      }
-    }
-    if (graph.edges() != null) {
-      for (WorkflowValidationService.Edge edge : graph.edges()) {
-        if (edge == null || edge.source() == null || edge.target() == null) {
-          continue;
-        }
-        next.computeIfAbsent(edge.source(), key -> new ArrayList<>()).add(edge.target());
-      }
-    }
-    List<WorkflowValidationService.Issue> found = new ArrayList<>();
-    Set<String> done = new HashSet<>();
-    Set<String> onPath = new HashSet<>();
-    for (String id : next.keySet()) {
-      if (walk(id, next, done, onPath, found)) {
-        break;
-      }
-    }
-    return found;
-  }
-
-  /** 深搜找第一个环；找到即停 —— 一处环就够说明「跑不完」，列全三处没有额外信息。 */
-  private static boolean walk(
-      String id,
-      Map<String, List<String>> next,
-      Set<String> done,
-      Set<String> onPath,
-      List<WorkflowValidationService.Issue> found) {
-    if (done.contains(id)) {
-      return false;
-    }
-    if (!onPath.add(id)) {
-      return false;
-    }
-    for (String target : next.getOrDefault(id, List.of())) {
-      if (onPath.contains(target)) {
-        found.add(
-            new WorkflowValidationService.Issue(
-                "ERROR",
-                CYCLE,
-                "图上有环：「" + target + "」转了一圈又回到自己，执行器会一直转下去",
-                "删掉构成环的那条连线；需要重复执行请在节点配置里设次数，不要用连线绕",
-                target));
-        onPath.remove(id);
-        return true;
-      }
-      if (walk(target, next, done, onPath, found)) {
-        onPath.remove(id);
-        return true;
-      }
-    }
-    onPath.remove(id);
-    done.add(id);
-    return false;
   }
 
   private static String label(WorkflowValidationService.Node node) {

@@ -54,12 +54,22 @@ public class WorkflowValidationService {
                 "画布上有未知类型：" + node.type(),
                 "这个节点可能来自更新的版本，请升级后再编辑",
                 node.id()));
-      } else if (!catalog.implemented(node.type())) {
+      } else if (isHumanInTheLoop(node.type())) {
+        // 判据 2（09 §5.3.2 ②）：人工介入节点 = 中断点，本版本不支持，含它的图拒绝发布。
         issues.add(
             issue(
-                "WARNING",
+                "ERROR",
+                "INTERRUPT_NODE",
+                "节点「" + node.title() + "」是人工介入节点（追问 / 表单收集），本版本不支持",
+                "把人工介入换成已实现的节点（例如「AI 对话」或「回复」），否则发布后这一步无法自动执行",
+                node.id()));
+      } else if (!catalog.implemented(node.type())) {
+        // 判据 2：implemented=false = 本版本不支持 ⇒ 从 WARNING 升为 ERROR，直接拒绝发布。
+        issues.add(
+            issue(
+                "ERROR",
                 "PLANNED_TYPE",
-                "节点「" + node.type() + "」还没实现",
+                "节点「" + node.type() + "」本版本还不支持（还没实现）",
                 "先把它换成已实现的节点，否则发布后这一步不会执行",
                 node.id()));
       }
@@ -87,6 +97,9 @@ public class WorkflowValidationService {
       }
       outgoing.computeIfAbsent(edge.source(), key -> new ArrayList<>()).add(edge.target());
     }
+
+    // 判据 1/2（04 BR-04-02 禁止成环）：图里不许有环 —— 有环执行器会一直转下去，这里直接拦下。
+    issues.addAll(cycles(graph));
 
     String startId =
         byId.values().stream()
@@ -131,6 +144,79 @@ public class WorkflowValidationService {
 
     boolean passed = issues.stream().noneMatch(i -> "ERROR".equals(i.level()));
     return new Result(passed, issues);
+  }
+
+  /**
+   * 人工介入节点 = {@code #113} 的「中断点」：走到这里要停下来等用户填/答，本版本的执行器只跑 全自动线性流程，不支持 —— {@code QUESTION_NODE}（追问）/
+   * {@code FORM_NODE}（表单收集）。
+   *
+   * <p>★ 刻意按类型硬识别，而不是看 {@code implemented}：{@code QUESTION_NODE} 在 {@code node-types.json} 里被错标成
+   * {@code implemented:true}（账目不准、待订正），但它是人工介入节点，必须拦。
+   */
+  private static boolean isHumanInTheLoop(String type) {
+    return "QUESTION_NODE".equals(type) || "FORM_NODE".equals(type);
+  }
+
+  /** 只报环（{@code CYCLE}）—— 结构、可达性与类型校验在 {@link #validate} 里做。 */
+  private static List<Issue> cycles(Graph graph) {
+    Map<String, List<String>> next = new HashMap<>();
+    for (Node node : graph.nodes()) {
+      if (node != null && node.id() != null) {
+        next.computeIfAbsent(node.id(), key -> new ArrayList<>());
+      }
+    }
+    if (graph.edges() != null) {
+      for (Edge edge : graph.edges()) {
+        if (edge == null || edge.source() == null || edge.target() == null) {
+          continue;
+        }
+        next.computeIfAbsent(edge.source(), key -> new ArrayList<>()).add(edge.target());
+      }
+    }
+    List<Issue> found = new ArrayList<>();
+    Set<String> done = new HashSet<>();
+    Set<String> onPath = new HashSet<>();
+    for (String id : next.keySet()) {
+      if (walk(id, next, done, onPath, found)) {
+        break;
+      }
+    }
+    return found;
+  }
+
+  /** 深搜找第一个环；找到即停 —— 一处环就够说明「跑不完」，列全没有额外信息。 */
+  private static boolean walk(
+      String id,
+      Map<String, List<String>> next,
+      Set<String> done,
+      Set<String> onPath,
+      List<Issue> found) {
+    if (done.contains(id)) {
+      return false;
+    }
+    if (!onPath.add(id)) {
+      return false;
+    }
+    for (String target : next.getOrDefault(id, List.of())) {
+      if (onPath.contains(target)) {
+        found.add(
+            issue(
+                "ERROR",
+                "CYCLE",
+                "图上有环：「" + target + "」转了一圈又回到自己，执行器会一直转下去",
+                "删掉构成环的那条连线；需要重复执行请在节点配置里设次数，不要用连线绕",
+                target));
+        onPath.remove(id);
+        return true;
+      }
+      if (walk(target, next, done, onPath, found)) {
+        onPath.remove(id);
+        return true;
+      }
+    }
+    onPath.remove(id);
+    done.add(id);
+    return false;
   }
 
   private static Issue issue(
