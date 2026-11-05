@@ -61,7 +61,7 @@ class DocumentManagementTest {
   static final PostgreSQLContainer POSTGRES = PostgresImage.container();
 
   private static final String STUB_API_BASE =
-      System.getenv().getOrDefault("AI_STUB_ROOT", "http://localhost:11434") + "/v1";
+      System.getenv().getOrDefault("AI_STUB_ROOT", "http://localhost:11999") + "/v1";
 
   private static final Pattern ID = Pattern.compile("\"id\"\\s*:\\s*\"([0-9a-f-]{36})\"");
 

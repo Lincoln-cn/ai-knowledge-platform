@@ -62,9 +62,15 @@ FIXTURES = [
     Path(__file__).resolve().parent.parent / "backend/src/test/resources/fixtures/multihop-answer.md",
 ]
 
-STUB_API_BASE = "http://localhost:11434/v1"
-STUB_CONFIG = "http://localhost:11434/__stub/config"
-STUB_RESET = "http://localhost:11434/__stub/reset"
+# ★ 桩地址走环境变量，**不能写死 11434**：那是 Ollama 的默认端口，CI 的 ubuntu runner
+#   上没有 Ollama、桩起在 11999 ⇒ 写死时这些闸门全红在「网关不可达：连接
+#   http://localhost:11434/v1/... 失败（ConnectException：null）」，而它们量的是别的东西。
+#   ★ 与 `check_b4_b5_latency.py` / `check_b6_ingest_throughput.py` / `check_document_actions.py`
+#     用同一个变量 `AIP_STUB_URL`（约定：**不带 /v1 的根**，默认 127.0.0.1:11434）。
+_STUB_ROOT = os.environ.get("AIP_STUB_URL", "http://127.0.0.1:11434").rstrip("/")
+STUB_API_BASE = _STUB_ROOT + "/v1"
+STUB_CONFIG = _STUB_ROOT + "/__stub/config"
+STUB_RESET = _STUB_ROOT + "/__stub/reset"
 
 # ★ 问"处罚标准"，而答案段里写的是"违约金上限" —— 词面不通，只有靠第 2 轮才够得着
 QUESTION = "A-102 号设备的处罚标准是多少"

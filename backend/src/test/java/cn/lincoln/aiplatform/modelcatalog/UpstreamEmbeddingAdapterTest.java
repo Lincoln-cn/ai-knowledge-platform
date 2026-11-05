@@ -50,7 +50,7 @@ class UpstreamEmbeddingAdapterTest {
 
   /** 桩服务的 OpenAI 兼容入口（base 末尾要带 /v1：{@code UpstreamGateway} 会拼 /embeddings）。 */
   private static final String STUB_API_BASE =
-      System.getenv().getOrDefault("AI_STUB_ROOT", "http://localhost:11434") + "/v1";
+      System.getenv().getOrDefault("AI_STUB_ROOT", "http://localhost:11999") + "/v1";
 
   @Autowired EmbeddingPort embeddingPort;
   @Autowired ModelRepository models;

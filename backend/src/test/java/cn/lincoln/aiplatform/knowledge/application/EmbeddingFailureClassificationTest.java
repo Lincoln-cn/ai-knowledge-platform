@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.knowledge.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import jakarta.persistence.PersistenceException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -46,5 +47,52 @@ class EmbeddingFailureClassificationTest {
   void plainRuntimeExceptionIsNotResourceFailure() {
     assertThat(EmbeddingRunner.isResourceExhaustion(new IllegalArgumentException("段数不一致")))
         .isFalse();
+  }
+
+  // ===== #303：把 #227 判据修复钉进仓库内测试（此前只有 .build/ 里的探针脚本，CI 不跑）=====
+
+  @Test
+  @DisplayName("★ #227 修复①：SQLTransientConnectionException 本身就是资源不足（Hikari 抛的根）")
+  void sqlTransientConnectionExceptionIsResourceFailure() {
+    assertThat(
+            EmbeddingRunner.isResourceExhaustion(
+                new java.sql.SQLTransientConnectionException("connection is not available")))
+        .isTrue();
+  }
+
+  @Test
+  @DisplayName("★ #227 修复②：Hibernate 的固定措辞「Could not open JPA EntityManager for transaction」⇒ true")
+  void hibernateEntityManagerWordingIsResourceFailure() {
+    // #303 现场：上传 500 / 解析失败的外层就是这句（Hibernate PersistenceException 的固定 message）
+    RuntimeException error =
+        new PersistenceException("Could not open JPA EntityManager for transaction");
+    assertThat(EmbeddingRunner.isResourceExhaustion(error)).isTrue();
+  }
+
+  @Test
+  @DisplayName("★ #227 修复③：Hikari 的固定措辞「Connection is not available, request timed out」⇒ true")
+  void hikariTimeoutWordingIsResourceFailure() {
+    // 只有措辞命中、类型不在判据里 —— 单独钉住措辞这一根判据
+    RuntimeException error =
+        new IllegalStateException(
+            "批写入失败",
+            new RuntimeException(
+                "Connection is not available, request timed out after 32310ms (total=10, active=10,"
+                    + " idle=0, waiting=53)"));
+    assertThat(EmbeddingRunner.isResourceExhaustion(error)).isTrue();
+  }
+
+  @Test
+  @DisplayName("★ #303 现场真实根因链（PersistenceException ← SQLTransientConnectionException）⇒ true")
+  void realWorldCauseChainIsResourceFailure() {
+    RuntimeException error =
+        new IllegalStateException(
+            "批写入失败",
+            new PersistenceException(
+                "Could not open JPA EntityManager for transaction",
+                new java.sql.SQLTransientConnectionException(
+                    "Connection is not available, request timed out after 32310ms (total=10,"
+                        + " active=10, idle=0, waiting=53)")));
+    assertThat(EmbeddingRunner.isResourceExhaustion(error)).isTrue();
   }
 }

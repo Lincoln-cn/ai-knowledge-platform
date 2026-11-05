@@ -80,7 +80,20 @@ import org.springframework.stereotype.Component;
  * <h3>分数量纲</h3>
  *
  * <p>{@code coverage = 命中的查询词数 / 查询词数} ∈ (0,1] —— 界面上那个 0–1 的分数与阈值滑块
- * 在三种模式下都说得通（意思是"这次查询的词命中了几成"）。排序仍用 {@code ts_rank}（更专业）： <strong>排序看 rank、展示看 coverage</strong>。
+ * 在三种模式下都说得通（意思是"这次查询的词命中了几成"）。排序用 {@code ts_rank}： <strong>排序看 rank、展示看 coverage</strong>。
+ *
+ * <h3>★ 为什么不是 {@code ts_rank_cd}（2026-11-06 试过并回退）</h3>
+ *
+ * <p>动机：合成语料里同一句模板话（「相关记录保存期限不少于3年」）在 1556/5517 段里重复， 而带主语的完整答案句只有 1 条；{@code ts_rank} 只看词频与段长 ⇒
+ * 干扰段普遍 0.90+ 且大量并列 （并列到只能按 {@code s.id} 兜底），那条答案实测排第 8 之外。{@code ts_rank_cd} （cover
+ * density，看词<b>挨不挨着</b>）在<b>那一条</b>上把它排到了第 1（0.1092 vs 0.1000）。
+ *
+ * <p>★ <b>但全量 195 条上它是明显退步的</b>：B1 86.2% → <b>44.1%</b>、B3 59.5% → <b>28.7%</b>、 文档级 top1 96.3% →
+ * 74.9%。原因：{@code ts_rank_cd} 对<b>短段</b>给低分、对长段要求词密集， 而本语料多数正确段是"400+ 字、答案句只占一句"的形态 ——
+ * 单条最优与全局最优不是同一件事。
+ *
+ * <p>⇒ <b>结论：排序口径不能靠单条探针改</b>。要动这一行，必须先有全量 195 条的前后对比， 且判据是"B1 与 B3 不出现方向相反的移动"。读数留档 {@code
+ * .build/b1b3-tsrankcd.json}。
  */
 @Component
 public class JdbcSegmentSearchQuery implements SegmentSearchPort {
@@ -584,6 +597,42 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
                 //   靠驱动自动映射会在"取值不在枚举里"时给出一个含糊的错，那样反而难查
                 ClassificationLevel.valueOf(rs.getString("classification"))),
         ids.toArray());
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>★ 一次查询取回"每个命中段的前后邻座"，不按段循环发 SQL —— 命中 20 段时循环版会发 20 条， 而这条 join 只发 1 条。判据：{@code (h.ordinal
+   * - ?)} 与 {@code (h.ordinal + ?)} 都是列表达式， planner 走 {@code uq_segment_doc_ordinal} 那个唯一索引。
+   */
+  @Override
+  public Map<UUID, List<String>> neighborTexts(Collection<UUID> segmentIds, int before, int after) {
+    if (segmentIds == null || segmentIds.isEmpty() || (before <= 0 && after <= 0)) {
+      return Map.of();
+    }
+    List<UUID> ids = List.copyOf(segmentIds);
+    String sql =
+        "select h.id as hit_id, s.content as content"
+            + " from kb_segment h"
+            + " join kb_segment s on s.document_id = h.document_id"
+            + "   and s.deleted_at is null and s.id <> h.id"
+            + "   and s.ordinal between h.ordinal - ? and h.ordinal + ?"
+            + " where h.id in ("
+            + placeholders(ids.size())
+            + ")"
+            + " order by h.id, s.ordinal";
+    Map<UUID, List<String>> byHit = new LinkedHashMap<>();
+    jdbc.query(
+        sql,
+        (rs) -> {
+          byHit
+              .computeIfAbsent(rs.getObject("hit_id", UUID.class), k -> new ArrayList<>())
+              .add(rs.getString("content"));
+        },
+        before,
+        after,
+        ids.toArray());
+    return byHit;
   }
 
   // ────────────────────────── 内部 ──────────────────────────

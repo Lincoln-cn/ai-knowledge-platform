@@ -125,9 +125,9 @@ jobs:
       - name: 起 OpenAI 桩服务（向量化与模型目录都打它）
         working-directory: backend
         run: |
-          python tools/openai_stub.py --port 11434 > /tmp/stub.log 2>&1 &
+          python tools/openai_stub.py --port 11999 > /tmp/stub.log 2>&1 &
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:11434/v1/models > /dev/null; then
+            if curl -sf http://localhost:11999/v1/models > /dev/null; then
               echo "桩服务就绪"
               exit 0
             fi
@@ -150,6 +150,11 @@ jobs:
           DB_URL: jdbc:postgresql://localhost:5432/aiplatform
           DB_USER: aiplatform
           DB_PASSWORD: aiplatform
+          # ★ 上游必须指向本 job 自己起的桩（11999），不能用 application.yml 的默认
+          #   `http://localhost:11434/v1`：那是 Ollama 的端口，CI 里没有它，症状是
+          #   「向量化失败：网关不可达：连接 http://localhost:11434/v1/embeddings 失败」
+          #   ⇒ S1 / S3 / 跨场景三条闸门全红在"夹具文档向量化失败"，而它们量的是别的东西。
+          AI_BASE_URL: http://localhost:11999/v1
         run: |
           # ★ 不写死版本号：pom 的 version 是发布切点，会随周次前进（0.4.5 …），
           #   写死只会在下一次版本对齐时把闸门变成"找不到 jar"。
@@ -246,6 +251,14 @@ jobs:
           PGUSER: aiplatform
           PGPASSWORD: aiplatform
           PGDATABASE: aiplatform
+          # ★ 闸门脚本要自己**建模型行**（`check_document_actions` 建向量模型、`check_multihop` /
+          #   `check_query_understanding` 建对话模型），而 `apiBase` 决定那次向量化/推理打向哪里。
+          #   不设时它们默认 `127.0.0.1:11434` —— 那是 **Ollama 的端口**，runner 上没有 Ollama，
+          #   症状是「网关不可达：连接 http://localhost:11434/v1/embeddings 失败（ConnectException：null）」
+          #   ⇒ 单段重向量 / 库级重算 / 多跳 / 查询理解四条判据全红在环境上，而它们量的是别的东西。
+          #   ★ 这是「三方地址不一致」的第六处（桩起的端口 / 探活的 / 后端连的 / **闸门脚本连的**）。
+          AIP_STUB_URL: http://localhost:11999
+          AIP_CHAT_API_BASE: http://localhost:11999/v1
         run: |
           # ★ S1 的**整链**（MVP · ROADMAP §2.1）：**从空库起**一条命令跑完 ——
           #   建库（先断 documentCount==0）→ 上传真实字节 → 解析 → 切分预览与入库**同源**（段数相等）
@@ -309,7 +322,21 @@ jobs:
                    #   ★ 判据取 max 不取平均（§二 写的是上限）；1 轮冷启动 + 3 轮热态。
                    #   ★ B6（150 段）/ B7（200 次）**暂不并入**：一次引入三条重闸门会让本 job 同时红三处，
                    #     定位不了是哪条链坏的。等这条在 CI 站稳再谈（脚本已在仓库里，可手动跑）。
-                   check_b4_b5_latency)
+                   check_b4_b5_latency \
+                   # ★ 画布在真后端上能不能把图渲染出来（`#21`）。
+                   #   ★ **为什么这条非有不可**：`#20`（画布一个节点都渲染不出来）在 main 上活了 9 天，
+                   #     而本 job 已有十几条闸门、前端另有三条画布闸门 —— 它们全绿是因为**没有一条去看画布
+                   #     在真后端上的样子**：前端那三条跑在 mock 上，图是夹具自带的 `as5`（9 个节点），
+                   #     验证的是"前端拿到一张图能不能画"，不是"真后端给的图能不能画"。
+                   #   ★ 种子图由脚本自己 `PUT /workflow/draft` 写入（幂等、不依赖手工建的应用、不给
+                   #     db/seed 加产品无关的夹具），断言"渲染出的节点数 == 图里的节点数"，不是 "> 0"。
+                   #   ★ `--self-check` 会把一个节点类型改成不存在的类型，此时本闸门必须非零退出
+                   #     （实测 3/5 红、退出码 1）—— 否则它只是一条恒绿的装饰。
+                   check_workflow_canvas \
+                   # ★ 建库向导的布局（`#42`）：四步走完、1600/1280/1024 三档
+                   #   无横向滚动无重叠、预览区高度随视口变化。★ 这三条都是"窄了才红"，
+                   #   宽屏上永远过 —— 所以它非要有，且必须真的切视口。
+                   check_kb_wizard_layout)
           failed=()
           for g in "${gates[@]}"; do
             echo "::group::${g}.py"
@@ -329,6 +356,24 @@ jobs:
 
       # ★ 真栈红的时候，日志就是唯一的证据 —— 不留就等于让人去猜（本 job 第一次进 CI 时用过它）
       # ★ PG 现在是容器而不是 service ⇒ 它的日志不自动出现在 job 输出里，必须自己捞。
+      # ★ 500 + **空响应体**是本项目最贵的一种读数：既没有帧、也没有原因 —— 闸门的诊断行只能打出"（空）"，
+      #   而"没帧"和"没看"在读数上长得一模一样（0824-10-27 run `40520445036` 换来第一条教训）。
+      #   后端日志是唯一能给出堆栈的东西 ⇒ 失败时捞尾部，别让人去猜。
+      #   ★ 这条是 2026-11-06 补的：`#298` 那轮 `check_s3` / `check_cross_scenario` 各红过一次"500 + 空体"，
+      #   本地复跑两条闸门都全绿、CI 上却轮着红 ⇒ **没有堆栈就无从判断是偶发还是真回归**。
+      - name: 失败时留后端日志（500 空体的唯一证据）
+        if: failure()
+        run: |
+          f=backend/logs/ai-platform.log
+          if [ -f "$f" ]; then
+            echo "===== 后端日志尾部（400 行）====="
+            tail -n 400 "$f"
+            echo "===== 其中的 ERROR 行 ====="
+            grep -n "ERROR" "$f" | tail -n 60 || true
+          else
+            echo "（后端没有落日志：$f 不存在）"
+          fi
+
       - name: 失败时留 PG 日志
         if: failure()
         run: docker logs aip-pg > /tmp/pg.log 2>&1 || true

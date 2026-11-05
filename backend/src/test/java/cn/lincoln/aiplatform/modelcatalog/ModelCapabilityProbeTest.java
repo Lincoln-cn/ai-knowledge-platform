@@ -50,7 +50,7 @@ class ModelCapabilityProbeTest {
 
   /** 与 application.yml 的 spring.ai.openai.base-url 同一个默认值（Ollama 的 OpenAI 兼容端点）。 */
   private static final String BASE_URL =
-      System.getenv().getOrDefault("AI_BASE_URL", "http://localhost:11434/v1");
+      System.getenv().getOrDefault("AI_BASE_URL", "http://localhost:11999/v1");
 
   private static final String PROBE_MODELS = System.getenv().getOrDefault("AI_PROBE_MODELS", "");
 

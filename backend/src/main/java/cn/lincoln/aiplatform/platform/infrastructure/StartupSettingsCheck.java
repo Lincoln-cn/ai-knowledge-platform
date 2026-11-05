@@ -138,6 +138,48 @@ final class StartupSettingsCheck {
    *
    * @param ollamaMaxLoadedModels {@code app.model.ollama.max-loaded-models}（{@code -1} = 未声明）
    */
+  /**
+   * 解析/分段并发的校验（`#303`）—— 与向量化并发**同一套容量口径**、同一处校验：两者的上限都由连接池上限推出来。
+   *
+   * <p>★ 为什么不并进 {@link #problems}：那个方法的 4/6 参签名被既有测试与调用方钉住了，加参会改老签名。新校验用新方法，两个都在启动时跑。
+   *
+   * @param parseConcurrency 同时解析/分段的份数（`app.ingestion.parse-concurrency`；0 = auto）
+   * @param poolSize 连接池上限（Hikari `maximum-pool-size`）
+   * @param availableProcessors 逻辑核数（解析是 CPU 密集，并发超过核数只有抢占没有吞吐）
+   */
+  static List<String> ingestionProblems(
+      int parseConcurrency, int poolSize, int availableProcessors) {
+    List<String> problems = new ArrayList<>();
+    if (parseConcurrency == 0) {
+      return problems; // 0 = auto（min(核数, 池上限/2)），永远合法
+    }
+    if (parseConcurrency < 0) {
+      problems.add(
+          "app.ingestion.parse-concurrency="
+              + parseConcurrency
+              + "：负数没有意义 —— 0 表示自动取 min(逻辑核数, 连接池上限/2)。改成 0 或 ≥1 的数。");
+    } else if (parseConcurrency > poolSize) {
+      problems.add(
+          "app.ingestion.parse-concurrency="
+              + parseConcurrency
+              + " 大于连接池上限 "
+              + poolSize
+              + "：解析中的每份任务都要周期性占用连接（进度回写、收尾落库），多出来的任务会拿不到连接，"
+              + "表现为『与内容无关的解析失败/卡在分段中』（#303 现场就是池=2 时 20 份一起解析）。"
+              + "改成 ≤ 池上限的一半（给请求线程留余量）；0 = 自动按这个口径取。");
+    }
+    if (parseConcurrency > availableProcessors) {
+      problems.add(
+          "app.ingestion.parse-concurrency="
+              + parseConcurrency
+              + " 大于逻辑核数 "
+              + availableProcessors
+              + "：解析/分段是 CPU 密集（Tika+OCR），并发超过核数不会更快，只有上下文抢占 —— 每份都变慢、总时长反而变长。"
+              + "建议 ≤ 逻辑核数；0 = 自动按 min(核数, 池上限/2) 取。");
+    }
+    return problems;
+  }
+
   static List<String> modelSlotProblems(int ollamaMaxLoadedModels) {
     List<String> problems = new ArrayList<>();
     if (ollamaMaxLoadedModels <= 0) {

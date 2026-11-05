@@ -500,7 +500,14 @@ class StubHandler(BaseHTTPRequestHandler):
             return
         if path == "/__stub/config":
             with _LOCK:
-                for key in ("delay_ms", "chunk_delay_ms", "fail_rate"):
+                for key in (
+                    "delay_ms",
+                    "chunk_delay_ms",
+                    "fail_rate",
+                    "echo_system_prompt",
+                    "answer_override",
+                    "drop_citations",
+                ):
                     if key in body:
                         _CONFIG[key] = body[key]
                 if "entity_override" in body:

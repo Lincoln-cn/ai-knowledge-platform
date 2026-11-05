@@ -154,6 +154,24 @@ public interface SegmentSearchPort {
   List<Card> load(Collection<UUID> segmentIds);
 
   /**
+   * 取命中分段的<strong>上下文邻居</strong>（{@code #65} 的查询侧那一半）。
+   *
+   * <p>返回 {@code 命中段 id → 邻居段正文列表（按 ordinal 升序，前 before 段 + 后 after 段）}。 ★
+   * <strong>不做任何安全过滤</strong>：邻居段与命中段同属一份文档，而"这份文档的这个分段可见"已经由 {@code load} 的调用方判过；这里只按 {@code
+   * (document_id, ordinal)} 取邻座，不再判一次密级 —— 理由与 {@link #load} 完全相同：重复判一次会让"看不见"与"已被删"给出同样的症状。
+   *
+   * <p>★★ <strong>默认实现是"没有邻居"</strong>，不是抛异常 —— 与 {@link #visibleSegments} 的默认实现
+   * （明确拒绝）不同。区别在于：那一条如果静默返回全量就是越权；这一条静默返回空只是"没开这个能力"， 行为与不开 {@code #65} 时<strong>逐字一致</strong>。
+   *
+   * <p>★ 它<strong>不产生新引用</strong>：调用方只把返回的文本拼进"给模型的上下文"， {@code SourceRef} 的条数、编号、{@code full}
+   * 一律不变（{@code 12 §3.2}：重叠区不算独立内容， 引用编号指向主块）。
+   */
+  default Map<UUID, List<String>> neighborTexts(
+      Collection<UUID> segmentIds, int before, int after) {
+    return Map.of();
+  }
+
+  /**
    * 向量那一路 —— ★ <strong>密级与三级过滤都在这一条 SQL 里</strong>（{@code 13 §三} 硬要求： pre-filter，不是"查完再筛"）。
    *
    * <p>★ 为什么向量检索挂在这个端口上、而不在 {@code vectorindex}： 密级住在 {@code kb_document}、启用位散在三张表里 —— 要让 planner

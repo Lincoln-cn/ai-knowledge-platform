@@ -72,6 +72,12 @@ final class Caliber {
           "createdAt: Instant",
           "createdBy: UUID",
           "updatedAt: Instant",
+          // ★★ 2026-11-06（#304 / V70）：期望解析开始的时刻。
+          //   ★ 为什么它不是"版本维度"、也不是"源系统授权依据"：它是**加工流水线的自愈维度** ——
+          //     回收器据此分辨「正常等待」（无字节元数据登记，值为 null）与「解析任务没起来」（超期无主），
+          //     与"同一份文档的新旧关系"、"源系统给了谁读权限"都无关（走法同 V34 三列：红的第一问是
+          //     "我加的是不是那个概念"，第二问才是"基线跟上了没有"）。
+          "parseExpectedAt: Instant",
           "updatedBy: UUID",
           "deletedAt: Instant");
 
@@ -124,6 +130,7 @@ final class Caliber {
           "conversation_id",
           "revision",
           "supersedes_id",
+          "parse_expected_at",
           "labels");
 
   /**

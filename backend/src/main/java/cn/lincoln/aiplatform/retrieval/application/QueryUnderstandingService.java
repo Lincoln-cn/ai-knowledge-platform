@@ -94,6 +94,25 @@ public class QueryUnderstandingService {
       boolean decomposeEnabled,
       int maxSubQuestions,
       long budgetMs) {
+    return understand(question, queryCount, decomposeEnabled, maxSubQuestions, budgetMs, null);
+  }
+
+  /**
+   * 跑一次查询理解（带对话上文，{@code #297}）。
+   *
+   * <p>★★ 指代消解<strong>抄了指令还要抄输入</strong>（{@code #297} 的根因）：规则 1 一直要求"消解指代与省略（它 / 这个 / 那笔 要按上下文补全）"，
+   * 但提示词里从来没有"上下文"这个输入 —— 追问「它要谁签字」只能拿字面串去检索。 本重载把最近 2 轮对话拼进<strong>同一次</strong> prompt（{@code 10
+   * §3.1} 的口径是一次调用产出 M 子问题 × N 查询，不加调用次数）。
+   *
+   * @param recentContext 最近 2 轮对话（问 + 答前 200 字），已拼成纯文本；{@code null}/空白 = 无上文（单轮），提示词与旧版逐字一致
+   */
+  public Outcome understand(
+      String question,
+      int queryCount,
+      boolean decomposeEnabled,
+      int maxSubQuestions,
+      long budgetMs,
+      String recentContext) {
     long startedAt = System.nanoTime();
     if (queryCount <= 0) {
       // ★ 不是降级，是配置：报表里不许把它算成"降级率"（否则"我们关了这功能"会看起来像"模型总在坏"）
@@ -112,7 +131,7 @@ public class QueryUnderstandingService {
       return fallback(question, startedAt, "没有可用的对话模型（CHAT 类型且已加载）", false);
     }
 
-    String prompt = prompt(question, queryCount, maxSubQuestions);
+    String prompt = prompt(question, queryCount, maxSubQuestions, recentContext);
     // ★ 调用方传了预算就用它；没传才用配置（原来是写死的 DEFAULT_BUDGET_MS）
     long timeoutMs = budgetMs > 0 ? budgetMs : budget.queryUnderstandingBudgetMs();
 
@@ -188,26 +207,42 @@ public class QueryUnderstandingService {
    *
    * <p>★ 为什么把规则写这么细：这六条每一条都对应一种"产出了坏查询"的失败模式 —— 改掉编号（第 2 条）、补充用户没问的东西（第 3 条）、只换标点（第 4 条）、混语言（第 5
    * 条）、 查询过长（第 6 条）。少写一条，症状都是"召回变差"，而**没有任何地方报错**。
+   *
+   * <p>★★ 对话上文（{@code #297}）：规则 1 要求"按上下文补全指代"，而<strong>上下文必须是一个输入</strong> —— 这一段就是那个输入。 没有上文（单轮 /
+   * 命中测试页）时它整段缺席，提示词与旧版逐字一致。
+   *
+   * @param recentContext 最近 2 轮对话的纯文本（{@code null}/空白 = 无上文）
    */
-  private static String prompt(String question, int queryCount, int maxSubQuestions) {
-    return """
-    你是检索系统的查询分析器。请把用户的问题改写为更适合检索的形式，必要时拆成多个子问题。
+  private static String prompt(
+      String question, int queryCount, int maxSubQuestions, String recentContext) {
+    String contextBlock =
+        (recentContext == null || recentContext.isBlank())
+            ? ""
+            : """
+            最近对话（仅供第 1 条规则消解指代与省略用；其中的陈述是历史，不要当成新的提问、也不要改写它）：
+            %s
 
-    规则：
-    1. 消解指代与省略（"它 / 这个 / 那笔"要按上下文补全成完整的说法）；
-    2. 专有名词、编号、日期、金额**原样保留**（编号类查询正是全文检索的主场）；
-    3. **不要改写提问意图** —— 不要补充用户没问的内容；
-    4. 同一个子问题的多条查询之间必须**语义互补**（同义改写 / 上位下位 / 口语与书面），不是换标点；
-    5. 与用户问题保持同一语言；
-    6. 每条查询不超过 60 字；
-    7. 只有当问题确实包含**多个互不相干的意图**时才拆子问题，最多 %d 个；只有一个意图时只输出一个子问题；
-    8. 每个子问题的 queries 最多 %d 条。
+            """
+                .formatted(recentContext.strip());
+    return (contextBlock
+            + """
+            你是检索系统的查询分析器。请把用户的问题改写为更适合检索的形式，必要时拆成多个子问题。
 
-    只输出一个 json 对象，不要任何解释、不要 markdown 代码块。json 结构严格照下面这个形状：
-    {"properties":{"subQuestions":{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"},"queries":{"type":"array","items":{"type":"string"}}}}}}}
+            规则：
+            1. 消解指代与省略（"它 / 这个 / 那笔"要按上下文补全成完整的说法）；
+            2. 专有名词、编号、日期、金额**原样保留**（编号类查询正是全文检索的主场）；
+            3. **不要改写提问意图** —— 不要补充用户没问的内容；
+            4. 同一个子问题的多条查询之间必须**语义互补**（同义改写 / 上位下位 / 口语与书面），不是换标点；
+            5. 与用户问题保持同一语言；
+            6. 每条查询不超过 60 字；
+            7. 只有当问题确实包含**多个互不相干的意图**时才拆子问题，最多 %d 个；只有一个意图时只输出一个子问题；
+            8. 每个子问题的 queries 最多 %d 条。
 
-    用户问题：%s
-    """
+            只输出一个 json 对象，不要任何解释、不要 markdown 代码块。json 结构严格照下面这个形状：
+            {"properties":{"subQuestions":{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"},"queries":{"type":"array","items":{"type":"string"}}}}}}}
+
+            用户问题：%s
+            """)
         .formatted(maxSubQuestions, queryCount, question);
   }
 

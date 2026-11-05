@@ -20,6 +20,8 @@ import java.util.UUID;
  *
  * @param contextWindow 对话模型：上下文窗口；向量模型为 null
  * @param dimension 向量模型：输出维度；对话模型为 null。维度与向量表绑定，改则需全量重灌
+ * @param apiBase 这条模型**实际会打到的**上游地址（服务商地址或旧式直连地址）。 ★ 它是"证明这台机器在量对的东西"的唯一凭据：`baseModel`
+ *     是名字，名字不说明请求发到哪 （`#223` 的陷阱② 就是"名字看着对、请求打到 Ollama"）。★ 与 `apiKeyCipher` 不同， 地址本身不是秘密，界面也该看得见。
  * @param loadError 加载失败的可读排查原因。★ <strong>仅 {@code LOAD_FAILED} 时有值</strong>， 其余状态为 null
  *     并省略字段（{@code NON_NULL} 标在组件上，与 {@code UserView.initialPassword} 同一写法 —— {@code status} 等字段为
  *     null 时契约要求字段在，不能整条 record 一起省掉）
@@ -38,20 +40,33 @@ public record ModelView(
     boolean builtin,
     String remark,
     @JsonInclude(JsonInclude.Include.NON_NULL) String loadError,
+    /** 实际打到的上游地址；见类注释的 `@param apiBase`。 */
+    @JsonInclude(JsonInclude.Include.NON_NULL) String apiBase,
     /** 绑定的服务商；null = 旧式直连 / 默认上游。 */
     @JsonInclude(JsonInclude.Include.NON_NULL) UUID providerId,
     @JsonInclude(JsonInclude.Include.NON_NULL) String providerName,
     @JsonInclude(JsonInclude.Include.NON_NULL) ProviderKind providerKind,
     @JsonInclude(JsonInclude.Include.NON_NULL) ProviderEgress egress,
     /** 旧式直连（没有 providerId）：界面要标出来，避免把“未绑定”读成“没配”。 */
-    boolean legacyDirect) {
+    boolean legacyDirect,
+    /**
+     * 引用数（{@code #300}）：应用 + 知识库 + 其下文档 + 平台默认键。{@code > 0} 时删除按钮必须禁用。
+     *
+     * <p>★ 它必须<strong>出现在列表里</strong>：界面在点删除之前就要知道"这个模型动不得"，等到点了才吃 409 已经晚了。 与 {@code apiKey}
+     * 不同它不是秘密 —— 它是删除守卫的读数。
+     */
+    long referenceCount) {
 
   /** 从聚合映射成视图。★ 不拷贝 apiKeyCipher / apiKeyIv —— 它们永远不出网。 */
   public static ModelView from(Model model) {
-    return from(model, null);
+    return from(model, null, 0);
   }
 
   public static ModelView from(Model model, ModelProvider provider) {
+    return from(model, provider, 0);
+  }
+
+  public static ModelView from(Model model, ModelProvider provider, long referenceCount) {
     return new ModelView(
         model.id(),
         model.name(),
@@ -66,10 +81,12 @@ public record ModelView(
         model.builtin(),
         model.remark(),
         model.loadError(),
+        model.apiBase(),
         model.providerId(),
         provider == null ? null : provider.name(),
         provider == null ? null : provider.kind(),
         provider == null ? null : provider.egress(),
-        model.providerId() == null);
+        model.providerId() == null,
+        referenceCount);
   }
 }

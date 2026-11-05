@@ -1,4 +1,4 @@
-package cn.lincoln.aiplatform.retrieval.domain;
+package cn.lincoln.aiplatform.platform.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

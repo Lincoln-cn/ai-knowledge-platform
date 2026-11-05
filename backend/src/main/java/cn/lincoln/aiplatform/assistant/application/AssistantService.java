@@ -1120,8 +1120,24 @@ public class AssistantService {
       boolean multiHopEnabled,
       int maxHops) {
 
+    /**
+     * 新建应用的检索参数默认值。
+     *
+     * <p>★★ {@code queryCount = 0}（不改写）与 {@code multiHopEnabled = false}（不多跳）都是**刻意关着**的
+     * 缺省，理由不是"保守"，而是这两件都在**问答主链路上加一次大模型调用**：
+     *
+     * <ul>
+     *   <li>查询理解（`#297`）在本机 1.5B 上实测 **3.7–4.2 秒**，而首字延迟基线只有 0.9 秒 ⇒ 打开它会让一个新应用的首字直接变成 4 秒（B4 判据上限
+     *       10 秒，只剩一倍余量）；
+     *   <li>多跳（`#283`）在第一轮命中不充分时再检一轮，最差 +7.14 秒。
+     * </ul>
+     *
+     * <p>★ 2026-11-05 之前这里写的是 {@code 3, true, 3}（照抄知识库侧 `V23` 的列默认值）——
+     * 于是**每个新建应用都默认开查询理解**，问答链路凭空多一次上游调用：真栈上表现为桩多收一条 chat 请求、`check_public_share_e2e` 的"提示词进了上游
+     * prompt"读到的是**改写器**那条请求体。 知识库侧那三列的默认值仍是 3（它是"可配置能力"的默认展示值），但**应用侧是消费方**， 消费方的缺省应当与"不做这件事"一致。
+     */
     public static RetrievalDraft defaults() {
-      return new RetrievalDraft("HYBRID", 0.6, 5, "REFUSE", 3, true, 3, false, 2);
+      return new RetrievalDraft("HYBRID", 0.6, 5, "REFUSE", 0, true, 3, false, 2);
     }
   }
 }

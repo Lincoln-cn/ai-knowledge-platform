@@ -275,6 +275,39 @@ jobs:
         working-directory: backend
         run: python tools/check_config_docs.py
 
+      # ★ `#289` 那个病的可核判据：一个"页面"如果正文全是说明文字、功能全在一个
+      #   自动弹出的浮层里，那它不是一个页面。判据很直白：**关掉浮层之后，页面上还剩什么？**
+      #   先跑自检（三条判据各自都要能红，`#223` 的纪律），再扫全库。
+      - name: 页面实质闸门 · 自检
+        working-directory: backend
+        run: python tools/check_page_substance.py --self-check
+
+      - name: 页面实质闸门 · 扫全库（#290）
+        working-directory: backend
+        run: python tools/check_page_substance.py
+
+      # ★ `#291`：桩不能和 Ollama 抢 11434。同一个端口两个消费者时，
+      #   "桩没起、ollama 在跑"表现为 `404: model 'stub-plain' not found` —— 看起来像代码坏了。
+      - name: 桩端口闸门 · 自检
+        working-directory: backend
+        run: python tools/check_stub_port.py --self-check
+
+      - name: 桩端口闸门（#291）
+        working-directory: backend
+        run: python tools/check_stub_port.py
+
+      # ★ `#87`：质量指标今天只覆盖"检索对不对"，"答案对不对"（忠实度 / 噪声敏感度）
+      #   两个读数完全没有。这条闸门钉住三件事：两个读数在 13 册里有位置、有口径、
+      #   且**没有被偷偷实现**（`自动评测已启用` 必须为 0 —— 留缝不是做实体）。
+      #   先跑自检（每个判据都要能红），再扫全库。
+      - name: 质量指标闸门 · 自检（#87）
+        working-directory: backend
+        run: python tools/check_quality_metrics.py --self-check
+
+      - name: 质量指标闸门（#87）
+        working-directory: backend
+        run: python tools/check_quality_metrics.py
+
       # ★ 闸门自己的守卫也要能被断言（#223）：这三条守的是"别量错东西"，
       #   而一条守卫错了的表现是静默 —— 永远为真等于没有，过严则把正确情形判成错。
       #   离线、不需要浏览器、不连栈（playwright 在脚本里是延迟导入的）。

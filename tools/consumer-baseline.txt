@@ -31,3 +31,4 @@ POST	/assistants/{}/workflow/versions/{}/rollback	#198
 #   视图后删本行；(b) 判定此刻这条端点不该存在（表空、没人写）⇒ 连端点、表、契约函数一起摘，
 #   但那时要先把 `WorkflowRecordController` / `WorkflowRecordQueryService` / V62 迁移一起删。
 GET	/assistants/{}/workflow/records	#198
+

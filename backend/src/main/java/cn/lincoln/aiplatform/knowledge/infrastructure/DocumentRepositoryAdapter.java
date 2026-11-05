@@ -105,6 +105,19 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
   }
 
   @Override
+  public List<Document> findStaleByStatus(DocumentStatus status, Instant cutoff) {
+    // ★ 与删除清理同理：回收超期是系统按自愈策略执行，不按库、不按密级过滤 ——
+    //   排查"哪份卡住了"的人可能不是这份文档的可见者，但卡死本身要被看见。
+    return jpa.findStaleByStatus(status, cutoff);
+  }
+
+  @Override
+  public List<Document> findStalePendingParse(DocumentStatus status, Instant cutoff) {
+    // ★ 同上：#304 的自愈扫描也是系统动作，不按库、不按密级过滤。
+    return jpa.findStalePendingParse(status, cutoff);
+  }
+
+  @Override
   public long countDeletedByKbId(UUID kbId) {
     return jpa.count(deletedFilter(kbId));
   }

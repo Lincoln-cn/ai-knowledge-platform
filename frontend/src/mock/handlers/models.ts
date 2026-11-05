@@ -1,9 +1,18 @@
-import { ApiError, ErrorCode } from '@/api/types'
-import type { BaseModelOption, ModelCapability, ModelInfo, UpsertModelBody } from '@/api/models'
+// ★ 运行时 import 用相对路径 + .ts 后缀（node:test 不解析 `@/` 别名，见 dispatch.ts 头注）；
+//   type-only 的 `@/…` 会被剥掉、不进运行时，保持原样。
+import { ApiError, ErrorCode } from '../../api/types.ts'
+import type { BaseModelOption, ModelCapability, ModelInfo, ModelReference, UpsertModelBody } from '@/api/models'
 import type { ProbeBaseModelBody } from '@/api/models'
-import type { MockRoute } from '../dispatch'
-import { MockEnvelope, paginate } from '../dispatch'
-import { baseModels, externalBaseModels, models, probedCapabilities } from '../fixtures/models'
+import type { MockRoute } from '../dispatch.ts'
+import { MockEnvelope, paginate } from '../dispatch.ts'
+import {
+  baseModels,
+  EMPTY_MODEL_REFERENCE,
+  externalBaseModels,
+  modelReferences,
+  models,
+  probedCapabilities
+} from '../fixtures/models.ts'
 
 /** 加载是异步的：先置「加载中」，若干秒后转「已加载」。与真实后端行为一致 */
 const LOAD_MS = 4000
@@ -13,6 +22,30 @@ const findModel = (id: string) => {
   if (!model) throw new ApiError(ErrorCode.NOT_FOUND, '模型不存在')
   return model
 }
+
+/** 引用面查询：没登记 = 无引用（与后端 `ModelReferencePort.ofModel` 同语义） */
+const refsOfModel = (id: string): ModelReference => modelReferences[id] ?? EMPTY_MODEL_REFERENCE
+
+/**
+ * 引用摘要，逐字对齐后端 `ModelReference.downstreamSummary()` 的措辞 ——
+ * mock 与真栈的 409 是"同一个读数"，连话术都不该有分叉。
+ * （providers mock 复用：服务商侧 409 的措辞同源。）
+ */
+export const summaryOf = (refs: ModelReference): string => {
+  const parts: string[] = []
+  if (refs.apps.length) parts.push(`${refs.apps.length} 个应用`)
+  if (refs.knowledgeBases.length) {
+    parts.push(`${refs.knowledgeBases.length} 个知识库` + (refs.documents > 0 ? `（共 ${refs.documents} 篇文档）` : ''))
+  } else if (refs.documents > 0) {
+    parts.push(`${refs.documents} 篇文档`)
+  }
+  if (refs.defaultKeys.length) parts.push(`平台默认键 ${refs.defaultKeys.join(' / ')}`)
+  return parts.join('、')
+}
+
+/** 引用总数，与后端 `ModelReference.total()` 同式 */
+const totalOf = (refs: ModelReference): number =>
+  refs.apps.length + refs.knowledgeBases.length + refs.documents + refs.defaultKeys.length + refs.models
 
 /** 两套上游目录合成一个查找表（指定 apiBase 时模型在外套里，不指定在默认套里） */
 const allBaseModels = (): BaseModelOption[] => [...baseModels, ...externalBaseModels]
@@ -244,17 +277,38 @@ export const modelRoutes: MockRoute[] = [
   [
     'DELETE',
     '/models/:id',
-    ({ path }) => {
+    ({ path, query }) => {
       const model = findModel(path.id)
       if (model.builtin) {
         throw new ApiError(ErrorCode.BAD_REQUEST, `「${model.name}」是内置模型，不可删除`)
       }
 
-      // 与后端当前行为一致：`ModelService.delete` 的「被应用/知识库引用」检查只是钩子，
-      // 后端还没有引用方查询；mock 若单方面拒绝，会让「mock 点不动、真栈能删」重演（#22）。
-      // 等后端补上引用计数后，两边同批加回。
+      // ★ #301：与后端 `ModelService.delete` 同口径 —— 有引用且没带 force ⇒ 409 + 引用面明细。
+      //   （#300 后端已补引用计数，mock 不再"看引用直接删"：那正是「mock 与真栈两个读数」。）
+      //   force=true = 明知有引用仍删，不做静默级联 —— 引用登记不动，与后端一致。
+      const refs = refsOfModel(path.id)
+      const force = query.force === true || query.force === 'true'
+      if (refs.apps.length + refs.knowledgeBases.length + refs.documents + refs.defaultKeys.length > 0 && !force) {
+        throw new ApiError(
+          ErrorCode.CONFLICT,
+          `「${model.name}」仍被 ${totalOf(refs)} 处引用，不能直接删除：${summaryOf(refs)}`,
+          '删掉它会让上面这些引用变成悬空指针（应用无法提问、知识库检索不到）。确认要删请用「强制删除」',
+          refs
+        )
+      }
       models.splice(models.indexOf(model), 1)
       return undefined
+    }
+  ],
+
+  [
+    // ★ 与后端 ModelController 的只读端点同形（#300）：点删除之前就要知道"动不得"，
+    //   而不是点了吃 409 才知道。409 的 data 与本端点的返回是同一个形状。
+    'GET',
+    '/models/:id/references',
+    ({ path }) => {
+      findModel(path.id)
+      return refsOfModel(path.id)
     }
   ],
 

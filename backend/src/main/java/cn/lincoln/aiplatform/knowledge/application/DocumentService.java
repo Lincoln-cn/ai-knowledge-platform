@@ -21,6 +21,7 @@ import cn.lincoln.aiplatform.platform.domain.AuditAction;
 import cn.lincoln.aiplatform.platform.domain.AuditLogPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.domain.ResourceExhaustion;
 import cn.lincoln.aiplatform.platform.infrastructure.metrics.BusinessMetrics;
 import cn.lincoln.aiplatform.platform.org.OrgDirectoryPort;
 import cn.lincoln.aiplatform.platform.web.PageResult;
@@ -878,6 +879,13 @@ public class DocumentService {
       Document saved = documents.save(document);
       created.add(DocumentView.from(saved));
       if (contents != null && i < contents.size() && contents.get(i) != null) {
+        // ★ #304：先落「期望解析开始的时刻」、再投事件 —— 事件监听器拿不到连接时解析任务会
+        //   从未创建（见 ParseRunner#onUploaded），而这个时刻是外部视角的回收器分辨
+        //   「正常等待」（无字节元数据登记，parse_expected_at 为 NULL）与「任务没起来」的唯一依据。
+        //   同一事务内再 save 一次（两行合一提交），时序上必须**先于** publishEvent：事件被消费时
+        //   这一列已经可读，回收器不会把刚投出的事件误判成"没人管"。
+        saved.expectParse();
+        documents.save(saved);
         events.publishEvent(new DocumentUploaded(saved.id(), contents.get(i), name, currentUserId));
       }
     }
@@ -889,8 +897,8 @@ public class DocumentService {
   /**
    * 登记一条<strong>会话临时附件</strong>文档（{@code 13 §11.2} 的第三域）—— 只落 {@code kb_document} 行。
    *
-   * <p>★ <strong>为什么它不发布 {@link DocumentUploaded}</strong>：那个事件的消费者是 {@code ParseRunner} 的
-   * {@code @TransactionalEventListener(AFTER_COMMIT)}，它<strong>异步</strong>解析。附件这条路上同步性本身就是判据 ——
+   * <p>★ <strong>为什么它不发布 {@link DocumentUploaded}</strong>：那个事件的消费者是 {@code ParseRunner} 的事件监听
+   * （{@code #304} 起为 {@code @EventListener} + 事务提交后异步起跑），它<strong>异步</strong>解析。附件这条路上同步性本身就是判据 ——
    * 用户在"上传完立刻提问"这一秒里问的是这份附件，异步解析意味着<b>第一次问答必然检索不到</b>，而"检索不到"与 "附件里确实没有"在用户眼里完全一样（{@code
    * silent-failure} 的形态）。所以解析由调用方 （{@code
    * ConversationAttachmentRegistrar}）在本方法返回后<strong>同步</strong>驱动，取舍记在 {@code #187}。
@@ -946,6 +954,10 @@ public class DocumentService {
     Document document =
         Document.conversationAttachment(
             UUID.randomUUID(), conversationId, ownerId, name, docType, classification);
+    // ★ #304：附件有字节、期望解析（同步驱动，见 ConversationAttachmentRegistrar）——
+    //   同样落「期望解析开始的时刻」：同步解析若在启动前炸（拿不到连接且收尾也失败），
+    //   行会停在 PENDING_PARSE，由 StuckPendingParseReaper 兜底判成可重试，不是永远转圈。
+    document.expectParse();
     documents.save(document);
     log.info(
         "会话附件登记：会话 {} · 文档 {}（{}）· 密级 {} · 文种 {}",
@@ -990,7 +1002,14 @@ public class DocumentService {
   /**
    * 解析**抛异常**时的收尾（第 9 周 · 0.3.1）—— 不许让文档停在「分段中」等一个永远不会来的结果。
    *
-   * <p>★ 只在文档仍然处于「分段中」时才写失败：它可能已经被删掉或已经走到了别处， 那时把状态按回去就是**用过期结论覆盖现状**。这种情况只记日志。
+   * <p>★ 只在文档仍然处于「分段中」或「待解析」时才写失败：它可能已经被删掉或已经走到了别处， 那时把状态按回去就是**用过期结论覆盖现状**。这种情况只记日志。
+   *
+   * <p>★ {@code #303} 放宽一处：原来只收 {@code SEGMENTING}，于是 {@code progress.start} 之前就炸的（连接池打满时建档线程刚转档就死）
+   * 那些份永远留在「待解析」—— 状态机本来就允许 {@code PENDING_PARSE → SEGMENT_FAILED}（{@link
+   * DocumentStatus}），守卫比状态机更严是漏收尾的机理之一。
+   *
+   * <p>★ {@code #303} 分流 hint：<b>资源不足不是文件的问题</b>。原来一刀切写「请确认文件可正常打开」——
+   * 连接池打满导致的失败被说成文件坏了，用户会去反复检查一个完全正常的文件（issue {@code #303} 的第三条病）。
    */
   @Transactional
   public void failParse(UUID documentId, RuntimeException cause) {
@@ -998,16 +1017,25 @@ public class DocumentService {
     if (document == null) {
       return;
     }
-    if (document.status() != DocumentStatus.SEGMENTING) {
+    if (document.status() != DocumentStatus.SEGMENTING
+        && document.status() != DocumentStatus.PENDING_PARSE) {
       log.warn(
-          "解析任务异常，但文档 {} 当前状态是 {}（不是分段中）⇒ 不覆盖它的状态。原因：{}",
+          "解析任务异常，但文档 {} 当前状态是 {}（不是分段中/待解析）⇒ 不覆盖它的状态。原因：{}",
           documentId,
           document.status(),
           cause.toString());
       return;
     }
-    String reason = "解析失败：" + String.valueOf(cause.getMessage());
-    document.recordParseFailure(reason, "请确认文件可正常打开；若为扫描件，确认服务端已装好 OCR 引擎与中文语言包", "");
+    String reason;
+    String hint;
+    if (ResourceExhaustion.isResourceExhaustion(cause)) {
+      reason = "解析失败：服务资源不足（数据库连接池被占满或库不可达），不是文件的问题";
+      hint = "服务繁忙，请稍后重试；若持续繁忙请联系管理员";
+    } else {
+      reason = "解析失败：" + String.valueOf(cause.getMessage());
+      hint = "请确认文件可正常打开；若为扫描件，确认服务端已装好 OCR 引擎与中文语言包";
+    }
+    document.recordParseFailure(reason, hint, "");
     documents.save(document);
   }
 

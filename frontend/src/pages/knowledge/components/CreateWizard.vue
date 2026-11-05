@@ -2,7 +2,7 @@
   <el-dialog
     v-model="visible"
     title="创建知识库"
-    width="860px"
+    width="min(860px, 94vw)"
     :close-on-click-modal="false"
     :show-close="step === 0 || step === 3"
     @closed="onClosed"
@@ -18,13 +18,13 @@
     <div v-show="step === 0" class="step-body">
       <!-- 分类 / 密级上限取自基础数据字典：空下拉的原因（失败 / 没配）必须写出来 -->
       <div v-if="catalogHint" class="notice warn">{{ catalogHint }}</div>
-      <el-form ref="baseFormRef" :model="baseForm" :rules="baseRules" label-width="96px" class="base-form">
+      <el-form ref="baseFormRef" :model="baseForm" :rules="baseRules" label-width="var(--kb-label-w)" class="base-form">
         <el-form-item label="名称" prop="name">
           <el-input v-model="baseForm.name" maxlength="30" show-word-limit placeholder="例如：合同管理制度" />
         </el-form-item>
         <el-form-item label="分类" prop="category">
           <!-- ★ value 用 code、显示用 label（08 §十）：管理员改展示名不影响已建库的取值 -->
-          <el-select v-model="baseForm.category" style="width: 220px" placeholder="选择分类">
+          <el-select v-model="baseForm.category" style="width: 100%" placeholder="选择分类">
             <el-option v-for="c in categories" :key="c.code" :label="c.label" :value="c.code" />
           </el-select>
         </el-form-item>
@@ -52,13 +52,13 @@
         </el-form-item>
         <el-form-item label="密级上限" prop="maxClassification">
           <!-- ★ 与建档的「密级」同一个字典：两边各写一份文案，迟早出现"上限叫机密、文档密级叫绝密" -->
-          <el-select v-model="baseForm.maxClassification" style="width: 220px" placeholder="选择密级上限">
+          <el-select v-model="baseForm.maxClassification" style="width: 100%" placeholder="选择密级上限">
             <el-option v-for="c in classifications" :key="c.code" :label="c.label" :value="c.code" />
           </el-select>
           <div class="hint micro">这个库允许装入的最高密级（13 §6）—— 文档密级超过它会被拒绝入库</div>
         </el-form-item>
         <el-form-item label="向量模型" prop="embeddingModelId">
-          <el-select v-model="baseForm.embeddingModelId" style="width: 280px" placeholder="选择向量模型">
+          <el-select v-model="baseForm.embeddingModelId" style="width: 100%" placeholder="选择向量模型">
             <el-option v-for="m in embeddingModels" :key="m.id" :label="m.name" :value="m.id">
               <span>{{ m.name }}</span>
               <span class="opt-hint">{{ m.dimension }} 维</span>
@@ -151,7 +151,7 @@
                所以这两个下拉只能选，不能现场新增 —— 要新值由管理员在「基础数据」里加。
              ⚠️ 部门的数据源应当是「组织机构树」（07 §十），不是字典项 —— 那一条还没做，仍用常量。 -->
         <div v-if="docMetaHint" class="notice warn">{{ docMetaHint }}</div>
-        <el-form ref="docMetaFormRef" :model="docMeta" :rules="docMetaRules" label-width="92px" class="doc-meta-form">
+        <el-form ref="docMetaFormRef" :model="docMeta" :rules="docMetaRules" label-width="var(--kb-label-w)" class="doc-meta-form">
           <el-form-item label="文种" prop="docType">
             <el-select
               v-model="docMeta.docType"
@@ -853,6 +853,10 @@ defineExpose({ open })
 
 .step-body {
   min-height: 320px;
+  /* ★ 表单标签列宽收敛成一个变量（`#42` 判据 ①）：base-form / doc-meta-form / 滑块行
+     三处消费同一个值，滑块与输入框才会"同宽同基线"——
+     两处各写一个 label-width（96px / 92px）就是两套基线，内容一变就看得出来。 */
+  --kb-label-w: 92px;
 }
 
 .base-form {
@@ -924,6 +928,23 @@ defineExpose({ open })
   }
 }
 
+/* ★ ≤1024 再收一档（`#42` 判据 ②）：单列之后宽度仍然紧张 ——
+   面板内边距让位给控件，弹窗宽度由 min(860px, 94vw) 自己跟着视口收，
+   两层合起来才保证窄屏"无横向滚动、无元素重叠"。 */
+@media (max-width: 1024px) {
+  .split-left {
+    padding: var(--space-sm);
+  }
+
+  .preview-head {
+    padding: var(--space-xs) var(--space-sm);
+  }
+
+  .preview-list {
+    padding: var(--space-2xs);
+  }
+}
+
 .split-left {
   display: flex;
   flex-direction: column;
@@ -955,12 +976,18 @@ defineExpose({ open })
 }
 
 .slider-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2xs);
+  /* ★ 与 el-form-item 同构（`#42`：「滑块与输入框同宽同基线」）：
+     label 列 = --kb-label-w，控件列占余下宽度 —— 滑块行与表单行的控件
+     左边缘、宽度、垂直居中基线全部一致，不再是"label 在上、滑块在下"的另一套排布。 */
+  display: grid;
+  grid-template-columns: var(--kb-label-w) minmax(0, 1fr);
+  align-items: center;
 }
 
 .slider-label {
+  /* 与 el-form-item__label 同一套右对齐 + 12px 内边距，两个 label 列才会重合成一条基线 */
+  padding-right: var(--space-sm);
+  text-align: right;
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   font-weight: 500;

@@ -416,6 +416,13 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.segmentation.max-chars`（`SEGMENT_MAX_CHARS`） | 1200 | 向量模型字符上限的**回落值**（库里的模型有 `contextWindow` 时以它为准） |
 | `app.segmentation.context-window`（`SEGMENT_CONTEXT_WINDOW`） | 80 | 索引侧上下文窗口，0 = 关。★ 它只进 `search_text` 不进 `content`；**换值（含 0↔非 0）要重新向量化存量文档** |
 | `app.ingestion.embedding-concurrency`（`INGESTION_EMBEDDING_CONCURRENCY`） | 4 | 批量入库时同时跑的份数。配 0 或负数按 1 算（配 0 会让向量化永不执行且不报错）；调高到超过连接池只会排队 |
+| `app.ingestion.parse-concurrency`（`INGESTION_PARSE_CONCURRENCY`） | 0（= 自动取 `min(逻辑核数, max(1, 连接池/2))`） | 同时解析的份数（`#303`）。★ 解析是 CPU 密集、且每份在解析期占一条连接 ⇒ 只压连接池不压它，会先炸解析（表现为「请确认文件可正常打开」这类与文件无关的失败）。配 0 = 按上面公式自动定，不建议手填大数 |
+| `app.ingestion.segmenting-timeout-minutes`（`INGESTION_SEGMENTING_TIMEOUT_MINUTES`） | 10 | 「分段中」超期多久后被回收（`#303`）。判超期看 **`updatedAt` 停摆**（活着的任务每页回写进度），不是"创建得久"；且只回收**无主**的（`ParseRunner` 登记表里没有任务）⇒ 慢跑不会被误杀。★ 下限 1 分钟 |
+| `app.ingestion.segmenting-reaper.enabled`（`INGESTION_SEGMENTING_REAPER_ENABLED`） | true | 自愈扫描开关。★ **与其它定时任务相反，默认开着** —— 关掉就等于回到「卡死永远没人管」。只有在排查"回收得太积极"时才临时关 |
+| `app.ingestion.segmenting-reaper.interval-ms`（`INGESTION_SEGMENTING_REAPER_INTERVAL_MS`） | 60000 | 扫描间隔（`fixedDelay`：一轮扫完再计下一轮，不是固定频率） |
+| `app.ingestion.pending-parse-timeout-minutes`（`INGESTION_PENDING_PARSE_TIMEOUT_MINUTES`） | 2 | 「待解析」超期多久后被回收（`#304`）。判超期看 **`parse_expected_at`（期望解析开始的时刻）**：只对"有字节、期望解析"的份生效，无字节元数据登记的文档永远停在「待解析」是正常的、回收器跳过。与 `segmenting-timeout-minutes` 的分工：那边是「任务已创建、中途死掉」，这边是「任务从未创建」。★ 下限 1 分钟 |
+| `app.ingestion.pending-parse-reaper.enabled`（`INGESTION_PENDING_PARSE_REAPER_ENABLED`） | true | 自愈扫描开关（`#304`）。★ 与其它定时任务相反，**默认开着** —— 关掉就等于回到「解析任务没起来时永远没人管」，只在排查"回收得太积极"时才临时关 |
+| `app.ingestion.pending-parse-reaper.interval-ms`（`INGESTION_PENDING_PARSE_REAPER_INTERVAL_MS`） | 60000 | 扫描间隔（`fixedDelay`：一轮扫完再计下一轮，不是固定频率） |
 | `spring.datasource.hikari.maximum-pool-size`（`DB_POOL_SIZE`） | 10 | 连接池上限。★ 并发高于它时多出来的虚拟线程拿不到连接，表现为「与文件内容无关的向量化失败」（`#227`）；★ 调大前先看库端 `max_connections`：**实例数 × 这个数**才是库看到的连接数 |
 
 ### 出站与文件
@@ -457,7 +464,32 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.embedding.local.model-name`（`LOCAL_ONNX_MODEL_NAME`） | `multilingual-e5-small` | ★★ **路由判据**：`RoutingEmbeddingAdapter` 按 `baseModel` 名分派，知识库里登记的名字必须与它一致，否则那条模型会去连上游 11434（而 11434 上可能根本没有这个模型） |
 | `app.chat.advisors.enabled`（`CHAT_ADVISORS_ENABLED`） | true | Spring AI advisor 链总开关。★ 只用于排障 —— 关着上线等于安全闸门不生效 |
 | `app.chat.guard.sensitive-words`（`CHAT_GUARD_SENSITIVE_WORDS`） | 空 | 问答输入/输出两侧的敏感词表（逗号分隔）。★ 默认空**不是**"没有这个功能"，而是"部署方按自己的合规要求填" —— 留着默认值上线等于这一层不设防 |
-| `app.chat.suggestions.parallel`（`AIP_SUGGESTIONS_PARALLEL`） | false | 「猜你想问」的并行模式：开着时回答一开始生成就用「问题 + 检索上下文」猜，用户"看到完成"时 chips 已经在了；代价是**它没看到答案**，追问更容易偏，且每次都多一次模型调用、与主回答抢同一个模型槽位（`#285`）。★ 默认关 = 把速度留给愿意换的人 |
+| `app.chat.suggestions.parallel`（`AIP_SUGGESTIONS_PARALLEL`） | false | 「猜你想问」的并行模式：开着时回答一开始生成就用「问题 + 检索上下文」猜，用户"看到完成"时 chips 已经在了；代价是**它没看到答案**，追问更容易偏，且每次都多一次模型调用、与主回答抢同一个模型槽位（`#285`）。★ 默认关 = 拿质量换给愿意换速度的人 |
+| `app.chat.retrieval.neighbor-context.enabled`（`AIP_NEIGHBOR_CONTEXT_ENABLED`） | false | 查询侧的**上下文窗口**（`#65`）：把命中段的**邻座正文**一并拼进"给模型的上下文"，用于补上被硬分段边界劈开的那半句（"…见下表" / 表在下一节）。★ **不产生新引用**：`SourceRef` 的条数、编号、`full` 一律不变，邻居段只标一句"与上段相邻，仅供理解上下文，不单独编号"。★ 默认关 = 凡是主链路上多一次数据库查询的开关，缺省必须与不做这件事一致 |
+| `app.chat.retrieval.neighbor-context.before`（`AIP_NEIGHBOR_CONTEXT_BEFORE`） | 1 | 往上取几个邻座段（`0` = 不往上取） |
+| `app.chat.retrieval.neighbor-context.after`（`AIP_NEIGHBOR_CONTEXT_AFTER`） | 1 | 往下取几个邻座段（`0` = 不往下取） |
+
+## 八之补三、把本机 Ollama 登记成服务商（`#288`，建议一开始就做）
+
+新建模型时，服务商下拉里有一条「**不绑定（旧式直连 / 默认上游）**」。选它，填上 `apiBase` 就能用 —— 但
+它会**悄悄少掉三件事**：出站密级（能不能出网）、认证方式、连通性检查，数据外发闸门也就没有供应商类别可判。
+代码侧 `ProviderKind` 早就准备好了（`OLLAMA("http://localhost:11434/v1", NONE, LOCAL, true)`），
+问题只是"从来没人走过那条路"—— 新装的实例里 `ai_model_provider` 是**空表**。
+
+所以装完之后，在界面上走一遍（或等价地 `POST /api/v1/model-providers`）：
+
+| 字段 | 值 |
+|---|---|
+| 名称 | 本机 Ollama |
+| 类别 | `OLLAMA` |
+| 服务地址 | `http://127.0.0.1:11434/v1`（★ **用 `127.0.0.1`，不要用 `localhost`**：容器的端口只绑 IPv4，而 Java 的 `localhost` 会先解析成 `::1`，症状是"连接上游失败 / ConnectException"） |
+| 认证方式 | `NONE` |
+| 出站 | `LOCAL`（不出网） |
+
+登记之后，新模型优先选它。★ **存量模型不用动**：它们的 `api_base` 是直填的，改绑服务商会让地址来源变一个，
+不属于这次调整的范围。
+
+---
 
 ## 九、OCR 的配置项（交付时可能要改的）
 

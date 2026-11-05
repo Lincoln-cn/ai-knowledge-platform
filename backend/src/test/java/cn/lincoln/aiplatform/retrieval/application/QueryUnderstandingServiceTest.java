@@ -190,6 +190,38 @@ class QueryUnderstandingServiceTest {
 
   // ────────────────────────── 夹具 ──────────────────────────
 
+  /**
+   * 判据 3（{@code #297}）：<b>指代消解要拿得到上文</b>。
+   *
+   * <p>★ 这条测的是"指令有没有配上输入"，不是"模型改得好不好"。原来规则 1 写着"按上下文补全指代"，而提示词里从来没有上下文 —— 那时无论模型多强都做不对，因为要做的事缺一个入参。
+   *
+   * <p>两条断言：<b>①</b> 有上文 ⇒ 提示词里出现那一段（且带"仅供消解指代"的边界说明，{@code #84} 同口径：拼进来的文本要声明是数据不是指令）； <b>②</b>
+   * 没有上文 ⇒ 提示词与旧版<b>逐字一致</b>（不多出一段空壳，否则命中测试页的提示词会无端变长）。
+   */
+  @Test
+  void recentContextReachesThePromptAndItsAbsenceKeepsTheOldPrompt() {
+    Fake fake =
+        new Fake(
+            Optional.of(UUID.randomUUID()),
+            """
+            {"subQuestions":[{"question":"它要谁签字","queries":["固定资产验收单 签字"]}]}
+            """);
+    QueryUnderstandingService service = fake.service();
+
+    // ① 有上文
+    service.understand("它要谁签字", 1, false, 3, 5000, "问：固定资产验收单保存多久\n答：不少于 3 年");
+    String withContext = fake.prompts.getFirst();
+    assertThat(withContext).contains("最近对话");
+    assertThat(withContext).contains("不少于 3 年");
+    // ★ 边界说明必须在：拼进来的文本是数据，不是新指令（#84）
+    assertThat(withContext).contains("不要当成新的提问");
+
+    // ② 没有上文 ⇒ 与旧版逐字一致
+    fake.prompts.clear();
+    service.understand("它要谁签字", 1, false, 3, 5000, null);
+    assertThat(fake.prompts.getFirst()).doesNotContain("最近对话");
+  }
+
   private static QueryUnderstandingService service(ChatPort port) {
     return new QueryUnderstandingService(
         port, new RetrievalBudgetProperties(5000, 5000, 0.6, true, true));
@@ -204,6 +236,10 @@ class QueryUnderstandingServiceTest {
 
     private final Optional<UUID> model;
     private final List<String> responses = new java.util.ArrayList<>();
+
+    /** 每次调用收到的提示词（{@code #297} 判据 3：核对上下文有没有真的进提示词）。 */
+    private final List<String> prompts = new java.util.ArrayList<>();
+
     private BusinessException failure;
     private final AtomicInteger calls = new AtomicInteger();
 
@@ -227,6 +263,7 @@ class QueryUnderstandingServiceTest {
     @Override
     public String complete(UUID modelId, String prompt, Duration timeout) {
       calls.incrementAndGet();
+      prompts.add(prompt);
       if (failure != null) {
         throw failure;
       }

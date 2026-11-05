@@ -49,17 +49,19 @@ public class ModelRepositoryAdapter implements ModelRepository {
 
   @Override
   public List<Model> search(
-      String keyword, ModelKind kind, ModelStatus status, int offset, int limit) {
+      String keyword, ModelKind kind, ModelStatus status, UUID providerId, int offset, int limit) {
     // 领域给的是 offset/limit；Spring Data 要的是"第几页、每页几条"。
     // limit 恒 > 0（调用方已归一化），所以这里的整除是安全的
-    return jpa.findAll(filter(keyword, kind, status), PageRequest.of(offset / limit, limit, sort()))
+    return jpa.findAll(
+            filter(keyword, kind, status, providerId),
+            PageRequest.of(offset / limit, limit, sort()))
         .getContent();
   }
 
   @Override
-  public long countSearch(String keyword, ModelKind kind, ModelStatus status) {
+  public long countSearch(String keyword, ModelKind kind, ModelStatus status, UUID providerId) {
     // ★ 与 search 共用同一份谓词 —— 两处各拼一遍必然漂移，症状是"列表 3 条、total 却是 10"
-    return jpa.count(filter(keyword, kind, status));
+    return jpa.count(filter(keyword, kind, status, providerId));
   }
 
   @Override
@@ -83,7 +85,8 @@ public class ModelRepositoryAdapter implements ModelRepository {
    * UserRepositoryAdapter} 同一口径（SQL 里再套 {@code lower(concat(...))} 会把类型推断弄丢）。 中文没有大小写，但 baseModel
    * 是英文，用户不会记得注册时用的是大写还是小写。
    */
-  private static Specification<Model> filter(String keyword, ModelKind kind, ModelStatus status) {
+  private static Specification<Model> filter(
+      String keyword, ModelKind kind, ModelStatus status, UUID providerId) {
     return (root, query, cb) -> {
       List<Predicate> predicates = new ArrayList<>();
       if (keyword != null && !keyword.isBlank()) {
@@ -98,6 +101,10 @@ public class ModelRepositoryAdapter implements ModelRepository {
       }
       if (status != null) {
         predicates.add(cb.equal(root.get("status"), status));
+      }
+      if (providerId != null) {
+        // ★ 服务商页的「N 个模型」点进来时靠它（`#289` 打磨）：同一个数字要能点开看到那 N 条。
+        predicates.add(cb.equal(root.get("providerId"), providerId));
       }
       return cb.and(predicates.toArray(new Predicate[0]));
     };

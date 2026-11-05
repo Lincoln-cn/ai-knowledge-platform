@@ -90,6 +90,15 @@ app:
     # ★ 开关只影响"什么时候算"，不影响前端：落库后 `SuggestionService.generate` 的幂等分支会直接返回存量。
     suggestions:
       parallel: ${AIP_SUGGESTIONS_PARALLEL:false}
+    # ★ `#65` 查询侧的上下文窗口：命中段的邻座正文拼进"给模型的上下文"。
+    #   缺省 false —— 与 `#297` 的 queryCount=0、`#283` 的 multiHopEnabled=false 同一条判据：
+    #   凡是在问答主链路上多一次数据库查询的开关，缺省必须与"不做这件事"一致。
+    #   ★ 它不产生新引用：SourceRef 的条数 / 编号 / full 一律不变。
+    retrieval:
+      neighbor-context:
+        enabled: ${AIP_NEIGHBOR_CONTEXT_ENABLED:false}
+        before: ${AIP_NEIGHBOR_CONTEXT_BEFORE:1}
+        after: ${AIP_NEIGHBOR_CONTEXT_AFTER:1}
   audit:
     retention:
       enabled: ${AUDIT_RETENTION_ENABLED:false}
@@ -224,6 +233,41 @@ app:
     #   ★ 配 0 或负数会被当成 1（配 0 会让向量化永远不跑，且没有任何报错）。
     #   ★ 调低只会变慢，不会失败；调高不会超过连接池上限，只会让更多的任务在排队。
     embedding-concurrency: ${INGESTION_EMBEDDING_CONCURRENCY:4}
+
+    # ★ 解析/分段的并发上限（#303）：一次上传 20 份时，最多这么多份同时在解析。
+    #   为什么要有它：ParseRunner 每份一个虚拟线程、没有上限 —— 池压到 2、20 份并发上传时先炸的是
+    #   解析（4 份 SEGMENT_FAILED、8 份卡在「分段中」不再动、1 份上传直接 500），而 EmbeddingConcurrencyGate
+    #   只管向量化那一段。
+    #   ★ 默认 0 = 自动取 min(逻辑核数, 连接池上限/2)。依据：解析/分段是 CPU 密集（Tika+OCR，实测每页
+    #     约 3.6 秒纯计算）⇒ 并发超过逻辑核数只有抢占没有吞吐；且每份任务要周期性占用连接（逐页进度
+    #     回写、收尾落库）⇒ 须给池留余量。★ 不抄向量化的 4 —— 向量化是 IO 密集，瓶颈不在 CPU。
+    #   ★ 调低只会变慢，不会失败；显式值越界由启动自检 WARN（不静默改值）。
+    parse-concurrency: ${INGESTION_PARSE_CONCURRENCY:0}
+
+    # ★ 「分段中」超期回收（#303）：卡死的份最坏这么久 + 一个扫描周期后被自动标成可重试。
+    #   判超期看的是 updatedAt 停摆（活着的任务每页回写进度），不是"创建得久"；且只回收"无主"的
+    #   （ParseRunner 登记表里没有任务）—— 「卡住」和「慢」是两件事，慢跑的不许误杀。
+    #   ★ 下限 1 分钟（配 0 会把刚转「分段中」的份立刻判死）。
+    segmenting-timeout-minutes: ${INGESTION_SEGMENTING_TIMEOUT_MINUTES:10}
+    segmenting-reaper:
+      # 自愈扫描默认开（#303）：与其它定时任务相反 —— 自愈不能默认关，关掉=回到"卡死永远没人管"。
+      enabled: ${INGESTION_SEGMENTING_REAPER_ENABLED:true}
+      # 扫描间隔（毫秒）：fixedDelay，一轮扫完再计下一轮。
+      interval-ms: ${INGESTION_SEGMENTING_REAPER_INTERVAL_MS:60000}
+
+    # ★ 「待解析」超期回收（#304）：解析任务**从未创建**的那一类卡死（事件监听器拿不到连接、
+    #   任务没排队成功）最坏这么久 + 一个扫描周期后被自动标成可重试。
+    #   判超期看的是 parse_expected_at（期望解析开始的时刻）：无字节元数据登记的文档该列为 NULL、
+    #   永远停在「待解析」是正常的（等字节），回收器跳过 —— 所以阈值只对"有字节、期望解析"的份生效。
+    #   ★ 下限 1 分钟（配 0 会把刚投出事件、还没排队的份立刻判死）。
+    #   ★ 与 segmenting-timeout-minutes 的分工：那边是「任务已创建、中途死掉」（看 updatedAt 停摆），
+    #   这边是「任务从未创建」（看期望解析时刻）；两类失败文案也不同（"未能启动" vs "已中断"）。
+    pending-parse-timeout-minutes: ${INGESTION_PENDING_PARSE_TIMEOUT_MINUTES:2}
+    pending-parse-reaper:
+      # 自愈扫描默认开（#304，同 #303 口径）：关掉 = 回到"卡死永远没人管"。
+      enabled: ${INGESTION_PENDING_PARSE_REAPER_ENABLED:true}
+      # 扫描间隔（毫秒）：fixedDelay，一轮扫完再计下一轮。
+      interval-ms: ${INGESTION_PENDING_PARSE_REAPER_INTERVAL_MS:60000}
 
   segmentation:
     # 分块目标长度默认值。★ 与前端向导 CreateWizard.vue 的 segForm.segmentLength 默认值一致 ——

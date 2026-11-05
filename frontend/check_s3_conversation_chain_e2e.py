@@ -68,6 +68,9 @@ PASSWORD = "admin"
 QUESTION = "报销标准"
 #: 追问用同一句话 + 序号：只要后端返回 200，就证明"带着 conversationId 的这一轮"被接住了。
 FOLLOW_UP = "那差旅住宿的上限呢"
+#: 第 ④ 步「生成中停止」用的问题。★ 探针（`--probe-timing`）与停止轮必须是**同一句**，
+#:   否则两次读数的正文长度不同，"第 3 片 vs done"的间隔就没法互相比。
+STOP_QUESTION = "请详细说明报销流程"
 
 #: ★ 本条闸门**自己造库、自己传文档、自己向量化**，不去借别的闸门留下的数据：
 #:   `ci.yml` 的 `gates` 是**顺序**跑的，前一条闸门在 finally 里把夹具删干净之后，
@@ -104,17 +107,21 @@ FIXTURE_TEXT = """# 差旅与费用报销管理办法
 #: 300ms ⇒ 约 3.6 秒窗口，比一次 HTTP 往返（真栈实测几十毫秒）宽两个数量级。
 #: ★ 不能设太小：停止请求是另一次 HTTP 往返，窗口比往返还短的话，请求到的时候这一轮已经收尾，
 #:   回执会是 `accepted=false`（= 停晚了），于是这条闸门变成在测"网络有多快"。
-#: ★★ 2026-10-30 追加（#237）：窗口够宽**不等于**能停住 —— 客户端看到的"帧"不是桩的帧：
-#:   后端会把若干 delta 合并成一帧（54 字实测只有约 3 帧、每帧 ~18 字）。所以触发条件必须是
-#:   **第一片正文**，不是"第 3 片"：等 3 片等于等整条答案到齐，节拍再慢也照样 `accepted=false`。
+#: ★★ 2026-11-04 判别实测（#237）：旧担心的"后端把若干 delta 合并成一帧"（54 字约 3 帧）**已消失** ——
+#:   #246 修掉攒包后，客户端实收 303 帧（每帧 1–4 字）、逐帧 30–50ms 均匀到达，
+#:   「第 3 片 → done 帧」间隔 14.554 秒（≫ 一次 HTTP 往返 50ms）⇒ 帧是逐个到的，不合并。
 CHUNK_DELAY_MS = 300
 
-#: 等到**第几片**正文再发停止（`#237`）。
-#: ★ 原来是 3。第 3 片到达时，若分片在客户端被合并送达（或首片之后剩余分片一次到齐），
-#:   主线程看到的"第 3 片"其实已经是全文 ⇒ 再发停止就必然 `accepted=false`，
-#:   而 `accepted=false` 在这一步被当成红 ⇒ 闸门在测"这一轮有没有被合并送达"，不是在测停止语义。
-#:   1 片 = 只要还有剩余分片在途，停止就有意义；窗口由 `CHUNK_DELAY_MS` 保证。
-STOP_MIN_CHUNKS = 1
+#: 停止触发条件 =「已吐出正文 ≥ 这么多字」就发停止（`#237`）。
+#: ★ **不用"第 N 片"**：片数取决于桩的切分实现（4 字/片）与转发层的合并/拆分行为
+#:   （实测客户端收到的是 1–4 字/帧，与桩的 4 字/片不是一回事），两者都可能变；
+#:   "已生成字数"与怎么切无关，是"生成确实在进行中"的确定性判据。
+#:   8 字 = 至少两片桩粒度，且远小于一条答案（45+ 字）⇒ 停下时剩余分片仍在途。
+STOP_MIN_CHARS = 8
+
+#: 兜底窗口（秒）：到点还没吐出 `STOP_MIN_CHARS` 字也照发停止 —— 读数照实记（可能落 `late`）。
+#: ★ 有界：无限等下去会把"停止没被验证"变成"卡死"。
+STOP_MAX_WAIT_S = 20.0
 
 #: 停晚了重试几次（`#237`）。一次就放弃会把"偶发"变成"必然红"，无限重试会把红变成绿。
 STOP_ATTEMPTS = 2
@@ -127,7 +134,9 @@ def classify_stop(accepted: bool, done_status: str | None) -> str:
     - ``late``：停晚了 —— 请求到达时这一轮已经收尾，`accepted=false` 是如实回执，**不是缺陷**
     - ``not-applied``：这一轮还没收尾，服务端却回了 `accepted=false` —— **真缺陷**
 
-    区分靠的是"停止请求发出之后那一轮有没有收尾"：收尾了就是停晚了，没走完就是没收下。
+    区分靠的是"停止请求**发出时**那一轮有没有收尾"：已经收尾就是停晚了，还在走就是没收下。
+    ★ `done_status` 必须在发停止请求**之前**取（2026-11-04 修）：流读完必有 done 帧，事后取
+    `accepted=False` 就永远落 `late`、「停止没生效」成死代码，判据 3 的两种读数又合并回去了。
     """
     if accepted:
         return "accepted"
@@ -316,12 +325,14 @@ def chat_collect(
     resp = urllib.request.urlopen(req, timeout=deadline)
     try:
         for raw in resp:
-            # ★ 每一帧的到达时刻（#237 诊断用）：只靠"收到了几帧"分不清"边到边收"与"流结束才到齐"
-            if times is not None:
-                times.append(time.time())
             frame = parse_frame(raw.decode("utf-8", errors="replace"))
             if frame is not None:
                 frames.append(frame)
+                # ★ 每一帧的到达时刻（#237 判别用），与 `frames` **一一对齐**。
+                #   旧行为是"每一行都记"（空行也算）⇒ 两个列表错位，量不出「第 3 片 vs done 帧」的间隔。
+                #   只靠"收到了几帧"分不清「边到边收」与「流结束一次到齐」—— 到达时刻是唯一的判据。
+                if times is not None:
+                    times.append(time.time())
     finally:
         resp.close()
     return frames
@@ -341,32 +352,30 @@ def ensure_chat_model(token: str) -> tuple[str, bool]:
       造法与 `check_query_understanding_e2e.py:157-177` 一致（`stub-plain` + 桩的 `apiBase`），
       `POST /models/{id}/load` 是异步的，所以这里轮询到 LOADED 才算就绪（不固定 sleep）。
     """
-    _, payload = call("GET", "/models?kind=CHAT&size=50", token)
-    rows = data_of(payload).get("list") or []
-    for row in rows:
-        if row.get("status") == "LOADED":
-            return str(row["id"]), False
-
-    if rows:
-        model_id, created = str(rows[0]["id"]), False
-    else:
-        status, payload = call(
-            "POST",
-            "/models",
-            token,
-            {
-                "name": f"S3整链-对话-{int(time.time())}",
-                "kind": "CHAT",
-                "supplier": "LOCAL_INFERENCE",
-                "baseModel": "stub-plain",
-                "apiBase": STUB_API_BASE,
-            },
-        )
-        if status not in (200, 201):
-            raise SystemExit(f"建对话模型失败（{status}）：{payload[:300]}")
-        model_id, created = str(data_of(payload).get("id") or ""), True
-        if not model_id:
-            raise SystemExit(f"建对话模型没返回 id：{payload[:300]}")
+    # ★ 不复用库里任何现成条目，一律新建（2026-11-04 本机共享桩踩坑，接在 qwen2.5:1.5b 那坑后面）：
+    #   apiBase 在 API 侧**读不到**（列表投影没有这个字段、`GET /models/{id}` 是 405）⇒ 复用无法校验
+    #   条目指向哪台桩。本机脏库实测：复用到的 stub-plain 条目 apiBase 指向另一台共享桩（11434），
+    #   于是脚本注入的 chunk_delay_ms 打到 AIP_STUB_URL 的桩（11999）上，时序注入对真实生成链路
+    #   完全不生效；且那台共享桩被别人的 fail_rate=1.0 污染过（整轮 500 FAILED、正文 0 字）。
+    #   一律新建 = apiBase 由本脚本钉死（STUB_API_BASE），生成走哪台桩可控；teardown 删掉
+    #   created_model ⇒ 不累积。CI 干净库行为不变（本来就是新建）。
+    status, payload = call(
+        "POST",
+        "/models",
+        token,
+        {
+            "name": f"S3整链-对话-{int(time.time())}",
+            "kind": "CHAT",
+            "supplier": "LOCAL_INFERENCE",
+            "baseModel": "stub-plain",
+            "apiBase": STUB_API_BASE,
+        },
+    )
+    if status not in (200, 201):
+        raise SystemExit(f"建对话模型失败（{status}）：{payload[:300]}")
+    model_id, created = str(data_of(payload).get("id") or ""), True
+    if not model_id:
+        raise SystemExit(f"建对话模型没返回 id：{payload[:300]}")
 
     status, loaded = call("POST", f"/models/{model_id}/load", token, {})
     if status not in (200, 202):
@@ -558,7 +567,147 @@ def list_messages(token: str, conversation_id: str) -> list[dict]:
     return data_of(payload).get("list") or []
 
 
+def teardown_fixtures(
+    token: str,
+    *,
+    conversation_id: str,
+    app_id: str,
+    doc_id: str,
+    kb_id: str,
+    embedding_model_id: str,
+    created_model: bool,
+    model_id: str,
+    created_chat: bool,
+    workdir: str,
+) -> None:
+    """逐件删夹具（主链与 `--probe-timing` 探针共用）。
+
+    ★ 逐件删：本 job 的闸门顺序跑，留下的应用/会话会污染后面的列表类断言。
+    ★ 重生成在后端会**另起一条消息**（若实现退化成 NEW）⇒ 再删一次列表里同应用的全部会话，
+      让"跑一次就多一堆 S3 会话"这件事不发生在 CI 里。
+    ★ 夹具的删除顺序由后端决定：模型"被知识库/应用引用"时删不掉，所以先删应用（上面）→
+      再删文档 → 再删库 → 最后删我建的模型。
+    ★ 只删**自己建的**对话模型：复用的那个是别人的夹具，删掉会让后面的闸门找不到可用模型。
+    """
+    if conversation_id:
+        call("DELETE", f"/conversations/{conversation_id}", token)
+    if app_id:
+        _, listing = call("GET", f"/conversations?appId={app_id}&page=1&size=50", token)
+        for row in data_of(listing).get("list") or []:
+            call("DELETE", f"/conversations/{row.get('id')}", token)
+        call("DELETE", f"/assistants/{app_id}", token)
+    if doc_id:
+        call("DELETE", f"/documents/{doc_id}", token)
+    if kb_id:
+        call("DELETE", f"/knowledge-bases/{kb_id}", token)
+    if created_model and embedding_model_id:
+        call("DELETE", f"/models/{embedding_model_id}", token)
+    if created_chat and model_id and model_id != embedding_model_id:
+        call("DELETE", f"/models/{model_id}", token)
+    try:
+        os.remove(os.path.join(workdir, "s3chain.md"))
+    except OSError:
+        pass
+    try:
+        os.rmdir(workdir)
+    except OSError:
+        pass
+
+
 # ──────────────────────────────── 主链 ────────────────────────────────
+
+
+def probe_timing() -> int:
+    """`#237` 判别：量「客户端看到的帧」的粒度与节奏 —— **不发停止请求**的一轮。
+
+    ★ 判别的问题：第 ④ 步「等到第 3 片再停」偶发停晚（`accepted=false` 且这一轮已收尾）。两种可能：
+      (a) 分片在客户端被**合并送达**（或首片之后剩余一次到齐）⇒ 看到"第 3 片"时这一轮已经收尾
+          ⇒ 是**等待阈值**的问题，与停止语义无关；
+      (b) 分片逐片到达，只是停止请求的窗口不够宽 ⇒ 是时序问题。
+      区分只看一个读数：**「第 3 片到达时刻」与「done 帧到达时刻」的间隔** ——
+      小于一次 HTTP 往返（本地实测几十毫秒）就是 (a)。
+    ★ 为什么这轮不发停止：停止会把 done 帧**提前拉回来**，间隔就量不出自然收尾的节奏了 ——
+      那样量到的"间隔小"分不清是「本来就一次到齐」还是「我把它停掉的」。
+    """
+    status, payload = call("POST", "/auth/login", body={"username": USER, "password": PASSWORD})
+    if status != 200:
+        raise SystemExit(f"登录失败（{status}）：{payload[:200]}")
+    token = str(data_of(payload).get("accessToken") or "")
+    if not token:
+        raise SystemExit("登录成功但没拿到 accessToken")
+
+    model_id, created_chat = ensure_chat_model(token)
+    stamp = str(int(time.time()))
+    workdir = tempfile.mkdtemp(prefix="s3probe-")
+    kb_id, doc_id, embedding_model_id, created_model = build_kb(token, stamp, workdir)
+    app_id = create_assistant(token, model_id, kb_id, stamp)
+    conversation_id = create_conversation(token, app_id)
+
+    injected = False
+    try:
+        injected = stub_config({"chunk_delay_ms": CHUNK_DELAY_MS, "delay_ms": 0})
+        print("== #237 判别：帧时序探针（一轮**不发停止**的流式）==")
+        note(
+            f"桩节拍：{'chunk_delay_ms=%d' % CHUNK_DELAY_MS if injected else '未注入（桩不认这个 key）'}"
+            f" · 问题「{STOP_QUESTION}」"
+        )
+        frames: list[dict] = []
+        times: list[float] = []
+        started = time.time()
+        chat_collect(
+            token,
+            {"appId": app_id, "conversationId": conversation_id, "question": STOP_QUESTION},
+            deadline=180.0,
+            sink=frames,
+            times=times,
+        )
+        rel = [t - started for t in times]
+        text_idx = [i for i, f in enumerate(frames) if "text" in f]
+        done_idx = next(
+            (i for i in range(len(frames) - 1, -1, -1) if "status" in frames[i] and "messageId" in frames[i]),
+            None,
+        )
+        full = text_of(frames)
+        sizes = [len(str(frames[i].get("text") or "")) for i in text_idx]
+        note(f"客户端实收 text 帧 {len(text_idx)} 个 · 正文共 {len(full)} 字 · 每帧字数 {sizes}")
+        note(f"正文帧到达时刻（相对开流，秒）：{[round(rel[i], 3) for i in text_idx]}")
+        if not text_idx or done_idx is None:
+            print("  ⇒ 判读：没有正文帧或没有 done 帧 ⇒ 这一轮不可判（先查流式链路本身）")
+            return 1
+        third = text_idx[min(2, len(text_idx) - 1)]
+        gap_done = rel[done_idx] - rel[third]
+        note(
+            f"★ 第 1 片 +{rel[text_idx[0]]:.3f}s · 第 3 片（不足 3 片时取最后一片）+{rel[third]:.3f}s"
+            f" · done 帧 +{rel[done_idx]:.3f}s"
+        )
+        note(f"★ 「第 3 片 → done 帧」间隔 {gap_done:.3f}s（一次本地 HTTP 往返按 50ms 计）")
+        rtt = 0.05
+        if gap_done < rtt:
+            print(
+                f"  ⇒ 判读（a）：间隔 {gap_done:.3f}s < 一次 HTTP 往返 {rtt * 1000:.0f}ms"
+                f" ⇒ 看到「第 3 片」时这一轮已经收尾 —— **等待阈值问题**（合并送达/一次到齐），与停止语义无关"
+            )
+        else:
+            print(
+                f"  ⇒ 判读（b）：第 3 片之后还有 {gap_done:.3f}s 的吐字窗口（≥ {rtt * 1000:.0f}ms）"
+                f" ⇒ 分片是逐片到达的，停止有机会停在半路 —— 若仍偶发停晚，根因不在等待阈值"
+            )
+        return 0
+    finally:
+        if injected:
+            stub_config({"chunk_delay_ms": 0})
+        teardown_fixtures(
+            token,
+            conversation_id=conversation_id,
+            app_id=app_id,
+            doc_id=doc_id,
+            kb_id=kb_id,
+            embedding_model_id=embedding_model_id,
+            created_model=created_model,
+            model_id=model_id,
+            created_chat=created_chat,
+            workdir=workdir,
+        )
 
 
 def self_check() -> int:
@@ -587,7 +736,11 @@ def self_check() -> int:
 
     # ★ 纪律：`late` 不许被当成绿（连试 STOP_ATTEMPTS 次都晚 ⇒ 停止语义没被验证）
     expect(STOP_ATTEMPTS >= 2, f"停晚了至少重试 1 次（当前 STOP_ATTEMPTS={STOP_ATTEMPTS}）")
-    expect(STOP_MIN_CHUNKS == 1, f"等到第 1 片就停（当前 STOP_MIN_CHUNKS={STOP_MIN_CHUNKS}）")
+    # ★ 金丝雀：触发条件必须是"按字数"且有界 —— 改坏必红（`#237` 判据 1）。
+    #   下界 1：0 字就停 = meta 帧就停 ⇒「部分正文留住」恒真式（评论 3 的坑）。
+    #   上界 16：等到太多字才停 = 等全文 ⇒ 停晚（评论 1 的坑）。
+    expect(1 <= STOP_MIN_CHARS <= 16, f"停止触发字数有界 1 ≤ STOP_MIN_CHARS ≤ 16（当前 {STOP_MIN_CHARS}）")
+    expect(STOP_MAX_WAIT_S <= 60.0, f"兜底窗口有界 STOP_MAX_WAIT_S ≤ 60（当前 {STOP_MAX_WAIT_S}）")
 
     if failures:
         print("")
@@ -716,7 +869,7 @@ def main() -> int:
                     # ★ 帧写进共享列表（`sink=`），主线程才可能"边吐边看"—— 见 `chat_collect` 的说明
                     chat_collect(
                         token,
-                        {"appId": app_id, "conversationId": conversation_id, "question": "请详细说明报销流程"},
+                        {"appId": app_id, "conversationId": conversation_id, "question": STOP_QUESTION},
                         sink=frames,
                     )
                 except Exception as e:  # noqa: BLE001
@@ -724,10 +877,11 @@ def main() -> int:
 
             worker = threading.Thread(target=reader, daemon=True)
             worker.start()
-            # 等到第 `STOP_MIN_CHUNKS` 片就停 —— 剩余分片在途，停止才有意义（`#237`）
-            deadline = time.time() + 60
+            # 等到「已吐出 STOP_MIN_CHARS 字」就停 —— 剩余分片在途，停止才有意义（#237）
+            # ★ 不用「第 N 片」：片数取决于桩的切分与转发层的合并行为，字数才是确定性判据。
+            deadline = time.time() + STOP_MAX_WAIT_S
             while time.time() < deadline:
-                if len([f for f in frames if "text" in f]) >= STOP_MIN_CHUNKS:
+                if len(text_of(frames)) >= STOP_MIN_CHARS:
                     break
                 if errors:
                     break
@@ -736,6 +890,10 @@ def main() -> int:
             meta_stop = meta_of(frames)
             message_id = str(meta_stop.get("messageId") or "")
             sent_before = text_of(frames)
+            # ★ done_status 在发停止请求**之前**取（#237 判据 3）：分类要回答「停止请求发出时
+            #   这一轮有没有收尾」。worker.join 之后再取（2026-11-04 修前的老实现）流读完必有
+            #   done 帧 ⇒ accepted=False 恒落 late、「停止没生效」（not-applied）永远走不到。
+            done_before_stop = str(done_of(frames).get("status") or "")
             stop_status, stop_payload = call(
                 "POST",
                 f"/conversations/{conversation_id}/messages/{message_id}/stop",
@@ -750,7 +908,7 @@ def main() -> int:
                 "sent_before": sent_before,
                 "stop_status": stop_status,
                 "accepted": stop_receipt.get("accepted") is True,
-                "done_status": str(done_of(frames).get("status") or ""),
+                "done_status": done_before_stop,
             }
 
         stop_round: dict = {}
@@ -878,35 +1036,18 @@ def main() -> int:
     finally:
         if chunk_delay_injected:
             stub_config({"chunk_delay_ms": 0})
-        # ★ 逐件删：本 job 的闸门顺序跑，留下的应用/会话会污染后面的列表类断言。
-        if conversation_id:
-            call("DELETE", f"/conversations/{conversation_id}", token)
-        # ★ 重生成在后端会**另起一条消息**（若实现退化成 NEW）⇒ 再删一次列表里同应用的全部会话，
-        #   让"跑一次就多一堆 S3 会话"这件事不发生在 CI 里。
-        if app_id:
-            _, listing = call("GET", f"/conversations?appId={app_id}&page=1&size=50", token)
-            for row in data_of(listing).get("list") or []:
-                call("DELETE", f"/conversations/{row.get('id')}", token)
-            call("DELETE", f"/assistants/{app_id}", token)
-        # ★ 夹具的删除顺序由后端决定：模型"被知识库/应用引用"时删不掉，所以先删应用（上面）→
-        #   再删文档 → 再删库 → 最后删我建的模型。
-        if doc_id:
-            call("DELETE", f"/documents/{doc_id}", token)
-        if kb_id:
-            call("DELETE", f"/knowledge-bases/{kb_id}", token)
-        if created_model and embedding_model_id:
-            call("DELETE", f"/models/{embedding_model_id}", token)
-        # ★ 只删**自己建的**对话模型：复用的那个是别人的夹具，删掉会让后面的闸门找不到可用模型。
-        if created_chat and model_id and model_id != embedding_model_id:
-            call("DELETE", f"/models/{model_id}", token)
-        try:
-            os.remove(os.path.join(workdir, "s3chain.md"))
-        except OSError:
-            pass
-        try:
-            os.rmdir(workdir)
-        except OSError:
-            pass
+        teardown_fixtures(
+            token,
+            conversation_id=conversation_id,
+            app_id=app_id,
+            doc_id=doc_id,
+            kb_id=kb_id,
+            embedding_model_id=embedding_model_id,
+            created_model=created_model,
+            model_id=model_id,
+            created_chat=created_chat,
+            workdir=workdir,
+        )
 
     if problems:
         print(f"\n结果：红 —— {len(problems)} 条不成立")
@@ -920,4 +1061,6 @@ def main() -> int:
 if __name__ == "__main__":
     if "--self-check" in sys.argv:
         sys.exit(self_check())
+    if "--probe-timing" in sys.argv:
+        sys.exit(probe_timing())
     sys.exit(main())

@@ -12,6 +12,7 @@ import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingStatus;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.domain.ResourceExhaustion;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import java.util.ArrayList;
 import java.util.List;
@@ -20,7 +21,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -197,9 +197,10 @@ public class EmbeddingRunner {
   /**
    * 这个异常是不是「资源不足」（连接池打满、库不可达），而不是「这份文档有问题」？
    *
-   * <p>★ 判据放窄：只认 Spring 的 {@link DataAccessResourceFailureException}（Hikari 等连接池拿不到 连接时抛的 {@code
-   * CannotGetJdbcConnectionException} 是它的子类）。别把任何 {@code DataAccessException} 都算进来 —— 唯一约束冲突、SQL
-   * 写错也是 DataAccessException，那类靠重试 好不了，归成"资源不足"会让用户无限重试。
+   * <p>★ 判据（instanceof 两种 + 三句固定措辞）与逐条理由住在 {@link ResourceExhaustion}（{@code #303}
+   * 挪过去的）：解析收尾（{@code DocumentService.failParse}）与 HTTP 兜底（{@code GlobalExceptionHandler}） 共用同一条判据
+   * —— 判据分叉会让同一个异常在三处得到两种说法，那正是 {@code #303} 的病根。这里保留方法名与包级可见性： 测试目标不变（{@code
+   * EmbeddingFailureClassificationTest}）。
    *
    * <p>包级可见：测试要验它的边界（{@code EmbeddingFailureClassificationTest}）。
    *
@@ -207,15 +208,9 @@ public class EmbeddingRunner {
    * @return 是否资源不足
    */
   static boolean isResourceExhaustion(Throwable error) {
-    for (Throwable current = error; current != null; current = current.getCause()) {
-      if (current instanceof DataAccessResourceFailureException) {
-        return true;
-      }
-      if (current.getCause() == current) {
-        break;
-      }
-    }
-    return false;
+    // ★ 实现住在 platform.domain.ResourceExhaustion（#303）：解析收尾与 HTTP 兜底也要同一条判据，
+    //   判据分叉会让同一个异常在三处得到两种说法。逐条理由与三句措辞的出处见那边的 javadoc。
+    return ResourceExhaustion.isResourceExhaustion(error);
   }
 
   // ────────────────────────── 内部 ──────────────────────────

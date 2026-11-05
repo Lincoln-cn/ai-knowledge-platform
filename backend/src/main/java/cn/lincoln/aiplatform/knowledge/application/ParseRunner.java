@@ -3,15 +3,19 @@ package cn.lincoln.aiplatform.knowledge.application;
 import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
 import cn.lincoln.aiplatform.knowledge.infrastructure.OcrFastScanner;
 import cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser;
+import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * 解析执行器（第 9 周 · 0.3.1）—— 「建档即解析」从**同步**改成**异步流水线**。
@@ -30,8 +34,12 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *   <li><b>落库</b>（{@link DocumentService#finishParse}，一个短事务）：解析结果 + 分块，原子完成
  * </ol>
  *
- * <p>★ 启动时机由 {@link TransactionalEventListener} 的 {@code AFTER_COMMIT} 保证 —— 见 {@link
- * DocumentUploaded}（那是 issue #18 的教训）。
+ * <p>★ 启动时机由<strong>事务同步的 {@code afterCommit}</strong> 回调保证（上传事务提交后才排队任务，那也是 issue #18 的教训）。 ★
+ * {@code #304} 起不再用 {@code @TransactionalEventListener(AFTER_COMMIT)}：那个注解会被 Modulith 的 {@code
+ * CompletionRegisteringAdvisor} 代理，代理在进入方法体**之前**先开一个新事务更新 {@code event_publication}（{@code
+ * markProcessing}）—— 连接池满时它抛 {@code CannotCreateTransactionException}，异常在代理外层、方法体从未执行 ⇒
+ * 解析任务从未创建、文档永远停在「待解析」。 改成普通 {@link EventListener}（同步于 {@code publishEvent}、跑在上传事务内）+ {@code
+ * afterCommit} 里才提交任务（纯内存，不碰连接池）。
  */
 @Service
 public class ParseRunner {
@@ -41,31 +49,94 @@ public class ParseRunner {
   /** 虚拟线程（{@code ADR-01}：IO/CPU 混合密集，且要"一篇慢不挡别的"）。 */
   private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
+  /**
+   * 在跑登记表（{@code #303}）：文档 id → 任务落地时刻。
+   *
+   * <p>★ <b>submit 时登记、任务收尾才注销</b> —— 排队中的任务（等闸门许可）也在表里。这张表是 {@link StuckSegmentingReaper}
+   * 区分「卡死」与「慢跑」的唯一依据：在表里 = 有活人管，超期只记日志不判死；不在表里 = 无主，才回收。判错的代价不对称 —— 误杀正在慢跑的份比卡住更坏。
+   */
+  private final Map<UUID, Instant> inFlight = new ConcurrentHashMap<>();
+
   private final TikaMarkdownParser parser;
   private final OcrFastScanner scanner;
   private final ParseProgressService progress;
   private final DocumentService documents;
+  private final ParseConcurrencyGate gate;
 
   public ParseRunner(
       TikaMarkdownParser parser,
       OcrFastScanner scanner,
       ParseProgressService progress,
-      DocumentService documents) {
+      DocumentService documents,
+      ParseConcurrencyGate gate) {
     this.parser = parser;
     this.scanner = scanner;
     this.progress = progress;
     this.documents = documents;
+    this.gate = gate;
+  }
+
+  /** 这份文档当前有没有活人管（在跑或排队中）？—— 给 {@link StuckSegmentingReaper} 判「卡死 vs 慢跑」。 */
+  public boolean isInFlight(UUID documentId) {
+    return inFlight.containsKey(documentId);
   }
 
   /**
-   * 收到上传事件 ⇒ 提交一次解析。
+   * 收到上传事件 ⇒ 排队一次解析（{@code #304} 的落点：任务必须被创建出来）。
    *
-   * <p>★ {@code AFTER_COMMIT}：上传那个事务提交之后才提交任务 —— 见 {@link DocumentUploaded}。
+   * <p>★★ 为什么是普通 {@link EventListener} + 事务同步回调，而不是
+   * {@code @TransactionalEventListener(AFTER_COMMIT)} （issue #304 的根因）：后者会被 Modulith 的 {@code
+   * CompletionRegisteringAdvisor} 代理，代理在 {@code proceed()} 之前先开一个新事务去登记事件（{@code markProcessing}）——
+   * 连接池满时那一步就抛 {@code CannotCreateTransactionException}， 异常根本没进本方法体 ⇒ {@code executor.submit}
+   * 从未执行、解析任务从未创建、{@code failParse} 也无从谈起， 文档永远停在「待解析」。而 {@code afterCommit} 回调是纯内存的（{@code
+   * TransactionSynchronizationManager}）， 不需要数据库连接，"任务排队"这一步在连接池耗尽时也必然发生。
+   *
+   * <p>★ #18 的语义<strong>没有退让</strong>：任务仍在<strong>上传事务提交之后</strong>才起跑（{@code afterCommit}）。 事务回滚 ⇒
+   * {@code afterCommit} 不触发 ⇒ 任务不起跑 —— 起跑的仍是"已落库的行"。
+   *
+   * <p>★ 方法体只做"注册回调"这一件事，且整体 try/catch：<strong>本方法同步跑在上传事务里</strong>， 任何外抛的异常都会把上传一起回滚 ——
+   * 那是把"解析没起来"换成"上传直接失败"，更坏。捕获后只留痕： 文档行已落定（{@code parse_expected_at} 已写），任务没排队的由 {@code
+   * StuckPendingParseReaper} 超期兜底判成可重试。
    */
-  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  @EventListener
   public void onUploaded(DocumentUploaded event) {
-    executor.submit(
-        () -> run(event.documentId(), event.content(), event.filename(), event.userId()));
+    try {
+      if (TransactionSynchronizationManager.isSynchronizationActive()) {
+        TransactionSynchronizationManager.registerSynchronization(
+            new TransactionSynchronization() {
+              @Override
+              public void afterCommit() {
+                submitParse(event);
+              }
+            });
+        return;
+      }
+      // ★ 无事务上下文（测试直调、或将来某个非事务调用点）：registerSynchronization 在这里会抛
+      //   IllegalStateException ⇒ 退化成"立刻排队"。语义差别只有一个：没有回滚保护可言
+      //   （本来就没有事务）。文档行已落定，起跑是安全的。
+      log.warn("onUploaded 在无事务上下文被调用：文档 {}（{}）—— 退化成直接排队解析", event.documentId(), event.filename());
+      submitParse(event);
+    } catch (RuntimeException e) {
+      log.error(
+          "解析任务排队失败：文档 {}（{}）—— 上传仍然成功，解析任务未排队；该文档将由 StuckPendingParseReaper 在超期后标为可重试。原因：{}",
+          event.documentId(),
+          event.filename(),
+          e.toString());
+    }
+  }
+
+  /** 排队一次解析（{@code afterCommit} 回调与无事务退化路径共用）。提交失败也只留痕，理由同 {@link #onUploaded}。 */
+  private void submitParse(DocumentUploaded event) {
+    try {
+      executor.submit(
+          () -> run(event.documentId(), event.content(), event.filename(), event.userId()));
+    } catch (RuntimeException e) {
+      log.error(
+          "解析任务提交失败：文档 {}（{}）—— 由 StuckPendingParseReaper 超期兜底。原因：{}",
+          event.documentId(),
+          event.filename(),
+          e.toString());
+    }
   }
 
   /**
@@ -77,6 +148,17 @@ public class ParseRunner {
    * @param userId 建档人
    */
   public void run(UUID documentId, byte[] content, String filename, UUID userId) {
+    // ★ 登记在闸门外：排队等许可的任务也算"有活人管"，否则排队超期会被看门狗误杀。
+    inFlight.put(documentId, Instant.now());
+    try {
+      gate.run(() -> doParse(documentId, content, filename, userId));
+    } finally {
+      inFlight.remove(documentId);
+    }
+  }
+
+  /** 一次解析的三步本体（{@link #run} 套在闸门里调它）。 */
+  private void doParse(UUID documentId, byte[] content, String filename, UUID userId) {
     try {
       // ── ① 分母：关掉 OCR 的快扫（约 0.3 秒 vs 全量的 11 秒）──
       OcrFastScanner.OcrPageInventory inventory = scanner.scan(content, filename);
@@ -121,7 +203,17 @@ public class ParseRunner {
     } catch (RuntimeException e) {
       // ★ 任何异常都要留下可读原因 —— 不许让文档停在「分段中」等一个永远不会来的结果
       log.warn("解析失败：文档 {}（{}）—— {}", documentId, filename, e.toString());
-      documents.failParse(documentId, e);
+      try {
+        documents.failParse(documentId, e);
+      } catch (RuntimeException finishError) {
+        // ★ #303 的卡死机理之一：资源不足时 failParse 自己也拿不到连接、同样炸掉 ⇒ 文档永远留在
+        //   「分段中」。这里只留痕不吞语义：文档交由 StuckSegmentingReaper 按超期回收（无主才判死）。
+        log.error(
+            "解析失败后收尾也失败：文档 {}（{}）—— 留给超期回收处理。收尾异常：{}",
+            documentId,
+            filename,
+            finishError.toString());
+      }
     }
   }
 }

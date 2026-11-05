@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.modelcatalog.web;
 
 import cn.lincoln.aiplatform.modelcatalog.application.BaseModelOption;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelCapability;
+import cn.lincoln.aiplatform.modelcatalog.application.ModelReference;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelService;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelView;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
@@ -63,9 +64,10 @@ public class ModelController {
       @RequestParam(required = false) String keyword,
       @RequestParam(required = false) ModelKind kind,
       @RequestParam(required = false) ModelStatus status,
+      @RequestParam(required = false) UUID providerId,
       @RequestParam(required = false) Integer page,
       @RequestParam(required = false) Integer size) {
-    return ApiResponse.ok(modelService.list(keyword, kind, status, page, size));
+    return ApiResponse.ok(modelService.list(keyword, kind, status, providerId, page, size));
   }
 
   /**
@@ -132,13 +134,35 @@ public class ModelController {
   /**
    * 删除模型。
    *
-   * <p>★ 拒绝条件是「被应用/知识库引用」而不是「已加载」（{@code 08 §3.2} 连带修正）—— 否则加载过的模型永远删不掉。 builtin 不可删。删除时清掉启用位。
+   * <p>★ 拒绝条件是「被应用/知识库/平台默认键引用」而不是「已加载」（{@code 08 §3.2} 连带修正）—— 否则加载过的模型永远删不掉。 builtin
+   * 不可删。删除时清掉启用位。
+   *
+   * <h3>★ {@code #300}：先查后删</h3>
+   *
+   * <p>有引用时返回 <strong>409</strong>，响应体 {@code data} 里带引用面明细（哪些应用 / 哪些知识库 / 多少文档 / 哪个平台默认键）；{@code
+   * force=true} 是明知有引用仍要删（改了地址/名字之后的清理场景）， 但<strong>不做静默级联</strong> —— 引用列不会被动过，删完那些引用会变成悬空的字符串
+   * id，因此 force 会被记进 WARN 日志。
+   *
+   * @param id 模型 id
+   * @param force 明知还有引用仍要删
    */
   @DeleteMapping("/{id}")
   @PreAuthorize("hasAuthority('model:manage')")
-  public ApiResponse<Void> delete(@PathVariable UUID id) {
-    modelService.delete(id);
+  public ApiResponse<Void> delete(
+      @PathVariable UUID id, @RequestParam(defaultValue = "false") boolean force) {
+    modelService.delete(id, force);
     return ApiResponse.ok();
+  }
+
+  /**
+   * 读某个模型的引用面（{@code #300}）：列表页的"删除"按钮靠它显示「N 处关联」。
+   *
+   * <p>★ 单独一个只读端点而不是只放在 409 响应体里 —— 否则用户必须先点一次删除才知道能不能删。
+   */
+  @GetMapping("/{id}/references")
+  @PreAuthorize("hasAuthority('model:manage')")
+  public ApiResponse<ModelReference> references(@PathVariable UUID id) {
+    return ApiResponse.ok(modelService.referencesOf(id));
   }
 
   // ────────────────────────── load 语义 ──────────────────────────

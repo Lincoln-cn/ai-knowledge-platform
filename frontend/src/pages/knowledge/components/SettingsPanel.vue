@@ -87,10 +87,10 @@
             <el-radio-button value="FREE_ANSWER">自由回答</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="改写条数">
+        <el-form-item label="查询理解条数">
           <el-input-number v-model="retrieval.queryCount" :min="0" :max="5" :disabled="!canManage" />
           <div class="hint micro">
-            0 = 不做这一层；1 = 只改写；默认 3。每多一条查询多一次检索 —— 低配机器往 1 调
+            0 = 不改写，用原句检索；1 = 只改写；默认 3。每多一条查询多一次检索 —— 低配机器往 1 调
           </div>
         </el-form-item>
         <el-form-item label="拆分多意图">

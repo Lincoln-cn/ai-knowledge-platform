@@ -37,8 +37,9 @@ import org.springframework.ai.rag.retrieval.search.DocumentRetriever;
  *
  * <h3>★ 它不证明什么（不要读成"生产已经接了"）</h3>
  *
- * <p>本用例用一个桩 {@link ChatModel}，只验证 Spring AI 的<strong>框架语义</strong>。生产对话端口仍走手写 HTTP（{@code #62}），
- * advisor 链在生产路径上仍然没有挂点 —— 那一条是独立欠账，本用例不冒充它。
+ * <p>本用例用一个桩 {@link ChatModel}，只验证 Spring AI 的<strong>框架语义</strong>（检索 advisor 的 order 与
+ * doc-context 传递），<strong>不</strong>证明生产装配。生产对话端口那条链有两条独立读数：{@code SpringAiChatAdapterTest}
+ * （适配器层：advisor 链 / 兜底分流 / 金丝雀）与 {@code SafeGuardHttpE2ETest}（HTTP 层：敏感词在上游之前被拦）。 本用例不冒充它们。
  *
  * <p>★ 为什么要引 {@code spring-ai-rag}（且只引 test scope）：这三个断言的对象是官方类；
  * 不引依赖就只能测一个自己实现的同名概念，那种断言永远为真，也永远发现不了升级带来的语义漂移。

@@ -20,9 +20,13 @@ import org.junit.jupiter.api.Test;
  *
  * <h3>★ 这条测试为什么必须存在</h3>
  *
- * <p>{@code #113} 的问题不是"没做"，而是"**设计没有变成能拦人的判据**" —— 一条只写在设计册里的要求，
- * 和"有余力的建议"没有区别。本类把"未落地"这个事实变成一条**会红的断言**：等执行引擎真落地那天， 它必须红，提醒实现者把 {@code #113}
- * 的六条判据接上（两段式、中断点即拒绝发布、{@code KeyUpdate}、 检查点 L1/L2 同事务、注册表边界、检索链不进图）—— 那时请把本类改成对这些行为的断言，而不是删掉它。
+ * <p>{@code #113} 的问题不是"没做"，而是"**设计没有变成能拦人的判据**" —— 一条只写在设计册里的要求， 和"有余力的建议"没有区别。执行引擎今天已落地，但**不在
+ * {@code workflow} 模块**（落在 {@code assistant/application}，与编排配置面/NodeTypeCatalog 同处；{@code workflow}
+ * 的 allowedDependencies 不含 {@code assistant}，搬过去会越界）， 所以 {@link
+ * #workflowModuleStillHasOnlyThePackageInfo} 仍绿、它只钉「{@code workflow} 模块别被塞实现类」； ★ {@code #113}
+ * 六条判据的**行为断言**已由 {@code WorkflowCompilerTest} / {@code WorkflowInterruptPublishTest} / {@code
+ * FlowStateTest} / {@code LinearWorkflowExecutorL1Test} / {@code LinearWorkflowExecutorTest} 接上
+ * （逐行对应见 {@code WorkflowEngineAdmissionTest#eachAdmissionCriterionHasItsOwnBehaviouralTest}）。
  */
 class WorkflowEngineAbsenceTest {
 
@@ -47,9 +51,10 @@ class WorkflowEngineAbsenceTest {
 
     assertThat(files)
         .as(
-            "★ workflow 模块一旦出现实现类，说明执行引擎开工了 ⇒ 请把 #113 的六条判据变成对行为的断言"
-                + "（两段式的『只编译不跑』测试 / 含中断点的图发布必失败 / KeyUpdate 两条 / L1 同事务 / 注册表边界先核 /"
-                + " 检索链不进图），再改本测试")
+            "★ workflow 模块保持只有 package-info（执行引擎不在这里，落在 assistant/application 与编排配置面同处）——"
+                + " 一旦有人把实现类塞进 workflow，这条会红。#113 六条判据的行为测试见 WorkflowCompilerTest /"
+                + " WorkflowInterruptPublishTest / FlowStateTest / LinearWorkflowExecutorL1Test /"
+                + " LinearWorkflowExecutorTest")
         .containsExactly("package-info.java");
   }
 

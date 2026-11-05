@@ -303,13 +303,13 @@ def stage_ingest(token: str, args: argparse.Namespace) -> str:
 def stage_embed(token: str, kb_id: str, args: argparse.Namespace) -> None:
     rows = documents_of(kb_id, token)
     todo = [r for r in rows if (r.get("status") or "") != "SUCCEEDED"]
-    print(f"  · 待向量化 {len(todo)}/{len(rows)} 份")
+    print(f"  · 待向量化 {len(todo)}/{len(rows)} 份", flush=True)
     started = time.time()
     for i, row in enumerate(todo, 1):
         doc_id = row.get("id")
         status, _ = CLIENT.call("POST", f"/documents/{doc_id}/embedding", token, {})
         if status != 200:
-            print(f"    ✗ {row.get('name')} 触发失败 {status}")
+            print(f"    ✗ {row.get('name')} 触发失败 {status}", flush=True)
             continue
         deadline = time.time() + 1800
         while time.time() < deadline:
@@ -319,7 +319,7 @@ def stage_embed(token: str, kb_id: str, args: argparse.Namespace) -> None:
             if st in {"SUCCEEDED", "EMBEDDING_FAILED", "SEGMENT_FAILED"}:
                 break
             time.sleep(2)
-        print(f"    [{i}/{len(todo)}] {row.get('name')} → {st}（{time.time() - started:.0f}s）")
+        print(f"    [{i}/{len(todo)}] {row.get('name')} → {st}（{time.time() - started:.0f}s）", flush=True)
         if st != "SUCCEEDED":
             print(f"      failReason={cur.get('failReason')} failHint={cur.get('failHint')}")
 
@@ -332,6 +332,9 @@ def stage_eval(token: str, kb_id: str, args: argparse.Namespace) -> int:
 
     records: list[dict] = []
     started = time.time()
+    # ★ 215 条 × 单条几秒 ≈ 十几分钟。此前**一条进度都不打**，
+    #   于是在外部看来和"卡死"完全一样（`#280` 那轮真的等了一个半小时）。
+    print(f"  开始：{len(qa)} 条，每 10 条报一次进度与预计剩余", flush=True)
     for i, item in enumerate(qa, 1):
         status, body = CLIENT.authed(
             "POST",
@@ -347,8 +350,15 @@ def stage_eval(token: str, kb_id: str, args: argparse.Namespace) -> int:
         )
         if status != 200:
             records.append({"id": item["id"], "error": f"{status} {str(body)[:120]}"})
+            print(f"  [{i}/{len(qa)}] {item['id']} 失败 {status}")
             continue
         hits = (body.get("data") or {}).get("items") or []
+
+        if i % 10 == 0 or i == len(qa):
+            spent = time.time() - started
+            per = spent / i
+            left = per * (len(qa) - i)
+            print(f"  [{i}/{len(qa)}] 已用 {spent/60:.1f} 分钟，预计还剩 {left/60:.1f} 分钟", flush=True)
         want_exact = item["expected_snippet"]
         want_loose = norm_loose(want_exact)
         want_core = core_of(want_exact)

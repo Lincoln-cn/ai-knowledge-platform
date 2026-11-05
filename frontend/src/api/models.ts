@@ -36,11 +36,48 @@ export interface ModelInfo {
   /** 旧式直连（没有 providerId）：界面要标出来，提示绑定服务商 */
   legacyDirect?: boolean
   /**
+   * 这条模型**实际会打到的**上游地址（服务商地址或旧式直连地址）。
+   * ★ 它是"证明这一次确实在量对的机器"的唯一凭据：`baseModel` 只是名字，名字不说明请求发到哪
+   * （`#223` 的陷阱②：名字看着对、请求却打到 Ollama）。界面也用它回答"这个模型到底连的是谁"。
+   */
+  apiBase?: string
+  /**
    * 加载失败的可读排查原因。
    * 仅 `LOAD_FAILED` 时有值，是能照着排查的那句话（不是「加载失败」四个字）；
    * 其余状态省略本字段。冻结契约只加可选字段。
    */
   loadError?: string
+  /**
+   * 引用面数量（`#300`）：有多少处东西指向这条模型（应用 + 知识库 + 文档 + 平台默认键）。
+   * ★ 后端在列表里就给出这个数 —— 界面靠它在**点删除之前**标出"这条删不得"，
+   *   而不是让用户点一次、吃一个 409 才知道。
+   */
+  referenceCount?: number
+}
+
+/** 引用面里的一条具名引用（应用 / 知识库）。 */
+export interface ModelReferenceItem {
+  id: string
+  name: string
+}
+
+/**
+ * 模型的引用面（`#300`）：删掉它之前会弄坏什么。
+ *
+ * ★ 形状由后端 `ModelReference` 决定；五类引用分别落在：
+ * `as_assistant.model_id` / `kb_knowledge_base.embedding_model_id` / 这些库下的文档 /
+ * `cv_chat_settings.default_model_id` / 服务商侧的 `ai_model.provider_id`（模型侧恒为 0）。
+ */
+export interface ModelReference {
+  apps: ModelReferenceItem[]
+  knowledgeBases: ModelReferenceItem[]
+  /** 这些知识库下**未删**的文档数（文档跟着库用同一个向量模型，没有自己的列） */
+  documents: number
+  /** 平台默认键的可读名，如 `cv_chat_settings.default_model_id` */
+  defaultKeys: string[]
+  /** 服务商侧：绑定在它下面的模型数（模型侧恒为 0） */
+  models: number
+  modelNames: string[]
 }
 
 /** 从供应商拉取到的可注册基础模型 */
@@ -111,6 +148,8 @@ export interface BaseModelsQuery {
 export interface ModelQuery extends PageQuery {
   kind?: ModelKind
   status?: ModelStatus
+  /** 只列这个服务商下的模型（服务商页的「N 个模型」点进来时用，`#289` 打磨） */
+  providerId?: string
 }
 
 export interface UpsertModelBody {
@@ -155,8 +194,26 @@ export const createModel = (body: UpsertModelBody) =>
 export const updateModel = (id: string, body: Partial<UpsertModelBody>) =>
   request<ModelInfo>({ method: 'PUT', url: '/models/:id', path: { id }, body })
 
-export const deleteModel = (id: string) =>
-  request<void>({ method: 'DELETE', url: '/models/:id', path: { id } })
+/**
+ * 删除模型（`#300`：先查后删）。
+ *
+ * ★ 有引用时后端返回 **409**，`ApiError.details` 里就是 {@link ModelReference}（哪些应用 / 哪些库 / 多少文档 /
+ * 哪个平台默认键）—— 界面据此展示明细，而不是只念一句"删除失败"。
+ *
+ * @param id 模型 id
+ * @param force 明知还有引用仍要删（后端会 WARN 留痕；**不会**静默改动引用它的行）
+ */
+export const deleteModel = (id: string, force = false) =>
+  request<void>({
+    method: 'DELETE',
+    url: '/models/:id',
+    path: { id },
+    query: force ? { force: true } : undefined
+  })
+
+/** 读模型的引用面（`#300`）：删除按钮显示「N 处关联」、强制删除弹框列明细都靠它。 */
+export const getModelReferences = (id: string) =>
+  request<ModelReference>({ method: 'GET', url: '/models/:id/references', path: { id } })
 
 /** 触发加载。加载是异步的，返回时的 status 仍是「加载中」(`LOADING`) */
 export const loadModel = (id: string) =>
