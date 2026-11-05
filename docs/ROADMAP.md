@@ -4013,6 +4013,42 @@ Cannot map `null` into type `boolean`
 
 ★ **判据 ⑥ 是全套里最容易被跳过的一条**，也是唯一能防住"口径被读成已经做了"的一条 —— 它的形状与 `#79` 的「读数本身要能红」一致。
 
+#### 11.12.5 ★★ 一件必须写清的边界：真跑业务不在 `0.6.1`
+
+执行器的 `NodeExecutor` 注册表今天只装**假实现**（测试里用 `@TestConfiguration` 装配），
+真实业务节点一个都没接 —— 这不是"没做完"，而是一条**有理由的排期**，理由两条：
+
+1. **`AI_CHAT_NODE` 要接 `conversation.ChatService`，而 `assistant` 的 `allowedDependencies` 是
+   `{platform, identity, modelcatalog, knowledge}`，不含 `conversation`**。
+   ★ 两者今天**互不依赖**（`conversation` 的名单是 `{platform, identity, modelcatalog, retrieval}`），
+   所以加一条边**不会成环**、`ModuleBoundaryTest` 也不会红 —— 但它会让"配置面依赖运行时",
+   而本项目既有的做法是**端口放 `platform`、实现各在自己模块**（`platform/assistant/AppBindingPort.java`
+   就是那个先例）。⇒ 正确路径是**在 `platform` 加一个 `WorkflowChatPort`**，由 `conversation` 实现，
+   `assistant` 侧只依赖端口。
+2. **那条端口是 `1.0.0`（"编排真能跑 + 工具能调"）的活**，`0.6.1` 的判据 ④ 只要求
+   "L1 检查点与业务同事务"，不要求"业务节点是真的"。
+
+★ 判据：**`0.6.1` 交付后，问答链路的行为必须与交付前逐字一致** —— 执行器不接任何生产调用点，
+只有 `LinearWorkflowExecutor` 的测试在调它。这条是"不做尾巴"的判据形式：不是"还差什么"，
+而是"**差的那部分不影响任何已有路径**"。
+
+#### 11.12.6 两套"已实现"的口径（记账，不改数字）
+
+`implemented` 这个词在本项目有**两个不同的所指**，混读会得出相反结论：
+
+| 口径 | 指什么 | 今天多少 | 谁守 |
+|---|---|---|---|
+| 契约 `ImplementedNodeType`（`frontend/src/api/workflow.ts`） | **画布能画**的节点类型 | 8 | `frontend/check_workflow_node_types.py`（要求每种恰好一个画布模块） |
+| `node-types.json` 的 `implemented` | **后端能跑**的节点类型 | 8（数字与上表**绑定**，见 `WorkflowNodeTypeTest.exactlyEightAreImplemented` 的注释） | `WorkflowNodeTypeTest` |
+
+★ 不一致的是 `QUESTION_NODE`：它在两处都是"已实现"，但**后端没有它的执行实现**（它是人工介入，
+`#113` 用 `isHumanInTheLoop` 拦它、`implemented=false` 的节点用 `PLANNED_TYPE` 拦）⇒
+**能画、不能发布**，这是 `0.6.1` 的**正确行为**，但"已实现"四个字读起来像"能跑"。
+
+⇒ 本版**不改数字**（改了会让契约与 JSON 脱钩、`check_workflow_node_types.py` 与
+`WorkflowNodeTypeTest` 互相打架），改为**把口径写在这里**，并在 `#113` 的关闭评论里记一笔：
+**"已实现" = 画布能画；"能跑" 需要另有一条账**。
+
 ### 11.12.4 不在本版
 
 - **中断点的挂起与恢复**（`1.0.0`）：本版只做"识别 + 拒绝发布"，**不做**"暂停在那里等人审批"。
