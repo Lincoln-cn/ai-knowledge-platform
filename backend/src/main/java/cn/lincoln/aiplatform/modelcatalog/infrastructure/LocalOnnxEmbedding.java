@@ -91,6 +91,39 @@ public class LocalOnnxEmbedding {
   }
 
   /**
+   * 问问「这个基础模型名的模型文件在不在磁盘上」—— ★ 只是为了在**路由走错时留下一行 WARN**。
+   *
+   * <p>为什么需要它（{@code #305} 缺口 A）：{@link RoutingEmbeddingAdapter} 只按<b>名字</b>判定"归不归本地服务"， 所以用户在模型行里填
+   * {@code bge-small-zh-v1.5} 时 —— <b>哪怕 {@code models/bge-small-zh-v1.5/} 里 24MB 的模型文件 好好躺着</b> ——
+   * 也会静默走上游。上游回来的是另一种维度的向量，检索照样返回结果、只是全部不对；而全程 <b>零日志零告警</b>，事后从读数上完全看不出走过哪条路。
+   *
+   * <p>★ 只报不平移：**不**改路由（改了会让"填错名字"变成"莫名走了本地"），也**不**抛错（那个模型行仍可能 合法地指向一台真上游）。判据见 {@code
+   * #305}：走错路时至少要能在日志里看见一行。
+   *
+   * @param baseModel 模型目录里的基础模型名（可以带空格）
+   * @return 磁盘上有一套完整的本地模型文件
+   */
+  public boolean hasModelFilesFor(String baseModel) {
+    if (baseModel == null || baseModel.isBlank()) {
+      return false;
+    }
+    String dir = modelsRoot() + "/" + baseModel.trim();
+    return resolve(dir + "/model_quantized.onnx").isFile()
+        && resolve(dir + "/tokenizer.json").isFile();
+  }
+
+  /** {@code models/} 那层目录 —— 由 {@code model-path} 往上两级推出来，不另开配置键（多一个键就多一处能配错）。 */
+  private String modelsRoot() {
+    java.nio.file.Path path = java.nio.file.Path.of(modelPath);
+    java.nio.file.Path parent = path.getParent();
+    if (parent == null) {
+      return "models";
+    }
+    java.nio.file.Path grand = parent.getParent();
+    return (grand == null ? parent : grand).toString().replace('\\', '/');
+  }
+
+  /**
    * @return 是否启用本地 ONNX（关掉时走上游，健康指示器报 UNKNOWN）
    */
   public boolean enabled() {
