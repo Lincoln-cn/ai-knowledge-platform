@@ -33,6 +33,9 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
   /** 同时向量化的文档份数（`#227` 的闸门容量）。 */
   private final int embeddingConcurrency;
 
+  /** 同时解析/分段的文档份数（`#303` 的闸门容量；0 = auto）。 */
+  private final int parseConcurrency;
+
   /** 连接池上限。默认值与 Spring Boot 的 Hikari 默认值一致（10）。 */
   private final int poolSize;
 
@@ -69,7 +72,9 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
       @Value("${app.model.api-key-secret:}") String apiKeySecret,
       // ★ `#282`：问答要两个模型同时驻留；槽位只有 1 时每轮都在重新加载模型。
       //   默认 -1 = 没声明（Ollama 默认 3×GPU 数，通常够），不报。
-      @Value("${app.model.ollama.max-loaded-models:-1}") int ollamaMaxLoadedModels) {
+      @Value("${app.model.ollama.max-loaded-models:-1}") int ollamaMaxLoadedModels,
+      // ★ `#303`：解析/分段并发（0 = auto）。与向量化并发同一套容量口径 —— 一起校验。
+      @Value("${app.ingestion.parse-concurrency:0}") int parseConcurrency) {
     this.embeddingConcurrency = embeddingConcurrency;
     this.poolSize = poolSize;
     this.contextWindow = contextWindow;
@@ -79,6 +84,7 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
     this.jwtSecret = jwtSecret;
     this.apiKeySecret = apiKeySecret;
     this.ollamaMaxLoadedModels = ollamaMaxLoadedModels;
+    this.parseConcurrency = parseConcurrency;
   }
 
   @Override
@@ -96,6 +102,10 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
     problems.addAll(StartupSettingsCheck.secretProblems(jwtSecret, apiKeySecret));
     // ★ 上游模型槽位（`#282`）：与上面那两组不同，它管的是"能不能稳定跑"，不是"安不安全"。
     problems.addAll(StartupSettingsCheck.modelSlotProblems(ollamaMaxLoadedModels));
+    // ★ 解析/分段并发（`#303`）：与向量化并发**同一套容量口径**（都从连接池上限推），所以同一处校验。
+    problems.addAll(
+        StartupSettingsCheck.ingestionProblems(
+            parseConcurrency, poolSize, Runtime.getRuntime().availableProcessors()));
 
     if (problems.isEmpty()) {
       log.info(

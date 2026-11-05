@@ -12,8 +12,8 @@ import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingStatus;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.domain.ResourceExhaustion;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
-import java.sql.SQLTransientConnectionException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -21,7 +21,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -198,18 +197,10 @@ public class EmbeddingRunner {
   /**
    * 这个异常是不是「资源不足」（连接池打满、库不可达），而不是「这份文档有问题」？
    *
-   * <p>★ 判据放窄：只认 Spring 的 {@link DataAccessResourceFailureException}（Hikari 等连接池拿不到 连接时抛的 {@code
-   * CannotGetJdbcConnectionException} 是它的子类）、JDBC 的 {@link SQLTransientConnectionException}（Hikari
-   * 等不到连接时真正抛的就是它），以及**被 Hibernate/JPA 包了一层的那两种形状**。别把任何 {@code DataAccessException} 都算进来 ——
-   * 唯一约束冲突、SQL 写错也是 DataAccessException，那类靠重试 好不了，归成"资源不足"会让用户无限重试。
-   *
-   * <p>★ 后两根是按 `#227` 反证读数补的（2026-11-05）：闸门关掉、70 份一起跑时 40 份 EMBEDDING_FAILED 里 **25 份**报的是 「Could
-   * not open JPA EntityManager for transaction」—— Hibernate 把 Hikari 的超时包成了 {@code
-   * org.hibernate.exception.JDBCConnectionException}（再上一层是 {@code
-   * jakarta.persistence.PersistenceException}）， 两种都不是 Spring 的异常 ⇒
-   * 旧判据漏认，用户看到的那句话里没有任何"连接池"字样。测试的取证方法就是看这条链：根因那两层 仍在 cause 里（{@code Connection is not available,
-   * request timed out after …} / {@code Unable to acquire JDBC Connection}）。**不 import Hibernate
-   * 的类型**：knowledge 的应用层不该依赖 ORM 实现，而这两句措辞是 Hibernate 与 Hikari 各自的固定文案（改动它会同时让这里报红，正好提醒复核）。
+   * <p>★ 判据（instanceof 两种 + 三句固定措辞）与逐条理由住在 {@link ResourceExhaustion}（{@code #303}
+   * 挪过去的）：解析收尾（{@code DocumentService.failParse}）与 HTTP 兜底（{@code GlobalExceptionHandler}） 共用同一条判据
+   * —— 判据分叉会让同一个异常在三处得到两种说法，那正是 {@code #303} 的病根。这里保留方法名与包级可见性： 测试目标不变（{@code
+   * EmbeddingFailureClassificationTest}）。
    *
    * <p>包级可见：测试要验它的边界（{@code EmbeddingFailureClassificationTest}）。
    *
@@ -217,22 +208,9 @@ public class EmbeddingRunner {
    * @return 是否资源不足
    */
   static boolean isResourceExhaustion(Throwable error) {
-    for (Throwable current = error; current != null; current = current.getCause()) {
-      if (current instanceof DataAccessResourceFailureException
-          || current instanceof SQLTransientConnectionException) {
-        return true;
-      }
-      String message = current.getMessage();
-      if (message != null
-          && (message.contains("Connection is not available")
-              || message.contains("Unable to acquire JDBC Connection"))) {
-        return true;
-      }
-      if (current.getCause() == current) {
-        break;
-      }
-    }
-    return false;
+    // ★ 实现住在 platform.domain.ResourceExhaustion（#303）：解析收尾与 HTTP 兜底也要同一条判据，
+    //   判据分叉会让同一个异常在三处得到两种说法。逐条理由与三句措辞的出处见那边的 javadoc。
+    return ResourceExhaustion.isResourceExhaustion(error);
   }
 
   // ────────────────────────── 内部 ──────────────────────────

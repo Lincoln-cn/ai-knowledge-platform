@@ -3,7 +3,10 @@ package cn.lincoln.aiplatform.knowledge.application;
 import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
 import cn.lincoln.aiplatform.knowledge.infrastructure.OcrFastScanner;
 import cn.lincoln.aiplatform.knowledge.infrastructure.TikaMarkdownParser;
+import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -41,20 +44,36 @@ public class ParseRunner {
   /** 虚拟线程（{@code ADR-01}：IO/CPU 混合密集，且要"一篇慢不挡别的"）。 */
   private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
+  /**
+   * 在跑登记表（{@code #303}）：文档 id → 任务落地时刻。
+   *
+   * <p>★ <b>submit 时登记、任务收尾才注销</b> —— 排队中的任务（等闸门许可）也在表里。这张表是 {@link StuckSegmentingReaper}
+   * 区分「卡死」与「慢跑」的唯一依据：在表里 = 有活人管，超期只记日志不判死；不在表里 = 无主，才回收。判错的代价不对称 —— 误杀正在慢跑的份比卡住更坏。
+   */
+  private final Map<UUID, Instant> inFlight = new ConcurrentHashMap<>();
+
   private final TikaMarkdownParser parser;
   private final OcrFastScanner scanner;
   private final ParseProgressService progress;
   private final DocumentService documents;
+  private final ParseConcurrencyGate gate;
 
   public ParseRunner(
       TikaMarkdownParser parser,
       OcrFastScanner scanner,
       ParseProgressService progress,
-      DocumentService documents) {
+      DocumentService documents,
+      ParseConcurrencyGate gate) {
     this.parser = parser;
     this.scanner = scanner;
     this.progress = progress;
     this.documents = documents;
+    this.gate = gate;
+  }
+
+  /** 这份文档当前有没有活人管（在跑或排队中）？—— 给 {@link StuckSegmentingReaper} 判「卡死 vs 慢跑」。 */
+  public boolean isInFlight(UUID documentId) {
+    return inFlight.containsKey(documentId);
   }
 
   /**
@@ -77,6 +96,17 @@ public class ParseRunner {
    * @param userId 建档人
    */
   public void run(UUID documentId, byte[] content, String filename, UUID userId) {
+    // ★ 登记在闸门外：排队等许可的任务也算"有活人管"，否则排队超期会被看门狗误杀。
+    inFlight.put(documentId, Instant.now());
+    try {
+      gate.run(() -> doParse(documentId, content, filename, userId));
+    } finally {
+      inFlight.remove(documentId);
+    }
+  }
+
+  /** 一次解析的三步本体（{@link #run} 套在闸门里调它）。 */
+  private void doParse(UUID documentId, byte[] content, String filename, UUID userId) {
     try {
       // ── ① 分母：关掉 OCR 的快扫（约 0.3 秒 vs 全量的 11 秒）──
       OcrFastScanner.OcrPageInventory inventory = scanner.scan(content, filename);
@@ -121,7 +151,17 @@ public class ParseRunner {
     } catch (RuntimeException e) {
       // ★ 任何异常都要留下可读原因 —— 不许让文档停在「分段中」等一个永远不会来的结果
       log.warn("解析失败：文档 {}（{}）—— {}", documentId, filename, e.toString());
-      documents.failParse(documentId, e);
+      try {
+        documents.failParse(documentId, e);
+      } catch (RuntimeException finishError) {
+        // ★ #303 的卡死机理之一：资源不足时 failParse 自己也拿不到连接、同样炸掉 ⇒ 文档永远留在
+        //   「分段中」。这里只留痕不吞语义：文档交由 StuckSegmentingReaper 按超期回收（无主才判死）。
+        log.error(
+            "解析失败后收尾也失败：文档 {}（{}）—— 留给超期回收处理。收尾异常：{}",
+            documentId,
+            filename,
+            finishError.toString());
+      }
     }
   }
 }

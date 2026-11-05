@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.platform.web;
 import cn.lincoln.aiplatform.platform.domain.AuditWriteFailedException;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.domain.ResourceExhaustion;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -258,10 +259,17 @@ public class GlobalExceptionHandler {
    * HttpMessageNotReadableException}（非法 JSON）、 {@code MethodArgumentTypeMismatchException}（非法
    * UUID）、 {@code NoResourceFoundException} 都继承 {@code Exception}。 凡是"调用方能修的输入问题"必须在上面显式映射成 4xx，
    * 否则联调时会看到"传错了 body / id"被报成"服务内部错误"， 人被指到后端去翻堆栈。
+   *
+   * <p>★ {@code #303} 分流：资源不足（连接池打满、库不可达）走 503 + 「服务繁忙，请稍后重试」—— 那不是"服务内部错误"，更不是调用方的文件有问题（上传 500 时
+   * hint 写「请确认文件可正常打开」正是这次要修的病）。判据与 解析/向量化收尾共用同一条（{@code ResourceExhaustion}）。
    */
   @ExceptionHandler(Exception.class)
   public ResponseEntity<ApiResponse<Void>> onUnexpected(Exception cause) {
     log.error("未预期的异常", cause);
+    if (ResourceExhaustion.isResourceExhaustion(cause)) {
+      return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+          .body(new ApiResponse<>(503, "服务繁忙（资源不足）", null, "服务繁忙，请稍后重试；若持续繁忙请联系管理员"));
+    }
     return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
         .body(new ApiResponse<>(500, "服务内部错误", null, "请把这次操作的时间反馈给管理员，日志里有对应的堆栈"));
   }
