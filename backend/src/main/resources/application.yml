@@ -246,6 +246,20 @@ app:
       # 扫描间隔（毫秒）：fixedDelay，一轮扫完再计下一轮。
       interval-ms: ${INGESTION_SEGMENTING_REAPER_INTERVAL_MS:60000}
 
+    # ★ 「待解析」超期回收（#304）：解析任务**从未创建**的那一类卡死（事件监听器拿不到连接、
+    #   任务没排队成功）最坏这么久 + 一个扫描周期后被自动标成可重试。
+    #   判超期看的是 parse_expected_at（期望解析开始的时刻）：无字节元数据登记的文档该列为 NULL、
+    #   永远停在「待解析」是正常的（等字节），回收器跳过 —— 所以阈值只对"有字节、期望解析"的份生效。
+    #   ★ 下限 1 分钟（配 0 会把刚投出事件、还没排队的份立刻判死）。
+    #   ★ 与 segmenting-timeout-minutes 的分工：那边是「任务已创建、中途死掉」（看 updatedAt 停摆），
+    #   这边是「任务从未创建」（看期望解析时刻）；两类失败文案也不同（"未能启动" vs "已中断"）。
+    pending-parse-timeout-minutes: ${INGESTION_PENDING_PARSE_TIMEOUT_MINUTES:2}
+    pending-parse-reaper:
+      # 自愈扫描默认开（#304，同 #303 口径）：关掉 = 回到"卡死永远没人管"。
+      enabled: ${INGESTION_PENDING_PARSE_REAPER_ENABLED:true}
+      # 扫描间隔（毫秒）：fixedDelay，一轮扫完再计下一轮。
+      interval-ms: ${INGESTION_PENDING_PARSE_REAPER_INTERVAL_MS:60000}
+
   segmentation:
     # 分块目标长度默认值。★ 与前端向导 CreateWizard.vue 的 segForm.segmentLength 默认值一致 ——
     #   否则用户在预览里看到的与入库得到的不同。

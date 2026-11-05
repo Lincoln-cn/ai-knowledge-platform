@@ -63,6 +63,23 @@ public interface DocumentRepository {
   List<Document> findStaleByStatus(DocumentStatus status, Instant cutoff);
 
   /**
+   * 找「期望解析、但解析任务从未起来」的文档（{@code #304} 超期回收用）。
+   *
+   * <p>★ 与 {@link #findStaleByStatus} 的分工：那边按 {@code updatedAt} 停摆扫「任务已创建、中途死掉」（{@code
+   * SEGMENTING}）； 这边按 {@code parse_expected_at} 超期扫「任务从未创建」（{@code PENDING_PARSE}）。两类语义见 {@code
+   * Document#parseExpectedAt}。
+   *
+   * <p>★ 谓词里的 {@code parse_expected_at is not null} 是命门：只登记元数据（无字节）的文档永远停在 {@code PENDING_PARSE}
+   * 是正常的 （等字节），必须跳过 —— 详情见 {@code JpaDocumentRepository} 同名查询的注释。
+   *
+   * @param status 目标状态（回收器传 {@code PENDING_PARSE}；做成参数是为了不在 JPQL 里写枚举字面量，同 {@link
+   *     #findStaleByStatus}）
+   * @param cutoff 期望解析时刻的截止（不含等于）
+   * @return 超期仍停在「待解析」的文档（不含软删；不含无字节元数据登记）
+   */
+  List<Document> findStalePendingParse(DocumentStatus status, Instant cutoff);
+
+  /**
    * 按库分页查文档（创建时间倒序）。★ 软删的不进列表。
    *
    * <p>★★ {@code orgFilter} 是 {@code #56} 的出口：{@link OrgAssignment#UNASSIGNED} 把
