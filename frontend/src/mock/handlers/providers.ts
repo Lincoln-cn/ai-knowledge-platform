@@ -1,8 +1,11 @@
-import { ApiError, ErrorCode } from '@/api/types'
+// ★ 运行时 import 用相对路径 + .ts 后缀（node:test 不解析 `@/` 别名，见 dispatch.ts 头注）
+import { ApiError, ErrorCode } from '../../api/types.ts'
 import type { ModelProviderInfo, ProviderKind } from '@/api/providers'
-import { toPublicProvider } from '@/lib/providerPublic'
-import type { MockRoute } from '../dispatch'
-import { models } from '../fixtures/models'
+import type { ModelReference } from '@/api/models'
+import { toPublicProvider } from '../../lib/providerPublic.ts'
+import type { MockRoute } from '../dispatch.ts'
+import { EMPTY_MODEL_REFERENCE, modelReferences, models } from '../fixtures/models.ts'
+import { summaryOf } from './models.ts'
 
 interface MockProvider extends ModelProviderInfo {
   apiKey?: string
@@ -33,6 +36,40 @@ const providers: MockProvider[] = [
  */
 const toPublic = (p: MockProvider): ModelProviderInfo =>
   toPublicProvider(p, models.filter((m) => m.providerId === p.id).length)
+
+const modelsOf = (providerId: string) => models.filter((m) => m.providerId === providerId)
+
+/**
+ * 服务商的引用面（#301），与后端 `JdbcModelReferencePort.ofProvider` 同形：
+ * `models`/`modelNames` = 它下面的模型；apps/kbs/documents/defaultKeys = **这些模型的下游聚合**
+ * （语义是"删掉这个服务商会弄坏什么"，不是"谁引用了服务商"）。
+ */
+const referencesOfProvider = (providerId: string): ModelReference => {
+  const owned = modelsOf(providerId)
+  const refs: ModelReference = {
+    apps: [],
+    knowledgeBases: [],
+    documents: 0,
+    defaultKeys: [],
+    models: owned.length,
+    // 后端 order by name（MAX_NAMES=20）；mock 数据量小，直接按名排全给
+    modelNames: [...owned].map((m) => m.name).sort()
+  }
+  for (const m of owned) {
+    const r = modelReferences[m.id] ?? EMPTY_MODEL_REFERENCE
+    for (const item of r.apps) {
+      if (!refs.apps.some((x) => x.id === item.id)) refs.apps.push(item)
+    }
+    for (const item of r.knowledgeBases) {
+      if (!refs.knowledgeBases.some((x) => x.id === item.id)) refs.knowledgeBases.push(item)
+    }
+    refs.documents += r.documents
+    for (const key of r.defaultKeys) {
+      if (!refs.defaultKeys.includes(key)) refs.defaultKeys.push(key)
+    }
+  }
+  return refs
+}
 
 export const providerRoutes: MockRoute[] = [
   [
@@ -205,22 +242,52 @@ export const providerRoutes: MockRoute[] = [
   ],
 
   [
+    // ★ #301：与后端 `ModelProviderService.delete` 同形（400 → 409 + 引用面明细 + force 语义）：
+    //   mock 与真栈对"删服务商被拒"必须给同一个读数（同族 #277）。
     'DELETE',
     '/model-providers/:id',
+    ({ path, query }) => {
+      const p = providers.find((x) => x.id === path.id)
+      if (!p) throw new ApiError(ErrorCode.NOT_FOUND, '服务商不存在')
+      const refs = referencesOfProvider(p.id)
+      const force = query.force === true || query.force === 'true'
+      if (refs.models > 0 && !force) {
+        throw new ApiError(
+          ErrorCode.CONFLICT,
+          `服务商「${p.name}」下还有 ${refs.models} 个模型，无法删除`,
+          '请先把这些模型改绑到其它服务商，或删除它们后再删服务商；确认要连模型一起删，请用「强制删除」',
+          refs
+        )
+      }
+      const modelsStillUsed =
+        refs.apps.length > 0 || refs.knowledgeBases.length > 0 || refs.documents > 0 || refs.defaultKeys.length > 0
+      if (modelsStillUsed) {
+        // ★★ force 也拦（与后端同口径）：删服务商会连带删模型，而这些模型正被应用/知识库用着 ——
+        //    那是"别人的功能坏了"，不是"你删了一个服务商"。
+        throw new ApiError(
+          ErrorCode.CONFLICT,
+          `服务商「${p.name}」下的 ${refs.models} 个模型仍被引用：${summaryOf(refs)}，不能连它们一起强制删除`,
+          '请先把这些应用/知识库/平台默认键改绑到别的模型，再回来删服务商（改绑不是删除，数据不会丢）',
+          refs
+        )
+      }
+      // force=true：连模型一起删（后端还留 log.warn 审计；mock 是无状态内存，删干净即可）
+      for (const m of modelsOf(p.id)) {
+        models.splice(models.indexOf(m), 1)
+      }
+      providers.splice(providers.indexOf(p), 1)
+      return undefined
+    }
+  ],
+
+  [
+    // ★ 与后端 `GET /model-providers/:id/references` 同形：删除弹框在动手指之前就读它
+    'GET',
+    '/model-providers/:id/references',
     ({ path }) => {
       const p = providers.find((x) => x.id === path.id)
       if (!p) throw new ApiError(ErrorCode.NOT_FOUND, '服务商不存在')
-      const used = models.filter((m) => m.providerId === p.id).length
-      if (used > 0) {
-        throw new ApiError(
-          ErrorCode.BAD_REQUEST,
-          `该服务商还有 ${used} 个模型引用，不能删除`,
-          '先把这些模型改绑到别的服务商，或删除模型，再删服务商'
-        )
-      }
-      const idx = providers.indexOf(p)
-      providers.splice(idx, 1)
-      return undefined
+      return referencesOfProvider(p.id)
     }
   ]
 ]

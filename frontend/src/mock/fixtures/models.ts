@@ -1,4 +1,4 @@
-import type { BaseModelOption, ModelInfo } from '@/api/models'
+import type { BaseModelOption, ModelInfo, ModelReference } from '@/api/models'
 
 /**
  * 模型数据。
@@ -25,8 +25,12 @@ export const models: ModelInfo[] = [
     builtin: true,
     remark: '内置对话模型，轻量、响应快'
   },
+  // ★ #301：m2 / m3 绑在 provider-jairouter 下 —— "有模型的服务商"在 mock 下要有一份数据，
+  //   删除守卫（弹确认框 / force 也 409）才走得通。m2 自己被应用引用（见 modelReferences）
+  //   ⇒ 删服务商时 force 也拦，正是 issue 判据 1 的「有下游引用时 force 仍 409」场景。
   {
     id: 'm2',
+    providerId: 'provider-jairouter',
     name: 'qwen3:8b',
     kind: 'CHAT',
     supplier: 'LOCAL_INFERENCE',
@@ -41,6 +45,7 @@ export const models: ModelInfo[] = [
   },
   {
     id: 'm3',
+    providerId: 'provider-jairouter',
     name: 'qwen3:30b-a3b',
     kind: 'CHAT',
     supplier: 'LOCAL_INFERENCE',
@@ -142,4 +147,44 @@ export const probedCapabilities: Record<string, { thinking: ModelInfo['thinking'
   'deepseek-r1:7b': { thinking: 'ALWAYS_ON', tools: 'UNSUPPORTED' },
   'deepseek-r1:14b': { thinking: 'ALWAYS_ON', tools: 'UNSUPPORTED' },
   'Qwen2-7B-Instruct': { thinking: 'NONE', tools: 'UNSUPPORTED' }
+}
+
+/**
+ * 模型的引用面（#301）：删模型前要查的"谁在用它"。
+ *
+ * ★ 形状与后端 `ModelReference` **同形**（`GET /models/:id/references` 与删除 409 的
+ *   `data` 都是它）：apps / knowledgeBases / documents / defaultKeys / models / modelNames。
+ *   mock 若自造一个简化的形状，「mock 与真栈同一个读数」就验不出来（#277 同族）。
+ * ★ 登记表而不是"从别的 fixture 算"：mock 的应用/库 fixture 里并没有 model_id 指向这里，
+ *   硬连起来只会造出两边都对不上的假关系；显式登记让"哪个模型有引用"成为可控的测试数据。
+ * ★ 刻意覆盖两类：m2 被**应用**引用、m6 被**知识库 + 文档**引用 —— 删除守卫的两条分支
+ *   （对话模型 / 向量模型）都能被走到；m3 / m4 无引用 ⇒ 可直接删的对照组。
+ */
+export const modelReferences: Record<string, ModelReference> = {
+  m2: {
+    apps: [{ id: 'as-contract-review', name: '合同审查助手' }],
+    knowledgeBases: [],
+    documents: 0,
+    defaultKeys: [],
+    models: 0,
+    modelNames: []
+  },
+  m6: {
+    apps: [],
+    knowledgeBases: [{ id: 'kb-product-manual', name: '产品手册库' }],
+    documents: 12,
+    defaultKeys: [],
+    models: 0,
+    modelNames: []
+  }
+}
+
+/** 空引用面：没有登记的模型 = 没有任何引用（与后端 `ModelReference.NONE` 同形）。 */
+export const EMPTY_MODEL_REFERENCE: ModelReference = {
+  apps: [],
+  knowledgeBases: [],
+  documents: 0,
+  defaultKeys: [],
+  models: 0,
+  modelNames: []
 }
