@@ -21,6 +21,7 @@ import cn.lincoln.aiplatform.platform.domain.AuditAction;
 import cn.lincoln.aiplatform.platform.domain.AuditLogPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.domain.ResourceExhaustion;
 import cn.lincoln.aiplatform.platform.infrastructure.metrics.BusinessMetrics;
 import cn.lincoln.aiplatform.platform.org.OrgDirectoryPort;
 import cn.lincoln.aiplatform.platform.web.PageResult;
@@ -990,7 +991,14 @@ public class DocumentService {
   /**
    * 解析**抛异常**时的收尾（第 9 周 · 0.3.1）—— 不许让文档停在「分段中」等一个永远不会来的结果。
    *
-   * <p>★ 只在文档仍然处于「分段中」时才写失败：它可能已经被删掉或已经走到了别处， 那时把状态按回去就是**用过期结论覆盖现状**。这种情况只记日志。
+   * <p>★ 只在文档仍然处于「分段中」或「待解析」时才写失败：它可能已经被删掉或已经走到了别处， 那时把状态按回去就是**用过期结论覆盖现状**。这种情况只记日志。
+   *
+   * <p>★ {@code #303} 放宽一处：原来只收 {@code SEGMENTING}，于是 {@code progress.start} 之前就炸的（连接池打满时建档线程刚转档就死）
+   * 那些份永远留在「待解析」—— 状态机本来就允许 {@code PENDING_PARSE → SEGMENT_FAILED}（{@link
+   * DocumentStatus}），守卫比状态机更严是漏收尾的机理之一。
+   *
+   * <p>★ {@code #303} 分流 hint：<b>资源不足不是文件的问题</b>。原来一刀切写「请确认文件可正常打开」——
+   * 连接池打满导致的失败被说成文件坏了，用户会去反复检查一个完全正常的文件（issue {@code #303} 的第三条病）。
    */
   @Transactional
   public void failParse(UUID documentId, RuntimeException cause) {
@@ -998,16 +1006,25 @@ public class DocumentService {
     if (document == null) {
       return;
     }
-    if (document.status() != DocumentStatus.SEGMENTING) {
+    if (document.status() != DocumentStatus.SEGMENTING
+        && document.status() != DocumentStatus.PENDING_PARSE) {
       log.warn(
-          "解析任务异常，但文档 {} 当前状态是 {}（不是分段中）⇒ 不覆盖它的状态。原因：{}",
+          "解析任务异常，但文档 {} 当前状态是 {}（不是分段中/待解析）⇒ 不覆盖它的状态。原因：{}",
           documentId,
           document.status(),
           cause.toString());
       return;
     }
-    String reason = "解析失败：" + String.valueOf(cause.getMessage());
-    document.recordParseFailure(reason, "请确认文件可正常打开；若为扫描件，确认服务端已装好 OCR 引擎与中文语言包", "");
+    String reason;
+    String hint;
+    if (ResourceExhaustion.isResourceExhaustion(cause)) {
+      reason = "解析失败：服务资源不足（数据库连接池被占满或库不可达），不是文件的问题";
+      hint = "服务繁忙，请稍后重试；若持续繁忙请联系管理员";
+    } else {
+      reason = "解析失败：" + String.valueOf(cause.getMessage());
+      hint = "请确认文件可正常打开；若为扫描件，确认服务端已装好 OCR 引擎与中文语言包";
+    }
+    document.recordParseFailure(reason, hint, "");
     documents.save(document);
   }
 

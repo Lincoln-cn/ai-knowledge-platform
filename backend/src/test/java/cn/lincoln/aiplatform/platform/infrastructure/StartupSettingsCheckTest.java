@@ -178,4 +178,53 @@ class StartupSettingsCheckTest {
     assertThat(problems).as("只该报没换的那条").hasSize(1);
     assertThat(problems.get(0)).contains("app.model.api-key-secret");
   }
+
+  // ===== #303：解析/分段并发的校验（与向量化同一套容量口径、同一处校验）=====
+
+  @Test
+  @DisplayName("★ parse-concurrency=0 = auto（min(核数, 池/2)）永远合法 —— 默认配置必须零告警")
+  void autoParseConcurrencyIsQuiet() {
+    assertThat(StartupSettingsCheck.ingestionProblems(0, 2, 8)).isEmpty();
+  }
+
+  @Test
+  @DisplayName("负数报 —— 说清 0 是 auto、怎么改")
+  void negativeParseConcurrencyIsReported() {
+    List<String> problems = StartupSettingsCheck.ingestionProblems(-1, 10, 8);
+    assertThat(problems).hasSize(1);
+    assertThat(problems.get(0))
+        .contains("app.ingestion.parse-concurrency=-1")
+        .contains("负数没有意义")
+        .contains("改成 0 或 ≥1");
+  }
+
+  @Test
+  @DisplayName("★ 大于池上限报 —— #303 现场（池=2 时 20 份一起解析）：说清后果与改成一半的建议")
+  void parseConcurrencyAbovePoolSizeIsReported() {
+    List<String> problems = StartupSettingsCheck.ingestionProblems(4, 2, 8);
+    assertThat(problems).hasSize(1);
+    assertThat(problems.get(0))
+        .contains("app.ingestion.parse-concurrency=4")
+        .contains("大于连接池上限 2")
+        .contains("#303")
+        .contains("池上限的一半");
+  }
+
+  @Test
+  @DisplayName("★ 大于逻辑核数报 —— 解析是 CPU 密集，超核数只有抢占没有吞吐")
+  void parseConcurrencyAboveCpuCountIsReported() {
+    List<String> problems = StartupSettingsCheck.ingestionProblems(8, 20, 4);
+    assertThat(problems).hasSize(1);
+    assertThat(problems.get(0))
+        .contains("app.ingestion.parse-concurrency=8")
+        .contains("大于逻辑核数 4")
+        .contains("CPU 密集");
+  }
+
+  @Test
+  @DisplayName("★ 对照：边界内的合法值不报（1..min(池,核数)）")
+  void parseConcurrencyWithinBoundsIsQuiet() {
+    assertThat(StartupSettingsCheck.ingestionProblems(2, 2, 8)).isEmpty();
+    assertThat(StartupSettingsCheck.ingestionProblems(1, 10, 8)).isEmpty();
+  }
 }

@@ -225,6 +225,27 @@ app:
     #   ★ 调低只会变慢，不会失败；调高不会超过连接池上限，只会让更多的任务在排队。
     embedding-concurrency: ${INGESTION_EMBEDDING_CONCURRENCY:4}
 
+    # ★ 解析/分段的并发上限（#303）：一次上传 20 份时，最多这么多份同时在解析。
+    #   为什么要有它：ParseRunner 每份一个虚拟线程、没有上限 —— 池压到 2、20 份并发上传时先炸的是
+    #   解析（4 份 SEGMENT_FAILED、8 份卡在「分段中」不再动、1 份上传直接 500），而 EmbeddingConcurrencyGate
+    #   只管向量化那一段。
+    #   ★ 默认 0 = 自动取 min(逻辑核数, 连接池上限/2)。依据：解析/分段是 CPU 密集（Tika+OCR，实测每页
+    #     约 3.6 秒纯计算）⇒ 并发超过逻辑核数只有抢占没有吞吐；且每份任务要周期性占用连接（逐页进度
+    #     回写、收尾落库）⇒ 须给池留余量。★ 不抄向量化的 4 —— 向量化是 IO 密集，瓶颈不在 CPU。
+    #   ★ 调低只会变慢，不会失败；显式值越界由启动自检 WARN（不静默改值）。
+    parse-concurrency: ${INGESTION_PARSE_CONCURRENCY:0}
+
+    # ★ 「分段中」超期回收（#303）：卡死的份最坏这么久 + 一个扫描周期后被自动标成可重试。
+    #   判超期看的是 updatedAt 停摆（活着的任务每页回写进度），不是"创建得久"；且只回收"无主"的
+    #   （ParseRunner 登记表里没有任务）—— 「卡住」和「慢」是两件事，慢跑的不许误杀。
+    #   ★ 下限 1 分钟（配 0 会把刚转「分段中」的份立刻判死）。
+    segmenting-timeout-minutes: ${INGESTION_SEGMENTING_TIMEOUT_MINUTES:10}
+    segmenting-reaper:
+      # 自愈扫描默认开（#303）：与其它定时任务相反 —— 自愈不能默认关，关掉=回到"卡死永远没人管"。
+      enabled: ${INGESTION_SEGMENTING_REAPER_ENABLED:true}
+      # 扫描间隔（毫秒）：fixedDelay，一轮扫完再计下一轮。
+      interval-ms: ${INGESTION_SEGMENTING_REAPER_INTERVAL_MS:60000}
+
   segmentation:
     # 分块目标长度默认值。★ 与前端向导 CreateWizard.vue 的 segForm.segmentLength 默认值一致 ——
     #   否则用户在预览里看到的与入库得到的不同。
