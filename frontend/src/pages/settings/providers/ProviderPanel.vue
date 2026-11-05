@@ -122,10 +122,14 @@
             <el-button link size="small" :type="p.enabled ? 'warning' : 'success'" @click="toggle(p)">
               {{ p.enabled ? '停用' : '启用' }}
             </el-button>
-            <el-button link size="small" type="danger" :disabled="p.modelCount > 0" @click="remove(p)">
+            <!--
+              ★ #301：按钮**不再因"有模型"而禁用** —— 禁用等于把"强制删除"这条出路藏起来
+              （后端 `ModelProviderService.delete` 一直支持 force）。有关联时点开强制删除确认框：
+              写明"将一并删除 N 个模型"，并说明"若这些模型自己还被应用/知识库引用，删除会被拒绝"。
+            -->
+            <el-button link size="small" type="danger" @click="remove(p)">
               删除
             </el-button>
-            <span v-if="p.modelCount > 0" class="micro muted">先解绑 {{ p.modelCount }} 个模型</span>
           </div>
         </div>
 
@@ -193,6 +197,65 @@
         <el-button size="small" type="primary" :loading="saving" @click="save">保存</el-button>
       </template>
     </el-dialog>
+
+    <!--
+      ★ #301：有关联的服务商走"确认后带 force=true 删"这条路。
+      与 models/Index.vue 的引用弹框同族（列明细 → 二次确认），差别是服务商删的是"一整串"：
+      下面 N 个模型跟着走 —— 弹框必须写明"将一并删除 N 个模型"。
+    -->
+    <el-dialog
+      v-model="removeDialog.visible"
+      :title="`删除服务商「${removeDialog.provider?.name ?? ''}」`"
+      width="560px"
+      append-to-body
+      :close-on-click-modal="!removeDialog.deleting"
+    >
+      <div v-if="removeDialog.loading" class="ref-loading">正在核对引用…</div>
+      <template v-else-if="removeDialog.refs">
+        <p class="ref-lead">
+          将一并删除 <b>{{ removeDialog.refs.models }}</b> 个模型：
+          <b>{{ removeDialog.refs.modelNames.join('、') || '（无）' }}</b>
+        </p>
+        <ul v-if="downstreamCount(removeDialog.refs) > 0" class="ref-list">
+          <li v-if="removeDialog.refs.apps.length">
+            <span class="ref-key">被这些应用使用</span>
+            <span class="ref-val">{{ removeDialog.refs.apps.map((a) => a.name).join('、') }}</span>
+          </li>
+          <li v-if="removeDialog.refs.knowledgeBases.length">
+            <span class="ref-key">被这些知识库使用</span>
+            <span class="ref-val">{{ removeDialog.refs.knowledgeBases.map((k) => k.name).join('、') }}</span>
+          </li>
+          <li v-if="removeDialog.refs.documents > 0">
+            <span class="ref-key">涉及文档</span>
+            <span class="ref-val">{{ removeDialog.refs.documents.toLocaleString() }} 篇</span>
+          </li>
+          <li v-if="removeDialog.refs.defaultKeys.length">
+            <span class="ref-key">平台默认</span>
+            <span class="ref-val">{{ removeDialog.refs.defaultKeys.join('、') }}</span>
+          </li>
+        </ul>
+        <div class="notice err ref-warn">
+          <span>
+            <b>若这些模型自己还被应用/知识库引用，删除会被拒绝（409）：</b>
+            请先把上面这些引用改绑到别的模型，再回来删 —— 改绑不是删除，数据不会丢。
+          </span>
+        </div>
+        <div v-if="removeDialog.error" class="ref-error">{{ removeDialog.error }}</div>
+      </template>
+
+      <template #footer>
+        <el-button size="small" :disabled="removeDialog.deleting" @click="removeDialog.visible = false">取消</el-button>
+        <el-button
+          size="small"
+          type="danger"
+          :loading="removeDialog.deleting"
+          :disabled="removeDialog.loading"
+          @click="forceRemove"
+        >
+          我了解后果，连 {{ removeDialog.refs?.models ?? 0 }} 个模型一起强制删除
+        </el-button>
+      </template>
+    </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -208,6 +271,7 @@ import type {
   ProviderKind,
   UpsertProviderBody
 } from '@/api/providers'
+import type { ModelReference } from '@/api/models'
 import { ApiError } from '@/api/types'
 
 const emit = defineEmits<{ changed: [] }>()
@@ -437,10 +501,42 @@ const clearKey = async (p: ModelProviderInfo) => {
   }
 }
 
+// ★ #301：强制删除确认框（有关联的服务商走这里；无模型的走原来的 ElMessageBox）
+const removeDialog = reactive({
+  visible: false,
+  loading: false,
+  deleting: false,
+  provider: null as ModelProviderInfo | null,
+  refs: null as ModelReference | null,
+  error: ''
+})
+
+/** 弹框里的"下游引用"计数（不含 models：那是它自己下面的模型，不是被谁引用） */
+const downstreamCount = (refs: ModelReference): number =>
+  refs.apps.length + refs.knowledgeBases.length + refs.documents + refs.defaultKeys.length
+
 const remove = async (p: ModelProviderInfo) => {
+  // ★ #301：有关联 ⇒ 弹确认框（写明"将一并删除 N 个模型"），确认后带 force=true 再删。
+  //   原来这里是 `:disabled="p.modelCount > 0"` —— 用户看不到"强制删除"这条路径（issue ①）。
+  if (p.modelCount > 0) {
+    removeDialog.provider = p
+    removeDialog.refs = null
+    removeDialog.error = ''
+    removeDialog.visible = true
+    removeDialog.loading = true
+    try {
+      removeDialog.refs = await providersApi.getProviderReferences(p.id)
+    } catch (error) {
+      // 读引用失败不堵死删除：真后端的 409 才是最终守卫，这里只提示
+      removeDialog.error = error instanceof ApiError ? error.message : '读取引用失败，仍可尝试强制删除'
+    } finally {
+      removeDialog.loading = false
+    }
+    return
+  }
   try {
     await ElMessageBox.confirm(
-      `删除服务商「${p.name}」？它没有被任何模型引用才能删除。`,
+      `删除服务商「${p.name}」？`,
       '删除服务商',
       { type: 'warning' }
     )
@@ -452,6 +548,30 @@ const remove = async (p: ModelProviderInfo) => {
     if (error !== 'cancel' && error !== 'close') {
       ElMessage.error(error instanceof ApiError ? error.message : '删除失败')
     }
+  }
+}
+
+const forceRemove = async () => {
+  const p = removeDialog.provider
+  if (!p) return
+  removeDialog.deleting = true
+  removeDialog.error = ''
+  try {
+    // ★ 判据①：这里就是 `?force=true` 的发出点（providersApi.deleteProvider(id, true)）
+    await providersApi.deleteProvider(p.id, true)
+    ElMessage.success(`已删除服务商「${p.name}」及其模型`)
+    removeDialog.visible = false
+    await fetchList()
+    emit('changed')
+  } catch (error) {
+    // ★ issue 判据 1：有下游引用时 force 仍 409 —— 原因要**留在弹框里**（一闪的 toast 记不住）
+    if (error instanceof ApiError) {
+      removeDialog.error = error.hint ? `${error.message}（${error.hint}）` : error.message
+    } else {
+      removeDialog.error = '删除失败'
+    }
+  } finally {
+    removeDialog.deleting = false
   }
 }
 
@@ -619,5 +739,53 @@ onMounted(fetchList)
 .empty {
   padding: var(--space-lg);
   text-align: center;
+}
+
+/* ── 强制删除确认框（#301）── 与 models/Index.vue 的引用弹框同款版式 */
+.ref-loading {
+  padding: var(--space-md) 0;
+  color: var(--text-3);
+  font-size: 14px;
+}
+
+.ref-lead {
+  margin: 0 0 var(--space-sm);
+  line-height: 1.6;
+}
+
+.ref-list {
+  margin: 0 0 var(--space-sm);
+  padding: 0;
+  list-style: none;
+}
+
+.ref-list li {
+  display: flex;
+  gap: var(--space-sm);
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--color-rule);
+}
+
+.ref-key {
+  flex: 0 0 110px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.ref-val {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.ref-warn {
+  margin-top: var(--space-sm);
+}
+
+.ref-error {
+  margin-top: var(--space-xs);
+  color: var(--color-danger);
+  font-size: var(--text-sm);
 }
 </style>

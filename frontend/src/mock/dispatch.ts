@@ -1,4 +1,6 @@
-import { ApiError } from '@/api/types'
+// ★ 相对路径 + .ts 后缀：node:test（--experimental-strip-types）不解析 `@/` 别名
+//   也不做无扩展名补全；vite / vue-tsc 两者都吃（tsconfig 已开 allowImportingTsExtensions）。
+import { ApiError } from '../api/types.ts'
 import type { HttpMethod, RequestOptions } from '@/lib/http'
 
 export interface MockContext {
@@ -37,8 +39,18 @@ export type MockRoute = [method: HttpMethod, pattern: string, handler: MockHandl
  * （文件在、类型对、页面能打开，但每次请求都 404）。改成按文件发现后，
  * 新增领域只加一个文件，不需要改本文件 —— 也不会有多个模块并行开发时
  * 争抢同一个注册表的问题。
+ *
+ * ★ `import.meta.glob` 是 vite 编译期 API，node:test 下不存在 ⇒ 防御性走空：
+ *   单测直接 import 各 handler 的 `*Routes` 数组断言，不走这里的聚合。
  */
-const discovered = import.meta.glob<Record<string, unknown>>('./handlers/*.ts', { eager: true })
+type GlobFn = (
+  pattern: string,
+  options?: { eager?: boolean }
+) => Record<string, Record<string, unknown>>
+const globFn = (import.meta as ImportMeta & { glob?: GlobFn }).glob
+const discovered: Record<string, Record<string, unknown>> = globFn
+  ? globFn('./handlers/*.ts', { eager: true })
+  : {}
 
 function collectRoutes(): MockRoute[] {
   const routes: MockRoute[] = []
