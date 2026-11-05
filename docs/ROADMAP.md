@@ -3974,3 +3974,48 @@ Cannot map `null` into type `boolean`
 - **保留**：B1 +2、B3 −3 的交换要能说清"为什么值得" —— 目前说不清；
 - **改成有条件生效**（例如只在"该段的 bestRank 来自向量路、且全文路同一文档也有命中"时抬高）—— 属设计改动，需重跑读数。
 - ★ 本节保留全部读数，**无论最后选哪条**：这是"一个看似更合理的排序规则把另一个指标弄坏"的完整记录，比结论更有用。
+
+## §11.12 `0.6.1` 轻引擎：`#113` 的落地设计与判据（2026-11-05）
+
+**为什么单列一节**：`#113` 的六条判据写的是"把设计变成能拦人的东西"，而它的**载体形状**（编译产物、注册表位置、执行范围）今天还没有任何文档写过。这一节先把形状定下来，实现才不至于被下一个实现者按自己方便的样子写掉。
+
+### 11.12.1 范围（用户 2026-11-05 拍板）
+
+| 项 | 拍板 | 理由 |
+|---|---|---|
+| 执行器支持的节点 | **只跑最线性的 4 个**：`START_NODE` → `SEARCH_DATASET_NODE` → `AI_CHAT_NODE` → `REPLY_NODE` | 条件分支需要状态机（求值位置 + 分支合并 + 回汇），复杂度翻倍；`0.6.1` 的目标是"编排真能跑一次"，不是"跑全" |
+| 中断点的载体 | **`node-types.json` 里 `implemented: false` 的节点 + 人工介入节点**（`QUESTION_NODE` 追问 / `FORM_NODE` 表单收集） | 分类已经存在（8 True / 10 False），不需要新造概念；★ 但 `QUESTION_NODE` 今天被标成 `implemented: true` —— 那是**账目不准**，它没有后端实现，本质就是人工介入 |
+
+★ **`0.6.1` 与 `1.0.0` 的边界**：循环 / `KeyUpdate` 之外的写语义 / 中断点**挂起与恢复** / 检查点 L2/L3 / 工具调用节点 —— **一件都不提前**。`§3.3` 的未实现节点清单**一条不减**。
+
+### 11.12.2 起点事实（实现前必须知道的五条）
+
+| 事实 | 位置 |
+|---|---|
+| `workflow` 模块**只有 `package-info.java`**；编排配置面全在 `assistant/` 模块 | `backend/src/main/java/cn/lincoln/aiplatform/workflow/` · `assistant/application/Workflow*Service.java`（27 个类） |
+| 发布前校验**已经存在**，且**已经检查 `implemented`** —— 但只报 **WARNING** | `assistant/application/WorkflowValidationService.java:57-65` |
+| 发布**真的会用**校验结果：`!result.passed()` ⇒ 抛 400 | `assistant/application/WorkflowPublishService.java:62-67` |
+| ★ 校验**没有环检测**（只做了从开始节点的可达性 BFS） | 同上，`:97-130` |
+| `workflow` 与 `assistant` 的 `@ApplicationModule(allowedDependencies)` **互不包含** | 两个 `package-info.java` |
+
+★ **最后一条的含义**：把编译器或执行器放 `workflow` 模块，就要给 `assistant` 加一条 `workflow` 依赖 —— 按 `#113` 判据 5 的要求，**先改闸门、后写实现**，且新规则要有反证。
+
+### 11.12.3 六条判据的落地形状
+
+| `#113` 判据 | 落地成什么 | 能红的证据 |
+|---|---|---|
+| ① 存在一个"只编译不跑"的测试 | `WorkflowCompiler`：`Graph → ExecutionPlan(List<PlanStep>, interruptNodeIds)`；`PlanStep(nodeId, type, order, branchHandle)` | 给定图 JSON，单独断言拓扑序与中断点清单；**不执行任何节点** |
+| ② 含中断点的图发布必失败 + 反向 | `PLANNED_TYPE` 从 **WARNING 升 ERROR** + 新增 `QUESTION_NODE`/`FORM_NODE` 的拒绝 | 造一张含 `RERANKER_NODE` 的图 ⇒ 发布 400；造一张纯线性图 ⇒ 发布成功（否则退化成"一律拒绝"） |
+| ③ `KeyUpdate` 的 `REPLACE`/`APPEND` 各一条能红的测试 | `enum KeyUpdate` + 状态写入类 | 同一键被两节点写：`REPLACE` ⇒ 覆盖、`APPEND` ⇒ 追加 |
+| ④ L1 检查点与业务同事务 | 每节点执行记录与业务同 `@Transactional` | 故意让某节点抛异常 ⇒ 该次执行的节点记录**不得**显示成功 |
+| ⑤ 注册表落地后 `ModuleBoundaryTest` + `PlatformPurityTest` 仍全绿 | 先跑现状、再定位置 | 若加过新规则，该规则要有反证（故意越界 ⇒ 红） |
+| ⑥ 一条钉住"当前没做识别"的断言 | 收紧**之前**先写"含中断点的图发布成功"，记下它**通过**（= 现状是放行） | 收紧后同一条断言**必须红**；两次读数都要留档 |
+
+★ **判据 ⑥ 是全套里最容易被跳过的一条**，也是唯一能防住"口径被读成已经做了"的一条 —— 它的形状与 `#79` 的「读数本身要能红」一致。
+
+### 11.12.4 不在本版
+
+- **中断点的挂起与恢复**（`1.0.0`）：本版只做"识别 + 拒绝发布"，**不做**"暂停在那里等人审批"。
+- **条件分支的执行**（`1.0.0`）：`CONDITION_NODE` / `NUMBER_CONDITION_NODE` 在校验层仍然合法（画布能画、能存草稿），但**发布会被拒**（因为它们不在 4 节点白名单里）。
+- **检查点 L2 / L3**（`1.0.0`）：本版只做 L1（执行记录与业务同事务）。
+- **借"统一"把检索链改成图**：`09 §5.3.3` 已写明不做 —— `RetrievalService.hitTest` 的十步**不属于解释器范围**，谁把它"收敛"进执行器就是在重写半年积累的检索语义。
