@@ -416,6 +416,10 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.segmentation.max-chars`（`SEGMENT_MAX_CHARS`） | 1200 | 向量模型字符上限的**回落值**（库里的模型有 `contextWindow` 时以它为准） |
 | `app.segmentation.context-window`（`SEGMENT_CONTEXT_WINDOW`） | 80 | 索引侧上下文窗口，0 = 关。★ 它只进 `search_text` 不进 `content`；**换值（含 0↔非 0）要重新向量化存量文档** |
 | `app.ingestion.embedding-concurrency`（`INGESTION_EMBEDDING_CONCURRENCY`） | 4 | 批量入库时同时跑的份数。配 0 或负数按 1 算（配 0 会让向量化永不执行且不报错）；调高到超过连接池只会排队 |
+| `app.ingestion.parse-concurrency`（`INGESTION_PARSE_CONCURRENCY`） | 0（= 自动取 `min(逻辑核数, max(1, 连接池/2))`） | 同时解析的份数（`#303`）。★ 解析是 CPU 密集、且每份在解析期占一条连接 ⇒ 只压连接池不压它，会先炸解析（表现为「请确认文件可正常打开」这类与文件无关的失败）。配 0 = 按上面公式自动定，不建议手填大数 |
+| `app.ingestion.segmenting-timeout-minutes`（`INGESTION_SEGMENTING_TIMEOUT_MINUTES`） | 10 | 「分段中」超期多久后被回收（`#303`）。判超期看 **`updatedAt` 停摆**（活着的任务每页回写进度），不是"创建得久"；且只回收**无主**的（`ParseRunner` 登记表里没有任务）⇒ 慢跑不会被误杀。★ 下限 1 分钟 |
+| `app.ingestion.segmenting-reaper.enabled`（`INGESTION_SEGMENTING_REAPER_ENABLED`） | true | 自愈扫描开关。★ **与其它定时任务相反，默认开着** —— 关掉就等于回到「卡死永远没人管」。只有在排查"回收得太积极"时才临时关 |
+| `app.ingestion.segmenting-reaper.interval-ms`（`INGESTION_SEGMENTING_REAPER_INTERVAL_MS`） | 60000 | 扫描间隔（`fixedDelay`：一轮扫完再计下一轮，不是固定频率） |
 | `spring.datasource.hikari.maximum-pool-size`（`DB_POOL_SIZE`） | 10 | 连接池上限。★ 并发高于它时多出来的虚拟线程拿不到连接，表现为「与文件内容无关的向量化失败」（`#227`）；★ 调大前先看库端 `max_connections`：**实例数 × 这个数**才是库看到的连接数 |
 
 ### 出站与文件
