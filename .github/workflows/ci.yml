@@ -251,6 +251,14 @@ jobs:
           PGUSER: aiplatform
           PGPASSWORD: aiplatform
           PGDATABASE: aiplatform
+          # ★ 闸门脚本要自己**建模型行**（`check_document_actions` 建向量模型、`check_multihop` /
+          #   `check_query_understanding` 建对话模型），而 `apiBase` 决定那次向量化/推理打向哪里。
+          #   不设时它们默认 `127.0.0.1:11434` —— 那是 **Ollama 的端口**，runner 上没有 Ollama，
+          #   症状是「网关不可达：连接 http://localhost:11434/v1/embeddings 失败（ConnectException：null）」
+          #   ⇒ 单段重向量 / 库级重算 / 多跳 / 查询理解四条判据全红在环境上，而它们量的是别的东西。
+          #   ★ 这是「三方地址不一致」的第六处（桩起的端口 / 探活的 / 后端连的 / **闸门脚本连的**）。
+          AIP_STUB_URL: http://localhost:11999
+          AIP_CHAT_API_BASE: http://localhost:11999/v1
         run: |
           # ★ S1 的**整链**（MVP · ROADMAP §2.1）：**从空库起**一条命令跑完 ——
           #   建库（先断 documentCount==0）→ 上传真实字节 → 解析 → 切分预览与入库**同源**（段数相等）

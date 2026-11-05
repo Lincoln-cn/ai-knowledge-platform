@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -78,6 +79,13 @@ def call(method: str, path: str, token: str | None = None, body=None):
 def setup_fixture(token: str) -> tuple[str, str, str]:
     """建一个绑定桩向量模型的库，并上传一份真实 docx（建档即解析 + 入库即分块）。"""
     stamp = str(int(time.time() * 1000))[-8:]
+    # ★ `apiBase` **不能写死 11434**：那是 Ollama 的端口，而 CI 的 ubuntu runner 上没有 Ollama，
+    #   桩起在 11999。写死时的形态是「网关不可达：连接 http://localhost:11434/v1/embeddings 失败
+    #   （ConnectException：null）」⇒ 单段重向量 / 库级重算两条判据全红在环境上，而它们量的是别的东西。
+    #   与 `check_b4_b5_latency.py` / `check_b6_ingest_throughput.py` 用同一个环境变量口径。
+    #   ★ 注意结尾要有 `/v1`：本项目的 `api_base` 是"带 /v1 的那一层"（与 `application.yml` 的
+    #     `spring.ai.openai.base-url` 同形），`AIP_STUB_URL` 约定是不带 /v1 的根。
+    embedding_api_base = os.environ.get("AIP_STUB_URL", "http://127.0.0.1:11434").rstrip("/") + "/v1"
     code, model = call(
         "POST",
         "/models",
@@ -87,7 +95,7 @@ def setup_fixture(token: str) -> tuple[str, str, str]:
             "kind": "EMBEDDING",
             "supplier": "LOCAL_INFERENCE",
             "baseModel": "bge-m3",
-            "apiBase": "http://localhost:11434/v1",
+            "apiBase": embedding_api_base,
             "dimension": 768,
         },
     )

@@ -26,7 +26,11 @@ from pathlib import Path
 FRONTEND = Path(__file__).resolve().parent          # frontend/
 SRC = FRONTEND / "src" / "pages" / "knowledge"     # 判据① 的扫描根
 WIZARD = SRC / "components" / "CreateWizard.vue"
-CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+# ★ 用 `channel="chrome"`（与仓库里其余 20 个脚本同一个写法），**不要**写死 Windows 路径：
+#   `#42` 交付时这里写的是 `r"C:\Program Files\Google\Chrome\Application\chrome.exe"`
+#   —— 那条在本机跑得通、在 ubuntu runner 上必炸
+#   （`BrowserType.launch: Failed to launch chromium because executable doesn't exist at …`），
+#   而 `channel=` 在两边都能找到浏览器（runner 自带 Chrome）。
 DEFAULT_BASE = "http://localhost:5283/"
 
 # 判据① 的病灶正则：calc(100% - Npx) 一律算「猜兄弟宽度」
@@ -136,7 +140,7 @@ def main():
         return 1
 
     with sync_playwright() as pw:
-        b = pw.chromium.launch(headless=True, executable_path=CHROME)
+        b = pw.chromium.launch(headless=True, channel="chrome")
         page = b.new_page(viewport={"width": 1600, "height": 950})
         errs = []
         page.on("pageerror", lambda e: errs.append(f"pageerror: {e}"))

@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -35,7 +36,13 @@ DOCX = (
     / "backend/src/test/resources/fixtures/structured.docx"
 )
 
-STUB_API_BASE = "http://localhost:11434/v1"
+# ★ 桩地址走环境变量，**不能写死 11434**：那是 Ollama 的默认端口，CI 的 ubuntu runner
+#   上没有 Ollama、桩起在 11999 ⇒ 写死时这些闸门全红在「网关不可达：连接
+#   http://localhost:11434/v1/... 失败（ConnectException：null）」，而它们量的是别的东西。
+#   ★ 与 `check_b4_b5_latency.py` / `check_b6_ingest_throughput.py` / `check_document_actions.py`
+#     用同一个变量 `AIP_STUB_URL`（约定：**不带 /v1 的根**，默认 127.0.0.1:11434）。
+_STUB_ROOT = os.environ.get("AIP_STUB_URL", "http://127.0.0.1:11434").rstrip("/")
+STUB_API_BASE = _STUB_ROOT + "/v1"
 
 # 多意图问题：两个互不相干的意图 —— 这一层该把它们拆开（10 §3.3.1）
 QUESTION = "差旅报销标准和采购审批流程分别是什么"
