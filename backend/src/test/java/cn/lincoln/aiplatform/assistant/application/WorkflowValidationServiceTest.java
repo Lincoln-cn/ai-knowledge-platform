@@ -75,8 +75,8 @@ class WorkflowValidationServiceTest {
   }
 
   @Test
-  @DisplayName("未知类型是错误，规划中类型只是警告")
-  void unknownTypeIsErrorButPlannedIsOnlyWarning() {
+  @DisplayName("未知类型是错误；规划中（implemented=false）类型本版本不支持 ⇒ 也是错误")
+  void unknownTypeAndUnimplementedTypeAreBothErrors() {
     WorkflowValidationService.Result unknown =
         service.validate(
             new WorkflowValidationService.Graph(
@@ -95,7 +95,11 @@ class WorkflowValidationServiceTest {
                     node("a", "START_NODE"), node("b", "RERANKER_NODE"), node("c", "AI_CHAT_NODE")),
                 List.of(edge("a", "b"), edge("b", "c"))));
     assertThat(codes(planned)).contains("PLANNED_TYPE");
-    assertThat(planned.passed()).isTrue();
+    assertThat(planned.passed())
+        .as(
+            "新语义（#113 判据 2）：implemented=false = 本版本不支持 ⇒ PLANNED_TYPE 由 WARNING 升为 ERROR，"
+                + "含它的图直接拒绝发布（收紧前这里断言的是 isTrue，即只警告仍放行）")
+        .isFalse();
   }
 
   @Test
