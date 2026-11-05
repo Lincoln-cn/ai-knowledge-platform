@@ -1,11 +1,15 @@
 package cn.lincoln.aiplatform.vectorindex.internal;
 
 import cn.lincoln.aiplatform.platform.vector.VectorIndexPort;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -29,6 +33,19 @@ import org.springframework.stereotype.Component;
  *
  * <p>{@code segmentId} 是主键且一个分段只会在<strong>一张</strong>表里有向量 （同一时刻一个库一个向量模型）⇒ 逐表查、命中即返回是正确的。而"有哪些向量表"
  * 从 {@code information_schema} 读（不是硬编码的维度列表）—— 维度表的集合本来就是运行时长出来的。
+ *
+ * <h3>★ 建表 DDL 每维度只跑一次（issue #302）</h3>
+ *
+ * <p>{@code create index if not exists … using hnsw …} <strong>即使索引已存在也要 ~73ms</strong> （取 {@code
+ * ShareUpdateExclusive} 锁、跨会话串行化；btree 那条只要 3.4ms）—— 早先每条 {@code upsert} 都 跑一遍 {@code
+ * ensureTable}，5517 段 × 73ms ≈ 403s，正好是整批向量化耗时的主体。现在：**进程内、按维度**各跑一次 （{@link
+ * #ensuredDimensions}），命中后只剩一次 map 查询。
+ *
+ * <p><strong>失效场景与取舍</strong>（写清楚，因为这是缓存）：这个集合只认<strong>进程内</strong>的事实 ——
+ * 表被<strong>外部</strong>删掉（DBA {@code drop table}、别的进程重建库）之后，标记还在。 处置是 <strong>下一条写入自愈一次</strong>：撞到
+ * {@code 42P01 undefined_table} 就摘掉该维度的标记、 重建表与索引、只重试这一条（见 {@link #upsert}）⇒ 「表不存在就自己建」在每条写入上都成立，
+ * 而成功的路径不再付出 DDL 的代价。<strong>不做的</strong>：不为"表被删"做定期核对、也不引入 分布式锁 —— 多副本部署时每个副本各建一次（{@code if not
+ * exists} 语义幂等）， 重复 DDL 的代价远低于分布式锁的复杂度（issue #302 的取舍）。
  */
 @Component
 public class JdbcVectorIndex implements VectorIndexPort {
@@ -39,6 +56,9 @@ public class JdbcVectorIndex implements VectorIndexPort {
   private static final Pattern DIGITS = Pattern.compile("\\d{1,5}");
 
   private final JdbcTemplate jdbc;
+
+  /** 已经建好表与索引的维度（issue #302 的缓存键）。★ 按维度各一次：同一批里所有段共用同一个维度 ⇒ 命中后只剩一次 map 查询。 */
+  private final Set<Integer> ensuredDimensions = ConcurrentHashMap.newKeySet();
 
   public JdbcVectorIndex(JdbcTemplate jdbc) {
     this.jdbc = jdbc;
@@ -54,6 +74,11 @@ public class JdbcVectorIndex implements VectorIndexPort {
 
   @Override
   public void ensureTable(int dimension) {
+    if (ensuredDimensions.contains(dimension)) {
+      // ★ issue #302：命中就走。`create index … if not exists … hnsw` 即使索引已存在也要 ~73ms
+      //   （ShareUpdateExclusive 锁、跨会话串行化）—— 每段跑一遍是 403s 的来源。
+      return;
+    }
     String table = tableFor(dimension);
     jdbc.execute(
         "create table if not exists "
@@ -76,6 +101,9 @@ public class JdbcVectorIndex implements VectorIndexPort {
             + "_kb on "
             + table
             + " ((metadata::jsonb ->> 'kb_id'))");
+    // ★ 三条全成功才标记：半途失败（例如 pgvector 没装好）留在外面，下一次写入会重试；
+    //   反过来"先标记再建"的后果是永远不再建表，比多跑一次 DDL 严重得多。
+    ensuredDimensions.add(dimension);
   }
 
   @Override
@@ -87,6 +115,22 @@ public class JdbcVectorIndex implements VectorIndexPort {
     }
     String table = tableFor(dimension);
     ensureTable(dimension);
+    try {
+      insertRow(table, entry, dimension);
+    } catch (DataAccessException error) {
+      if (!isMissingTable(error)) {
+        throw error;
+      }
+      // ★ 表被外部删掉了（进程内标记还在，见类注释的失效场景）⇒ 摘标记、重建、只重试这一条。
+      //   二次失败照抛：那已经不是"表不在"能解释的，重试只会把真正的问题藏起来。
+      ensuredDimensions.remove(dimension);
+      ensureTable(dimension);
+      insertRow(table, entry, dimension);
+    }
+  }
+
+  /** 单条写入。拆出来只为让 {@link #upsert} 的自愈重试不重复整段 SQL 拼接。 */
+  private void insertRow(String table, Entry entry, int dimension) {
     jdbc.update(
         "insert into "
             + table
@@ -97,6 +141,23 @@ public class JdbcVectorIndex implements VectorIndexPort {
         entry.content(),
         metadataJson(entry, dimension),
         toVectorLiteral(entry.vector()));
+  }
+
+  /**
+   * PG 的 {@code 42P01 undefined_table} —— 表被外部删掉后 {@code insert} 抛的 SQLState。
+   *
+   * <p>★ 沿 cause 链找 {@link SQLException} 而不是认 Spring 的包装类名：包装层次随 Spring 版本变， SQLState 是 SQL 标准、不会变。
+   */
+  private static boolean isMissingTable(Throwable error) {
+    for (Throwable current = error; current != null; current = current.getCause()) {
+      if (current instanceof SQLException sql && "42P01".equals(sql.getSQLState())) {
+        return true;
+      }
+      if (current.getCause() == current) {
+        break;
+      }
+    }
+    return false;
   }
 
   @Override
