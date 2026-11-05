@@ -31,3 +31,12 @@ POST	/assistants/{}/workflow/versions/{}/rollback	#198
 #   视图后删本行；(b) 判定此刻这条端点不该存在（表空、没人写）⇒ 连端点、表、契约函数一起摘，
 #   但那时要先把 `WorkflowRecordController` / `WorkflowRecordQueryService` / V62 迁移一起删。
 GET	/assistants/{}/workflow/records	#198
+
+# ★ 2026-11-04（模型删除依赖检查，`#300`）：`GET …/model-providers/{}/references` 的后端端点
+#   （`ModelProviderService` 的引用明细，与 `/models/{}/references` 同形）与契约函数
+#   `getProviderReferences` 都已落地并由 `ModelReferenceGuardTest` 覆盖，但**页面入口还没接** ——
+#   服务商面板今天只有「删除（不可点）」，没有"先看看它被谁引用"的入口。
+#   ★ 已另开 `#301` 承接（服务商侧补 force 入口 + 引用面），所以这条是**有主的临时登记**，
+#   不是"给它编一个不需要入口的理由"。
+#   ★ 销账方式：`#301` 把服务商的引用面接上后删掉本行（清单必须随修复收缩）。
+GET	/model-providers/{}/references	#301
