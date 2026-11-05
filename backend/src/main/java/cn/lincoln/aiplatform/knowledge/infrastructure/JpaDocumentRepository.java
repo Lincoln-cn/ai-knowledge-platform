@@ -56,4 +56,28 @@ public interface JpaDocumentRepository
   List<Document> findStaleByStatus(
       @Param("status") cn.lincoln.aiplatform.knowledge.domain.DocumentStatus status,
       @Param("cutoff") java.time.Instant cutoff);
+
+  /**
+   * 找「期望解析、但解析任务从未起来」的文档（{@code #304} 超期回收用）。
+   *
+   * <p>★ 判超期用 {@code parse_expected_at} 而不是 {@code updatedAt}：「待解析」的行没人回写进度，{@code updatedAt} 一动不动
+   * —— 按停摆判分不开「刚上传还在等」与「等了很久没人管」；{@code parse_expected_at} 是"应该开始解析的时刻"，超期它就该离开 {@code
+   * PENDING_PARSE}。
+   *
+   * <p>★★ {@code is not null} 是命门：只登记元数据（无字节）的文档永远停在 {@code PENDING_PARSE}
+   * 是<strong>正常</strong>的（等字节）， 它们的 {@code parse_expected_at} 为 NULL ——
+   * 回收器绝不能把「正常等待」误杀成「任务没起来」（{@code #304} 判据③）。
+   *
+   * <p>★ 软删文档不回收（同 {@link #findStaleByStatus}）：用户已经删了它，回收只会平白多一条失败记录。
+   *
+   * @param status 目标状态（调用方传 {@code PENDING_PARSE}；做成参数是为了不在 JPQL 里写枚举字面量）
+   * @param cutoff 期望解析时刻的截止（不含等于）
+   */
+  @Query(
+      "select d from Document d"
+          + " where d.status = :status and d.parseExpectedAt is not null"
+          + " and d.parseExpectedAt < :cutoff and d.deletedAt is null")
+  List<Document> findStalePendingParse(
+      @Param("status") cn.lincoln.aiplatform.knowledge.domain.DocumentStatus status,
+      @Param("cutoff") java.time.Instant cutoff);
 }

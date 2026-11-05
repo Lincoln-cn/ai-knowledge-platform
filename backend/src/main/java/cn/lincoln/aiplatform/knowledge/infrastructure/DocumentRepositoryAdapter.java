@@ -112,6 +112,12 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
   }
 
   @Override
+  public List<Document> findStalePendingParse(DocumentStatus status, Instant cutoff) {
+    // ★ 同上：#304 的自愈扫描也是系统动作，不按库、不按密级过滤。
+    return jpa.findStalePendingParse(status, cutoff);
+  }
+
+  @Override
   public long countDeletedByKbId(UUID kbId) {
     return jpa.count(deletedFilter(kbId));
   }

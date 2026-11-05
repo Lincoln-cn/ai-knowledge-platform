@@ -219,6 +219,28 @@ public class Document {
   @Column(name = "deleted_at")
   private Instant deletedAt;
 
+  /**
+   * 期望解析开始的时刻（{@code #304}）—— 「解析任务没起来」与「正常等待」的分界线。
+   *
+   * <p>★ 三类语义（这一列的全部约定）：
+   *
+   * <ol>
+   *   <li><b>有字节、期望解析</b>：建档时解析事件已投出，那一刻记入本列 ⇒ 超期仍停在 {@code PENDING_PARSE} 且无在跑任务 =
+   *       解析任务<strong>从未起来</strong>（{@code #304} 的卡死形态：事件监听器拿不到连接时任务根本没创建），由 {@code
+   *       StuckPendingParseReaper} 判成可重试的失败。
+   *   <li><b>只登记元数据（无字节）</b>：本列为 {@code null} ⇒ 永远停在 {@code PENDING_PARSE}
+   *       是<strong>正常</strong>的（等字节）， 回收器必须跳过（{@code JpaDocumentRepository#findStalePendingParse} 的
+   *       {@code is not null} 条件钉住这条）。
+   *   <li><b>已开始解析</b>：状态已离开 {@code PENDING_PARSE} ⇒ 由 {@code #303} 的「分段中」那套（{@code
+   *       StuckSegmentingReaper} 按 {@code updatedAt} 停摆判）管，与本列无关。
+   * </ol>
+   *
+   * <p>★ 为什么不用 {@code created_at} 代替：建档时刻对"正常等待"与"任务没起来"是同一个值（{@code #304} 原文明说 DB 层面区分不了），
+   * 而且"只登记元数据"路径与"带字节"路径的建档时刻也没有区别 —— 能区分它们的只有"当时有没有字节"，那就是本列的 null 语义。
+   */
+  @Column(name = "parse_expected_at")
+  private Instant parseExpectedAt;
+
   protected Document() {}
 
   /**
@@ -637,6 +659,16 @@ public class Document {
   }
 
   /**
+   * 期望解析开始（{@code #304}）—— 带字节建档、解析事件已投出的那一刻记下时刻。
+   *
+   * <p>★ 只在"有字节、期望解析"的路径上调它；只登记元数据的建档路径<strong>不调</strong>（保持 {@code null} = "等字节是正常的"）。 语义三类见
+   * {@link #parseExpectedAt} 字段注释。
+   */
+  public void expectParse() {
+    this.parseExpectedAt = Instant.now();
+  }
+
+  /**
    * ★ 从回收站恢复（`#259`）：把删除时间清掉，并把操作人记在 `updated_by` 上。
    *
    * <p>★ 只动聚合根这一行 —— 分段的软删由 {@code SegmentRepository#restoreByDocumentId} 在
@@ -913,6 +945,11 @@ public class Document {
 
   public Instant updatedAt() {
     return updatedAt;
+  }
+
+  /** 期望解析开始的时刻（{@code #304}）；{@code null} = 只登记元数据、等字节是正常的。 */
+  public Instant parseExpectedAt() {
+    return parseExpectedAt;
   }
 
   public Instant deletedAt() {

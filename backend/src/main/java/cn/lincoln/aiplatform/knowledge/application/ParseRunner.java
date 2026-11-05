@@ -12,9 +12,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * 解析执行器（第 9 周 · 0.3.1）—— 「建档即解析」从**同步**改成**异步流水线**。
@@ -33,8 +34,12 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *   <li><b>落库</b>（{@link DocumentService#finishParse}，一个短事务）：解析结果 + 分块，原子完成
  * </ol>
  *
- * <p>★ 启动时机由 {@link TransactionalEventListener} 的 {@code AFTER_COMMIT} 保证 —— 见 {@link
- * DocumentUploaded}（那是 issue #18 的教训）。
+ * <p>★ 启动时机由<strong>事务同步的 {@code afterCommit}</strong> 回调保证（上传事务提交后才排队任务，那也是 issue #18 的教训）。 ★
+ * {@code #304} 起不再用 {@code @TransactionalEventListener(AFTER_COMMIT)}：那个注解会被 Modulith 的 {@code
+ * CompletionRegisteringAdvisor} 代理，代理在进入方法体**之前**先开一个新事务更新 {@code event_publication}（{@code
+ * markProcessing}）—— 连接池满时它抛 {@code CannotCreateTransactionException}，异常在代理外层、方法体从未执行 ⇒
+ * 解析任务从未创建、文档永远停在「待解析」。 改成普通 {@link EventListener}（同步于 {@code publishEvent}、跑在上传事务内）+ {@code
+ * afterCommit} 里才提交任务（纯内存，不碰连接池）。
  */
 @Service
 public class ParseRunner {
@@ -77,14 +82,61 @@ public class ParseRunner {
   }
 
   /**
-   * 收到上传事件 ⇒ 提交一次解析。
+   * 收到上传事件 ⇒ 排队一次解析（{@code #304} 的落点：任务必须被创建出来）。
    *
-   * <p>★ {@code AFTER_COMMIT}：上传那个事务提交之后才提交任务 —— 见 {@link DocumentUploaded}。
+   * <p>★★ 为什么是普通 {@link EventListener} + 事务同步回调，而不是
+   * {@code @TransactionalEventListener(AFTER_COMMIT)} （issue #304 的根因）：后者会被 Modulith 的 {@code
+   * CompletionRegisteringAdvisor} 代理，代理在 {@code proceed()} 之前先开一个新事务去登记事件（{@code markProcessing}）——
+   * 连接池满时那一步就抛 {@code CannotCreateTransactionException}， 异常根本没进本方法体 ⇒ {@code executor.submit}
+   * 从未执行、解析任务从未创建、{@code failParse} 也无从谈起， 文档永远停在「待解析」。而 {@code afterCommit} 回调是纯内存的（{@code
+   * TransactionSynchronizationManager}）， 不需要数据库连接，"任务排队"这一步在连接池耗尽时也必然发生。
+   *
+   * <p>★ #18 的语义<strong>没有退让</strong>：任务仍在<strong>上传事务提交之后</strong>才起跑（{@code afterCommit}）。 事务回滚 ⇒
+   * {@code afterCommit} 不触发 ⇒ 任务不起跑 —— 起跑的仍是"已落库的行"。
+   *
+   * <p>★ 方法体只做"注册回调"这一件事，且整体 try/catch：<strong>本方法同步跑在上传事务里</strong>， 任何外抛的异常都会把上传一起回滚 ——
+   * 那是把"解析没起来"换成"上传直接失败"，更坏。捕获后只留痕： 文档行已落定（{@code parse_expected_at} 已写），任务没排队的由 {@code
+   * StuckPendingParseReaper} 超期兜底判成可重试。
    */
-  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  @EventListener
   public void onUploaded(DocumentUploaded event) {
-    executor.submit(
-        () -> run(event.documentId(), event.content(), event.filename(), event.userId()));
+    try {
+      if (TransactionSynchronizationManager.isSynchronizationActive()) {
+        TransactionSynchronizationManager.registerSynchronization(
+            new TransactionSynchronization() {
+              @Override
+              public void afterCommit() {
+                submitParse(event);
+              }
+            });
+        return;
+      }
+      // ★ 无事务上下文（测试直调、或将来某个非事务调用点）：registerSynchronization 在这里会抛
+      //   IllegalStateException ⇒ 退化成"立刻排队"。语义差别只有一个：没有回滚保护可言
+      //   （本来就没有事务）。文档行已落定，起跑是安全的。
+      log.warn("onUploaded 在无事务上下文被调用：文档 {}（{}）—— 退化成直接排队解析", event.documentId(), event.filename());
+      submitParse(event);
+    } catch (RuntimeException e) {
+      log.error(
+          "解析任务排队失败：文档 {}（{}）—— 上传仍然成功，解析任务未排队；该文档将由 StuckPendingParseReaper 在超期后标为可重试。原因：{}",
+          event.documentId(),
+          event.filename(),
+          e.toString());
+    }
+  }
+
+  /** 排队一次解析（{@code afterCommit} 回调与无事务退化路径共用）。提交失败也只留痕，理由同 {@link #onUploaded}。 */
+  private void submitParse(DocumentUploaded event) {
+    try {
+      executor.submit(
+          () -> run(event.documentId(), event.content(), event.filename(), event.userId()));
+    } catch (RuntimeException e) {
+      log.error(
+          "解析任务提交失败：文档 {}（{}）—— 由 StuckPendingParseReaper 超期兜底。原因：{}",
+          event.documentId(),
+          event.filename(),
+          e.toString());
+    }
   }
 
   /**

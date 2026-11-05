@@ -44,14 +44,13 @@ import org.springframework.scheduling.annotation.Scheduled;
  * <h3>★ 已知边界（如实登记）</h3>
  *
  * <ul>
- *   <li><b>不扫 {@code PENDING_PARSE}</b>：无字节的"只登记元数据"文档正常就停在 {@code PENDING_PARSE}（content
- *       不落库，数据库区分不了"还没开始"与"开始前就炸了"）。 那一路的卡死由 {@code DocumentService.failParse} 放宽守卫收尾。★
- *       残余的机理已定位（2026-11-05 压测实测）：{@link ParseRunner#onUploaded} 是事件监听器，在上传事务的 {@code
- *       afterCompletion} 里经 spring-modulith 的 {@code markProcessing} 开<b>新事务</b>拿连接 —— 池满时它抛 {@code
- *       CannotCreateTransactionException} （Could not open JPA EntityManager for
- *       transaction），<b>异常在代理外层、根本没进 onUploaded 方法体</b> ⇒ 解析任务从未创建， {@code failParse} 无从谈起，文档永远停在
- *       {@code PENDING_PARSE}（表现为"上传成功但永远待解析"）。 真正的修法是让事件登记重试、 或不经事件直接提交任务（动事件架构，超出 {@code #303}
- *       写面）—— 该残余<b>不属于判据②（SEGMENTING 卡死自愈）的范围</b>，如实留缝。
+ *   <li><b>只扫 {@code SEGMENTING}，不扫 {@code PENDING_PARSE}</b>：两者的卡死机理不同 —— 这里是「任务已创建、中途死掉」 （{@code
+ *       updatedAt} 停摆）；{@code PENDING_PARSE} 的卡死是「任务<em>从未创建</em>」（{@code #304} 机理：{@link
+ *       ParseRunner#onUploaded} 曾是事件监听器，池满时 {@code markProcessing} 开新事务抛 {@code
+ *       CannotCreateTransactionException}，异常在代理外层、没进方法体 ⇒ 解析任务从未创建）。按 {@code updatedAt} 判分不开
+ *       「无字节的正常等待」与「任务没起来」（content 不落库，两者创建时刻同值）。★ {@code #304} 已修：任务排队挪进纯内存的 {@code afterCommit}
+ *       回调（见 {@link ParseRunner#onUploaded}，把发生面压到"排队这一步自己也失败"）；那类卡死由 {@link
+ *       StuckPendingParseReaper} 按 {@code parse_expected_at} 超期回收，失败文案「解析任务未能启动」与本类的 「处理任务已中断」区分。
  *   <li><b>多实例部署登记表不跨进程</b>：另一个实例正在跑的份，本实例看不见，会被判死回收。单实例部署（当前形态）无此问题； 多实例需要把登记表换成共享存储（如 {@code
  *       pg_try_advisory_lock} 或心跳列），到时与 {@code #73} 的指标一起做。
  *   <li><b>回收与任务收尾有极小竞态窗口</b>：读后判、判后写之间任务恰好完成 ⇒ 一份成功的文档被标成 SEGMENT_FAILED。 窗口是毫秒级（回收路径里每份只做一次
