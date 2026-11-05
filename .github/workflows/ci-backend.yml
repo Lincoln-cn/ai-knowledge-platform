@@ -204,6 +204,13 @@ jobs:
       #   ★ GitHub 的 ubuntu runner 自带 Docker，Testcontainers 可直接用。
       - name: mvn verify
         working-directory: backend
+        # ★ `AI_BASE_URL` 必须指到本 job 起的桩（11999）。不设时它取 `application.yml` 的默认
+        #   `http://localhost:11434/v1` —— 那是 **Ollama 的端口**，而 runner 上没有 Ollama。
+        #   2026-11-04 的形态：桩起着、`STUB_ROOT` 可达（所以不失跳过），但 Spring AI 连 11434
+        #   ⇒ `OpenAiStubContractTest` 5 errors + 2 failures（`OpenAIIo Request failed`）。
+        #   ★ 这是「三方地址不一致」的第五处：桩起的端口 / 探活的端口 / **被测代码连的端口**。
+        env:
+          AI_BASE_URL: http://localhost:11999/v1
         run: mvn -B verify
 
       # ★ 零用例闸门：`Tests run: 0` 与「没有 `Tests run:` 行」一律按失败处理（Issue #53 / #50）。

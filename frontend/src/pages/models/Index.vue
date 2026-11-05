@@ -1160,7 +1160,7 @@ const forceRemove = async () => {
   display: flex;
   gap: var(--space-sm);
   padding: 6px 0;
-  border-bottom: 1px dashed var(--line-2);
+  border-bottom: 1px dashed var(--color-rule);
 }
 
 .ref-key {
@@ -1182,7 +1182,7 @@ const forceRemove = async () => {
 
 .ref-error {
   margin-top: var(--space-xs);
-  color: var(--danger, #d14343);
-  font-size: 13px;
+  color: var(--color-danger);
+  font-size: var(--text-sm);
 }
 </style>
