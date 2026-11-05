@@ -174,10 +174,17 @@ def main():
                 ).first
 
             def pick_option():
-                """点下拉里第一个**可见**选项（EP 每个 select 都有隐藏 popper，必须滤可见）。"""
+                """点下拉里第一个**可见**选项（EP 每个 select 都有隐藏 popper，必须滤可见）。
+
+                ★ `force=True`：CI 上这条曾以 `element is not stable` 超时 30s —— 下拉展开的
+                  过渡动画期间元素位置一直在变，Playwright 的"稳定性"检查会一直重试到超时。
+                  `filter(visible=True)` 已经保证了"可见"，这里再等动画结束 + force 跳过稳定性，
+                  断言语义不变（仍点的是同一个可见选项）。
+                """
                 opt = page.locator(".el-select-dropdown__item").filter(visible=True).first
                 opt.wait_for(state="visible", timeout=5000)
-                opt.click()
+                page.wait_for_timeout(250)
+                opt.click(force=True, timeout=10000)
 
             # ── 第一步：基本信息 ──
             mark = len(errs)
@@ -269,7 +276,10 @@ def main():
             # el-tree-select 渲染根元素就是 .el-select（无 .el-tree-select 类），弹层里是树
             item("责任部门").locator(".el-select").click()
             page.wait_for_timeout(300)
-            page.locator(".el-tree-node__content").filter(visible=True).first.click()
+            page.wait_for_timeout(250)
+            page.locator(".el-tree-node__content").filter(visible=True).first.click(
+                force=True, timeout=10000
+            )
             page.wait_for_timeout(150)
             page.click('.el-dialog button:has-text("生成预览")')
             try:
