@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.modelcatalog;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.lincoln.aiplatform.support.DocumentFixture;
 import cn.lincoln.aiplatform.support.PostgresImage;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -258,15 +259,14 @@ class ModelReferenceGuardTest {
         embeddingModelId);
   }
 
-  /** 种一篇文档（{@code scope_kind = 'KB'} 时 {@code kb_id} 必须等于 {@code scope_id}）。 */
+  /**
+   * 种一篇文档。
+   *
+   * <p>★ 走共用夹具 {@code DocumentFixture}，不在用例里另拼一份 {@code insert into kb_document} —— {@code
+   * DocumentFixtureGuardTest}（{@code #48} 判据 2）就是专门盯这件事的：两份真相改一处列名就会在 看起来无关的地方红。
+   */
   private void insertDoc(UUID kbId, String name) {
-    jdbc.update(
-        "insert into kb_document (id, kb_id, scope_kind, scope_id, name, doc_type, classification,"
-            + " status, created_at, updated_at) values (gen_random_uuid(), ?, 'KB', ?, ?, 'TXT',"
-            + " 'PUBLIC', 'SUCCEEDED', now(), now())",
-        kbId,
-        kbId,
-        name);
+    DocumentFixture.insertSucceeded(jdbc, kbId.toString(), name, "PUBLIC");
   }
 
   // ────────────────────────── HTTP ──────────────────────────

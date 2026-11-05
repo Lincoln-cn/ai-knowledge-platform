@@ -101,7 +101,7 @@ public record RetrievalParams(
         false,
         DEFAULT_MAX_HOPS,
         0,
-        true,
+        false,
         DEFAULT_MAX_SUB_QUESTIONS);
   }
 
@@ -123,7 +123,7 @@ public record RetrievalParams(
         multiHopEnabled,
         maxHops,
         0,
-        true,
+        false,
         DEFAULT_MAX_SUB_QUESTIONS);
   }
 }
