@@ -1,4 +1,4 @@
-// ★ 相对路径 + .ts 后缀：node:test（--experimental-strip-types）不解析 `@/` 别名
+﻿// ★ 相对路径 + .ts 后缀：node:test（--experimental-strip-types）不解析 `@/` 别名
 //   也不做无扩展名补全；vite / vue-tsc 两者都吃（tsconfig 已开 allowImportingTsExtensions）。
 import { ApiError } from '../api/types.ts'
 import type { HttpMethod, RequestOptions } from '@/lib/http'
@@ -47,14 +47,25 @@ export type MockRoute = [method: HttpMethod, pattern: string, handler: MockHandl
  *   ⇒ **所有接口都变成「mock 未实现该接口」**（页面能打开、登录点不动、12 个浏览器闸门全红）。
  *   2026-11-05 真的这么坏过一次（`#301` 为了照顾 node:test 把直接调用改成了间接调用）。
  *
- * ★ 别为 node:test 加防御：单测直接 import 各 handler 的 `*Routes` 数组断言，
- *   **不会** import 本文件，所以这里不需要"node:test 下不存在"的兜底。
+ * ★ 但它**不能放在模块顶层执行**：`handlers/*.ts` 自己会 `import { MockEnvelope, paginate } from '../dispatch.ts'`
+ *   （`handlers/models.ts`、`handlers/providers.ts` 都这么写），于是 `node --test` 加载任一 handler
+ *   都会连带加载本文件 —— 那个环境里 `import.meta.glob` 是 `undefined`，顶层直接调用会抛
+ *   `TypeError: (intermediate value).glob is not a function`（2026-11-05 真坏过一次）。
+ *   ⇒ 包进 `discovered()` 惰性求值：vite 里第一次 dispatch 时才展开（宏照样能替换，它是 AST 级的、
+ *   与位置无关）；`node --test` 里没人调用 `discovered()`，那句永不执行。
  */
-const discovered = import.meta.glob<Record<string, unknown>>('./handlers/*.ts', { eager: true })
+let discoveredCache: Record<string, Record<string, unknown>> | null = null
+
+function discovered(): Record<string, Record<string, unknown>> {
+  if (discoveredCache === null) {
+    discoveredCache = import.meta.glob<Record<string, unknown>>('./handlers/*.ts', { eager: true })
+  }
+  return discoveredCache
+}
 
 function collectRoutes(): MockRoute[] {
   const routes: MockRoute[] = []
-  for (const mod of Object.values(discovered)) {
+  for (const mod of Object.values(discovered())) {
     for (const [name, value] of Object.entries(mod)) {
       if (!name.endsWith('Routes') || !Array.isArray(value)) continue
       routes.push(...(value as MockRoute[]))
@@ -63,7 +74,17 @@ function collectRoutes(): MockRoute[] {
   return routes
 }
 
-const ROUTES: MockRoute[] = collectRoutes()
+// ★ 路由表也必须惰性求值：它在模块顶层调用 collectRoutes() → discovered() → import.meta.glob，
+//   于是「加载本文件」就等于「执行那个宏」。node --test 里加载 handlers/*.ts 会连带加载本文件，
+//   而那个环境没有这个宏 ⇒ 必须等到真的 dispatch 时才建表。
+let routesCache: MockRoute[] | null = null
+
+function routes(): MockRoute[] {
+  if (routesCache === null) {
+    routesCache = collectRoutes()
+  }
+  return routesCache
+}
 
 /** 模拟网络延迟，让骨架屏与 loading 态真的能被看到 */
 const LATENCY_MS = 180
@@ -96,7 +117,7 @@ export async function dispatchMock<T>(options: RequestOptions): Promise<T> {
   const method = options.method ?? 'GET'
   const url = options.url.split('?')[0]
 
-  for (const [routeMethod, pattern, handler] of ROUTES) {
+  for (const [routeMethod, pattern, handler] of routes()) {
     if (routeMethod !== method) continue
     const params = match(pattern, url)
     if (!params) continue
@@ -126,3 +147,4 @@ export function paginate<T>(list: T[], query: Record<string, unknown>) {
   const start = (page - 1) * size
   return { list: list.slice(start, start + size), total: list.length, page, size }
 }
+
