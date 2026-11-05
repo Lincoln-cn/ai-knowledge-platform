@@ -117,6 +117,7 @@ final class CaliberShape {
           "assistant/V62__assistant_workflow_record.sql",
           "assistant/V66__assistant_retrieval_multi_hop.sql",
           "assistant/V67__assistant_retrieval_query_count_check.sql",
+          "assistant/V68__assistant_model_id_dangling_cleanup.sql",
           "conversation/V32__conversation.sql",
           "conversation/V33__conversation_message.sql",
           "conversation/V35__conversation_message_feedback.sql",
