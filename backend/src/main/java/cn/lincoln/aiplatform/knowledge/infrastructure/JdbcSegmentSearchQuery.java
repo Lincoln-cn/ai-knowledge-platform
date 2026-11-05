@@ -80,7 +80,20 @@ import org.springframework.stereotype.Component;
  * <h3>分数量纲</h3>
  *
  * <p>{@code coverage = 命中的查询词数 / 查询词数} ∈ (0,1] —— 界面上那个 0–1 的分数与阈值滑块
- * 在三种模式下都说得通（意思是"这次查询的词命中了几成"）。排序仍用 {@code ts_rank}（更专业）： <strong>排序看 rank、展示看 coverage</strong>。
+ * 在三种模式下都说得通（意思是"这次查询的词命中了几成"）。排序用 {@code ts_rank}： <strong>排序看 rank、展示看 coverage</strong>。
+ *
+ * <h3>★ 为什么不是 {@code ts_rank_cd}（2026-11-06 试过并回退）</h3>
+ *
+ * <p>动机：合成语料里同一句模板话（「相关记录保存期限不少于3年」）在 1556/5517 段里重复， 而带主语的完整答案句只有 1 条；{@code ts_rank} 只看词频与段长 ⇒
+ * 干扰段普遍 0.90+ 且大量并列 （并列到只能按 {@code s.id} 兜底），那条答案实测排第 8 之外。{@code ts_rank_cd} （cover
+ * density，看词<b>挨不挨着</b>）在<b>那一条</b>上把它排到了第 1（0.1092 vs 0.1000）。
+ *
+ * <p>★ <b>但全量 195 条上它是明显退步的</b>：B1 86.2% → <b>44.1%</b>、B3 59.5% → <b>28.7%</b>、 文档级 top1 96.3% →
+ * 74.9%。原因：{@code ts_rank_cd} 对<b>短段</b>给低分、对长段要求词密集， 而本语料多数正确段是"400+ 字、答案句只占一句"的形态 ——
+ * 单条最优与全局最优不是同一件事。
+ *
+ * <p>⇒ <b>结论：排序口径不能靠单条探针改</b>。要动这一行，必须先有全量 195 条的前后对比， 且判据是"B1 与 B3 不出现方向相反的移动"。读数留档 {@code
+ * .build/b1b3-tsrankcd.json}。
  */
 @Component
 public class JdbcSegmentSearchQuery implements SegmentSearchPort {
