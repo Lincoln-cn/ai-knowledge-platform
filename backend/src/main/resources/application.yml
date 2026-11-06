@@ -226,6 +226,10 @@ app:
     external-api-ceiling: ${EGRESS_EXTERNAL_API_CEILING:INTERNAL}
 
   ingestion:
+    parse:
+      # #177：是否保留排版噪声行（页码/页脚/页首重复标题/目录行/版权行）。
+      # false = 照 12 §2.4 剔掉（现状）；true = 只剥占位标记。整页目录的文档受这条影响最大。
+      keep-design-lines: ${AIP_KEEP_DESIGN_LINES:false}
     # ★ 批量入库的向量化并发上限（#227）：一次触发 70 份时，最多这么多份同时在跑。
     #   为什么要有它：虚拟线程是无限起的，而数据库连接池默认只有 10 条 —— 69 份同时抢 10 条
     #   连接，10 份会以「Failed to obtain JDBC Connection」收场。那个失败与文档内容无关，

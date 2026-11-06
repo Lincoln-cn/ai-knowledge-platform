@@ -62,6 +62,20 @@ public class SegmentService {
   private final EmbeddingRunner runner;
   private final Segmenter segmenter = new Segmenter();
 
+  /**
+   * 是否保留排版噪声行（{@code #177}）—— 把配置转给 {@link #segmenter}。
+   *
+   * <p>★ 用 setter 注入而不是构造参数：{@code segmenter} 是字段初始化 {@code new Segmenter()}，
+   * 改成构造参数会牵动三个测试构造点，而这条配置只服务于"读数对比"。
+   *
+   * @param keepDesignLines true = 目录行/页脚/页码/版权行都保留
+   */
+  @org.springframework.beans.factory.annotation.Value(
+      "${app.ingestion.parse.keep-design-lines:false}")
+  void setKeepDesignLines(boolean keepDesignLines) {
+    this.segmenter.setKeepDesignLines(keepDesignLines);
+  }
+
   public SegmentService(
       SegmentRepository segments,
       SegmentEmbeddingRepository segmentEmbeddings,

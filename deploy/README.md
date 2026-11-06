@@ -418,6 +418,7 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.ingestion.embedding-concurrency`（`INGESTION_EMBEDDING_CONCURRENCY`） | 4 | 批量入库时同时跑的份数。配 0 或负数按 1 算（配 0 会让向量化永不执行且不报错）；调高到超过连接池只会排队 |
 | `app.ingestion.parse-concurrency`（`INGESTION_PARSE_CONCURRENCY`） | 0（= 自动取 `min(逻辑核数, max(1, 连接池/2))`） | 同时解析的份数（`#303`）。★ 解析是 CPU 密集、且每份在解析期占一条连接 ⇒ 只压连接池不压它，会先炸解析（表现为「请确认文件可正常打开」这类与文件无关的失败）。配 0 = 按上面公式自动定，不建议手填大数 |
 | `app.ingestion.segmenting-timeout-minutes`（`INGESTION_SEGMENTING_TIMEOUT_MINUTES`） | 10 | 「分段中」超期多久后被回收（`#303`）。判超期看 **`updatedAt` 停摆**（活着的任务每页回写进度），不是"创建得久"；且只回收**无主**的（`ParseRunner` 登记表里没有任务）⇒ 慢跑不会被误杀。★ 下限 1 分钟 |
+| `app.ingestion.parse.keep-design-lines`（`AIP_KEEP_DESIGN_LINES`） | false | 是否保留**排版噪声行**（页码 / 页脚 / 页首重复标题 / 点线目录行 / 版权行）。`false` = 照 `12 §2.4` 剔掉（现状）；`true` = 只剥占位标记。★ 影响面：**整页都是目录**的扫描件（第 1 页常见）在 `false` 下点线行全被剔、正文整体上提并重新切分。读数：`#177`（`ROADMAP §11.18`）；默认值待语料侧读数后再定 —— 当前 195 条合成语料没有目录页。 |
 | `app.ingestion.segmenting-reaper.enabled`（`INGESTION_SEGMENTING_REAPER_ENABLED`） | true | 自愈扫描开关。★ **与其它定时任务相反，默认开着** —— 关掉就等于回到「卡死永远没人管」。只有在排查"回收得太积极"时才临时关 |
 | `app.ingestion.segmenting-reaper.interval-ms`（`INGESTION_SEGMENTING_REAPER_INTERVAL_MS`） | 60000 | 扫描间隔（`fixedDelay`：一轮扫完再计下一轮，不是固定频率） |
 | `app.ingestion.pending-parse-timeout-minutes`（`INGESTION_PENDING_PARSE_TIMEOUT_MINUTES`） | 2 | 「待解析」超期多久后被回收（`#304`）。判超期看 **`parse_expected_at`（期望解析开始的时刻）**：只对"有字节、期望解析"的份生效，无字节元数据登记的文档永远停在「待解析」是正常的、回收器跳过。与 `segmenting-timeout-minutes` 的分工：那边是「任务已创建、中途死掉」，这边是「任务从未创建」。★ 下限 1 分钟 |
