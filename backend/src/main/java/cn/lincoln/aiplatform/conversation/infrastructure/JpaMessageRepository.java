@@ -9,6 +9,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -48,4 +49,16 @@ public interface JpaMessageRepository extends JpaRepository<Message, UUID> {
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select m from Message m where m.id = :id")
   Optional<Message> findByIdForUpdate(@Param("id") UUID id);
+
+  /**
+   * 物理删除某会话的全部消息（`#299` 会话彻底删除）。
+   *
+   * <p>★ 一条 {@code delete … where} 而不是"查出来逐条 delete"：会话可能有几百条消息， 逐条删在批量面前慢且没有收益。返回条数给按表逐项断言用。
+   */
+  @Modifying(clearAutomatically = true, flushAutomatically = true)
+  @Query("delete from Message m where m.conversationId = :conversationId")
+  long deleteByConversationId(@Param("conversationId") UUID conversationId);
+
+  /** 数一个会话的消息条数（`#299` dry-run 读数）。 */
+  long countByConversationId(UUID conversationId);
 }

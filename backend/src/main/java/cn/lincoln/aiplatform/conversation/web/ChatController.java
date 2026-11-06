@@ -9,6 +9,7 @@ import cn.lincoln.aiplatform.conversation.application.ChatStopService;
 import cn.lincoln.aiplatform.conversation.application.ChatStreamAssembler;
 import cn.lincoln.aiplatform.conversation.application.ConversationFeedbackService;
 import cn.lincoln.aiplatform.conversation.application.ConversationListService;
+import cn.lincoln.aiplatform.conversation.application.ConversationPurgeService;
 import cn.lincoln.aiplatform.conversation.application.PublicChatService;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -100,6 +101,7 @@ public class ChatController {
   private final ConversationListService conversationList;
   private final ConversationFeedbackService conversationFeedback;
   private final AttachmentRegistrar attachments;
+  private final ConversationPurgeService conversationPurge;
 
   public ChatController(
       ChatService chatService,
@@ -110,7 +112,9 @@ public class ChatController {
       ConversationListService conversationList,
       ConversationFeedbackService conversationFeedback,
       // ★ #187 判据 4：attachmentIds 的消费侧（见 AttachmentRegistrar 的类注释：它**不**进 ChatService.ChatRequest）
-      AttachmentRegistrar attachments) {
+      AttachmentRegistrar attachments,
+      // ★ #299：会话彻底删除（与软删两个独立动作）
+      ConversationPurgeService conversationPurge) {
     this.chatService = chatService;
     this.assembler = assembler;
     this.publicChat = publicChat;
@@ -119,6 +123,7 @@ public class ChatController {
     this.conversationList = conversationList;
     this.conversationFeedback = conversationFeedback;
     this.attachments = attachments;
+    this.conversationPurge = conversationPurge;
   }
 
   /**
@@ -251,6 +256,19 @@ public class ChatController {
       @PathVariable UUID conversationId, @AuthenticationPrincipal Jwt jwt) {
     conversationList.delete(conversationId, subjectOf(jwt));
     return ApiResponse.ok();
+  }
+
+  /**
+   * 彻底删除（`#299`）—— 与软删<strong>两个独立动作、两个独立 URL</strong>：共用一个 URL 时，
+   * 少传一个参数就会把"材料不再存在"当成"从列表消失"执行，而那一步不可恢复。
+   *
+   * <p>★ 只对已软删的会话开放（先反悔一次，再不可恢复），归属口径与软删一致。
+   */
+  @DeleteMapping("/{conversationId}/purge")
+  @PreAuthorize("hasAuthority('conversation:view')")
+  public ApiResponse<ConversationPurgeService.PurgeOutcome> purgeConversation(
+      @PathVariable UUID conversationId, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(conversationPurge.purge(conversationId, subjectOf(jwt)));
   }
 
   @GetMapping("/{conversationId}/messages")

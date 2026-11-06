@@ -109,6 +109,7 @@ final class CaliberShape {
           "knowledge/V57__knowledge_label_seam.sql",
           "knowledge/V65__knowledge_base_retrieval_multi_hop.sql",
           "knowledge/V70__knowledge_document_parse_expected_at.sql",
+          "knowledge/V80__knowledge_document_attachment_id.sql",
           "assistant/V29__assistant_app.sql",
           "assistant/V30__assistant_access_credential.sql",
           "assistant/V47__assistant_prompt_catalog.sql",
