@@ -32,3 +32,13 @@ POST	/assistants/{}/workflow/versions/{}/rollback	#198
 #   但那时要先把 `WorkflowRecordController` / `WorkflowRecordQueryService` / V62 迁移一起删。
 GET	/assistants/{}/workflow/records	#198
 
+# ★ 2026-11-07（`#83` 合规四件套）：`GET /complaints/{}` 的后端端点、契约函数
+#   `getComplaint`、mock handler 三处都已落地，但**页面零消费** ——
+#   投诉页（`frontend/src/pages/complaints/Index.vue`）的「办理」直接从列表行取数
+#   （`patchComplaint(target.id, body)`），不需要先拉一次详情。
+#   ★ 这条与上面两条的性质不同：它**不是欠账，是多做的端点**。
+#   销账二选一：(a) 真做一个「投诉详情」视图接上它（有独立价值时）；
+#   (b) 判定不需要 ⇒ 端点、契约函数、mock handler 一起摘掉。
+#   在此之前它只是一个"能被调用但没人调用"的接口，登记在这里是为了让"零消费 = 0 条"
+#   这个读数保持诚实，而不是靠忘记它。
+GET	/complaints/{}	#83
