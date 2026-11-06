@@ -343,6 +343,40 @@ class NoiseStripperTest {
     assertThat(r.markdown()).contains("[PDF 1]");
   }
 
+  /**
+   * 受控名单的另一头：{@code [图片 N]} / {@code [image N]} / {@code [IMG N]} 同样是占位（`#51` 判据 1 的「这类标记」），而
+   * {@code [图 N]} / {@code [表 N]} 是图注表题的<b>简写</b>，一个都不许动。
+   *
+   * <p>★ 这条对照是刻意的：{@code [图片 2]} 与 {@code [图 2]} 只差一个字，前者是工具吐的占位、后者是人写的图注 —— 任何"看方括号就删"的改法都会在这里翻车。
+   */
+  @Test
+  void chineseAndEnglishPlaceholderFormsAreRemovedButShortCaptionsStay() {
+    String md =
+        "[图片 1]"
+            + NL
+            + "\\[image 2\\]"
+            + NL
+            + "[IMG 3]"
+            + NL
+            + "正文段落"
+            + NL
+            + "[图 2]"
+            + NL
+            + "[表 3]";
+    NoiseStripper.Result r = NoiseStripper.strip(md);
+
+    assertThat(r.removedLines()).as("三种占位形态各剥 1 行").isEqualTo(3);
+    assertThat(r.markdown())
+        .doesNotContain("[图片 1]")
+        .doesNotContain("[image 2]")
+        .doesNotContain("[IMG 3]");
+    assertThat(r.markdown())
+        .as("[图 N]/[表 N] 是图注表题简写，不是占位 —— 剥了就是删真信息（#51 判据 2）")
+        .contains("[图 2]")
+        .contains("[表 3]")
+        .contains("正文段落");
+  }
+
   // ────────────────── 版权声明行（`#271` · 2026-11-01 拍板：算噪声，只认行首）──────────────────
 
   /**
