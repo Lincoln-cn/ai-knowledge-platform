@@ -191,7 +191,10 @@ def main() -> int:
             "kind": "EMBEDDING",
             "supplier": "LOCAL_INFERENCE",
             "baseModel": "bge-m3",
-            "dimension": 768,
+            # ★ 1024 而不是 768：`#305` 缺口 B 起，同一个 baseModel 的维度必须唯一
+            #   （库里 bge-m3 已登记 1024）。写成 768 会被后端 400 拒掉：
+            #   「同一个基础模型 bge-m3 已有登记维度 1024，不能再登记成 768」。
+            "dimension": 1024,
         },
     )
     model_id = (created.get("data") or {}).get("id")
