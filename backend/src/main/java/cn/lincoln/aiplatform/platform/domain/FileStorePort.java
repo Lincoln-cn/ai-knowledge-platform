@@ -42,4 +42,19 @@ public interface FileStorePort {
    * @throws IllegalStateException 键不存在 / 读失败 / 键解析后落在存储根之外
    */
   byte[] read(String key);
+
+  /**
+   * 删掉 {@code store} 写下的字节（{@code #299} 附件彻底删除的磁盘侧）。
+   *
+   * <p>★ <strong>幂等：文件不在也算成功</strong>。彻底删除要跑在"可能已经残缺"的现场上（上一次清理半途失败、 人工挪走过文件）——
+   * "文件本来就不在"与"这次删掉了"对调用方是同一个结果：磁盘上不该再有它。 不幂等会让重跑彻底删除变成一条 500，用户卡在"删不干净"里。
+   *
+   * <p>★ 这条缝的存在本身就是"彻底删除必须动磁盘"的痕迹：只删数据库行的话，{@code backend/data/files/} 里的字节会一直躺着 ——
+   * 那是数据安全事故（"彻底删除"在介质层撒谎），不是 nice-to-have。
+   *
+   * @param key {@code store} 返回的键（相对键，不是绝对路径）
+   * @return true = 调用后存储里没有这个键（删掉了或本来就没有）
+   * @throws IllegalStateException 键解析后落在存储根之外，或删除动作本身失败（权限、只读挂载）
+   */
+  boolean delete(String key);
 }

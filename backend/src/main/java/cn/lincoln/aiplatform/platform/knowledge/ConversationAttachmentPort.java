@@ -54,4 +54,31 @@ public interface ConversationAttachmentPort {
       String displayName,
       byte[] content,
       ClassificationLevel classification);
+
+  /**
+   * 彻底删除一个会话下的<strong>全部</strong>会话域文档行（{@code kb_document} + {@code kb_segment} +
+   * 向量），并报告哪些上传文件因此不再被引用（{@code #299}）。
+   *
+   * <p>★ 为什么删库内行要走本端口、删文件却不走：{@code kb_document} 是 {@code knowledge}（{@code CLOSED}）的内部形状，而 {@code
+   * cv_file} 与磁盘字节归 {@code conversation} —— 两侧各守自己的表，引用计数在 {@code kb_document} 所有者这边判（删完行之后数），
+   * 文件删除由调用方拿 {@link #orphanedAttachmentIds()} 去调 {@code ConversationFilePurgePort}。
+   *
+   * <p>★ 分段与向量<strong>物理删</strong>：{@code 02 §5.1.1} 行 587 的口径（彻底删除必须物理删分段与向量）—— 分段表的 {@code
+   * content} 就是正文摘录，留着的话"彻底删除"只删了个标题。
+   *
+   * @param conversationId 会话 id
+   * @return 清理读数（文档/分段/向量各删了几行）+ 不再被任何文档行引用的 {@code cv_file.id} 列表
+   */
+  PurgeResult purgeConversationAttachments(UUID conversationId);
+
+  /**
+   * {@link #purgeConversationAttachments} 的读数（{@code #299} 判据 1 的按表逐项断言与审计摘要都读它）。
+   *
+   * @param documents 删掉的 {@code kb_document} 行数
+   * @param segments 删掉的 {@code kb_segment} 行数
+   * @param vectors 删掉的向量行数（会话域只走全文一路时恒 0 —— 删前删后都是 0，如实报）
+   * @param orphanedAttachmentIds 彻底删除后已无任何文档行引用的上传文件（{@code cv_file.id}）—— 只有这些才允许删磁盘字节
+   */
+  record PurgeResult(
+      int documents, int segments, int vectors, java.util.List<UUID> orphanedAttachmentIds) {}
 }

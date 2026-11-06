@@ -151,6 +151,49 @@ public class DocumentRepositoryAdapter implements DocumentRepository {
     return jpa.findOne(spec);
   }
 
+  /** 会话域文档的幂等查，按附件 id（`#299`）。与 {@link #findConversationAttachment} 同口径。 */
+  @Override
+  public Optional<Document> findConversationAttachmentByAttachmentId(
+      UUID conversationId, UUID attachmentId) {
+    if (attachmentId == null) {
+      return Optional.empty();
+    }
+    Specification<Document> spec =
+        (root, query, cb) ->
+            cb.and(
+                cb.equal(root.get("scopeKind"), DocumentScopeKind.CONVERSATION),
+                cb.equal(root.get("scopeId"), conversationId),
+                cb.equal(root.get("attachmentId"), attachmentId),
+                cb.isNull(root.get("deletedAt")));
+    return jpa.findOne(spec);
+  }
+
+  /**
+   * 会话彻底删除的清单查询（`#299`）。
+   *
+   * <p>★ 不带密级上限、不跳过软删行：这是数据生命周期动作（删干净），不是列表读取 —— 过滤会让"彻底删除" 漏掉几行，而漏掉的行正是"删完之后数据还在"的来源。
+   */
+  @Override
+  public List<Document> findConversationAttachments(UUID conversationId) {
+    Specification<Document> spec =
+        (root, query, cb) ->
+            cb.and(
+                cb.equal(root.get("scopeKind"), DocumentScopeKind.CONVERSATION),
+                cb.equal(root.get("scopeId"), conversationId));
+    return jpa.findAll(spec);
+  }
+
+  /** 引用计数（`#299`）：还有几条文档行引用着这个上传文件。同样不带任何读侧过滤 —— 计数必须数全。 */
+  @Override
+  public long countByAttachmentId(UUID attachmentId) {
+    if (attachmentId == null) {
+      return 0;
+    }
+    Specification<Document> spec =
+        (root, query, cb) -> cb.equal(root.get("attachmentId"), attachmentId);
+    return jpa.count(spec);
+  }
+
   // ────────────────────────── 内部 ──────────────────────────
 
   private static Sort sort() {
