@@ -24,6 +24,7 @@ import type {
   ToolsMode
 } from '@/api/models'
 import type { FeedbackStatus } from '@/api/feedback'
+import type { ComplaintKind, ComplaintStatus } from '@/api/compliance'
 import type { NoRefStrategy, RetrievalMode } from '@/api/retrieval'
 import type {
   ChatRole,
@@ -131,6 +132,26 @@ export const FEEDBACK_STATUS_LABELS: Record<FeedbackStatus, string> = {
   PROCESSING: '处理中',
   RESOLVED: '已处理',
   IGNORED: '已忽略'
+}
+
+/** 投诉举报工单状态（#83 第十五条）。★ 与 FeedbackStatus 分开：投诉举报是留痕举证工单。 */
+export const COMPLAINT_STATUS_LABELS: Record<ComplaintStatus, string> = {
+  SUBMITTED: '已提交',
+  PROCESSING: '办理中',
+  RESOLVED: '已办结',
+  REJECTED: '不予受理'
+}
+
+export const COMPLAINT_STATUSES: ComplaintStatus[] = [
+  'SUBMITTED',
+  'PROCESSING',
+  'RESOLVED',
+  'REJECTED'
+]
+
+export const COMPLAINT_KIND_LABELS: Record<ComplaintKind, string> = {
+  COMPLAINT: '投诉',
+  REPORT: '举报'
 }
 export const FEEDBACK_STATUS_VALUES: FeedbackStatus[] = [
   'PENDING',

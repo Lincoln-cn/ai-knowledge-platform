@@ -89,7 +89,10 @@ public class PermissionCatalog {
           new Item(Permissions.SYSTEM_MANAGE, "账号与权限", "系统"),
           new Item(Permissions.AUDIT_VIEW, "审计记录查看", "系统"),
           new Item(Permissions.IDENTITY_ORG_MANAGE, "组织机构", "系统"),
-          new Item(Permissions.PLATFORM_DICT_MANAGE, "基础数据", "系统"));
+          new Item(Permissions.PLATFORM_DICT_MANAGE, "基础数据", "系统"),
+          // ★ 合规族（#83）—— 与 feedback 族分开登记：投诉举报是留痕举证工单，不是内容质量反馈。
+          new Item(Permissions.COMPLAINT_HANDLE, "办理投诉举报", "合规"),
+          new Item(Permissions.PLATFORM_COMPLIANCE_MANAGE, "合规登记", "合规"));
 
   private final JdbcTemplate jdbc;
   private final RoleRepository roles;

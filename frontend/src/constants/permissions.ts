@@ -43,7 +43,11 @@ export const PERM = {
 
   // 管理菜单下的两块基础数据（07 §十 / 08 §十）
   orgManage: 'identity:org:manage',
-  dictManage: 'platform:dict:manage'
+  dictManage: 'platform:dict:manage',
+  /** 办理投诉举报工单（#83 第十五条）。★ 与 `feedbackHandle` 分开：投诉举报是留痕举证工单，不是内容质量反馈。 */
+  complaintHandle: 'complaint:handle',
+  /** 合规登记（#83）：算法备案号/安全评估结论登记位 + 投诉举报反馈时限。★ 与 `systemManage` 分开。 */
+  complianceManage: 'platform:compliance:manage'
 } as const
 
 export type PermissionCode = (typeof PERM)[keyof typeof PERM]

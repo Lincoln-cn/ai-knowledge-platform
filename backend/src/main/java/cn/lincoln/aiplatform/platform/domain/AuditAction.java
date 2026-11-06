@@ -41,6 +41,22 @@ public enum AuditAction {
 
   /** 撤销会话分享链接（与生成成对：一条链接的生命周期两端都要能回答"谁做的"）。 */
   CONVERSATION_UNSHARE("conversation.unshare"),
+
+  /**
+   * 会话彻底删除（`#299`）：会话、消息、引用快照、附件行与字节一起从库里消失。
+   *
+   * <p>★ 审计不删（`13 §7.2` 第 3 条）：业务数据消失得越干净，"发生过什么"越只能靠这条记录回答。 它与 {@link #DOCUMENT_PURGE} 是同一口径的两个域。
+   */
+  CONVERSATION_PURGE("conversation.purge"),
+
+  /**
+   * 会话附件彻底删除（`#299`）：附件的文档行、分段、向量与来源字节（{@code cv_file} + 磁盘）一起消失。
+   *
+   * <p>★ 与 {@link #CONVERSATION_PURGE} 各留一条（issue `#299` 判据）：会话整体删除与单个附件删除是
+   * 两条独立入口，混成一条就无法回答"这次到底删了什么"。
+   */
+  ATTACHMENT_PURGE("attachment.purge"),
+
   DOCUMENT_PURGE("document.purge"),
 
   /**

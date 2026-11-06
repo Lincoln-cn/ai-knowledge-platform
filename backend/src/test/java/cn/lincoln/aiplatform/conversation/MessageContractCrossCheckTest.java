@@ -258,6 +258,17 @@ class MessageContractCrossCheckTest {
    *
    * <p>★ 2026-10-21（{@code #182}）：加 {@code findByIdForUpdate} —— 读时收敛陈旧 GENERATING 要对单行加写锁，
    * 它是只读口（行锁不是状态写入），写入口仍只有 {@code save}。
+   *
+   * <p>★★ 2026-11-07（{@code #299}）：加 <strong>两个</strong>方法 —— {@code
+   * countByConversation}（只读，用于彻底删除前 报出"将删除 N 条消息"）与 {@code
+   * deleteByConversation}（<strong>这是第二个写入口，如实记在这里</strong>）。
+   *
+   * <p>为什么它不违反这条断言的原意：这条守的是"<strong>状态迁移</strong>不能由 SQL 直接做"（比如 {@code update cv_message set
+   * status = 'COMPLETED' where …} 会绕过 {@code Message} 里的状态机）。而 {@code cv_message} 对 {@code
+   * cv_conversation} <strong>没有外键级联</strong>，会话彻底删除时消息必须显式删 ——
+   * 那时整条会话都已判定要销毁，没有"状态"可言，也就无从绕开状态机。它只接受一个 {@code conversationId}、 不接受任何状态条件，形状上就做不了"改状态"这件事。
+   *
+   * <p>★ 如果将来有人想给它加重载（比如按状态删、按时间删），先回来读这段：那才是这条断言真正要挡的东西。
    */
   @Test
   void repositoryPortKeepsASingleWritePath() {
@@ -266,6 +277,14 @@ class MessageContractCrossCheckTest {
         .filteredOn(m -> !m.isSynthetic())
         .extracting(java.lang.reflect.Method::getName)
         .containsExactlyInAnyOrder(
-            "save", "findById", "findByIdForUpdate", "listByConversation", "slice", "windowAround");
+            "save",
+            "findById",
+            "findByIdForUpdate",
+            "listByConversation",
+            "slice",
+            "windowAround",
+            // ★ #299：会话彻底删除用（见上方 javadoc 里为什么它不算"绕开状态机"）
+            "countByConversation",
+            "deleteByConversation");
   }
 }

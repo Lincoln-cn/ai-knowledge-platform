@@ -183,6 +183,8 @@ const ACTIONS = [
   { value: 'grant.change', label: '改角色权限' },
   { value: 'audit.purge', label: '清理过期审计' },
   { value: 'workflow.publish', label: '发布编排版本' },
+  { value: 'conversation.purge', label: '彻底删除会话' },
+  { value: 'attachment.purge', label: '彻底删除附件' },
 ]
 
 const RESOURCES = [
@@ -190,6 +192,7 @@ const RESOURCES = [
   { value: 'ASSISTANT', label: '应用' },
   { value: 'ROLE', label: '角色' },
   { value: 'CONVERSATION', label: '会话' },
+  { value: 'ATTACHMENT', label: '附件' },
   { value: 'AUDIT_LOG', label: '审计记录' },
 ]
 

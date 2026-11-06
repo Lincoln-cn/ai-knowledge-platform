@@ -67,7 +67,8 @@ export const navGroups: NavGroup[] = [
       { path: '/assistants/prompts', label: '提示词', icon: 'EditPen' },
       { path: '/models', label: '模型管理', icon: 'Cpu' },
       { path: '/analytics', label: '运营看板', icon: 'TrendCharts' },
-      { path: '/feedback', label: '反馈处理', icon: 'ChatLineSquare' }
+      { path: '/feedback', label: '反馈处理', icon: 'ChatLineSquare' },
+      { path: '/complaints', label: '投诉举报', icon: 'Warning' }
     ]
   },
   {
@@ -84,7 +85,8 @@ export const navGroups: NavGroup[] = [
       { path: '/admin', label: '系统管理', icon: 'Setting' },
       // ★ 审计记录放「管理」而不是塞进系统管理的 tab：它是一张**只读的事实表**，
       //   与"改配置"不是同一类动作；而且查审计的人常常是来核对某个变更，不该先去翻 tab
-      { path: '/audit', label: '审计记录', icon: 'Document' }
+      { path: '/audit', label: '审计记录', icon: 'Document' },
+      { path: '/compliance', label: '合规设置', icon: 'Stamp' }
     ]
   }
 ]

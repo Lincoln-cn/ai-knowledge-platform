@@ -131,6 +131,31 @@ public interface MessageRepository {
   Optional<Window> windowAround(UUID conversationId, UUID targetMessageId, int radius);
 
   /**
+   * 物理删除某会话的全部消息（`#299` 会话彻底删除）。
+   *
+   * <p>★ 为什么这里破"只有 save 一条写入口"的例：那是<strong>状态机</strong>的纪律（消息的状态迁移只能经 save），
+   * 而彻底删除是<strong>数据生命周期</strong>动作 —— 行本身要消失，不走任何状态。把 delete 藏进 save 的某个魔法状态只会更难核对。
+   *
+   * <p>★ 为什么必须显式删：{@code cv_message.conversation_id} 刻意没有外键（"消息是会话子实体、 会话删除是软删，外键只会添乱"），删会话行不会带走消息
+   * —— 彻底删除时漏掉这一步，消息就成了永远没人管的孤儿行。 {@code cv_feedback_state} 有外键 {@code on delete cascade} 到 {@code
+   * cv_message}，删消息时自动带走。
+   *
+   * @param conversationId 会话 id
+   * @return 删掉的消息条数（按表逐项断言用）
+   */
+  long deleteByConversation(UUID conversationId);
+
+  /**
+   * 数一个会话下有多少条消息（{@code #299} 归档清理 dry-run 的读数——"如果清掉这个会话，消息会少多少行"）。
+   *
+   * <p>读方法，不是写入口：上面"只有 {@link #save} 一条写入口"的纪律不受影响。
+   *
+   * @param conversationId 会话 id
+   * @return 该会话的消息条数
+   */
+  long countByConversation(UUID conversationId);
+
+  /**
    * 一页消息 + 该会话的总条数。
    *
    * <p>★ 两个分量一起返回是刻意的：分两次问会出现"这中间又落了一条消息"的窗口 ⇒ {@code total} 与页内容不同口径，而那是没人会怀疑的读数。

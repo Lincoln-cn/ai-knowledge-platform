@@ -20,3 +20,5 @@
 #     knowledge.infrastructure.FullTextIndex           @Component（启动时自检 zhparser）
 #     knowledge.infrastructure.SegmentLabelMismatchMetric  @Component（注册 Gauge）
 #   ⇒ `#270` 那种「同一件事两份实现」是个例，不是系统性问题。
+cn.lincoln.aiplatform.knowledge.domain.OcrLineLossGuard  # #96：类的 javadoc 自己写着「#96 排期 L3（后置）：生产接线（版面连通域数渲染行数 + 真去标 needsReview）随 L3 落，本类先把判据与夹具留下（issue 原话"判据 1 的夹具现在就该留着"）」⇒ 它是**按排期留的判据件**，不是死代码。★ 生产接线（连通域数渲染行数 + needsReview 的真实消费路径）落在 L3；接线后这一行必须删掉（规矩 2）。
+

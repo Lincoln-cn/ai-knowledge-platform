@@ -107,4 +107,28 @@ public class ConversationRepositoryAdapter implements ConversationRepository {
         .filter(found -> Objects.equals(found.assistantId(), assistantId))
         .findFirst();
   }
+
+  /** 「软删已过留存期」的会话（`#299` dry-run 底册）—— 只数不删。 */
+  @Override
+  public List<Conversation> findDeletedBefore(java.time.Instant cutoff, int limit) {
+    if (cutoff == null || limit <= 0) {
+      return List.of();
+    }
+    return jpa.findDeletedBefore(cutoff, org.springframework.data.domain.PageRequest.of(0, limit));
+  }
+
+  /** 「软删已过留存期」的会话条数（`#299` dry-run 报表读数）。 */
+  @Override
+  public long countDeletedBefore(java.time.Instant cutoff) {
+    return cutoff == null ? 0 : jpa.countDeletedBefore(cutoff);
+  }
+
+  /** 物理删除会话行（`#299`）—— {@code cv_conversation_feedback} / {@code cv_share} 靠外键级联带走。 */
+  @Override
+  public void delete(Conversation conversation) {
+    if (conversation == null) {
+      return;
+    }
+    jpa.delete(conversation);
+  }
 }

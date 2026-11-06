@@ -118,4 +118,19 @@ public class MessageRepositoryAdapter implements MessageRepository {
     //    而前端拿它判断"窗口前还有没有更早的一页"（只给窗口条数 ⇒ 深链后"加载更早"消失且不报错）。
     return Optional.of(new Window(List.copyOf(all.subList(from, to)), all.size()));
   }
+
+  /** 物理删除某会话的全部消息（`#299`）—— 一条批量 DELETE，理由见 {@link MessageRepository#deleteByConversation}。 */
+  @Override
+  public long deleteByConversation(UUID conversationId) {
+    if (conversationId == null) {
+      return 0;
+    }
+    return jpa.deleteByConversationId(conversationId);
+  }
+
+  /** 数一个会话的消息条数（`#299` dry-run 读数）—— 读方法，不动数据。 */
+  @Override
+  public long countByConversation(UUID conversationId) {
+    return conversationId == null ? 0 : jpa.countByConversationId(conversationId);
+  }
 }

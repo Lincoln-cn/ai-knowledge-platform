@@ -85,6 +85,17 @@ public class Document {
   @Column(name = "owner_id")
   private UUID ownerId;
 
+  /**
+   * 来源上传文件（{@code cv_file.id}，{@code V80} · {@code #299}）。
+   *
+   * <p>★ 只有会话附件行有值；库域文档没有"上传文件"这一层。彻底删除时按它追溯磁盘字节： {@code attachment_id → cv_file.id → storage_key →
+   * backend/data/files/}。没有这一列， "会话删干净了但磁盘上还躺着原文"是数据安全事故，不是 nice-to-have。
+   *
+   * <p>★ 可空且存量行不回填（登记链路在此之前不落它，没有可靠的旧映射可抄）； 一文件可被多会话引用 ⇒ 删除侧按引用计数决定要不要动 {@code cv_file} 与磁盘。
+   */
+  @Column(name = "attachment_id")
+  private UUID attachmentId;
+
   @Column(name = "name", nullable = false, length = 255)
   private String name;
 
@@ -328,6 +339,7 @@ public class Document {
    * @param id 文档 id
    * @param conversationId 会话 id（★ 落 {@code scope_id}，并由生成列派生 {@code conversation_id}）
    * @param ownerId 上传人（★ 落 {@code owner_id}，检索谓词第三支要求它等于当前请求者）
+   * @param attachmentId 来源上传文件（{@code cv_file.id}，{@code V80} · {@code #299}）—— 彻底删除时按它追溯磁盘字节
    * @param name 展示名（用户上传时的原始文件名）
    * @param docType 文种（★ 列 NOT NULL；取值口径见 {@code ConversationAttachmentRegistrar#DOC_TYPE}）
    * @param classification 密级（★ 由调用方按 {@code 13 §11.5} 取会话当前值）
@@ -337,6 +349,7 @@ public class Document {
       UUID id,
       UUID conversationId,
       UUID ownerId,
+      UUID attachmentId,
       String name,
       String docType,
       ClassificationLevel classification) {
@@ -357,6 +370,9 @@ public class Document {
     document.scopeKind = DocumentScopeKind.CONVERSATION;
     document.scopeId = conversationId;
     document.ownerId = ownerId;
+    // ★ #299：把来源上传文件记下来 —— 会话彻底删除时按它把磁盘字节一起删掉，
+    //   否则"数据真的不在"只做到数据库这一层，磁盘上还躺着原文。
+    document.attachmentId = attachmentId;
     document.init(id, name, "local", docType, null, classification, List.of(), ownerId);
     return document;
   }
@@ -801,6 +817,11 @@ public class Document {
   /** 传输者；会话域那一支的判据（库域不使用）。分段落库时从文档继承。 */
   public UUID ownerId() {
     return ownerId;
+  }
+
+  /** 来源上传文件（{@code cv_file.id}，{@code V80} · {@code #299}）。★ 只有会话附件行有值；彻底删除时按它追溯磁盘字节。 */
+  public UUID attachmentId() {
+    return attachmentId;
   }
 
   public String name() {

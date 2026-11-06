@@ -140,4 +140,32 @@ public interface ConversationRepository {
    * @return 最近一条（按 {@code last_message_at}、再按 {@code created_at} 倒序）；没有时空
    */
   Optional<Conversation> findLatestByUserAndAssistant(UUID userId, UUID assistantId);
+
+  /**
+   * 物理删除会话行（`#299` 会话彻底删除）—— 与软删（{@code deleted_at} 标记）是两个独立动作。
+   *
+   * <p>★ 只给 {@code ConversationPurgeService} 用：调用方必须保证消息已先删、且已过软删那一步。 {@code
+   * cv_conversation_feedback} 与 {@code cv_share} 有外键 {@code on delete cascade} 到会话行，自动带走。
+   *
+   * @param conversation 会话（必须是已软删的那一条）
+   */
+  void delete(Conversation conversation);
+
+  /**
+   * 找出「软删已过留存期」的会话（{@code #299} 归档清理 dry-run 的计数底册）。今天只有 dry-run 读它 —— 真删执行体不存在（配置位 {@code
+   * app.lifecycle.retention.*} 没有消费者），天数要与客户确认之后才有资格启用。
+   *
+   * @param cutoff 截止时刻（{@code deleted_at < cutoff} 的才算过期）
+   * @param limit 最多返回几条（dry-run 只做计数，不需要全量拖回）
+   * @return 过期的软删会话（按软删时间排序）
+   */
+  List<Conversation> findDeletedBefore(java.time.Instant cutoff, int limit);
+
+  /**
+   * 「软删已过留存期」的会话条数（{@code #299} dry-run 报表的读数；与 {@link #findDeletedBefore} 同一口径）。
+   *
+   * @param cutoff 截止时刻
+   * @return 过期软删会话数
+   */
+  long countDeletedBefore(java.time.Instant cutoff);
 }
