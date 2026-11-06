@@ -34,7 +34,9 @@ export const permissions: PermissionItem[] = [
   //   但不该能改角色与字典。清理过期记录仍要 `system:manage`（删数据不可逆）。
   { code: PERM.auditView, label: '审计记录查看', module: '系统' },
   { code: PERM.orgManage, label: '组织机构', module: '系统' },
-  { code: PERM.dictManage, label: '基础数据', module: '系统' }
+  { code: PERM.dictManage, label: '基础数据', module: '系统' },
+  { code: PERM.complaintHandle, label: '办理投诉举报', module: '合规' },
+  { code: PERM.complianceManage, label: '合规登记', module: '合规' }
 ]
 
 const all = permissions.map((p) => p.code)
@@ -71,7 +73,8 @@ export const roles: Role[] = [
       PERM.conversationView,
       PERM.conversationShare,
       PERM.dashboardView,
-      PERM.feedbackHandle
+      PERM.feedbackHandle,
+      PERM.complaintHandle
     ]
   },
   {

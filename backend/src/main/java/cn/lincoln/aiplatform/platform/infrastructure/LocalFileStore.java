@@ -84,6 +84,18 @@ public class LocalFileStore implements FileStorePort {
     }
   }
 
+  @Override
+  public boolean delete(String key) {
+    Path target = resolveInsideRoot(key);
+    try {
+      boolean removed = Files.deleteIfExists(target);
+      log.info("附件字节删除：键 {}，{}", key, removed ? "已删掉" : "本就不在（幂等成功）");
+      return true;
+    } catch (IOException cause) {
+      throw new IllegalStateException("文件删除失败（根目录 " + root + "，键 " + key + "）", cause);
+    }
+  }
+
   /**
    * 从原始文件名里取扩展名（含点，小写）。
    *

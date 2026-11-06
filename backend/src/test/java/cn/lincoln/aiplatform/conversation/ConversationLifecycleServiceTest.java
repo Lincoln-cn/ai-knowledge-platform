@@ -130,5 +130,22 @@ class ConversationLifecycleServiceTest {
           .filter(c -> java.util.Objects.equals(c.assistantId(), assistantId))
           .findFirst();
     }
+
+    /** 物理删（#299）—— 本用例不测彻底删除，但 fake 必须把接口实现全。 */
+    @Override
+    public void delete(Conversation conversation) {
+      rows.remove(conversation.id());
+    }
+
+    /** 留存期试算底册（#299）—— 本用例不测归档清理，返回空即可。 */
+    @Override
+    public List<Conversation> findDeletedBefore(java.time.Instant cutoff, int limit) {
+      return List.of();
+    }
+
+    @Override
+    public long countDeletedBefore(java.time.Instant cutoff) {
+      return 0;
+    }
   }
 }

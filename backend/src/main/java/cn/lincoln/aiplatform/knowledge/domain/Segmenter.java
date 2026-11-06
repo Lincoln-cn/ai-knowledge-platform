@@ -35,6 +35,17 @@ public class Segmenter {
    */
   private final TableStatementRewriter tableRewriter;
 
+  /**
+   * 是否保留"排版噪声行"（页码 / 页脚 / 页首重复标题 / 目录行 / 版权行）。
+   *
+   * <p>默认 {@code false} = 现状（照 {@code 12 §2.4} 剔掉）。置 {@code true} 时只剥占位标记，其余原样保留。
+   *
+   * <p>★ 存在的理由（{@code #177}）：{@code 12 §2.4} 的意图是"剔页眉页脚页码"，隐含假设是"目录只占页面一小部分"。
+   * 遇到<b>整页都是目录</b>的文档（扫描件第 1 页常见），12 行目录会被当成 12 行噪声全部剔掉，那一页就什么都不剩。 该开关把这条口径变成<b>可选</b>，读数（保留 vs
+   * 剔掉）在同一套评测上对比后再定默认值。
+   */
+  private boolean keepDesignLines;
+
   /** 默认构造：规则版改写。★ 现有三处调用方（两个 Service 与测试）走的都是它，零改动。 */
   public Segmenter() {
     this(new RuleBasedTableStatementRewriter());
@@ -43,6 +54,15 @@ public class Segmenter {
   /** 注入式构造：给"换一个改写实现"留的口子。 */
   public Segmenter(TableStatementRewriter tableRewriter) {
     this.tableRewriter = tableRewriter;
+  }
+
+  /**
+   * 设置是否保留排版噪声行（{@code #177}）。由两个 Service 从配置里注入。
+   *
+   * @param keepDesignLines true = 保留页码/页脚/目录行/版权行，只剥占位标记
+   */
+  public void setKeepDesignLines(boolean keepDesignLines) {
+    this.keepDesignLines = keepDesignLines;
   }
 
   /**
@@ -193,7 +213,7 @@ public class Segmenter {
           "请调大向量模型的上限（换长上下文模型），或缩短文档名/部门标签。");
     }
 
-    NoiseStripper.Result stripped = NoiseStripper.strip(markdown);
+    NoiseStripper.Result stripped = NoiseStripper.strip(markdown, keepDesignLines);
     if (stripped.markdown().isBlank()) {
       // ★ 全是噪声 ⇒ 不产分段，但**剥离行数照记**：否则"文档有内容却切不出段"看起来像 bug
       return new SegmentPlan(List.of(), stripped.removedLines());

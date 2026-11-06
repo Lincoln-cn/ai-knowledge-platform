@@ -78,6 +78,14 @@ final class Caliber {
           //     与"同一份文档的新旧关系"、"源系统给了谁读权限"都无关（走法同 V34 三列：红的第一问是
           //     "我加的是不是那个概念"，第二问才是"基线跟上了没有"）。
           "parseExpectedAt: Instant",
+          // ★★ 2026-11-06（#299 / V80）：会话附件的**来源上传文件**（cv_file.id）。
+          //   ★ 为什么它不是"版本维度"、也不是"源系统授权依据"：它回答"这份附件的字节来自哪个 cv_file 行、
+          //     磁盘上哪个键"（会话彻底删除时按引用计数删 cv_file + 磁盘字节的唯一追溯链），
+          //     与"同一份文档的新旧关系"（#86 的 revision/supersedes_id）、"源系统给了谁读权限"（#81 的
+          //     source_acl 一族）都无关。库域文档天然无值（null）。
+          //   ★ 可空 + 不加外键（cv_file 与 kb_document 分属两模块，多态引用）；走法同 V34/V70：
+          //     红的第一问是"我加的是不是那个概念"，第二问才是"基线跟上了没有"。
+          "attachmentId: UUID",
           "updatedBy: UUID",
           "deletedAt: Instant");
 
@@ -131,6 +139,7 @@ final class Caliber {
           "revision",
           "supersedes_id",
           "parse_expected_at",
+          "attachment_id",
           "labels");
 
   /**

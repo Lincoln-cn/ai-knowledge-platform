@@ -20,6 +20,10 @@ export type AuditActionCode =
   // ★ 发布编排版本（`#198`）：它把画布上的图变成线上正在跑的那一版，
   //   属于"行为切换"，所以必须留痕；明细里带 version 与 nodeCount。
   | 'workflow.publish'
+  // ★ 彻底删除会话 / 附件（`#299`）：与 document.purge 同一族，但对象与后果不同 ——
+  //   会话删掉会连带删它的消息、分段、向量；附件删掉会动磁盘文件。三条都必须能筛出来。
+  | 'conversation.purge'
+  | 'attachment.purge'
 
 /**
  * 一条审计记录。

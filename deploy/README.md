@@ -311,9 +311,23 @@ pg_dump -Fc -f /backup/aip-$(date +%F).dump "$DATABASE_URL"
 pg_restore -d "$TARGET_URL" --clean --if-exists /backup/aip-2026-10-31.dump
 ```
 
-★ **一条与"删得掉"直接相关的提醒**：`pg_dump` 的备份里包含**软删的数据**（`deleted_at` 有值的行）——
-所以在实现彻底删除之前，"数据主体要求删除"这件事**连备份都过不去**。这不是遗漏，是 `#75` 第二段
-（0.5.x）要解决的问题，写在这里是为了不让它被读成"已经有删除能力了"。
+★ **「备份里还有」的口径（判据 ④，`#299` 2026-11）**：彻底删除（`DELETE /api/v1/documents/{id}/purge`、
+`DELETE /api/v1/conversations/{id}/purge`）的真实语义是**从生产库与检索里消失**——
+`pg_dump` 的备份里当然还有：日备保留 14 天、周全备 8 周 ⇒ **被彻底删除的数据在最坏情况下还能从备份里恢复出来，
+最长 ≈ 8 周**。三句话把这个口径钉住：
+
+1. **对数据主体的说法**：删除请求已执行——生产系统与检索里不再存在、不可再被引用；备份副本按备份轮转
+   （14 天 / 8 周）自然过期，在此期间只有"从旧备份整库恢复"这一条路能把它带回来，而**恢复是演练级动作、
+   不是查询动作**——没有人能"查一下备份里这条还在不在"。
+2. **客户要求"备份也擦掉"（介质级擦除）时怎么做**：备份是**外部系统**（NAS / 对象存储 / 备份机），
+   平台控制不了，**这条只记账不实现**（`#299` 处置）。流程口径：① 由备份管理员在备份系统侧**定位含该数据的
+   备份文件**（按恢复到隔离实例 + 查询确认的方式定位，备份系统本身不提供行级查询）；② 对这些备份副本
+   **单独安全擦除或直接销毁**（覆盖写 / 加密擦除 / 介质销毁，按客户保密制度）；③ 擦除动作**在客户的备份管理
+   流程里留记录**（哪个备份、擦除时间、执行人）——平台的 `pf_audit_log` 只追加，**不假装它管得到备份**。
+   ★ 话术边界：平台侧只能承诺"生产库与检索里已删除"；"备份里也已擦除"这句话**只能由备份管理员签字**，
+   平台文档不代签。
+3. **WAL 归档同理**：归档 WAL ≥ 7 天的窗口内同样可能含被删数据，随归档过期自然消失；
+   要提前消除时走第 2 条同一流程（在 WAL 归档存储侧处理）。
 
 ---
 
@@ -418,6 +432,7 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.ingestion.embedding-concurrency`（`INGESTION_EMBEDDING_CONCURRENCY`） | 4 | 批量入库时同时跑的份数。配 0 或负数按 1 算（配 0 会让向量化永不执行且不报错）；调高到超过连接池只会排队 |
 | `app.ingestion.parse-concurrency`（`INGESTION_PARSE_CONCURRENCY`） | 0（= 自动取 `min(逻辑核数, max(1, 连接池/2))`） | 同时解析的份数（`#303`）。★ 解析是 CPU 密集、且每份在解析期占一条连接 ⇒ 只压连接池不压它，会先炸解析（表现为「请确认文件可正常打开」这类与文件无关的失败）。配 0 = 按上面公式自动定，不建议手填大数 |
 | `app.ingestion.segmenting-timeout-minutes`（`INGESTION_SEGMENTING_TIMEOUT_MINUTES`） | 10 | 「分段中」超期多久后被回收（`#303`）。判超期看 **`updatedAt` 停摆**（活着的任务每页回写进度），不是"创建得久"；且只回收**无主**的（`ParseRunner` 登记表里没有任务）⇒ 慢跑不会被误杀。★ 下限 1 分钟 |
+| `app.ingestion.parse.keep-design-lines`（`AIP_KEEP_DESIGN_LINES`） | false | 是否保留**排版噪声行**（页码 / 页脚 / 页首重复标题 / 点线目录行 / 版权行）。`false` = 照 `12 §2.4` 剔掉（现状）；`true` = 只剥占位标记。★ 影响面：**整页都是目录**的扫描件（第 1 页常见）在 `false` 下点线行全被剔、正文整体上提并重新切分。读数：`#177`（`ROADMAP §11.18`）；默认值待语料侧读数后再定 —— 当前 195 条合成语料没有目录页。 |
 | `app.ingestion.segmenting-reaper.enabled`（`INGESTION_SEGMENTING_REAPER_ENABLED`） | true | 自愈扫描开关。★ **与其它定时任务相反，默认开着** —— 关掉就等于回到「卡死永远没人管」。只有在排查"回收得太积极"时才临时关 |
 | `app.ingestion.segmenting-reaper.interval-ms`（`INGESTION_SEGMENTING_REAPER_INTERVAL_MS`） | 60000 | 扫描间隔（`fixedDelay`：一轮扫完再计下一轮，不是固定频率） |
 | `app.ingestion.pending-parse-timeout-minutes`（`INGESTION_PENDING_PARSE_TIMEOUT_MINUTES`） | 2 | 「待解析」超期多久后被回收（`#304`）。判超期看 **`parse_expected_at`（期望解析开始的时刻）**：只对"有字节、期望解析"的份生效，无字节元数据登记的文档永远停在「待解析」是正常的、回收器跳过。与 `segmenting-timeout-minutes` 的分工：那边是「任务已创建、中途死掉」，这边是「任务从未创建」。★ 下限 1 分钟 |

@@ -611,11 +611,15 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
       return Map.of();
     }
     List<UUID> ids = List.copyOf(segmentIds);
+    // ★ 这里**不能**写 s.deleted_at is null：kb_segment 没有 deleted_at 列（#259 订正过 —— 分段不软删，
+    //   可见性由所属文档的 deleted_at 决定，见 02 §5.1.1）。邻座与命中段同属一份文档，文档被软删时
+    //   主查询根本不会返回命中段，所以这里只需要 join 文档表把"文档已删"这一层钉住即可。
     String sql =
         "select h.id as hit_id, s.content as content"
             + " from kb_segment h"
+            + " join kb_document d on d.id = h.document_id and d.deleted_at is null"
             + " join kb_segment s on s.document_id = h.document_id"
-            + "   and s.deleted_at is null and s.id <> h.id"
+            + "   and s.id <> h.id"
             + "   and s.ordinal between h.ordinal - ? and h.ordinal + ?"
             + " where h.id in ("
             + placeholders(ids.size())

@@ -23,4 +23,11 @@ public interface FileRefRepository {
    * 而那两种情况对外的答案<strong>必须一样</strong>（404，不泄漏存在性）。把这两种情况在这里揉成一个异常， 调用点就没法自己决定这条口径。
    */
   Optional<FileRef> findById(UUID id);
+
+  /**
+   * 物理删掉一条附件元数据（{@code #299} 附件彻底删除）。★ 只给「彻底删除」这一个动作 —— 上传记录的软删今天不存在， 也不该与文档侧的软删混用一个入口。
+   *
+   * <p>★ 幂等：行不在就算删完了（与 {@code FileStorePort#delete} 同口径）—— 彻底删除要跑在"可能已经残缺"的现场上。
+   */
+  void delete(FileRef file);
 }

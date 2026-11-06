@@ -133,4 +133,38 @@ public interface DocumentRepository {
    * <p>★ 只查 {@code scope_kind='CONVERSATION'}：库域文档的 {@code scope_id} 是 kb_id，语义不同，不许串。
    */
   Optional<Document> findConversationAttachment(UUID conversationId, String name);
+
+  /**
+   * 按「会话 + 附件 id」找一条会话域文档（`#299` 起的幂等键首选）。
+   *
+   * <p>★ {@code V80} 补上 {@code attachment_id} 列之后，幂等键升级为 <strong>(conversationId,
+   * attachmentId)</strong>： 同会话两份同名不同内容的附件不再互相顶掉。名字键保留作旧行（{@code attachment_id} 为空）的回退。
+   *
+   * <p>★ 与 {@link #findConversationAttachment} 同口径：只查 {@code
+   * scope_kind='CONVERSATION'}、不带密级上限（写侧幂等查不是列表读取）、 不含软删行（软删的那份不是"已登记"，重新登记是新行）。
+   */
+  Optional<Document> findConversationAttachmentByAttachmentId(
+      UUID conversationId, UUID attachmentId);
+
+  /**
+   * 列出一个会话下的<strong>全部</strong>会话域文档（`#299` 会话彻底删除用）。
+   *
+   * <p>★ 不分页、不按密级收窄：这是<strong>数据生命周期</strong>动作（删干净），不是列表读取 —— 按密级过滤会让"彻底删除"漏掉低密级看不到的那几行，
+   * 而漏掉的行正是"删完之后数据还在"的来源。与 {@link #findDeletedBefore} 同一条口径。
+   *
+   * @param conversationId 会话 id（{@code scope_id}）
+   * @return 该会话的全部会话域文档（含软删的 —— 软删行也要走彻底删除，否则回收站里永远躺着孤儿）
+   */
+  List<Document> findConversationAttachments(UUID conversationId);
+
+  /**
+   * 数一数还有多少条文档行引用着这个上传文件（`#299` 的引用计数）。
+   *
+   * <p>★ 删除侧的判据：{@code countByAttachmentId == 0} 才允许删 {@code cv_file} 行与磁盘字节。
+   * 同一个上传文件可以被多个会话引用（跨会话复用同一 {@code cv_file}），先删文件会让另一个会话的附件变成"有行无字节"的半截数据。
+   *
+   * @param attachmentId {@code cv_file.id}
+   * @return 还引用着它的文档行数（含软删行）
+   */
+  long countByAttachmentId(UUID attachmentId);
 }

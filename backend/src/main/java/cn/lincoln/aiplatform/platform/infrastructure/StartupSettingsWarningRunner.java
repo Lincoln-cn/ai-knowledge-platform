@@ -55,6 +55,14 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
   /** 模型 API Key 的加密密钥（默认值是仓库里的示例值，`#272`）。 */
   private final String apiKeySecret;
 
+  /**
+   * 是否开启了"取相邻段落做上下文"（`#65`，`app.chat.retrieval.neighbor-context.enabled`）。
+   *
+   * <p>★ 这一项<b>不进 problems</b>：它不是"配错了会坏"，而是"打开了就要知道它多跑一次 SQL、且这个 版本没有回归测试兜住"。放进去会把"配置自检发现 N
+   * 项"的语义污染成"N 个配置错误"。
+   */
+  private final boolean neighborContextEnabled;
+
   /** 上游 Ollama 的模型槽位上限（`#282`）；`-1` = 未声明，走 Ollama 自己的默认值。 */
   private final int ollamaMaxLoadedModels;
 
@@ -74,7 +82,9 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
       //   默认 -1 = 没声明（Ollama 默认 3×GPU 数，通常够），不报。
       @Value("${app.model.ollama.max-loaded-models:-1}") int ollamaMaxLoadedModels,
       // ★ `#303`：解析/分段并发（0 = auto）。与向量化并发同一套容量口径 —— 一起校验。
-      @Value("${app.ingestion.parse-concurrency:0}") int parseConcurrency) {
+      @Value("${app.ingestion.parse-concurrency:0}") int parseConcurrency,
+      @Value("${app.chat.retrieval.neighbor-context.enabled:false}")
+          boolean neighborContextEnabled) {
     this.embeddingConcurrency = embeddingConcurrency;
     this.poolSize = poolSize;
     this.contextWindow = contextWindow;
@@ -85,6 +95,7 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
     this.apiKeySecret = apiKeySecret;
     this.ollamaMaxLoadedModels = ollamaMaxLoadedModels;
     this.parseConcurrency = parseConcurrency;
+    this.neighborContextEnabled = neighborContextEnabled;
   }
 
   @Override
@@ -106,6 +117,14 @@ public class StartupSettingsWarningRunner implements ApplicationRunner {
     problems.addAll(
         StartupSettingsCheck.ingestionProblems(
             parseConcurrency, poolSize, Runtime.getRuntime().availableProcessors()));
+
+    // ★ 邻座上下文（`#65`）：默认关。打开后每轮问答多一次相邻段落查询，而这个版本它没有
+    //   仓库内的回归测试（见 ROADMAP §11.18.5），所以打开时明说，不让它悄悄生效。
+    if (neighborContextEnabled) {
+      log.warn(
+          "⚠️ 邻座上下文已开启（app.chat.retrieval.neighbor-context.enabled=true）：每轮问答会额外查一次"
+              + "相邻段落。★ 该功能在本版本没有回归测试覆盖，生产请先小范围验证；关掉它不影响任何现有行为。");
+    }
 
     if (problems.isEmpty()) {
       log.info(

@@ -59,7 +59,7 @@ public final class NoiseStripper {
       Pattern.compile(".*?[.．…·]{2,}[\\s.．，,、;；:：]*\\d{1,4}\\s*$");
 
   /**
-   * 解析器留下的**图片占位标记**（`#51`）：整行只有 `[PDF 1]` / `[pdf 12]` 这种方括号 + 格式名 + 序号。
+   * 解析器留下的**图片占位标记**（`#51`）：整行只有 `[PDF 1]` / `[pdf 12]` / `[图片 3]` / `[image 4]` 这种 方括号 + 格式名 + 序号。
    *
    * <p>★★ 取证结论（2026-11-01，不是推断）：**我们这条链不产生它** —— 4 份夹具与一份自造的图文混排 PDF （PDFBox 画了图）解析后 {@code [PDF
    * N]} 命中数都是 <b>0</b>，Tika 对嵌入式图片是「直接丢弃、不留标记」。 因此它只可能来自 <b>源 PDF 的文本层</b>（生成该 PDF 的工具把图写成了这行占位文字）。
@@ -67,18 +67,24 @@ public final class NoiseStripper {
    * <p>★ 为什么还是要剥：它一旦进 {@code search_text} 就同时污染向量与全文索引，而且**不会让任何闸门变红** （{@code 12 §10.2} 风险 2
    * 的反面：内容里多了一点垃圾，然后没人发现）。
    *
+   * <p>★ 受控形态名单（{@code #51} 判据 1：「{@code [PDF N]} / {@code [图片 N]} 这类标记」）： {@code PDF} · {@code 图片}
+   * · {@code image} · {@code img}（后三者大小写不敏感）。 ★ 名单是**受控枚举、不是"像占位就删"**：{@code [图 2]} / {@code [表 2]}
+   * 是图注表格的 <b>简写</b>（实测文档里有），不是工具占位 —— 它们<b>不进名单</b>。 宁可漏剥一个没见过的工具变体，不许误删一行真图注。
+   *
    * <p>★ 边界（宁可漏剥，不许误杀）：
    *
    * <ul>
    *   <li><b>只认整行</b>：{@code [PDF 1] 图注} 这种行内还有内容的**不动** —— 那多半是真图注；
-   *   <li><b>只认方括号 + PDF + 数字</b>：{@code 图 1} / {@code 表 1} / {@code Table 1} 这类图注表格标题**不动**；
+   *   <li><b>只认名单里的格式名 + 数字</b>：{@code 图 1} / {@code 表 1} / {@code Table 1} / {@code [图 2]}
+   *       这类图注表格标题**不动**；
    *   <li><b>两种写法都认</b>：Tika 的 Markdown handler 会把方括号转义 —— 源文本 {@code [PDF 1]} 解析产物里是 {@code \[PDF
    *       1\]}（实测）。只认裸形态的话，这条规则在生产上永远不生效。
    *   <li>代码围栏内不动（与其余规则同口径）。
    * </ul>
    */
   private static final Pattern PARSER_PLACEHOLDER =
-      Pattern.compile("^\\\\?\\[\\s*(?:PDF|pdf|Pdf)\\s*\\d{1,3}\\s*\\\\?\\]$");
+      Pattern.compile(
+          "^\\\\?\\[\\s*(?:PDF|图片|image|img)\\s*\\d{1,3}\\s*\\\\?\\]$", Pattern.CASE_INSENSITIVE);
 
   /**
    * 版权声明行（`#271`）：整行、行首、短行。
@@ -124,11 +130,29 @@ public final class NoiseStripper {
   }
 
   /**
-   * 剥掉页眉/页脚/页码/目录行。
+   * 剥掉页眉/页脚/页码/目录行（默认口径 {@code 12 §2.4}）。
    *
    * @param markdown 解析产物（{@code Document.parsedContent}）；null / 空 ⇒ 原样返回
    */
   public static Result strip(String markdown) {
+    return strip(markdown, false);
+  }
+
+  /**
+   * 剥离入口（带 {@code #177} 设计剥离开关）。
+   *
+   * <p><strong>口径（#177 取证结论，2026-11-06）</strong>：目录行/页脚/页首重复标题/页码/版权行的"整段丢失"是本类 ②②b③④
+   * 规则的<strong>设计行为</strong>（{@code 12 §2.4}：页眉页脚会污染分块与向量），不是 OCR 丢 —— 实测 OCR 原始输出里三类内容全部存在（目录 6
+   * 行、页脚三页、页首标题三页），OCR 原始逐页相似度 0.90/0.93/0.85，而走剥离后跌到 issue #177 的 0.13/0.79/0.36。
+   *
+   * <p><strong>keepDesignLines = true</strong>：跳过 ②②b③④ 全部排版噪声规则，只保留 ① 占位标记剥离（{@code #51} 的 {@code
+   * [PDF N]} 是解析垃圾，任何模式都剥）。给"裁定保留章节锚点/页脚"的消费方（issue #177 要求的"可关的开关"）；<strong>默认 false
+   * 不改变现有行为</strong> —— 默认口径是否变更待 12 §2.4 裁定，不在本 worktree 拍板。
+   *
+   * @param markdown 解析产物（{@code Document.parsedContent}）；null / 空 ⇒ 原样返回
+   * @param keepDesignLines true = 保留排版噪声行（目录/页脚/页首重复标题/页码/版权）
+   */
+  public static Result strip(String markdown, boolean keepDesignLines) {
     if (markdown == null || markdown.isBlank()) {
       return Result.untouched(markdown == null ? "" : markdown);
     }
@@ -160,91 +184,95 @@ public final class NoiseStripper {
       }
     }
 
-    // ② 独立成行的页码
-    for (int i = 0; i < lines.length; i++) {
-      String trimmed = lines[i].strip();
-      if (!trimmed.isEmpty() && !inFence[i] && PAGE_NUMBER.matcher(trimmed).matches()) {
-        drop[i] = true;
+    // ②②b③④ 一起受 #177 开关 keepDesignLines 控制：它们同属「排版噪声」规则（12 §2.4），
+    //   true 时整体跳过（只留 ① 占位剥离）。★ 分组成因：把它们混进 ① 会说不清是谁剥的。
+    if (!keepDesignLines) {
+      // ② 独立成行的页码
+      for (int i = 0; i < lines.length; i++) {
+        String trimmed = lines[i].strip();
+        if (!trimmed.isEmpty() && !inFence[i] && PAGE_NUMBER.matcher(trimmed).matches()) {
+          drop[i] = true;
+        }
       }
-    }
 
-    // ②b 版权声明行（`#271`）：整行 + 行首 + 不超长。
-    //   ★ 必须先于 ③「跨页重复行」：它只出现 1 次时那条规则认不出来 —— `noisy.docx` 的 11/12
-    //     差的就是这一条（夹具基准把它记作 noiseLines，而生产实现此前没有这条规则）。
-    for (int i = 0; i < lines.length; i++) {
-      if (inFence[i]) {
-        continue;
+      // ②b 版权声明行（`#271`）：整行 + 行首 + 不超长。
+      //   ★ 必须先于 ③「跨页重复行」：它只出现 1 次时那条规则认不出来 —— `noisy.docx` 的 11/12
+      //     差的就是这一条（夹具基准把它记作 noiseLines，而生产实现此前没有这条规则）。
+      for (int i = 0; i < lines.length; i++) {
+        if (inFence[i]) {
+          continue;
+        }
+        String trimmed = lines[i].strip();
+        if (!trimmed.isEmpty()
+            && trimmed.length() < COPYRIGHT_MAX_LENGTH
+            && COPYRIGHT_LINE.matcher(trimmed).matches()) {
+          drop[i] = true;
+        }
       }
-      String trimmed = lines[i].strip();
-      if (!trimmed.isEmpty()
-          && trimmed.length() < COPYRIGHT_MAX_LENGTH
-          && COPYRIGHT_LINE.matcher(trimmed).matches()) {
-        drop[i] = true;
-      }
-    }
 
-    // ③ 跨页重复行：同一行出现 ≥3 次且长度 < 60 字 ⇒ 判为页眉页脚，**全部**剔掉
-    //
-    //   ★★ 保守性护栏（实测踩到过，必须留）：**重复行必须是少数派**。
-    //     "跨页重复行"这条规则的隐含前提是"页面里还有别的内容"；而一份
-    //     "一行短句重复 N 次"的文档会被整篇剥空（实测：闸门夹具就是这种文本 ⇒ 预览 0 段、
-    //     整篇文档看起来"有内容却切不出段"）。这类误杀属于 §10.2 风险 2 *内容静默缺失*，
-    //     比漏剔严重得多 —— 所以宁可在这类文档上一条都不剥。
-    Map<String, List<Integer>> occurrences = new LinkedHashMap<>();
-    int nonBlank = 0;
-    for (int i = 0; i < lines.length; i++) {
-      if (inFence[i] || lines[i].isBlank()) {
-        continue;
+      // ③ 跨页重复行：同一行出现 ≥3 次且长度 < 60 字 ⇒ 判为页眉页脚，**全部**剔掉
+      //
+      //   ★★ 保守性护栏（实测踩到过，必须留）：**重复行必须是少数派**。
+      //     "跨页重复行"这条规则的隐含前提是"页面里还有别的内容"；而一份
+      //     "一行短句重复 N 次"的文档会被整篇剥空（实测：闸门夹具就是这种文本 ⇒ 预览 0 段、
+      //     整篇文档看起来"有内容却切不出段"）。这类误杀属于 §10.2 风险 2 *内容静默缺失*，
+      //     比漏剔严重得多 —— 所以宁可在这类文档上一条都不剥。
+      Map<String, List<Integer>> occurrences = new LinkedHashMap<>();
+      int nonBlank = 0;
+      for (int i = 0; i < lines.length; i++) {
+        if (inFence[i] || lines[i].isBlank()) {
+          continue;
+        }
+        nonBlank++;
+        String trimmed = lines[i].strip();
+        if (drop[i] || trimmed.length() >= REPEAT_MAX_LENGTH) {
+          continue;
+        }
+        occurrences.computeIfAbsent(trimmed, k -> new ArrayList<>()).add(i);
       }
-      nonBlank++;
-      String trimmed = lines[i].strip();
-      if (drop[i] || trimmed.length() >= REPEAT_MAX_LENGTH) {
-        continue;
-      }
-      occurrences.computeIfAbsent(trimmed, k -> new ArrayList<>()).add(i);
-    }
-    int repeatedTotal = 0;
-    for (Map.Entry<String, List<Integer>> entry : occurrences.entrySet()) {
-      if (entry.getValue().size() >= REPEAT_MIN_OCCURRENCES) {
-        repeatedTotal += entry.getValue().size();
-      }
-    }
-    if (repeatedTotal * 2 <= nonBlank) {
+      int repeatedTotal = 0;
       for (Map.Entry<String, List<Integer>> entry : occurrences.entrySet()) {
         if (entry.getValue().size() >= REPEAT_MIN_OCCURRENCES) {
-          entry.getValue().forEach(index -> drop[index] = true);
+          repeatedTotal += entry.getValue().size();
         }
       }
-    }
+      if (repeatedTotal * 2 <= nonBlank) {
+        for (Map.Entry<String, List<Integer>> entry : occurrences.entrySet()) {
+          if (entry.getValue().size() >= REPEAT_MIN_OCCURRENCES) {
+            entry.getValue().forEach(index -> drop[index] = true);
+          }
+        }
+      }
 
-    // ④ 目录页：连续 ≥5 行都是"点线 + 结尾页码"（★ 空行不打断）
-    //
-    //   ★★ 实测教训（这条规则踩了两次，都记在这里）：
-    //     第一次：点线与页码之间的标点。真实 OCR 输出是「第一章 总则 ..……….….， 1」（中间是个逗号），
-    //             而第一版正则要求点线紧跟数字 ⇒ 一条都没剔掉。
-    //     第二次（本次）：**Tika 的 Markdown 输出每行之间都有空行**，于是"连续 5 行"在物理行上
-    //             永远不成立 ⇒ 真栈上依然一条没剔，而单测（理想文本无空行）全绿。
-    //   ⇒ 两次的共性：**规则的判据不能按物理行写，要按"有内容的行"写**。
-    List<Integer> tocRun = new ArrayList<>();
-    for (int i = 0; i < lines.length; i++) {
-      if (inFence[i]) {
-        tocRun.clear();
-        continue;
-      }
-      if (lines[i].isBlank()) {
-        continue; // 空行既不算入，也不打断
-      }
-      if (TOC_LINE.matcher(lines[i].strip()).matches()) {
-        tocRun.add(i);
-      } else {
-        if (tocRun.size() >= TOC_MIN_RUN) {
-          tocRun.forEach(index -> drop[index] = true);
+      // ④ 目录页：连续 ≥5 行都是"点线 + 结尾页码"（★ 空行不打断）
+      //
+      //   ★★ 实测教训（这条规则踩了两次，都记在这里）：
+      //     第一次：点线与页码之间的标点。真实 OCR 输出是「第一章 总则 ..……….….， 1」（中间是个逗号），
+      //             而第一版正则要求点线紧跟数字 ⇒ 一条都没剔掉。
+      //     第二次（本次）：**Tika 的 Markdown 输出每行之间都有空行**，于是"连续 5 行"在物理行上
+      //             永远不成立 ⇒ 真栈上依然一条没剔，而单测（理想文本无空行）全绿。
+      //   ⇒ 两次的共性：**规则的判据不能按物理行写，要按"有内容的行"写**。
+      List<Integer> tocRun = new ArrayList<>();
+      for (int i = 0; i < lines.length; i++) {
+        if (inFence[i]) {
+          tocRun.clear();
+          continue;
         }
-        tocRun.clear();
+        if (lines[i].isBlank()) {
+          continue; // 空行既不算入，也不打断
+        }
+        if (TOC_LINE.matcher(lines[i].strip()).matches()) {
+          tocRun.add(i);
+        } else {
+          if (tocRun.size() >= TOC_MIN_RUN) {
+            tocRun.forEach(index -> drop[index] = true);
+          }
+          tocRun.clear();
+        }
       }
-    }
-    if (tocRun.size() >= TOC_MIN_RUN) {
-      tocRun.forEach(index -> drop[index] = true);
+      if (tocRun.size() >= TOC_MIN_RUN) {
+        tocRun.forEach(index -> drop[index] = true);
+      }
     }
 
     // ⑤ 拼回去：被剔掉的行不占位（留下空行会让后续按段落切分多出空块）

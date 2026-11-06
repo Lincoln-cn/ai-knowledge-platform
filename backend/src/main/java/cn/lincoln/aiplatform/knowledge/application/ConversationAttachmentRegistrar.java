@@ -2,8 +2,15 @@ package cn.lincoln.aiplatform.knowledge.application;
 
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
+import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingRepository;
+import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.knowledge.ConversationAttachmentPort;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,12 +66,20 @@ public class ConversationAttachmentRegistrar implements ConversationAttachmentPo
 
   private final DocumentService documents;
   private final DocumentRepository repository;
+  private final SegmentRepository segments;
+  private final SegmentEmbeddingRepository segmentEmbeddings;
   private final ParseRunner parser;
 
   public ConversationAttachmentRegistrar(
-      DocumentService documents, DocumentRepository repository, ParseRunner parser) {
+      DocumentService documents,
+      DocumentRepository repository,
+      SegmentRepository segments,
+      SegmentEmbeddingRepository segmentEmbeddings,
+      ParseRunner parser) {
     this.documents = documents;
     this.repository = repository;
+    this.segments = segments;
+    this.segmentEmbeddings = segmentEmbeddings;
     this.parser = parser;
   }
 
@@ -83,8 +98,17 @@ public class ConversationAttachmentRegistrar implements ConversationAttachmentPo
       byte[] content,
       ClassificationLevel classification) {
 
+    // ★ 幂等键（`#299`）：附件 id 非空时按 (conversationId, attachmentId) 幂等，**不按名字顶掉** ——
+    //   同会话两份同名不同内容（重传）是两份材料；按名字顶掉第二份会让它的 cv_file 无人引用，
+    //   会话彻底删除时那个文件永远清不掉。名字键只兜 attachmentId 为空的旧行。
     Document existing =
-        repository.findConversationAttachment(conversationId, displayName.trim()).orElse(null);
+        attachmentId != null
+            ? repository
+                .findConversationAttachmentByAttachmentId(conversationId, attachmentId)
+                .orElse(null)
+            : repository
+                .findConversationAttachment(conversationId, displayName.trim())
+                .orElse(null);
     if (existing != null) {
       log.info(
           "会话附件已在会话 {} 里登记过（附件 {} → 文档 {}）⇒ 复用，不重解析", conversationId, attachmentId, existing.id());
@@ -93,7 +117,7 @@ public class ConversationAttachmentRegistrar implements ConversationAttachmentPo
 
     UUID documentId =
         documents.registerConversationAttachment(
-            conversationId, ownerId, displayName, DOC_TYPE, classification);
+            conversationId, ownerId, attachmentId, displayName, DOC_TYPE, classification);
 
     // ★ 同步解析：返回之后这次问答的检索才可能命中它（判据 4 的全部意义就在这一句）
     parser.run(documentId, content, displayName, ownerId);
@@ -104,5 +128,92 @@ public class ConversationAttachmentRegistrar implements ConversationAttachmentPo
         documentId,
         content == null ? 0 : content.length);
     return documentId;
+  }
+
+  /**
+   * 会话彻底删除的库内侧（{@code #299}）：删该会话全部会话域文档行 + 分段 + 向量，报告"孤儿"上传文件。
+   *
+   * <p>★ 顺序与 {@code DocumentService.purge} 同源（先分段向量后文档行）—— 反序会留孤儿分段，而孤儿分段在检索里照样命中。
+   * 引用计数在删完行之后数（{@code countByAttachmentId}）：数到 0 的才进 {@code orphanedAttachmentIds}，调用方拿它去删 {@code
+   * cv_file} 与磁盘字节 —— 同一文件跨会话复用时，另一个会话还引用着的不许删。
+   */
+  @Override
+  public PurgeResult purgeConversationAttachments(UUID conversationId) {
+    if (conversationId == null) {
+      throw new IllegalArgumentException("会话 id 不能为空");
+    }
+    List<Document> attachments = repository.findConversationAttachments(conversationId);
+    int segmentsDeleted = 0;
+    int vectorsDeleted = 0;
+    Set<UUID> candidateFiles = new LinkedHashSet<>();
+    for (Document attachment : attachments) {
+      UUID documentId = attachment.id();
+      segmentsDeleted += segments.findByDocumentId(documentId).size();
+      vectorsDeleted += segmentEmbeddings.countByDocumentId(documentId);
+      // ★ 顺序与 DocumentService.purge 同源：先分段与向量、后文档行（反序会留孤儿分段，孤儿分段照样命中检索）
+      segments.deleteByDocumentId(documentId);
+      segmentEmbeddings.deleteByDocumentId(documentId);
+      repository.delete(attachment);
+      if (attachment.attachmentId() != null) {
+        candidateFiles.add(attachment.attachmentId());
+      }
+    }
+    // ★ 引用计数（#299）：还有别的文档行（任意会话、含软删）引用着的文件不进"可删"清单
+    List<UUID> orphanedAttachmentIds =
+        candidateFiles.stream()
+            .filter(fileId -> repository.countByAttachmentId(fileId) == 0)
+            .toList();
+    log.info(
+        "会话附件清理（会话 {}）：文档 {} 行 · 分段 {} 行 · 向量 {} 行 · 可删文件 {} 个",
+        conversationId,
+        attachments.size(),
+        segmentsDeleted,
+        vectorsDeleted,
+        orphanedAttachmentIds.size());
+    return new PurgeResult(
+        attachments.size(), segmentsDeleted, vectorsDeleted, orphanedAttachmentIds);
+  }
+
+  /**
+   * dry-run 预演（{@code #299} 归档清理「留缝」）：只数不删，逐表给出"如果彻底删除这一批会话，附件三域会各少多少行、哪些文件会没人引用"。
+   *
+   * <p>★ 与 {@link #purgeConversationAttachments} 的差别只有两个：不动任何行；孤儿判定是"假设删完"——
+   * 引用计数里扣掉本批会删的行后归零才算孤儿（同一个 {@code cv_file} 可以被多个会话的附件行引用，批外还剩引用的文件不许报成可删）。
+   */
+  @Override
+  public PurgeResult previewConversationAttachments(List<UUID> conversationIds) {
+    if (conversationIds == null || conversationIds.isEmpty()) {
+      return new PurgeResult(0, 0, 0, List.of());
+    }
+    int documents = 0;
+    int segmentsCount = 0;
+    int vectorsCount = 0;
+    Map<UUID, Integer> batchReferences = new LinkedHashMap<>();
+    for (UUID conversationId : conversationIds) {
+      List<Document> attachments = repository.findConversationAttachments(conversationId);
+      documents += attachments.size();
+      for (Document attachment : attachments) {
+        UUID documentId = attachment.id();
+        segmentsCount += segments.findByDocumentId(documentId).size();
+        vectorsCount += segmentEmbeddings.countByDocumentId(documentId);
+        if (attachment.attachmentId() != null) {
+          batchReferences.merge(attachment.attachmentId(), 1, Integer::sum);
+        }
+      }
+    }
+    // ★ 假设删完的引用计数：总引用数扣掉本批会删的行，归零才算孤儿（批外还有人引用的不许动）
+    List<UUID> orphanedAttachmentIds =
+        batchReferences.entrySet().stream()
+            .filter(e -> repository.countByAttachmentId(e.getKey()) <= e.getValue())
+            .map(Map.Entry::getKey)
+            .toList();
+    log.info(
+        "会话附件清理预演（dry-run，只数不删）：会话 {} 个 · 文档 {} 行 · 分段 {} 行 · 向量 {} 行 · 将无人引用的文件 {} 个",
+        conversationIds.size(),
+        documents,
+        segmentsCount,
+        vectorsCount,
+        orphanedAttachmentIds.size());
+    return new PurgeResult(documents, segmentsCount, vectorsCount, orphanedAttachmentIds);
   }
 }

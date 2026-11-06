@@ -100,6 +100,20 @@ public class DocumentService {
   private final Segmenter segmenter = new Segmenter();
 
   /**
+   * 是否保留排版噪声行（{@code #177}）—— 把配置转给 {@link #segmenter}。
+   *
+   * <p>★ 用 setter 注入而不是构造参数：{@code segmenter} 是字段初始化 {@code new Segmenter()}，
+   * 改成构造参数会牵动三个测试构造点，而这条配置只服务于"读数对比"。
+   *
+   * @param keepDesignLines true = 目录行/页脚/页码/版权行都保留
+   */
+  @org.springframework.beans.factory.annotation.Value(
+      "${app.ingestion.parse.keep-design-lines:false}")
+  void setKeepDesignLines(boolean keepDesignLines) {
+    this.segmenter.setKeepDesignLines(keepDesignLines);
+  }
+
+  /**
    * 会话密级水位的补偿口（{@code #247} 判据 ①）：文档<b>升密</b>时把引用过它的会话抬到新密级。
    *
    * <p>★ 走平台端口而不是直接依赖 {@code conversation.domain}：模块边界由 {@code ModuleBoundaryTest} 守着（见端口 javadoc）。
@@ -112,6 +126,14 @@ public class DocumentService {
    * <p>★ 与业务同事务（端口 javadoc 里写了理由）：审计写不进去时整笔回滚，避免"变更发生了却没有记录"。
    */
   private final AuditLogPort audit;
+
+  /**
+   * 会话附件文件清理口（{@code #299}）：彻底删除一条会话附件文档时，把来源 {@code cv_file} 行与磁盘字节一起删掉。
+   *
+   * <p>★ 走平台端口而不是直接依赖 {@code conversation} 模块（模块边界由 {@code ModuleBoundaryTest} 守着）： 计数在本模块判（{@code
+   * countByAttachmentId == 0} 才许删），执行在 {@code conversation} 侧做。
+   */
+  private final cn.lincoln.aiplatform.platform.conversation.ConversationFilePurgePort filePurge;
 
   /** 回收站保留期（天）。0 = 关闭恢复（删除即不可恢复）。 */
   private final int restoreWindowDays;
@@ -131,6 +153,7 @@ public class DocumentService {
       BusinessMetrics metrics,
       cn.lincoln.aiplatform.platform.watermark.ConversationWatermarkPort watermark,
       AuditLogPort audit,
+      cn.lincoln.aiplatform.platform.conversation.ConversationFilePurgePort filePurge,
       // ★ 回收站保留期（`#259`）：超过这个天数只能彻底删除。
       //   读的是**天**而不是小时：留一个小时的恢复窗口等于没有窗口（用户第二天才想起来）。
       @org.springframework.beans.factory.annotation.Value("${app.knowledge.restore-window-days:7}")
@@ -149,6 +172,7 @@ public class DocumentService {
     this.metrics = metrics;
     this.watermark = watermark;
     this.audit = audit;
+    this.filePurge = filePurge;
     this.restoreWindowDays = Math.max(0, restoreWindowDays);
   }
 
@@ -592,12 +616,23 @@ public class DocumentService {
     segments.deleteByDocumentId(documentId);
     segmentEmbeddings.deleteByDocumentId(documentId);
     documents.delete(document);
+    // ★ #299：会话附件文档的来源文件（cv_file 行 + 磁盘字节）跟着走 ——
+    //   只删库里的行，"彻底删除"在介质层是撒谎。引用计数 == 0 才删（同一上传文件可能被多个会话引用）。
+    //   顺序放在 documents.delete 之后：删完本行，countByAttachmentId 数到的才是"别人还在用"。
+    if (document.attachmentId() != null
+        && documents.countByAttachmentId(document.attachmentId()) == 0) {
+      filePurge.purgeAttachmentFile(document.attachmentId());
+      log.info("文档 {} 的来源附件 {} 已随彻底删除清掉（cv_file 行 + 磁盘字节）", documentId, document.attachmentId());
+    }
     audit.record(
         AuditAction.DOCUMENT_PURGE,
         "DOCUMENT",
         documentId.toString(),
         currentUserId,
-        Map.of("name", document.name(), "kbId", document.kbId().toString()));
+        // ★ kbId 只有库域文档有（会话附件文档为 null）—— Map.of 不收 null 值，按域分别记
+        document.kbId() != null
+            ? Map.of("name", document.name(), "kbId", document.kbId().toString())
+            : Map.of("name", document.name(), "conversationId", document.scopeId().toString()));
   }
 
   @Transactional
@@ -621,7 +656,10 @@ public class DocumentService {
         "DOCUMENT",
         documentId.toString(),
         currentUserId,
-        Map.of("name", document.name(), "kbId", document.kbId().toString()));
+        // ★ 会话附件文档没有 kbId（Map.of 不收 null），按域分别记（#299）
+        document.kbId() != null
+            ? Map.of("name", document.name(), "kbId", document.kbId().toString())
+            : Map.of("name", document.name(), "conversationId", document.scopeId().toString()));
   }
 
   /**
@@ -664,7 +702,10 @@ public class DocumentService {
         "DOCUMENT",
         documentId.toString(),
         currentUserId,
-        Map.of("name", document.name(), "kbId", document.kbId().toString()));
+        // ★ 会话附件文档没有 kbId（Map.of 不收 null），按域分别记（#299）
+        document.kbId() != null
+            ? Map.of("name", document.name(), "kbId", document.kbId().toString())
+            : Map.of("name", document.name(), "conversationId", document.scopeId().toString()));
     log.info("文档 {} 已从回收站恢复（分段与向量一直在库里）", documentId);
     return DocumentView.from(documents.findById(documentId).orElse(document));
   }
@@ -770,15 +811,22 @@ public class DocumentService {
     return new ReembedKbView(queued);
   }
 
-  /** 按 id 取文档并做可见性判定（不可见与不存在同一个 404 —— 不泄漏存在性）。 */
+  /**
+   * 按 id 取文档并做可见性判定（不可见与不存在同一个 404 —— 不泄漏存在性）。
+   *
+   * <p>★ `#299`：会话附件文档（{@code kbId == null}）不属于任何库，库可见性继承对它没有意义 —— 它的归属由会话域管（会话彻底删除时按 {@code
+   * scope_id} 一并清）。这里跳过库校验， 只要文档行在就算可见：管理端点本身有 {@code knowledge:manage} 权限兜底，不是"看见即所得"。
+   */
   private Document requireVisibleDocument(UUID documentId) {
     Document document =
         documents
             .findById(documentId)
             .orElseThrow(
                 () -> new BusinessException(ErrorCode.NOT_FOUND, "文档不存在", "它可能已被删除，或你没有访问权限"));
-    // ★ 可见性继承库（07 §3.3）：库不可见 ⇒ 文档也不可见
-    knowledgeBases.get(document.kbId());
+    // ★ 可见性继承库（07 §3.3）：库不可见 ⇒ 文档也不可见（会话附件文档没有库，跳过）
+    if (document.kbId() != null) {
+      knowledgeBases.get(document.kbId());
+    }
     return document;
   }
 
@@ -903,15 +951,17 @@ public class DocumentService {
    * silent-failure} 的形态）。所以解析由调用方 （{@code
    * ConversationAttachmentRegistrar}）在本方法返回后<strong>同步</strong>驱动，取舍记在 {@code #187}。
    *
-   * <p>★ <strong>幂等键 = (conversationId, name)</strong>：见 {@link
-   * DocumentRepository#findConversationAttachment} 的 javadoc —— 今天没有"附件 →
-   * 文档"的映射列，代价（同会话同名不同内容会被当成同一份）写在那里。
+   * <p>★ <strong>幂等键 = (conversationId, attachmentId)</strong>（{@code #299} 起，附件 id 非空时优先）； 附件 id
+   * 未知的旧行回退 <strong>(conversationId, name)</strong>：见 {@link
+   * DocumentRepository#findConversationAttachment} 的 javadoc —— 代价（同会话同名不同内容会被当成同一份）写在那里， 新链路靠
+   * {@code attachment_id} 列（V80）躲开它。
    *
    * <p>★ 这里<strong>不做</strong>可见性/密级判定：附件 id 属于谁、会话当前密级是多少，都是 {@code conversation} 模块的事实（{@code 13
    * §11.5} 的"不许低于会话当前密级"由调用方取值后传进来）。知识模块只负责"按给定归属与 密级落一条形状合法的会话域文档"。
    *
    * @param conversationId 会话 id（= {@code scope_id}，也是生成列 {@code conversation_id} 的来源）
    * @param ownerId 上传者（= {@code owner_id}；检索谓词第三支按它与会话 id 一起收窄）
+   * @param attachmentId 来源上传文件（{@code cv_file.id}，{@code #299}）—— 彻底删除时按它追到 {@code cv_file} 与磁盘字节
    * @param name 显示名（同一次会话内唯一，见幂等键）
    * @param docType 文种（会话附件用一个固定常量，见 {@code ConversationAttachmentRegistrar}）
    * @param classification 密级（调用方传会话当前密级 ⇒ 不会低于下限，也不会凭空抬升）
@@ -921,6 +971,7 @@ public class DocumentService {
   public UUID registerConversationAttachment(
       UUID conversationId,
       UUID ownerId,
+      UUID attachmentId,
       String name,
       String docType,
       ClassificationLevel classification) {
@@ -943,8 +994,16 @@ public class DocumentService {
           ErrorCode.BAD_REQUEST, "密级必填", "会话附件的密级不许低于会话当前密级，由调用方传入（13 §11.5 ①）");
     }
 
+    // ★ 幂等键（`#299` · V80 起）：attachmentId 非空时**只**按 (conversationId, attachmentId) 幂等，
+    //   **不回退**名字键 —— 同会话两份同名不同内容（用户重新上传）是两份材料，按名字顶掉第二份，
+    //   它的 cv_file 就再也无人引用（追溯链断），会话彻底删除时那两个文件会永远留成孤儿。
+    //   名字键只兜 attachmentId 为空的旧行（V80 之前登记的存量行没有 attachment_id 列值）。
     Document existing =
-        documents.findConversationAttachment(conversationId, name.trim()).orElse(null);
+        attachmentId != null
+            ? documents
+                .findConversationAttachmentByAttachmentId(conversationId, attachmentId)
+                .orElse(null)
+            : documents.findConversationAttachment(conversationId, name.trim()).orElse(null);
     if (existing != null) {
       // ★ 已登记过：返回同一条。**不重解析** —— 解析失败的行不会因为再问一次就自愈，
       //   重试是另一件事（需要显式动作），不能让"再问一遍"变成隐式的重试。
@@ -953,7 +1012,13 @@ public class DocumentService {
 
     Document document =
         Document.conversationAttachment(
-            UUID.randomUUID(), conversationId, ownerId, name, docType, classification);
+            UUID.randomUUID(),
+            conversationId,
+            ownerId,
+            attachmentId,
+            name,
+            docType,
+            classification);
     // ★ #304：附件有字节、期望解析（同步驱动，见 ConversationAttachmentRegistrar）——
     //   同样落「期望解析开始的时刻」：同步解析若在启动前炸（拿不到连接且收尾也失败），
     //   行会停在 PENDING_PARSE，由 StuckPendingParseReaper 兜底判成可重试，不是永远转圈。

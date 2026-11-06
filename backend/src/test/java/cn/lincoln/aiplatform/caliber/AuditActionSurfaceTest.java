@@ -52,6 +52,8 @@ class AuditActionSurfaceTest {
           "conversation.unshare",
           "document.purge",
           "document.restore",
+          "conversation.purge",
+          "attachment.purge",
           "audit.purge",
           // ★ 2026-10-31（#198 发布端点）：`workflow.publish` —— 把画布上正在改的图变成"线上正在跑的那一版"，
           //   是一次面向使用者的行为切换。它此前只加在枚举里、没登记到 13，于是这条断言在 CI 上红了 ——

@@ -26,4 +26,9 @@ public class FileRefRepositoryAdapter implements FileRefRepository {
   public Optional<FileRef> findById(UUID id) {
     return jpa.findById(id);
   }
+
+  @Override
+  public void delete(FileRef file) {
+    jpa.delete(file);
+  }
 }
