@@ -4331,3 +4331,63 @@ List<Card> loadWithNeighbors(Collection<UUID> segmentIds, int before, int after)
 - 开关**已落地且默认 `false`**（不改现状），读数在案；
 - **默认值不在本版定** —— 定它需要一份"目录行对检索有用/有害"的读数，而那要求语料里有带目录页的文档（当前 195 条没有）。登记为语料侧欠账；
 - `#177` 的 issue 判据（"目录页内容可被检索到"）**已可核对**：`keep=true` 时点线行在段 0 里。
+
+### 11.19 `#305` 缺口 B：同一基础模型的向量维度必须唯一（2026-11-07）
+
+#### 11.19.1 缺的是什么
+
+`#305` 原本写成「`base_model` / `dimension` 两个字段在本地路径上不生效」，实测后拆成两个缺口。
+**缺口 A**（`RoutingEmbeddingAdapter` 静默走上游）已在 PR #306 修掉；
+**本条是缺口 B**：`dimension` 只是个**登记值**，没人校验它跟同一条 `base_model` 的其他登记是否一致。
+
+后果不是"显示不准"，是**检索结果少一半**：维度决定向量写进哪张 `vec_embedding_<dim>` 表
+（`backend/src/main/java/cn/lincoln/aiplatform/knowledge/infrastructure/JdbcSegmentSearchQuery.java`
+只查与当前模型维度同名的表）。同一个 `bge-m3` 登记成 768 与 1024 之后：
+
+- 两批向量分居两张表，**互相检索不到**；
+- 界面上一切正常（都能向量化、都能入库、文档状态都是 `SUCCEEDED`）；
+- 只在"换模型重新向量化"之后以"结果少一半"的形式暴露 —— 与 `#304` 同族：**症状离原因很远**。
+
+库里的现况是已经错了：`bge-m3` 登记 `768` 有 24 条、登记 `1024` 有 6 条，而它的真实输出维度是 1024。
+
+#### 11.19.2 改法（只管新增，不碰存量）
+
+| 文件 | 改动 |
+|---|---|
+| `modelcatalog/infrastructure/JpaModelRepository.java` | 加 `List<Model> findByKindAndBaseModel(ModelKind, String)` |
+| `modelcatalog/domain/ModelRepository.java` | 加 **`default`** `List<Model> embeddingModelsOf(String)`（默认空） |
+| `modelcatalog/infrastructure/ModelRepositoryAdapter.java` | 覆盖它，转调上面的 JPA 方法 |
+| `modelcatalog/application/ModelService.java` | `create` 里调 `validateDimensionMatchesSiblings(...)`；不一致抛 400 + 可读后果 |
+
+★ **接口方法必须是 `default`**：`OutboundPiiPassthroughTest` / `ChatModelAdapterTest` / `SpringAiChatAdapterTest`
+各有一个 `FakeModels`，加抽象方法会当场把它们全编译红（实测报了三条「不是抽象的, 并且未覆盖…embeddingModelsOf」）。
+一个**校验输入**不该要求每个实现都写一遍。
+
+★ **只拦新增、不回填存量**，原因是查不出存量：`kb_document` **没有 `embedding_model_id` 列**，
+`vec_embedding_<dim>` 表只有 `id / content / metadata / embedding`、**没有模型归属**。
+⇒ 那 24 条登记错的历史模型今天无法自动修正，只能靠人工按「真实维度」改一次。
+这条限制比"没做"更重要 —— 不写下来就会被读成"已经统一了"。
+
+#### 11.19.3 判据读数
+
+`backend/src/test/java/cn/lincoln/aiplatform/modelcatalog/ModelDimensionConsistencyTest.java` **4/4 绿**：
+
+| 用例 | 钉的是什么 |
+|---|---|
+| `aSecondDimensionForTheSameBaseModelIsRejected` | 消息含「已有登记维度 768」「不能再登记成 1024」；`hint()` 含 `vec_embedding_1024` |
+| `theSameDimensionIsAccepted` | 同维度照常创建 |
+| `differentBaseModelsKeepTheirOwnDimensions` | 不同 `baseModel` 各管各的 |
+| `aBlankBaseModelIsNotGuardedHere` | 空 `baseModel` 不进这条校验（那是另一个问题） |
+
+**反证**：在 `validateDimensionMatchesSiblings` 开头插入 `if (true) { return; }` ⇒
+`Tests run: 4, Failures: 1`，失败信息 `Expecting code to raise a throwable`（第二次创建 1024 没被拒）；
+删掉后 4/4 绿。
+
+#### 11.19.4 不在本条
+
+- **存量修正**（那 24 条）：没有归属信息可依，只能人工；
+- **跨 baseModel 的维度冲突**（比如两个不同模型都写 768 表）：物理上会混在一张表里，但要区分它们得先给
+  `vec_embedding_*` 加模型归属列 —— 属 `1.0.0` 的向量层改造，不在本版；
+- **`dimension` 与实际输出的核对**（登记 768 而模型真出 1024 仍不报）：要真跑一次推理才知道，
+  属 `#305` 缺口 A 的延伸。
+
