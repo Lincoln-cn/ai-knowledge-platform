@@ -107,4 +107,13 @@ public class ConversationRepositoryAdapter implements ConversationRepository {
         .filter(found -> Objects.equals(found.assistantId(), assistantId))
         .findFirst();
   }
+
+  /** 物理删除会话行（`#299`）—— {@code cv_conversation_feedback} / {@code cv_share} 靠外键级联带走。 */
+  @Override
+  public void delete(Conversation conversation) {
+    if (conversation == null) {
+      return;
+    }
+    jpa.delete(conversation);
+  }
 }

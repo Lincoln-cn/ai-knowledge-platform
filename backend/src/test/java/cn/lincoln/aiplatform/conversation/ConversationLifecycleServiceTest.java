@@ -130,5 +130,11 @@ class ConversationLifecycleServiceTest {
           .filter(c -> java.util.Objects.equals(c.assistantId(), assistantId))
           .findFirst();
     }
+
+    /** 物理删（#299）—— 本用例不测彻底删除，但 fake 必须把接口实现全。 */
+    @Override
+    public void delete(Conversation conversation) {
+      rows.remove(conversation.id());
+    }
   }
 }

@@ -140,4 +140,14 @@ public interface ConversationRepository {
    * @return 最近一条（按 {@code last_message_at}、再按 {@code created_at} 倒序）；没有时空
    */
   Optional<Conversation> findLatestByUserAndAssistant(UUID userId, UUID assistantId);
+
+  /**
+   * 物理删除会话行（`#299` 会话彻底删除）—— 与软删（{@code deleted_at} 标记）是两个独立动作。
+   *
+   * <p>★ 只给 {@code ConversationPurgeService} 用：调用方必须保证消息已先删、且已过软删那一步。 {@code
+   * cv_conversation_feedback} 与 {@code cv_share} 有外键 {@code on delete cascade} 到会话行，自动带走。
+   *
+   * @param conversation 会话（必须是已软删的那一条）
+   */
+  void delete(Conversation conversation);
 }

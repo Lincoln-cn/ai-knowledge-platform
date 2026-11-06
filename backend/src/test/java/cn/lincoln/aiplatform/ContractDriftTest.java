@@ -202,7 +202,20 @@ class ContractDriftTest {
           //   删除条件：它们被写进 api/*.ts 之后（那时"后端不实现"由**逐条登记的 KNOWN_MISSING**
           //   表达，而"双向都不比对"这一条就只剩噪音了）。
           "/workflow/demo/invalid-graph",
-          "/workflow/demo/valid-graph");
+          "/workflow/demo/valid-graph",
+          // ★ 会话彻底删除（#299 · 本批）—— 后端有、api/** 没有，而它只能这样。
+          //
+          //   ① 为什么是例外：彻底删除是**管理面/合规面**动作（issue #299：数据生命周期的第二半），
+          //      MVP 的前端（§二 三张清单）没有它的界面位置 —— 它不是"前端漏接线"，而是"前端尚未决定怎么做"。
+          //      软删（DELETE /conversations/{*}）在契约里，彻底删除刻意是另一个 URL（软删与彻底删除
+          //      两个独立动作不许合并 URL：少传一个参数就会把"材料不再存在"当成"从列表消失"执行）。
+          //
+          //   ② 真源在哪：conversation/web/ChatController 的 @DeleteMapping("/{conversationId}/purge")
+          //      （类级 /api/v1/conversations）；服务编排 = ConversationPurgeService（按表逐项删除）。
+          //
+          //   ③ ★ 触发条件（防黑洞）：一旦前端给"彻底删除"做了入口并把这条写进 api/** 的 request({...})
+          //      字面量，**这一条必须从这里删掉** —— 那时两侧都有，主闸门的双向对账本来就能管住它。
+          "/conversations/{*}/purge");
 
   /**
    * {@code request({ method: 'GET', url: '/x' })} 的选项对象起始 —— 锚定左花括号。
