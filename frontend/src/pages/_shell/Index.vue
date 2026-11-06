@@ -113,6 +113,9 @@ import AboutDialog from './AboutDialog.vue'
 import AgreementDialog from './AgreementDialog.vue'
 import { complianceApi } from '@/api'
 import { AGREEMENT_VERSION } from '@/constants/agreement'
+
+/** 协议状态拉不到时的已提示过标记（每个会话只提示一次）。 */
+const CONSENT_WARNED_KEY = 'agreement-consent-warned'
 import { APP_TITLE } from '@/config/env'
 import { canReach } from '@/lib/reach'
 import { navGroups } from '@/router/routes'
@@ -256,7 +259,18 @@ onMounted(() => {
       .then((consent) => {
         if (consent?.version !== AGREEMENT_VERSION) agreementRef.value?.open()
       })
-      .catch(() => {})
+      .catch((error: unknown) => {
+        // ★ 这里不能 `.catch(() => {})`：协议状态拉不到时，“没弹窗”与“已经同意过”长得一模一样，
+        //   用户永远不知道自己的同意记录到底有没有落地。所以必须说出来 —— 但不能把外壳打挂
+        //   （那会让菜单塌掉、导航失效，比漏一个弹窗严重）。
+        //   每个会话只提示一次：它每次登录都会重试，不该变成骚扰。
+        if (sessionStorage.getItem(CONSENT_WARNED_KEY) === '1') return
+        sessionStorage.setItem(CONSENT_WARNED_KEY, '1')
+        const message = error instanceof Error && error.message ? error.message : '未知原因'
+        ElMessage.warning(
+          `无法加载服务协议状态（${message}）—— 不影响使用，但这次可能不会再提示你阅读协议`
+        )
+      })
   }).catch((error: unknown) => {
     const message =
       error instanceof Error && error.message ? error.message : '登录已过期，请重新登录'
