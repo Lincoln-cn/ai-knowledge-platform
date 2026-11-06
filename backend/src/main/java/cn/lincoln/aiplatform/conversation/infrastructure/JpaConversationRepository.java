@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.conversation.domain.Conversation;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -21,6 +22,18 @@ import org.springframework.data.repository.query.Param;
  * 同一条判断：<strong>"读出来逐个改"会引入窗口</strong> （那边是"改到一半"，这里是"并发丢更新"）。
  */
 public interface JpaConversationRepository extends JpaRepository<Conversation, UUID> {
+
+  /** 「软删已过留存期」的会话（{@code #299} 归档清理 dry-run 的计数底册）—— 只数不删，真删执行体今天不存在。 */
+  @Query(
+      "select c from Conversation c where c.deletedAt is not null and c.deletedAt < :cutoff"
+          + " order by c.deletedAt")
+  List<Conversation> findDeletedBefore(
+      @Param("cutoff") java.time.Instant cutoff, Pageable pageable);
+
+  /** 「软删已过留存期」的会话条数（{@code #299} dry-run 报表读数，与 {@link #findDeletedBefore} 同口径）。 */
+  @Query(
+      "select count(c) from Conversation c where c.deletedAt is not null and c.deletedAt < :cutoff")
+  long countDeletedBefore(@Param("cutoff") java.time.Instant cutoff);
 
   /**
    * 某个人的会话（未软删，最近发言在前；还没发过言的排在最后）。

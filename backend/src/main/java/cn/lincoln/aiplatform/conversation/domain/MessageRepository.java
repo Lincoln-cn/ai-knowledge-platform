@@ -146,6 +146,16 @@ public interface MessageRepository {
   long deleteByConversation(UUID conversationId);
 
   /**
+   * 数一个会话下有多少条消息（{@code #299} 归档清理 dry-run 的读数——"如果清掉这个会话，消息会少多少行"）。
+   *
+   * <p>读方法，不是写入口：上面"只有 {@link #save} 一条写入口"的纪律不受影响。
+   *
+   * @param conversationId 会话 id
+   * @return 该会话的消息条数
+   */
+  long countByConversation(UUID conversationId);
+
+  /**
    * 一页消息 + 该会话的总条数。
    *
    * <p>★ 两个分量一起返回是刻意的：分两次问会出现"这中间又落了一条消息"的窗口 ⇒ {@code total} 与页内容不同口径，而那是没人会怀疑的读数。

@@ -72,6 +72,21 @@ public interface ConversationAttachmentPort {
   PurgeResult purgeConversationAttachments(UUID conversationId);
 
   /**
+   * 只数不删（{@code #299} 归档清理「留缝」的 dry-run）：如果把这一批会话彻底删除，附件三域会各少多少行、哪些 {@code cv_file} 会因此不再被引用。
+   *
+   * <p>与 {@link #purgeConversationAttachments} 是一对「预演 ↔ 执行」。预演用整批入参一次算完：同一个 {@code cv_file}
+   * 可以被多个会话的附件行引用，逐个会话单独预演会把「这批全删掉才没人引用」的文件算成两边都「还有人用」，少报孤儿。批口径 = 引用计数落在本批被删行之外的部分归零才算孤儿。
+   *
+   * <p>★ 本方法没有任何副作用：不删行、不删文件、不写审计。归档清理的真删执行体今天不存在（配置位 {@code app.lifecycle.retention.*} 没有消费者）——
+   * 这正是「留缝」的形状：先有口径与读数，真做要等客户口径。
+   *
+   * @param conversationIds 要试算的会话 id（前置校验是调用方的事）
+   * @return 与 {@link #purgeConversationAttachments} 同形状的计数；{@code orphanedAttachmentIds}
+   *     是「这批全删后没人引用」的 {@code cv_file.id}
+   */
+  PurgeResult previewConversationAttachments(java.util.List<UUID> conversationIds);
+
+  /**
    * {@link #purgeConversationAttachments} 的读数（{@code #299} 判据 1 的按表逐项断言与审计摘要都读它）。
    *
    * @param documents 删掉的 {@code kb_document} 行数

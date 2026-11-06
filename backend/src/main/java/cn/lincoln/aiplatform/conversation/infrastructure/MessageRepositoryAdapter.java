@@ -127,4 +127,10 @@ public class MessageRepositoryAdapter implements MessageRepository {
     }
     return jpa.deleteByConversationId(conversationId);
   }
+
+  /** 数一个会话的消息条数（`#299` dry-run 读数）—— 读方法，不动数据。 */
+  @Override
+  public long countByConversation(UUID conversationId) {
+    return conversationId == null ? 0 : jpa.countByConversationId(conversationId);
+  }
 }

@@ -136,5 +136,16 @@ class ConversationLifecycleServiceTest {
     public void delete(Conversation conversation) {
       rows.remove(conversation.id());
     }
+
+    /** 留存期试算底册（#299）—— 本用例不测归档清理，返回空即可。 */
+    @Override
+    public List<Conversation> findDeletedBefore(java.time.Instant cutoff, int limit) {
+      return List.of();
+    }
+
+    @Override
+    public long countDeletedBefore(java.time.Instant cutoff) {
+      return 0;
+    }
   }
 }

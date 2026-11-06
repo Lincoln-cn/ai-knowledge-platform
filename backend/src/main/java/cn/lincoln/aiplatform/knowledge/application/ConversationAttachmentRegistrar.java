@@ -6,8 +6,10 @@ import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingRepository;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.knowledge.ConversationAttachmentPort;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -170,5 +172,48 @@ public class ConversationAttachmentRegistrar implements ConversationAttachmentPo
         orphanedAttachmentIds.size());
     return new PurgeResult(
         attachments.size(), segmentsDeleted, vectorsDeleted, orphanedAttachmentIds);
+  }
+
+  /**
+   * dry-run 预演（{@code #299} 归档清理「留缝」）：只数不删，逐表给出"如果彻底删除这一批会话，附件三域会各少多少行、哪些文件会没人引用"。
+   *
+   * <p>★ 与 {@link #purgeConversationAttachments} 的差别只有两个：不动任何行；孤儿判定是"假设删完"——
+   * 引用计数里扣掉本批会删的行后归零才算孤儿（同一个 {@code cv_file} 可以被多个会话的附件行引用，批外还剩引用的文件不许报成可删）。
+   */
+  @Override
+  public PurgeResult previewConversationAttachments(List<UUID> conversationIds) {
+    if (conversationIds == null || conversationIds.isEmpty()) {
+      return new PurgeResult(0, 0, 0, List.of());
+    }
+    int documents = 0;
+    int segmentsCount = 0;
+    int vectorsCount = 0;
+    Map<UUID, Integer> batchReferences = new LinkedHashMap<>();
+    for (UUID conversationId : conversationIds) {
+      List<Document> attachments = repository.findConversationAttachments(conversationId);
+      documents += attachments.size();
+      for (Document attachment : attachments) {
+        UUID documentId = attachment.id();
+        segmentsCount += segments.findByDocumentId(documentId).size();
+        vectorsCount += segmentEmbeddings.countByDocumentId(documentId);
+        if (attachment.attachmentId() != null) {
+          batchReferences.merge(attachment.attachmentId(), 1, Integer::sum);
+        }
+      }
+    }
+    // ★ 假设删完的引用计数：总引用数扣掉本批会删的行，归零才算孤儿（批外还有人引用的不许动）
+    List<UUID> orphanedAttachmentIds =
+        batchReferences.entrySet().stream()
+            .filter(e -> repository.countByAttachmentId(e.getKey()) <= e.getValue())
+            .map(Map.Entry::getKey)
+            .toList();
+    log.info(
+        "会话附件清理预演（dry-run，只数不删）：会话 {} 个 · 文档 {} 行 · 分段 {} 行 · 向量 {} 行 · 将无人引用的文件 {} 个",
+        conversationIds.size(),
+        documents,
+        segmentsCount,
+        vectorsCount,
+        orphanedAttachmentIds.size());
+    return new PurgeResult(documents, segmentsCount, vectorsCount, orphanedAttachmentIds);
   }
 }

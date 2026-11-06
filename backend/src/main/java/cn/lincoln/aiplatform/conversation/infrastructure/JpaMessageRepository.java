@@ -58,4 +58,7 @@ public interface JpaMessageRepository extends JpaRepository<Message, UUID> {
   @Modifying(clearAutomatically = true, flushAutomatically = true)
   @Query("delete from Message m where m.conversationId = :conversationId")
   long deleteByConversationId(@Param("conversationId") UUID conversationId);
+
+  /** 数一个会话的消息条数（`#299` dry-run 读数）。 */
+  long countByConversationId(UUID conversationId);
 }

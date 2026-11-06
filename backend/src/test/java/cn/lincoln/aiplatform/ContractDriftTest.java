@@ -215,7 +215,22 @@ class ContractDriftTest {
           //
           //   ③ ★ 触发条件（防黑洞）：一旦前端给"彻底删除"做了入口并把这条写进 api/** 的 request({...})
           //      字面量，**这一条必须从这里删掉** —— 那时两侧都有，主闸门的双向对账本来就能管住它。
-          "/conversations/{*}/purge");
+          "/conversations/{*}/purge",
+          // ★ 归档清理 dry-run（#299 · 本批「留缝」）—— 后端有、api/** 没有，而它只能这样。
+          //
+          //   ① 为什么是例外：这是**管理面只读试算**（"如果按留存期清理会清掉什么"，只数不删），
+          //      归档清理本身是 issue #299 判定「留缝」的一格 —— 天数是客户口径（02 §5.1.1 行 616
+          //      「数字是口径不是承诺」），真删执行体今天不存在。MVP 前端（§二）没有它的界面位置，
+          //      它不是"前端漏接线"。刻意用 GET 不用 POST：连"提交清理"的形状都不给。
+          //
+          //   ② 真源在哪：conversation/web/ConversationRetentionController 的
+          //      @GetMapping("/dry-run")（类级 /api/v1/conversations/retention）；
+          //      服务 = RetentionDryRunService（@Transactional(readOnly = true)，只数不删）。
+          //
+          //   ③ ★ 触发条件（防黑洞）：一旦前端做了留存期管理界面并把这条写进 api/** 的 request({...})
+          //      字面量，**这一条必须从这里删掉**。另一条触发：真删执行体上线时端点形状大概率变
+          //      （从"试算"变"提交"），那时本来就要重新设计这条契约。
+          "/conversations/retention/dry-run");
 
   /**
    * {@code request({ method: 'GET', url: '/x' })} 的选项对象起始 —— 锚定左花括号。
