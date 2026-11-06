@@ -368,6 +368,14 @@ jobs:
           failed=()
           for g in "${gates[@]}"; do
             echo "::group::${g}.py"
+            # ★ 每条闸门前把桩的 fail_rate 复位 —— `check_failure_visible_e2e` 会把 fail_rate 设成 1.0
+            #   来测"失败要看得见"，它**跑完不复位**（那才是它自己的判据：失败要能被后续观察），
+            #   而桩是本 job 内**所有闸门共享的一个进程**。不复位的后果实测过一次（2026-11-07）：
+            #   `check_s3_conversation_chain_e2e` 的第 5 轮返回 500，后端日志里是
+            #   「向量模型 … 的分组检索失败，跳过该组：向量化失败：上游返回 HTTP 500：
+            #    {"error": {"message": "桩服务按 fail_rate 注入的故障"}}」——
+            #   即**上一次闸门注入的故障泄漏到了下一次**。★ 判据：共享一个桩的闸门，状态必须在入口显式归零。
+            curl -s -X POST -d '{"fail_rate": 0.0}' "${AIP_STUB_URL}/__stub/config" > /dev/null || true
             if python "${g}.py"; then
               echo "✓ ${g}.py 通过"
             else
