@@ -22,7 +22,7 @@
 # 改坏了闸门也是 exit 0，读数与"一致"完全一样。
 #
 # ── 数字 ──
-跳过 39
+跳过 43
 #
 src/mock/handlers/assistants.ts | POST | /assistants | 返回表达式解析不出：withOwnerName(created)
 src/mock/handlers/assistants.ts | POST | /assistants/import | 返回表达式解析不出：withOwnerName(created)
@@ -63,6 +63,10 @@ src/mock/handlers/providers.ts | DELETE | /model-providers/:id/key | 返回表�
 src/mock/handlers/retrieval.ts | GET | /knowledge-bases/:kbId/retrieval | 返回表达式解析不出：findParams(path.kbId)
 src/mock/handlers/workflow.ts | GET | /assistants/:appId/workflow/versions | 契约里同一路径有多个返回类型
 src/mock/handlers/workflow.ts | POST | /assistants/:appId/workflow/debug | 判不了（mock 返回多分支联合，只部分分支与契约相符 —— 可能是守卫收窄）
+src/mock/handlers/compliance.ts | GET | /compliance/settings | 判不了（mock 对象带展开/动态键，缺键不能作证）
+src/mock/handlers/compliance.ts | PUT | /compliance/settings | 判不了（mock 对象带展开/动态键，缺键不能作证）
+src/mock/handlers/compliance.ts | GET | /compliance/agreement/consent | 返回表达式解析不出：mine.length ? mine[mine.length - 1] : null
+src/mock/handlers/compliance.ts | POST | /compliance/agreement/consent | 返回表达式解析不出：existing
 
 # ── 上面 41 条各自的理由，按原因归类 ──
 # · 返回表达式解析不出 23 条：`return helper(...)` 的 helper 读了 handler 的形参
@@ -72,3 +76,21 @@ src/mock/handlers/workflow.ts | POST | /assistants/:appId/workflow/debug | 判�
 # · 判不了（多分支联合）4 条：守卫收窄后各分支形状不同，缺键不能作证。
 # · 契约里同一路径有多个返回类型 4 条：契约自己没说死，无从比对。
 # · 契约里没有这条端点 1 条：`/conversations/chat` 是第一维登记过的 SSE 例外。
+
+# ── 39 → 43 是 `#83` 合规四件套带进来的四条（2026-11-07）──
+# 四条都在 `src/mock/handlers/compliance.ts`，原因归两类、都是这份清单里**已有**的类别，
+# 不是新的解析器缺陷：
+#   · `GET/PUT /compliance/settings` 返回 `{ ...complianceSettings }` —— 展开对象，
+#     "契约必填键在不在"无法从字面量证明（与 `assistants.ts` 那 9 处同因）。
+#   · `GET /compliance/agreement/consent` 返回 `mine.length ? mine[mine.length - 1] : null`、
+#     `POST …/consent` 返回 `existing` —— 都是运行时算出来的值，
+#     解析器不追形参/局部变量流转（与 `knowledge.ts` 的 `return kb`、`providers.ts` 的
+#     `return toPublic(p)` 同因）。
+#
+# ★ 为什么"调基线"而不是"修解析器"：这四条的形状由 `frontend/src/api/compliance.ts`
+#   的类型定义约束，而那边是**契约侧**、闸门第二维（契约↔mock 双向比对）已经管住了。
+#   形状这一维跳过它，等于"少看一处"，但那一处的正确性另有读数为证 —— 这一点必须写在这里，
+#   否则下一个人看到的只是"数字从 39 变成 43"。
+#
+# ★ 想把这四条真的收进"一致"桶，需要解析器支持"局部变量指向同文件内的字面量对象"，
+#   那是 `_MockShaper._infer` 的一次结构性改造，属独立批次；本批不顺手做。

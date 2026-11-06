@@ -175,6 +175,34 @@ jobs:
           cat /tmp/backend.log
           exit 1
 
+      # ★ `#83` 的服务协议首登弹窗必须由**数据**处理，不能靠闸门点掉它。
+      #   现象（2026-11-07 实测）：CI 干净库里 `admin` 没有同意记录 ⇒ 每个真栈闸门登录后
+      #   第一屏都是那个 `el-overlay-dialog`（`aria-label="服务协议与适用人群"`），
+      #   页面上任何点击都被它 `intercepts pointer events` ⇒ 30 秒超时。
+      #   10 条真栈闸门一次全红，而**后端与页面本身都是好的**。
+      #   修法二选一：(a) 每条闸门自己点掉弹窗 —— 10 处重复、且掩盖"首登就该弹"这个设计；
+      #   (b) 在起真后端之后预置一条同意留痕 —— 一处、且与真实用户的"同意过"完全同形。
+      #   这里选 (b)；弹窗本身由 `#83` 自己的 Playwright e2e 覆盖，不靠这批闸门证明。
+      #   ★ 版本号必须与 `frontend/src/constants/agreement.ts` 的 `AGREEMENT_VERSION` 一致，
+      #     否则前端按版本比对仍会弹。
+      - name: 预置服务协议同意记录（否则首登弹窗挡住所有真栈闸门）
+        # ★ 走 `docker exec aip-pg` 而不是本机 psql：psql 客户端要到后面
+        #   「装 psql 客户端」那步才装上，这一步在它之前。
+        run: |
+          VERSION="$(grep -oP "AGREEMENT_VERSION = '\K[^']+" frontend/src/constants/agreement.ts)"
+          echo "协议版本：$VERSION"
+          test -n "$VERSION"
+          INSERTED=$(docker exec aip-pg psql -U aiplatform -d aiplatform -tAc \
+            "insert into platform_agreement_consent (id, user_id, agreement_version, agreed_at)
+             select gen_random_uuid(), u.id, '$VERSION', now()
+             from iam_user u where u.username = 'admin'
+             on conflict do nothing
+             returning id" | grep -c . || true)
+          echo "插入条数：$INSERTED"
+          # ★ 0 条说明 admin 不在库里（seed 变了）或版本号没取到 —— 都要当场报错，
+          #   否则下一轮仍然是"10 条闸门全红 + 看不出为什么"。
+          test "$INSERTED" -ge 1
+
       # ★ 真栈前端：覆盖 .env.development 里的 VITE_USE_MOCK=true 与错端口 18088。
       #   这两个默认值是"后端未就绪时走 mock"的遗留，不覆盖就会拿 mock 当"真栈证据"。
       - name: 安装前端依赖
