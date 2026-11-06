@@ -13,15 +13,25 @@ export const complianceSettings = {
   securityAssessmentConclusion: null as string | null,
 }
 
-/** 协议同意记录：admin 已同意当前版本；其余用户未同意，用于演示首登弹窗。 */
-export const agreementConsents: AgreementConsent[] = [
-  {
-    id: 'agr-1',
-    userId: 'u1',
+/**
+ * 协议同意记录：**所有演示账号都已同意当前版本**。
+ *
+ * <p>★ 为什么不是只给 admin —— 首登弹窗是 `#83` 加的**全用户**弹窗（法规要求"服务协议"要可知可见），
+ * 只要有一个测试账号没同意，它在 mock 栈里的第一屏就是遮罩：`verify_permissions.py` 的四条顶栏断言
+ * 与 `check_ui_states.py` 的页面级断言全都点不动（实测 2026-11-07 CI：7 个 FAIL 全是
+ * `TimeoutError: Locator.click: Timeout 30000ms exceeded`，而真栈那边同样红）。
+ *
+ * <p>首登弹窗本身**由 `#83` 的 Playwright e2e 覆盖**（它自己清空这条记录再登录），
+ * 所以这里不需要留一个"故意未同意"的账号来演示 —— 那会让**其他所有**闸门长期被遮罩挡住。
+ */
+export const agreementConsents: AgreementConsent[] = ['u1', 'u2', 'u3', 'u4'].map(
+  (userId, index) => ({
+    id: `agr-${index + 1}`,
+    userId,
     version: 'v1-2026-11-06',
     agreedAt: '2026-11-06T09:00:00+08:00',
-  },
-]
+  }),
+);
 
 export const complaints: ComplaintTicket[] = [
   {
