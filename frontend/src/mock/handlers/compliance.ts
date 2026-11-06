@@ -8,6 +8,7 @@
  */
 import { ApiError, ErrorCode } from '@/api/types'
 import type {
+  AgreementConsent,
   ComplaintPatchBody,
   ComplaintStatus,
   ComplianceSettings
@@ -15,7 +16,7 @@ import type {
 import { PERM } from '@/constants/permissions'
 import type { MockRoute } from '../dispatch'
 import { paginate } from '../dispatch'
-import { complaints, complianceSettings } from '../fixtures/compliance'
+import { agreementConsents, complaints, complianceSettings } from '../fixtures/compliance'
 import { users } from '../fixtures/identity'
 import { currentSubjects, selfId } from '../policy'
 
@@ -156,5 +157,33 @@ export const complianceRoutes: MockRoute[] = [
     ticket.handlerNote = note
     ticket.updatedAt = new Date().toISOString()
     return ticket
+  }],
+
+  // ★ #83 第九条/第十条：协议同意留痕（GET 查最新一条 / POST 同意，幂等）
+  ['GET', '/compliance/agreement/consent', ({ token }) => {
+    const uid = selfId(currentSubjects(token))
+    const mine = agreementConsents
+      .filter((c) => c.userId === uid)
+      .sort((a, b) => a.agreedAt.localeCompare(b.agreedAt))
+    return mine.length ? mine[mine.length - 1] : null
+  }],
+  ['POST', '/compliance/agreement/consent', ({ body, token }) => {
+    const uid = selfId(currentSubjects(token))
+    const version = String((body as { version?: unknown }).version ?? '').trim()
+    if (!version || version.length > 64) {
+      throw new ApiError(ErrorCode.BAD_REQUEST, '协议版本号不能为空且不超过 64 字符')
+    }
+    const existing = agreementConsents.find((c) => c.userId === uid && c.version === version)
+    if (existing) {
+      return existing
+    }
+    const record: AgreementConsent = {
+      id: `agr-${agreementConsents.length + 1}`,
+      userId: uid,
+      version,
+      agreedAt: new Date().toISOString(),
+    }
+    agreementConsents.push(record)
+    return record
   }],
 ]

@@ -98,3 +98,29 @@ export function updateComplianceSettings(body: {
 }) {
   return request<ComplianceSettings>({ method: 'PUT', url: '/compliance/settings', body })
 }
+
+/** 服务协议同意记录（`#83` 第九条/第十条：协议与适用人群公示 + 同意留痕）。 */
+export interface AgreementConsent {
+  id: string
+  userId: string
+  /** 同意的协议版本（`AGREEMENT_VERSION`）。 */
+  version: string
+  agreedAt: string
+}
+
+/** 查询当前用户最新一次协议同意记录；从未同意过返回 null（首登弹协议）。 */
+export function getAgreementConsent() {
+  return request<AgreementConsent | null>({
+    method: 'GET',
+    url: '/compliance/agreement/consent',
+  })
+}
+
+/** 同意当前服务协议版本（幂等：同版本重复提交返回同一条记录）。 */
+export function consentAgreement(body: { version: string }) {
+  return request<AgreementConsent>({
+    method: 'POST',
+    url: '/compliance/agreement/consent',
+    body,
+  })
+}

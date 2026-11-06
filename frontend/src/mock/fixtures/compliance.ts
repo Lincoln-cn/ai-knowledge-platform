@@ -4,7 +4,7 @@
  * ★ 工单号沿用后端形状 `CMP-<yyyyMMdd>-<4位>`；反馈时限 15 天与 V83 迁移的种入值一致
  *   （15 天 = 运营口径，不是法条数字 —— 见迁移头注释）。
  */
-import type { ComplaintTicket } from '@/api/compliance'
+import type { AgreementConsent, ComplaintTicket } from '@/api/compliance'
 
 export const complianceSettings = {
   complaintFeedbackDays: 15,
@@ -12,6 +12,16 @@ export const complianceSettings = {
   algorithmFilingNo: null as string | null,
   securityAssessmentConclusion: null as string | null,
 }
+
+/** 协议同意记录：admin 已同意当前版本；其余用户未同意，用于演示首登弹窗。 */
+export const agreementConsents: AgreementConsent[] = [
+  {
+    id: 'agr-1',
+    userId: 'u1',
+    version: 'v1-2026-11-06',
+    agreedAt: '2026-11-06T09:00:00+08:00',
+  },
+]
 
 export const complaints: ComplaintTicket[] = [
   {
