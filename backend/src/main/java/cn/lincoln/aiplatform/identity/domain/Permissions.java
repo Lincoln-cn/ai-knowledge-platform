@@ -99,6 +99,21 @@ public final class Permissions {
   /** 组织机构树 —— 数据权限的载体（07 §十）。 */
   public static final String IDENTITY_ORG_MANAGE = "identity:org:manage";
 
+  /**
+   * 办理投诉举报工单（{@code #83} 第十五条）。
+   *
+   * <p>★ 不借用 {@code feedback:handle}：feedback 是内容质量反馈（赞踩→沉淀问答对）， 投诉举报是合规工单（留痕举证 + 反馈时限 +
+   * 公示流程），受理口径与留痕要求都不同 —— 一个门禁借用语义不相关的权限点 = 这个族还没有权限点。
+   */
+  public static final String COMPLAINT_HANDLE = "complaint:handle";
+
+  /**
+   * 合规登记（{@code #83}）：登记算法备案号 / 安全评估结论、调整投诉举报反馈时限。
+   *
+   * <p>★ 不借用 {@code system:manage}（账号与权限）：合规登记是"填对外公示的法定要件"， 与账号管理不是一类；复用会让"合规专员"必须拿到改角色的权限。
+   */
+  public static final String PLATFORM_COMPLIANCE_MANAGE = "platform:compliance:manage";
+
   /** 全量清单。★ 这是"权限点一共几个"的唯一定义 —— 测试会断言它恰好 ALL.size() 个（不再写死数字）。 */
   public static final List<String> ALL =
       List.of(
@@ -122,7 +137,9 @@ public final class Permissions {
           SYSTEM_MANAGE,
           AUDIT_VIEW,
           IDENTITY_ORG_MANAGE,
-          PLATFORM_DICT_MANAGE);
+          PLATFORM_DICT_MANAGE,
+          COMPLAINT_HANDLE,
+          PLATFORM_COMPLIANCE_MANAGE);
 
   private static final List<String> KB_OPERATOR =
       List.of(
@@ -137,7 +154,8 @@ public final class Permissions {
           CONVERSATION_VIEW,
           CONVERSATION_SHARE,
           DASHBOARD_VIEW,
-          FEEDBACK_HANDLE);
+          FEEDBACK_HANDLE,
+          COMPLAINT_HANDLE);
 
   private static final List<String> APP_CONFIG =
       List.of(
