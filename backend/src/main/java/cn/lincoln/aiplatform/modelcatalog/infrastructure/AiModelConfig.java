@@ -1,6 +1,8 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
 import cn.lincoln.aiplatform.platform.domain.CryptoPort;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -32,5 +34,21 @@ public class AiModelConfig {
   @Bean
   ApiKeyCipher apiKeyCipher(CryptoPort cryptoPort) {
     return ApiKeyCipher.of(cryptoPort);
+  }
+
+  /**
+   * 给测试用的 {@link ChatClient}。
+   *
+   * <p>★ 2026-11-06 一度删掉过它（当时判"生产代码零注入"），结果 {@code OpenAiStubContractTest} 与 {@code
+   * ModelCapabilityProbeTest} 里的 {@code @Autowired ChatClient} 当场 {@code
+   * UnsatisfiedDependencyException} —— 它们靠的是 OpenAI starter 的自动配置，而那个 starter 收窄到 {@code test}
+   * scope 后不再提供。
+   *
+   * <p>⇒ 那次收窄**没有做成**：{@code spring-ai-starter-model-openai} 回 {@code compile} scope（它的自动配置有 真实消费方
+   * = 两处测试），本 bean 一并恢复。真要收窄得先把那两处测试改成显式构造 {@code ChatClient}， 那是独立的一批活，别和别的东西混在一起做。
+   */
+  @Bean
+  ChatClient testVisibleChatClient(ChatModel chatModel) {
+    return ChatClient.builder(chatModel).build();
   }
 }

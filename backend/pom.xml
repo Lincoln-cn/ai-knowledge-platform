@@ -143,7 +143,6 @@
     <dependency>
       <groupId>org.springframework.ai</groupId>
       <artifactId>spring-ai-starter-model-openai</artifactId>
-      <scope>test</scope>
     </dependency>
 
     <!-- ─── 进程内向量化（本地 ONNX）───
