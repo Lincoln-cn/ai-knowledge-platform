@@ -1,35 +1,25 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
 import cn.lincoln.aiplatform.platform.domain.CryptoPort;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * 模型接入的装配 —— 把 Spring AI 的 {@link ChatModel} 收成一个<strong>单例</strong> {@link ChatClient}。
+ * 模型接入的装配 —— 属性类与 API key 加解密器。
  *
  * <p>为什么在 {@code modelcatalog} 的 {@code infrastructure} 包：它是"外部适配器" （{@code 01 §6.2} 给 {@code
  * infrastructure} 的职责），而模型接入正是被隔离在这个模块里的东西 （{@code 01 §二} 第 3 行）。
  *
- * <p>★ 为什么是单例、且由我们显式建：{@code ChatClient} 每次 {@code builder().build()} 都会 重新装配 advisor 链。等 M3/M4b
- * 挂上检索 advisor（{@code 11 §9} 的 order 250 那一段）之后， 每个请求各建一个客户端等于把整条 advisor 链重建一遍 ——
- * 这是那种"功能全对、只是慢"的问题， 最难在测试里发现。
- *
- * <p>⚠️ 这个 bean **不挂 advisor**：它只是 modelcatalog 暴露的通用客户端。真正的 advisor 链在 {@link SpringAiChatAdapter}
- * 里按 order 装配（{@code SafeGuardChatAdvisor} 100 / {@code AdvisorChainTrace}
- * 150），且<strong>流式与非流式两个出口都挂</strong> —— 生产对话端口（{@code ChatModelAdapter} 的六条出口）走的就是这条链，{@code
- * UpstreamGateway} 只是显式兜底。
+ * <p>★ 2026-11-06 删掉了原来那个 {@code @Bean ChatClient chatClient(ChatModel)}：它依赖 OpenAI starter 自动配置出来的
+ * {@code ChatModel}，而那个 starter 现在只在 {@code test} scope（生产代码零使用已核实）。 代价与取舍写在 {@code pom.xml}
+ * 那一节的注释里。生产代码一律 {@code ChatClient.builder(model).build()} 现建 —— advisor 链在 {@link
+ * SpringAiChatAdapter} 里按 order 装配（{@code SafeGuardChatAdvisor} 100 / {@code AdvisorChainTrace}
+ * 150），流式与非流式两个出口都挂。
  */
 @Configuration
 @EnableConfigurationProperties({ModelApiProperties.class, EgressProperties.class})
 public class AiModelConfig {
-
-  @Bean
-  ChatClient chatClient(ChatModel chatModel) {
-    return ChatClient.builder(chatModel).build();
-  }
 
   /**
    * API key 加解密器。

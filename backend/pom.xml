@@ -113,12 +113,37 @@
       <artifactId>spring-boot-starter-data-jpa</artifactId>
     </dependency>
 
-    <!-- ─── 模型接入：只挂 OpenAI 兼容客户端，base-url 指向 Ollama 的 /v1（开发期）───
-         ★ 它会带进 spring-webflux（库）——这不等于选了 WebFlux 栈：
-           spring-boot-starter-webmvc 在，Boot 的 WebApplicationType 仍是 SERVLET（09 §4.5） -->
+    <!-- ─── 模型接入：只要 `client-chat` 这一层，**不带 OpenAI 客户端实现**（2026-11-06 收窄）───
+         此前写的是 `spring-ai-starter-model-openai`，它把两样东西捆在一起：
+           ① 我们真正需要的：`ChatClient` / `Advisor` / `Message` / `ChatResponse` / `BeanOutputConverter`
+              —— 生产对话路径（`SpringAiChatAdapter` 的六条出口）与 advisor 链（安全闸门 100 / trace 150）
+              全靠这一层；
+           ② 我们一行都没用的：`OpenAiChatModel` / `OpenAiApi` / 自动配置（生产代码里零命中，
+              对话走 `NativeSpringAiChatModel`、向量走 `UpstreamEmbeddingAdapter`）。
+         收成 `spring-ai-client-chat` 之后只留 ①。
+         ★ 实测过一次「直接删掉」的后果：`org/springframework/ai/chat/client/advisor/api/CallAdvisor.class`
+           找不到 ⇒ `AdvisorChainTrace` 配置类加载失败 ⇒ 整个上下文起不来。原因是那几个接口由
+           `spring-ai-client-chat` 提供，而它当时只是 `starter` 的传递依赖 —— 所以不能删、只能换。
+         ★ `spring.ai.openai.base-url` / `api-key` 这两个键仍然有效：`SpringAiChatAdapter`（:60-61）
+           与 `UpstreamGateway`（:65-66）用 `@Value` 直接读，不依赖任何属性绑定类。 -->
+    <dependency>
+      <groupId>org.springframework.ai</groupId>
+      <artifactId>spring-ai-client-chat</artifactId>
+    </dependency>
+
+    <!-- ─── ★ 测试专用：OpenAI 兼容客户端（生产**不带**，见上一条注释）───
+         生产代码零使用已核实；但它被两处测试真的用到：
+           · `modelcatalog/ModelCapabilityProbeTest`（M0 结论三的探针，`@Autowired ChatClient` + `OpenAiChatOptions`）
+           · `modelcatalog/OpenAiStubContractTest`（桩契约，`@Autowired ChatClient`）
+         所以放在 `test` scope：**运行时不带这个客户端，测试里仍能装配出 `ChatClient`**。
+         ★ 由此 `AiModelConfig.chatClient(ChatModel)` 那个 bean 必须删掉 —— 它依赖的 `ChatModel`
+            在生产期只能来自 OpenAI starter 的自动配置，而那已经不在生产路径上了。
+         ★ 代价（如实记）：`ChatClient` 这个 bean 从此**只在测试上下文里存在**；生产代码一律
+            `ChatClient.builder(model).build()` 现建（`SpringAiChatAdapter.clientOf`）。 -->
     <dependency>
       <groupId>org.springframework.ai</groupId>
       <artifactId>spring-ai-starter-model-openai</artifactId>
+      <scope>test</scope>
     </dependency>
 
     <!-- ─── 进程内向量化（本地 ONNX）───
