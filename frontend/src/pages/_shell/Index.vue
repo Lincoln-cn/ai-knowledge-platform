@@ -84,6 +84,7 @@
           <el-dropdown-menu>
             <el-dropdown-item command="my-account">我的账号</el-dropdown-item>
             <el-dropdown-item command="change-password">修改密码</el-dropdown-item>
+            <el-dropdown-item command="about">关于</el-dropdown-item>
             <el-dropdown-item command="logout">退出登录</el-dropdown-item>
           </el-dropdown-menu>
         </template>
@@ -96,6 +97,8 @@
 
     <CommandPalette v-model="paletteOpen" />
     <AccountDialog ref="accountRef" />
+    <AboutDialog ref="aboutRef" />
+    <AgreementDialog ref="agreementRef" />
   </div>
 </template>
 
@@ -106,6 +109,10 @@ import { ElMessage } from 'element-plus'
 import BrandMark from '@/components/BrandMark.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import AccountDialog from './AccountDialog.vue'
+import AboutDialog from './AboutDialog.vue'
+import AgreementDialog from './AgreementDialog.vue'
+import { complianceApi } from '@/api'
+import { AGREEMENT_VERSION } from '@/constants/agreement'
 import { APP_TITLE } from '@/config/env'
 import { canReach } from '@/lib/reach'
 import { navGroups } from '@/router/routes'
@@ -121,6 +128,8 @@ const scrolled = ref(false)
 const navEl = ref<HTMLElement | null>(null)
 const hintEl = ref<HTMLButtonElement | null>(null)
 const accountRef = ref<InstanceType<typeof AccountDialog>>()
+const aboutRef = ref<InstanceType<typeof AboutDialog>>()
+const agreementRef = ref<InstanceType<typeof AgreementDialog>>()
 
 /* ⌘K 提示按平台写字 —— Windows 上画一个 ⌘ 是骗人。 */
 const isMac = /mac/i.test(navigator.userAgent)
@@ -238,7 +247,17 @@ onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointerdown)
   // 刷新页面后把登录态找回来。失败说明令牌已过期 —— 给提示并回登录页，
   // 不能 `.catch(() => {})` 吞掉（那会留下「未登录」的坏壳：菜单塌掉、无提示、不跳转）
-  session.loadProfile().catch((error: unknown) => {
+  session.loadProfile().then(() => {
+    // ★ #83 第九条/第十条：首次使用弹服务协议与适用人群；同意过当前版本的不再弹。
+    //   同意记录落 platform_agreement_consent（V84）—— 检查失败静默放行，
+    //   不能让协议检查把外壳打挂。
+    complianceApi
+      .getAgreementConsent()
+      .then((consent) => {
+        if (consent?.version !== AGREEMENT_VERSION) agreementRef.value?.open()
+      })
+      .catch(() => {})
+  }).catch((error: unknown) => {
     const message =
       error instanceof Error && error.message ? error.message : '登录已过期，请重新登录'
     ElMessage.warning(message)
@@ -259,6 +278,10 @@ watch(
 const onCommand = async (command: string) => {
   if (command === 'my-account') {
     accountRef.value?.open()
+    return
+  }
+  if (command === 'about') {
+    aboutRef.value?.open()
     return
   }
   if (command === 'change-password') {
