@@ -469,6 +469,37 @@ class MarkdownChunkerTest {
    *
    * <p>用「最长公共 前缀/后缀」量出来，而不是手数字数 —— 手数字数最容易看走眼。
    */
+  /**
+   * 生产通道的<strong>转义竖线</strong>表格必须仍被识别成表格块（{@code #313}）。
+   *
+   * <p>Tika 解析 PDF/DOCX 后产出的 markdown 里，表格行是 {@code \| Step \| Owner \|}（竖线被转义）。 修之前 {@code
+   * isTableRow} 只认裸 {@code |} ⇒ 这些行走段落路径 ⇒ {@code is_table} 恒空、 表格行级陈述一条都不生成，而界面上"文档已就绪"、不报错不告警。
+   *
+   * <p>★ 反证：把 {@code isTableRow} 的 {@code unescapePipes(...)} 去掉，这条会红。
+   */
+  @Test
+  void 转义竖线的表格仍识别为表格块() {
+    String md =
+        """
+        下表是审批流程。
+
+        \\| Step \\| Owner \\| Days \\|
+        \\| --- \\| --- \\| --- \\|
+        \\| 申请 \\| 张三 \\| 2 \\|
+        \\| 审批 \\| 李四 \\| 3 \\|
+
+        表后正文。
+        """;
+
+    List<SegmentChunk> chunks = chunker.chunk(md, 200);
+
+    assertThat(chunks).as("转义表格必须成块").hasSize(3);
+    assertThat(chunks.get(1).isTable()).as("整表一块（is_table=true）").isTrue();
+    assertThat(chunks.get(1).content())
+        .as("块正文保留解析产物原样（引用给人看的是原文，不清洗）")
+        .contains("\\| Step \\| Owner \\| Days \\|");
+  }
+
   private static String overlapRegion(SegmentChunk prev, SegmentChunk curr) {
     String a = prev.content();
     String b = curr.content();
