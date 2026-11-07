@@ -35,4 +35,17 @@ public interface ModelRepository {
 
   /** 某个服务商下还有多少个模型 —— 删除服务商前的守卫读它。 */
   long countByProviderId(UUID providerId);
+
+  /**
+   * 同一个基础模型的全部向量模型（`#305` 缺口 B）。
+   *
+   * <p>存在理由：向量维度决定写哪张 {@code vec_embedding_<dim>} 表。同一个基础模型被登记成两个维度时， 两批向量会分居两表、互相检索不到 ——
+   * 而这种错在界面上看起来完全正常，只有在"换了个模型重新向量化"之后 才会以"检索突然少一半"的形式暴露。
+   */
+  default List<Model> embeddingModelsOf(String baseModel) {
+    // ★ 默认返回空、而不是要求每个实现都写一遍：这是一个**新增的校验输入**，不是核心能力。
+    //   生产的唯一实现 ModelRepositoryAdapter 会覆盖它；测试里的 Fake 不该被这种细节牵连
+    //   （`#305` 缺口 B 之前，三个测试各有一个 FakeModels，加抽象方法当场把它们全编译红）。
+    return List.of();
+  }
 }

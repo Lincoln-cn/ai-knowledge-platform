@@ -4419,6 +4419,36 @@ boolean serves(String baseModel) {
 - **`#305` 缺口 A / B**：拆成两个 PR（#306 已合、#308 在跑），不进 0.4.9。
 - **`#177` 的 B1/B3 两轮读数**：新加的目录页文档**不在** 195 条语料的分子分母里 ⇒ 两轮读数必然逐条相同。判据：**"跑一遍评测"只有在被测对象落在评测的分子分母里时才是读数**。
 - **`#280` 的 B3 真召回**：`ROADMAP §11.13` 已把三层原因与三个回退过的改造记账，本版不动代码。
+## §11.19 同一个基础模型的向量维度必须唯一（`#305` 缺口 B，2026-11-06）
+
+### 11.19.1 缺的是什么
+
+向量维度决定写哪张 `vec_embedding_<dim>` 表。同一个 `base_model` 若被登记成 768 与 1024 两条，两批向量会分居两张表、**互相检索不到**，而界面上一切正常 —— 只在"换模型重新向量化"之后，以"结果少一半"的形态暴露。库里现况已经如此：`bge-m3` 登记 768 的有 24 条、1024 的有 6 条，而它的真实维度是 1024。
+
+### 11.19.2 改法（四个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `modelcatalog/domain/ModelRepository.java` | ★ **`default`** `List<Model> embeddingModelsOf(String baseModel) { return List.of(); }` |
+| `modelcatalog/infrastructure/JpaModelRepository.java` | 加 `findByKindAndBaseModel(ModelKind, String)` |
+| `modelcatalog/infrastructure/ModelRepositoryAdapter.java` | 实现 `embeddingModelsOf`（空/blank 返 `List.of()`） |
+| `modelcatalog/application/ModelService.java` | `create` 里加 `validateDimensionMatchesSiblings(...)`；不一致抛 400 + hint |
+
+★ **两条要点**：
+
+1. **接口方法必须是 `default`**：`OutboundPiiPassthroughTest` / `ChatModelAdapterTest` / `SpringAiChatAdapterTest` 各有一个 `FakeModels`，写成抽象方法会让它们当场编译红。
+2. **只拦新增、不回填存量**：`kb_document` 没有 `embedding_model_id` 列、`vec_embedding_<dim>` 也没有模型归属 ⇒ **查不出**"哪些文档用了这个向量模型"，那 24 条错登记只能人工改。
+
+### 11.19.3 判据读数
+
+`ModelDimensionConsistencyTest` **4/4 绿**：`aSecondDimensionForTheSameBaseModelIsRejected`（message 含「已有登记维度 768」「不能再登记成 1024」，`hint()` 含 `vec_embedding_1024`）· `theSameDimensionIsAccepted` · `differentBaseModelsKeepTheirOwnDimensions` · `aBlankBaseModelIsNotGuardedHere`。
+
+**反证**：在 `validateDimensionMatchesSiblings` 开头插 `if (true) { return; }` ⇒ `Tests run: 4, Failures: 1`（`Expecting code to raise a throwable`）；删掉后 4/4 绿。
+
+### 11.19.4 不在本条三项
+
+存量 24 条的修正 · 跨 `baseModel` 的维度冲突 · `dimension` 与实际输出维度的核对（属 `#305` 缺口 A 的邻域）。
+
 
 ## §11.18 `#177` 的读数与口径决定（2026-11-06）
 

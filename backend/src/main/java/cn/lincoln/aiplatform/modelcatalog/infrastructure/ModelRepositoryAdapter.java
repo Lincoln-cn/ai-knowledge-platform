@@ -65,6 +65,14 @@ public class ModelRepositoryAdapter implements ModelRepository {
   }
 
   @Override
+  public List<Model> embeddingModelsOf(String baseModel) {
+    if (baseModel == null || baseModel.isBlank()) {
+      return List.of();
+    }
+    return jpa.findByKindAndBaseModel(ModelKind.EMBEDDING, baseModel.trim());
+  }
+
+  @Override
   public long countByProviderId(UUID providerId) {
     return jpa.count((root, query, cb) -> cb.equal(root.get("providerId"), providerId));
   }

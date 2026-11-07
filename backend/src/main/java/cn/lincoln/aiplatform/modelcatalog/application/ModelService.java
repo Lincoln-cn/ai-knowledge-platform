@@ -301,6 +301,8 @@ public class ModelService {
   @Transactional
   public ModelView create(UpsertCommand command, UUID operatorId) {
     validateCapacity(command.kind(), command.dimension(), command.contextWindow());
+    validateDimensionMatchesSiblings(
+        command.kind(), command.baseModel(), command.dimension(), null);
     if (command.kind() == ModelKind.EMBEDDING && command.dimension() == null) {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST,
@@ -652,6 +654,44 @@ public class ModelService {
    *
    * @param providerId {@code null} = 旧式直连 / 默认上游
    */
+  /**
+   * 同一个基础模型的向量维度必须唯一（`#305` 缺口 B）。
+   *
+   * <p>★ 为什么这条不是"洁癖"：维度决定写哪张 {@code vec_embedding_<dim>} 表。同一个 {@code baseModel} 被登记成 768 和 1024
+   * 时，两批向量分居两张表，而检索时按模型自己的 dimension 选表 —— <strong>两边永远互相看不见</strong>，但界面上一切正常。它只会在"换个模型重新向量化"之后
+   * 以"检索结果突然少一半"的形式暴露，而那时已经很难追溯是谁先改的。
+   *
+   * <p>★ 只对向量模型、只对非空 dimension 生效：对话模型没有维度；未声明维度的那一支由 {@link #validateCapacity}
+   * 与上面的"必须显式声明"拦，不在这里重复报。
+   *
+   * @param selfId 更新场景传自己的 id（要把自己从兄弟里排除），新建传 {@code null}
+   */
+  private void validateDimensionMatchesSiblings(
+      ModelKind kind, String baseModel, Integer dimension, UUID selfId) {
+    if (kind != ModelKind.EMBEDDING || baseModel == null || baseModel.isBlank()) {
+      return;
+    }
+    if (dimension == null) {
+      return;
+    }
+    for (Model sibling : models.embeddingModelsOf(baseModel)) {
+      if (selfId != null && selfId.equals(sibling.id())) {
+        continue;
+      }
+      Integer other = sibling.dimension();
+      if (other != null && !other.equals(dimension)) {
+        throw new BusinessException(
+            ErrorCode.BAD_REQUEST,
+            "同一个基础模型 " + baseModel.trim() + " 已有登记维度 " + other + "，不能再登记成 " + dimension,
+            "维度决定向量写哪张表（vec_embedding_"
+                + dimension
+                + "）；两个维度会让两批向量互相检索不到。请沿用 "
+                + other
+                + "，或先处理掉那条旧登记");
+      }
+    }
+  }
+
   private ModelProvider requireProvider(UUID providerId) {
     if (providerId == null) {
       return null;
