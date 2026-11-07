@@ -261,12 +261,29 @@ public class MarkdownChunker {
     return t.startsWith("```") || t.startsWith("~~~");
   }
 
+  /**
+   * 是不是表格行（GFM 的 {@code | a | b |}）。
+   *
+   * <p>★ 必须同时认 <strong>转义形态</strong> {@code \| a \| b \|}：生产通道（Tika 解析 PDF/DOCX 后产出的
+   * markdown）会把竖线转义成 {@code \|}，只认裸 {@code |} 会让表格行掉进段落路径 ⇒ {@code is_table} 恒空、
+   * 表格行级陈述一条都不生成，而界面上一切正常（{@code #313} 的静默退化）。
+   */
   private static boolean isTableRow(String line) {
-    return line.stripLeading().startsWith("|");
+    String t = unescapePipes(line.stripLeading());
+    return t.startsWith("|") && t.indexOf('|', 1) > 0;
   }
 
   private static boolean isSeparatorRow(String line) {
-    return TABLE_SEPARATOR.matcher(line.strip()).matches();
+    return TABLE_SEPARATOR.matcher(unescapePipes(line.strip())).matches();
+  }
+
+  /**
+   * 把生产通道的转义竖线还原成裸竖线，<strong>只用于判定与拆分</strong>。
+   *
+   * <p>不作用于 {@code content}：块正文要保留解析产物的原样（引用给人看的是原文）。
+   */
+  private static String unescapePipes(String line) {
+    return line.indexOf("\\|") < 0 ? line : line.replace("\\|", "|");
   }
 
   // ────────────────────────── L1 章节 + L2/L3/L4 装箱 ──────────────────────────

@@ -30,10 +30,10 @@
                         </div>
                     </template>
                     <div class="w-full">
-                        <el-text type="info" v-if="form_data.dataset_id_list?.length === 0">
+                        <el-text type="info" v-if="kbList.length === 0">
                             关联的知识库展示在这里
                         </el-text>
-                        <template v-for="item in form_data.dataset_id_list" :key="item" v-else>
+                        <template v-for="item in kbList" :key="item" v-else>
                             <div class="flex-between border border-r-4 white-bg mb-4" style="padding: 5px 8px">
                                 <div class="flex align-center" style="line-height: 20px">
                                     <!--
@@ -128,8 +128,36 @@ const form = {
     question_reference_address: []
 }
 
+/**
+ * `props.nodeModel` 是 LogicFlow 的节点模型，**不是 Vue 的响应式对象**：
+ * 对它做 `set(node_data, 'dataset_id_list', ...)`，数据确实写进去了，
+ * 但 `computed` 的 `get` 只依赖 `props.nodeModel` 这个 **prop 引用**，
+ * 引用没变 ⇒ 不会重算 ⇒ 模板不重新渲染。
+ * 表现就是「勾了两个知识库、点确定，面板上还是原来那一个」——
+ * 也就是用户报的「知识库选择没有回填到界面上」。
+ *
+ * 修法：加一个显式的版本号 `tick`，`get` 里读它建立依赖，写数据后自增强制重算。
+ * 不用 `reactive(...)` 包 `nodeModel`：那会把 LogicFlow 自己的对象换成代理，
+ * 画布的命中测试与连线会一起坏掉。
+ */
+const tick = ref(0)
+
+/**
+ * 列表渲染专用：**每次都返回新数组**。
+ * `props.nodeModel.properties.node_data.dataset_id_list` 是 LogicFlow 对象里的普通数组，
+ * 不是 Vue 的响应式数组 —— `v-for` 遍历它建立不了依赖，改了长度也不会重新渲染。
+ * 返回副本 + 读一次 `tick` 之后，模板才有机会看到变化。
+ */
+const kbList = computed(() => {
+    void tick.value
+    const list = (form_data.value?.dataset_id_list ?? []) as any[]
+    return Array.isArray(list) ? [...list] : []
+})
+
 const form_data = computed({
     get: () => {
+        // 建立对 tick 的依赖（读一次就够，值本身不参与返回）
+        void tick.value
         if (props.nodeModel.properties.node_data) {
             return props.nodeModel.properties.node_data
         } else {
@@ -139,6 +167,7 @@ const form_data = computed({
     },
     set: (value) => {
         set(props.nodeModel.properties, 'node_data', value)
+        tick.value++
     }
 })
 
@@ -165,10 +194,12 @@ const openParamSettingDialog = () => {
 function removeDataset(id: any) {
     const list = props.nodeModel.properties.node_data.dataset_id_list.filter((v: any) => v !== id)
     set(props.nodeModel.properties.node_data, 'dataset_id_list', list)
+    tick.value++
 }
 
 function addDataset(val: Array<string>) {
     set(props.nodeModel.properties.node_data, 'dataset_id_list', val)
+    tick.value++
 }
 
 function openDatasetDialog() {
