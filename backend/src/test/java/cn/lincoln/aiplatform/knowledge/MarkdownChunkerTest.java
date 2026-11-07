@@ -319,8 +319,37 @@ class MarkdownChunkerTest {
     String region = overlapRegion(chunks.get(0), chunks.get(1));
     assertThat(region).as("重叠区必须是前块尾部的完整句「丙丁。」—— 不许从句中半个字起").isEqualTo("丙丁。");
     assertThat(region.length()).isLessThanOrEqualTo(4);
-    assertThat(chunks.get(1).content()).isEqualTo("丙丁。" + "戊己。");
+    // ★ #315：重叠前缀与本块正文之间必须是**分行**的 —— 直接相撞会粘成「丙丁。戊己。」一句话，
+    //   切分产物里段首因此看起来像上一段的结尾（引用的第一句是别人的）。
+    assertThat(chunks.get(1).content()).isEqualTo("丙丁。" + "\n" + "戊己。");
     assertThat(chunks.get(0).content()).as("首块不加任何重叠前缀").isEqualTo("甲乙。丙丁。");
+  }
+
+  /**
+   * ★★ `#315`：重叠前缀与正文之间必须有换行，不许把两段粘成一行。
+   *
+   * <p>实测形态：`MarkdownChunker.java:462` 原来是 `tail + curr.content()`，而 `tail` 是从行边界之后切出来的
+   * 完整行末（不含换行）、`curr.content()` 又从行首开始 ⇒ 拼完是「上一段的最后一行」直接接「本段第一行」。
+   *
+   * <p>后果不是"看不清"，而是**引用错位**：用户点开引用看到的第一句是上一段的内容；`content_tsv` 里两段共用同一个 词元边界，BM25 打分也会把两段算得更像。
+   *
+   * <p>★ 判据同时钉两件事：① 有换行 ② 行数 = 前块末行 + 本块全部行。只断"含 \n"会被"两个换行"糊弄过去。
+   */
+  @Test
+  void 重叠前缀与正文之间必须换行_不许粘成一行() {
+    String md =
+        """
+        甲乙。丙丁。
+
+        戊己。
+        """;
+    List<SegmentChunk> chunks = chunker.chunk(md, 10, 4);
+
+    assertThat(chunks).hasSize(2);
+    String second = chunks.get(1).content();
+    assertThat(second).as("重叠前缀「丙丁。」与正文「戊己。」必须是两行").isEqualTo("丙丁。\n戊己。");
+    assertThat(second.lines().count()).as("两行，不是一行也不是三行").isEqualTo(2);
+    assertThat(second).as("不许出现连续两个换行（那会在段首留一个空行）").doesNotContain("\n\n");
   }
 
   /** ★ 取不到句/行边界就<strong>不</strong>重叠（宁可少重叠）—— overlap=2 时尾部 2 字落在句中，必须放弃。 */
@@ -430,7 +459,8 @@ class MarkdownChunkerTest {
     }
     // 确实补上了重叠（否则这条契约测试是空转）
     assertThat(chunks.get(0).content()).isEqualTo("短句。");
-    assertThat(chunks.get(1).content()).isEqualTo("短句。短句。");
+    // ★ #315：重叠前缀与正文之间换行 —— 见 重叠前缀与正文之间必须换行_不许粘成一行
+    assertThat(chunks.get(1).content()).isEqualTo("短句。\n短句。");
   }
 
   /** ★ {@code 12 §3.3} 参数纪律：overlap 越界必须拒绝，禁止静默纠正（静默纠正是最难查的一类 bug）。 */
