@@ -408,4 +408,61 @@ class NoiseStripperTest {
     assertThat(r.removedLines()).isEqualTo(2);
     assertThat(r.markdown()).contains("正文").doesNotContain("Copyright").doesNotContain("版权所有");
   }
+
+  // ────────────────── #314：表格行不是页眉 ──────────────────
+
+  /**
+   * ★★ 同构重复表格的表头与分隔行**不许**被「跨页重复行」规则当页眉剥掉（`#314`）。
+   *
+   * <p>实测形态（2026-11-07，B 路取证）：一篇文档里有 3 个结构相同的表格，每个表头都是 `| 步骤 | 责任人 |` ⇒ 表头出现 3 次、长度 &lt; 60 字 ⇒
+   * 命中规则 ③「重复 ≥3 次」⇒ 三张表的表头与分隔行**全部被剥光**（ 表头 0/3、分隔行 0/3，表体 3/3 还在）。
+   *
+   * <p>后果是静默的：表格变成一堆没有列名的竖线集合，{@code RuleBasedTableStatementRewriter} 再也拼不出行级陈述（与 {@code #313}
+   * 叠加后同一条链全断）。而「文档已就绪」照常显示。
+   *
+   * <p>★ 判据为什么是"表格行一律不参与规则
+   * ③"：页眉页脚的判据是**自然语言短句**；表格行的竖线结构本身就是「这是数据」的标记，重复出现是同构表格的正常形态，不是排版噪声。宁可漏剔跨页续表头（无害），不可剥掉表头（毁数据）。
+   */
+  @Test
+  void 同构重复表格的表头与分隔行不许被当页眉剥掉() {
+    StringBuilder builder = new StringBuilder();
+    for (int table = 1; table <= 3; table++) {
+      builder.append("### 表 ").append(table).append(NL).append(NL);
+      builder.append("| 步骤 | 责任人 |").append(NL);
+      builder.append("| --- | --- |").append(NL);
+      builder.append("| 步骤").append(table).append("甲 | 张三 |").append(NL);
+      builder.append("| 步骤").append(table).append("乙 | 李四 |").append(NL).append(NL);
+    }
+    NoiseStripper.Result result = NoiseStripper.strip(builder.toString());
+
+    assertThat(result.markdown()).as("表头是内容，不是页眉").contains("| 步骤 | 责任人 |");
+    assertThat(result.markdown()).as("分隔行也是内容").contains("| --- | --- |");
+    assertThat(result.markdown()).as("三张表的表体一行都不许少").contains("| 步骤3乙 | 李四 |");
+  }
+
+  /**
+   * 生产通道里表格的竖线是**转义形态** {@code \|}（{@code #313} 取证）—— 判定同样要认。
+   *
+   * <p>这条单独立一个用例，因为转义形态在真栈上才是常态，而按裸 {@code |} 写判据会在单测里绿、在真栈上一条都不生效（{@code #313} 就是这么栽的）。
+   *
+   * <p>★★ 夹具必须让"重复行是少数派" —— 否则规则 ③ 的保守性护栏会先放行整篇（{@code repeatedTotal * 2 <= nonBlank}
+   * 不成立），本用例就变成**空真**：不剥是因为 护栏，不是因为表格行判定。（第一版就是 9 行里 6 行重复 ⇒ 6×2=12 &gt; 9 ⇒ 一条都不剥 ⇒ 用例绿得毫无意义。）
+   */
+  @Test
+  void 转义竖线的重复表头也不许被剥() {
+    StringBuilder builder = new StringBuilder();
+    for (int table = 1; table <= 3; table++) {
+      builder.append("\\| 步骤 \\| 责任人 \\|").append(NL);
+      builder.append("\\| --- \\| --- \\|").append(NL);
+      builder.append("\\| 第").append(table).append("步 \\| 王五 \\|").append(NL);
+      builder.append("\\| 第").append(table).append("步说明 \\| 赵六 \\|").append(NL);
+      builder.append("表").append(table).append("之后的一段正文，用来把重复行压成少数派").append(NL);
+    }
+    // 15 个非空行、6 行重复 ⇒ 12 <= 15 ⇒ 护栏放行，规则 ③ 真的会剥（去掉表格行判定才会红）
+    String markdown = builder.toString();
+    NoiseStripper.Result result = NoiseStripper.strip(markdown);
+
+    assertThat(result.markdown()).as("转义形态的表头同样是内容").contains("\\| 步骤 \\| 责任人 \\|");
+    assertThat(result.markdown()).as("转义形态的分隔行也是内容").contains("\\| --- \\| --- \\|");
+  }
 }
