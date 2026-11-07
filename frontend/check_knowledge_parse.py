@@ -237,6 +237,29 @@ def main() -> int:
                             f"（status={bad_state.get('status')!r}）",
                         )
 
+                    # ── 判据 4（#51）：解析结果里不许残留 [PDF N] / [图片 N] 一类占位标记
+                    #
+                    # ★ 这条现在是「防回归」而不是「读数」：现有全部夹具解析后该形态的出现次数
+                    #   都是 0/0（mixed.pdf 实测 495 字、0 处），所以它此刻**不会红**。
+                    #   它守的是未来某份文档重新带出该形态时，这里先红一次 ——
+                    #   总比让它静默污染 search_text 与引用好（silent-failure 的形状）。
+                    #   `#51` 的「X → 0」读数需要一份**真的带该占位符**的原始 PDF，那份样本
+                    #   至今没拿到（同 #96 / #151 的处境），所以 issue 保持 open。
+                    #
+                    # ★ 为什么名单里只有 PDF / 图片 / image / img：`[图 N]`、`[表 N]` 是**真信息**
+                    #   （图注与表题），剥掉它们是另一种静默损失（`NoiseStripper.PARSER_PLACEHOLDER`
+                    #   的名单同理）。
+                    if fixture_doc_id:
+                        placeholder = re.compile(
+                            r"\[(?:PDF|图片|image|img)\s*\d{1,3}\]", re.IGNORECASE
+                        )
+                        hits = placeholder.findall(structured_state.get("parsedContent") or "")
+                        check(
+                            not hits,
+                            "解析结果里没有 [PDF N] / [图片 N] 一类占位标记"
+                            f"（命中 {len(hits)} 处：{hits[:5]}）",
+                        )
+
             # ────────────── 进入知识库 → 文档面板 ──────────────
             page.goto(f"{BASE}/#/knowledge", wait_until="networkidle")
             # ★ 等**库卡出现**，不等固定 2.5 秒。实测在 CI 上会红：那台机器是**全新库 + 冷后端**
