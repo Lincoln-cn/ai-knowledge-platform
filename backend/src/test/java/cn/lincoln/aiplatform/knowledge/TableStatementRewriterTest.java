@@ -86,6 +86,29 @@ class TableStatementRewriterTest {
     assertThat(rewriter.rewrite(table)).isEqualTo("标准：一线城市；限额：500 元/天");
   }
 
+  /**
+   * 生产通道的<strong>转义竖线</strong>表格也要改写（{@code #313}）。
+   *
+   * <p>Tika 解析 PDF 后给的是 {@code \| Step \| Owner \|}。修之前 {@code findSeparatorRow} 匹配不到分隔行 ⇒
+   * 整个改写器原样返回 ⇒ {@code search_text} 里进的是原表转义文本、行级陈述 0 行， 而界面显示"文档已就绪"，不报错不告警。
+   *
+   * <p>★ 反证：把 {@code findSeparatorRow} 与 {@code cellsOf} 里的 {@code unescapePipes(...)} 去掉，这条会红。
+   */
+  @Test
+  void rewritesEscapedPipeTables() {
+    String escaped =
+        """
+        \\| 审批步骤 \\| 责任人 \\| 天数 \\|
+        \\| --- \\| --- \\| --- \\|
+        \\| 申请 \\| 张三 \\| 2 \\|
+        \\| 审批 \\| 李四 \\| 3 \\|
+        """;
+
+    assertThat(rewriter.rewrite(escaped))
+        .as("转义形态必须与裸竖线得到同一句行级陈述")
+        .isEqualTo("审批步骤：申请；责任人：张三；天数：2\n审批步骤：审批；责任人：李四；天数：3");
+  }
+
   @Test
   void nonTableReturnsAsIs() {
     String prose = "本制度规定如下要点：\n- 适用公司各部门\n- 适用正式员工";
