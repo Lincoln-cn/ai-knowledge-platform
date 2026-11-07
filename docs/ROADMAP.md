@@ -4500,3 +4500,49 @@ boolean serves(String baseModel) {
 - 开关**已落地且默认 `false`**（不改现状），读数在案；
 - **默认值不在本版定** —— 定它需要一份"目录行对检索有用/有害"的读数，而那要求语料里有带目录页的文档（当前 195 条没有）。登记为语料侧欠账；
 - `#177` 的 issue 判据（"目录页内容可被检索到"）**已可核对**：`keep=true` 时点线行在段 0 里。
+
+## §11.21 检索排序两段式（`#280`，2026-11-07）
+
+### 11.21.1 这条改的是哪一层
+
+`#280` 的 16 条真缺口经 16 文件 × 3 模式 + 全库 SQL 名次定性后，**A 分词 / B 切分 / C 语料各 0 条，D 排序 16/16**。
+
+机制：合成语料里同一句模板话被大量重复（「保存期限」在 1556/5529 段 = **28%** 里出现），而 `ts_rank` 只看词频与段长 ⇒
+带主语的正确段与不带主语的干扰段**近分并列成海**（并列到只能按 `s.id` 兜底），答案词（表单名 / 主语）不加权。
+被证伪的假设：**不是长段稀释** —— top20 全体 320 段 avg 414 / p50 416 / max 493 字，与全库 avg 409 / p50 416 / p90 458 一致，
+`≥1200` 字长段 0/320，rank 与字数 spearman **0.017**。
+
+### 11.21.2 改法：AND 优先 + OR 兜底
+
+| 位置 | 改法 |
+|---|---|
+| `JdbcSegmentSearchQuery.toAndQuery(List<String>)` | 新增：`'a' & 'b' & 'c'`（词元全中） |
+| CTE | 加 `to_tsquery('chinese_zh', ?) as tq_all`，绑定值紧随 `tq` |
+| 排序 | `order by (case when s.content_tsv @@ q.tq_all then 0 else 1 end), ts_rank(...) desc, s.id` |
+
+★ **AND 只决定谁排在前面，不改变召回面** —— 纯 AND 会漏掉"缺词元"的段（实测 `SYN-031-1` 的 coverage 8/9 ⇒ AND 组 0 命中，
+`SYN-063-3` 同理），所以 `where` 子句一个字没动。
+
+### 11.21.3 读数（全量 195 条，同一批问题、同一库）
+
+| 口径 | 改前 | 改后 | 变化 |
+|---|---|---|---|
+| B1 前 5 core | 84.6% | **85.1%** | +0.5 |
+| B3 第 1 条 core | 59.5% | **60.0%** | +0.5 |
+| `rank_core = 0` | 21 条 | **17 条** | −4 |
+| 验面 | — | `knowledge.*Test` **337/337**、`ModelDimensionConsistencyTest` 4/4 | 零回归 |
+
+★ **方向对，但远远不够**：B3 要 **80%**，现在 60.0%，还差 20 点。两段式只解决"全中 vs 部分中"这一刀，
+治不了"全中但排序仍错"（`SYN-001-3` 实测 top1 文档对、段不对）。
+
+### 11.21.4 环境事故（这一次的全量读数差点读不出来）
+
+- `ContainerFetchException: Can't get Docker image: ai-knowledge-platform-pg:dev` ⇒ **Docker Desktop 没起**（`dockerDesktopLinuxEngine` 管道不存在）。那时候 `knowledge.*Test` 报 **34 errors**，而它们全是环境问题，不是代码。
+- 起来之后 `FlywaySqlUnableToConnectToDbException: Connection to localhost:15432 refused` ⇒ **`aip-postgres` 容器没起**（Docker 重启后容器停了）。`docker start aip-postgres` 恢复。
+- ★ 判据：**Testcontainers 的红先看 `Caused by` 的第一行** —— `ContainerFetchException` 是"Docker 没起"，`FlywaySqlUnableToConnectToDbException` 是"库容器没起"，两者都不是"测试挂了"。
+
+### 11.21.5 不在本条
+
+1. **cross-encoder 重排**（§11.13.5 的候选 1）：需要外部模型，本机 `models/` 里没有 reranker；
+2. **语料去重 / 变体化**（§11.13.5 的候选 3）：治的是"并列海"本身，但要重造语料，属独立批次；
+3. **答案词加权**（查询侧 `setweight` 在 Postgres **走不通** —— `setweight(to_tsquery(...))` 报 `function setweight(tsquery, unknown) does not exist`，它只接 `tsvector`）。
