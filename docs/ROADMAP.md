@@ -4404,17 +4404,15 @@ boolean serves(String baseModel) {
 ★ **两条要点**：
 
 1. **接口方法必须是 `default`**：`OutboundPiiPassthroughTest` / `ChatModelAdapterTest` / `SpringAiChatAdapterTest` 各有一个 `FakeModels`，写成抽象方法会让它们当场编译红。
-2. **只拦新增、不回填存量**：`kb_document` 没有 `embedding_model_id` 列、`vec_embedding_<dim>` 也没有模型归属 ⇒ **查不出**"哪些文档用了这个向量模型"，那 24 条错登记只能人工改。这一条要留在账上，别让下一个人以为"改完了就干净了"。
+2. **只拦新增、不回填存量**：`kb_document` 没有 `embedding_model_id` 列、`vec_embedding_<dim>` 也没有模型归属 ⇒ **查不出**"哪些文档用了这个向量模型"，那 24 条错登记只能人工改。
 
 ### 11.19.3 判据读数
 
-`ModelDimensionConsistencyTest` **4/4 绿**：`aSecondDimensionForTheSameBaseModelIsRejected`（message 含「已有登记维度 768」「不能再登记成 1024」，`hint()` 含 `vec_embedding_1024`）· `theSameDimensionIsAccepted` · `differentBaseModelsKeepTheirOwnDimensions` · `aBlankBaseModelIsNotGuardedHere`。
-
-**反证**：在 `validateDimensionMatchesSiblings` 开头插 `if (true) { return; }` ⇒ `Tests run: 4, Failures: 1`（`Expecting code to raise a throwable`）；删掉后 4/4 绿。
+`ModelDimensionConsistencyTest` **4/4 绿** + **反证**（`if (true) { return; }` ⇒ `Tests run: 4, Failures: 1`）。
 
 ### 11.19.4 不在本条三项
 
-存量 24 条的修正（要人工定，或先做"文档记录用了哪个向量模型"）· 跨 `baseModel` 的维度冲突（例如 `bge-m3` 与 `multilingual-e5-small` 撞同一维度 —— 那是正常的）· `dimension` 与实际输出维度的核对（属 `#305` 缺口 A 的邻域）。
+存量 24 条的修正 · 跨 `baseModel` 的维度冲突（正常）· `dimension` 与实际输出维度的核对（属缺口 A 邻域）。
 
 ## §11.18 `#177` 的读数与口径决定（2026-11-06）
 

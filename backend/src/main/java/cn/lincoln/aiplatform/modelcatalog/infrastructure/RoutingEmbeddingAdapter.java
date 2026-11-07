@@ -34,6 +34,14 @@ public class RoutingEmbeddingAdapter implements EmbeddingPort {
   private final UpstreamEmbeddingAdapter upstream;
   private final ModelIdentityPort identities;
 
+  /**
+   * 已经为哪些 baseModel 打过「模型文件在、但名字对不上」的 WARN —— 同一名字只打一次。
+   *
+   * <p>★ 为什么必须去重：向量化是逐段调用的（一份 70 段的文档就是 70 次），若每次都打， 那行 WARN 会把自己淹没在 70 行里，等于没有。
+   */
+  private final java.util.Set<String> warnedModelFiles =
+      java.util.concurrent.ConcurrentHashMap.newKeySet();
+
   public RoutingEmbeddingAdapter(
       LocalOnnxEmbedding local, UpstreamEmbeddingAdapter upstream, ModelIdentityPort identities) {
     this.local = local;
@@ -41,10 +49,36 @@ public class RoutingEmbeddingAdapter implements EmbeddingPort {
     this.identities = identities;
   }
 
+  /**
+   * 路由走了上游，但这个基础模型的模型文件就在磁盘上 ⇒ 至少留一行 WARN（#305 缺口 A）。
+   *
+   * <p>那种情形下用户看到的是「向量化成功、检索有结果、只是全不对」，而日志里一个字都没有 —— 本项目最贵的失败形态就是这种「看起来在做、实际没生效」。★
+   * 这里只报不平移：改路由会让「填错名字」 变成「莫名走了本地」，而那个模型行也可能确实指向一台真上游。
+   *
+   * @param baseModel 模型行里的基础模型名
+   */
+  private void warnIfItsFilesAreRightHere(String baseModel) {
+    if (baseModel == null || !local.hasModelFilesFor(baseModel)) {
+      return;
+    }
+    if (!warnedModelFiles.add(baseModel.trim().toLowerCase(java.util.Locale.ROOT))) {
+      return;
+    }
+    log.warn(
+        "模型的基础模型名是「{}」，磁盘上 models/{}/ 里也有完整的本地模型文件 —— 但本地 ONNX 只服务「{}」"
+            + "（app.embedding.local.model-name）。本轮已按名字走上游；若你以为在用本地模型，"
+            + "把 app.embedding.local.model-name 改成「{}」并重启（#305）",
+        baseModel,
+        baseModel.trim(),
+        local.servedModelName(),
+        baseModel.trim());
+  }
+
   @Override
   public List<float[]> embed(UUID modelId, List<String> texts) {
     String baseModel = identities.baseModelOf(modelId);
     if (!local.serves(baseModel)) {
+      warnIfItsFilesAreRightHere(baseModel);
       return upstream.embed(modelId, texts);
     }
     // ★ 只在这一条分支里用本地实现；失败会抛 BusinessException（调用方据此把入库停在"可读原因"上）
