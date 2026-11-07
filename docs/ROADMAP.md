@@ -4612,3 +4612,36 @@ B3（第一位命中）涨 10 点说明这部分缺口**纯粹是排序问题，
 
 选 1 或 2 的触发条件写在这里：**若接了重排后 B3 仍在 70% 以下**，再评估 late interaction
 （要同时评估存储成本）或 LLM listwise（要评估 token 成本）。
+
+
+### 11.22.7 真栈实测：接线是对的，但默认关（2026-11-08 凌晨）
+
+**读数**（后端 18088 真栈，`tools/check_b1_b3_quality.py --mode FULLTEXT --topn 10 --threshold 0.6`，
+原合成语料库 `19320317-2748-47dc-bc07-5d969d2a32d7`，`RETRIEVAL_RERANK_ENABLED=true`）：
+
+| 跑法 | 条数 | 总耗时 | 均摊 |
+|---|---|---|---|
+| 单条 | 1 | **24.4s** | 含首次模型加载 |
+| 批量 | 20 | **261.2s** | **13.1s / 条** |
+| 批量（未接重排，基线） | 195 | 约 6 分钟 | 约 1.8s / 条 |
+
+⇒ **重排让单条检索从约 1.8s 变成约 13s（慢 7 倍）**，而 `§二` 的 B4 门槛是**单跳 ≤10s**。
+**离线测的 2.4s/条不能当真实栈读数** —— 离线是同一进程内连续跑、模型常热、候选已落盘；
+真栈是逐条请求，每条都要走完整链路。这正是 11.22.4 第 3 条「真栈要重测」要验的事。
+
+**接线本身没有错**（有反证钉着）：`RerankWiringTest` 把 `finalIds = rerankPort.rerank(...)`
+换成 `List.copyOf(finalIds)` ⇒ `Failures: 1`，红在顺序断言 `expected [S3,S1,S2] but was [S1,S2,S3]`。
+慢的是 **CPU 上跑 278M 参数的 cross-encoder 前向**（5 个候选 × 512 token）。
+
+**处置（本轮）**：`app.retrieval.rerank.enabled` **默认改为 `false`**
+（`RerankProperties` 的 `@DefaultValue("false")` + `application.yml` 的 `${RETRIEVAL_RERANK_ENABLED:false}`），
+`RerankProperties.defaults()` 仍返回 `true` 供测试显式验"开"的行为。
+
+**要开的话，先解决速度**（三条候选，按性价比排序）：
+1. **ONNX 量化**（`model_quantized.onnx`，int8）—— 体积与耗时都能砍一半以上，精度损失需重测 B3；
+2. **GPU 执行提供器**（`onnxruntime_gpu` + CUDA EP）—— 本机有 GPU（1050 4GB，已在跑 ollama），但显存与 ollama 抢；
+3. **换更小的 reranker**（例如 `bge-reranker-base` 的蒸馏版）—— 精度会掉，要重新过 11.22.2 的门槛。
+
+★ 判定：**这三条都不能在本轮内做**（每条都要重测 195 条 + 真栈计时），
+而 B3 现在 68.2% 离 80% 还差 11.8 点 —— 所以本轮**只交付可用的接线 + 默认关**，
+把"要不要为 B3 付 13s 的代价"留给下一轮拍板。

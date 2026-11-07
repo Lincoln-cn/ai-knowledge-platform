@@ -168,8 +168,10 @@ app:
     #    全量重排 20 个反而只有 +9.8 点且 11.8s ⇒ 窗口就取前 5，别改成全量。
     # ★ 失败一律降级返回原序（模型缺失/初始化失败/推理异常），检索不因重排坏掉而不可用。
     rerank:
-      # 总开关：关掉 = 一次都不调重排（每条省 2.4s）
-      enabled: ${RETRIEVAL_RERANK_ENABLED:true}
+      # 总开关：默认关。★ 2026-11-08 真栈实测：逐条请求 12.5s/条（含首次模型加载的单条 24.4s），
+      #   远超 B4 门槛（单跳 ≤10s）⇒ 先用 false；优化（GPU/量化/更小模型）后再开。
+      #   离线批量是 2.4s/条，那个数不能当真实栈读数（见 ROADMAP §11.22.4）。
+      enabled: ${RETRIEVAL_RERANK_ENABLED:false}
       # ★ 只重排前 topK 个（读数见上），窗口外保持 RRF 原序
       top-k: ${RETRIEVAL_RERANK_TOP_K:5}
       # 模型文件**不进仓库**（`models/*` 被 .gitignore 忽略），落盘步骤见 `models/README.md`
