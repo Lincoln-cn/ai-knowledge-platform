@@ -116,6 +116,31 @@ public final class NoiseStripper {
   private NoiseStripper() {}
 
   /**
+   * 这一行看起来是 Markdown 表格行吗（`#314`）。
+   *
+   * <p>两种形态都认：裸竖线（{@code | 步骤 | 责任人 |}）与**转义竖线**（{@code \| 步骤 \| 责任人 \|}）。 后者才是生产通道的常态 —— Tika
+   * 把竖线转义了（{@code #313} 取证），只认裸竖线会让这条判据在单测里绿、在真栈上一条都不生效。
+   *
+   * <p>判据只要求"至少出现两个竖线标记"（一个表格行至少要有两列），这样一句话里偶然带了一个竖线不会被误判成表格。
+   */
+  static boolean looksLikeTableRow(String line) {
+    if (line == null || line.isEmpty()) {
+      return false;
+    }
+    int marks = 0;
+    for (int i = 0; i < line.length(); i++) {
+      char c = line.charAt(i);
+      if (c == '\\' && i + 1 < line.length() && line.charAt(i + 1) == '|') {
+        marks++;
+        i++;
+      } else if (c == '|') {
+        marks++;
+      }
+    }
+    return marks >= 2;
+  }
+
+  /**
    * 剥离结果。
    *
    * @param markdown 剥离后的 Markdown（原文的顺序与其余内容不变）
@@ -226,6 +251,13 @@ public final class NoiseStripper {
         nonBlank++;
         String trimmed = lines[i].strip();
         if (drop[i] || trimmed.length() >= REPEAT_MAX_LENGTH) {
+          continue;
+        }
+        // ★ 表格行不参与 ③（`#314`，2026-11-07）：同构表格的表头/分隔行天然重复，
+        //   而它们是**内容**（列名与列数），不是页眉。页眉的判据是"自然语言短句"，
+        //   表格行的竖线结构本身就是"这是数据"的标记 —— 重复是同构表格的正常形态。
+        //   宁可漏剔跨页续表头（无害），不可剥掉表头（毁数据，见 #314 实测：表头 0/3）。
+        if (looksLikeTableRow(trimmed)) {
           continue;
         }
         occurrences.computeIfAbsent(trimmed, k -> new ArrayList<>()).add(i);

@@ -181,17 +181,27 @@ public class RuleBasedTableStatementRewriter implements TableStatementRewriter {
 
   private static int findSeparatorRow(List<String> lines) {
     for (int i = 1; i < lines.size(); i++) {
-      if (SEPARATOR_ROW.matcher(lines.get(i).strip()).matches()
-          && lines.get(i - 1).strip().startsWith("|")) {
+      if (SEPARATOR_ROW.matcher(unescapePipes(lines.get(i).strip())).matches()
+          && unescapePipes(lines.get(i - 1).strip()).startsWith("|")) {
         return i;
       }
     }
     return -1;
   }
 
-  /** 拆一行为单元格：去掉首尾的空段（GFM 的 {@code | a | b |} 形式）。 */
+  /**
+   * 把生产通道的转义竖线还原成裸竖线，<strong>只用于判定与拆分</strong>。
+   *
+   * <p>★ 生产通道（Tika 解析 PDF/DOCX 产出的 markdown）给的是 {@code \| Name \| Dept \|}； 只认裸 {@code |} 会让 {@link
+   * #findSeparatorRow} 找不到分隔行 ⇒ 整个改写器原样返回（{@code #313}）。 不改作用到输出文本上：单元格值里的反斜杠是原文的一部分时不该被吃掉。
+   */
+  private static String unescapePipes(String line) {
+    return line.indexOf("\\|") < 0 ? line : line.replace("\\|", "|");
+  }
+
+  /** 拆一行为单元格：去掉首尾的空段（GFM 的 {@code | a | b |} 形式，转义形态 {@code \| a \| b \|} 同样认）。 */
   private static List<String> cellsOf(String line) {
-    String trimmed = line.strip();
+    String trimmed = unescapePipes(line.strip());
     if (!trimmed.startsWith("|")) {
       return List.of();
     }
