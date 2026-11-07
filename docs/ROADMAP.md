@@ -4281,7 +4281,112 @@ List<Card> loadWithNeighbors(Collection<UUID> segmentIds, int before, int after)
 - **轻引擎只跑四个节点**。条件分支、循环、人工介入**一律拒绝发布**（有错误码 + 可读原因），`1.0.0` 的循环/检查点/工具调用一件都没提前。
 - **`#305` 未修**：`models/bge-small-zh-v1.5/` 有 24MB 模型文件却永远不会被加载（`serves()` 只比对 `app.embedding.local.model-name`，默认 `multilingual-e5-small`）⇒ 用户填它时**静默走上游**。
 
-### 11.18 `#177` 的读数与口径决定（2026-11-06）
+## §11.17 本地向量模型的"走错路"必须留痕（`#305` 缺口 A，2026-11-06）
+
+### 11.17.1 缺的是什么
+
+`modelcatalog/infrastructure/RoutingEmbeddingAdapter.java:47` 的路由是：
+
+```java
+if (!local.serves(baseModel)) { return upstream.embed(modelId, texts); }
+```
+
+```java
+boolean serves(String baseModel) {
+  return enabled && baseModel != null && servedModelName.equalsIgnoreCase(baseModel.trim());
+}
+```
+
+`servedModelName` = `@Value("${app.embedding.local.model-name:multilingual-e5-small}")`。
+⇒ **路由只看名字**。而 `models/bge-small-zh-v1.5/` 这套文件在本仓库里**真实存在**
+（`model_quantized.onnx` 24,010,842 字节 + `tokenizer.json` 439,125 字节）。
+
+用户在模型行里填 `bge-small-zh-v1.5` 时：名字对不上 ⇒ **静默走上游** ⇒ 上游回来 768 维、落进 `vec_embedding_768`，
+而本地模型是 384 维 ⇒ **检索照样有结果、只是全都不对**，日志里一个字都没有。
+
+★ 这是本项目头号病（silent failure）的又一个形状：**看起来在做，实际没生效**。
+
+### 11.17.2 改法
+
+| 文件 | 改动 |
+|---|---|
+| `LocalOnnxEmbedding.java` | 新增 `hasModelFilesFor(baseModel)` 与 `modelsRoot()`（由 `modelPath` 往上两级推出，**不另开配置键**） |
+| `RoutingEmbeddingAdapter.java` | 在 `!local.serves(...)` 分支里，若磁盘上确实有这套文件就 WARN 一行（含 `baseModel` / 正确的 `model-name` / 改成什么并重启）；同一名字只打一次 |
+| `LocalOnnxEmbeddingModelFilesTest.java` | 4 例（纯单元，不启动 ONNX） |
+| `RoutingEmbeddingAdapterWarnTest.java` | 4 例（Mockito + Logback `ListAppender` 抓 WARN） |
+
+★ **同一名字只打一次**是必要的：向量化是逐段调用，一份 70 段的文档就是 70 次调用；不节流会把日志淹掉。
+
+### 11.17.3 判据读数
+
+| 项 | 读数 |
+|---|---|
+| `LocalOnnxEmbeddingModelFilesTest` | **4/4** |
+| `RoutingEmbeddingAdapterWarnTest` | **4/4** |
+| **反证**（删掉 `warnIfItsFilesAreRightHere(baseModel);` 那行） | **Failures: 2**（两个 WARN 相关用例红） |
+| 反证还原后 | **4/4** |
+
+★ 为什么用 Logback `ListAppender` 抓日志、而不是"读源码里有没有那句话"：后者在重构后仍然绿；
+前者在 WARN 被删掉的那一刻就红 —— 反证读数证明了这一点。
+
+### 11.17.4 不在本版
+
+- **缺口 B**：`dimension` 不生效（维度来自实际产出，登记值可与实际值长期不一致）—— 只记账。
+- 把 `model-name` / `model-path` 做成**模型级**配置 —— 需先解决"一个 JVM 只能有一个 `OrtEnvironment`、`close()` 是 no-op"。
+
+### 11.17.5 途中两次工具层失败（留作教训）
+
+反证本可以 1 分钟做完，实际做了三轮：
+
+1. **`Set-Content -Encoding utf8` 写出 BOM** ⇒ `非法字符: '﻿'`，编译失败。改源码一律用
+   `python` 的 `pathlib.write_text(..., encoding="utf-8", newline="
+")`。
+2. 改用 python 后 **spotless 报换行符不符**（仓库是 `
+`）⇒ 必须先 `mvn -o -q spotless:apply` 再跑。
+3. 还原时我用了一个**猜出来的锚点**（`      if (!local.serves(baseModel)) {`，6 空格），实际是 4 空格 ⇒
+   `AssertionError` ⇒ 又得多跑一轮 `git diff -U4` 看真实缩进。
+
+★ 判据：**改源码的"锚点"必须从文件里取，不能凭记忆写** —— 缩进、换行符、BOM 三样都会让一次正确的改动看起来像失败。
+
+### 11.13.6 ★ 16 条逐条分类的读数：**没有一条是"答案句不在库"**（2026-11-06）
+
+对 `.build/b1b3-clean.json` 里 `rank_core=0` 的 21 条，去掉 5 条已归因于融合反例（`#293`）的，剩 **16 条**逐条取证。
+
+**取证一：答案句在不在库**（`.build/b3_in_library.py`，取 `expected_snippet` 去标点后的前 10 字做探针，`like` 查 `kb_segment`）：
+
+| 命中段数 | 条数 |
+|---|---|
+| 0（不在库） | **0** |
+| 1 | 10 |
+| 2 | 2 |
+| 3 | 2 |
+| 7 | 1 |
+| 15 | 1 |
+
+⇒ **16 条全部在库**。先前 `§11.10.92` 写的"20/21 在库、唯一不在库是 `SYN-028-1`"，本轮用干净语料重查后 `SYN-028-1` **也在库**（1 段）。
+
+**取证二：两路各自能把答案句排到第几**（`.build/b3_16class.py`，`/retrieval/test` · topN=10 · 三种模式）：
+
+| 结论 | 条数 | 含义 |
+|---|---|---|
+| 答案句在库且**可达**（FULLTEXT 第 1–8 位） | **5** | 差的是**排序**，不是召回 |
+| 两路前 10 都无答案句 | **11** | 答案句在库但**排到 10 名以外** |
+
+★ 5 条可达的分布：`SYN-031-1` 第 1 · `SYN-034-1` 第 2 · `SYN-017-2` 第 5 · `SYN-001-2` 第 7 · `SYN-001-3` 第 8。
+
+**三条结论**
+
+1. **B3 的 21 条一条都不是"句子不在库"** —— 全部是"在库、但排不进前 5"。这把 `§11.10.92` 的"真召回缺口"口径彻底否掉：不是召回不到，是**排序分不开**。
+2. **向量路在这 16 条上一条都没进前 10** —— 只有 FULLTEXT 能命中。这说明 384 维 e5-small 对"同一模板句的不同主语"没有区分力（与 `§11.10.89` 的 bge-m3 读数方向一致）。
+3. **语料本身的重复度是主因**：`《固定资产验收单》的保存期限不少于3年` 这类句子在库里有 1 条正确写法，而「保存期限」三字在 1556 段（28%）里出现 ⇒ 排序要做的正是"从 1556 个同义干扰段里挑出那 1 个带主语的"，这是**重排该干的活**，不是召回。
+
+**处置**：本版仍**一个都不修**（与 `§11.13.4` 一致）。但候选清单要改：原 `§11.13.5` 写"cross-encoder 重排 → 更强向量模型 → 语料去重"，按本轮读数**顺序应倒过来**——
+① **语料去重**（把 1556 个同义干扰段压下去，零模型成本，且不改产品代码）；
+② **cross-encoder 重排**（在压缩后的候选池上做，效果才可归因）；
+③ 更强向量模型（`bge-m3` 已证明 B1 83.3% / B3 62.3%，是当前最好的单路）。
+
+★ 判据：**"答案句在不在库"必须单独量一次**。只跑评测不查库，会把"排序失败"误读成"检索失败"，于是去改召回层（改分段、调 topN、换模型），而真正该改的是排序 —— 本项目已经在这条路上绕了 `min-rank`、`ts_rank_cd`、`topN` 三圈（`§11.13.2`）。
+## §11.18 `#177` 的读数与口径决定（2026-11-06）
 
 #### 11.18.1 这条 issue 到底是什么
 
