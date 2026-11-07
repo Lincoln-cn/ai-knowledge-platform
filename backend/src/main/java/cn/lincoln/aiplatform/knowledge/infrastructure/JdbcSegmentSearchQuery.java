@@ -376,10 +376,14 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
       return List.of();
     }
     String tsquery = toOrQuery(lexemes);
+    // ★ #280 两段式：AND 版只用来「分组排序」，不作为筛选条件 —— 纯 AND 会漏掉「缺词元」的段
+    //   （实测 SYN-031-1 的 coverage 8/9 ⇒ AND 0 命中），所以召回面仍是 OR，AND 只决定谁排在前面。
+    String tsqueryAll = toAndQuery(lexemes);
     RetrievalScope scope = query.scope();
 
     List<Object> args = new ArrayList<>();
     args.add(tsquery);
+    args.add(tsqueryAll);
     args.add(String.join("\n", lexemes));
     args.add(lexemes.size());
     // ★ 绑定值的位置约定：其余参数 → 三域 → 密级 → limit
@@ -388,6 +392,7 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
 
     String sql =
         "with q as (select to_tsquery('chinese_zh', ?) as tq,"
+            + " to_tsquery('chinese_zh', ?) as tq_all,"
             + " string_to_array(cast(? as text), E'\\n') as lex)"
             + " select s.id as segment_id,"
             // coverage = 查询词里有几个在这条分段里出现了（分子数查询词、分母是查询词数）
@@ -398,8 +403,12 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
             + " where s.content_tsv @@ q.tq"
             + " and"
             + securityPredicate(scope.sharedKbIds().size())
-            // ★ 同分时按 id 兜底排序：没有它，闸门会在同分样本上偶发红，而那种红会被误当成"检索坏了"
-            + " order by ts_rank(s.content_tsv, q.tq) desc, s.id"
+            // ★ #280 两段式排序（2026-11-07）：词元全中的段先出，其余按原 ts_rank 兜底。
+            //   动机见 issue #280 的 16 条定性：同模板句 ts_rank 近分并列成海（「保存期限」1556/5529 = 28%），
+            //   答案词不加权 ⇒ 带主语的正确段被淹。AND 组排前把「全中」与「部分中」分开。
+            //   ★ 它不改变召回面（OR 仍是筛选条件），只改变名次 ⇒ 不达标的仍然是召回问题，不是它。
+            + " order by (case when s.content_tsv @@ q.tq_all then 0 else 1 end),"
+            + " ts_rank(s.content_tsv, q.tq) desc, s.id"
             + " limit ?";
 
     return jdbc.query(
@@ -687,6 +696,18 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
    * <p>★ 每个词元都加单引号：即使某个词元碰巧含操作符也不会被当语法执行（实测引号形式可用： {@code to_tsquery('chinese_zh','''住宿'' |
    * ''标准''')} ⇒ {@code '住宿' | '标准'}）。
    */
+  /**
+   * 所有词元都要出现（{@code a & b & c}）—— `#280` 两段式排序用的那一版。
+   *
+   * <p>★ 它<strong>不</strong>作为筛选条件：纯 AND 会漏掉「缺词元」的段（实测 {@code SYN-031-1} 的 coverage 8/9 ⇒ AND 组 0
+   * 命中），所以召回面仍是 OR，AND 只决定谁排在前面。
+   */
+  private static String toAndQuery(List<String> lexemes) {
+    return lexemes.stream()
+        .map(lexeme -> "'" + lexeme.replace("'", "''") + "'")
+        .collect(Collectors.joining(" & "));
+  }
+
   private static String toOrQuery(List<String> lexemes) {
     return lexemes.stream()
         .map(lexeme -> "'" + lexeme.replace("'", "''") + "'")
