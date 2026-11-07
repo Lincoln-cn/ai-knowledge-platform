@@ -2,6 +2,8 @@ package cn.lincoln.aiplatform.knowledge.infrastructure;
 
 import cn.lincoln.aiplatform.knowledge.domain.ParseResult;
 import java.io.ByteArrayInputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import org.apache.tika.exception.EncryptedDocumentException;
@@ -165,9 +167,31 @@ public class TikaMarkdownParser {
 
     // ★ Word 列表归一：OOXML 只给 p 打 class="list_*"，包成 ul/ol/li 后 Markdown 才有列表语法
     ToMarkdownContentHandler markdown = new ToMarkdownContentHandler();
+    // ── #96：逐页「OCR 产出了几行」的可观测面 ─────────────────────────────────────
+    //
+    // ★ 为什么不是 OcrLineLossGuard 的行数比对：那个 guard 要 (renderedLines, ocrLines) 两个数，
+    //   而**这一页之所以走 OCR，正是因为它没有文本层** ⇒ renderedLines 对 OCR 页永远取不到。
+    //   这是逻辑上的不可能，不是实现偷懒（#96 的判据 1 因此改不成读数，见 issue 评论）。
+    //
+    // ⇒ 这里退一步，只留「这一页 OCR 出了几行」这一个可数的量：
+    //   整页丢（行数 0）与「只出来一两个字」（行数 ≤ 1）能被一眼看到，
+    //   这是 silent-failure 的最低止血；细粒度丢行仍需人工抽查（#87 的抽查表）。
+    //
+    // ★ 用 markdown 的**累计行数差**作页级读数：PageMarkerHandler 在页码 div 结束时回调，
+    //   此刻 markdown 里已经有这一页的全部产出。第 i 页的行数 = 第 i 页累计 − 第 i−1 页累计。
+    List<int[]> pageLines = new ArrayList<>(); // 每项 = {pageIndex, 累计行数, 是否 OCR 页}
+    PageProgressListener counting =
+        (idx, ocrPage) ->
+            pageLines.add(new int[] {idx, countLines(markdown.toString()), ocrPage ? 1 : 0});
+    PageProgressListener effective =
+        listener == null
+            ? counting
+            : (idx, ocrPage) -> {
+              counting.onPageDone(idx, ocrPage);
+              listener.onPageDone(idx, ocrPage);
+            };
     WordListNormalizingHandler handler =
-        new WordListNormalizingHandler(
-            listener == null ? markdown : new PageMarkerHandler(markdown, listener));
+        new WordListNormalizingHandler(new PageMarkerHandler(markdown, effective));
     Metadata metadata = new Metadata();
     if (filename != null && !filename.isBlank()) {
       metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, filename);
@@ -198,6 +222,7 @@ public class TikaMarkdownParser {
         //   现在落在日志里；等 T249.3 把两个字段接进契约与库之后，它会同时出现在界面上
         //   （「已识别 3/10 页」的进度就靠它）。★ 先让它可见，而不是先加一个没人读的字段。
         log.info("OCR：{} 共 {} 页，其中 {} 页走了 OCR", filename, pageCount, ocrPageCount);
+        logOcrPageLines(filename, pageLines);
       }
       if (extracted.isBlank()) {
         return ocrAvailable
@@ -217,6 +242,55 @@ public class TikaMarkdownParser {
   }
 
   // ────────────────────────── 内部 ──────────────────────────
+
+  /** 数一数当前 Markdown 缓冲里有多少非空行（`#96` 的页级读数单位）。 */
+  private static int countLines(String text) {
+    if (text == null || text.isEmpty()) {
+      return 0;
+    }
+    int lines = 0;
+    for (int i = 0; i < text.length(); i++) {
+      if (text.charAt(i) == '\n') {
+        lines++;
+      }
+    }
+    return text.charAt(text.length() - 1) == '\n' ? lines : lines + 1;
+  }
+
+  /**
+   * `#96`：把「每一页 OCR 出了几行」打进日志，整页丢 / 只出一两个字时额外 WARN。
+   *
+   * <p>★ 这里<strong>不</strong>做「渲染行数 vs OCR 行数」的比对：那一页之所以走 OCR，正是因为它没有文本层 —— 参考值对 OCR 页永远不存在（`#96`
+   * 判据 1 因此改不成读数，见 issue 评论）。能数出来的只有"这一页产出了多少"。
+   *
+   * <p>★ 永远不抛：这条观测是**附加信息**，不许它把一次成功的解析变成失败。
+   */
+  private static void logOcrPageLines(String filename, List<int[]> pageLines) {
+    try {
+      if (pageLines.isEmpty()) {
+        return;
+      }
+      int previous = 0;
+      for (int[] row : pageLines) {
+        int pageIndex = row[0];
+        int cumulative = row[1];
+        boolean ocrPage = row[2] == 1;
+        int lines = Math.max(0, cumulative - previous);
+        previous = cumulative;
+        if (!ocrPage) {
+          continue;
+        }
+        if (lines <= 1) {
+          // 整页丢字（0 行）或只出来一两个字（1 行）—— `#96` 要止血的正是这两种形态。
+          log.warn("#96 OCR 页产出过少：{} 第 {} 页只产出 {} 行，疑似整页丢字，请人工核对", filename, pageIndex, lines);
+        } else {
+          log.info("#96 OCR 页产出：{} 第 {} 页 {} 行", filename, pageIndex, lines);
+        }
+      }
+    } catch (RuntimeException e) {
+      log.debug("#96 页级 OCR 读数统计失败（不影响解析）：{}", e.toString());
+    }
+  }
 
   private static String extensionOf(String filename) {
     if (filename == null) {
