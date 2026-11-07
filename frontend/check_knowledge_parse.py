@@ -217,6 +217,22 @@ def main() -> int:
                     fixture_bad_id = ((bad_doc.get("data") or [{}])[0]).get("id")
                     print(f"   夹具：上传 empty.docx（预期解析失败）→ doc={fixture_bad_id}")
 
+                    # ③ 带占位形态的文本层 PDF（`#51` 判据 4 的**能红的样本**）
+                    #
+                    # ★ 这份夹具是专门造出来的：文本层里受控放了 8 处 `[PDF N]` 一类形态
+                    #   （整行 6 处 + 行内 2 处），外加真信息 `[图 1]` / `[表 1]`。
+                    #   形态来源 = 源文档文本层被 Tika 原样带出（md 通道会转义成 `\[PDF 1\]`），
+                    #   不是 Tika 自己插入的 —— 这一点是 13 文件 × 12 通道矩阵 + 常量池扫描双证过的。
+                    #   ★ 没有它，判据 4 的「命中 0 处」是 0/0 假绿（现有夹具解析后本来就没有该形态）。
+                    placeholder_doc = api_multipart(
+                        f"/knowledge-bases/{fixture_kb_id}/documents",
+                        token,
+                        meta,
+                        FIXTURES / "text-placeholder.pdf",
+                    )
+                    placeholder_doc_id = ((placeholder_doc.get("data") or [{}])[0]).get("id")
+                    print(f"   夹具：上传 text-placeholder.pdf → doc={placeholder_doc_id}")
+
                     # ★ 异步解析必须等到终态（Issue #170）；超时仍按失败处理，不能靠固定 sleep
                     if fixture_doc_id:
                         structured_state = wait_document(fixture_kb_id, fixture_doc_id, token, True)
@@ -237,27 +253,79 @@ def main() -> int:
                             f"（status={bad_state.get('status')!r}）",
                         )
 
-                    # ── 判据 4（#51）：解析结果里不许残留 [PDF N] / [图片 N] 一类占位标记
+                    # ── 判据 4（#51）：**分段后的正文**里不许残留 [PDF N] / [图片 N] 一类占位标记
                     #
-                    # ★ 这条现在是「防回归」而不是「读数」：现有全部夹具解析后该形态的出现次数
-                    #   都是 0/0（mixed.pdf 实测 495 字、0 处），所以它此刻**不会红**。
-                    #   它守的是未来某份文档重新带出该形态时，这里先红一次 ——
-                    #   总比让它静默污染 search_text 与引用好（silent-failure 的形状）。
-                    #   `#51` 的「X → 0」读数需要一份**真的带该占位符**的原始 PDF，那份样本
-                    #   至今没拿到（同 #96 / #151 的处境），所以 issue 保持 open。
+                    # ★ 2026-11-07 换口径：原先断的是 `parsedContent` 命中 0 处，而 `parsedContent`
+                    #   存的是**剥离前的原文**（`NoiseStripper.strip` 在生产链上的唯一调用点是
+                    #   `Segmenter.java:216`，即分段入口）⇒ 病灶（正文混形态）与剥离点不在同一处，
+                    #   断 `parsedContent` 等于断错了层。现在改成断**真正被消费的那一层**：分段正文。
+                    #   `parsedContent` 允许带形态 —— 它的语义就是"解析出来的原文"。
                     #
-                    # ★ 为什么名单里只有 PDF / 图片 / image / img：`[图 N]`、`[表 N]` 是**真信息**
-                    #   （图注与表题），剥掉它们是另一种静默损失（`NoiseStripper.PARSER_PLACEHOLDER`
-                    #   的名单同理）。
-                    if fixture_doc_id:
+                    # ★ 名单里只有 PDF / 图片 / image / img：`[图 N]`、`[表 N]` 是**真信息**
+                    #   （图注与表题），剥掉它们是另一种静默损失。
+                    #
+                    # ★ 用 `text-placeholder.pdf` 而不是 `structured.docx`：后者解析后本来就没有该形态，
+                    #   拿它断「0 处」是 0/0 假绿（这条闸门此前一直是那个形状）。
+                    if placeholder_doc_id:
+                        # ★ 生产通道（md-auto）给出的是**转义形态** `\[PDF 1\]` —— 方括号被反斜杠转义。
+                        #   只写 `\[PDF ...\]` 会漏掉它（第一版本就是这么漏的：样本明明带了 8 处、
+                        #   这条却数到 0 处）。正则两边各留一个可选的反斜杠。
                         placeholder = re.compile(
-                            r"\[(?:PDF|图片|image|img)\s*\d{1,3}\]", re.IGNORECASE
+                            r"\\?\[(?:PDF|图片|image|img)\s*\d{1,3}\\?\]", re.IGNORECASE
                         )
-                        hits = placeholder.findall(structured_state.get("parsedContent") or "")
+                        placeholder_state = wait_document(
+                            fixture_kb_id, placeholder_doc_id, token, True
+                        )
+                        raw_hits = placeholder.findall(
+                            placeholder_state.get("parsedContent") or ""
+                        )
                         check(
-                            not hits,
-                            "解析结果里没有 [PDF N] / [图片 N] 一类占位标记"
-                            f"（命中 {len(hits)} 处：{hits[:5]}）",
+                            len(raw_hits) >= 6,
+                            "带形态的样张确实把占位标记带进了 parsedContent"
+                            f"（命中 {len(raw_hits)} 处：{raw_hits[:8]}；"
+                            "★ 这条是样本有效性自证 —— 它不到 6 处，下面那条「分段后 0 处」就没有意义）",
+                        )
+                        segments = api_json(
+                            "GET",
+                            f"/segments?documentId={placeholder_doc_id}&page=1&size=200",
+                            token,
+                        )
+                        segment_rows = (segments.get("data") or {}).get("list") or []
+                        # ★ 只判「整行就是形态」——剥离规则（`NoiseStripper.PARSER_PLACEHOLDER`）
+                        #   刻意只认整行：行内的 `详见附件 \[PDF 6\]。` 是正文的一部分，
+                        #   按行内替换会把它连坐成 `详见附件 。`（另一种静默损失）。
+                        #   ⇒ 样本里行内那 2 处**应当留着**，由本条下面的 `inline` 读数逐处登记。
+                        whole_line = re.compile(
+                            r"^\\?\[(?:PDF|图片|image|img)\s*\d{1,3}\\?\]$", re.IGNORECASE
+                        )
+                        leaked = []
+                        inline = 0
+                        for row in segment_rows:
+                            for line in (row.get("content") or "").splitlines():
+                                bare = line.strip()
+                                if not bare:
+                                    continue
+                                if whole_line.match(bare):
+                                    leaked.append((row.get("ordinal"), bare))
+                                elif placeholder.search(bare):
+                                    inline += 1
+                        check(
+                            not leaked,
+                            "分段后的正文里没有**整行**的 [PDF N] / [图片 N] 占位标记"
+                            f"（分段 {len(segment_rows)} 段，泄漏 {len(leaked)} 行：{leaked[:3]}）",
+                        )
+                        print(
+                            f"   · 行内形态 {inline} 处按设计保留（整行规则不连坐正文里的指代）"
+                        )
+                        # ★ 真信息必须留下：剥离规则只认"整行是形态"，不许连坐 `[图 N]` / `[表 N]`
+                        kept = sum(
+                            1
+                            for row in segment_rows
+                            if re.search(r"\\?\[(?:图|表)\s*\d{1,3}\\?\]", row.get("content") or "")
+                        )
+                        check(
+                            kept > 0,
+                            f"真信息 [图 N] / [表 N] 仍留在分段正文里（{kept} 段含它）",
                         )
 
             # ────────────── 进入知识库 → 文档面板 ──────────────
