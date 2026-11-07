@@ -169,8 +169,9 @@ public class TikaMarkdownParser {
     ToMarkdownContentHandler markdown = new ToMarkdownContentHandler();
     // ── #96：逐页「OCR 产出了几行」的可观测面 ─────────────────────────────────────
     //
-    // ★ 为什么不是 OcrLineLossGuard 的行数比对：那个 guard 要 (renderedLines, ocrLines) 两个数，
-    //   而**这一页之所以走 OCR，正是因为它没有文本层** ⇒ renderedLines 对 OCR 页永远取不到。
+    // ★ 为什么不是「渲染行数 vs OCR 行数」那种行数比对：那种判法要两个数，
+    //   而**这一页之所以走 OCR，正是因为它没有文本层** ⇒ 渲染行数对 OCR 页永远取不到。
+    //   （那个 guard 类因此仍是「判据与夹具先留着」的形态，登记在 test-only-types 基线里。）
     //   这是逻辑上的不可能，不是实现偷懒（#96 的判据 1 因此改不成读数，见 issue 评论）。
     //
     // ⇒ 这里退一步，只留「这一页 OCR 出了几行」这一个可数的量：
