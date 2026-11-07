@@ -3,6 +3,8 @@ package cn.lincoln.aiplatform.retrieval.application;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
+import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
+import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
@@ -131,6 +133,16 @@ public class RetrievalService {
    */
   private final RetrievalBudgetProperties budget;
 
+  /**
+   * 重排端口（cross-encoder）：只依赖 {@code platform} 里的接口，不依赖实现类（{@code #293} 模块边界）。
+   *
+   * <p>★ 位置是刻意的：重排在"配额合并 + 可见性过滤 + 截断"**之后**、组装视图之前 —— 它改的是"谁排最前面"（送进答案的那几条）， 不参与召回与配额（那些各有自己的判据）。
+   */
+  private final RerankPort rerankPort;
+
+  /** 重排配置（{@code app.retrieval.rerank.*}）：{@code enabled} 在调用点判 —— 关掉就一次都不调。 */
+  private final RerankProperties rerankProperties;
+
   private final MultiHopService multiHop;
 
   public RetrievalService(
@@ -138,12 +150,16 @@ public class RetrievalService {
       EmbeddingPort embeddingPort,
       QueryUnderstandingService queryUnderstanding,
       MultiHopService multiHop,
-      RetrievalBudgetProperties budget) {
+      RetrievalBudgetProperties budget,
+      RerankPort rerankPort,
+      RerankProperties rerankProperties) {
     this.segmentSearch = segmentSearch;
     this.embeddingPort = embeddingPort;
     this.queryUnderstanding = queryUnderstanding;
     this.multiHop = multiHop;
     this.budget = budget;
+    this.rerankPort = rerankPort;
+    this.rerankProperties = rerankProperties;
   }
 
   @Transactional(readOnly = true)
@@ -361,6 +377,19 @@ public class RetrievalService {
     Map<UUID, SegmentSearchPort.Card> cards = new LinkedHashMap<>();
     for (SegmentSearchPort.Card card : segmentSearch.load(finalIds)) {
       cards.put(card.segmentId(), card);
+    }
+
+    // ⑥b ★★ cross-encoder 重排（只重排前 topK 个，窗口与读数见 RerankPort）：
+    //     离线实测 B3 引用准确率 57.9% → 68.2%（+10.3 点），单条 2.4s（p95 3.1s）；
+    //     ★ 失败一律降级原序（NoopRerankerAdapter），检索不因重排坏掉而不可用 ——
+    //     enabled 在这里判：关掉 = 一次都不调（省 2.4s/条）。
+    if (rerankProperties.enabled() && finalIds.size() > 1) {
+      Map<UUID, String> rerankTexts = new HashMap<>();
+      for (Map.Entry<UUID, SegmentSearchPort.Card> entry : cards.entrySet()) {
+        rerankTexts.put(entry.getKey(), entry.getValue().content());
+      }
+      finalIds =
+          rerankPort.rerank(request.question(), finalIds, rerankTexts, rerankProperties.topK());
     }
 
     List<HitTestView.Item> items = new ArrayList<>(finalIds.size());

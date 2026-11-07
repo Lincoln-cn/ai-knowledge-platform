@@ -161,6 +161,20 @@ app:
     query-understanding-enabled: ${RETRIEVAL_QU_ENABLED:true}
     # ★ 低配可关：解析失败时不再调第二次模型（CPU 上省 4–5s）
     query-understanding-retry-on-parse-failure: ${RETRIEVAL_QU_RETRY:true}
+    # ─── cross-encoder 重排（只重排前 topK 个候选）───
+    #
+    # ★ 离线实测（`BAAI/bge-reranker-base`，同一份语料）：只重排前 5 个 ⇒ B3 引用准确率
+    #    57.9% → 68.2%（+10.3 点，变好 45 条 / 变差 22 条），单条 2.4s（p95 3.1s）；
+    #    全量重排 20 个反而只有 +9.8 点且 11.8s ⇒ 窗口就取前 5，别改成全量。
+    # ★ 失败一律降级返回原序（模型缺失/初始化失败/推理异常），检索不因重排坏掉而不可用。
+    rerank:
+      # 总开关：关掉 = 一次都不调重排（每条省 2.4s）
+      enabled: ${RETRIEVAL_RERANK_ENABLED:true}
+      # ★ 只重排前 topK 个（读数见上），窗口外保持 RRF 原序
+      top-k: ${RETRIEVAL_RERANK_TOP_K:5}
+      # 模型文件**不进仓库**（`models/*` 被 .gitignore 忽略），落盘步骤见 `models/README.md`
+      model-path: ${RETRIEVAL_RERANK_MODEL_PATH:models/bge-reranker-base/model.onnx}
+      tokenizer-path: ${RETRIEVAL_RERANK_TOKENIZER_PATH:models/bge-reranker-base/tokenizer.json}
   security:
     jwt:
       # ★ 必须是 URL 形式，不能是 "ai-knowledge-platform" 这样的裸串 ——

@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
+import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import java.util.List;
@@ -137,6 +139,12 @@ class RetrievalVectorScopeBoundaryTest {
    */
   private static RetrievalService service() {
     return new RetrievalService(
-        null, null, null, null, new RetrievalBudgetProperties(5000, 5000, 0.6, true, true));
+        null,
+        null,
+        null,
+        null,
+        new RetrievalBudgetProperties(5000, 5000, 0.6, true, true),
+        RerankPort.noop(),
+        RerankProperties.defaults());
   }
 }

@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
+import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
+import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
@@ -235,7 +237,9 @@ class MultiHopTest {
             new FakeEmbedding(),
             new SlowUnderstanding(120),
             hop,
-            new RetrievalBudgetProperties(5000, 60, 0.6, true, true));
+            new RetrievalBudgetProperties(5000, 60, 0.6, true, true),
+            RerankPort.noop(),
+            RerankProperties.defaults());
     HitTestQuery request =
         new HitTestQuery(
             RetrievalMode.FULLTEXT.name(),
@@ -266,7 +270,9 @@ class MultiHopTest {
             new FakeEmbedding(),
             new FakeUnderstanding(),
             hop,
-            new RetrievalBudgetProperties(5000, 5000, 0.6, true, true));
+            new RetrievalBudgetProperties(5000, 5000, 0.6, true, true),
+            RerankPort.noop(),
+            RerankProperties.defaults());
     HitTestQuery request =
         new HitTestQuery(
             RetrievalMode.FULLTEXT.name(),
