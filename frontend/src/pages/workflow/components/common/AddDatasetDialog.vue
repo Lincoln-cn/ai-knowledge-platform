@@ -73,7 +73,9 @@ const props = defineProps({
 const emit = defineEmits(['addData', 'refresh'])
 
 const dialogVisible = ref<boolean>(false)
-const checkList = ref([])
+// ★ 必须显式声明元素类型（`#318`）：`ref([])` 会被推断成 `never[]`，
+//   于是 `checkList.value.includes(v.id)` 里的 `any` 参数直接编译不过（TS2345）。
+const checkList = ref<any[]>([])
 const currentEmbedding = ref('')
 const searchValue = ref('')
 const searchDate = ref<any[]>([])
