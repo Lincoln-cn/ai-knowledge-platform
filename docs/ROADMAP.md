@@ -4386,6 +4386,39 @@ boolean serves(String baseModel) {
 ③ 更强向量模型（`bge-m3` 已证明 B1 83.3% / B3 62.3%，是当前最好的单路）。
 
 ★ 判据：**"答案句在不在库"必须单独量一次**。只跑评测不查库，会把"排序失败"误读成"检索失败"，于是去改召回层（改分段、调 topN、换模型），而真正该改的是排序 —— 本项目已经在这条路上绕了 `min-rank`、`ts_rank_cd`、`topN` 三圈（`§11.13.2`）。
+## §11.20 `0.4.9` 发布记录（2026-11-07）
+
+`squash` = **`cb74b57`**，tag = **`v0.4.9`**，PR = **#307**（16 个提交）。CI 第 7 轮 7/7 全绿：架构+口径 2m28s · 后端全量 **53m43s** · 12 个确定性闸门 6m3s · 前端构建+冒烟 3m17s · 类型检查 1m10s · 后端编译+格式化 35s · 真栈 **20m46s**。
+
+### 11.20.1 这一版交付的九件事与判据读数
+
+| # | 事项 | 判据读数 |
+|---|---|---|
+| 1 | `#51` `[PDF N]` 类标记剥离 | `NoiseStripperTest` 19 例全绿；`[图 N]`/`[表 N]` 刻意保留（宽松版会连坐） |
+| 2 | `#96` OCR 漏行判据 | `OcrLineLossGuard` 5 例；★ 实测推翻 issue 前提：第 2 页是**乱码回吐**、行没消失 |
+| 3 | `#151` OCR 行首丢字 | ★ **判据 2 做不到**：7 组 psm/预处理无一满足"页 3 提升且另两页不降" |
+| 4 | `#177` 目录页被清洗 | 逐页相似度 **0.9044 → 0.1374 → 0.9044**（OCR / 洗完 / 洗完+保留排版行） |
+| 5 | `#65` 查询侧邻座上下文 | `ChatNeighborContextTest` 2/2 + 反证 1 failure；★ 开关默认关 + 启动告警（本版无回归测试覆盖） |
+| 6 | `#83` 合规四件套 | 投诉举报 3/3 · 服务协议 1/1 · 备案留缝 · 深度合成只记账；e2e **21/21** |
+| 7 | `#299` 生命周期第二半 | 会话彻底删除 2/2 · 附件 4/4 · 归档留缝 3/3；**磁盘字节真的没了** |
+| 8 | `#304` `PENDING_PARSE` 卡死 | `ParseRunnerEventListenerTest` 4/4 · 回收器 7/7 · 恢复 3/3 · 反证 1/1 |
+| 9 | `#297` 查询理解接进对话链路 | `QueryUnderstandingServiceTest` 11/11；★ 本机小模型改写不出来，降级路径正确 |
+
+### 11.20.2 这一版踩到并修掉的七处 CI 陷阱
+
+1. **`import.meta.glob` 被间接调用**（`const globFn = (import.meta as ...).glob`）⇒ vite 的**编译期宏**静态分析认不出 ⇒ 路由表为空 ⇒ 所有接口变「mock 未实现该接口」。正解：改成**惰性求值**（`discovered()` / `routes()`），宏替换是 AST 级、与位置无关。
+2. **`ci.yml` 的 `gates` 数组续行符写成 `\\`** ⇒ bash 把它当成反斜杠字面量元素 ⇒ 数组提前截断。
+3. **闸门脚本的 `DEFAULT_BASE` 写死本机端口**（5283），CI 在 5280。
+4. **`deploy/README.md` 的配置文档闸门读的是 `git show HEAD:`** ⇒ 工作区改了不算，必须 commit。
+5. **`mvn verify` 那步没设 `AI_BASE_URL`** ⇒ 连 `application.yml:72` 的默认 11434（runner 无 Ollama）⇒ 5 errors。这是「三方地址不一致」的**第五处**。
+6. **桩的 `fail_rate` 泄漏**：`check_failure_visible_e2e` 把桩设成 `fail_rate=1.0` 后不复位，而桩是全 job 共享进程 ⇒ 后面闸门全撞注入故障。修法：`gates` 循环第一行**显式归零**。★ 判据：**共享一个桩的闸门，状态必须在入口归零**。
+7. **`#83` 的首登服务协议弹窗遮住所有闸门**：CI 干净库里 admin 没有同意记录 ⇒ 每个真栈闸门登录后第一屏就是遮罩。修法是**CI 预置同意记录**（版本号从 `frontend/src/constants/agreement.ts` 取、不写死），不是"每条闸门自己点掉弹窗"。
+
+### 11.20.3 这一版明确没做的三件
+
+- **`#305` 缺口 A / B**：拆成两个 PR（#306 已合、#308 在跑），不进 0.4.9。
+- **`#177` 的 B1/B3 两轮读数**：新加的目录页文档**不在** 195 条语料的分子分母里 ⇒ 两轮读数必然逐条相同。判据：**"跑一遍评测"只有在被测对象落在评测的分子分母里时才是读数**。
+- **`#280` 的 B3 真召回**：`ROADMAP §11.13` 已把三层原因与三个回退过的改造记账，本版不动代码。
 ## §11.19 同一个基础模型的向量维度必须唯一（`#305` 缺口 B，2026-11-06）
 
 ### 11.19.1 缺的是什么
@@ -4408,11 +4441,14 @@ boolean serves(String baseModel) {
 
 ### 11.19.3 判据读数
 
-`ModelDimensionConsistencyTest` **4/4 绿** + **反证**（`if (true) { return; }` ⇒ `Tests run: 4, Failures: 1`）。
+`ModelDimensionConsistencyTest` **4/4 绿**：`aSecondDimensionForTheSameBaseModelIsRejected`（message 含「已有登记维度 768」「不能再登记成 1024」，`hint()` 含 `vec_embedding_1024`）· `theSameDimensionIsAccepted` · `differentBaseModelsKeepTheirOwnDimensions` · `aBlankBaseModelIsNotGuardedHere`。
+
+**反证**：在 `validateDimensionMatchesSiblings` 开头插 `if (true) { return; }` ⇒ `Tests run: 4, Failures: 1`（`Expecting code to raise a throwable`）；删掉后 4/4 绿。
 
 ### 11.19.4 不在本条三项
 
-存量 24 条的修正 · 跨 `baseModel` 的维度冲突（正常）· `dimension` 与实际输出维度的核对（属缺口 A 邻域）。
+存量 24 条的修正 · 跨 `baseModel` 的维度冲突 · `dimension` 与实际输出维度的核对（属 `#305` 缺口 A 的邻域）。
+
 
 ## §11.18 `#177` 的读数与口径决定（2026-11-06）
 
