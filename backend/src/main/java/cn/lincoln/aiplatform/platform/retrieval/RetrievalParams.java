@@ -47,7 +47,8 @@ public record RetrievalParams(
     int maxHops,
     int queryCount,
     boolean decomposeEnabled,
-    int maxSubQuestions) {
+    int maxSubQuestions,
+    Boolean rerankListwise) {
 
   /**
    * 通用问答（没有应用）的默认值：全文、阈值 0、TopN 5、自由回答。
@@ -102,7 +103,8 @@ public record RetrievalParams(
         DEFAULT_MAX_HOPS,
         0,
         false,
-        DEFAULT_MAX_SUB_QUESTIONS);
+        DEFAULT_MAX_SUB_QUESTIONS,
+        null);
   }
 
   /**
@@ -124,6 +126,66 @@ public record RetrievalParams(
         maxHops,
         0,
         false,
-        DEFAULT_MAX_SUB_QUESTIONS);
+        DEFAULT_MAX_SUB_QUESTIONS,
+        null);
+  }
+
+  /**
+   * 带查询理解、<b>不带</b> listwise 的版本（{@code #297} 的旧签名）。
+   *
+   * <p>★ 为什么要留它：{@code #297} 时期有调用点直接传 9 个参数；{@code rerankListwise} 是 {@code #151} 之后才有的第 10 格，
+   * 若不给这个重载，那些调用点会全部编译失败——而它们本来就不关心 listwise（缺省 {@code null} = 跟随全局配置）。
+   *
+   * @param mode 检索模式
+   * @param threshold 相似度阈值
+   * @param topN 引用分段 Top
+   * @param noRefStrategy 无引用策略
+   * @param multiHopEnabled 多跳开关
+   * @param maxHops 多跳轮数
+   * @param queryCount 查询理解每轮的查询条数（0 = 不做）
+   * @param decomposeEnabled 是否做子问题拆分
+   * @param maxSubQuestions 子问题数上限
+   */
+  public RetrievalParams(
+      RetrievalMode mode,
+      double threshold,
+      int topN,
+      NoRefStrategy noRefStrategy,
+      boolean multiHopEnabled,
+      int maxHops,
+      int queryCount,
+      boolean decomposeEnabled,
+      int maxSubQuestions) {
+    this(
+        mode,
+        threshold,
+        topN,
+        noRefStrategy,
+        multiHopEnabled,
+        maxHops,
+        queryCount,
+        decomposeEnabled,
+        maxSubQuestions,
+        null);
+  }
+
+  /**
+   * 把 {@code rerankListwise} 换一个值，其余不变。
+   *
+   * @param value 新值；{@code null} 表示跟随全局配置
+   * @return 新实例
+   */
+  public RetrievalParams withRerankListwise(Boolean value) {
+    return new RetrievalParams(
+        mode,
+        threshold,
+        topN,
+        noRefStrategy,
+        multiHopEnabled,
+        maxHops,
+        queryCount,
+        decomposeEnabled,
+        maxSubQuestions,
+        value);
   }
 }

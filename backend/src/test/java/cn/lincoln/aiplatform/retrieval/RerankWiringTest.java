@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
+import cn.lincoln.aiplatform.platform.retrieval.ListwiseRerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
@@ -106,6 +107,14 @@ class RerankWiringTest {
 
   private static RetrievalService service(
       FakeSearch search, RerankPort rerank, RerankProperties rerankProperties) {
+    return service(search, rerank, rerankProperties, ListwiseRerankPort.noop());
+  }
+
+  private static RetrievalService service(
+      FakeSearch search,
+      RerankPort rerank,
+      RerankProperties rerankProperties,
+      ListwiseRerankPort listwise) {
     return new RetrievalService(
         search,
         new FakeEmbedding(),
@@ -113,12 +122,93 @@ class RerankWiringTest {
         new FakeMultiHop(),
         new RetrievalBudgetProperties(5000, 5000, 0.6, true, true),
         rerank,
-        rerankProperties);
+        rerankProperties,
+        listwise);
+  }
+
+  /**
+   * ★★ LLM listwise 的接线（用户 2026-11-08：「不默认开启，做成配置」）。
+   *
+   * <p>判据设计与上面两条同源：假 listwise 返回测试自己选的 {@code [S2, S3, S1]}， 与检索原序 {@code [S1, S2, S3]} 完全不同 ⇒
+   * 接线没生效时结果不会是它。
+   */
+  @Test
+  void listwiseRunsWhenRequestTurnsItOn() {
+    FakeSearch search = new FakeSearch();
+    search.answer(
+        QUESTION,
+        List.of(
+            new SegmentSearchPort.Scored(S1, 0.9),
+            new SegmentSearchPort.Scored(S2, 0.8),
+            new SegmentSearchPort.Scored(S3, 0.7)));
+    RecordingListwise listwise = new RecordingListwise(List.of(S2, S3, S1));
+    // 全局关 + 请求开 ⇒ 请求赢
+    RetrievalService service =
+        service(search, RerankPort.noop(), new RerankProperties(false, 3, "x", "y"), listwise);
+
+    HitTestView view = service.hitTest(queryWithListwise(Boolean.TRUE));
+
+    assertThat(view.items())
+        .as("请求 rerankListwise=true ⇒ 顺序必须是假 listwise 给的 [S2, S3, S1]")
+        .extracting(HitTestView.Item::segmentId)
+        .containsExactly(S2, S3, S1);
+    assertThat(listwise.calls).as("listwise 端口恰好被调一次").isEqualTo(1);
+    assertThat(listwise.lastQuery).as("传的是用户原始问题").isEqualTo(QUESTION);
+  }
+
+  /**
+   * ★ 反证：请求显式关掉时，即使全局开着，listwise 也<strong>一次都不许被调</strong>。
+   *
+   * <p>这条能红：假如判档写反（先看全局再看请求、或忽略请求），{@code calls} 会是 1、顺序会变成 {@code [S3, S1, S2]}。
+   */
+  @Test
+  void requestCanTurnListwiseOffWhileGlobalIsOn() {
+    FakeSearch search = new FakeSearch();
+    search.answer(
+        QUESTION,
+        List.of(
+            new SegmentSearchPort.Scored(S1, 0.9),
+            new SegmentSearchPort.Scored(S2, 0.8),
+            new SegmentSearchPort.Scored(S3, 0.7)));
+    RecordingListwise listwise = new RecordingListwise(List.of(S3, S1, S2));
+    RetrievalService service =
+        service(
+            search, RerankPort.noop(), new RerankProperties(false, 3, "x", "y", true, 5), listwise);
+
+    HitTestView view = service.hitTest(queryWithListwise(Boolean.FALSE));
+
+    assertThat(listwise.calls).as("请求显式关 ⇒ listwise 端口一次都不许被调").isZero();
+    assertThat(view.items())
+        .as("请求显式关 ⇒ 保持检索原序")
+        .extracting(HitTestView.Item::segmentId)
+        .containsExactly(S1, S2, S3);
   }
 
   private static HitTestQuery query() {
     return new HitTestQuery(
         RetrievalMode.FULLTEXT.name(), 0.6, 5, null, List.of(KB), QUESTION, 1, false, 3, false, 1);
+  }
+
+  /**
+   * 带 listwise 档位的查询。
+   *
+   * @param rerankListwise {@code null} = 这次请求没指定（跟随全局）
+   * @return 查询
+   */
+  private static HitTestQuery queryWithListwise(Boolean rerankListwise) {
+    return new HitTestQuery(
+        RetrievalMode.FULLTEXT.name(),
+        0.6,
+        5,
+        null,
+        List.of(KB),
+        QUESTION,
+        1,
+        false,
+        3,
+        false,
+        1,
+        rerankListwise);
   }
 
   private static UUID seg(int value) {
@@ -146,6 +236,28 @@ class RerankWiringTest {
       lastTopK = topK;
       lastTexts = texts;
       return answer;
+    }
+  }
+
+  /** 假 listwise：返回测试指定的顺序，并把收到的参数记下来。 */
+  private static final class RecordingListwise implements ListwiseRerankPort {
+
+    private final List<UUID> answer;
+    int calls;
+    String lastQuery;
+    int lastTopK;
+
+    RecordingListwise(List<UUID> answer) {
+      this.answer = answer;
+    }
+
+    @Override
+    public List<UUID> rerank(
+        String query, List<UUID> candidateIds, Map<UUID, String> texts, int topK) {
+      calls++;
+      lastQuery = query;
+      lastTopK = topK;
+      return List.copyOf(answer);
     }
   }
 

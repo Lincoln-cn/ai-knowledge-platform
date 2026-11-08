@@ -43,17 +43,33 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * 门槛（`§二` 2026-11-08 起是「单跳 ≤10s、多跳 ≤20s」）。余量只有 0.3s，将来换真模型 会破 —— 那时要么上 GPU 执行提供器（1050 4GB 会与 ollama
  * 抢显存，见 {@code #282}），要么缩窗口。
  *
- * @param enabled 是否启用重排（默认开，见类注释）
+ * <h3>★★ LLM listwise 是第三、四个键（用户 2026-11-08 要求「做成配置、不默认开」）</h3>
+ *
+ * <p>{@code listwise-enabled} 默认 <b>false</b>、{@code listwise-top-k} 默认 <b>5</b>。它接在 cross-encoder
+ * 之后，对已排好的前 {@code listwiseTopK} 个再让对话模型排一次。
+ *
+ * <p>20 条试跑读数：B3 65.00% → <b>70.00%（+5.00 点）</b>，变好 2 / 变差 1 / 不变 17，但单条 <b>3.12s</b> （p95 11.69s）⇒
+ * 叠加检索的 8.5s 后单跳 11.6s，<b>破 B4</b>。所以默认关：<b>它是有收益的增益件， 但在低配机器上装不下</b>。
+ *
+ * <p>★ 用户 2026-11-08 的口径：「本机能力不行，部署到更高配置的服务器上这些延迟应该可以下压」⇒ 这个键的用途
+ * 就是<strong>在好机器上打开它</strong>。应用级与对话级各有一格可以覆盖它（{@code retrieval.rerankListwise} 与请求体同名字段），优先级：<b>请求
+ * &gt; 应用 &gt; 全局</b>。
+ *
+ * @param enabled 是否启用 ONNX cross-encoder 重排（默认开，见类注释）
  * @param topK 重排窗口（只重排前 topK 个候选；默认 10，见类注释）
  * @param modelPath ONNX 模型路径
  * @param tokenizerPath tokenizer.json 路径
+ * @param listwiseEnabled 是否在 cross-encoder 之后再做一次 LLM listwise（默认关，见类注释）
+ * @param listwiseTopK 交给 listwise 的候选数（默认 5；只排 1 个等于没排）
  */
 @ConfigurationProperties(prefix = "app.retrieval.rerank")
 public record RerankProperties(
     @DefaultValue("true") boolean enabled,
     @DefaultValue("10") int topK,
     @DefaultValue("models/bge-reranker-base/model.onnx") String modelPath,
-    @DefaultValue("models/bge-reranker-base/tokenizer.json") String tokenizerPath) {
+    @DefaultValue("models/bge-reranker-base/tokenizer.json") String tokenizerPath,
+    @DefaultValue("false") boolean listwiseEnabled,
+    @DefaultValue("5") int listwiseTopK) {
 
   /**
    * 全默认值实例 —— 给"重排与被测行为无关"的测试夹具用。
@@ -62,7 +78,27 @@ public record RerankProperties(
    */
   public static RerankProperties defaults() {
     return new RerankProperties(
-        true, 10, "models/bge-reranker-base/model.onnx", "models/bge-reranker-base/tokenizer.json");
+        true,
+        10,
+        "models/bge-reranker-base/model.onnx",
+        "models/bge-reranker-base/tokenizer.json",
+        false,
+        5);
+  }
+
+  /**
+   * 不带 listwise 的旧签名（{@code #312} 时期）。
+   *
+   * <p>★ 为什么要留：那一批测试直接 {@code new RerankProperties(enabled, topK, model, tokenizer)} 造配置，它们不关心
+   * listwise ⇒ 缺省 {@code listwiseEnabled = false}、{@code listwiseTopK = 5}（＝生产默认）。
+   *
+   * @param enabled 是否启用 cross-encoder 重排
+   * @param topK 重排窗口
+   * @param modelPath ONNX 模型路径
+   * @param tokenizerPath tokenizer.json 路径
+   */
+  public RerankProperties(boolean enabled, int topK, String modelPath, String tokenizerPath) {
+    this(enabled, topK, modelPath, tokenizerPath, false, 5);
   }
 
   /**
@@ -75,6 +111,10 @@ public record RerankProperties(
     if (topK < 1) {
       throw new IllegalArgumentException(
           "app.retrieval.rerank.top-k 必须 ≥ 1（只重排前 topK 个候选）：实际 " + topK);
+    }
+    if (listwiseTopK < 2) {
+      throw new IllegalArgumentException(
+          "app.retrieval.rerank.listwise-top-k 必须 ≥ 2（只排 1 个等于没排）：实际 " + listwiseTopK);
     }
     Objects.requireNonNull(modelPath, "app.retrieval.rerank.model-path 不许为空");
     Objects.requireNonNull(tokenizerPath, "app.retrieval.rerank.tokenizer-path 不许为空");

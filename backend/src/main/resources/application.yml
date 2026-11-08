@@ -180,6 +180,12 @@ app:
       # 模型文件**不进仓库**（`models/*` 被 .gitignore 忽略），落盘步骤见 `models/README.md`
       model-path: ${RETRIEVAL_RERANK_MODEL_PATH:models/bge-reranker-base/model.onnx}
       tokenizer-path: ${RETRIEVAL_RERANK_TOKENIZER_PATH:models/bge-reranker-base/tokenizer.json}
+      # ★★ LLM listwise（cross-encoder 之后再让对话模型排一次）——默认关。
+      #   20 条试跑：B3 65.00% → 70.00%（+5.00 点），但单条 3.12s（p95 11.69s）⇒ 叠加后单跳 11.6s 破 B4。
+      #   用户 2026-11-08 口径：本机算力不够，好机器上延迟能压下来 ⇒ 做成配置、好机器上开。
+      #   优先级：请求体 > 应用配置（retrieval.rerankListwise）> 这里。
+      listwise-enabled: ${RETRIEVAL_RERANK_LISTWISE_ENABLED:false}
+      listwise-top-k: ${RETRIEVAL_RERANK_LISTWISE_TOP_K:5}
   security:
     jwt:
       # ★ 必须是 URL 形式，不能是 "ai-knowledge-platform" 这样的裸串 ——

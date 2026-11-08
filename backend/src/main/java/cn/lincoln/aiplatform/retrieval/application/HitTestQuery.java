@@ -37,7 +37,8 @@ public record HitTestQuery(
     Boolean decomposeEnabled,
     Integer maxSubQuestions,
     Boolean multiHopEnabled,
-    Integer maxHops) {
+    Integer maxHops,
+    Boolean rerankListwise) {
 
   /** TopN 上限与 mock 的 PUT 校验一致（1–20）。 */
   public static final int MAX_TOP_N = 20;
@@ -93,5 +94,38 @@ public record HitTestQuery(
 
   public int maxHopsOrDefault() {
     return maxHops == null ? DEFAULT_MAX_HOPS : maxHops;
+  }
+
+  /**
+   * 旧签名的构造器（{@code multiHopEnabled} 那一批，{@code #283}）。
+   *
+   * <p>★ 为什么要留：{@code rerankListwise} 是 {@code #151} 之后才有的第 12 格，而 {@code HitTestQuery} 被很多
+   * 测试与调用点直接 {@code new} 出来（它们不关心 listwise）⇒ 不给这个重载就全部编译失败。缺省 {@code null} = 这次请求没指定，交给全局配置。
+   */
+  public HitTestQuery(
+      String mode,
+      Double threshold,
+      Integer topN,
+      String noRefStrategy,
+      List<UUID> kbIds,
+      String question,
+      Integer queryCount,
+      Boolean decomposeEnabled,
+      Integer maxSubQuestions,
+      Boolean multiHopEnabled,
+      Integer maxHops) {
+    this(
+        mode,
+        threshold,
+        topN,
+        noRefStrategy,
+        kbIds,
+        question,
+        queryCount,
+        decomposeEnabled,
+        maxSubQuestions,
+        multiHopEnabled,
+        maxHops,
+        null);
   }
 }

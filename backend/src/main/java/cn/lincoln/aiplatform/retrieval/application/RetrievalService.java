@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.retrieval.application;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
+import cn.lincoln.aiplatform.platform.retrieval.ListwiseRerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
@@ -143,8 +144,25 @@ public class RetrievalService {
   /** 重排配置（{@code app.retrieval.rerank.*}）：{@code enabled} 在调用点判 —— 关掉就一次都不调。 */
   private final RerankProperties rerankProperties;
 
+  /** LLM listwise 重排端口（{@code #151}）：接在 cross-encoder 之后，默认关（见 {@link RerankProperties}）。 */
+  private final ListwiseRerankPort listwiseRerankPort;
+
   private final MultiHopService multiHop;
 
+  /**
+   * 不带 listwise 的旧签名（{@code #312} 时期，7 参）。
+   *
+   * <p>★ 为什么要留：那一批测试直接 {@code new RetrievalService(...)} 造服务，它们不关心 listwise ⇒ 缺省接 {@link
+   * ListwiseRerankPort#noop()}（永远原序）——与"listwise 关"完全等价， 所以旧测试的断言一字不用改。
+   *
+   * @param segmentSearch 分段检索端口
+   * @param embeddingPort 向量端口
+   * @param queryUnderstanding 查询理解
+   * @param multiHop 多跳
+   * @param budget 预算配置
+   * @param rerankPort cross-encoder 重排端口
+   * @param rerankProperties 重排配置
+   */
   public RetrievalService(
       SegmentSearchPort segmentSearch,
       EmbeddingPort embeddingPort,
@@ -153,6 +171,26 @@ public class RetrievalService {
       RetrievalBudgetProperties budget,
       RerankPort rerankPort,
       RerankProperties rerankProperties) {
+    this(
+        segmentSearch,
+        embeddingPort,
+        queryUnderstanding,
+        multiHop,
+        budget,
+        rerankPort,
+        rerankProperties,
+        ListwiseRerankPort.noop());
+  }
+
+  public RetrievalService(
+      SegmentSearchPort segmentSearch,
+      EmbeddingPort embeddingPort,
+      QueryUnderstandingService queryUnderstanding,
+      MultiHopService multiHop,
+      RetrievalBudgetProperties budget,
+      RerankPort rerankPort,
+      RerankProperties rerankProperties,
+      ListwiseRerankPort listwiseRerankPort) {
     this.segmentSearch = segmentSearch;
     this.embeddingPort = embeddingPort;
     this.queryUnderstanding = queryUnderstanding;
@@ -160,6 +198,7 @@ public class RetrievalService {
     this.budget = budget;
     this.rerankPort = rerankPort;
     this.rerankProperties = rerankProperties;
+    this.listwiseRerankPort = listwiseRerankPort;
   }
 
   @Transactional(readOnly = true)
@@ -383,20 +422,38 @@ public class RetrievalService {
     //     离线实测 B3 引用准确率 57.9% → 68.2%（+10.3 点），单条 2.4s（p95 3.1s）；
     //     ★ 失败一律降级原序（NoopRerankerAdapter），检索不因重排坏掉而不可用 ——
     //     enabled 在这里判：关掉 = 一次都不调（省 2.4s/条）。
+    // ★★ ⑥b 与 ⑥c 是**两个独立开关**（用户 2026-11-08：「listwise 做成配置」）：
+    //    重排文本先无条件备好，两个开关各判各的 —— 早先把 ⑥c 嵌在 ⑥b 的 if 里，
+    //    结果是"关掉 cross-encoder 就顺带关掉 listwise"，而这两件事的代价与收益完全不同
+    //    （前者缺它 B3 掉 13 点，后者只是"锦上添花但慢"）。ListwiseWiringTest 抓到了这个 bug。
+    Map<UUID, String> rerankTexts = new HashMap<>();
+    for (Map.Entry<UUID, SegmentSearchPort.Card> entry : cards.entrySet()) {
+      // ★ 文档名必须进来（`#312` 阶段 0 实验 E2 实测）：B3 判的是"第 1 条命中且**同文档**"，
+      //   只喂正文时交叉编码器不知道这段属于哪个文档，只会判"像不像在回答这个问题"。
+      //   195 条离线对照：只喂正文 58.0%→67.2%（+9.2），正文前加文档名 58.0%→71.3%（+13.3）
+      //   ⇒ 净增 +4.1 点，超过"有效"判据（>+3）。
+      String docName = entry.getValue().docName();
+      String body = entry.getValue().content();
+      rerankTexts.put(
+          entry.getKey(), docName == null || docName.isBlank() ? body : docName + "\n" + body);
+    }
     if (rerankProperties.enabled() && finalIds.size() > 1) {
-      Map<UUID, String> rerankTexts = new HashMap<>();
-      for (Map.Entry<UUID, SegmentSearchPort.Card> entry : cards.entrySet()) {
-        // ★ 文档名必须进来（`#312` 阶段 0 实验 E2 实测）：B3 判的是"第 1 条命中且**同文档**"，
-        //   只喂正文时交叉编码器不知道这段属于哪个文档，只会判"像不像在回答这个问题"。
-        //   195 条离线对照：只喂正文 58.0%→67.2%（+9.2），正文前加文档名 58.0%→71.3%（+13.3）
-        //   ⇒ 净增 +4.1 点，超过"有效"判据（>+3）。
-        String docName = entry.getValue().docName();
-        String body = entry.getValue().content();
-        rerankTexts.put(
-            entry.getKey(), docName == null || docName.isBlank() ? body : docName + "\n" + body);
-      }
       finalIds =
           rerankPort.rerank(request.question(), finalIds, rerankTexts, rerankProperties.topK());
+    }
+
+    // ⑥c ★★ LLM listwise（用户 2026-11-08：不默认开、做成配置）。接在 cross-encoder 之后：
+    //     前者负责"从 10 个里挑出最有希望的"，后者负责"在这几个里再做一次语义判断"。
+    //     20 条试跑 B3 65.00% → 70.00%（+5.00 点），但单条 3.12s ⇒ 默认关，好机器上开。
+    //     ★ 优先级：请求参数（HitTestQuery.rerankListwise）> 全局（listwiseEnabled）。
+    //       null 表示"这次请求没指定"，交给全局。
+    Boolean listwiseWanted = request.rerankListwise();
+    boolean listwiseOn =
+        listwiseWanted != null ? listwiseWanted : rerankProperties.listwiseEnabled();
+    if (listwiseOn && finalIds.size() > 1) {
+      finalIds =
+          listwiseRerankPort.rerank(
+              request.question(), finalIds, rerankTexts, rerankProperties.listwiseTopK());
     }
 
     List<HitTestView.Item> items = new ArrayList<>(finalIds.size());
