@@ -168,12 +168,15 @@ app:
     #    全量重排 20 个反而只有 +9.8 点且 11.8s ⇒ 窗口就取前 5，别改成全量。
     # ★ 失败一律降级返回原序（模型缺失/初始化失败/推理异常），检索不因重排坏掉而不可用。
     rerank:
-      # 总开关：默认关。★ 2026-11-08 真栈实测：逐条请求 12.5s/条（含首次模型加载的单条 24.4s），
-      #   远超 B4 门槛（单跳 ≤10s）⇒ 先用 false；优化（GPU/量化/更小模型）后再开。
-      #   离线批量是 2.4s/条，那个数不能当真实栈读数（见 ROADMAP §11.22.4）。
-      enabled: ${RETRIEVAL_RERANK_ENABLED:false}
-      # ★ 只重排前 topK 个（读数见上），窗口外保持 RRF 原序
-      top-k: ${RETRIEVAL_RERANK_TOP_K:5}
+      # 总开关：★ 2026-11-08 全量实测后改默认开（用户拍板「质量优先」）。
+      #   全量 195 条：B1 85.13% → 87.18%、B3 60.00% → 73.33%（+13.33 点）。
+      #   ★ 代价：窗口 10 的 8.5s 是检索本身，加 LLM 生成约 1.2s ⇒ 单跳约 9.7s，贴 B4 的 10s 门槛。
+      #     换真模型会破 —— 那时上 GPU 执行提供器（与 ollama 抢显存，见 #282）或缩窗口。
+      enabled: ${RETRIEVAL_RERANK_ENABLED:true}
+      # ★ 只重排前 topK 个（窗口外保持 RRF 原序）。
+      #   ★★ 窗口才是那个旋钮：窗口 5 只能修「第 1 条指向错文档」（doc_top1 93→100），B1/B3 一动不动，
+      #      因为答案段不在前 5、重排看不到它；窗口 10 才把 B1 与 B3 一起拉起来（30 条：70.00% vs 63.33%）。
+      top-k: ${RETRIEVAL_RERANK_TOP_K:10}
       # 模型文件**不进仓库**（`models/*` 被 .gitignore 忽略），落盘步骤见 `models/README.md`
       model-path: ${RETRIEVAL_RERANK_MODEL_PATH:models/bge-reranker-base/model.onnx}
       tokenizer-path: ${RETRIEVAL_RERANK_TOKENIZER_PATH:models/bge-reranker-base/tokenizer.json}
