@@ -72,12 +72,13 @@ class RerankWiringTest {
     assertThat(rerank.calls).as("重排端口恰好被调一次").isEqualTo(1);
     assertThat(rerank.lastQuery).as("传的是用户原始问题").isEqualTo(QUESTION);
     assertThat(rerank.lastTopK).as("窗口取配置的 topK").isEqualTo(3);
-    // ★ texts 必须是**正文**（重排要按正文算相关性），且是按 id 对上的
+    // ★ texts 是"文档名 + 换行 + 正文"（`#312` E2 实测：只喂正文 B3 68.2%，加文档名 71.3%），
+    //   且是按 id 对上的
     assertThat(rerank.lastTexts)
-        .as("texts 按 id 带正文，而不是空串/占位")
-        .containsEntry(S1, FakeSearch.contentOf(S1))
-        .containsEntry(S2, FakeSearch.contentOf(S2))
-        .containsEntry(S3, FakeSearch.contentOf(S3));
+        .as("texts 按 id 带「文档名\\n正文」，而不是空串/占位")
+        .containsEntry(S1, FakeSearch.textsOf(S1))
+        .containsEntry(S2, FakeSearch.textsOf(S2))
+        .containsEntry(S3, FakeSearch.textsOf(S3));
   }
 
   @Test
@@ -158,6 +159,13 @@ class RerankWiringTest {
       return "正文-" + id;
     }
 
+    /** 喂给重排的文本 = 文档名 + 换行 + 正文（与 {@code RetrievalService} 的接线一致）。 */
+    static String textsOf(UUID id) {
+      return DOC_NAME + "\n" + contentOf(id);
+    }
+
+    private static final String DOC_NAME = "文档";
+
     void answer(String query, List<Scored> scored) {
       byQuery.put(query, scored);
     }
@@ -203,7 +211,7 @@ class RerankWiringTest {
                 id,
                 "标题-" + id,
                 contentOf(id),
-                "文档",
+                DOC_NAME,
                 "库",
                 UUID.randomUUID(),
                 UUID.randomUUID(),

@@ -386,7 +386,14 @@ public class RetrievalService {
     if (rerankProperties.enabled() && finalIds.size() > 1) {
       Map<UUID, String> rerankTexts = new HashMap<>();
       for (Map.Entry<UUID, SegmentSearchPort.Card> entry : cards.entrySet()) {
-        rerankTexts.put(entry.getKey(), entry.getValue().content());
+        // ★ 文档名必须进来（`#312` 阶段 0 实验 E2 实测）：B3 判的是"第 1 条命中且**同文档**"，
+        //   只喂正文时交叉编码器不知道这段属于哪个文档，只会判"像不像在回答这个问题"。
+        //   195 条离线对照：只喂正文 58.0%→67.2%（+9.2），正文前加文档名 58.0%→71.3%（+13.3）
+        //   ⇒ 净增 +4.1 点，超过"有效"判据（>+3）。
+        String docName = entry.getValue().docName();
+        String body = entry.getValue().content();
+        rerankTexts.put(
+            entry.getKey(), docName == null || docName.isBlank() ? body : docName + "\n" + body);
       }
       finalIds =
           rerankPort.rerank(request.question(), finalIds, rerankTexts, rerankProperties.topK());
