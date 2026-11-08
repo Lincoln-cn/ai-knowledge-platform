@@ -161,6 +161,12 @@ public class OnnxRerankerAdapter implements RerankPort {
         OrtSession session;
         OrtSession.SessionOptions options = new OrtSession.SessionOptions();
         try {
+          // ★ 线程数必须显式设：默认值在 Windows 上表现为单线程，而离线 Python 评测用的是全核
+          //   （同一批候选、同一条 query 前 5 段：Python 2.6s vs 真栈 13.1s，差 5 倍就出在这里）。
+          int cores = Math.max(1, Runtime.getRuntime().availableProcessors());
+          options.setIntraOpNumThreads(cores);
+          options.setInterOpNumThreads(1);
+          options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
           session = environment.createSession(model.toString(), options);
         } finally {
           options.close();
