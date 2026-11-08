@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.conversation.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.conversation.domain.Message;
+import cn.lincoln.aiplatform.conversation.domain.MessageKind;
 import cn.lincoln.aiplatform.conversation.domain.MessageStatus;
 import cn.lincoln.aiplatform.conversation.domain.SourceRef;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
@@ -29,7 +30,7 @@ import tools.jackson.databind.ObjectMapper;
  *   <li>{@code SourceRefSerializationTest} —— 引用快照落 {@code jsonb} 那一侧（Hibernate 的 Jackson 2）；
  *   <li>{@code StreamContractCrossCheckTest} —— SSE 契约的<strong>类型形状</strong>（record 分量名 vs TS 字段名）；
  *   <li>★ <strong>本类</strong> —— 历史消息这一条 <strong>REST</strong> 链路的<strong>线形状</strong> （{@code
- *       ChatMessage} 的 13 个键名 + 三个"今天恒为某个值"的格子的语义）。
+ *       ChatMessage} 的 14 个键名 + 三个"今天恒为某个值"的格子的语义）。
  * </ul>
  *
  * <p>★ 它在 {@code conversation.application} 包（与 {@link ChatMessageView} 同包）**不是为了省一行 import**：
@@ -55,6 +56,7 @@ class ChatMessageViewTest {
           "id",
           "conversationId",
           "role",
+          "kind",
           "content",
           "status",
           "refs",
@@ -73,6 +75,7 @@ class ChatMessageViewTest {
             UUID.randomUUID(),
             UUID.randomUUID(),
             "ASSISTANT",
+            MessageKind.ANSWER,
             "答案",
             MessageStatus.GENERATED,
             List.of(fullRef()),
@@ -148,13 +151,36 @@ class ChatMessageViewTest {
     assertThat(json).as("★ 附件这一格整个不出现（契约可缺省，POST /files 还没实现）").doesNotContain("attachments");
   }
 
-  // ────────────────────────── 夹具 ──────────────────────────
+  /**
+   * ★★ {@code #286}：开场白必须是<strong>可区分的一条助手消息</strong>，而且它没有引用。
+   *
+   * <p>★ 前端靠 {@code kind} 决定"这一条不显示重新生成 / 引用区"；若这里退化成 {@code ANSWER}，前端会把它当成模型回答 ——
+   * 用户能"重新生成"一句应用写好的欢迎语。
+   *
+   * <p>★ {@code refs = null} 是"从没经过检索"，不是"零命中"：开场白根本没有检索这一步。
+   */
+  @Test
+  void prologueMessageCarriesItsKindAndHasNoRefs() throws Exception {
+    Message prologue = Message.prologue(UUID.randomUUID(), UUID.randomUUID(), "您好，我可以帮您查制度。");
 
+    ChatMessageView view = ChatMessageView.of(prologue);
+    Map<String, Object> node = JSON.readValue(JSON.writeValueAsString(view), Map.class);
+
+    assertThat(node.get("kind"))
+        .as("★ 契约里的 kind 必须原样出现；退化成 ANSWER 会让前端把开场白当模型回答处理（#286）")
+        .isEqualTo("PROLOGUE");
+    assertThat(node.get("role")).as("★ 开场白是助手角色 —— 它显示在回答那一侧").isEqualTo("ASSISTANT");
+    assertThat(node.get("refs")).as("★ 开场白没有经过检索 ⇒ refs 为 null（不是 []）").isNull();
+    assertThat(view.status()).as("★ 它从来没有'生成中'这个阶段").isEqualTo(MessageStatus.GENERATED);
+  }
+
+  // ────────────────────────── 夹具 ──────────────────────────
   private static ChatMessageView viewWithRefs(List<Map<String, Object>> refs) {
     return new ChatMessageView(
         UUID.randomUUID(),
         UUID.randomUUID(),
         "ASSISTANT",
+        MessageKind.ANSWER,
         "答案",
         MessageStatus.GENERATED,
         refs,

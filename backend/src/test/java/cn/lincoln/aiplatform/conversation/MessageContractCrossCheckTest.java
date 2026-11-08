@@ -78,6 +78,9 @@ class MessageContractCrossCheckTest {
   private static final Pattern ROLE_UNION =
       Pattern.compile("export type ChatRole\\s*=\\s*([^;\\n]+);?");
 
+  private static final Pattern KIND_UNION =
+      Pattern.compile("export type MessageKind\\s*=\\s*([^;\\n]+);?");
+
   private static final Pattern QUOTED = Pattern.compile("'([A-Za-z_]+)'");
 
   // ────────────────────────── ① 状态取值：逐字 ──────────────────────────
@@ -109,6 +112,25 @@ class MessageContractCrossCheckTest {
 
     assertThat(java)
         .as("★ 角色取值必须与契约的 ChatRole 逐字一致（写错会把一条回答渲染成用户气泡）")
+        .containsExactlyElementsOf(contract);
+  }
+
+  /**
+   * ★ {@code #286}：{@code MessageKind} 的两个取值 = 契约 {@code MessageKind} 联合类型（同名同序）。
+   *
+   * <p>★ 前端按它决定"这一条是不是开场白"（不渲染重新生成 / 引用区）。若这里与契约漂移， 前端拿到的是一个认不出的取值 —— 它会安静地退化成"普通回答"，而那种表现与"开场白没落库"
+   * 一模一样。
+   */
+  @Test
+  void messageKindValuesMatchTheFrozenContractExactly() {
+    List<String> contract = unionValues(read(CONTRACT_MESSAGES), KIND_UNION, "MessageKind");
+    List<String> java =
+        Arrays.stream(cn.lincoln.aiplatform.conversation.domain.MessageKind.values())
+            .map(Enum::name)
+            .toList();
+
+    assertThat(java)
+        .as("★ 消息种类取值必须与契约的 MessageKind 逐字一致（ANSWER / PROLOGUE）")
         .containsExactlyElementsOf(contract);
   }
 
@@ -150,6 +172,7 @@ class MessageContractCrossCheckTest {
             "id",
             "conversationId",
             "role",
+            "kind",
             "content",
             "status",
             "refs",
@@ -167,6 +190,9 @@ class MessageContractCrossCheckTest {
     assertThat(message.id()).as("id").isNotNull();
     assertThat(message.conversationId()).as("conversationId").isNotNull();
     assertThat(message.role()).as("role").isNotNull();
+    assertThat(message.kind())
+        .as("kind（V87；#286：前端据此不给开场白渲染重新生成与引用区）")
+        .isEqualTo(cn.lincoln.aiplatform.conversation.domain.MessageKind.ANSWER);
     assertThat(message.content()).as("content").isNotNull();
     assertThat(message.status()).as("status").isNotNull();
     assertThat(message.references()).as("refs（列 references）").isNull();

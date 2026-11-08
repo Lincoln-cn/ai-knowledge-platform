@@ -17,6 +17,7 @@ import type {
   ChatMessage,
   Conversation,
   ConversationShare,
+  MessageKind,
   MessageStatus
 } from '@/api/conversations'
 import type { SourceRef } from '@/api/stream-types'
@@ -173,6 +174,40 @@ export function addConversation(conv: StoredConversation): StoredConversation {
   return conv
 }
 
+/**
+ * 给会话补上开场白消息（`#286`）。
+ *
+ * ★ 三条与后端 `ConversationListService.ensurePrologue` 对齐的口径：
+ *  1. 空白正文**不造消息**（否则每个空开场白的应用都多一个空气泡）；
+ *  2. 已经有开场白的不重复落（重复点「新建会话」只该看到一条）；
+ *  3. **不动 `turnCount`** —— 开场白不是一轮问答（`readConversation` 的轮数会照常显示 0）。
+ */
+export function addPrologueMessage(conversationId: string, text: string): ChatMessage | undefined {
+  const body = text.trim()
+  if (!body) return undefined
+  const list = (state.messagesByConv[conversationId] ??= [])
+  const existing = list.find((m) => m.kind === 'PROLOGUE')
+  if (existing) return existing
+  const message = buildMessage({
+    id: `pm_${Date.now().toString(36)}`,
+    conversationId,
+    role: 'ASSISTANT',
+    kind: 'PROLOGUE',
+    content: body,
+    status: 'GENERATED',
+    refs: [],
+    suggestions: [],
+    feedback: null,
+    tokens: 0,
+    durationMs: 0,
+    failReason: null,
+    failHint: null
+  })
+  list.unshift(message)
+  persist()
+  return message
+}
+
 export function removeConversation(id: string): void {
   const idx = state.conversations.findIndex((c) => c.id === id)
   if (idx >= 0) state.conversations.splice(idx, 1)
@@ -287,10 +322,16 @@ export interface AppendTurnResult {
   assistant: ChatMessage
 }
 
+/**
+ * 组装一条存储消息。
+ *
+ * ★ `kind` 默认 `ANSWER`：只有开场白是 `PROLOGUE`，而它由 `addConversation` 单独落
+ * （见 {@link seedPrologueMessage}）—— 问答路径永远产出正常消息。
+ */
 function buildMessage(
-  base: Omit<ChatMessage, 'id' | 'createdAt'> & { id: string }
+  base: Omit<ChatMessage, 'id' | 'createdAt' | 'kind'> & { id: string; kind?: MessageKind }
 ): ChatMessage {
-  return { ...base, createdAt: new Date().toISOString() }
+  return { ...base, kind: base.kind ?? 'ANSWER', createdAt: new Date().toISOString() }
 }
 
 /**

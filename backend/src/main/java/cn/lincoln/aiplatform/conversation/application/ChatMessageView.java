@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.conversation.application;
 
 import cn.lincoln.aiplatform.conversation.domain.Message;
+import cn.lincoln.aiplatform.conversation.domain.MessageKind;
 import cn.lincoln.aiplatform.conversation.domain.MessageStatus;
 import cn.lincoln.aiplatform.conversation.domain.SourceRef;
 import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
@@ -47,6 +48,8 @@ import java.util.UUID;
  * @param id 消息 id（{@code cv_message.id}）
  * @param conversationId 所属会话 id
  * @param role {@code USER} / {@code ASSISTANT}（枚举名逐字 = 契约取值）
+ * @param kind 消息种类：{@code ANSWER}（正常消息）/ {@code PROLOGUE}（应用开场白，{@code #286}）。 ★
+ *     前端据此不给开场白渲染「重新生成」与引用区；它与 {@code role} 正交 —— 开场白本来就是助手角色
  * @param content 正文（★ 停止 / 失败也保留已生成那一段，{@code MSG-I2}）
  * @param status 四态（{@code GENERATING} 不是终态，会被"刷新页面"读到）
  * @param refs 引用快照；★ {@code null} = 这一批引用**从来没到过**，{@code []} = 明确的零命中 —— 两者不许糊成一个
@@ -62,6 +65,7 @@ public record ChatMessageView(
     UUID id,
     UUID conversationId,
     String role,
+    MessageKind kind,
     String content,
     MessageStatus status,
     List<Map<String, Object>> refs,
@@ -97,6 +101,7 @@ public record ChatMessageView(
         message.id(),
         message.conversationId(),
         message.role().name(),
+        message.kind(),
         message.content(),
         message.status(),
         refsOf(refs),
@@ -125,6 +130,7 @@ public record ChatMessageView(
         message.id(),
         message.conversationId(),
         message.role().name(),
+        message.kind(),
         message.content(),
         message.status(),
         refsOf(message.references()),

@@ -2,7 +2,11 @@ package cn.lincoln.aiplatform.conversation.application;
 
 import cn.lincoln.aiplatform.conversation.domain.Conversation;
 import cn.lincoln.aiplatform.conversation.domain.ConversationRepository;
+import cn.lincoln.aiplatform.conversation.domain.Message;
+import cn.lincoln.aiplatform.conversation.domain.MessageKind;
+import cn.lincoln.aiplatform.conversation.domain.MessageRepository;
 import cn.lincoln.aiplatform.platform.assistant.AppBindingPort;
+import cn.lincoln.aiplatform.platform.assistant.AppOpeningPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.PageResult;
@@ -56,9 +60,19 @@ public class ConversationListService {
 
   private final AppBindingPort appBindings;
 
-  public ConversationListService(ConversationRepository conversations, AppBindingPort appBindings) {
+  private final MessageRepository messages;
+
+  private final AppOpeningPort openings;
+
+  public ConversationListService(
+      ConversationRepository conversations,
+      AppBindingPort appBindings,
+      MessageRepository messages,
+      AppOpeningPort openings) {
     this.conversations = conversations;
     this.appBindings = appBindings;
+    this.messages = messages;
+    this.openings = openings;
   }
 
   /**
@@ -100,12 +114,61 @@ public class ConversationListService {
             .findLatestByUserAndAssistant(userId, appId)
             .filter(c -> c.messageCount() == 0);
     if (reusable.isPresent()) {
-      return toItem(reusable.get());
+      Conversation reused = reusable.get();
+      // ★ 复用的空会话也要确保开场白在（上线前建的空会话没有它；而重复调用不能多出一条）
+      ensurePrologue(reused);
+      return toItem(reused);
     }
     Conversation conversation =
         conversations.save(
             new Conversation(UUID.randomUUID(), userId, appId, Conversation.PLACEHOLDER_TITLE));
+    ensurePrologue(conversation);
     return toItem(conversation);
+  }
+
+  /**
+   * 把应用的开场白落成这条会话的<strong>第一条助手消息</strong>（{@code #286}）。
+   *
+   * <h3>★★ 为什么是"消息"而不是"空态文案"</h3>
+   *
+   * <p>开场白原先只在前端空态页上显示（{@code emptyText} 读应用配置），用户发出第一句后它消失， 刷新、换设备、翻历史都再也看不到。落成消息之后，它与正常回答一样由
+   * {@code GET /conversations/{id}/messages} 返回 —— 这是 {@code #286} 的核心判据。
+   *
+   * <h3>★★ 三个"不"</h3>
+   *
+   * <ol>
+   *   <li><b>不记 {@code recordMessage}</b>：{@code cv_conversation.message_count} 就是契约里的 {@code
+   *       turnCount}（"轮数"），开场白不是一轮问答。★ 它也<strong>不推进</strong>会话的 {@code last_message_at} ——
+   *       否则"刚建的空会话"会以创建时刻排到列表最前，而它其实什么都没发生。
+   *   <li><b>不重复落</b>：{@code message_count} 为 0 的判定会命中"已经带开场白但还没提问"的会话
+   *       （开场白不计数），所以复用路径必须查一次"这条会话里有没有 {@code PROLOGUE}"。 少这一步的症状是：每点一次「新建会话」就多一条开场白，而界面上只显示其中一条。
+   *   <li><b>开场白为空就不造</b>：{@link AppOpeningPort#prologueOf} 已经把"应用不存在 / 看不见 / 空白开场白"合并成 {@link
+   *       Optional#empty()}；通用问答（{@code assistantId == null}）也走这条路。
+   * </ol>
+   *
+   * @param conversation 刚新建或刚复用的会话
+   */
+  private void ensurePrologue(Conversation conversation) {
+    /*
+     * ★ 两层都在挡"空白"：端口实现本来就把空白折成 empty（且 javadoc 这么写了），
+     * 但服务层仍然再 strip 一次 —— 端口是可替换的实现点，而"空白不落库"是这一层的
+     * 判据，不能靠某个实现恰好守规矩（`#286` 的"开场白为空时不造消息"）。
+     */
+    Optional<String> prologue =
+        openings
+            .prologueOf(conversation.assistantId())
+            .map(String::strip)
+            .filter(text -> !text.isEmpty());
+    if (prologue.isEmpty()) {
+      return;
+    }
+    boolean alreadyPresent =
+        messages.listByConversation(conversation.id()).stream()
+            .anyMatch(message -> message.kind() == MessageKind.PROLOGUE);
+    if (alreadyPresent) {
+      return;
+    }
+    messages.save(Message.prologue(UUID.randomUUID(), conversation.id(), prologue.get()));
   }
 
   /**

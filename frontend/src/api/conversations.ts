@@ -17,6 +17,18 @@ export interface ChatAttachment {
 
 /** 消息角色（2.4 补录） */
 export type ChatRole = 'USER' | 'ASSISTANT'
+/**
+ * 消息种类（#286）。
+ *
+ * - `ANSWER`：正常消息（用户提问，或模型生成的回答）
+ * - `PROLOGUE`：应用开场白 —— 会话里的**第一条助手消息**，但**不是模型回答**
+ *
+ * ★ 为什么要有它：开场白与模型回答在 `role` 上都是 `ASSISTANT`，在 `status` 上都是 `GENERATED`
+ * （开场白没有"生成中"的中间态），**没有任何现有字段能把它们分开**。而界面上必须分开 ——
+ * 开场白不能有「重新生成」（那会把它覆盖成模型输出），不能有引用区（它没经过检索），也不能被赞/踩。
+ * ★ 后端同名字段与它逐字对齐（`MessageKind` 枚举，由 `MessageContractCrossCheckTest` 守着）。
+ */
+export type MessageKind = 'ANSWER' | 'PROLOGUE'
 /** 赞踩（2.4 补录）。与 `FeedbackItem.type`、`submitMessageFeedback` 同口径 */
 export type MessageFeedback = 'UP' | 'DOWN'
 
@@ -24,6 +36,8 @@ export interface ChatMessage {
   id: string
   conversationId: string
   role: ChatRole
+  /** 消息种类。开场白 = `PROLOGUE`；其余（含用户提问）= `ANSWER` */
+  kind: MessageKind
   content: string
   status: MessageStatus
   refs: SourceRef[]

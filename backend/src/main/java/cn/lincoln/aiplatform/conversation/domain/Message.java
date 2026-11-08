@@ -87,6 +87,17 @@ public class Message {
   @Column(name = "role", nullable = false, updatable = false, length = 16)
   private MessageRole role;
 
+  /**
+   * 消息种类（{@code #286} · 迁移 {@code V87}）：正常消息 vs 应用开场白。★ 不可变。
+   *
+   * <p>★ 为什么必须有这一列：开场白落成一条 {@code ASSISTANT} 消息之后，若没有种类标记， 「重新生成」「引用溯源」「赞/踩」这些只对"模型回答"成立的动作会把它一起处理
+   * —— 用户能对一句自己没让模型生成的话点赞，也能"重新生成"一条开场白（它会被覆盖成模型回答）。 现有的 {@code role} 分不开（开场白本来就是助手角色），{@code
+   * status} 也分不开 （它的终态与正常回答一样是 {@code GENERATED}）。
+   */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "kind", nullable = false, updatable = false, length = 16)
+  private MessageKind kind = MessageKind.ANSWER;
+
   /** 正文。★ 生成过程中<strong>增量追加</strong>；终态之后不再改变（见类注释）。 */
   @Column(name = "content", nullable = false)
   private String content;
@@ -191,6 +202,7 @@ public class Message {
     this.id = id;
     this.conversationId = conversationId;
     this.role = MessageRole.ASSISTANT;
+    this.kind = MessageKind.ANSWER;
     this.content = content == null ? "" : content;
     this.status = MessageStatus.GENERATING;
   }
@@ -215,6 +227,33 @@ public class Message {
     }
     Message message = new Message(id, conversationId, question);
     message.role = MessageRole.USER;
+    message.status = MessageStatus.GENERATED;
+    return message;
+  }
+
+  /**
+   * 建一条<strong>开场白</strong>消息 —— 应用设定的第一句欢迎语（{@code #286}）。
+   *
+   * <p>★ 状态直接是 {@code GENERATED}：这句话在应用保存那一刻就已经写好了，它<strong>从来没有</strong> "生成中"这个阶段。若给它 {@code
+   * GENERATING}，界面上会出现一条永远转圈、也没有任何东西会去收尾的消息。
+   *
+   * <p>★ 为什么单独的工厂而不是"公开构造器 + 传 kind"：与 {@link #user} 同一条理由 —— {@code (PROLOGUE, GENERATING)}
+   * 这种非法组合不该成为一个可编译的表达式。
+   *
+   * <p>★ 空开场白<strong>直接抛</strong>：调用方本就不该调用本方法（"开场白为空不造消息"是 {@code #286}
+   * 的硬约束）。留一条空开场白在会话里，用户看到的是一个空气泡。
+   *
+   * @param id 主键
+   * @param conversationId 所属会话 ★ 必填
+   * @param text 开场白正文（★ 空白立刻抛）
+   * @return 一条 {@code GENERATED} 的开场白消息
+   */
+  public static Message prologue(UUID id, UUID conversationId, String text) {
+    if (text == null || text.isBlank()) {
+      throw new IllegalArgumentException("开场白正文不能为空 —— 空开场白应当根本不落库（否则会话里多一条空气泡）");
+    }
+    Message message = new Message(id, conversationId, text.strip());
+    message.kind = MessageKind.PROLOGUE;
     message.status = MessageStatus.GENERATED;
     return message;
   }
@@ -398,6 +437,15 @@ public class Message {
     return role;
   }
 
+  /**
+   * 消息种类（{@code #286}）。
+   *
+   * <p>★ 消费方应当先看它再看 {@link #role()}：{@code role == ASSISTANT} 且有正文 <strong>不再</strong>等于"这是一条模型回答"。
+   */
+  public MessageKind kind() {
+    return kind;
+  }
+
   /** 正文。★ 终态之后它<strong>保留</strong>停止 / 失败那一刻已经生成的内容（MSG-I2）。 */
   public String content() {
     return content;
@@ -490,6 +538,10 @@ public class Message {
    * @throws IllegalArgumentException 不是助手消息，或它<strong>还在生成中</strong>
    */
   public void restart() {
+    if (kind == MessageKind.PROLOGUE) {
+      // ★ #286：开场白不是模型生成的回答，"重新生成"它等于把应用写好的一句话覆盖成模型输出
+      throw new IllegalArgumentException("开场白不是模型生成的回答，不能重新生成（重新生成只对模型回答成立）");
+    }
     if (role != MessageRole.ASSISTANT) {
       throw new IllegalArgumentException("只有助手的回答可以重新生成（这条消息是 " + role + "）");
     }
@@ -530,6 +582,11 @@ public class Message {
    * @throws IllegalArgumentException 违反上面第 1 或第 2 条
    */
   public void rate(MessageFeedback next) {
+    if (kind == MessageKind.PROLOGUE) {
+      // ★ #286：判定 ①「反馈按钮不出现在开场白上」的领域侧第二道网 —— 前端隐藏按钮之外，
+      //   任何入口拿开场白 id 来评价都必须被拒（领域不变量一旦有第二个入口就不再是不变量）
+      throw new IllegalArgumentException("开场白不是模型生成的回答，不能被赞/踩");
+    }
     if (role != MessageRole.ASSISTANT) {
       throw new IllegalArgumentException("只有助手的回答可以被赞/踩（这条消息是 " + role + "）");
     }

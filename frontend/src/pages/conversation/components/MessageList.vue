@@ -44,7 +44,13 @@
           -->
           <span v-if="msg.role !== 'USER'" class="avatar" aria-hidden="true">AI</span>
           <header class="msg-head">
-            <span class="label">{{ msg.role === 'USER' ? 'QUERY' : 'ANSWER' }}</span>
+            <!--
+              ★ 开场白标 `PROLOGUE` 而不是 `ANSWER`（#286）：它与回答同样落在助手那一侧，
+                但它不是模型这一次生成的 —— 让用户能一眼看出"这句话是应用配置的"。
+            -->
+            <span class="label">{{
+              msg.kind === 'PROLOGUE' ? 'PROLOGUE' : msg.role === 'USER' ? 'QUERY' : 'ANSWER'
+            }}</span>
             <span v-if="msg.role !== 'USER' && botIcon" class="bot-name tiny muted ellipsis">{{ botIcon }}</span>
             <span v-if="msg.status === 'GENERATING'" class="stat">
               <span class="dot ok" /><span class="tiny muted">生成中</span>
@@ -101,8 +107,15 @@
             </template>
           </div>
 
-          <!-- 引用来源：空应用 / 无引用时不显示 -->
-          <div v-if="msg.role !== 'USER' && msg.refs?.length" class="ref-block">
+          <!--
+            引用来源：空应用 / 无引用时不显示。
+            ★ 开场白不显示引用区（#286）：它没经过检索，`refs` 恒为 null —— 这一条是显式的，
+              不靠"refs 恰好为空"，否则以后有人给开场白塞引用就会静默渲染出一个来源块。
+          -->
+          <div
+            v-if="msg.role !== 'USER' && msg.kind !== 'PROLOGUE' && msg.refs?.length"
+            class="ref-block"
+          >
             <div class="label">SOURCES</div>
             <div class="ref-chips">
               <button
@@ -120,9 +133,18 @@
             </div>
           </div>
 
-          <!-- 操作条：空回答只留提示内的「重新生成」，不照常出整条 -->
+          <!--
+            操作条：空回答只留提示内的「重新生成」，不照常出整条。
+            ★ 开场白没有操作条（#286）：赞/踩/重新生成/分享/继续 全都只对"模型这一轮的回答"成立。
+              后端另有第二道网（`Message#rate` / `prepareRegenerate` 对 PROLOGUE 抛 400）。
+          -->
           <div
-            v-if="msg.role !== 'USER' && msg.status !== 'GENERATING' && !isEmptyAnswer(msg)"
+            v-if="
+              msg.role !== 'USER' &&
+              msg.kind !== 'PROLOGUE' &&
+              msg.status !== 'GENERATING' &&
+              !isEmptyAnswer(msg)
+            "
             class="actions"
           >
             <button type="button" class="act" @click="emit('copy', msg)">复制</button>

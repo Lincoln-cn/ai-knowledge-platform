@@ -256,6 +256,9 @@ public class ChatTurnWriter implements ChatTurnStore {
       }
       boolean usableAssistant =
           message.role() == cn.lincoln.aiplatform.conversation.domain.MessageRole.ASSISTANT
+              // ★ #286：开场白不是模型生成的回答，绝不进模型上下文 ——
+              //   否则模型会以为"上一轮我已经答过这么一句"，而它其实只是应用写好的一句欢迎语
+              && message.kind() == cn.lincoln.aiplatform.conversation.domain.MessageKind.ANSWER
               && message.content() != null
               && !message.content().isBlank();
       if (message.role() == cn.lincoln.aiplatform.conversation.domain.MessageRole.USER
@@ -411,6 +414,12 @@ public class ChatTurnWriter implements ChatTurnStore {
             .findById(target.conversationId())
             .filter(found -> found.userId().equals(userId))
             .orElseThrow(() -> notFound("消息不存在", "它可能已被删除，或者不在你的可见范围内"));
+
+    // ★ #286：开场白不能重新生成 —— 先挡在这里，而不是让后面的 preceding() 去报
+    //   "这条回答前面没有用户提问"（开场白通常是会话第一条消息，那句文案会把人引向错误的排查方向）
+    if (target.kind() == cn.lincoln.aiplatform.conversation.domain.MessageKind.PROLOGUE) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "开场白不是模型生成的回答，不能重新生成", "重新生成只对模型回答成立");
+    }
 
     // ★ 领域层会拒"不是助手"与"还在生成中"（两条都是 IllegalArgumentException ⇒ controller 转 400）
     Message previous =

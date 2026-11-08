@@ -53,10 +53,7 @@
           @load-earlier="chat.loadEarlier"
         />
 
-        <div
-          v-if="!chat.messages.value.length && !chat.loadingHistory.value && appBrief?.quickQuestions.length"
-          class="quick-asks"
-        >
+        <div v-if="showsQuickAsks && appBrief?.quickQuestions.length" class="quick-asks">
           <span class="micro muted">试试这些问题</span>
           <div class="quick-chips">
             <button
@@ -246,6 +243,21 @@ const emptyText = computed(() => {
   // 不要在空态文案里写「引用来源」四字 —— 文本断言会把说明当成引用块假阳
   return '开始提问吧。未挂知识库时回答只有模型自身知识，属正常现象。'
 })
+
+/**
+ * 推荐问题的显示判据（`#286` 判据 ②）。
+ *
+ * ★ 以前判的是「消息流为空」；现在开场白本身就是一条消息 ⇒ 那个判据会让推荐问题
+ * 在新建会话里**立刻消失**（回归）。这里改成它真正想表达的意思：
+ * 「这一段会话里还没有真实问答」—— 即消息全是开场白（空数组也满足）。
+ *
+ * ★ 明确的口径：**推荐问题是输入辅助，不是消息**。它不进 `cv_message`、不计入 `turnCount`、
+ * 不参与刷新后的历史回放 —— 刷新后能复原的只有开场白那一条。
+ */
+const showsQuickAsks = computed(
+  () =>
+    !chat.loadingHistory.value && chat.messages.value.every((m) => m.kind === 'PROLOGUE')
+)
 
 const composerPlaceholder = computed(
   () => '输入问题，Enter 发送 / Shift+Enter 换行'
@@ -443,7 +455,14 @@ const onCreateConv = async () => {
     activeConversation.value = conv
     applyAppBrief(conv, appId.value)
     await loadAppBrief(conv.appId || appId.value)
-    chat.messages.value = []
+    /*
+     * ★ 开场白现在是真正的第一条消息（`#286`）—— 建完会话必须把它**读回来**。
+     *
+     * 以前这里是 `chat.messages.value = []`：那时开场白只是空态里的一段静态文案，
+     * 消息流本来就是空的。现在后端在建会话时已把开场白落进 `cv_message`，
+     * 清空消息会让它"看不见"—— 症状正好等于"开场白没落库"，而且刷新后才出现。
+     */
+    await chat.loadHistory(conv.id)
     activeMessage.value = null
     activeRefIndex.value = null
     // ★ 新建会话同样清空草稿（草稿属于「上一条会话」）
@@ -510,6 +529,8 @@ const ensureConversation = async (): Promise<ConversationEx | null> => {
   history.prepend(conv)
   activeConversation.value = conv
   applyAppBrief(conv, appId.value)
+  // ★ 同 onCreateConv：新会话里可能已有开场白消息（`#286`），发送前先读回来，避免它被第一轮覆盖掉
+  await chat.loadHistory(conv.id)
   return conv
 }
 

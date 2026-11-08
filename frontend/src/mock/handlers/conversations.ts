@@ -21,6 +21,7 @@ import { clearanceFromToken } from '../fixtures/identity'
 import { documents, knowledgeBases, segments } from '../fixtures/knowledge'
 import {
   addConversation,
+  addPrologueMessage,
   appendTurn,
   conversations,
   createShare,
@@ -457,7 +458,7 @@ export const conversationRoutes: MockRoute[] = [
         throw new ApiError(ErrorCode.NOT_FOUND, `应用「${appId}」不存在或已下架`)
       }
 
-      return addConversation({
+      const conv = addConversation({
         id: `c${Date.now().toString(36)}`,
         title: '新建会话',
         appId: appId ?? null,
@@ -469,6 +470,12 @@ export const conversationRoutes: MockRoute[] = [
         ownerId: selfId(subjects),
         visibility: 'PRIVATE'
       })
+      /*
+       * ★ `#286`：开场白是会话里真正的第一条助手消息（与后端同口径）。
+       * 它落进消息表、刷新后仍在，但**不计 turnCount**、也没有生成状态 —— 它不是模型回答。
+       */
+      if (app?.prologue) addPrologueMessage(conv.id, app.prologue)
+      return conv
     }
   ],
 
