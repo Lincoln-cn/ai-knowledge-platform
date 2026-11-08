@@ -420,6 +420,12 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.retrieval.hop-budget-ratio`（`RETRIEVAL_HOP_BUDGET_RATIO`） | 0.6 | 多跳的"该收手了"水位：用掉 60% 就不开新一轮 |
 | `app.retrieval.query-understanding-enabled`（`RETRIEVAL_QU_ENABLED`） | true | 关掉 = **主动单路**，`degradeLevel` 保持 0（这是配置，不是降级 —— `#64` 判据 2） |
 | `app.retrieval.query-understanding-retry-on-parse-failure`（`RETRIEVAL_QU_RETRY`） | true | 关掉可省一次模型调用（CPU 上 4–5s），代价是解析失败直接降级 |
+| `app.retrieval.rerank.enabled`（`RETRIEVAL_RERANK_ENABLED`） | true | cross-encoder 重排总开关。★ 打开后**单条检索多 8.5s**（fp32 窗口 10），关掉回到约 0.9s。收益是 B3 引用准确率 60.00% → 73.33%（+13.33 点）—— 这是"质量换延迟"的开关，不是性能开关 |
+| `app.retrieval.rerank.top-k`（`RETRIEVAL_RERANK_TOP_K`） | 10 | ★★ **这个值才是质量的旋钮，不是模型**。窗口 5 只能修"第 1 条指向错文档"（`doc_top1` 93→100），B1/B3 一动不动 —— 因为答案段压根不在前 5，重排看不到它；窗口 10 才把 B1 85.13→87.18%、B3 60.00→73.33% 一起拉起来。调小省时间但白开 |
+| `app.retrieval.rerank.model-path`（`RETRIEVAL_RERANK_MODEL_PATH`） | `models/bge-reranker-base/model.onnx` | ONNX 模型路径（约 1GB，**不进仓库**，部署时要单独放）。相对路径按"当前工作目录 → 上一层"解析 |
+| `app.retrieval.rerank.tokenizer-path`（`RETRIEVAL_RERANK_TOKENIZER_PATH`） | `models/bge-reranker-base/tokenizer.json` | 分词器（约 16MB） |
+| `app.retrieval.rerank.listwise-enabled`（`RETRIEVAL_RERANK_LISTWISE_ENABLED`） | **false** | LLM listwise：对重排后的前 N 个再让对话模型排一次。20 条试跑 B3 65.00%→70.00%（+5 点），但单条 **3.12s**（p95 11.69s）⇒ 叠加检索 8.5s 后单跳 11.6s，**在本机破 B4 的 10s**。所以默认关：**它是"好机器上再打开"的增益件**。★ 三档覆盖顺序：请求体 `rerankListwise` > 应用 `retrieval.rerankListwise` > 这个全局值，`null` = 跟随下一级 |
+| `app.retrieval.rerank.listwise-top-k`（`RETRIEVAL_RERANK_LISTWISE_TOP_K`） | 5 | 交给 listwise 的候选数。只排 1 个等于没排，所以下限是 2（配 1 会在启动时被拒） |
 
 ### 分段与入库
 
