@@ -824,6 +824,9 @@ public class AssistantService {
         retrieval.multiHopEnabled(),
         retrieval.maxHops(),
         actorId);
+    // ★★ `#151`（2026-11-08）：listwise 那格单独写 —— 它的三档语义（null = 跟随全局）
+    //   与 applyRetrieval 的"覆盖式"不同：覆盖式会把 null 写成"没配过"，而这正是要保留的状态。
+    assistant.changeRerankListwise(retrieval.rerankListwise());
     assistant.bind(draft.kbIds(), draft.promptIds(), actorId);
   }
 
@@ -876,7 +879,8 @@ public class AssistantService {
         assistant.retrievalDecomposeEnabled(),
         assistant.retrievalMaxSubQuestions(),
         assistant.retrievalMultiHopEnabled(),
-        assistant.retrievalMaxHops());
+        assistant.retrievalMaxHops(),
+        assistant.retrievalRerankListwise());
   }
 
   private PublishCheckResult.Item modelItem(UUID modelId) {
@@ -1020,7 +1024,8 @@ public class AssistantService {
         assistant.retrievalDecomposeEnabled(),
         assistant.retrievalMaxSubQuestions(),
         assistant.retrievalMultiHopEnabled(),
-        assistant.retrievalMaxHops());
+        assistant.retrievalMaxHops(),
+        assistant.retrievalRerankListwise());
   }
 
   private static AssistantType requireType(AssistantType type) {
@@ -1118,7 +1123,8 @@ public class AssistantService {
       boolean decomposeEnabled,
       int maxSubQuestions,
       boolean multiHopEnabled,
-      int maxHops) {
+      int maxHops,
+      Boolean rerankListwise) {
 
     /**
      * 新建应用的检索参数默认值。
@@ -1137,7 +1143,46 @@ public class AssistantService {
      * prompt"读到的是**改写器**那条请求体。 知识库侧那三列的默认值仍是 3（它是"可配置能力"的默认展示值），但**应用侧是消费方**， 消费方的缺省应当与"不做这件事"一致。
      */
     public static RetrievalDraft defaults() {
-      return new RetrievalDraft("HYBRID", 0.6, 5, "REFUSE", 0, true, 3, false, 2);
+      return new RetrievalDraft("HYBRID", 0.6, 5, "REFUSE", 0, true, 3, false, 2, null);
+    }
+
+    /**
+     * 旧签名的构造器（{@code #283} 时期，9 参）。
+     *
+     * <p>★ {@code rerankListwise} 缺省 {@code null} = 跟随全局（用户 2026-11-08 的三档语义）， <b>不是</b> {@code
+     * false} —— 否则"新建的应用"会永远强制关掉全局开关打开的功能。
+     *
+     * @param mode 检索模式
+     * @param threshold 相似度阈值
+     * @param topN 引用分段 Top
+     * @param noRefStrategy 无引用策略
+     * @param queryCount 查询理解条数
+     * @param decomposeEnabled 是否拆子问题
+     * @param maxSubQuestions 子问题数上限
+     * @param multiHopEnabled 多跳开关
+     * @param maxHops 多跳轮数
+     */
+    public RetrievalDraft(
+        String mode,
+        double threshold,
+        int topN,
+        String noRefStrategy,
+        int queryCount,
+        boolean decomposeEnabled,
+        int maxSubQuestions,
+        boolean multiHopEnabled,
+        int maxHops) {
+      this(
+          mode,
+          threshold,
+          topN,
+          noRefStrategy,
+          queryCount,
+          decomposeEnabled,
+          maxSubQuestions,
+          multiHopEnabled,
+          maxHops,
+          null);
     }
   }
 }

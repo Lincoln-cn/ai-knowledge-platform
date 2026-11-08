@@ -94,7 +94,7 @@ class OnnxRerankerAdapterTest {
         MODEL.toFile().isFile() && TOKENIZER.toFile().isFile(),
         "模型文件不在（CI runner 没有 1GB 的 model.onnx）⇒ 跳过依赖真实推理的判据");
     return new OnnxRerankerAdapter(
-        new RerankProperties(true, 5, MODEL.toString(), TOKENIZER.toString()));
+        new RerankProperties(true, 5, MODEL.toString(), TOKENIZER.toString(), false, 5));
   }
 
   private static UUID seg(int value) {

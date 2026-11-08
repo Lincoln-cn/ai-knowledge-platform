@@ -60,7 +60,8 @@ class RerankWiringTest {
             new SegmentSearchPort.Scored(S2, 0.8),
             new SegmentSearchPort.Scored(S3, 0.7)));
     RecordingRerank rerank = new RecordingRerank(List.of(S3, S1, S2));
-    RetrievalService service = service(search, rerank, new RerankProperties(true, 3, "x", "y"));
+    RetrievalService service =
+        service(search, rerank, new RerankProperties(true, 3, "x", "y", false, 5));
 
     HitTestView view = service.hitTest(query());
 
@@ -92,7 +93,8 @@ class RerankWiringTest {
             new SegmentSearchPort.Scored(S2, 0.8),
             new SegmentSearchPort.Scored(S3, 0.7)));
     RecordingRerank rerank = new RecordingRerank(List.of(S3, S1, S2));
-    RetrievalService service = service(search, rerank, new RerankProperties(false, 3, "x", "y"));
+    RetrievalService service =
+        service(search, rerank, new RerankProperties(false, 3, "x", "y", false, 5));
 
     HitTestView view = service.hitTest(query());
 
@@ -144,7 +146,11 @@ class RerankWiringTest {
     RecordingListwise listwise = new RecordingListwise(List.of(S2, S3, S1));
     // 全局关 + 请求开 ⇒ 请求赢
     RetrievalService service =
-        service(search, RerankPort.noop(), new RerankProperties(false, 3, "x", "y"), listwise);
+        service(
+            search,
+            RerankPort.noop(),
+            new RerankProperties(false, 3, "x", "y", false, 5),
+            listwise);
 
     HitTestView view = service.hitTest(queryWithListwise(Boolean.TRUE));
 

@@ -128,6 +128,19 @@ public class Assistant implements OwnedResource {
   @Column(name = "retrieval_query_count", nullable = false)
   private short retrievalQueryCount = 3;
 
+  /**
+   * LLM listwise 重排（用户 2026-11-08：应用配置与对话配置都能改）。
+   *
+   * <p>三档：{@code null} = 跟随全局（{@code app.retrieval.rerank.listwise-enabled}，默认关）；{@code true} =
+   * 本应用打开； {@code false} = 本应用强制关。
+   *
+   * <p>★ 用包装类型 {@code Boolean} 而不是 {@code boolean}："没配过"与"显式关"必须能区分 —— 否则全局开关一开，
+   * 所有应用都被静默改写行为。{@code #294} 的导入端点还会反序列化旧 bundle，那里没有这一项， 基本类型会直接撞 {@code
+   * FAIL_ON_NULL_FOR_PRIMITIVES}。
+   */
+  @Column(name = "retrieval_rerank_listwise")
+  private Boolean retrievalRerankListwise;
+
   @Column(name = "retrieval_decompose_enabled", nullable = false)
   private boolean retrievalDecomposeEnabled = true;
 
@@ -295,6 +308,18 @@ public class Assistant implements OwnedResource {
     this.updatedBy = updatedBy;
   }
 
+  /**
+   * 单独设置 LLM listwise 的三档值（用户 2026-11-08）—— 与 {@link #applyRetrieval} 分开。
+   *
+   * <p>★ 为什么不做成 {@code applyRetrieval} 的第 11 个参数：那个方法有 6 处调用点， 每处都补一个 {@code Boolean} 会让"这次
+   * 请求根本没带这一项"（{@code #294} 的导入端点就是这样） 与"显式传 null"混在一起。单独一个 setter 让语义清楚： <b>调了才改，不调就不动</b>。
+   *
+   * @param value {@code null} = 跟随全局；{@code true} = 打开；{@code false} = 强制关
+   */
+  public void changeRerankListwise(Boolean value) {
+    this.retrievalRerankListwise = value;
+  }
+
   /** 覆盖式写入绑定关系（先清后加，交给 Hibernate 处理子表）。 */
   public void bind(List<UUID> kbIds, List<UUID> promptIds, UUID updatedBy) {
     this.kbIds.clear();
@@ -434,6 +459,15 @@ public class Assistant implements OwnedResource {
 
   public int retrievalMaxHops() {
     return retrievalMaxHops;
+  }
+
+  /**
+   * LLM listwise 重排的三档值（用户 2026-11-08）。
+   *
+   * @return {@code null} = 跟随全局；{@code true} = 本应用打开；{@code false} = 本应用强制关
+   */
+  public Boolean retrievalRerankListwise() {
+    return retrievalRerankListwise;
   }
 
   public RetrievalMode retrievalMode() {

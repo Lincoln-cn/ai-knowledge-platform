@@ -87,23 +87,12 @@ public record RerankProperties(
   }
 
   /**
-   * 不带 listwise 的旧签名（{@code #312} 时期）。
-   *
-   * <p>★ 为什么要留：那一批测试直接 {@code new RerankProperties(enabled, topK, model, tokenizer)} 造配置，它们不关心
-   * listwise ⇒ 缺省 {@code listwiseEnabled = false}、{@code listwiseTopK = 5}（＝生产默认）。
-   *
-   * @param enabled 是否启用 cross-encoder 重排
-   * @param topK 重排窗口
-   * @param modelPath ONNX 模型路径
-   * @param tokenizerPath tokenizer.json 路径
-   */
-  public RerankProperties(boolean enabled, int topK, String modelPath, String tokenizerPath) {
-    this(enabled, topK, modelPath, tokenizerPath, false, 5);
-  }
-
-  /**
    * 构造即校验（同 {@link RetrievalBudgetProperties} 的做法）：值的合法性属于<strong>这个类型</strong>， "直接 {@code
    * new}"的测试与"Boot 绑定"的生产走同一条检查。
+   *
+   * <p>★★ 这里<b>只留规范构造器</b>（6 参）。2026-11-08 曾加过一个 4 参便捷构造器（不带 listwise），结果是 <b>整个 Spring
+   * 上下文起不来</b>：{@code app.retrieval.rerank-…RerankProperties: No default constructor found} —— Boot
+   * 的构造绑定要求候选构造器<b>唯一</b>，多一个就绑不上，而报错文案说的是"没默认构造器"， 与真因（构造器不唯一）毫无关系。测试里要造简版配置，直接传全 6 参。
    *
    * @throws IllegalArgumentException 任一值不合法
    */

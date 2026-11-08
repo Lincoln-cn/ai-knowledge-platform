@@ -26,6 +26,7 @@ import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -182,6 +183,23 @@ public class RetrievalService {
         ListwiseRerankPort.noop());
   }
 
+  /**
+   * 生产用的构造器（8 参）。
+   *
+   * <p>★★ {@code @Autowired} 是必需的，不是装饰：这个类有<b>两个</b>构造器（这个 8 参与下面那个 7 参便捷版）， Spring
+   * 在候选不唯一时无法决定用哪个，报出来的却是 {@code Failed to instantiate … : No default constructor found} ——
+   * 文案与真因（构造器不唯一）毫无关系。2026-11-08 加 listwise 端口时就是这么撞了一次。
+   *
+   * @param segmentSearch 检索端口
+   * @param embeddingPort 向量化端口
+   * @param queryUnderstanding 查询理解
+   * @param multiHop 多跳
+   * @param budget 预算
+   * @param rerankPort cross-encoder 重排
+   * @param rerankProperties 重排配置
+   * @param listwiseRerankPort LLM listwise 重排
+   */
+  @Autowired
   public RetrievalService(
       SegmentSearchPort segmentSearch,
       EmbeddingPort embeddingPort,

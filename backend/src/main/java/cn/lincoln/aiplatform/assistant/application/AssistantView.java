@@ -85,15 +85,57 @@ public record AssistantView(
       Boolean decomposeEnabled,
       Integer maxSubQuestions,
       Boolean multiHopEnabled,
-      Integer maxHops) {
+      Integer maxHops,
+      Boolean rerankListwise) {
 
-    /** ★ 缺省归一：旧包没有这几项时按库里的列默认值补齐（查询理解 3 / 开 / 3；多跳关、2 轮）。 */
+    /**
+     * ★ 缺省归一：旧包没有这几项时按库里的列默认值补齐（查询理解 3 / 开 / 3；多跳关、2 轮）。
+     *
+     * <p>★ {@code rerankListwise} <b>不</b>归一成 {@code false}：它的三档语义里 {@code null} 表示"跟随全局" （用户
+     * 2026-11-08），归一会让"没配过"变成"显式关"，全局开关一开就再也打开不了 —— 这与 {@code #283} 要消灭的"配了不生效"是同一族问题。
+     */
     public RetrievalView {
       queryCount = queryCount == null ? 3 : queryCount;
       decomposeEnabled = decomposeEnabled == null ? Boolean.TRUE : decomposeEnabled;
       maxSubQuestions = maxSubQuestions == null ? 3 : maxSubQuestions;
       multiHopEnabled = multiHopEnabled != null && multiHopEnabled;
       maxHops = maxHops == null ? 2 : maxHops;
+    }
+
+    /**
+     * 旧签名的构造器（{@code #283} 时期，9 参）。
+     *
+     * @param mode 检索模式
+     * @param threshold 相似度阈值
+     * @param topN 引用分段 Top
+     * @param noRefStrategy 无引用策略
+     * @param queryCount 查询理解条数
+     * @param decomposeEnabled 是否拆子问题
+     * @param maxSubQuestions 子问题数上限
+     * @param multiHopEnabled 多跳开关
+     * @param maxHops 多跳轮数
+     */
+    public RetrievalView(
+        String mode,
+        double threshold,
+        int topN,
+        String noRefStrategy,
+        Integer queryCount,
+        Boolean decomposeEnabled,
+        Integer maxSubQuestions,
+        Boolean multiHopEnabled,
+        Integer maxHops) {
+      this(
+          mode,
+          threshold,
+          topN,
+          noRefStrategy,
+          queryCount,
+          decomposeEnabled,
+          maxSubQuestions,
+          multiHopEnabled,
+          maxHops,
+          null);
     }
   }
 
@@ -127,7 +169,8 @@ public record AssistantView(
             assistant.retrievalDecomposeEnabled(),
             assistant.retrievalMaxSubQuestions(),
             assistant.retrievalMultiHopEnabled(),
-            assistant.retrievalMaxHops()),
+            assistant.retrievalMaxHops(),
+            assistant.retrievalRerankListwise()),
         assistant.multiTurn(),
         assistant.thinkingEnabled(),
         assistant.prologue(),

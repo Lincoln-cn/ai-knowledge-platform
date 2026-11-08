@@ -83,7 +83,12 @@ public class AppBindingAdapter implements AppBindingPort {
             app.retrievalMaxHops(),
             app.retrievalQueryCount(),
             app.retrievalDecomposeEnabled(),
-            app.retrievalMaxSubQuestions()));
+            app.retrievalMaxSubQuestions(),
+            // ★★ `#151`（2026-11-08）：LLM listwise 的三档值也必须走这条路。
+            //   用户要的是"应用配置与对话配置都能改"，而这条适配器是"应用配置"进入问答链路的
+            //   唯一入口 —— 不接这里，界面上能配、检索链路永远读不到（`#283`/`#297` 两族假象）。
+            //   null 原样透传：它表示"跟随全局"，不是"关"。
+            app.retrievalRerankListwise()));
   }
 
   /**
