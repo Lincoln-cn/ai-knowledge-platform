@@ -39,6 +39,10 @@ class AppBindingAdapterTest {
     when(app.retrievalThreshold()).thenReturn(new BigDecimal("0.60"));
     when(app.retrievalTopN()).thenReturn(5);
     when(app.retrievalNoRefStrategy()).thenReturn(NoRefStrategy.REFUSE);
+    // ★ 必须显式 stub 成 null：Mockito 对包装类型 Boolean 的默认返回是 false（不是 null），
+    // 而 false 在这条链路上是「本应用强制关重排」这个有意义的取值 —— 不 stub 就等于
+    // 让测试替身替我们做了一个"用户配过关"的决定。null 才是「没配过 = 跟随全局」。
+    when(app.retrievalRerankListwise()).thenReturn(null);
 
     AssistantRepository assistants = mock(AssistantRepository.class);
     when(assistants.findById(appId)).thenReturn(Optional.of(app));
@@ -54,5 +58,8 @@ class AppBindingAdapterTest {
     assertThat(binding.retrieval())
         .as("检索参数仍然随绑定走，不能被本次改动挤掉")
         .isEqualTo(new RetrievalParams(RetrievalMode.FULLTEXT, 0.60, 5, NoRefStrategy.REFUSE));
+    assertThat(binding.retrieval().rerankListwise())
+        .as("★ 应用没配过这一项 ⇒ 必须是 null（跟随全局），不是 false（强制关）")
+        .isNull();
   }
 }
