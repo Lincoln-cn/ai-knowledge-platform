@@ -44,6 +44,14 @@ export interface RetrievalParams {
   multiHopEnabled?: boolean
   /** 多跳轮数上限（含首轮），1～3；缺省 2（= 首轮 + 最多再检一轮） */
   maxHops?: number
+  /**
+   * 列表重排（LLM listwise）的**应用级**开关。
+   *
+   * ★ 三态：`undefined`/`null` = 跟随全局（`app.retrieval.rerank.listwise-enabled`，默认关）·
+   * `true` = 本应用开 · `false` = 本应用强制关。`false` 与 `null` 语义不同，不能合并 ——
+   * 合并之后"跟随全局"就没法表达了。优先级：请求 > 应用 > 全局。
+   */
+  rerankListwise?: boolean | null
 }
 
 export interface HitItem {

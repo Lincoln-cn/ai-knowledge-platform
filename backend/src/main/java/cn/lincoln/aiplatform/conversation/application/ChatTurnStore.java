@@ -30,6 +30,17 @@ public interface ChatTurnStore {
       UUID conversationId, UUID appId, String question, UUID userId);
 
   /**
+   * 同上，但把<strong>请求级</strong>的列表重排开关一起带进去。
+   *
+   * <p>★ 默认实现委托给四参版本并传 {@code null}（= 跟随应用 / 全局）—— 这样既有的测试替身不用改， 而"请求级开关"只在真实现里生效。{@code null} 不是
+   * {@code false}：三档语义见 {@code RerankProperties}。
+   */
+  default ChatTurnWriter.PreparedTurn prepare(
+      UUID conversationId, UUID appId, String question, UUID userId, Boolean rerankListwise) {
+    return prepare(conversationId, appId, question, userId);
+  }
+
+  /**
    * 调试的一轮（{@code #184}）：<strong>只读应用绑定、不建会话、不建消息、不落库</strong>。
    *
    * <p>★★ 它是"调试与正式问答使用同一套配置"（{@code BR-02-08}）的落点：应用 → 模型 / 知识库 / 角色设定 / 检索参数 的映射仍然只在 {@link

@@ -118,7 +118,49 @@ public class ChatTurnWriter implements ChatTurnStore {
       //   "给应用选提示词"是个只在界面上生效的设置。空 = 没绑。
       List<String> promptTexts,
       // ★ `#185`：应用级检索参数。通用问答（app == null）时是 null ⇒ 由 ChatService 回落到平台设置。
-      RetrievalParams retrieval) {}
+      RetrievalParams retrieval,
+      // ★ 请求级的列表重排（LLM listwise）开关：null = 跟随应用 / 全局（三档语义，见
+      //   RerankProperties）。它必须走 PreparedTurn 而不是在 ChatService 里再查一次请求体 ——
+      //   重新生成那一路的请求体与首轮不是同一个，两处各查一次就会出现"上一轮的开、这一轮的关"。
+      Boolean rerankListwise) {
+
+    /**
+     * 不带请求级开关的构造器（{@code rerankListwise} 缺省 = 跟随应用 / 全局）。
+     *
+     * <p>★ 留着它是为了不让"加一个可选开关"变成"改所有造这一轮的地方"：调试路径、 重新生成路径、以及一批既有测试都只关心别的字段。缺省值必须是 {@code null} 而不是
+     * {@code false} —— 见 {@code RerankProperties} 的三档语义。
+     */
+    public PreparedTurn(
+        UUID conversationId,
+        UUID assistantMessageId,
+        UUID userMessageId,
+        String traceId,
+        String modelLabel,
+        UUID modelId,
+        List<UUID> kbIds,
+        boolean multiTurn,
+        boolean thinkingEnabled,
+        UUID appId,
+        String rolePrompt,
+        List<String> promptTexts,
+        RetrievalParams retrieval) {
+      this(
+          conversationId,
+          assistantMessageId,
+          userMessageId,
+          traceId,
+          modelLabel,
+          modelId,
+          kbIds,
+          multiTurn,
+          thinkingEnabled,
+          appId,
+          rolePrompt,
+          promptTexts,
+          retrieval,
+          null);
+    }
+  }
 
   /**
    * 建这一轮的两条消息（用户消息 + {@code GENERATING} 助手消息）并把模型定下来。
@@ -139,6 +181,16 @@ public class ChatTurnWriter implements ChatTurnStore {
   @Override
   @Transactional
   public PreparedTurn prepare(UUID conversationId, UUID appId, String question, UUID userId) {
+    return prepare(conversationId, appId, question, userId, null);
+  }
+
+  /**
+   * 建这一轮，并把<strong>请求级</strong>的列表重排开关带进去。
+   *
+   * @param rerankListwise null = 跟随应用 / 全局；true = 本次强制开；false = 本次强制关
+   */
+  public PreparedTurn prepare(
+      UUID conversationId, UUID appId, String question, UUID userId, Boolean rerankListwise) {
     // ★ 请求体里的 appId 只在**新建会话**时生效；已有会话的应用以 conversation.assistantId 为准。
     //   否则「会话 A + appId B」会用 B 的模型/知识库写进 A 的会话（#190）。
     AppBindingPort.AppBinding requestedApp = appId == null ? null : requireVisibleApp(appId);
@@ -193,7 +245,8 @@ public class ChatTurnWriter implements ChatTurnStore {
         // ★ `#215`：提示词正文随这一轮进链路（此前只有 rolePrompt 一个来源）
         app == null ? List.of() : app.promptTexts(),
         // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）
-        app == null ? null : app.retrieval());
+        app == null ? null : app.retrieval(),
+        rerankListwise);
   }
 
   /**
@@ -227,7 +280,8 @@ public class ChatTurnWriter implements ChatTurnStore {
         app.rolePrompt(),
         // ★ `#215`：调试要看到和应用会话**同一段** prompt —— 否则"调试通过、线上不一致"（`BR-02-08`）
         app.promptTexts(),
-        app.retrieval());
+        app.retrieval(),
+        null);
   }
 
   /**
@@ -469,7 +523,8 @@ public class ChatTurnWriter implements ChatTurnStore {
         // ★ `#215`：提示词正文随这一轮进链路（此前只有 rolePrompt 一个来源）
         app == null ? List.of() : app.promptTexts(),
         // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）
-        app == null ? null : app.retrieval());
+        app == null ? null : app.retrieval(),
+        null);
   }
 
   /**

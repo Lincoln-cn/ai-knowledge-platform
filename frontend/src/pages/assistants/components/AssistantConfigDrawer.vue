@@ -207,6 +207,20 @@
           </el-radio-group>
         </el-form-item>
 
+        <el-form-item label="列表重排">
+          <!-- ★ 三态而不是开关：null = 跟随全局（默认关），false 是"本应用强制关"这个有意义的
+               取值，不是"没配过"。把 null 与 false 混用会让"跟随全局"与"强关"无法区分。 -->
+          <el-radio-group v-model="form.retrieval.rerankListwise">
+            <el-radio-button :value="null">跟随全局</el-radio-button>
+            <el-radio-button :value="true">本应用开</el-radio-button>
+            <el-radio-button :value="false">本应用关</el-radio-button>
+          </el-radio-group>
+          <span class="micro muted" style="margin-left: var(--space-xs)">
+            用交叉编码器把候选段重新排序（#312）。★ 质量会涨，但每题多 2～8 秒 —— 单跳延迟门槛
+            10s 已经很紧，所以全局默认关；部署到算力更好的机器上再打开
+          </span>
+        </el-form-item>
+
         <el-form-item label="开场白">
           <el-input
             v-model="form.prologue"
@@ -290,7 +304,9 @@ const form = reactive({
     maxSubQuestions: 3,
     // ★ 多跳（#283）：应用级也有一份，默认关 —— 与知识库级同样的口径（谁配谁生效，应用优先）
     multiHopEnabled: false,
-    maxHops: 2
+    maxHops: 2,
+    // ★ 三态：null = 跟随全局（默认关）；false = 本应用强制关 —— 与 null 语义不同，不能合并
+    rerankListwise: null as boolean | null
   },
   prologue: '',
   multiTurn: true,
@@ -370,7 +386,8 @@ const fillForm = (a: Assistant) => {
     decomposeEnabled: a.retrieval.decomposeEnabled ?? true,
     maxSubQuestions: a.retrieval.maxSubQuestions ?? 3,
     multiHopEnabled: a.retrieval.multiHopEnabled ?? false,
-    maxHops: a.retrieval.maxHops ?? 2
+    maxHops: a.retrieval.maxHops ?? 2,
+    rerankListwise: a.retrieval.rerankListwise ?? null
   }
   form.prologue = a.prologue
   form.multiTurn = a.multiTurn

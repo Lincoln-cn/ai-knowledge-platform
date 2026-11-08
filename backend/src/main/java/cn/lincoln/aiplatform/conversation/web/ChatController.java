@@ -354,7 +354,11 @@ public class ChatController {
     ChatService.StartedTurn started =
         chatService.startTurn(
             new ChatService.ChatRequest(
-                body.appId(), body.conversationId(), body.question(), userId),
+                body.appId(),
+                body.conversationId(),
+                body.question(),
+                userId,
+                body.rerankListwise()),
             mode,
             body.targetMessageId());
     // ★★ #187 判据 4：`attachmentIds` 从「收下但不消费」变成「真进检索」（13 §11.4.1 / §11.2 第三域）。
@@ -501,5 +505,9 @@ public class ChatController {
       // 契约 ChatMode = 'NEW' | 'REGENERATE' | 'CONTINUE'（不传按 NEW 处理）
       String mode,
       // 重生成 / 继续生成的目标助手消息（REGENERATE 必填）
-      UUID targetMessageId) {}
+      UUID targetMessageId,
+      // 列表重排（LLM listwise）的**请求级**开关：null = 跟随应用 / 全局（推荐，也是默认）。
+      // ★ 三档语义与 #318 那条"null ≠ false"同源：false 在三级配置里是"本次强制关"这个有意义的取值，
+      // 不能拿它表示"没配过"。
+      Boolean rerankListwise) {}
 }

@@ -353,7 +353,14 @@ public class ChatService {
    * @param question 提问（非空）
    * @param userId 当前登录用户（★ 从 JWT 的 {@code sub} 取）
    */
-  public record ChatRequest(UUID appId, UUID conversationId, String question, UUID userId) {}
+  public record ChatRequest(
+      UUID appId, UUID conversationId, String question, UUID userId, Boolean rerankListwise) {
+
+    /** 不带请求级开关的老签名：{@code rerankListwise} 缺省 = 跟随应用 / 全局。 */
+    public ChatRequest(UUID appId, UUID conversationId, String question, UUID userId) {
+      this(appId, conversationId, question, userId, null);
+    }
+  }
 
   /**
    * 一轮的启动结果：<strong>落库读数 + 真正要问的问题</strong>。
@@ -438,7 +445,11 @@ public class ChatService {
       throw new BusinessException(ErrorCode.BAD_REQUEST, "问题不能为空", "请输入你想问的内容");
     }
     return turns.prepare(
-        request.conversationId(), request.appId(), request.question().strip(), request.userId());
+        request.conversationId(),
+        request.appId(),
+        request.question().strip(),
+        request.userId(),
+        request.rerankListwise());
   }
 
   /**
@@ -524,19 +535,24 @@ public class ChatService {
    * ChatTurnWriter} / 适配器）—— 那正是口径会漂的形状。
    */
   private RetrievalParams effectiveRetrieval(ChatTurnWriter.PreparedTurn turn) {
+    RetrievalParams base;
     if (turn.retrieval() != null) {
-      return turn.retrieval();
+      base = turn.retrieval();
+    } else if (policyResolver == null) {
+      base = RetrievalParams.platformDefaults();
+    } else {
+      base =
+          new RetrievalParams(
+              // ★ 平台设置没有"检索模式"这一格（它只属于应用 / 知识库）⇒ 通用问答固定全文。
+              RetrievalMode.FULLTEXT,
+              policyResolver.retrievalThreshold(),
+              policyResolver.retrievalTopN(),
+              // ★ 通用问答没有"无引用策略"这一格 ⇒ 保持既有行为（自由回答）。
+              NoRefStrategy.FREE_ANSWER);
     }
-    if (policyResolver == null) {
-      return RetrievalParams.platformDefaults();
-    }
-    return new RetrievalParams(
-        // ★ 平台设置没有"检索模式"这一格（它只属于应用 / 知识库）⇒ 通用问答固定全文。
-        RetrievalMode.FULLTEXT,
-        policyResolver.retrievalThreshold(),
-        policyResolver.retrievalTopN(),
-        // ★ 通用问答没有"无引用策略"这一格 ⇒ 保持既有行为（自由回答）。
-        NoRefStrategy.FREE_ANSWER);
+    // ★ 请求级覆盖叠在最后：null = 保持应用 / 全局（三档语义）。
+    //   放在这里而不是各处调用点，是因为本方法已经是"这一轮到底用什么检索参数"的**唯一出口**。
+    return base.withRerankListwise(turn.rerankListwise());
   }
 
   /**
