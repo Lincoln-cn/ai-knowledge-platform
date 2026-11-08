@@ -27,7 +27,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class LinearWorkflowExecutor {
 
   private static final String START = "START_NODE";
-  private static final Set<String> SUPPORTED_TYPES =
+
+  /**
+   * 本版本执行器真正能跑的节点类型。
+   *
+   * <p>★ 对外可见是因为 {@link WorkflowValidationService} 要用它做<strong>发布前</strong>拦截： 这个集合之外的类型在运行时才会抛
+   * {@code IllegalArgumentException}，而发布校验不拦就等于 "发布成功、点试用时 500"。判据必须与执行器读同一份常量，不许各写一份 —— 两处各写一份，
+   * 将来加一个节点类型时必然漏改一处。
+   */
+  public static final Set<String> SUPPORTED_TYPES =
       Set.of("START_NODE", "SEARCH_DATASET_NODE", "AI_CHAT_NODE", "REPLY_NODE");
 
   private final WorkflowNodeExecutionRepository records;

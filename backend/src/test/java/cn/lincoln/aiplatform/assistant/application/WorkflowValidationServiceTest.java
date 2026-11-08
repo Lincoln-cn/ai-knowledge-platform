@@ -49,6 +49,62 @@ class WorkflowValidationServiceTest {
   }
 
   @Test
+  @DisplayName("条件分支：发布前就拦住，而不是发布成功、点试用时才 500")
+  void conditionNodeIsRejectedAtPublishTime() {
+    WorkflowValidationService.Result result =
+        service.validate(
+            new WorkflowValidationService.Graph(
+                List.of(
+                    node("a", "START_NODE"),
+                    node("b", "CONDITION_NODE"),
+                    node("c", "AI_CHAT_NODE")),
+                List.of(edge("a", "b"), edge("b", "c"))));
+
+    assertThat(codes(result)).contains("NODE_NOT_EXECUTABLE");
+    assertThat(result.passed()).isFalse();
+    assertThat(result.issues())
+        .filteredOn(issue -> "NODE_NOT_EXECUTABLE".equals(issue.code()))
+        .singleElement()
+        .satisfies(
+            issue -> {
+              assertThat(issue.nodeId()).isEqualTo("b");
+              assertThat(issue.message()).contains("本版本执行引擎还跑不了");
+              assertThat(issue.hint()).contains("V1.0");
+            });
+  }
+
+  @Test
+  @DisplayName("问题优化：implemented=true 但执行器没有它的执行器，同样在发布前拦住")
+  void questionNodeIsRejectedAtPublishTime() {
+    WorkflowValidationService.Result result =
+        service.validate(
+            new WorkflowValidationService.Graph(
+                List.of(
+                    node("a", "START_NODE"), node("b", "QUESTION_NODE"), node("c", "AI_CHAT_NODE")),
+                List.of(edge("a", "b"), edge("b", "c"))));
+
+    assertThat(codes(result)).contains("NODE_NOT_EXECUTABLE");
+    assertThat(result.passed()).isFalse();
+  }
+
+  @Test
+  @DisplayName("四种可执行节点：不报 NODE_NOT_EXECUTABLE（防这条规则一概拦死）")
+  void fourExecutableTypesDoNotTriggerThatRule() {
+    WorkflowValidationService.Result result =
+        service.validate(
+            new WorkflowValidationService.Graph(
+                List.of(
+                    node("a", "START_NODE"),
+                    node("b", "SEARCH_DATASET_NODE"),
+                    node("c", "AI_CHAT_NODE"),
+                    node("d", "REPLY_NODE")),
+                List.of(edge("a", "b"), edge("b", "c"), edge("c", "d"))));
+
+    assertThat(codes(result)).doesNotContain("NODE_NOT_EXECUTABLE");
+    assertThat(result.passed()).isTrue();
+  }
+
+  @Test
   @DisplayName("两个开始节点：入口不唯一")
   void twoStartsIsAnError() {
     WorkflowValidationService.Result result =
