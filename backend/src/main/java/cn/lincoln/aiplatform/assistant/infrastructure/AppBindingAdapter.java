@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * {@link AppBindingPort} 的实现 —— 端口在 {@code platform}、实现在提供方模块（{@code assistant}）。
@@ -50,6 +51,7 @@ public class AppBindingAdapter implements AppBindingPort {
   }
 
   @Override
+  @Transactional(readOnly = true)
   public Optional<AppBinding> findVisibleById(UUID appId) {
     if (appId == null) {
       // ★ null 不是"也许有这个应用"：通用问答本来就没有应用，直接空，不去查库

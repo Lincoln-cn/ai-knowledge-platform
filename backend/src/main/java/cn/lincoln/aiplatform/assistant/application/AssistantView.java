@@ -157,9 +157,9 @@ public record AssistantView(
         favorited,
         assistant.modelId(),
         modelName,
-        assistant.kbIds(),
+        copyOf(assistant.kbIds()),
         assistant.rolePrompt(),
-        assistant.promptIds(),
+        copyOf(assistant.promptIds()),
         new RetrievalView(
             assistant.retrievalMode().name(),
             assistant.retrievalThreshold().doubleValue(),
@@ -181,7 +181,24 @@ public record AssistantView(
         assistant.ownerId(),
         assistant.visibility().name(),
         assistant.grants(),
-        assistant.tags(),
+        copyOf(assistant.tags()),
         assistant.createdAt());
+  }
+
+  /**
+   * 把领域对象上的集合**复制出来**，而不是把它的引用塞进视图。
+   *
+   * <p>★ 这不是防御性编程的洁癖，是一个真踩过的 500：{@code Assistant.kbIds/promptIds/tags} 是 JPA 的懒加载集合，而视图是 record ——
+   * 它的字段要到 <strong>Jackson 序列化</strong>时才被读取，那时 {@code @Transactional} 方法的会话早已关闭，于是抛 {@code
+   * LazyInitializationException: Cannot lazily initialize collection ... (no session)}。
+   *
+   * <p>症状特别容易误判：同一个实体在「创建 / 更新」这类先写过集合的路径上不炸（写的时候集合已被 初始化），只在「从模板 instantiate
+   * 出来再读」这类干净会话上炸，看起来像"模板功能坏了"而不是 "视图层持有懒加载引用"。
+   *
+   * <p>复制发生在 {@code from(...)} 被调用的那一刻 —— 也就是事务内 —— 所以它同时也是一次 显式初始化。{@code null}
+   * 统一归一成空列表：视图里两个"没有"（null 与空）对前端没有区别， 而对序列化有区别。
+   */
+  private static <T> List<T> copyOf(List<T> source) {
+    return source == null ? List.of() : List.copyOf(source);
   }
 }
