@@ -138,7 +138,8 @@ final class CaliberShape {
           "conversation/V49__message_feedback_state.sql",
           "conversation/V53__conversation_share.sql",
           "conversation/V63__conversation_file.sql",
-          "conversation/V87__conversation_message_prologue.sql");
+          "conversation/V87__conversation_message_prologue.sql",
+          "assistant/V88__assistant_trigger_slots.sql");
 
   private CaliberShape() {}
 
