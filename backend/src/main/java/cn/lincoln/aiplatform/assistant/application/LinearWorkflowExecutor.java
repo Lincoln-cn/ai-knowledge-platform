@@ -66,7 +66,8 @@ public class LinearWorkflowExecutor {
         throw new IllegalStateException("没有类型 " + step.type() + " 的节点执行器");
       }
       try {
-        executor.execute(new WorkflowNodeContext(executionId, step.nodeId(), step.type(), state));
+        executor.execute(
+            new WorkflowNodeContext(executionId, step.nodeId(), step.type(), input, state));
       } catch (Exception ex) {
         // ★ 抛出去让 @Transactional 整体回滚 —— L1：失败那跑的节点记录不得显示成功。
         throw ex instanceof RuntimeException runtime ? runtime : new IllegalStateException(ex);
