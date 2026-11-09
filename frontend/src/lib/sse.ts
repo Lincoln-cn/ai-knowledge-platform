@@ -192,7 +192,14 @@ export function chatStreamViaSse(options: ChatStreamOptions): StreamHandle {
         conversationId: options.conversationId,
         question: options.question,
         attachmentIds: options.attachmentIds ?? [],
-        thinking: options.thinking ?? false
+        thinking: options.thinking ?? false,
+        // ★★ `mode` / `targetMessageId` 必须一起发：契约里它们是表达"覆盖重生成 / 续写"
+        //   意图的唯一方式，缺了服务端只能按 `NEW` 处理 —— 结果是**点重新生成会多出一轮问答**，
+        //   而界面上看起来只是"重生成了一次"。
+        //   ★ 这两格此前只在 mock 层（`mock/stream.ts:151`）实现，真栈这条链漏了 ——
+        //     `mock 与真栈行为不一致` 正是"mock 只住传输层"这条纪律要防的形状。
+        mode: options.mode,
+        targetMessageId: options.targetMessageId
       })
     })
 
