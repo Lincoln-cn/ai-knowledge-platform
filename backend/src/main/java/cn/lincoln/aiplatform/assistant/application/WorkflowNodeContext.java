@@ -24,6 +24,7 @@ import java.util.UUID;
  * @param input 本次执行的用户输入（可为 {@code null}）
  * @param state 同一次执行内共享的流程状态
  * @param nodeConfig 当前节点在画布上那段 {@code properties.config}；没有就是空 map
+ * @param userId 发起这次执行的用户；{@code null} = 未知（见下）
  */
 public record WorkflowNodeContext(
     UUID executionId,
@@ -31,7 +32,18 @@ public record WorkflowNodeContext(
     String type,
     String input,
     FlowState state,
-    Map<String, Object> nodeConfig) {
+    Map<String, Object> nodeConfig,
+    UUID userId) {
+
+  /**
+   * ★ <strong>{@code userId} 是 {@code #326} 加的最后一格，而且现在还没有任何人读它。</strong>
+   *
+   * <p>它存在的原因：检索节点要按"谁在执行"去查 —— 密级 pre-filter 与组织 scope 都挂在人身上。在这个字段之前， 执行上下文里只有 {@code
+   * executionId}，执行器回答不了"这是谁的知识库"，于是只有两条路：按系统身份查（等于绕过密级）、 或者不查（功能缺失）。两者都不是实现层面能决定的，所以先把通道建出来。
+   *
+   * <p>★ 现在 {@code LinearWorkflowExecutor} 传的是 {@code null}（执行记录里还没有"谁发起"这一列）。<strong>这不是占位符语义，
+   * 是"真的未知"</strong> —— 因此读到 {@code null} 的实现都不许按"能看到全部"处理。
+   */
 
   /**
    * ★ <strong>{@code nodeConfig} 是 {@code #326} 加的第 6 格</strong>：加之前节点配置在编译阶段就被丢掉了（{@code
@@ -48,13 +60,28 @@ public record WorkflowNodeContext(
   }
 
   /**
+   * 兼容构造器：{@code #326} 加 {@code userId} 之前（无执行者身份）。
+   *
+   * <p>★ 现在 {@code LinearWorkflowExecutor} 走的正是这一条，因为执行记录里还没有「谁发起」这一列。
+   */
+  public WorkflowNodeContext(
+      UUID executionId,
+      String nodeId,
+      String type,
+      String input,
+      FlowState state,
+      Map<String, Object> nodeConfig) {
+    this(executionId, nodeId, type, input, state, nodeConfig, null);
+  }
+
+  /**
    * 兼容构造器：{@code #326} 加 {@code nodeConfig} 之前的签名（无节点配置）。
    *
    * <p>★ 保留它是为了让"只加字段"这一次提交不牵动任何既有调用点 —— 先证明加了字段别处没坏，再写使用方。
    */
   public WorkflowNodeContext(
       UUID executionId, String nodeId, String type, String input, FlowState state) {
-    this(executionId, nodeId, type, input, state, Map.of());
+    this(executionId, nodeId, type, input, state, Map.of(), null);
   }
 
   /**
@@ -63,6 +90,6 @@ public record WorkflowNodeContext(
    * <p>★ 保留它是因为既有测试与 {@code NodeExecutor} 的实现方都是按 4 参构造的；新代码请用 6 参重载。
    */
   public WorkflowNodeContext(UUID executionId, String nodeId, String type, FlowState state) {
-    this(executionId, nodeId, type, null, state, Map.of());
+    this(executionId, nodeId, type, null, state, Map.of(), null);
   }
 }
