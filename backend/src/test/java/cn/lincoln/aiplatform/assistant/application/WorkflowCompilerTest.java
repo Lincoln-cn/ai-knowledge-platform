@@ -133,4 +133,47 @@ class WorkflowCompilerTest {
     assertThat(result.plan()).isNull();
     assertThat(result.errors()).anySatisfy(error -> assertThat(error).contains("不连通"));
   }
+
+  @Test
+  @DisplayName("画布 JSON 上的节点配置一路带到 PlanStep.config（#326）")
+  void carriesNodeConfigFromCanvasJsonToPlanStep() throws Exception {
+    // ★ 用真实的画布 JSON 形状反序列化，而不是 new Node(id, type) —— 这一条要证的正是
+    // 「Jackson 把 properties 填进来了」，用构造器造出来的节点证明不了这件事。
+    String json =
+        """
+        {
+          "nodes": [
+            {"id": "s", "type": "START_NODE"},
+            {"id": "d", "type": "SEARCH_DATASET_NODE",
+             "properties": {"config": {"dataset_id_list": ["kb-1", "kb-2"],
+                                       "retrieval": {"topN": 5}}}},
+            {"id": "r", "type": "REPLY_NODE"}
+          ],
+          "edges": [
+            {"source": "s", "target": "d"},
+            {"source": "d", "target": "r"}
+          ]
+        }
+        """;
+    WorkflowCompiler.Graph graph = new ObjectMapper().readValue(json, WorkflowCompiler.Graph.class);
+
+    WorkflowCompiler.CompileResult result = compiler.compile(graph);
+    assertThat(result.ok()).as("这张图必须编译成功").isTrue();
+
+    WorkflowCompiler.PlanStep search =
+        result.plan().steps().stream()
+            .filter((step) -> "d".equals(step.nodeId()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(search.config())
+        .as("检索节点的配置必须带出来，否则执行器拿不到要检索哪些库")
+        .containsEntry("dataset_id_list", java.util.List.of("kb-1", "kb-2"));
+
+    WorkflowCompiler.PlanStep start =
+        result.plan().steps().stream()
+            .filter((step) -> "s".equals(step.nodeId()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(start.config()).as("没配 config 的节点给空 map，不是 null").isEmpty();
+  }
 }
