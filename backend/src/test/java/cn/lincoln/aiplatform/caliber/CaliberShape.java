@@ -141,7 +141,8 @@ final class CaliberShape {
           "conversation/V87__conversation_message_prologue.sql",
           "assistant/V88__assistant_trigger_slots.sql",
           "assistant/V89__assistant_template_center.sql",
-          "assistant/V90__assistant_template_builtin_seed.sql");
+          "assistant/V90__assistant_template_builtin_seed.sql",
+          "assistant/V91__assistant_workflow_record_user.sql");
 
   private CaliberShape() {}
 
