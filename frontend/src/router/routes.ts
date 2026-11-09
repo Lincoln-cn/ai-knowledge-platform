@@ -57,7 +57,9 @@ export const navGroups: NavGroup[] = [
       { path: '/conversation', label: '对话', icon: 'ChatDotRound' },
       { path: '/knowledge', label: '知识库', icon: 'Collection' },
       { path: '/market', label: '应用市场', icon: 'Shop' },
-      { path: '/assistants', label: '应用管理', icon: 'Grid' }
+      { path: '/assistants', label: '应用管理', icon: 'Grid' },
+      // 模板中心挨着应用管理：模板是「应用的配置快照」，两者是同一件东西的两个状态
+      { path: '/templates', label: '模板中心', icon: 'Files' }
     ]
   },
   {
