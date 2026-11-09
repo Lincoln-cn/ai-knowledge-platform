@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.assistant.application;
 
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -22,16 +23,46 @@ import java.util.UUID;
  * @param type 当前节点类型
  * @param input 本次执行的用户输入（可为 {@code null}）
  * @param state 同一次执行内共享的流程状态
+ * @param nodeConfig 当前节点在画布上那段 {@code properties.config}；没有就是空 map
  */
 public record WorkflowNodeContext(
-    UUID executionId, String nodeId, String type, String input, FlowState state) {
+    UUID executionId,
+    String nodeId,
+    String type,
+    String input,
+    FlowState state,
+    Map<String, Object> nodeConfig) {
+
+  /**
+   * ★ <strong>{@code nodeConfig} 是 {@code #326} 加的第 6 格</strong>：加之前节点配置在编译阶段就被丢掉了（{@code
+   * WorkflowCompiler.Node} 只有 {@code id} / {@code type}）⇒ {@code SEARCH_DATASET_NODE} 拿不到 {@code
+   * dataset_id_list}、{@code AI_CHAT_NODE} 拿不到模型，执行器写出来也是空转。
+   *
+   * <p>★ 它和 {@code input} 的区别：{@code input} 是**一次执行**的属性（所有节点读同一份），{@code nodeConfig}
+   * 是**一个节点**的属性（每个节点不同）。混成一个字段会让执行器分不清"这是用户说的"还是"这是配的"。
+   *
+   * <p>★ 永不返回 {@code null}：编译期已把缺失归一成 {@link Map#of()}，执行器不必判空 —— 判空散落到每个实现里， 只要漏一处就是 NPE。
+   */
+  public WorkflowNodeContext {
+    nodeConfig = nodeConfig == null ? Map.of() : Map.copyOf(nodeConfig);
+  }
+
+  /**
+   * 兼容构造器：{@code #326} 加 {@code nodeConfig} 之前的签名（无节点配置）。
+   *
+   * <p>★ 保留它是为了让"只加字段"这一次提交不牵动任何既有调用点 —— 先证明加了字段别处没坏，再写使用方。
+   */
+  public WorkflowNodeContext(
+      UUID executionId, String nodeId, String type, String input, FlowState state) {
+    this(executionId, nodeId, type, input, state, Map.of());
+  }
 
   /**
    * 兼容构造器：{@code #326} 之前的签名（无 {@code input}）。
    *
-   * <p>★ 保留它是因为既有测试与 {@code NodeExecutor} 的实现方都是按 4 参构造的；新代码请用 5 参重载。
+   * <p>★ 保留它是因为既有测试与 {@code NodeExecutor} 的实现方都是按 4 参构造的；新代码请用 6 参重载。
    */
   public WorkflowNodeContext(UUID executionId, String nodeId, String type, FlowState state) {
-    this(executionId, nodeId, type, null, state);
+    this(executionId, nodeId, type, null, state, Map.of());
   }
 }

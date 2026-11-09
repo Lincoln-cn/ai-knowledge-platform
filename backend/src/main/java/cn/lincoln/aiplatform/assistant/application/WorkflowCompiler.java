@@ -53,13 +53,44 @@ public final class WorkflowCompiler {
    * @param order 拓扑序（0 起）
    * @param branchHandle 该步从条件节点哪个分支进来；线性路径为 {@code null}
    */
-  public record PlanStep(String nodeId, String type, int order, String branchHandle) {}
+  public record PlanStep(
+      String nodeId, String type, int order, String branchHandle, Map<String, Object> config) {
+    /**
+     * 不带配置的旧构造器。
+     *
+     * <p>保留它有两个用处：一是让这次"只加字段、不接使用"的改动成为一个可单独验收的步子（先红/绿一次，再写使用方）； 二是编译之外的地方（例如调试计划）本来就不需要配置。
+     */
+    public PlanStep(String nodeId, String type, int order, String branchHandle) {
+      this(nodeId, type, order, branchHandle, Map.of());
+    }
+  }
 
   /** 图（只取编译需要的字段）。 */
   public record Graph(List<Node> nodes, List<Edge> edges) {}
 
-  /** 节点（只取 id / type）。 */
-  public record Node(String id, String type) {}
+  /**
+   * 节点。
+   *
+   * <p>★ {@code properties} 是**原样保留**的画布节点配置（Jackson 直接反序列化这一层），里面装着 {@code config}。 加这一格之前它一直是丢的
+   * —— 于是 {@code SEARCH_DATASET_NODE} 拿不到 {@code dataset_id_list}、 {@code AI_CHAT_NODE}
+   * 拿不到模型，执行器即使写出来也没有可用的输入。
+   */
+  public record Node(String id, String type, Map<String, Object> properties) {
+    /** 只读 id / type 的场合（判据、日志）。 */
+    public Node(String id, String type) {
+      this(id, type, Map.of());
+    }
+
+    /** 画布节点上那段 {@code properties.config}；没有就给空 map，不返回 null。 */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> config() {
+      if (properties == null) {
+        return Map.of();
+      }
+      Object config = properties.get("config");
+      return config instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
+    }
+  }
 
   /** 边（带条件分支出口 {@code sourceHandle}：从条件节点的哪个出口连出来）。 */
   public record Edge(String source, String target, String sourceHandle) {}
@@ -130,7 +161,7 @@ public final class WorkflowCompiler {
         continue;
       }
       Node node = byId.get(id);
-      steps.add(new PlanStep(id, node.type(), steps.size(), enterHandle.get(id)));
+      steps.add(new PlanStep(id, node.type(), steps.size(), enterHandle.get(id), node.config()));
       for (String next : adjacency.getOrDefault(id, List.of())) {
         if (indegree.merge(next, -1, Integer::sum) == 0) {
           queue.add(next);
