@@ -72,8 +72,7 @@ class NodeExecutorRegistryTest {
    *
    * <p>每补一个就删一行。这份清单与 {@link #actualGap()} 必须一致，否则说明有人补了实现却没更新清单（下面第二条用例会红）。
    */
-  private static final Set<String> KNOWN_UNIMPLEMENTED =
-      Set.of("SEARCH_DATASET_NODE", "AI_CHAT_NODE", "REPLY_NODE");
+  private static final Set<String> KNOWN_UNIMPLEMENTED = Set.of("AI_CHAT_NODE", "REPLY_NODE");
 
   private static Set<String> actualGap() throws IOException {
     Set<String> implemented = implementedTypes();
