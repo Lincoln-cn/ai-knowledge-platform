@@ -533,8 +533,12 @@ public class ChatService {
    *
    * <p>★ 应用有绑定就用应用的（即使值是默认值）；通用问答（应用为 null）才回落平台设置。 不要在三处各判一次（{@code ChatService} / {@code
    * ChatTurnWriter} / 适配器）—— 那正是口径会漂的形状。
+   *
+   * <p>★ 包可见（不是 {@code private}）是<strong>故意的</strong>：它是纯函数式的（{@code PreparedTurn} → {@code
+   * RetrievalParams}，无副作用），请求级三档覆盖（{@code rerankListwise}）就叠在这一行上。 没有一条直接断它的测试，就只能断到"参数对象
+   * 能存这个值"，断不到"这一轮真的用了它"—— 于是把 {@code withRerankListwise} 那行删掉，全仓仍然是绿的。
    */
-  private RetrievalParams effectiveRetrieval(ChatTurnWriter.PreparedTurn turn) {
+  RetrievalParams effectiveRetrieval(ChatTurnWriter.PreparedTurn turn) {
     RetrievalParams base;
     if (turn.retrieval() != null) {
       base = turn.retrieval();
