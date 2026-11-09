@@ -73,6 +73,8 @@
           :show-thinking="showThinkingToggle"
           :thinking="thinking"
           @update:thinking="thinking = $event"
+          :rerank-listwise="rerankListwise"
+          @update:rerank-listwise="rerankListwise = $event"
           @send="onSend"
           @stop="chat.stop"
         />
@@ -185,9 +187,17 @@ const session = useSessionStore()
 const appId = computed(() => (route.query.appId as string) || '')
 const history = useHistoryPanel()
 const thinking = ref(false)
+/**
+ * 本会话的列表重排（LLM listwise）开关 —— **请求级**。
+ *
+ * ★ 三态，`null` 是默认值（跟随应用 / 全局）。`false` 与 `null` 语义不同：
+ * `false` 是"这次只要快、不要重排"这个有意义的决定，`null` 是"别管我，按配置来"。
+ */
+const rerankListwise = ref<boolean | null>(null)
 const chat = useChatSession({
   appId: appId.value || undefined,
-  thinking
+  thinking,
+  rerankListwise
 })
 
 const activeConversation = ref<ConversationEx | null>(null)

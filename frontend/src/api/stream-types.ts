@@ -204,6 +204,11 @@ export interface ChatStreamOptions {
   mode?: ChatMode
   /** 重生成 / 继续生成的目标助手消息 id */
   targetMessageId?: string
+  /**
+   * 列表重排（LLM listwise）的**请求级**开关：`undefined`/`null` = 跟随应用 / 全局 ·
+   * `true` = 本次强制开 · `false` = 本次强制关。优先级：请求 > 应用 > 全局。
+   */
+  rerankListwise?: boolean | null
 
   onMeta?: (meta: StreamMeta) => void
   onRefs?: (refs: SourceRef[]) => void

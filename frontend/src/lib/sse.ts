@@ -199,7 +199,9 @@ export function chatStreamViaSse(options: ChatStreamOptions): StreamHandle {
         //   ★ 这两格此前只在 mock 层（`mock/stream.ts:151`）实现，真栈这条链漏了 ——
         //     `mock 与真栈行为不一致` 正是"mock 只住传输层"这条纪律要防的形状。
         mode: options.mode,
-        targetMessageId: options.targetMessageId
+        targetMessageId: options.targetMessageId,
+        rerankListwise: options.rerankListwise ?? undefined
+        // ★ 请求级重排开关：只有显式设过值才带（`undefined` ⇒ 不出现在 body 里 ⇒ 服务端按"跟随"处理）
       })
     })
 

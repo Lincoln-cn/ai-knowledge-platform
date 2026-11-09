@@ -60,6 +60,22 @@
           <input v-model="thinking" type="checkbox" :disabled="disabled" />
           <span>思考模式</span>
         </label>
+        <!--
+          ★ 请求级重排开关（三态）。用 select 而不是 checkbox：`跟随 / 开 / 关` 是三个决定，
+          而 checkbox 只有两个 —— 把"跟随"塞进 unchecked 会让用户没法表达"这次强制关"。
+        -->
+        <el-select
+          v-model="rerankListwise"
+          class="tool rerank"
+          size="small"
+          :disabled="disabled"
+          style="width: 108px"
+          title="列表重排（LLM listwise）：走交叉编码器把候选段重排一遍，质量更准但每题慢 2～8 秒"
+        >
+          <el-option :value="null" label="重排·跟随" />
+          <el-option :value="true" label="重排·开" />
+          <el-option :value="false" label="重排·关" />
+        </el-select>
       </div>
 
       <div class="right">
@@ -100,18 +116,31 @@ const props = defineProps<{
   placeholder?: string
   showThinking?: boolean
   thinking?: boolean
+  /** 请求级重排开关三态：null = 跟随应用 / 全局 */
+  rerankListwise?: boolean | null
 }>()
 
 const emit = defineEmits<{
   send: [text: string, attachments: AttachmentDraft[]]
   stop: []
   'update:thinking': [value: boolean]
+  'update:rerankListwise': [value: boolean | null]
 }>()
 
 const text = ref('')
 const attachments = ref<AttachmentDraft[]>([])
 const inputEl = ref<HTMLTextAreaElement>()
 const thinking = ref(props.thinking ?? false)
+const rerankListwise = ref<boolean | null>(props.rerankListwise ?? null)
+
+watch(rerankListwise, (v) => emit('update:rerankListwise', v))
+watch(
+  () => props.rerankListwise,
+  (v) => {
+    // ★ 只认三态里的值；`undefined` 不能传下去 —— 那会被当成"没设过"，把用户的"强制关"吞掉
+    if (v === true || v === false || v === null) rerankListwise.value = v
+  }
+)
 
 /** 上传中或已失败的附件不允许发出去 —— 发送时只带真实 id */
 const hasBlockingAtt = computed(() =>

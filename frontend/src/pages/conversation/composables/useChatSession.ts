@@ -278,6 +278,13 @@ export interface ChatSessionOptions {
   appId?: string
   credentialToken?: string
   thinking?: Ref<boolean>
+  /**
+   * 本会话的列表重排（LLM listwise）开关（请求级）。
+   *
+   * 三态：`null` = 跟随应用 / 全局（默认）· `true` = 本次强制开 · `false` = 本次强制关。
+   * ★ `false` 与 `null` 语义不同，不能合并 —— 合并之后"跟随"就没法表达了。
+   */
+  rerankListwise?: Ref<boolean | null>
   onConversationCreated?: (conv: ConversationEx) => void
   onNeedConversation?: () => Promise<string | null>
 }
@@ -527,6 +534,8 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       // 重生成/继续生成把目标消息 id 一并带上：服务端据此覆盖/续写，而不是新增一轮
       mode,
       targetMessageId: mode && mode !== 'NEW' ? assistant.id : undefined,
+      // ★ 请求级重排开关：只有它被显式设过值才发（`undefined` 就不带 ⇒ 服务端按"跟随"处理）
+      rerankListwise: options.rerankListwise?.value ?? undefined,
 
       onMeta: (meta) => {
         assistant.id = meta.messageId || assistant.id

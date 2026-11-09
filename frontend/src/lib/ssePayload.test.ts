@@ -47,6 +47,15 @@ test('chat 请求体带 targetMessageId：覆盖的是哪一条回答', () => {
   )
 })
 
+test('chat 请求体带 rerankListwise：请求级重排开关（三态，null 是"跟随"）', () => {
+  const block = chatBodyBlock()
+  assert.match(
+    block,
+    /\brerankListwise:\s*options\.rerankListwise\b/,
+    '请求体里没有 rerankListwise ⇒ 对话页那个三态开关点了也不生效'
+  )
+})
+
 test('chat 请求体仍带三格老字段（回归保护，不是本条的主判据）', () => {
   const block = chatBodyBlock()
   for (const key of ['appId', 'conversationId', 'question']) {
