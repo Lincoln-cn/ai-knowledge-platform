@@ -34,6 +34,7 @@
           <span>{{ formatTime(t.createdAt) }}</span>
         </div>
         <div class="tpl-actions">
+          <el-button size="small" :disabled="!canCreate" @click="openDetail(t)">详情</el-button>
           <el-button size="small" type="primary" :disabled="!canCreate" @click="openInstantiate(t)">
             从模板建应用
           </el-button>
@@ -41,6 +42,34 @@
         </div>
       </el-card>
     </div>
+
+    <!-- 模板详情（顺带确认"这份模板还在"） -->
+    <el-dialog v-model="detailVisible" title="模板详情" width="560px">
+      <div v-loading="detailLoading">
+        <el-descriptions v-if="detailTarget" :column="1" border size="small">
+          <el-descriptions-item label="名称">{{ detailTarget.name }}</el-descriptions-item>
+          <el-descriptions-item label="分类">
+            {{ detailTarget.category || '（未分类）' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="说明">
+            {{ detailTarget.description || '（没有说明）' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="来源">
+            {{ detailTarget.sourceAppId || '内置模板（不可删）' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="创建时间">
+            {{ formatTime(detailTarget.createdAt) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="内容">
+            详情接口不带 payload（那是一份完整导出包，全量返回会让接口体积与模板数成正比）。
+            要看内容，请「从模板建应用」之后看建出来的应用。
+          </el-descriptions-item>
+        </el-descriptions>
+      </div>
+      <template #footer>
+        <el-button @click="detailVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 从应用存成模板 -->
     <el-dialog v-model="createVisible" title="从应用存成模板" width="560px">
@@ -100,6 +129,7 @@ import { Plus, Refresh } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@/components/PageHeader.vue'
 import { templatesApi, assistantsApi } from '@/api'
+import { ApiError } from '@/api/types'
 import { useSessionStore } from '@/stores/session'
 
 const router = useRouter()
@@ -168,6 +198,34 @@ function openInstantiate(t: templatesApi.Template) {
   instTarget.value = t
   skipMissing.value = true
   instVisible.value = true
+}
+
+/**
+ * 模板详情：重新按 id 读一次。
+ *
+ * <p>★ 用途不是"多显示几个字段"，而是**建应用之前确认这份模板还在**：列表可能是几十秒前读的，
+ * 这段时间里别人可能把它删了。点了「从模板建应用」再去 404，用户看到的会是"建应用失败"，
+ * 而不是"这份模板已经不在了"。
+ *
+ * <p>★ 详情视图**不带 payload**（后端 `TemplateView` 明写：payload 就是一份完整导出包，
+ * 全量返回会让接口体积与模板数成正比）。真要看内容，请「从模板建应用」之后看建出来的应用。
+ */
+const detailVisible = ref(false)
+const detailTarget = ref<templatesApi.Template | null>(null)
+const detailLoading = ref(false)
+
+async function openDetail(t: templatesApi.Template) {
+  detailVisible.value = true
+  detailLoading.value = true
+  detailTarget.value = null
+  try {
+    detailTarget.value = await templatesApi.getTemplate(t.id)
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '读取模板详情失败')
+    detailVisible.value = false
+  } finally {
+    detailLoading.value = false
+  }
 }
 
 async function doInstantiate() {
