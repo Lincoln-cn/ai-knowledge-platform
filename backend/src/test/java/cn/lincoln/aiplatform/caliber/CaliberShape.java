@@ -111,6 +111,7 @@ final class CaliberShape {
           "knowledge/V70__knowledge_document_parse_expected_at.sql",
           "knowledge/V80__knowledge_document_attachment_id.sql",
           "knowledge/V92__kb_entity.sql",
+          "knowledge/V94__kb_entity_merge.sql",
           "knowledge/V93__kb_entity_dict.sql",
           "assistant/V29__assistant_app.sql",
           "assistant/V30__assistant_access_credential.sql",
