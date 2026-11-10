@@ -3,15 +3,18 @@ package cn.lincoln.aiplatform.knowledge.infrastructure;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import cn.lincoln.aiplatform.knowledge.application.EntityExtractor;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer.Recognized;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
  * {@link HanlpEntityRecognizer} 的判据。
  *
- * <p>★ 用例直接来自真语料实测的**错误形态**（见类的注释里的读数表），不是"跑一下看它出什么"。
+ * <p>★ 用例直接来自真语料实测的**错误形态**（见类的注释里的读数表），不是「跑一下看它出什么」。
  */
 class HanlpEntityRecognizerTest {
 
@@ -91,5 +94,20 @@ class HanlpEntityRecognizerTest {
   void hasName() {
     assertThat(recognizer.name()).isEqualTo("hanlp-1.8.6");
     assertThat(recognizer.supportedTypes()).containsExactly("ORG", "DOC");
+  }
+
+  // ===== #328：词表必须按库取，而不是永远用构造时那份 =====
+
+  @Test
+  @DisplayName("库级字典为空 ⇒ 退回构造时那份，不是什么都抽不出")
+  void fallsBackToDefaultWhenLibraryHasNoDictionary() {
+    HanlpEntityRecognizer fresh = new HanlpEntityRecognizer(List.of("部", "中心"));
+    fresh.setDictionaryPort(kbId -> new EntityExtractor.Dictionary(List.of(), List.of(), Map.of()));
+
+    // 空字典不是错：新建库还没配字典，退回默认表才能抽到「财务资产部」
+    assertThat(fresh.recognize(UUID.randomUUID(), "财务资产部是归口管理部门。"))
+        .filteredOn(r -> r.type().equals("ORG"))
+        .extracting(Recognized::name)
+        .contains("财务资产部");
   }
 }
