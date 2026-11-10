@@ -53,6 +53,11 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * 正交的单位向量）。断言用容差比较。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@TestPropertySource(
+    properties = {
+      "app.retrieval.rerank.enabled=false",
+      "app.retrieval.rerank.listwise-enabled=false"
+    })
 @Testcontainers
 @TestPropertySource(properties = "app.security.captcha.enabled=false")
 class RetrievalHitTestTest {
