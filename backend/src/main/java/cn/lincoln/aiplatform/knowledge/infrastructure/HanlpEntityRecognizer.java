@@ -187,7 +187,9 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
   }
 
   private boolean endsWithOrgSuffix(String word, List<String> suffixes) {
-    for (String suffix : orgSuffixes) {
+    // ★ 这里必须用参数 suffixes，不能用字段 orgSuffixes —— 用字段的话库级字典永远进不来
+    //   （#328 的真 bug：参数传进来了、循环却读字段，于是“换个库换一套词表”始终不生效）。
+    for (String suffix : suffixes) {
       if (word.endsWith(suffix) && word.length() > suffix.length() + 1) {
         return true;
       }

@@ -98,6 +98,29 @@ class HanlpEntityRecognizerTest {
 
   // ===== #328：词表必须按库取，而不是永远用构造时那份 =====
 
+  /**
+   * ★★ `#328` 的核心判据：同一个词、同一个文本，**换个库换一套后缀表，结果要不同**。
+   *
+   * <p>这条判据曾经红过 8 轮、最后被我删掉 —— 真因在 `endsWithOrgSuffix` 里：参数 `suffixes` 传进来了， 循环却读字段
+   * `orgSuffixes`，于是库级字典永远进不来。修完这条就能绿，所以它同时是那条 bug 的守卫。
+   */
+  @Test
+  void usesTheSuffixTableOfEachKnowledgeBase() {
+    var recognizer = new HanlpEntityRecognizer(List.of("公司"));
+    recognizer.setDictionaryPort(
+        kbId -> new EntityExtractor.Dictionary(List.of("部"), List.of(), java.util.Map.of()));
+
+    String text = "财务资产部负责固定资产管理。";
+
+    // 不传库标识 ⇒ 用构造时那份（只有「公司」）⇒ 抽不到
+    assertThat(recognizer.recognize(text)).isEmpty();
+
+    // 传库标识 ⇒ 用这个库配的（「部」）⇒ 抽得到
+    assertThat(recognizer.recognize(java.util.UUID.randomUUID(), text))
+        .extracting(HanlpEntityRecognizer.Recognized::name)
+        .contains("财务资产部");
+  }
+
   @Test
   @DisplayName("库级字典为空 ⇒ 退回构造时那份，不是什么都抽不出")
   void fallsBackToDefaultWhenLibraryHasNoDictionary() {
