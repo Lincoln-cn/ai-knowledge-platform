@@ -184,6 +184,47 @@ class KnowledgeBaseManagementTest {
     assertThat(res.body()).as("错误文案要能照着改 —— 说清是「库的密级上限」必填，而不是笼统的「参数不合法」").contains("密级");
   }
 
+  // ────────────────────────── 4b · 库分类 / 导入方式必填（#327）──────────────────────────
+
+  /**
+   * ★ {@code category} 与 {@code importType} 在 DB 层都是 not null，而 API 层原先一个都没校验、建库端点连 {@code @Valid}
+   * 都没挂 ⇒ 少传一个就是 {@code violates not-null constraint} 的 500，界面上只看到「服务内部错误」（{@code #327}）。
+   *
+   * <p>★ 断的是 400 与<strong>能照着改的文案</strong>，不是笼统的「参数不合法」。
+   */
+  @Test
+  void 建库缺category返回400() throws Exception {
+    String admin = accessToken("admin", "admin");
+
+    String body =
+        """
+        {"name":"缺分类的库","description":"d","icon":"📘",\
+        "importType":"LOCAL","embeddingModelId":"%s","maxClassification":"INTERNAL"}\
+        """
+            .formatted(UUID.randomUUID());
+
+    HttpResponse<String> res = post("/api/v1/knowledge-bases", body, admin);
+    assertThat(res.statusCode()).as("缺必填字段应当是 400，不是 500").isEqualTo(400);
+    assertThat(res.body()).as("文案要点名是库分类必填").contains("库分类必填");
+  }
+
+  /** 同上，{@code importType} 缺失。 */
+  @Test
+  void 建库缺importType返回400() throws Exception {
+    String admin = accessToken("admin", "admin");
+
+    String body =
+        """
+        {"name":"缺导入方式的库","category":"制度规范","description":"d","icon":"📘",\
+        "embeddingModelId":"%s","maxClassification":"INTERNAL"}\
+        """
+            .formatted(UUID.randomUUID());
+
+    HttpResponse<String> res = post("/api/v1/knowledge-bases", body, admin);
+    assertThat(res.statusCode()).isEqualTo(400);
+    assertThat(res.body()).contains("导入方式必填");
+  }
+
   // ────────────────────────── 5 · ownerId 不接受前端传 · visibility 默认 PRIVATE
   // ──────────────────────────
 
