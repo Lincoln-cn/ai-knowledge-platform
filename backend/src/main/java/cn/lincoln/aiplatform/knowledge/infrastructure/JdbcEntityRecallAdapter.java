@@ -1,9 +1,9 @@
 package cn.lincoln.aiplatform.knowledge.infrastructure;
 
 import cn.lincoln.aiplatform.knowledge.domain.EntityMentionRepository;
-import cn.lincoln.aiplatform.knowledge.domain.EntityRecallPort;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRepository;
+import cn.lincoln.aiplatform.platform.retrieval.EntityRecallPort;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;

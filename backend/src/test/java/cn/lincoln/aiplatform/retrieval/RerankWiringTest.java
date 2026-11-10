@@ -2,10 +2,10 @@ package cn.lincoln.aiplatform.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import cn.lincoln.aiplatform.knowledge.domain.EntityRecallPort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
+import cn.lincoln.aiplatform.platform.retrieval.EntityRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.ListwiseRerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;

@@ -1,4 +1,4 @@
-package cn.lincoln.aiplatform.knowledge.domain;
+package cn.lincoln.aiplatform.platform.retrieval;
 
 import java.util.List;
 import java.util.UUID;
@@ -8,6 +8,10 @@ import java.util.UUID;
  *
  * <p>★ 这是 0.6.2 的第一层。它要回答的问题只有一句话： <strong>问题里提到的机构/文档，在哪几段里被提到？</strong> 这些段随后作为**一路候选**参与 RRF
  * （检索链路本来就有"多路融合"的形状，扩召回只是多一路，不是新算法）。
+ *
+ * <p>★ 2026-11-11 从 knowledge.domain 搬到这里：retrieval 模块要用它，而 knowledge 没有暴露它 ⇒ ModuleBoundaryTest 报
+ * depends-on-non-exposed-type。搬端口而不是给 knowledge 开 NamedInterface —— 后者的读数是闸门绿了，前者才是依赖方向真的合法。同 #293
+ * 的处置。
  *
  * <p>★ 为什么不是直接查表：{@code kb_entity} / {@code kb_entity_mention} 是形状，
  * 而调用方要的是语义（"提到过"）。把表结构暴露给检索侧，等于每次改表都要改检索。
