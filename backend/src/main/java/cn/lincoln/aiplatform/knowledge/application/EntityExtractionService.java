@@ -1,11 +1,13 @@
 package cn.lincoln.aiplatform.knowledge.application;
 
 import cn.lincoln.aiplatform.knowledge.domain.EntityDictionaryPort;
+import cn.lincoln.aiplatform.knowledge.domain.EntityMentionRepository;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRepository;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -13,7 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
- * 把"一批段文本"抽成实体写进库。
+ * 把"一批段文本"抽成实体写进库，并记下每个实体出现在哪一段。
  *
  * <p>★ 这是 {@code kb_entity} 的**第一个写入方**。在此之前（`b664259` 建表、`e3f7d49` 能读字典） 表是一张只有 schema 没有数据的空表 ——
  * 本项目反复记账的同一个形状："留了缝，缝后面是空的"。
@@ -32,31 +34,63 @@ public class EntityExtractionService {
   private final EntityRecognizer recognizer;
   private final EntityRepository repository;
   private final EntityDictionaryPort dictionaryPort;
+  private final EntityMentionRepository mentionRepository;
 
   public EntityExtractionService(
       EntityRecognizer recognizer,
       EntityRepository repository,
-      EntityDictionaryPort dictionaryPort) {
+      EntityDictionaryPort dictionaryPort,
+      EntityMentionRepository mentionRepository) {
     this.recognizer = recognizer;
     this.repository = repository;
     this.dictionaryPort = dictionaryPort;
+    this.mentionRepository = mentionRepository;
   }
 
   /**
-   * 抽取并写入。
+   * 抽取并写入（不记出处）。
    *
    * @param kbId 知识库 id
    * @param texts 段正文（一次传一批，内部去重）
    * @return 真正新插入的实体条数
    */
   public int extractAndStore(UUID kbId, List<String> texts) {
-    if (kbId == null || texts == null || texts.isEmpty()) {
+    if (texts == null || texts.isEmpty()) {
+      return 0;
+    }
+    List<Segment> wrapped = new ArrayList<>(texts.size());
+    for (String text : texts) {
+      wrapped.add(new Segment(null, text));
+    }
+    return extract(kbId, null, wrapped);
+  }
+
+  /**
+   * 抽取并写入，同时记下「实体出现在哪一段」（{@code kb_entity_mention}）。
+   *
+   * <p>★ 为什么要把段 id 传进来：扩召回的整个动作是「问题里提到财务资产部 → 找出提到它的段」， 没有段 id 这一步连不上。与 {@code #51}
+   * 同族：一条命中如果不可溯源，排错比没有更糟。
+   *
+   * @param kbId 知识库 id
+   * @param documentId 文档 id
+   * @param segments 段（id 可以为 null —— 没有 id 的段只抽实体、不记出处）
+   * @return 真正新插入的实体条数
+   */
+  public int extractAndStore(UUID kbId, UUID documentId, List<Segment> segments) {
+    return extract(kbId, documentId, segments);
+  }
+
+  private int extract(UUID kbId, UUID documentId, List<Segment> segments) {
+    if (kbId == null || segments == null || segments.isEmpty()) {
       return 0;
     }
     try {
       Set<String> seen = new LinkedHashSet<>();
       List<EntityRepository.Candidate> batch = new ArrayList<>();
-      for (String text : texts) {
+      // ★ 每段抽到哪些实体名 —— 用来在写完实体之后补 mention。
+      List<Pending> pendings = new ArrayList<>();
+      for (Segment segment : segments) {
+        String text = segment.content();
         if (text == null || text.isBlank()) {
           continue;
         }
@@ -67,32 +101,61 @@ public class EntityExtractionService {
           continue;
         }
         int taken = 0;
+        List<EntityRepository.Candidate> perSegment = new ArrayList<>();
         for (EntityRecognizer.Recognized r : found) {
           if (r == null || r.name() == null || r.name().isBlank()) {
-            continue;
-          }
-          // 同一批里同名同类型只写一次：INSERT 是逐条的，重复传只会白跑 SQL
-          String key = r.type() + "\u0000" + r.name();
-          if (!seen.add(key)) {
             continue;
           }
           if (++taken > MAX_PER_SEGMENT) {
             log.warn("#实体抽取 单段命中超过 {} 个实体，已截断（kb={}, 段长={}）", MAX_PER_SEGMENT, kbId, text.length());
             break;
           }
+          // 同一批里同名同类型只写一次：INSERT 是逐条的，重复传只会白跑 SQL
+          String key = r.type() + "\u0000" + r.name();
+          if (!seen.add(key)) {
+            // ★ 不 continue 到外层：这一段仍然「提到了这个实体」，mention 要记。
+            perSegment.add(
+                new EntityRepository.Candidate(r.type(), r.name(), "RULE", r.confidence()));
+            continue;
+          }
           batch.add(new EntityRepository.Candidate(r.type(), r.name(), "RULE", r.confidence()));
+          perSegment.add(
+              new EntityRepository.Candidate(r.type(), r.name(), "RULE", r.confidence()));
+        }
+        if (!perSegment.isEmpty() && segment.id() != null) {
+          pendings.add(new Pending(segment.id(), perSegment));
         }
       }
-      if (batch.isEmpty()) {
-        return 0;
+
+      int inserted = batch.isEmpty() ? 0 : repository.insertAll(kbId, batch);
+
+      // ★ 实体写完再记出处：mention 需要实体 id，而 id 是插入时生成的。
+      if (documentId != null && !pendings.isEmpty()) {
+        int mentioned = 0;
+        List<EntityMentionRepository.Mention> mentions = new ArrayList<>();
+        for (Pending pending : pendings) {
+          for (EntityRepository.Candidate c : pending.candidates()) {
+            Optional<UUID> entityId = repository.findIdByName(kbId, c.type(), c.name());
+            if (entityId.isPresent()) {
+              mentions.add(
+                  new EntityMentionRepository.Mention(
+                      entityId.get(), kbId, documentId, pending.segmentId()));
+            }
+          }
+        }
+        if (!mentions.isEmpty()) {
+          mentioned = mentionRepository.insertAll(mentions);
+        }
+        log.info(
+            "#实体抽取 抽出 {} 个候选、新写入 {} 个、记下 {} 条出处（kb={}）", batch.size(), inserted, mentioned, kbId);
+      } else {
+        log.info("#实体抽取 抽出 {} 个候选、新写入 {} 个（kb={}）", batch.size(), inserted, kbId);
       }
-      int inserted = repository.insertAll(kbId, batch);
-      log.info("#实体抽取 抽出 {} 个候选、新写入 {} 个（kb={}）", batch.size(), inserted, kbId);
       return inserted;
     } catch (RuntimeException e) {
       // ★ 抽取失败不回滚文档：这件事与"文档能不能用"无关。但必须留痕 + 返回 0，
       //   不许吞成"成功写了 0 个"。
-      log.warn("#实体抽取 失败，本次不写实体（kb={}, 段数={}）：{}", kbId, texts.size(), e.toString());
+      log.warn("#实体抽取 失败，本次不写实体（kb={}, 段数={}）：{}", kbId, segments.size(), e.toString());
       return 0;
     }
   }
@@ -101,4 +164,9 @@ public class EntityExtractionService {
   public EntityExtractor.Dictionary dictionaryOf(UUID kbId) {
     return dictionaryPort.dictionaryOf(kbId);
   }
+
+  /** 一段待抽取的正文。{@code id} 为 null 表示只抽实体、不记出处。 */
+  public record Segment(UUID id, String content) {}
+
+  private record Pending(UUID segmentId, List<EntityRepository.Candidate> candidates) {}
 }

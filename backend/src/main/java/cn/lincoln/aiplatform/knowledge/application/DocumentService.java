@@ -1231,8 +1231,17 @@ public class DocumentService {
         //   "抽取没发生"与"抽取了但没实体"在结果上完全一样，只有日志能把两者分开。
         log.warn("#实体抽取 未装配 EntityExtractionService，本次不抽（文档 {}）", document.id());
       } else {
-        entityExtraction.extractAndStore(
-            document.kbId(), plan.stream().map(PlannedSegment::content).toList());
+        // ★ 0.6.2：把段 id 与文档 id 一起传下去，让 kb_entity_mention 记下「实体出现在哪一段」。
+        //   扩召回的整个动作是「问题里提到财务资产部 → 找出提到它的段」，没有段 id 这一步连不上。
+        //   ⚠ 与 plan 按下标对齐：toSave 是逐条按 plan 构造的，两者顺序一致（同一段循环里 add）。
+        java.util.List<EntityExtractionService.Segment> withIds =
+            new java.util.ArrayList<>(toSave.size());
+        int pairCount = Math.min(toSave.size(), plan.size());
+        for (int i = 0; i < pairCount; i++) {
+          withIds.add(
+              new EntityExtractionService.Segment(toSave.get(i).id(), plan.get(i).content()));
+        }
+        entityExtraction.extractAndStore(document.kbId(), document.id(), withIds);
       }
 
       // ★ 回填进度列 + 状态置 PENDING_EMBEDDING（不是 SUCCEEDED —— 向量化还没做）

@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import cn.lincoln.aiplatform.knowledge.domain.EntityDictionaryPort;
+import cn.lincoln.aiplatform.knowledge.domain.EntityMentionRepository;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRepository;
 import java.util.List;
@@ -48,7 +49,7 @@ class EntityExtractionServiceTest {
 
   private static EntityExtractionService service(
       EntityRecognizer recognizer, EntityRepository repo, EntityDictionaryPort dict) {
-    return new EntityExtractionService(recognizer, repo, dict);
+    return new EntityExtractionService(recognizer, repo, dict, mock(EntityMentionRepository.class));
   }
 
   @Test
