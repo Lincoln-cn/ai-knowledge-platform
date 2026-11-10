@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.retrieval.application;
 
+import cn.lincoln.aiplatform.knowledge.domain.EntityRecallPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
@@ -148,6 +149,13 @@ public class RetrievalService {
   /** LLM listwise 重排端口（{@code #151}）：接在 cross-encoder 之后，默认关（见 {@link RerankProperties}）。 */
   private final ListwiseRerankPort listwiseRerankPort;
 
+  /**
+   * 实体扩召回的读端口（0.6.2）。问题里提到的机构/文档出现过的段，作为**一路候选**参与 RRF。
+   *
+   * <p>★ 它是"多一路"而不是"新算法"：检索本来就是多条查询各自检索再融合， 实体命中与"另一条查询"在结构上同类。
+   */
+  private final EntityRecallPort entityRecallPort;
+
   private final MultiHopService multiHop;
 
   /**
@@ -180,7 +188,9 @@ public class RetrievalService {
         budget,
         rerankPort,
         rerankProperties,
-        ListwiseRerankPort.noop());
+        ListwiseRerankPort.noop(),
+        // ★ 7 参这条路只服务既有测试（它们不关心实体扩召回）。
+        (kbId, question) -> java.util.List.of());
   }
 
   /**
@@ -208,7 +218,8 @@ public class RetrievalService {
       RetrievalBudgetProperties budget,
       RerankPort rerankPort,
       RerankProperties rerankProperties,
-      ListwiseRerankPort listwiseRerankPort) {
+      ListwiseRerankPort listwiseRerankPort,
+      EntityRecallPort entityRecallPort) {
     this.segmentSearch = segmentSearch;
     this.embeddingPort = embeddingPort;
     this.queryUnderstanding = queryUnderstanding;
@@ -217,6 +228,7 @@ public class RetrievalService {
     this.rerankPort = rerankPort;
     this.rerankProperties = rerankProperties;
     this.listwiseRerankPort = listwiseRerankPort;
+    this.entityRecallPort = entityRecallPort;
   }
 
   @Transactional(readOnly = true)

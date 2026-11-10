@@ -125,7 +125,10 @@ class RerankWiringTest {
         new RetrievalBudgetProperties(5000, 5000, 0.6, true, true),
         rerank,
         rerankProperties,
-        listwise);
+        listwise,
+        // ★ 这个测试关心的是重排接线，不是实体扩召回 ⇒ 显式给"一路都没有"，
+        //   不让它悄悄接上一个会改候选集的替身（那会让顺序断言失去意义）。
+        (kbId, question) -> java.util.List.of());
   }
 
   /**
