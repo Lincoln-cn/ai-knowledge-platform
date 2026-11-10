@@ -71,6 +71,25 @@ public class JdbcEntityRepository implements EntityRepository {
   }
 
   @Override
+  public List<Entity> listOf(UUID kbId) {
+    if (kbId == null) {
+      return List.of();
+    }
+    return jdbc.query(
+        "select id, type, name, source, confidence from kb_entity"
+            + " where kb_id = ? and deleted_at is null and merged_into is null"
+            + " order by type, name",
+        (rs, i) ->
+            new Entity(
+                rs.getObject(1, java.util.UUID.class),
+                rs.getString(2),
+                rs.getString(3),
+                rs.getString(4),
+                rs.getDouble(5)),
+        kbId);
+  }
+
+  @Override
   public long countOf(UUID kbId) {
     if (kbId == null) {
       return 0;

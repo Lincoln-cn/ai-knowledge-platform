@@ -27,6 +27,19 @@ public interface EntityRepository {
   /** 一个库里的实体数（给探针与测试用）。 */
   long countOf(UUID kbId);
 
+  /**
+   * 列一个库里的实体（**只看未合并、未删除的**）。
+   *
+   * <p>★ 为什么现在就要这个方法：`kb_entity` 到 `7a0600a` 为止只有「写」和「按名读」， 抽取到底抽到了什么，除了直接连库看以外没有任何途径 ——
+   * 那等于这一步仍然是黑箱。 0.6.2 的扩召回也要从这里取候选。
+   *
+   * <p>★ 过滤条件写死在这里（而不是让调用方传参）：`merged_into is not null` 的行是「已经被合到 别的实体上」的，列出来会让同一个名字出现两次。
+   */
+  List<Entity> listOf(UUID kbId);
+
+  /** 一条已入库的实体。 */
+  record Entity(UUID id, String type, String name, String source, double confidence) {}
+
   /** 一条待写入的实体。 */
   record Candidate(String type, String name, String source, double confidence) {}
 }
