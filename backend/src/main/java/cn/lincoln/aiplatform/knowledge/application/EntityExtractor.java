@@ -55,6 +55,14 @@ public final class EntityExtractor {
   private static final String HEAD_CHARS = "[^\\s，。；：、（）()《》\\u201c\\u201d" + VIRTUAL_WORDS + "]";
 
   /** 制度文书名（书名号包着的）。★ 书名号本身是常量，不是词表。 */
+  /**
+   * 标记词两侧各看多远找机构名。
+   *
+   * <p>取 20 个字符：制度文档里「综合部隶属财务资产部」这类紧邻句远短于它，而 拉太宽会把上一句话的机构捞进来（「财务部负责…。综合部隶属财务资产部。」里 前者不该是 from）。20
+   * 是一个够用又不越句的量。
+   */
+  private static final int RELATION_WINDOW = 20;
+
   private static final Pattern DOC = Pattern.compile("《([^《》]{2,40})》");
 
   /** 人员：职务词在名字后面（"张伟经理"这种中式写法）。★ 职务词可配（见字典的 `PERSON_TITLE`）。 */
@@ -85,7 +93,34 @@ public final class EntityExtractor {
             .sorted((a, b) -> Integer.compare(b.length(), a.length()))
             .map(Pattern::quote)
             .collect(Collectors.joining("|"));
-    this.org = Pattern.compile("(" + HEAD_CHARS + "{2,12}?(?:" + suffixAlt + "))");
+    // ★ 关系标记词的首字必须从机构名的字符集里排掉。
+    //
+    // 反例（这个测试就是被它弄红的）：`综合部隶属财务资产部` 里「隶」是一个合法汉字，
+    // 而「隶属财务资产部」以「部」结尾 ⇒ 整段被抽成一个机构名，于是 `relations` 里
+    // "两端都必须已在实体表里"的门永远等不到 `财务资产部`，一条边都产不出来。
+    //
+    // 这是"词表驱动"该付的代价：字符集放宽能多抽到真机构，但会把标记词也吃进去。
+    // 处置不是把字符集收窄回白名单（那会漏掉大量真机构），而是**只排掉我们已知的
+    // 标记词首字** —— 它们本来就只作连接词用，不可能是机构名的第一个字。
+    String headChars = HEAD_CHARS;
+    if (!dictionary.relationMarks().isEmpty()) {
+      // HEAD_CHARS 是 `[^…]` 形状（以 `]` 收尾）⇒ 把字面字符直接插在 `]` 之前即可。
+      // ★ 不能在这里用 Pattern.quote：字符类里塞 `\Q…\E` 会让整类失效（实测抽到 0 个实体）。
+      StringBuilder excluded = new StringBuilder();
+      for (String mark : dictionary.relationMarks().keySet()) {
+        // ★ 排掉整条标记词的**每一个字**，不只是首字。
+        // 只排首字时 `隶属财务资产部` 会退化成 `属财务资产部`（"属"仍被当机构名开头），
+        // 于是 `relations` 还是等不到 `财务资产部`。
+        for (char c : mark.toCharArray()) {
+          excluded.append(c);
+        }
+      }
+      if (excluded.length() > 0) {
+        int close = headChars.lastIndexOf(']');
+        headChars = headChars.substring(0, close) + excluded + headChars.substring(close);
+      }
+    }
+    this.org = Pattern.compile("(" + headChars + "{2,12}?(?:" + suffixAlt + "))");
 
     if (dictionary.personTitles().isEmpty()) {
       this.person = null;
@@ -162,33 +197,45 @@ public final class EntityExtractor {
     List<Relation> result = new ArrayList<>();
     Set<String> seen = new LinkedHashSet<>();
     for (Map.Entry<String, String> mark : relationMarks.entrySet()) {
-      Pattern p =
-          Pattern.compile(
-              "("
-                  + HEAD_CHARS
-                  + "{2,12}?(?:"
-                  + suffixAlt()
-                  + "))"
-                  + Pattern.quote(mark.getKey())
-                  + "("
-                  + HEAD_CHARS
-                  + "{2,12}?(?:"
-                  + suffixAlt()
-                  + "))");
-      Matcher matcher = p.matcher(text);
-      while (matcher.find()) {
-        String from = matcher.group(1).strip();
-        String to = matcher.group(2).strip();
-        // 两端都得是已抽取到的实体，否则不成边
-        if (!names.contains(from) || !names.contains(to) || from.equals(to)) {
-          continue;
-        }
-        if (seen.add(mark.getValue() + "|" + from + "|" + to)) {
+      // ★ 不能用一个"(机构)(标记词)(机构)"的正则整体匹配：那种写法把"哪一部分是实体"
+      // 交给正则去猜，而标记词的位置其实是确定的。改成**先定位标记词，再在它左右的
+      // 窗口里各找最近的一个机构名** —— 这与"两端都必须在实体表里"是同一条判据的
+      // 两种落地方式，但后者对"综合部隶属财务资产部"这种紧邻句更稳。
+      int at = text.indexOf(mark.getKey());
+      while (at >= 0) {
+        String from = nearestOrgBefore(text, at);
+        int toStart = at + mark.getKey().length();
+        String to = nearestOrgAt(text, toStart);
+        if (from != null
+            && to != null
+            && !from.equals(to)
+            && names.contains(from)
+            && names.contains(to)
+            && seen.add(mark.getValue() + "|" + from + "|" + to)) {
           result.add(new Relation(mark.getValue(), from, to));
         }
+        at = text.indexOf(mark.getKey(), toStart);
       }
     }
     return List.copyOf(result);
+  }
+
+  /** 标记词左侧窗口里**最靠右**的机构名（离标记词最近的那一个）。 */
+  private String nearestOrgBefore(String text, int markStart) {
+    int from = Math.max(0, markStart - RELATION_WINDOW);
+    Matcher matcher = org.matcher(text.substring(from, markStart));
+    String last = null;
+    while (matcher.find()) {
+      last = matcher.group(1).strip();
+    }
+    return last;
+  }
+
+  /** 标记词右侧窗口里**最靠左**的机构名（离标记词最近的那一个）。 */
+  private String nearestOrgAt(String text, int markEnd) {
+    int to = Math.min(text.length(), markEnd + RELATION_WINDOW);
+    Matcher matcher = org.matcher(text.substring(markEnd, to));
+    return matcher.find() ? matcher.group(1).strip() : null;
   }
 
   private String suffixAlt() {
