@@ -113,6 +113,8 @@ final class CaliberShape {
           "knowledge/V92__kb_entity.sql",
           "knowledge/V94__kb_entity_merge.sql",
           "knowledge/V95__kb_entity_mention.sql",
+
+          "knowledge/V96__kb_relation.sql",
           "knowledge/V93__kb_entity_dict.sql",
           "assistant/V29__assistant_app.sql",
           "assistant/V30__assistant_access_credential.sql",

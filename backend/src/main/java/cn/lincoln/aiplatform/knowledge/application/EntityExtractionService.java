@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.knowledge.application;
 
 import cn.lincoln.aiplatform.knowledge.domain.EntityDictionaryPort;
 import cn.lincoln.aiplatform.knowledge.domain.EntityMentionRepository;
+import cn.lincoln.aiplatform.knowledge.domain.EntityRelationRepository;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRepository;
 import java.util.ArrayList;
@@ -35,16 +36,19 @@ public class EntityExtractionService {
   private final EntityRepository repository;
   private final EntityDictionaryPort dictionaryPort;
   private final EntityMentionRepository mentionRepository;
+  private final EntityRelationRepository relationRepository;
 
   public EntityExtractionService(
       EntityRecognizer recognizer,
       EntityRepository repository,
       EntityDictionaryPort dictionaryPort,
-      EntityMentionRepository mentionRepository) {
+      EntityMentionRepository mentionRepository,
+      EntityRelationRepository relationRepository) {
     this.recognizer = recognizer;
     this.repository = repository;
     this.dictionaryPort = dictionaryPort;
     this.mentionRepository = mentionRepository;
+    this.relationRepository = relationRepository;
   }
 
   /**
@@ -89,6 +93,8 @@ public class EntityExtractionService {
       List<EntityRepository.Candidate> batch = new ArrayList<>();
       // ★ 每段抽到哪些实体名 —— 用来在写完实体之后补 mention。
       List<Pending> pendings = new ArrayList<>();
+      // ★ 关系与实体同一批收集，但**分开存**：关系的两端要等实体写完才有 id。
+      List<PendingRelation> pendingRelations = new ArrayList<>();
       for (Segment segment : segments) {
         String text = segment.content();
         if (text == null || text.isBlank()) {
@@ -97,6 +103,11 @@ public class EntityExtractionService {
         // ★ 必须把 kbId 传下去：词表在 kb_entity_dict 里是 per-库的（#328），
         //   不带库标识就只能吃全局默认表 —— 那样数据库里配的字典一个字都不生效。
         List<EntityRecognizer.Recognized> found = recognizer.recognize(kbId, text);
+        // 关系用同一个识别器抽（接口给了 default 空实现，所以不是所有实现都有关系）
+        List<EntityRecognizer.Relation> relations = recognizer.relations(text);
+        if (relations != null && !relations.isEmpty() && segment.id() != null) {
+          pendingRelations.add(new PendingRelation(segment.id(), relations));
+        }
         if (found == null) {
           continue;
         }
@@ -143,6 +154,35 @@ public class EntityExtractionService {
             }
           }
         }
+      // ★ 关系放在 mention 之后：两端实体必须是**已经入库**的，
+      //   否则这条边在图里没有端点（kb_relation 的两个外键会直接拒绝）。
+      if (!pendingRelations.isEmpty()) {
+        int related = 0;
+        List<EntityRelationRepository.Candidate> edges = new ArrayList<>();
+        for (PendingRelation pr : pendingRelations) {
+          for (EntityRecognizer.Relation rel : pr.relations()) {
+            if (rel == null || rel.type() == null) {
+              continue;
+            }
+            // 两端都要能解析成 id。抽到名字但库里没有这个实体 ⇒ 这条关系只记日志不落库：
+            // 落一条缺端点的边比不落更糟，下游任何按实体的查询都会撞空。
+            Optional<UUID> from = repository.findIdByName(kbId, "ORG", rel.from());
+            Optional<UUID> to = repository.findIdByName(kbId, "ORG", rel.to());
+            if (from.isEmpty() || to.isEmpty()) {
+              log.debug("#实体关系 端点不在库里，跳过（{} -> {}）", rel.from(), rel.to());
+              continue;
+            }
+            edges.add(
+                new EntityRelationRepository.Candidate(
+                    from.get(), to.get(), rel.type(), documentId, pr.segmentId(), 0.8));
+          }
+        }
+        if (!edges.isEmpty()) {
+          related = relationRepository.insertAll(kbId, edges);
+        }
+        log.info("#实体关系 写入 {} 条（kb={}，候选 {}）", related, kbId, edges.size());
+      }
+
         if (!mentions.isEmpty()) {
           mentioned = mentionRepository.insertAll(mentions);
         }
@@ -169,4 +209,7 @@ public class EntityExtractionService {
   public record Segment(UUID id, String content) {}
 
   private record Pending(UUID segmentId, List<EntityRepository.Candidate> candidates) {}
+
+  /** 一段读出来的关系。两端还是名字，落库前才解析成 id。 */
+  private record PendingRelation(UUID segmentId, List<EntityRecognizer.Relation> relations) {}
 }
