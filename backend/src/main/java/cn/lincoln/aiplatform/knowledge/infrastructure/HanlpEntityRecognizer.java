@@ -68,6 +68,15 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
   private final Pattern docPattern = Pattern.compile("《([^《》]{2,40})》");
 
   /**
+   * 关系抽取委托给它 —— HanLP 1.x 没有关系抽取，但**不能就此返回空**。
+   *
+   * <p>★ 2026-11-11 真栈上撞到的坑：{@link #relations(String)} 原来直接 {@code return
+   * List.of();}，注释写"关系由规则层补"，可规则层从来没有被接进这条链 ⇒ 实体表 263 行、关系表 **0
+   * 行**，两边都没有异常。所以这里把规则层实例化进来，关系标记词与机构后缀表同源。
+   */
+  private final EntityExtractor relationExtractor;
+
+  /**
    * Spring 用的无参构造器 —— 用 {@link #defaultSuffixes()} 的默认后缀表。
    *
    * <p>★ 为什么必须有它：{@link #HanlpEntityRecognizer(List)} 会在后缀为空时抛错（那是给 "调用方传了空字典"用的判据），而 Spring 容器里没有
@@ -91,6 +100,15 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
     }
     this.orgSuffixes =
         orgSuffixes.stream().sorted((a, b) -> Integer.compare(b.length(), a.length())).toList();
+    // ★ 关系抽取用内置默认标记词：后缀表与识别器同源，标记词取 JdbcEntityDictionaryAdapter.builtin()
+    //   那一份（它同时也是库级字典打底的那份），两处不会漂。
+    //   人名表传空 —— 这条链不抽 PERSON（见 TYPES）。
+    this.relationExtractor =
+        new EntityExtractor(
+            new EntityExtractor.Dictionary(
+                this.orgSuffixes,
+                List.of(),
+                JdbcEntityDictionaryAdapter.builtin().relationMarks()));
     // ★★ 必须开 enableOrganizationRecognize：不开的话 HanLP 会把「财务资产部」切成
     // `财务/n 资产/n 部/q`（"部"当量词），一个机构都切不出来（实测）。
     // 但开了它又会把「生产设备」标成 nt —— 所以下面还要用后缀表再过滤一遍。
@@ -141,11 +159,19 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
   /**
    * ★ 关系不在这里给：HanLP 1.x 没有关系抽取。
    *
-   * <p>返回空列表表示"这一层抽不出"，不是"这段没有关系"。关系由规则层 （标记词 + 两端在实体表里）补 —— 见 {@link EntityRecognizer} 的接口注释。
+   * <p>但**不能返回空** —— 这是 2026-11-11 真栈上撞到的一个坑：这个方法以前直接 {@code return List.of();}，注释写"关系由规则层补"，可规则层
+   * {@link EntityExtractor} 从来没有被接进这条链（{@code EntityExtractionService} 注入的是本类）。结果是：实体表 263 行、关系表
+   * **0 行**， 而两边都没有任何异常 —— "抽不出"与"没有关系"读数完全一样。
+   *
+   * <p>现在委托给规则层：标记词取本类构造时那份字典（内置默认 + 库级覆盖已在 {@code JdbcEntityDictionaryAdapter} 里合过），两端仍要求落在实体表里。
    */
   @Override
   public List<Relation> relations(String text) {
-    return List.of();
+    // ★ 两个 Relation 是不同包里的两个 record（EntityExtractor.Relation 在 application、
+    //   EntityRecognizer.Relation 在 domain），必须显式转换，不能直接返回。
+    return relationExtractor.relations(text).stream()
+        .map(r -> new Relation(r.type(), r.from(), r.to()))
+        .toList();
   }
 
   @Override

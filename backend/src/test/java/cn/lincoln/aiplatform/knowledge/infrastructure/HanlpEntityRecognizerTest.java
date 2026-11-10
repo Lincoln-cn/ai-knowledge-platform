@@ -2,9 +2,11 @@ package cn.lincoln.aiplatform.knowledge.infrastructure;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 import cn.lincoln.aiplatform.knowledge.application.EntityExtractor;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer.Recognized;
+import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer.Relation;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -132,5 +134,18 @@ class HanlpEntityRecognizerTest {
         .filteredOn(r -> r.type().equals("ORG"))
         .extracting(Recognized::name)
         .contains("财务资产部");
+  }
+
+  @Test
+  @DisplayName("relations 必须真的抽得出关系 —— 恒返回空会让关系表永远是 0 行")
+  void relationsAreNotAlwaysEmpty() {
+    // ★ 这条是 2026-11-11 真栈撞出来的：relations() 曾经直接 return List.of()，
+    //   注释写"关系由规则层补"，但规则层从没被接进这条链 ⇒ kb_entity 263 行、kb_relation 0 行，
+    //   两边都没有异常。判据：内置标记词「归口」必须能抽出 BELONGS_TO。
+    HanlpEntityRecognizer fresh = new HanlpEntityRecognizer(List.of("部", "中心"));
+
+    assertThat(fresh.relations("综合部归口财务资产部管理。"))
+        .extracting(Relation::type, Relation::from, Relation::to)
+        .contains(tuple("BELONGS_TO", "综合部", "财务资产部"));
   }
 }

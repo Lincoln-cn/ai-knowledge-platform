@@ -12,8 +12,8 @@ import static org.mockito.Mockito.when;
 
 import cn.lincoln.aiplatform.knowledge.domain.EntityDictionaryPort;
 import cn.lincoln.aiplatform.knowledge.domain.EntityMentionRepository;
-import cn.lincoln.aiplatform.knowledge.domain.EntityRelationRepository;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
+import cn.lincoln.aiplatform.knowledge.domain.EntityRelationRepository;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRepository;
 import java.util.List;
 import java.util.Map;
@@ -183,8 +183,7 @@ class EntityExtractionServiceTest {
         new EntityRecognizer() {
           @Override
           public List<Recognized> recognize(UUID kbId, String text) {
-            return List.of(
-                new Recognized("ORG", "综合部", 0.8), new Recognized("ORG", "财务资产部", 0.8));
+            return List.of(new Recognized("ORG", "综合部", 0.8), new Recognized("ORG", "财务资产部", 0.8));
           }
 
           @Override
@@ -204,7 +203,10 @@ class EntityExtractionServiceTest {
         };
 
     service(rec, repo, mock(EntityDictionaryPort.class), relations)
-        .extractAndStore(KB, UUID.randomUUID(), List.of(new EntityExtractionService.Segment(segmentId, "综合部隶属财务资产部。")));
+        .extractAndStore(
+            KB,
+            UUID.randomUUID(),
+            List.of(new EntityExtractionService.Segment(segmentId, "综合部隶属财务资产部。")));
 
     // ★ 断的是"落库的两端是 id、类型是受控值、取证位置没丢"——
     //   只断"被调用过"是不够的：传名字进去同样会被调用，而外键会把它拒掉。
@@ -253,7 +255,10 @@ class EntityExtractionServiceTest {
         };
 
     service(rec, repo, mock(EntityDictionaryPort.class), relations)
-        .extractAndStore(KB, UUID.randomUUID(), List.of(new EntityExtractionService.Segment(UUID.randomUUID(), "综合部隶属财务资产部。")));
+        .extractAndStore(
+            KB,
+            UUID.randomUUID(),
+            List.of(new EntityExtractionService.Segment(UUID.randomUUID(), "综合部隶属财务资产部。")));
 
     // ★ 半条边（一端是 null）会撞 kb_relation 的 not-null，整批 insert 全废；
     //   跳过它则其余边照常写入 —— 这是"宁可少一条边，不可写入一条查不出端点的边"。
