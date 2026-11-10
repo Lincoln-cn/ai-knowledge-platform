@@ -185,6 +185,24 @@
       <artifactId>caffeine</artifactId>
     </dependency>
 
+    <!-- ─── 中文分词与实体识别（0.6.1）：HanLP 1.x portable ───
+         ★ 为什么是这个而不是 CoreNLP / HanLP 2.x（2026-11-11 查证）：
+           1. **Apache-2.0** —— CoreNLP 是 GPL-3.0，混进商用主程序是硬伤；
+           2. **纯 Java + 离线** —— HanLP 2.x 只有 RESTful client，意味着制度文档要发到
+              hanlp.hankcs.com 上解析，直接撞 #72 的外发闸门；
+           3. **8MB 且 jar 自带 data/dictionary**（含 organization/nt.txt.bin 机构名词典），
+              不需要另外下载模型；
+           4. 支持 CustomDictionary 动态增删（字典可放库、不重启）与自定义正则模式。
+         ★ 已知的两个坑（上游明写）：
+           · CustomDictionary 的动态增删改**不是线程安全的** ⇒ 写入加锁、读侧走快照；
+           · 动态增删**不落盘** ⇒ 字典的真源是数据库（`kb_entity_dict`），启动时灌进来。
+         ★ 只排 portable（不带 data 之外的额外模型）；构建仍需 `-o` 离线可达本地仓库。 -->
+    <dependency>
+      <groupId>com.hankcs</groupId>
+      <artifactId>hanlp</artifactId>
+      <version>portable-1.8.6</version>
+    </dependency>
+
     <!-- ─── 迁移：★ 必须用 starter（只写 flyway-core 会丢自动配置，09 §4.4） ─── -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
