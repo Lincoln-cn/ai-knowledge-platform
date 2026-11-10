@@ -5141,3 +5141,48 @@ B 写完后自查发现 `Bundle.labels()` 返回 `List.of()`、`merge` 永远返
 - **存量文档不回填 mention**：只有重新解析才写。与 `#305` 的"只拦新增不回填存量"同口径。
 - **别名不参与召回**：`kb_entity_alias` 今天没有写入方，扩召回只用规范名。
 - **`OnnxNerRecognizer`**：`labels.txt` 的顺序是模型自带，硬编码必错，缺模型文件就没写。
+
+## 11.30 0.6.4 实体关系抽取接进解析链（2026-11-11）
+
+0.6.2 做完实体扩召回后，`kb_entity` 有 258 行、`kb_entity_mention` 有 7244 行，但 `kb_relation` 是 **0 行**。这一批把它从 0 做到 2。
+
+### 11.30.1 三个断点（逐个在真栈上撞出来）
+
+| # | 断点 | 表现 | 读数 |
+|---|---|---|---|
+| 1 | `HanlpEntityRecognizer.relations()` 直接 `return List.of()` | 注释写着「关系由规则层补」，可规则层 `EntityExtractor` 从没被接进这条链 | 实体 263 行、关系 0 行，**两边都没有异常** |
+| 2 | `kb_entity_dict` 是 0 行 | `relationMarks` 空 ⇒ `EntityExtractor.relations()` 一条都抽不出 | `select count(*) from kb_entity_dict` = 0 |
+| 3 | 无（`V96` 表本身是对的） | — | 迁移执行成功 |
+
+★ 第 1 条是本批最值钱的：**它不会报错**。`EntityExtractorTest` 9/9 全绿（单测直接测规则层），`kb_relation` 0 行，两件事同时成立 —— 因为没人测「这条链上到底调了谁」。
+
+### 11.30.2 改法
+
+1. `HanlpEntityRecognizer` 加 `private final EntityExtractor relationExtractor`，在带参数的构造器里用 `JdbcEntityDictionaryAdapter.builtin().relationMarks()` 初始化；`relations(text)` 委托给它再转到 domain 的 `Relation`。
+   ★ 两个 `Relation` 是**不同包里的两个 record**（application / domain）⇒ 必须显式转换，直接 return 编译不过。
+2. `JdbcEntityDictionaryAdapter` 新增 `static Dictionary builtin()`：10 个机构后缀 + 10 条受控关系标记词；`dictionaryOf(kbId)` 改成 **builtin 打底 + 库行的同名覆盖**。`kbId == null` 也返回 builtin。
+3. `V96__kb_relation.sql`：四类关系 check 约束、两端 `references kb_entity(id)`、`chk_kb_relation_not_self`、`uq_kb_relation(from,to,type)`、`segment_id` 作为取证位置。
+
+### 11.30.3 判据读数
+
+| 判据 | 读数 |
+|---|---|
+| `HanlpEntityRecognizerTest` | **11/11**（新增「relations 必须真的抽得出关系」） |
+| `EntityExtractionServiceTest` | **7/7** |
+| `JdbcEntityDictionaryAdapterTest` | **4/4** |
+| 反证 ①：`relations` 改回 `List.of()` | **10/11（1 failure）** |
+| 反证 ②：去掉 `builtin()` 打底 | **2/4** |
+| 真栈：`select count(*) from kb_relation` | **0 → 2** |
+| 真栈抽到的两条边 | `RESPONSIBLE_FOR`（"负责"）、`BELONGS_TO`（"归口"），同一对实体 |
+
+### 11.30.4 这一批的教训
+
+**「注释说 X 由 Y 补」，就一定要有一条测试证明 Y 真的在这条链上。** 第 1 个断点存在了多久没人知道 —— 它从写下的那一刻起就是这句注释在替它作保。
+
+### 11.30.5 这一批没做的
+
+- 别名参与召回（`kb_entity_alias` 有表无写入口、无读入口）→ 0.6.3
+- 关系进入检索（`kb_relation` 今天只是落库，检索链路不消费）→ 等 `§11.27.5` 的图检索触发条件
+- `OnnxNerRecognizer`（B 实现）：需要中文 NER 的 ONNX 模型 + 配套 `vocab.txt` / `labels.txt`（标签顺序是模型自带，硬编码必错）
+
+
