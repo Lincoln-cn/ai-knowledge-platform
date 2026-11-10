@@ -38,7 +38,25 @@ public interface EntityRecognizer {
    * @param text 已解析、已剥离噪声的正文（不是原始 PDF 字节）
    * @return 按首次出现排序的实体；空文本返回空列表，不抛异常
    */
-  List<Recognized> recognize(String text);
+  default List<Recognized> recognize(String text) {
+    return recognize(null, text);
+  }
+
+  /**
+   * 从一段正文里抽实体，**按库取词表**（`#328`）。
+   *
+   * <p>★★ 为什么必须有 {@code kbId}：词表在 `kb_entity_dict` 里是 <b>per-库</b>的 （用户 2026-11-11
+   * 要求「字典放到数据库里，不是必须要重启才能生效的」）。 不带库标识的实现只能吃一份全局默认表 —— 那样数据库里配的字典<b>一个字都不会生效</b>，
+   * 而"没配字典"与"配了但不生效"读数完全一样（`#328`）。
+   *
+   * <p>默认实现委托 {@link #recognize(String)}：让"不吃库级词表"的实现（如 `OnnxNerRecognizer` 的模型自带标签）不必为了签名而写空方法。★
+   * 但这意味着<b>调用方必须显式传 kbId</b>， 不许因为"默认实现能跑"就省掉 —— 抽取服务那边一定要把库 id 往下传。
+   *
+   * @param kbId 目标知识库；{@code null} 表示"不要库级词表，用实现自己的默认表"
+   */
+  default List<Recognized> recognize(java.util.UUID kbId, String text) {
+    return recognize(text);
+  }
 
   /**
    * 这个实现能给出的实体类型。

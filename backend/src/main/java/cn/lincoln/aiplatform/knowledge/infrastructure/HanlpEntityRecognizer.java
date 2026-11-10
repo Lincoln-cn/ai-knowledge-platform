@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.knowledge.infrastructure;
 
 import cn.lincoln.aiplatform.knowledge.application.EntityExtractor;
+import cn.lincoln.aiplatform.knowledge.domain.EntityDictionaryPort;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
 import com.hankcs.hanlp.HanLP;
 import com.hankcs.hanlp.corpus.tag.Nature;
@@ -53,6 +54,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class HanlpEntityRecognizer implements EntityRecognizer {
 
+  private static final org.slf4j.Logger LOG =
+      org.slf4j.LoggerFactory.getLogger(HanlpEntityRecognizer.class);
+
   /** ★ `supportedTypes` 里**没有 PERSON**：见类注释第 3 条。 也没有 TERM（引号里的术语由规则层给）。 */
   private static final List<String> TYPES = List.of("ORG", "DOC");
 
@@ -94,8 +98,14 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
     this.segment = HanLP.newSegment().enableOrganizationRecognize(true);
   }
 
+  /**
+   * 按库取词表（`#328`）：{@code kbId} 非空且字典端口可用时，用这个库在 `kb_entity_dict` 里配的后缀表；否则退回构造时给的那份（Spring 装配走
+   * `defaultSuffixes()`）。
+   *
+   * <p>★ 为什么不是「每次都查库」：抽取是逐段调用的，一篇 70 段的文档会调 70 次； 词表按库缓存（`EntityDictionaryPort` 的实现自己负责），这里只管取。
+   */
   @Override
-  public List<Recognized> recognize(String text) {
+  public List<Recognized> recognize(java.util.UUID kbId, String text) {
     if (text == null || text.isBlank()) {
       return List.of();
     }
@@ -111,7 +121,7 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
       if (word.chars().allMatch(Character::isLetterOrDigit) && !containsHan(word)) {
         continue;
       }
-      if (endsWithOrgSuffix(word) && seen.add("ORG:" + word)) {
+      if (endsWithOrgSuffix(word, suffixesFor(kbId)) && seen.add("ORG:" + word)) {
         // ★ 规则判定给固定置信度，不假装是模型概率
         out.add(new Recognized("ORG", word, 0.8));
       }
@@ -143,12 +153,40 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
     return TYPES;
   }
 
+  /** 这个库该用哪张后缀表：库级字典优先，取不到用构造时那份。 */
+  private List<String> suffixesFor(java.util.UUID kbId) {
+    if (kbId == null || dictionaryPort == null) {
+      return orgSuffixes;
+    }
+    try {
+      List<String> fromDb = dictionaryPort.dictionaryOf(kbId).orgSuffixes();
+      if (fromDb != null && !fromDb.isEmpty()) {
+        return fromDb;
+      }
+      // ★ 库级字典空 ≠ 错：新建库还没配，退回默认表是对的。但要在日志里说清
+      //   「用的不是这个库配的」，否则「配了不生效」与「还没配」读数一样。
+      LOG.debug("库 {} 没有配置机构后缀，使用默认表（{} 条）", kbId, orgSuffixes.size());
+      return orgSuffixes;
+    } catch (RuntimeException failure) {
+      LOG.warn("读库级字典失败，本次用默认表（kb={}）：{}", kbId, failure.toString());
+      return orgSuffixes;
+    }
+  }
+
+  /** ★ 可选注入：没有它也能跑（退回默认表），所以不用 required=true 把上下文建崩。 */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setDictionaryPort(EntityDictionaryPort port) {
+    this.dictionaryPort = port;
+  }
+
+  private EntityDictionaryPort dictionaryPort;
+
   @Override
   public String name() {
     return "hanlp-1.8.6";
   }
 
-  private boolean endsWithOrgSuffix(String word) {
+  private boolean endsWithOrgSuffix(String word, List<String> suffixes) {
     for (String suffix : orgSuffixes) {
       if (word.endsWith(suffix) && word.length() > suffix.length() + 1) {
         return true;

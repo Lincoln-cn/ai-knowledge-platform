@@ -60,7 +60,9 @@ public class EntityExtractionService {
         if (text == null || text.isBlank()) {
           continue;
         }
-        List<EntityRecognizer.Recognized> found = recognizer.recognize(text);
+        // ★ 必须把 kbId 传下去：词表在 kb_entity_dict 里是 per-库的（#328），
+        //   不带库标识就只能吃全局默认表 —— 那样数据库里配的字典一个字都不生效。
+        List<EntityRecognizer.Recognized> found = recognizer.recognize(kbId, text);
         if (found == null) {
           continue;
         }
