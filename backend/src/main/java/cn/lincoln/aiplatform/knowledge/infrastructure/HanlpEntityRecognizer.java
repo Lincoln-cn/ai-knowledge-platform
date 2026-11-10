@@ -63,6 +63,24 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
 
   private final Pattern docPattern = Pattern.compile("《([^《》]{2,40})》");
 
+  /**
+   * Spring 用的无参构造器 —— 用 {@link #defaultSuffixes()} 的默认后缀表。
+   *
+   * <p>★ 为什么必须有它：{@link #HanlpEntityRecognizer(List)} 会在后缀为空时抛错（那是给 "调用方传了空字典"用的判据），而 Spring 容器里没有
+   * {@code List<String>} 这个 bean， 只会传 {@code null} 或直接找不到构造器 —— 真栈上表现为**整个应用起不来**：
+   *
+   * <pre>
+   * UnsatisfiedDependencyException: … 'hanlpEntityRecognizer' … Constructor threw exception
+   * </pre>
+   *
+   * <p>★ 默认表是**全局兜底**，不是"这个库配了什么"：per-库的字典由 {@code kb_entity_dict} 决定（`e3f7d49`），在 {@code
+   * EntityExtractionService} 那一层 才按库取。这一层只负责"中文怎么分词 + 哪些后缀算机构"，不该知道库。
+   */
+  @org.springframework.beans.factory.annotation.Autowired
+  public HanlpEntityRecognizer() {
+    this(defaultSuffixes());
+  }
+
   public HanlpEntityRecognizer(List<String> orgSuffixes) {
     if (orgSuffixes.isEmpty()) {
       throw new IllegalArgumentException("机构后缀为空：识别器会一个实体都抽不出来");
