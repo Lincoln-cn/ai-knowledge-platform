@@ -5020,3 +5020,77 @@ kb_entity_alias(id, entity_id, alias_name, source, confidence, created_at)
 
 ★ 图检索**不在 0.6–0.9 任何一版里**，但它的前置条件（实体表 + 关系表）在 0.6.1 与 0.6.3 落地 ——
 触发时缺的只是"写一条递归 CTE"，不是"从零开始"。
+
+## 11.28 0.6.1 实体库落地记录（2026-11-11）
+
+### 11.28.1 零到一：从空表到有出处
+
+`b664259` 建了 `kb_entity` / `kb_entity_alias` / `kb_entity_dict` 三张表，`e3f7d49` 让字典能读，
+但**没有任何代码往里写** —— 这是本项目反复记账的同一个形状：「留了缝，缝后面是空的」。
+0.6.1 把它填上，并且一次填到**可溯源**：
+
+| 提交 | 内容 |
+|---|---|
+| `7802e18` | `EntityRecognizer` 接口 + `EntityExtractor`（规则版）+ `HanlpEntityRecognizer` + 8/8 测试 |
+| `9b9130c` | `V92`（`kb_entity` + `kb_entity_alias`）+ `tools/check_retrieval_plan.py` |
+| `b664259` | `V93__kb_entity_dict.sql` + 补登记 V92/V93 |
+| `e3f7d49` | `EntityDictionaryPort` + `JdbcEntityDictionaryAdapter`（字典真源在 DB） |
+| `3d504e2` | `EntityRepository` + `JdbcEntityRepository` + `EntityExtractionService`（第一个写入方） |
+| `8a9e99d` | 接进 `DocumentService.segmentAndPersist` |
+| `651ae72` | `HanlpEntityRecognizer` 补无参构造器（**真栈让整个应用起不来**） |
+| `912edcd` | `EntityRecognizer.recognize(kbId, text)`，抽取按库取词表 |
+| `7a0600a` | `endsWithOrgSuffix` 读的是字段不是参数（**库级字典一个字都不生效**） |
+| `713839f` | `V94__kb_entity_merge.sql`（合并留缝，只加列不加服务） |
+| `a039f44` | `EntityRepository.listOf` —— 抽到了什么终于不用连库看 |
+| `b28cc65` | `V95__kb_entity_mention.sql` + 抽取时记出处 |
+
+### 11.28.2 三个「只有真栈能抓」的错
+
+这三条的共同点：**单元测试全是自己 `new` 的，看不见装配与环境**。
+
+1. **`HanlpEntityRecognizer` 少无参构造器** ⇒ Spring 找不到 `List<String>` bean ⇒ 传 null ⇒
+   构造器里的 `IllegalArgumentException` 让**整个应用上下文起不来**。
+   一个库级配置缺失把整个服务建崩，而 8 条测试全绿。
+2. **`endsWithOrgSuffix` 读字段不读参数** ⇒ 库级字典永远进不来。判据写了八轮才绿，
+   前七轮我都去查 HanLP 分词，而那条判据第一次就红得干净、指向的就是「库级字典没生效」。
+3. **建库三个必填字段缺失报 500**（`category` / `importType` / `maxClassification` 类型）——
+   API 层没校验、DB 层 not-null 直接 500。⇒ 记账 `#327`（已修：补 `@Valid` 是关键，
+   只加注解不挂 `@Valid` 等于「编译过、行为不变」）。
+
+### 11.28.3 HanLP 探针的读数（决定了怎么用它）
+
+真语料 6 段 × 约 410 字，打开 `enableOrganizationRecognize` + `enablePlaceRecognize` + `enableNameRecognize`：
+
+```
+财务资产部/nt   ← 对
+生产设备/nt     ← 不是机构
+对生产设备/nt   ← 连「对」都吃进名字里
+应于/nr 须将/nr 应在/nr  ← 时间介词/连词被当人名（三处全错）
+```
+
+不开 NER 开关时分词是 `[财务/n, 资产/n, 部/q, …]` —— 「部」被标成量词，一个机构都抽不出来。
+
+⇒ 用法**只能是**：开 `enableOrganizationRecognize(true)` 拿候选 + 后缀表过滤 + **人名一律不抽**
+（`supportedTypes` 只含 `ORG` / `DOC`）。HanLP 1.x 自带的 NER 在制度文本上不能直接用。
+
+### 11.28.4 `OnnxNerRecognizer` 写了又删
+
+用户要求 A/B 两个实现（`HanlpEntityRecognizer` / `OnnxNerRecognizer`，同一 `EntityRecognizer` 接口）。
+B 写完后自查发现 `Bundle.labels()` 返回 `List.of()`、`merge` 永远返回空 ——
+**能编译、能过"返回空"的测试、名字叫 OnnxNerRecognizer，但一个实体也抽不出来**。
+这正是本项目一直在批的 silent-failure 形状，所以删文件而不是提交。
+
+要真写 B 需要：① 中文 NER 的 ONNX 模型 ② 配套 `vocab.txt` 与 `labels.txt`
+（标签顺序是模型自带的，不同导出不同，不读就只能硬编码，硬编码必然错）。
+
+### 11.28.5 没做的
+
+- **扩召回的查询侧没接**：`kb_entity_mention` 有写入方了，但检索链路还不读它。
+  下一步是 `RetrievalService.hitTest` 里加一路「实体命中」参与 RRF，
+  判据是 **B1 73.33% → ≥75.33%**（涨不到就回滚）。
+- **存量文档不回填** `kb_entity` / `kb_entity_mention`（只在重新解析时写），
+  与 `#305` 的「只拦新增不回填存量」同口径。
+- **实体合并只留列**（`merged_into`），没写 `EntityMergeService` ——
+  今天没有消费者，写出来是死代码负债。
+- **字典管理界面**：用户问过菜单位置，判断挂在知识库详情页 tab 上、不新建顶级菜单
+  （依据 `AGENTS.md` 的「同类东西归一个菜单」），但还没做。
