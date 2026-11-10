@@ -114,6 +114,22 @@ public class DocumentService {
   }
 
   /**
+   * 实体抽取（0.6.1）—— 分段落库之后调一次，把这一段里的机构名与文书名记进 {@code kb_entity}。
+   *
+   * <p>★ <b>没有兜底实现、也不判空</b>：{@code null} 时第一次解析就会 NPE。这是有意的 —— "忘了装配"与"这一段真的没有实体"读数必须能分开。用 {@code
+   * required = false} 只是为了让 既有测试的构造点不必全改（它们大多不碰解析链），生产环境里这个 bean 一定在。
+   *
+   * <p>★ 抽取失败<b>不影响文档可用性</b>：{@link EntityExtractionService} 内部已 try/catch 并 返回
+   * 0，不会把异常抛到这里、也不会回滚已写好的分段。
+   */
+  private EntityExtractionService entityExtraction;
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setEntityExtraction(EntityExtractionService entityExtraction) {
+    this.entityExtraction = entityExtraction;
+  }
+
+  /**
    * 会话密级水位的补偿口（{@code #247} 判据 ①）：文档<b>升密</b>时把引用过它的会话抬到新密级。
    *
    * <p>★ 走平台端口而不是直接依赖 {@code conversation.domain}：模块边界由 {@code ModuleBoundaryTest} 守着（见端口 javadoc）。
@@ -1205,6 +1221,19 @@ public class DocumentService {
                 document.labels()));
       }
       segments.saveAll(toSave);
+
+      // ★ 实体抽取（0.6.1）：分段刚落库、还没进向量化 —— 用刚切出来的段正文，不用整篇原文。
+      //   段正文是检索实际会看的那份文本，"问答里出现过的机构名"与它同一口径。
+      //   ★ 失败不会抛（服务内部 try/catch 返回 0），所以这里不包 try ——包了反而会掩盖"没装配"。
+      if (entityExtraction == null) {
+        // ★ 只在真的没注入时留痕。生产环境 {@code @Autowired(required = false)} 一定会注入；
+        //   没注入的是既有测试（它们不关心实体库）。这里写 warn 而不是 debug，是因为
+        //   "抽取没发生"与"抽取了但没实体"在结果上完全一样，只有日志能把两者分开。
+        log.warn("#实体抽取 未装配 EntityExtractionService，本次不抽（文档 {}）", document.id());
+      } else {
+        entityExtraction.extractAndStore(
+            document.kbId(), plan.stream().map(PlannedSegment::content).toList());
+      }
 
       // ★ 回填进度列 + 状态置 PENDING_EMBEDDING（不是 SUCCEEDED —— 向量化还没做）
       document.recordSegmentSuccess(
