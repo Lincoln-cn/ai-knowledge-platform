@@ -87,6 +87,19 @@
             <el-radio-button value="FREE_ANSWER">自由回答</el-radio-button>
           </el-radio-group>
         </el-form-item>
+        <el-form-item label="LLM 重排">
+          <el-select v-model="retrieval.rerankListwise" :disabled="!canManage" style="width: 220px">
+            <!-- ★ 三态不是 checkbox：`null` = 跟随平台默认（今天默认关），`true`/`false` = 这个库显式开/关。
+                 用 checkbox 的话"跟随"只能塞进 unchecked，用户没法表达"这个库强制关"，
+                 而服务端把 `null` 与 `false` 当两件事（`RetrievalParams.rerankListwise`）。 -->
+            <el-option label="跟随平台默认" :value="null" />
+            <el-option label="开（本库生效）" :value="true" />
+            <el-option label="关（本库不重排）" :value="false" />
+          </el-select>
+          <div class="hint micro">
+            对前 5 条候选再逐题排一次。质量更好但每问多几秒 —— 低配机器建议关
+          </div>
+        </el-form-item>
         <el-form-item label="查询理解条数">
           <el-input-number v-model="retrieval.queryCount" :min="0" :max="5" :disabled="!canManage" />
           <div class="hint micro">
@@ -200,7 +213,10 @@ const retrieval = reactive<RetrievalParams>({
   // ★ 多跳两项（#283）：以前只挂在命中测试那一侧的临时参数里，库级没有 ⇒ 对话链路永不跑多跳。
   //   默认关 —— 升级不改变存量行为（判据 ③），要开的人自己承担每轮多一次模型调用。
   multiHopEnabled: false,
-  maxHops: 2
+  maxHops: 2,
+  // ★ LLM 重排（#312 第三、四级开关）：`null` = 跟随平台默认（`app.retrieval.rerank.listwise-enabled`，
+  //   今天默认关）。默认给 `null` 而不是 `false` —— 存量库不该被这个面板"替用户做一个决定"。
+  rerankListwise: null
 })
 
 /** P1 设置面板改动静默丢失：脏标记上报给页面壳，切 Tab 前确认 */
@@ -275,6 +291,8 @@ const loadRetrieval = async () => {
   retrieval.maxSubQuestions = params.maxSubQuestions ?? 3
   retrieval.multiHopEnabled = params.multiHopEnabled ?? false
   retrieval.maxHops = params.maxHops ?? 2
+  // 重排开关：`null` 是**有意义的取值**（跟随平台默认），所以兜底用 `?? null` 而不是 `?? false`
+  retrieval.rerankListwise = params.rerankListwise ?? null
   takeSnapshot()
 }
 
@@ -291,7 +309,9 @@ const saveRetrieval = async () => {
       decomposeEnabled: retrieval.decomposeEnabled,
       maxSubQuestions: retrieval.maxSubQuestions,
       multiHopEnabled: retrieval.multiHopEnabled,
-      maxHops: retrieval.maxHops
+      maxHops: retrieval.maxHops,
+      // ★ `null` 也要显式带上：它表示"跟随平台默认"，与"用户没改过"在服务端不等价
+      rerankListwise: retrieval.rerankListwise
     })
     ElMessage.success('检索参数已保存')
     takeSnapshot()
