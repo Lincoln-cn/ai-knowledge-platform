@@ -434,8 +434,12 @@ class PublicStopEndpointTest {
         .contains("\"refs\":[{")
         .contains("\"classification\":\"INTERNAL\"");
     assertThat(body)
-        .as("★ 用户消息那一侧的 refs 必须是 null（不是 []）：它没有引用快照，与「零命中」是两件事")
-        .contains("\"role\":\"USER\",\"content\":\"合同违约金\",\"status\":\"GENERATED\",\"refs\":null");
+        .as(
+            "★ 用户消息那一侧的 refs 必须是 null（不是 []）：它没有引用快照，与「零命中」是两件事。"
+                + " ★ 这里不比相邻字段的顺序 —— 视图加过 kind（#286），逐字相邻断言会把新增字段当成回归；"
+                + " 而 USER/ASSISTANT 两条的 refs 本就一 null 一非 null，所以 refs:null 只可能落在用户那条上")
+        .contains("\"role\":\"USER\"")
+        .contains("\"refs\":null");
   }
 
   /**
