@@ -5217,3 +5217,55 @@ B 写完后自查发现 `Bundle.labels()` 返回 `List.of()`、`merge` 永远返
 
 ★ 三条都不影响任何 B 判据 —— 别名是召回质量的锦上添花，不是门槛项。
 
+## 11.32 0.6.4 收口与本轮撞到的两条真红（2026-11-11）
+
+### 11.32.1 0.6.4 交付了什么
+
+关系抽取从「有代码」变成「有数据」：
+
+| 层 | 改动 | 判据 |
+|---|---|---|
+| 表 | `V96__kb_relation.sql`（四类受控关系 + 两端外键 + 取证位置） | `MigrationInventoryTest` 1/1 |
+| 写 | `JdbcEntityRelationRepository.insertAll`（`on conflict do nothing`） | 落库两端是 id、类型是受控值 |
+| 接 | `EntityExtractionService` 在 mention 之后落边 | 半条边不写 |
+| 读 | 故意没有（随读取方同一批进） | — |
+
+真栈判据：`select count(*) from kb_relation` 从 **0 → 2**（同一对实体两条边：`RESPONSIBLE_FOR` + `BELONGS_TO`）。
+
+### 11.32.2 两个断点，都不是异常，都是"没有读数"
+
+真栈第一次跑，实体表 263 行、关系表 0 行，**日志里一个错都没有**。逐个查才是：
+
+1. **`kb_entity_dict` 是空表** ⇒ 字典空 ⇒ `relationMarks` 空 ⇒ 一条都抽不出来。
+   修法：`JdbcEntityDictionaryAdapter.builtin()` 打底 + 库里的行覆盖同名项。
+2. **`HanlpEntityRecognizer.relations()` 直接 `return List.of()`**，注释写「关系由规则层补」，而规则层 `EntityExtractor` 从来没被接进这条链。
+   修法：加 `relationExtractor` 字段并委托；两个 `Relation` 是不同包的两个 record，必须显式转换。
+
+★ **教训**：「有代码」与「有数据」是两件事。两张表都建好、两个类都写完、单测全绿，而中间那一步从来没被调用过 —— 这类缺口不会抛异常，只会让某张表一直是 0 行。判据必须是**表里的行数**，不是「代码存在」。
+
+### 11.32.3 撞到的第一条真红：模块边界（已修，`5d91a52b`）
+
+0.6.2 给 `RetrievalService` 加了一个构造参数 `EntityRecallPort`（在 `knowledge.domain`），而 `retrieval` 模块不能依赖 `knowledge` 的非暴露类型 ⇒ `ModuleBoundaryTest` 红。
+
+处置同 `#293`：**搬端口，不给 `knowledge` 开 `@NamedInterface`**。后者闸门也会绿，但那绿的是"闸门被改了"，不是"依赖方向合法"。
+
+★ 这个红是 `734834c7` 引入的，当时单测全绿 —— 因为**架构闸门不在那些测试里**。第二次栽在同一处（第一次是 `#293`）。
+
+### 11.32.4 撞到的第二条真红：`rrfPutsTwoPathHitsFirst`（未修，`#329`）
+
+`mvn -Dtest=cn.lincoln.aiplatform.retrieval.*Test` ⇒ 45 例 1 failure：
+`HYBRID` 期望 `[A, B]`，实得 `[B, A]`。
+
+已经排除的：实体扩召回（夹具三段正文都没有机构名，且 `if (!byEntity.isEmpty())` 保证空时不占路）· 全文路本身（同文件另一条断言 `FULLTEXT` 只命中 A，是绿的）· 向量路（`VECTOR` 断言 `[B, A]` 是绿的）。
+
+还没定位的：`RetrievalHitTestTest` 从 0.4.8 起没改过，而 `RetrievalService` 之后改了六次 ⇒ 六个候选。
+**这条测试 71 秒一次**，逐个回退是四到五轮近一分钟的循环，所以这一轮只记录、不硬修。
+
+★ **这一条真正暴露的是闸门覆盖面**：`retrieval.*Test` **不在** CI 的架构闸门里（那个只跑 `cn.lincoln.aiplatform.*Test` 顶层与 `caliber.*Test`），它只在整包回归里跑 —— 而整包回归这几轮一直被并发取消。**一条红能不能被发现，取决于它恰好在哪个闸门里。**
+
+### 11.32.5 这一轮的方法教训
+
+- **诊断打印比推理快**：`EntityExtractor` 那次的真因（`HEAD_CHARS` 含「隶」）是靠一行 `System.out.println` 直接看出来的，之前两轮改 `relations()` 都是猜。
+- **`str.replace` 找不到时原样返回**：一次接线脚本因此"报成功、代码没动、测试还绿"。现在每处替换都带 `assert count == 1`。
+- **失败的脚本可能已经产生副作用**：`FileNotFoundError` 发生在 spawn 失败之后，文件已经被改掉了。反证脚本必须自带恢复。
+
