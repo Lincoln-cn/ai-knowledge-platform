@@ -334,6 +334,24 @@ public class RetrievalService {
           log.warn("查询「{}」检索失败，丢弃这一路：{}", query, failure.getMessage());
         }
       }
+      // ★ 实体扩召回（0.6.2）：问题里提到的机构出现过的段，作为**一路候选**参与子问题内 RRF。
+      //   它是「多一路」不是新算法 —— 与另一条查询在结构上同类，所以进 perQuery。
+      if (!scope.isEmpty() && !scope.hasConversationScope()) {
+        try {
+          java.util.LinkedHashSet<UUID> byEntity = new java.util.LinkedHashSet<>();
+          for (UUID kbId : scope.sharedKbIds()) {
+            byEntity.addAll(entityRecallPort.segmentsMentionedIn(kbId, request.question()));
+          }
+          if (!byEntity.isEmpty()) {
+            perQuery.add(new java.util.ArrayList<>(byEntity));
+            paths++;
+          }
+        } catch (RuntimeException failure) {
+          // ★ 扩召回失败不拖累整次检索：它是「多一路」，不是必经之路。
+          //   但必须留痕 —— 静默失效正是本项目反复记账的形状。
+          log.warn("实体扩召回失败，本次少一路候选：{}", failure.toString());
+        }
+      }
       if (perQuery.isEmpty()) {
         continue;
       }

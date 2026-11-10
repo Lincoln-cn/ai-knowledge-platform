@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.lincoln.aiplatform.knowledge.domain.EntityRecallPort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
@@ -129,6 +130,21 @@ class RerankWiringTest {
         // ★ 这个测试关心的是重排接线，不是实体扩召回 ⇒ 显式给"一路都没有"，
         //   不让它悄悄接上一个会改候选集的替身（那会让顺序断言失去意义）。
         (kbId, question) -> java.util.List.of());
+  }
+
+  /** 带实体扩召回的构造（0.6.2 的判据用）。 */
+  private static RetrievalService serviceWithRecall(
+      FakeSearch search, RerankPort rerank, EntityRecallPort recall) {
+    return new RetrievalService(
+        search,
+        new FakeEmbedding(),
+        new FakeUnderstanding(),
+        new FakeMultiHop(),
+        new RetrievalBudgetProperties(5000, 5000, 0.6, true, true),
+        rerank,
+        RerankProperties.defaults(),
+        ListwiseRerankPort.noop(),
+        recall);
   }
 
   /**
@@ -400,5 +416,38 @@ class RerankWiringTest {
     public List<float[]> embed(UUID modelId, List<String> texts) {
       throw new UnsupportedOperationException("全文模式不该向量化");
     }
+  }
+
+  /**
+   * 0.6.2 判据：实体扩召回带进来的段，必须是**别的路找不到、但最后出现在结果里**的那一条。
+   *
+   * <p>★ 这条测试存在的理由：接线之前，23 条既有测试全绿也没证明扩召回改变了任何东西 —— 它们只证明"没破"。要让这条判据真的能红，必须让 E1 只能从实体那一路进来。
+   */
+  @Test
+  void entityRecallBringsInASegmentThatNoOtherPathFound() {
+    UUID fromFullText = UUID.fromString("eeeeeeee-0000-4000-8000-000000000001");
+    UUID fromEntity = UUID.fromString("eeeeeeee-0000-4000-8000-000000000002");
+
+    FakeSearch search = new FakeSearch();
+    search.answer(QUESTION, List.of(new SegmentSearchPort.Scored(fromFullText, 0.9)));
+
+    // 反证用：同一个 FakeSearch，但不给实体那一路。
+    List<UUID> withoutRecall =
+        serviceWithRecall(search, RerankPort.noop(), (kbId, question) -> List.of())
+            .hitTest(query())
+            .items()
+            .stream()
+            .map(h -> h.segmentId())
+            .toList();
+    assertThat(withoutRecall).doesNotContain(fromEntity);
+
+    List<UUID> withRecall =
+        serviceWithRecall(search, RerankPort.noop(), (kbId, question) -> List.of(fromEntity))
+            .hitTest(query())
+            .items()
+            .stream()
+            .map(h -> h.segmentId())
+            .toList();
+    assertThat(withRecall).as("实体扩召回带进来的段必须出现在结果里").contains(fromEntity);
   }
 }
