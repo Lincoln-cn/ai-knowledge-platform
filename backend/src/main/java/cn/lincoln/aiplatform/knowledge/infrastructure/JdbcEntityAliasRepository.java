@@ -6,15 +6,22 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Repository;
 
 /**
- * 别名表的 JDBC 实现（0.6.3）。
+ * 别名表的 JDBC 实现（0.6.3 读口 / 0.6.6 写口）。
  *
  * <p>★ 一次查完再在内存里挑：别名表按库分区，一个库的别名通常几十条；逐条 {@code in} 反而要拼 SQL 参数。
  *
- * <p>★ 只读 —— 别名今天只有 {@code MANUAL} 来源（管理员在界面上录），还没有规则合并，所以写入口随合并策略那一批一起进（同 {@code
- * WorkflowRecordRepository} 的口径：加写方法要与写入方同一批）。
+ * <p>★ 读写都在这里：0.6.3 只加了 {@code canonicalIds}（读），0.6.6 补了 {@code insertAll}（写，合并策略用）。
+ * 写口等到有写入方（{@code JdbcEntityMergeService}）才加，口径同 {@code WorkflowRecordRepository}。
+ *
+ * <p>★★ 2026-11-11 补 {@code @Repository}：此前这个类**没有注解**，Spring 里根本没有它的 bean。
+ * 后果不是编译错也不是启动错（没人注入它），而是「别名功能在任何生产路径上都不存在」—— 与 {@code kb_relation} / {@code kb_entity_dict}
+ * 同一个形状：读数为 0 与功能没接长得一样。 这次是给合并服务注入 {@code EntityAliasRepository} 时抛 {@code
+ * NoSuchBeanDefinitionException} 才暴露的。
  */
+@Repository
 public class JdbcEntityAliasRepository implements EntityAliasRepository {
 
   private final JdbcTemplate jdbc;
