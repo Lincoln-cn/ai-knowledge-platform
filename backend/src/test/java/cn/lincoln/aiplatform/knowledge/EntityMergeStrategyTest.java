@@ -159,4 +159,44 @@ class EntityMergeStrategyTest {
         .isEqualTo("a=x");
     assertThat(JdbcEntityMergeService.sharedAttribute(null, "{}")).isNull();
   }
+
+  /**
+   * 第二档确认合并的判据（{@code §11.36.1} 的 D 项）。
+   *
+   * <p>★ 这是「点确认之后发生了什么」的完整断言，三件事一起断：① 别名表多一行、{@code source} 是 {@code MANUAL}（能区分机器认的还是人认的）②
+   * 原实体行<b>还在</b>（合并不许删行，否则不可拆） ③ 再次确认同一组是幂等的（返回 0，不是报错）。
+   */
+  @Test
+  void 人工确认合并只写别名不删原行() {
+    UUID kbId = insertKb();
+    UUID keep = insertOrg(kbId, "财务资产部", "FIN-006");
+    UUID merge = insertOrg(kbId, "财务部", "FIN-007");
+
+    int added = mergeService.recordManualAliases(kbId, keep, List.of("财务部"));
+    assertThat(added).as("第一次确认必须真的写进去").isEqualTo(1);
+
+    var row =
+        jdbc.queryForMap(
+            "select entity_id, source, confidence from kb_entity_alias where kb_id = ?", kbId);
+    assertThat(row.get("entity_id")).isEqualTo(keep);
+    assertThat(row.get("source")).as("人工确认的来源必须是 MANUAL").isEqualTo("MANUAL");
+    assertThat(((Number) row.get("confidence")).doubleValue()).isEqualTo(1.0);
+
+    // ★ 关键：原实体行还在。删了它，这条别名就无从回溯"当初是不是合错了"。
+    Integer entities =
+        jdbc.queryForObject(
+            "select count(*) from kb_entity where kb_id = ? and deleted_at is null",
+            Integer.class,
+            kbId);
+    assertThat(entities).as("合并只写别名，不删原实体").isEqualTo(2);
+    assertThat(merge).as("被并入的那行依然存在").isNotNull();
+    Integer stillThere =
+        jdbc.queryForObject("select count(*) from kb_entity where id = ?", Integer.class, merge);
+    assertThat(stillThere).isEqualTo(1);
+
+    // 幂等：同一组再确认一次是 0，不是异常。
+    assertThat(mergeService.recordManualAliases(kbId, keep, List.of("财务部")))
+        .as("重复确认返回 0")
+        .isZero();
+  }
 }

@@ -56,7 +56,11 @@ public class JdbcEntityMergeService implements EntityMergeService {
   }
 
   @Override
-  public int recordAliases(UUID kbId, UUID entityId, List<String> aliases) {
+  public int recordManualAliases(UUID kbId, UUID entityId, List<String> aliases) {
+    return recordWithSource(kbId, entityId, aliases, "MANUAL");
+  }
+
+  private int recordWithSource(UUID kbId, UUID entityId, List<String> aliases, String source) {
     if (kbId == null || entityId == null || aliases == null || aliases.isEmpty()) {
       return 0;
     }
@@ -65,13 +69,18 @@ public class JdbcEntityMergeService implements EntityMergeService {
       if (a == null || a.isBlank()) {
         continue;
       }
-      // ★ 置信度 1.0：强键相同是确定性判断，不是启发式。
-      rows.add(new EntityAliasRepository.Alias(entityId, a, "IMPORT", 1.0));
+      // ★ 置信度 1.0：人工确认同样是确定性判断，不是启发式。
+      rows.add(new EntityAliasRepository.Alias(entityId, a, source, 1.0));
     }
     if (rows.isEmpty()) {
       return 0;
     }
     return aliasRepository.insertAll(kbId, rows);
+  }
+
+  @Override
+  public int recordAliases(UUID kbId, UUID entityId, List<String> aliases) {
+    return recordWithSource(kbId, entityId, aliases, "IMPORT");
   }
 
   @Override

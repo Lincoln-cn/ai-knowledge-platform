@@ -54,6 +54,18 @@ public interface EntityMergeService {
   int recordAliases(UUID kbId, UUID entityId, List<String> aliases);
 
   /**
+   * 同上，但由人确认（管理界面的第二档）。
+   *
+   * <p>★ 与 {@link #recordAliases} 的区别只有 {@code source}：那条记 {@code IMPORT}（导入时强键相同， 是确定性判断、置信度
+   * 1.0），这条记 {@code MANUAL}（属性重叠是<b>可能</b>相同，人点了确认）。
+   *
+   * <p>为什么必须分开：事后要能回答「这个别名是机器认的还是人认的」。混成一个值，一旦合并错了， 分不清是规则太松还是人工判断失误。
+   *
+   * @return 实际新增的别名行数（0 表示已经记过，不是失败）
+   */
+  int recordManualAliases(UUID kbId, UUID entityId, List<String> aliases);
+
+  /**
    * 第二档：属性重叠的候选（<b>不自动执行</b>，供管理界面等人确认）。
    *
    * <p>{@code reason} 写清为什么认为它们可能相同（共有的属性名与值）—— 确认的人需要依据， 只给一个分数等于让他盲选。
