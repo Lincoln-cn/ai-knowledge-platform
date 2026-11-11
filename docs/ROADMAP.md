@@ -5535,3 +5535,54 @@ C 与 D 完成后 `kb_relation` 才有「多跳」这一层能力，而 0.7 的�
 执行引擎停在第 1 层入口（用户点「试用」）。所以 A–E 全部做完不等于「0.6 的全部工作做完」，
 但**不阻塞 0.7 开工**。
 
+## 11.37 0.6.6 交付（2026-11-11）
+
+§11.36 排的五项里 A 与 B 同版交付，两个提交都已推 main。
+
+### 11.37.1 A 项：别名参与实体扩召回（9c8f335f）
+
+JdbcEntityRecallAdapter 原来只按名字精确找实体（indIdByName），
+找不到就 continue —— 于是问题里说「财务部」时，登记成「财务资产部」
+的别名那条路径**完全没被走过**。读口（25b11a73）与写口（2d2ec24）
+都在，缺的正是这第三跳。
+
+改法：精确名找不到时再问一次 EntityAliasRepository.canonicalIds。
+**顺序不能反** —— 精确名命中时不该多查一次；别名表按名字（不分类型）
+索引，因为别名天然不带类型信息。
+
+读数：JdbcEntityRecallAdapterTest **7/7**（新增
+
+ecallsThroughAliasWhenExactNameMisses）。
+反证：entityId.isEmpty() 改成 entityId.isEmpty() || true
+⇒ Tests run: 7, Failures: 3，红在该条 :95；还原后 7/7。
+
+### 11.37.2 B 项：ONNX 侧 PERSON（853e168d）
+
+HanlpEntityRecognizer 加 PERSON 之后，OnnxNerRecognizer 的
+supportedTypes() 只有 ORG ⇒ **同一个接口的两个实现能力不同**，
+换一个 bean 行为就变（§11.36.3 第 ② 条就是防这个）。
+
+改法：PERSON_LABELS = Set.of(name) + supportedTypes() 加 PERSON +
+decode(...) 加第二遍扫（独立的 personSpans，不复用 ORG 缓冲 ——
+机构靠后缀表、人名靠长度，塞一起会让「张伟」被边界扩展误接）。
+置信度 **0.65**，比 HanLP 那条路（0.7）再低一档：模型没见过我们的领域。
+
+读数：OnnxNerRecognizerTest **11/11**。
+反证：if (PERSON_LABELS.contains(...)) 加 alse &&
+⇒ Tests run: 11, Failures: 1，红在 
+ecognizesPersonWithItsOwnType:203。
+
+### 11.37.3 一条新教训
+
+**spotless:apply 会把长行拆开**，于是「用整行做反证的 needle」会
+静默失配（NEW == RAW 时不报错、继续跑，得到的是原样绿）。
+两次都栽在这里：一次 NEEDLE 未命中，一次替换成
+Optional.<UUID>empty().orElse(null) 类型不匹配、**编译失败且没有任何
+Tests run 输出**，脚本仍打印 proof applied。
+判据：**反证脚本必须断言替换真的发生了，且失败时输出里必须有
+Tests run: 这一行**。
+
+### 11.37.4 这一版没做
+
+C（kb_relation 多跳）/ D（合并第二档界面）/ E（0.6.0 tag）仍在
+§11.36.1 的排期里，分别属 0.6.8 与 0.6.9。
