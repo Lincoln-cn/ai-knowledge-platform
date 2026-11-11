@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.knowledge.infrastructure;
 
+import cn.lincoln.aiplatform.knowledge.domain.EntityAliasRepository;
 import cn.lincoln.aiplatform.knowledge.domain.EntityMentionRepository;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRepository;
@@ -26,14 +27,17 @@ public class JdbcEntityRecallAdapter implements EntityRecallPort {
   private final EntityRecognizer recognizer;
   private final EntityRepository entityRepository;
   private final EntityMentionRepository mentionRepository;
+  private final EntityAliasRepository aliasRepository;
 
   public JdbcEntityRecallAdapter(
       EntityRecognizer recognizer,
       EntityRepository entityRepository,
-      EntityMentionRepository mentionRepository) {
+      EntityMentionRepository mentionRepository,
+      EntityAliasRepository aliasRepository) {
     this.recognizer = recognizer;
     this.entityRepository = entityRepository;
     this.mentionRepository = mentionRepository;
+    this.aliasRepository = aliasRepository;
   }
 
   @Override
@@ -57,8 +61,19 @@ public class JdbcEntityRecallAdapter implements EntityRecallPort {
         log.debug("#实体扩召回 问题里的实体超过 {} 个，已截断（kb={}）", MAX_ENTITIES, kbId);
         break;
       }
-      // ★ 实体表里没有这个名字 ⇒ 这个库还没抽到过它，跳过（不是错误）。
+      // ★ 先按名字精确找；找不到再问一次别名表（§11.36.1 的 A 项）。
+      //   顺序不能反：别名是"同一个实体的另一个叫法"，精确名命中时不该再走一次查询。
       Optional<UUID> entityId = entityRepository.findIdByName(kbId, r.type(), r.name());
+      if (entityId.isEmpty()) {
+        // ★ 别名表按名字（不分类型）索引 —— 别名天然不带类型信息，
+        //   “财务部”既是 ORG 的别名，也不该因为识别器把它标成别的类型就丢掉。
+        entityId =
+            Optional.ofNullable(
+                aliasRepository.canonicalIds(kbId, List.of(r.name())).get(r.name()));
+        if (entityId.isPresent()) {
+          log.debug("#实体扩召回 名字「{}」经别名命中规范实体 {}", r.name(), entityId.get());
+        }
+      }
       if (entityId.isEmpty()) {
         continue;
       }

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.lincoln.aiplatform.knowledge.domain.EntityAliasRepository;
 import cn.lincoln.aiplatform.knowledge.domain.EntityMentionRepository;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRepository;
@@ -33,6 +34,11 @@ class JdbcEntityRecallAdapterTest {
     return r;
   }
 
+  /** 默认没有别名 —— 只测「按名字找不到时不该凭空命中」。 */
+  private static EntityAliasRepository aliasWith() {
+    return mock(EntityAliasRepository.class);
+  }
+
   @Test
   @DisplayName("问题里提到已入库的实体 ⇒ 返回它出现过的段")
   void recallsSegmentsOfKnownEntity() {
@@ -45,7 +51,8 @@ class JdbcEntityRecallAdapterTest {
     when(mentions.segmentIdsOf(ENTITY)).thenReturn(List.of(SEG_B, SEG_A));
 
     List<UUID> got =
-        new JdbcEntityRecallAdapter(rec, repo, mentions).segmentsMentionedIn(KB, "财务资产部的职责？");
+        new JdbcEntityRecallAdapter(rec, repo, mentions, aliasWith())
+            .segmentsMentionedIn(KB, "财务资产部的职责？");
 
     assertThat(got).containsExactly(SEG_A, SEG_B);
   }
@@ -58,11 +65,34 @@ class JdbcEntityRecallAdapterTest {
     EntityMentionRepository mentions = mock(EntityMentionRepository.class);
 
     List<UUID> got =
-        new JdbcEntityRecallAdapter(rec, repo, mentions).segmentsMentionedIn(KB, "这条怎么处理？");
+        new JdbcEntityRecallAdapter(rec, repo, mentions, aliasWith())
+            .segmentsMentionedIn(KB, "这条怎么处理？");
 
     assertThat(got).isEmpty();
     verify(repo, never()).findIdByName(any(), anyString(), anyString());
     verify(mentions, never()).segmentIdsOf(any());
+  }
+
+  @Test
+  @DisplayName("按名字找不到时走别名：问题里说『财务部』也能召回『财务资产部』的段（0.6.6 的 A 项）")
+  void recallsThroughAliasWhenExactNameMisses() {
+    EntityRecognizer rec =
+        recognizerReturning(List.of(new EntityRecognizer.Recognized("ORG", "财务部", 0.8)));
+    EntityRepository repo = mock(EntityRepository.class);
+    // 精确名找不到 —— 库里登记的是「财务资产部」
+    when(repo.findIdByName(KB, "ORG", "财务部")).thenReturn(Optional.empty());
+    EntityAliasRepository alias = mock(EntityAliasRepository.class);
+    when(alias.canonicalIds(KB, List.of("财务部"))).thenReturn(java.util.Map.of("财务部", ENTITY));
+    EntityMentionRepository mentions = mock(EntityMentionRepository.class);
+    when(mentions.segmentIdsOf(ENTITY)).thenReturn(List.of(SEG_A));
+
+    List<UUID> got =
+        new JdbcEntityRecallAdapter(rec, repo, mentions, alias)
+            .segmentsMentionedIn(KB, "财务部的审批流程？");
+
+    // ★ 判据不是"没崩"，是"别名真的把人带到段上了"。
+    //   把 adapter 里那段 aliasRepository.canonicalIds(...) 注掉，这条会红。
+    assertThat(got).containsExactly(SEG_A);
   }
 
   @Test
@@ -74,7 +104,9 @@ class JdbcEntityRecallAdapterTest {
     when(repo.findIdByName(KB, "ORG", "综合部")).thenReturn(Optional.empty());
     EntityMentionRepository mentions = mock(EntityMentionRepository.class);
 
-    assertThat(new JdbcEntityRecallAdapter(rec, repo, mentions).segmentsMentionedIn(KB, "综合部负责什么？"))
+    assertThat(
+            new JdbcEntityRecallAdapter(rec, repo, mentions, aliasWith())
+                .segmentsMentionedIn(KB, "综合部负责什么？"))
         .isEmpty();
     verify(mentions, never()).segmentIdsOf(any());
   }
@@ -97,7 +129,8 @@ class JdbcEntityRecallAdapterTest {
         .thenReturn(List.of(SEG_A, SEG_B));
 
     List<UUID> got =
-        new JdbcEntityRecallAdapter(rec, repo, mentions).segmentsMentionedIn(KB, "财务资产部与综合部谁负责？");
+        new JdbcEntityRecallAdapter(rec, repo, mentions, aliasWith())
+            .segmentsMentionedIn(KB, "财务资产部与综合部谁负责？");
 
     assertThat(got).containsExactly(SEG_A, SEG_B);
   }
@@ -109,7 +142,9 @@ class JdbcEntityRecallAdapterTest {
     EntityRepository repo = mock(EntityRepository.class);
     EntityMentionRepository mentions = mock(EntityMentionRepository.class);
 
-    assertThat(new JdbcEntityRecallAdapter(rec, repo, mentions).segmentsMentionedIn(null, "财务资产部"))
+    assertThat(
+            new JdbcEntityRecallAdapter(rec, repo, mentions, aliasWith())
+                .segmentsMentionedIn(null, "财务资产部"))
         .isEmpty();
     verify(rec, never()).recognize(any(), anyString());
   }
@@ -126,7 +161,9 @@ class JdbcEntityRecallAdapterTest {
 
     // ★ "没有命中"与"没查成"读数一样，后者必须冒出去 —— 否则扩召回静默失效。
     assertThatThrownBy(
-            () -> new JdbcEntityRecallAdapter(rec, repo, mentions).segmentsMentionedIn(KB, "财务资产部"))
+            () ->
+                new JdbcEntityRecallAdapter(rec, repo, mentions, aliasWith())
+                    .segmentsMentionedIn(KB, "财务资产部"))
         .isInstanceOf(IllegalStateException.class);
   }
 }
