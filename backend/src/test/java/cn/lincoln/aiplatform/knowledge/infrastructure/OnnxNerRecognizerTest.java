@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.knowledge.infrastructure;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -119,7 +120,9 @@ class OnnxNerRecognizerTest {
     // 关系由 EntityExtractor 的标记词规则抽；如果这个类哪天开始返回非空，
     // 说明有人加了第二条关系抽取路径，那条路径必须同时解决"与规则冲突时谁赢"。
     assertThat(recognizer.relations("综合部隶属财务资产部管理。")).isEmpty();
-    assertThat(recognizer.supportedTypes()).containsExactly("ORG");
+    // ★ 2026-11-11 加了 PERSON（§11.36.1 的 B 项）—— 与 HanlpEntityRecognizer 的
+    //   supportedTypes() 必须一致；两个实现对不上时，换一个 bean 行为就变。
+    assertThat(recognizer.supportedTypes()).containsExactly("ORG", "PERSON");
   }
 
   @Test
@@ -178,6 +181,29 @@ class OnnxNerRecognizerTest {
       //   过滤整条丢掉。★ 后果不是"少一个字"，是"整条实体消失且没有日志"。
       //   去掉 decode() 里的 isOrgSuffixStart 分支，这条会红（只剩「信息技术部」）。
       assertThat(names).containsExactlyInAnyOrder("信息技术部", "财务资产部", "采购供应部");
+    } finally {
+      recognizer.close();
+    }
+  }
+
+  @Test
+  @DisplayName("真推理：人名走 B-I-name，类型是 PERSON 而不是 ORG（0.6.6 的 B 项）")
+  void recognizesPersonWithItsOwnType() {
+    Assumptions.assumeTrue(
+        Files.exists(MODEL_DIR.resolve("model.onnx")),
+        "缺模型文件：python tools/fetch_onnx_models.py --only ner");
+
+    OnnxNerRecognizer recognizer = new OnnxNerRecognizer(MODEL_DIR, 4);
+    try {
+      List<EntityRecognizer.Recognized> found = recognizer.recognize("该申请由张伟经理审批，经李静主任复核后归档。");
+
+      // ★ 判据不是"抽到了张伟"（那可能来自 ORG 那遍的误判），而是"类型是 PERSON"。
+      //   把 PERSON_LABELS 改成 Set.of()（或把 decode 第二遍那句 if 注掉），这条会红。
+      assertThat(found)
+          .anyMatch(r -> "PERSON".equals(r.type()) && r.name().contains("张伟"))
+          .allMatch(r -> !"PERSON".equals(r.type()) || r.confidence() == 0.65);
+      // 机构那遍不该因为这段文本凭空造出一个 ORG
+      assertThat(found).noneMatch(r -> "ORG".equals(r.type()) && r.name().contains("张伟"));
     } finally {
       recognizer.close();
     }

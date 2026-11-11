@@ -43,11 +43,14 @@ import org.slf4j.LoggerFactory;
  *
  * <p>现在标签来自模型自带的 {@code config.json} 的 {@code id2label}： 顺序是导出时定死的，写死一份必然在换模型时错位，而错位不会抛异常，只会静默抽错。
  *
- * <h3>只认机构，人名一律不抽</h3>
+ * <h3>只认机构与职位人名</h3>
  *
  * <p>29 类标签里与组织相关的有三类：{@code organization} / {@code company} / {@code government}。
- * 人名、地名、时间、邮箱、手机号都在标签里，但本项目的实体库只服务「制度文档里的责任主体」， 抽人名只会给 {@code kb_entity} 塞噪声。{@link
- * #supportedTypes()} 如实声明只支持 ORG。
+ * 地名、时间、邮箱、手机号都在标签里，但本项目的实体库只服务「制度文档里的责任主体」， 抽地名只会给 {@code kb_entity} 塞噪声。{@link #supportedTypes()}
+ * 如实声明支持哪些类型。
+ *
+ * <p>★ 2026-11-11 加了 PERSON（{@link #PERSON_LABELS}）：同一天 {@code HanlpEntityRecognizer} 也加了。**两个实现的
+ * {@code supportedTypes()} 必须一致** —— 否则换一个 bean 行为就变， 而调用方是按接口声明写代码的（见 {@code §11.36.3} 第 ② 条纪律）。
  *
  * <h3>关系不在这里抽</h3>
  *
@@ -69,6 +72,17 @@ public class OnnxNerRecognizer implements EntityRecognizer {
 
   /** 与 {@link #DEFAULT_ORG_SUFFIXES} 同长度；只收以这些结尾的候选。 */
   static final Set<String> ORG_LABELS = Set.of("organization", "company", "government");
+
+  /**
+   * 人名类标签（CCKS 2020 里只有 {@code name} 这一组）。
+   *
+   * <p>★★ 2026-11-11 加（`§11.36.1` 的 B 项）：同一天给 {@code HanlpEntityRecognizer} 加了 PERSON，
+   * 而这里没加的话，**同一个接口的两个实现能力不同** —— 换一个 bean 行为就变，而调用方按 {@link #supportedTypes()} 写代码，读到的却是两套答案。
+   *
+   * <p>★ 与 HanLP 那条路的关键差别：HanLP 走**规则**（名字 + 职务词后缀），这里走**模型**（B-I-name）。 模型认的是"看起来像人名"，不管后面有没有职务词
+   * —— 所以置信度给低一档（0.65）， 并且在 {@code compact} 之后仍按后缀表再收一次（人名没有后缀，只剩长度约束）。
+   */
+  static final Set<String> PERSON_LABELS = Set.of("name");
 
   /**
    * 开头的虚词不当实体开头：「应配合财务资产部」不该整体入库。
@@ -108,7 +122,7 @@ public class OnnxNerRecognizer implements EntityRecognizer {
 
   @Override
   public List<String> supportedTypes() {
-    return List.of("ORG");
+    return List.of("ORG", "PERSON");
   }
 
   /** ★ 返回空 = 这一层不抽关系，不是"没有关系"。关系由 {@code EntityExtractor} 的标记词规则负责。 */
@@ -290,9 +304,48 @@ public class OnnxNerRecognizer implements EntityRecognizer {
     }
     flush(spans, current);
 
+    // ★ 第二遍：人名（§11.36.1 的 B 项）。
+    //   不复用上面那遍的缓冲，因为人名的收敛规则与机构完全不同：
+    //   机构靠后缀表、人名靠长度；把两种类型塞进同一个 StringBuilder 会让
+    //   「张伟」被 isOrgSuffixStart 的边界扩展误接上去。
+    //   代价是再扫一遍 logits —— 29 类 × 512 格，与一次前向相比可以忽略。
+    List<String> personSpans = new ArrayList<>();
+    StringBuilder person = new StringBuilder();
+    for (int i = 0; i < ids.length; i++) {
+      if (special.contains(ids[i])) {
+        flush(personSpans, person);
+        continue;
+      }
+      int best = 0;
+      for (int c = 1; c < logits[0][i].length; c++) {
+        if (logits[0][i][c] > logits[0][i][best]) {
+          best = c;
+        }
+      }
+      String label = activeLabels.get(best);
+      String piece = tokens[i].startsWith("##") ? tokens[i].substring(2) : tokens[i];
+      if (label.startsWith("B-")) {
+        flush(personSpans, person);
+        if (PERSON_LABELS.contains(label.substring(2))) {
+          person.append(piece);
+        }
+      } else if (label.startsWith("I-") && person.length() > 0) {
+        person.append(piece);
+      } else {
+        flush(personSpans, person);
+      }
+    }
+    flush(personSpans, person);
+
     List<Recognized> out = new ArrayList<>();
     for (String span : compact(spans)) {
       out.add(new Recognized("ORG", span, 0.9));
+    }
+    for (String span : personSpans) {
+      // ★ 长度 2-4：单字几乎不是完整人名（是姓氏碎片），五字以上多半是两个名字连在一起。
+      if (span.length() >= 2 && span.length() <= 4) {
+        out.add(new Recognized("PERSON", span, 0.65));
+      }
     }
     return out;
   }
