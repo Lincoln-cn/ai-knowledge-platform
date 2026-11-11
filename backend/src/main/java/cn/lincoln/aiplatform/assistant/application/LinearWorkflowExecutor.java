@@ -58,6 +58,21 @@ public class LinearWorkflowExecutor {
    */
   @Transactional(rollbackFor = Exception.class)
   public void execute(UUID executionId, WorkflowCompiler.ExecutionPlan plan, String input) {
+    executeAndReturn(executionId, plan, input);
+  }
+
+  /**
+   * 与 {@link #execute} 同一条执行，但把最终状态交回给调用方。
+   *
+   * <p>★ 为什么加这个方法而不是把 {@code execute} 改成有返回值：{@code execute} 有四个测试直接用，改签名等于让它们跟着改 ——
+   * 而这几个测试测的是"节点按顺序跑、状态按语义写"，与"要不要拿到返回值"无关。多一个方法，测试一行不用动。
+   *
+   * <p>★ 事务语义与 {@code execute} 完全一致（节点抛异常整批回滚）。调用方若要**在失败时也留痕**，必须像 {@code WorkflowDebugService}
+   * 那样先执行、再用自己的事务写记录 —— 记录放进这个事务会在失败时一起消失。
+   */
+  @Transactional(rollbackFor = Exception.class)
+  public FlowState executeAndReturn(
+      UUID executionId, WorkflowCompiler.ExecutionPlan plan, String input) {
     requireLinearFourNode(plan);
     FlowState state = new FlowState();
     for (WorkflowCompiler.PlanStep step : plan.steps()) {
@@ -82,6 +97,7 @@ public class LinearWorkflowExecutor {
               step.order(),
               "SUCCEEDED"));
     }
+    return state;
   }
 
   /** 只放行线性 4 节点计划；条件分支 / 循环 / 人工介入 / 其它类型一律拒绝。 */

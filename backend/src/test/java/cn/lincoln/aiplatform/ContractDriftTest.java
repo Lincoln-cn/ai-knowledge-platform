@@ -108,7 +108,9 @@ class ContractDriftTest {
           //     全部在 2026-10-31 落地，只剩这一条；而它的实现前提是「把图真的跑一遍」，
           //     即执行引擎，执行引擎按 `ROADMAP §九` 排 V1.0、且已记在 #113。
           //     把它留在 #198 会让账单看起来像「编排还差十条端点」，与实际相反 ⇒ 改挂 #113。
-          missing("POST", "/assistants/{*}/workflow/debug", "#113", "V1.0（执行引擎）"));
+          //   ★ 2026-11-12 已落地（0.7.0）：`WorkflowDebugController` + `WorkflowDebugService`，
+          //     写入方与 `WorkflowRecordRepository#save` 同批进 ⇒ 这一条从 missing 清单里删掉。
+          );
 
   // ★ conversations（0）—— GET/PATCH/DELETE /conversations/{id} 已随 #187 落地，
   //   会话分享三条也已在 2026-10-25 落地（V53 + 公开面 /public/shares/{token}）
@@ -520,6 +522,11 @@ class ContractDriftTest {
    */
   @Test
   void 删掉真实基线的一条仍缺失必须红() {
+    // ★ 2026-11-12：最后一条真实 missing（`POST …/workflow/debug`）随 0.7.0 落地，台账被清空。
+    //   空台账下"删掉任意一条"没有对象可删 —— 这里跳过，而不是把这条自检删掉：
+    //   下次有人重新登记 missing 时，它必须自动恢复运行，否则拦截职责又会退回"没人验证"。
+    org.junit.jupiter.api.Assumptions.assumeFalse(
+        KNOWN_MISSING.isEmpty(), "真实台账已清空（没有待实现端点），这条反证没有对象可删");
     MissingEndpoint victim = KNOWN_MISSING.getFirst();
     List<MissingEndpoint> withoutVictim =
         KNOWN_MISSING.stream().filter(entry -> !entry.equals(victim)).toList();

@@ -35,6 +35,12 @@ public class WorkflowRecordRepositoryAdapter implements WorkflowRecordRepository
   }
 
   @Override
+  public WorkflowRecord save(WorkflowRecord record) {
+    // ★ 直接落库、不判重：id 由调用方生成，重复保存同一行是调用方的 bug，静默覆盖会把它变成"数据自己变了"。
+    return records.save(record);
+  }
+
+  @Override
   public List<WorkflowRecord> page(UUID assistantId, String status, int page, int size) {
     // ★ 端口用 1 起始的页码（契约口径），Spring Data 用 0 起始 —— 换算只在这一行。
     PageRequest request = PageRequest.of(page - 1, size, NEWEST_FIRST);
