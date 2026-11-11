@@ -136,9 +136,16 @@ public class WorkflowDebugService {
     return value.replace("\\", "\\\\").replace("\"", "\\\"");
   }
 
+  /**
+   * 输出预览。
+   *
+   * <p>★ 空输出返回 <b>空串</b>而不是 {@code null}：{@code as_workflow_record.final_output_preview} 是 {@code
+   * text not null}（{@code V62__assistant_workflow_record.sql:37}）。这个差别只有真栈能发现 —— {@code
+   * WorkflowDebugServiceTest} 用的是 Mock 仓储，不校验 SQL 约束，所以它在单元测试里一直是绿的。
+   */
   private static String preview(String output) {
-    if (output == null) {
-      return null;
+    if (output == null || output.isBlank()) {
+      return "";
     }
     return output.length() <= PREVIEW_LIMIT ? output : output.substring(0, PREVIEW_LIMIT);
   }
