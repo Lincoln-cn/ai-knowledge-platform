@@ -4,8 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
 import cn.lincoln.aiplatform.knowledge.infrastructure.HanlpEntityRecognizer;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -17,6 +15,8 @@ import java.util.Set;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 在 30 段人工基线（{@code backend/tools/ner_testset.jsonl}）上量 HanLP 的机构名抽取质量。
@@ -60,7 +60,7 @@ class HanlpNerAccuracyTest {
     List<String> misses = new ArrayList<>();
     List<String> extras = new ArrayList<>();
 
-    ObjectMapper mapper = new ObjectMapper();
+    JsonMapper mapper = JsonMapper.builder().build();
     for (String line : lines) {
       if (line.isBlank()) {
         continue;

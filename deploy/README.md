@@ -427,6 +427,14 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.retrieval.rerank.listwise-enabled`（`RETRIEVAL_RERANK_LISTWISE_ENABLED`） | **false** | LLM listwise：对重排后的前 N 个再让对话模型排一次。20 条试跑 B3 65.00%→70.00%（+5 点），但单条 **3.12s**（p95 11.69s）⇒ 叠加检索 8.5s 后单跳 11.6s，**在本机破 B4 的 10s**。所以默认关：**它是"好机器上再打开"的增益件**。★ 三档覆盖顺序：请求体 `rerankListwise` > 应用 `retrieval.rerankListwise` > 这个全局值，`null` = 跟随下一级 |
 | `app.retrieval.rerank.listwise-top-k`（`RETRIEVAL_RERANK_LISTWISE_TOP_K`） | 5 | 交给 listwise 的候选数。只排 1 个等于没排，所以下限是 2（配 1 会在启动时被拒） |
 
+### 实体识别
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `app.entity.recognizer`（`AIP_ENTITY_RECOGNIZER`） | `onnx` | 用哪个识别器抽实体：`onnx`（BERT，29 类标签）或 `hanlp`（分词 + 后缀表）。★ 两个实现的 `supportedTypes()` 必须一致，不一致就是"换一个 bean 行为就变"。同一套 30 段验证集上 ONNX 的 F1 是 99%，HanLP 是 49% —— HanLP 分词会把「采购供应部」切成「采购」+「供应部」 |
+| `app.entity.onnx.model-dir`（`AIP_NER_MODEL_DIR`） | `models/bert-chinese-ner-onnx` | NER 模型目录，里面要有 `model.onnx` / `tokenizer.json` / `config.json`。★ 相对路径相对**后端进程的工作目录**（`backend/`），不是仓库根 —— 从别处启动会找不到模型文件，症状是"抽不出实体但没有任何报错"。用 `python tools/fetch_onnx_models.py --only ner` 可下 |
+| `app.entity.onnx.threads`（`AIP_NER_THREADS`） | 0（= 按核数自动） | ONNX 推理线程数。抽取已在虚拟线程上异步跑，这个数只影响单次前向的并行度 |
+
 ### 分段与入库
 
 | 键（ENV） | 默认 | 改了会怎样 |

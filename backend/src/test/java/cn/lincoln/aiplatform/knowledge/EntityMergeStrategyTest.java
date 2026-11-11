@@ -87,8 +87,9 @@ class EntityMergeStrategyTest {
     return kbId;
   }
 
+  /** 同 {@code code} 已存在时不插新行，返回已有那一行的 id。 */
   @Test
-  void 强键已存在时不插新行_返回已有行的id() {
+  void strongKeyHitReusesExistingRow() {
     UUID kbId = insertKb();
     UUID existing = insertOrg(kbId, "财务资产部", "FIN-001");
 
@@ -99,14 +100,16 @@ class EntityMergeStrategyTest {
     assertThat(decision.matchedCode()).isEqualTo("FIN-001");
   }
 
+  /** 强键在库里查不到时照常插入 —— 第一档只处理「已经有了」这种情况。 */
   @Test
-  void 强键不存在时照常插入() {
+  void strongKeyMissInsertsNewRow() {
     UUID kbId = insertKb();
     assertThat(mergeService.resolve(kbId, "FIN-999").insertNew()).isTrue();
   }
 
+  /** 实体没有 {@code code}（抽取出来的都没有）时照常插入，交给后两档判定。 */
   @Test
-  void 没有强键时照常插入() {
+  void missingStrongKeyInsertsNewRow() {
     UUID kbId = insertKb();
     insertOrgWithoutCode(kbId, "财务资产部");
     // 抽取出的实体没有 code ⇒ 走正常插入，交给后两档判定。
@@ -114,8 +117,9 @@ class EntityMergeStrategyTest {
     assertThat(mergeService.resolve(kbId, "  ").insertNew()).isTrue();
   }
 
+  /** 同一组别名写两次只留一行：{@code unique(kb_id, alias_name)} 挡第二次。 */
   @Test
-  void 别名写入是幂等的() {
+  void aliasWriteIsIdempotent() {
     UUID kbId = insertKb();
     UUID existing = insertOrg(kbId, "财务资产部", "FIN-002");
 
@@ -130,8 +134,9 @@ class EntityMergeStrategyTest {
     assertThat(aliases).containsExactly("财务部");
   }
 
+  /** 第二档只出候选清单，别名表一个字都不动 —— 等人确认。 */
   @Test
-  void 属性候选只出清单不写库() {
+  void attributeCandidatesDoNotWriteAliases() {
     UUID kbId = insertKb();
     UUID a = insertOrg(kbId, "财务资产部", "FIN-004");
     UUID b = insertOrg(kbId, "财务部", "FIN-005");
@@ -151,8 +156,9 @@ class EntityMergeStrategyTest {
     assertThat(aliases).as("候选阶段不许写别名").isZero();
   }
 
+  /** 共同属性判定只认字符串对：数字与布尔不参与，类型差异会把「不同」判成「相同」。 */
   @Test
-  void 共同属性判定不吃数字与布尔值() {
+  void sharedAttributeIgnoresNumbersAndBooleans() {
     // 数字/布尔不参与 —— 类型差异会让"相同"变成误判。
     assertThat(JdbcEntityMergeService.sharedAttribute("{\"a\": 1}", "{\"a\": 1}")).isNull();
     assertThat(JdbcEntityMergeService.sharedAttribute("{\"a\": \"x\"}", "{\"a\": \"x\"}"))
@@ -167,7 +173,7 @@ class EntityMergeStrategyTest {
    * 原实体行<b>还在</b>（合并不许删行，否则不可拆） ③ 再次确认同一组是幂等的（返回 0，不是报错）。
    */
   @Test
-  void 人工确认合并只写别名不删原行() {
+  void manualMergeWritesAliasAndKeepsOriginalRow() {
     UUID kbId = insertKb();
     UUID keep = insertOrg(kbId, "财务资产部", "FIN-006");
     UUID merge = insertOrg(kbId, "财务部", "FIN-007");

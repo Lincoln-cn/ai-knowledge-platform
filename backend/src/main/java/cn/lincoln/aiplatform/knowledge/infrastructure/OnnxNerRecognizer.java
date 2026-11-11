@@ -7,8 +7,6 @@ import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -21,6 +19,8 @@ import java.util.Map;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 基于 ONNX BERT 的中文实体识别。
@@ -95,7 +95,7 @@ public class OnnxNerRecognizer implements EntityRecognizer {
   private final Path modelDir;
   private final int threads;
   private final List<String> orgSuffixes;
-  private static final ObjectMapper MAPPER = new ObjectMapper();
+  private static final JsonMapper MAPPER = JsonMapper.builder().build();
 
   private volatile OrtSession session;
   private volatile HuggingFaceTokenizer tokenizer;
@@ -211,16 +211,13 @@ public class OnnxNerRecognizer implements EntityRecognizer {
     }
     // id2label 的 key 是字符串序号，按数值排序而不是按字典序（否则 "10" 排在 "2" 前面）
     List<Map.Entry<Integer, String>> entries = new ArrayList<>();
-    id2label
-        .fields()
-        .forEachRemaining(
-            e ->
-                entries.add(
-                    Map.entry(
-                        Integer.parseInt(e.getKey()),
-                        e.getValue().isTextual()
-                            ? e.getValue().asText()
-                            : e.getValue().path("label").asText())));
+    for (Map.Entry<String, JsonNode> e : id2label.properties()) {
+      JsonNode value = e.getValue();
+      entries.add(
+          Map.entry(
+              Integer.parseInt(e.getKey()),
+              value.isTextual() ? value.asText() : value.path("label").asText()));
+    }
     entries.sort(Map.Entry.comparingByKey());
     List<String> out = entries.stream().map(Map.Entry::getValue).toList();
     boolean hasOrg =
