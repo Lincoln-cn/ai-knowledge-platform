@@ -5412,3 +5412,81 @@ er_ollama_label.py / HanlpNerAccuracyTest） |
    脚本「大小不符就删」直接删掉本地 388MB 模型。已改成「只报告，重下要显式 --force」。
 
 ---
+
+## 11.35 0.6.7：实体合并第一档、PERSON 抽取、版本号 0.6.0（2026-11-11）
+
+0.6 收口前最后一批。三件事加一处记录失误。
+
+### 11.35.1 合并策略第一档 —— 设计被真库推翻
+
+第一版写的是「扫全库找同 `code` 的组再合并」，集成测试直接撞：
+
+```
+ERROR: duplicate key value violates unique constraint "uq_kb_entity_code"
+```
+
+`kb_entity` 上有 `unique(kb_id, code) where code is not null`，库里**不可能**存在两行同 code。
+唯一约束是对的，错的是把合并想成「事后清理」：事后扫描在健康的库上永远扫不到东西，
+那不是「暂时没数据」，是**这个功能永远空转**。
+
+改成写入前问一句：
+
+| 方法 | 语义 |
+|---|---|
+| `resolve(kbId, code)` | 返回 `Decision(insertNew, mergeInto, matchedCode)`；code 已存在 ⇒ `insertNew=false` + 已有行的 id |
+| `recordAliases(kbId, entityId, aliases)` | 幂等，`source=IMPORT`、`confidence=1.0`（强键相同是确定性判断，不是启发式） |
+| `candidatesByAttributes(kbId)` | 第二档只出候选、**不写库**；`reason` 写「共同属性 department=财务」，让人看到依据而不是一个分数 |
+
+读数 `EntityMergeStrategyTest` **6/6**（真库 Testcontainers）：强键已存在时不插新行 / 强键不存在时照常插入 /
+没有强键时照常插入 / 别名写入是幂等的 / 属性候选只出清单不写库 / 共同属性判定不吃数字与布尔值。
+
+### 11.35.2 第四个「代码写了、测试绿了、东西没被创建出来」
+
+`JdbcEntityAliasRepository` **从来没有 `@Repository` 注解** —— Spring 里根本没有它的 bean。
+
+不报错是因为没人注入它；`JdbcEntityAliasRepositoryTest` 用 Mockito 直接 `new`，也看不见。
+直到给 `JdbcEntityMergeService` 注入它时抛 `NoSuchBeanDefinitionException` 才暴露。
+
+同一形状在 0.6 里出现了**四次**：`kb_relation`（0 行）· `kb_entity_dict`（0 行）·
+`kb_entity_alias`（0 行）· `JdbcEntityAliasRepository`（无 bean）。共同点：
+**缺失的那一层不产生任何异常，读数与「功能正常运行但没数据」完全一样**。
+
+### 11.35.3 PERSON 抽取 —— 不用 HanLP 的 nr，走职务词后缀
+
+原来的 `TYPES` 只有 `ORG`/`DOC`，类注释写着「人名一律不抽」，理由是 2026-11-11 的探针实测：
+HanLP 的 `enableNameRecognize` 把「应于 / 须将 / 应在」标成 `nr`，三处全错。
+
+加回来**不用** HanLP 的 nr，走 `EntityExtractor` 的职务词后缀规则 ——
+名字后面必须跟 `PERSON_TITLES` 之一（经理 / 主任 / 部长 / 处长 / 科长 / 总监 / 总裁 / 总经理 / 副局长 / 副经理），
+规则本身就是精度护栏：「应于」后面没有任何职务词。
+
+- `personExtractor` 与 `relationExtractor` **分开实例化**：各管一件事，改职务词不该影响关系抽取。
+- 置信度 **0.7**，比 ORG 的 0.8 低一档 —— 机构有后缀表兜底，人名靠职务词，可能把「销售经理」这类复合词误判。
+
+| 判据 | 读数 |
+|---|---|
+| 正证 | `HanlpEntityRecognizerTest` **12/12** |
+| 反证 | 注入 `"PERSON"` → `"NOPE"` ⇒ **12 例 1 失败**，红在 `personNeedsTitleSuffix:69` |
+| 还原核验 | 字节一致 · 无 BOM |
+
+### 11.35.4 版本号 0.6.0
+
+四处同号：`backend/pom.xml` · `frontend/package.json` · `frontend/package-lock.json` 的顶层与 `packages[""]` 根。
+
+### 11.35.5 两处记录失误（我的）
+
+**① merge 提交吞掉了消息。** `bf4c0ade` 是一次 merge，但暂存区里已经准备好的内容被并进了这次 merge 提交，
+消息用的还是 merge 的（「清掉 10 处冲突」），一句没提合并策略与版本号。
+已补 `aa363324` 说明。教训：**暂存区里有东西时不要直接 commit** ——
+若当时处于 merge 状态，内容会被并进 merge 提交、用 merge 的消息。
+
+**② 提交了一个编译不过的测试。** `EntityMergeStrategyTest` 在那次提交里编译不过（缺 `PostgresImage` 的
+import、`sharedAttribute` 跨包访问不到），是下一轮跑 `test-compile` 才发现的。已由 `36d0288e` 修复。
+教训：**提交前必须跑一次 `test-compile`**，不能只看「上一次跑过测试」。
+
+### 11.35.6 这一批没做的
+
+- `kb_relation` 被检索消费**已在 0.6.7 做过**（`d7b333cb`），不在本批。
+- 别名参与召回：`0.6.3` 只做了读口与写口，检索链路仍未消费 `kb_entity_alias`。
+- 合并策略第二档的**界面**：候选清单已能从 `candidatesByAttributes` 取，但没有任何页面在调。
+
