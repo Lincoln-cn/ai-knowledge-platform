@@ -67,12 +67,26 @@ public class JdbcRelationRecallAdapter implements RelationRecallPort {
     if (entityIds.isEmpty()) {
       return List.of();
     }
-    List<UUID> segments = relationRepository.segmentIdsOf(kbId, entityIds);
+    // ★ 第二跳（`§11.36.1` 的 C 项）：问题问 A、答案写在「B 与 C 的关系」那一段时，
+    //   只查一跳永远找不到。先把 A 的邻居 B 也加进来，再统一查段。
+    //   邻居只扩一跳、不递归 —— 三跳以上在这个规模上没有证据支持吃回本，见 `§11.27.5`。
+    Set<UUID> withNeighbors = new LinkedHashSet<>(entityIds);
+    List<UUID> neighbors = relationRepository.neighborEntityIds(kbId, entityIds);
+    if (!neighbors.isEmpty()) {
+      withNeighbors.addAll(neighbors);
+      log.debug("#关系扩召回 第二跳：起点实体 {} 个，邻居 {} 个（kb={}）", entityIds.size(), neighbors.size(), kbId);
+    }
+    List<UUID> segments = relationRepository.segmentIdsOf(kbId, withNeighbors);
     if (segments.isEmpty()) {
-      log.debug("#关系扩召回 实体有 {} 个，但没有任何关系陈述段（kb={}）", entityIds.size(), kbId);
+      log.debug("#关系扩召回 实体有 {} 个，但没有任何关系陈述段（kb={}）", withNeighbors.size(), kbId);
       return List.of();
     }
-    log.debug("#关系扩召回 命中 {} 个实体、{} 段（kb={}）", entityIds.size(), segments.size(), kbId);
+    log.debug(
+        "#关系扩召回 命中 {} 个实体（含邻居 {}）、{} 段（kb={}）",
+        withNeighbors.size(),
+        neighbors.size(),
+        segments.size(),
+        kbId);
     // ★ 按 id 升序：名次交给 RRF，不在这里预排。
     List<UUID> ordered = new ArrayList<>(new LinkedHashSet<>(segments));
     ordered.sort(null);

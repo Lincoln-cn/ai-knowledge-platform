@@ -77,4 +77,40 @@ public class JdbcEntityRelationRepository implements EntityRelationRepository {
     Set<UUID> ordered = new LinkedHashSet<>(rows);
     return new ArrayList<>(ordered);
   }
+
+  @Override
+  public List<UUID> neighborEntityIds(UUID kbId, Collection<UUID> entityIds) {
+    if (kbId == null || entityIds == null || entityIds.isEmpty()) {
+      return List.of();
+    }
+    // ★ 两端都要取：实体可能出现在 from_entity 也可能出现在 to_entity，
+    //   只取一端会漏掉一半的邻居。
+    String placeholders = String.join(", ", java.util.Collections.nCopies(entityIds.size(), "?"));
+    List<Object> args = new ArrayList<>();
+    args.add(kbId);
+    args.addAll(entityIds);
+    args.add(kbId);
+    args.addAll(entityIds);
+    List<UUID> rows =
+        jdbc.query(
+            """
+            select to_entity as neighbor
+              from kb_relation
+             where kb_id = ?
+               and from_entity in (%s)
+            union
+            select from_entity as neighbor
+              from kb_relation
+             where kb_id = ?
+               and to_entity in (%s)
+            """
+                .formatted(placeholders, placeholders),
+            (rs, i) -> rs.getObject(1, UUID.class),
+            args.toArray());
+    // ★ 去掉起点自己：A 与 B 有关系时，A 也会作为一个"另一端"被查出来，
+    //   那不是邻居，把它留在集合里只会让第二跳原地打转。
+    Set<UUID> ordered = new LinkedHashSet<>(rows);
+    ordered.removeAll(entityIds);
+    return new ArrayList<>(ordered);
+  }
 }

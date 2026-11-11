@@ -46,6 +46,24 @@ public interface EntityRelationRepository {
   List<UUID> segmentIdsOf(UUID kbId, Collection<UUID> entityIds);
 
   /**
+   * 与给定实体有关系的其他实体 id（一跳邻居）。
+   *
+   * <p>★ 为什么需要它：{@link #segmentIdsOf} 只回答「<b>这些</b>实体参与过的关系段」。问题问 A、而答案写在「B 与 C 的关系」那一段时，一跳永远找不到 ——
+   * 这正是 `§11.36.1` 的 C 项要补的那一跳。
+   *
+   * <p>★ 只返回<b>另一端</b>的 id，不返回关系类型：这一版要的是「还能往哪儿走」，类型留给排序时的语义判断（再说 四类关系里三类都表示「谁管谁」，对召回方向没有区分度）。
+   *
+   * <p>★ 两端都算：实体在关系的 {@code from_entity} 还是 {@code to_entity}，对「还有哪些相关实体」没有区别。
+   *
+   * <p>★ 失败语义同 {@link #segmentIdsOf}：查库失败抛异常，<strong>不吞成空列表</strong>。
+   *
+   * @param kbId 知识库 id（{@code null} 返回空列表）
+   * @param entityIds 起点实体（空集合返回空列表）
+   * @return 去重后的邻居 id；没有邻居返回空列表，不返回 {@code null}
+   */
+  List<UUID> neighborEntityIds(UUID kbId, Collection<UUID> entityIds);
+
+  /**
    * 待写入的一条关系。
    *
    * <p>{@code fromEntity} / {@code toEntity} 是**已经入库**的实体 id，不是名字 ——
