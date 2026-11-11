@@ -41,10 +41,11 @@ PAGES = FRONTEND / "src/pages"
 #         不要写"已处理"这类没有位置的话 —— 要能被 grep 到。
 # ──────────────────────────────────────────────────────────────────────────────
 PENDING = {
-    "POST /assistants/{*}/workflow/debug": {
-        "issue": "#198",
-        "guard": "",
-    },
+    # ★ 2026-11-12：最后一条 POST /assistants/{*}/workflow/debug 随 0.7.0 落地，
+    #   已从这里删掉（后端台账 ContractDriftTest.KNOWN_MISSING 同一时刻摘的同一条）。
+    #   前端页面侧的降级处理（"试用调不到就提示没开通"）可以撤了 —— 它现在能真的调通。
+    #   ★ 空账不是"闸门坏了"：见 read_backend_ledger 的 docstring。
+
     # ★ 已落：POST /assistants/{*}/workflow/publish 随 #198 第四块后端交付（2026-10-31），
     #   故从本账里摘掉 —— 后端台账（ContractDriftTest.KNOWN_MISSING）同一时刻摘的同一条。
     # ★ 同日补记：当时这里写着"前端仍无页面调用 `publishWorkflow`"，那条**已经不成立** ——
@@ -72,11 +73,24 @@ def read_backend_ledger() -> list[tuple[str, str]]:
 
     ★ 只读字段块，不读整个文件 —— 里面的金丝雀测试也用 `missing("GET", "/users", …)` 造数据，
     整文件扫会把那些假端点当成真欠账。
+
+    ★★ 台账**允许为空**（2026-11-12 起就是空的：最后一个待实现端点
+    `POST /assistants/{*}/workflow/debug` 随 0.7.0 落地）。空不是"正则失配"——
+    要区分这两件事，靠的是"`KNOWN_MISSING =` 还在不在"和"块里有没有 `List.of(`"，
+    不是靠"读出来几条"。上一版把这两件事混成了一个判断，于是台账一清空，
+    这道闸门就报"已失效"，而它其实什么都没坏。
     """
     text = DRIFT.read_text(encoding="utf-8")
+    if "KNOWN_MISSING =" not in text:
+        # 形状真的变了：字段被改名或删掉了，正则再怎么调也读不到
+        raise LookupError("ContractDriftTest 里找不到 KNOWN_MISSING = 字段")
     start = text.index("KNOWN_MISSING =")
-    block = text[start : text.index("/**", start)]
+    tail = text.find("/**", start)
+    block = text[start:] if tail < 0 else text[start:tail]
+    if "List.of(" not in block:
+        raise LookupError("KNOWN_MISSING 字段块里没有 List.of(，形状对不上")
     return re.findall(r'missing\("([A-Z]+)",\s*"([^"]+)"', block)
+
 
 
 def segs_backend(path: str) -> list[str]:
@@ -131,12 +145,19 @@ def count_callers(fn: str) -> int:
 
 
 def check() -> int:
-    ledger = read_backend_ledger()
+    try:
+        ledger = read_backend_ledger()
+    except LookupError as e:
+        print(f"✗ 台账读不出来（正则与 ContractDriftTest 的形状对不上了）⇒ 这道闸门已失效：{e}")
+        return 1
     decls = collect_declarations()
 
+    # ★ 台账为空是**合法状态**（2026-11-12 起就是空的）：所有待实现端点都已落地。
+    #   "读出来 0 条"与"正则失配"必须分开判断 —— 前者由 read_backend_ledger 正常返回 [],
+    #   后者由它 raise LookupError。上一版把两件事混成 `if not ledger`，于是台账一清空
+    #   这道闸门就自报失效，而实际上什么都没坏。
     if not ledger:
-        print("✗ 台账读不出来（正则与 ContractDriftTest 的形状对不上了）⇒ 这道闸门已失效")
-        return 1
+        print("✓ 后端台账已清空（没有待实现端点）；前端这边的欠账账本同样应当为空")
 
     problems: list[str] = []
     declared: dict[str, list[str]] = {}
