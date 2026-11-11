@@ -49,8 +49,8 @@ class WorkflowValidationServiceTest {
   }
 
   @Test
-  @DisplayName("条件分支：发布前就拦住，而不是发布成功、点试用时才 500")
-  void conditionNodeIsRejectedAtPublishTime() {
+  @DisplayName("条件分支：0.7.2 之后能发布，不再被 NODE_NOT_EXECUTABLE 拦住")
+  void conditionNodeIsNoLongerRejectedAtPublishTime() {
     WorkflowValidationService.Result result =
         service.validate(
             new WorkflowValidationService.Graph(
@@ -60,17 +60,14 @@ class WorkflowValidationServiceTest {
                     node("c", "AI_CHAT_NODE")),
                 List.of(edge("a", "b"), edge("b", "c"))));
 
-    assertThat(codes(result)).contains("NODE_NOT_EXECUTABLE");
-    assertThat(result.passed()).isFalse();
+    // 这条断言原来是反的：它守的是「条件分支在发布前就被拦住，而不是发布成功、
+    // 点试用时才 500」。0.7.2 给了 CONDITION_NODE 一个真的执行器之后前提没了 ——
+    // 现在该拦住的是「目录标了 implemented 却没有执行器」的类型，而 CONDITION_NODE
+    // 两边都有。
+    assertThat(codes(result)).doesNotContain("NODE_NOT_EXECUTABLE");
     assertThat(result.issues())
         .filteredOn(issue -> "NODE_NOT_EXECUTABLE".equals(issue.code()))
-        .singleElement()
-        .satisfies(
-            issue -> {
-              assertThat(issue.nodeId()).isEqualTo("b");
-              assertThat(issue.message()).contains("本版本执行引擎还跑不了");
-              assertThat(issue.hint()).contains("V1.0");
-            });
+        .isEmpty();
   }
 
   @Test

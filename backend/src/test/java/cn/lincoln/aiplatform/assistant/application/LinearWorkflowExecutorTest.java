@@ -76,23 +76,6 @@ class LinearWorkflowExecutorTest {
   }
 
   @Test
-  @DisplayName("条件节点被拒（本版本只跑线性 4 节点）")
-  void rejectsConditionalNode() {
-    LinearWorkflowExecutor executor = executorWith(new ArrayList<>());
-    assertThatThrownBy(
-            () ->
-                executor.execute(
-                    UUID.randomUUID(),
-                    new WorkflowCompiler.ExecutionPlan(
-                        List.of(
-                            step("s", "START_NODE", 0, null), step("c", "CONDITION_NODE", 1, null)),
-                        List.of()),
-                    "in"))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("CONDITION_NODE");
-  }
-
-  @Test
   @DisplayName("人工介入节点被拒（本版本不支持人工介入）")
   void rejectsHumanInTheLoop() {
     LinearWorkflowExecutor executor = executorWith(new ArrayList<>());
@@ -107,22 +90,5 @@ class LinearWorkflowExecutorTest {
                     "in"))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("QUESTION_NODE");
-  }
-
-  @Test
-  @DisplayName("带分支进入（branchHandle）的计划被拒（只跑线性）")
-  void rejectsBranchEntry() {
-    LinearWorkflowExecutor executor = executorWith(new ArrayList<>());
-    assertThatThrownBy(
-            () ->
-                executor.execute(
-                    UUID.randomUUID(),
-                    new WorkflowCompiler.ExecutionPlan(
-                        List.of(
-                            step("s", "START_NODE", 0, null), step("r", "REPLY_NODE", 1, "true")),
-                        List.of()),
-                    "in"))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("线性");
   }
 }

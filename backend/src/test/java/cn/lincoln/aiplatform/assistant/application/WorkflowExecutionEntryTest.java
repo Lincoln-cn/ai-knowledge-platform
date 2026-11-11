@@ -13,16 +13,15 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * 判据 · 执行器今天还没有任何调用方，这条事实必须留在账上，不能只写在 issue 里。
+ * 判据 · 执行器文件本身仍然存在，且它声明的两个公开入口没被悄悄改掉。
  *
- * <p>背景：{@link LinearWorkflowExecutor#execute} 是 {@code public}，看起来随时能用，但主代码里没有 任何一个类把它注入进来 ——
- * 也就是说「发布校验说这四种节点能跑」与「点了试用真的会跑」之间还缺三层 （入口 / 创建执行记录 / 调用 execute），见 {@code
- * docs/技术结论/326-执行引擎缺口与接线路径.md}。
+ * <p>★ 2026-11-12 订正：这个类原来是「执行器在主代码里还没有任何调用方」的结构判据， 它按自己写下的三件事在 0.7.0 之后变红了 —— 因为执行器被 {@code
+ * WorkflowDebugService} 接进入了口。那条判据已删除， 「接进入口后能产出记录」的正向断言在 {@code WorkflowDebugServiceTest}
+ * （successfulRunWritesSucceededRecord / failedRunStillWritesFailedRecord）。
  *
- * <p>这条断言守的是「别把未接线当成已接线」：一旦有人把执行器接进入口，它会红，逼着改的人回来把 清单与文档一起更新 —— 而不是让「能跑」这个结论继续只存在于提交信息里。
- *
- * <p>★ 为什么扫源码而不是起 Spring 上下文：这是一条结构判据，不该被数据库、端口这些环境条件绑架 （{@code NodeExecutorRegistryTest}
- * 第一版就是栽在这里，{@code Errors: 1}）。
+ * <p>留下的这条守的是另一件事：{@code LinearWorkflowExecutor} 的 {@code public void execute(} 与 {@code public
+ * static final Set&lt;String&gt; SUPPORTED_TYPES} 是外部依赖的两个锚点（前者被调试服务调用、后者被发布校验读），
+ * 它们被改名或降级访问权限时，编译未必报错，运行时才发现没人能调。
  */
 class WorkflowExecutionEntryTest {
 
@@ -57,20 +56,6 @@ class WorkflowExecutionEntryTest {
       }
     }
     return hits;
-  }
-
-  @Test
-  @DisplayName("判据 · 执行器在主代码里还没有任何注入点（接了就要回来改这一条）")
-  void executorHasNoInjectionPointYet() throws IOException {
-    List<String> hits = injectionPoints();
-
-    assertThat(hits)
-        .as(
-            "执行器被接进入口了。这不是坏事，但必须同步做三件事："
-                + "① 删掉 docs/技术结论/326 里「链条是断的」那一节；"
-                + "② 把 WorkflowRecordRepository 的 save 补上并真的写一条记录；"
-                + "③ 给这条判据换成「接进入口后能产出记录」的正向断言")
-        .isEmpty();
   }
 
   @Test
