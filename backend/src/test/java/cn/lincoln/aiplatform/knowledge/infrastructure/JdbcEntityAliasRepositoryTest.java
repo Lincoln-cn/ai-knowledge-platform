@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.knowledge.infrastructure;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -8,6 +9,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.lincoln.aiplatform.knowledge.domain.EntityAliasRepository;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -75,5 +77,49 @@ class JdbcEntityAliasRepositoryTest {
     when(jdbc.queryForList(anyString(), eq(kbId))).thenReturn(List.of());
 
     assertThat(repository.canonicalIds(kbId, List.of("财务部"))).isNotNull().isEmpty();
+  }
+
+  @Test
+  @DisplayName("写入别名返回真正新增的行数")
+  void insertAllReturnsInsertedCount() {
+    when(jdbc.update(anyString(), any(), eq(kbId), any(), any(), any())).thenReturn(1, 1);
+
+    int rows =
+        repository.insertAll(
+            kbId,
+            List.of(
+                new EntityAliasRepository.Alias(canonical, "财务部", "MANUAL", 1.0),
+                new EntityAliasRepository.Alias(canonical, "财务资产部", "RULE", 0.9)));
+
+    assertThat(rows).isEqualTo(2);
+  }
+
+  @Test
+  @DisplayName("重复别名被唯一约束挡下，不计入返回值")
+  void duplicateAliasIsNotCounted() {
+    // on conflict do nothing ⇒ 第二条返回 0；返回值小于入参长度，调用方能看出有一条没写进去
+    when(jdbc.update(anyString(), any(), eq(kbId), any(), any(), any())).thenReturn(1, 0);
+
+    int rows =
+        repository.insertAll(
+            kbId,
+            List.of(
+                new EntityAliasRepository.Alias(canonical, "财务部", "MANUAL", 1.0),
+                new EntityAliasRepository.Alias(canonical, "财务部", "RULE", 0.8)));
+
+    assertThat(rows).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("空输入不写库")
+  void insertAllWithEmptyInputSkipsWrite() {
+    assertThat(repository.insertAll(kbId, List.of())).isZero();
+    assertThat(repository.insertAll(kbId, null)).isZero();
+    assertThat(
+            repository.insertAll(
+                null, List.of(new EntityAliasRepository.Alias(canonical, "x", "MANUAL", 1.0))))
+        .isZero();
+
+    verify(jdbc, never()).update(anyString(), any(), any(), any(), any(), any());
   }
 }

@@ -28,6 +28,21 @@ public interface EntityAliasRepository {
   Map<String, UUID> canonicalIds(UUID kbId, List<String> aliases);
 
   /**
+   * 写入别名（0.6.6 合并策略的写入口）。
+   *
+   * <p>★ 只写别名、<b>不动 {@code kb_entity}</b>：合并 = 加一行别名，原实体行保留。已经落库的实体 id 被 {@code kb_entity_mention}
+   * 与 {@code kb_relation} 引用着，改 id 就是改历史，也正是「可拆」的前提。
+   *
+   * <p>★ 同一库里一个别名只能指向一个实体（{@code
+   * uq_kb_entity_alias_name}）。重复写入不是错误：两条规则都认为「财务部」是「财务资产部」的别名时，第二次写入被忽略，先到的那条留下。返回值只数**真正新增**的行。
+   *
+   * @param kbId 库标识
+   * @param aliases 待写入的别名
+   * @return 真正写入的行数（被唯一约束挡下的不计）
+   */
+  int insertAll(UUID kbId, List<Alias> aliases);
+
+  /**
    * 一条别名。
    *
    * @param entityId 规范实体 id

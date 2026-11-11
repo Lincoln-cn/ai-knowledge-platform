@@ -57,4 +57,33 @@ public class JdbcEntityAliasRepository implements EntityAliasRepository {
     }
     return picked;
   }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>★ 用 {@code on conflict do nothing} 而不是先查再插：唯一约束已经在表上，让数据库判定比在应用里查一次再插可靠 ——
+   * 两个合并任务同时跑时会同时查到「不存在」。与 {@code JdbcEntityRelationRepository} 同一个选择。
+   *
+   * <p>★ 重复别名不算错，但**也不静默**：被挡下的行仍然会让返回值小于入参长度，调用方能知道「有几条没写进去」。如果这里吞掉、返回值仍然等于入参长度，管理员改一次合并策略却看不出没生效。
+   */
+  @Override
+  public int insertAll(UUID kbId, List<Alias> aliases) {
+    if (kbId == null || aliases == null || aliases.isEmpty()) {
+      return 0;
+    }
+    int inserted = 0;
+    for (Alias alias : aliases) {
+      int rows =
+          jdbc.update(
+              "insert into kb_entity_alias (entity_id, kb_id, alias_name, source, confidence)"
+                  + " values (?, ?, ?, ?, ?) on conflict (kb_id, alias_name) do nothing",
+              alias.entityId(),
+              kbId,
+              alias.aliasName(),
+              alias.source(),
+              alias.confidence());
+      inserted += rows;
+    }
+    return inserted;
+  }
 }
