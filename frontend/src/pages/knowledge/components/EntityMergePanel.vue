@@ -76,9 +76,25 @@ onMounted(load)
 
     <el-skeleton v-if="loading && rows.length === 0" :rows="4" animated />
 
-    <el-empty v-else-if="rows.length === 0" description="没有需要归并的候选" />
+    <el-empty
+      v-else-if="rows.length === 0"
+      description="没有需要归并的候选：库里还没有两个实体的描述性属性完全一致"
+    >
+      <template #description>
+        <p class="empty-hint">
+          没有需要归并的候选。这一档只挑出<strong>属性完全一致</strong>的实体对；
+          库里实体少、或者都没填属性时，这里会是空的。
+        </p>
+        <p class="empty-hint">
+          下一步：先上传文档让实体被抽出来，或在文档里写清归属（「财务资产部是……的归口管理部门」）。
+        </p>
+      </template>
+    </el-empty>
 
     <el-table v-else :data="rows" size="small" row-key="mergeId">
+      <template #empty>
+        <div class="empty-hint">没有需要归并的候选。</div>
+      </template>
       <el-table-column label="保留" min-width="160">
         <template #default="{ row }">{{ row.keepName }}</template>
       </el-table-column>
@@ -132,5 +148,11 @@ onMounted(load)
 .reason {
   font-size: 12px;
   color: var(--el-text-color-regular);
+}
+.empty-hint {
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
 }
 </style>
