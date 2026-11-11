@@ -5655,9 +5655,18 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 
 ### 11.39.5 没做的另外两件
 
-- **`v0.6.0` 的 tag 仍未打**：`§11.36.1` 对 E 的判据是「A–D 全合入 main、CI 全绿、
-  `gh release view` 能查到」。A–D 已经全在 main 上，但这一串提交的 CI 还在跑；
-  tag 是**状态**不是一次提交，不满足判据就不打。
+- **`v0.6.0` 的 tag 最终没有打，改打 `v0.7.0`（2026-11-12 决定）**：`§11.36.1` 对 E 的判据是
+  「A–D 全合入 main、CI 全绿、`gh release view` 能查到」。A–D 早就在 main 上了，
+  但那一串提交的 CI 一直被后续推送取消 —— 等它绿的时候，main 上已经有 0.7.0–0.7.2 的
+  全部内容（调试入口、`AI_CHAT_NODE`、条件分支）。
+  此时再打 `v0.6.0`，它会指向一个**包含 0.7 全部内容**的提交：tag 语义与实际内容对不上，
+  以后有人拿 `v0.6.0` 去复现「0.6 的版本」会看到执行引擎。
+  ⇒ 处置：版本号四处（`pom` / `package.json` / `package-lock` 两处）升到 **0.7.0**，
+  `CHANGELOG.md` 加 `## 0.7.0` 一节并在开头写明"0.6.0 与 0.7.0 是连续交付的，
+  `v0.6.0` 的 tag 从未打出，内容不丢，全部并进本版"。
+  ★ 这条同时暴露了一个流程问题：**「等 CI 绿再打 tag」在持续推送的节奏下永远不会满足**
+  —— 每推一次就取消上一轮 51 分钟的回归。要么在发版窗口冻结推送，要么接受
+  "tag 指向的提交里包含下一版的改动"并在 release notes 里说明。这次选了前者的变体（合并两版）。
 - **`NodeTypeCatalog` 的 `implemented` 仍是一维布尔**：它同时表达"界面上能放"与"执行器能跑"，
   而 `BASE_NODE` / `QUESTION_NODE` / `CONDITION_NODE` / `NUMBER_CONDITION_NODE` 四个
   今天的状态是「界面能放、发布被拒」。拆成两个字段要动契约与前端，属 0.8。
