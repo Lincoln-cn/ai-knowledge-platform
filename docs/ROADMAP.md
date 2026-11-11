@@ -5586,3 +5586,78 @@ Tests run: 这一行**。
 
 C（kb_relation 多跳）/ D（合并第二档界面）/ E（0.6.0 tag）仍在
 §11.36.1 的排期里，分别属 0.6.8 与 0.6.9。
+
+## 11.39 0.7.0–0.7.2 交付与 0.7.3 的边界（2026-11-12）
+
+### 11.39.1 交付清单
+
+| 版本 | 提交 | 内容 | 判据读数 |
+|---|---|---|---|
+| 0.7.0 | `45912c16` + `6655358b` | 「试用」接后端：`WorkflowRecordRepository.save`（与写入方同批进）· `LinearWorkflowExecutor.executeAndReturn` · `WorkflowDebugService` · `WorkflowDebugController` · 画布加「试用」按钮 | 真栈 `as_workflow_record` **0 → 1 行** |
+| 0.7.1 | `75d29136` | `AiChatNodeExecutor`（走 `platform.model.ChatPort`，不跨模块引 `conversation`） | `AiChatNodeExecutorTest` 10/10 · 四节点全在轨迹里 |
+| 0.7.2 | `76391131` | 条件分支运行时判定：编译器把 `branchHandle` 沿入边传播到整条链 · 执行器按 `active_branch` 跳过 · `ConditionNodeExecutor` | `ConditionBranchTest` 3/3 · 反证 3 例 2 失败 |
+
+**架构与口径闸门**：`cn.lincoln.aiplatform.*Test` 38/38（1 skipped）· `caliber.*Test` 34/34。
+
+### 11.39.2 真栈验证抓到的两个 bug（都只有真栈能发现）
+
+**① `final_output_preview` 不能为 null（`21ae0252`）**
+
+`WorkflowDebugService.preview(output)` 在 `output == null` 时返回 `null`，
+而 `as_workflow_record.final_output_preview` 是 `text not null default ''`
+（`V62__assistant_workflow_record.sql:37`）。真栈 500，日志：
+
+```
+ERROR: null value in column "final_output_preview" of relation "as_workflow_record"
+       violates not-null constraint
+```
+
+`WorkflowDebugServiceTest` 用 Mock 仓储、**不校验 SQL 约束** ⇒ 单测 4/4 绿。
+改为空输出返回空串。
+
+**② 试用的 `ok` 写死 `true`（`2e2ca7c7`）**
+
+真栈读数自相矛盾：`ok=True` 而记录是 `FAILED`。根因是
+`return new Result(true, null, output, trail, elapsedMs, executionId);` 里那个 `true`
+没有跟着 `failReason == null` 走 —— 前端会显示"成功"、记录里是失败。
+
+★ 更值得记的是**测试也一起错了**：`failedRunStillWritesFailedRecord` 原来断言
+`assertThat(result.ok()).isTrue()`，**把 bug 抄成了期望值**，所以它一直是绿的。
+一条照着实现抄的断言只能证明"实现没变"，证明不了"实现对不对"。
+
+### 11.39.3 这一批最值钱的教训
+
+1. **单元测试用 Mock 仓储时，SQL 约束是测不到的** —— `not null` / 唯一键 / check
+   只有真栈能验。0.7.0 的两个 bug 都是这个形状。
+2. **「照着实现抄的期望值」是假绿的主要来源** —— 见到一个断言在描述"当前的返回值"，
+   先问一句"这个值是实现算出来的，还是实现里写死的"。
+3. **配置对象的字段类型要先看 record 声明**：`UpsertModelBody` 的 `thinking` / `tools`
+   是枚举 `ThinkingMode` / `ToolsMode`，传 `false` 会得到「请求体不是合法 JSON」这种
+   完全指错方向的文案（`#294` 同族）。
+4. **前端入口可能完全不存在**：0.7.0 之前画布页里从来没有「试用」按钮，
+   `grep 试用|debug` 只命中两个 CSS 类残留。判"某功能有没有前端"必须搜英文标识符 + 文件名。
+
+### 11.39.4 0.7.3（触发器）没有做，以及为什么
+
+`§11.27.1` 把 0.7.3 定为「触发器从留缝转实体（`#295`）」。**本轮没做**，理由是
+`#295` 自己写下的边界：
+
+> 实现（cron 解析、并发去重、错过补跑、失败重试、审计）是 V1.0 的活。
+
+`V88` 已经加了两列 `trigger_type` / `trigger_cron`（留缝），`TriggerSlotTest` 有两条
+断言钉住"没有调度器碰这两列"「主代码里没有 `trigger_type` / `triggerCron` 的读写方」。
+把留缝转实体需要同时：加 `last_triggered_at` 或等价的上次触发依据 · 处理多副本重复触发 ·
+定义错过补跑策略 · 改掉 `TriggerSlotTest` 的两条口径。**这些不是一次提交能做完的，
+硬做只会做出一个"看起来能定时跑、实际会重复触发"的东西。**
+
+⇒ 0.7 的边界是：**「图能被告触发着跑一轮、并且留下可查的记录」已经成立**（0.7.0 的判据），
+**「应用会按时间自己跑」仍未开始**，且这一状态在 `#295` 与本节两处都写着。
+
+### 11.39.5 没做的另外两件
+
+- **`v0.6.0` 的 tag 仍未打**：`§11.36.1` 对 E 的判据是「A–D 全合入 main、CI 全绿、
+  `gh release view` 能查到」。A–D 已经全在 main 上，但这一串提交的 CI 还在跑；
+  tag 是**状态**不是一次提交，不满足判据就不打。
+- **`NodeTypeCatalog` 的 `implemented` 仍是一维布尔**：它同时表达"界面上能放"与"执行器能跑"，
+  而 `BASE_NODE` / `QUESTION_NODE` / `CONDITION_NODE` / `NUMBER_CONDITION_NODE` 四个
+  今天的状态是「界面能放、发布被拒」。拆成两个字段要动契约与前端，属 0.8。
