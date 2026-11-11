@@ -277,6 +277,13 @@ public class OnnxNerRecognizer implements EntityRecognizer {
         }
       } else if (label.startsWith("I-") && current.length() > 0) {
         current.append(piece);
+      } else if (current.length() > 0 && isOrgSuffixStart(piece)) {
+        // ★ 边界扩展（0.6.6）：模型把「部」标成 O，但它是机构后缀、且紧跟在一个机构名
+        //   之后 —— 这是 WordPiece 的边界问题，不是"这个字不是机构的一部分"。
+        //   实测（2026-11-11）：「财务资产部负责预算」被标成 B-organization(财务资产) + O(部)
+        //   ⇒ span 是「财务资产」，随后被 compact() 的后缀过滤整条丢掉，三个机构只剩一个。
+        //   ★ 不做这一步的后果不是"少一个字"，是"整条实体消失且没有日志"。
+        current.append(piece);
       } else {
         flush(spans, current);
       }
@@ -295,6 +302,18 @@ public class OnnxNerRecognizer implements EntityRecognizer {
       spans.add(current.toString());
       current.setLength(0);
     }
+  }
+
+  /**
+   * 这一个 token 是不是某个机构后缀的**开头**（用于边界扩展）。
+   *
+   * <p>★ 只接受单字 token：多字 token 说明 WordPiece 把几个字并成了一格，那种情况下 这格的归属已经由模型自己判断过了，我们再猜就是在覆盖它。
+   *
+   * <p>★ 用 {@code startsWith} 而不是 {@code equals}：后缀表里有「领导小组」「委员会」这类
+   * 多字后缀，它们的开头一个字（「领」「委」）同样是"机构名还没写完"的信号。
+   */
+  private boolean isOrgSuffixStart(String piece) {
+    return piece.length() == 1 && orgSuffixes.stream().anyMatch(s -> s.startsWith(piece));
   }
 
   private static Set<Long> specialIds() {

@@ -156,6 +156,33 @@ class OnnxNerRecognizerTest {
     }
   }
 
+  @Test
+  @DisplayName("边界扩展：模型把『部』标成 O 时，机构名不能被截断（0.6.6）")
+  void spanBoundaryIsExtendedToOrgSuffix() {
+    Assumptions.assumeTrue(
+        Files.exists(MODEL_DIR.resolve("model.onnx")),
+        "缺模型文件：python tools/fetch_onnx_models.py --only ner");
+
+    OnnxNerRecognizer recognizer = new OnnxNerRecognizer(MODEL_DIR, 4);
+    try {
+      List<String> names =
+          recognizer
+              .recognize("信息技术部是公司信息化建设的归口管理部门。" + "财务资产部负责预算编制与资金审核。" + "采购供应部主管供应商准入与合同签订。")
+              .stream()
+              .map(EntityRecognizerName::of)
+              .toList();
+
+      // ★ 这条是 2026-11-11 真栈撞出来的：三个机构只抽到一个。
+      //   模型的原始输出是 [信息技术部, 财务资产, 采购供应] —— 后两个的「部」被标成 O
+      //   （WordPiece 边界问题），截断后的「财务资产」不以「部」结尾 ⇒ 被 compact() 的后缀
+      //   过滤整条丢掉。★ 后果不是"少一个字"，是"整条实体消失且没有日志"。
+      //   去掉 decode() 里的 isOrgSuffixStart 分支，这条会红（只剩「信息技术部」）。
+      assertThat(names).containsExactlyInAnyOrder("信息技术部", "财务资产部", "采购供应部");
+    } finally {
+      recognizer.close();
+    }
+  }
+
   /** 只为在断言里取名字，避免把整个 record 塞进断言。 */
   private static final class EntityRecognizerName {
     private static String of(
