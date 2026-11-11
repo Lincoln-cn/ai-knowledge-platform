@@ -256,6 +256,10 @@
             v-else-if="activeTab === 'hittest'"
             :kb-id="openedKb.id"
           />
+          <EntityMergePanel
+            v-else-if="activeTab === 'merge'"
+            :kb-id="openedKb.id"
+          />
           <SettingsPanel
             v-else-if="activeTab === 'settings'"
             :kb="openedKb"
@@ -294,6 +298,7 @@ import SegmentPanel from './components/SegmentPanel.vue'
 import QuestionPanel from './components/QuestionPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import HitTestPanel from './components/HitTestPanel.vue'
+import EntityMergePanel from './components/EntityMergePanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -318,6 +323,7 @@ const TABS = [
   { key: 'segments', label: '分段' },
   { key: 'questions', label: '问题' },
   { key: 'hittest', label: '命中测试' },
+  { key: 'merge', label: '实体归并' },
   { key: 'settings', label: '设置' }
 ] as const
 

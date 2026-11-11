@@ -114,3 +114,41 @@ export const deleteKnowledgeBase = (id: string) =>
 
 export const listKnowledgeCategories = () =>
   request<KnowledgeCategory[]>({ method: 'GET', url: '/knowledge-bases/categories' })
+
+/* ──────────────────── 实体归并（第二档，§11.36.1 的 D 项） ──────────────────── */
+
+/**
+ * 一条待确认的合并候选。
+ *
+ * ★ **第二档不自动合并**：属性重叠只是「可能」相同，而并入哪一边会直接改权限归属。
+ * `reason` 是给人看的依据（例如「共同属性 department=财务」），不是分数 —— 只给分数等于让人盲选。
+ */
+export interface EntityMergeCandidate {
+  keepId: string
+  keepName: string
+  mergeId: string
+  mergeName: string
+  reason: string
+}
+
+/** 列出属性重叠的候选（只读，不改任何数据） */
+export const listEntityMergeCandidates = (kbId: string) =>
+  request<EntityMergeCandidate[]>({
+    method: 'GET',
+    url: '/knowledge-bases/:kbId/entity-merge/candidates',
+    path: { kbId }
+  })
+
+/**
+ * 确认一条合并：把 `mergeName` 记成 `keepId` 的别名。
+ *
+ * ★ 不会删除 `mergeId` 那一行 —— 合并必须可拆，否则「这个别名是不是当初合错了」无从回答。
+ * 返回值 `added` 为 0 表示这条别名已经记过（幂等），不是失败。
+ */
+export const confirmEntityMerge = (kbId: string, keepId: string, mergeName: string) =>
+  request<{ added: number }>({
+    method: 'POST',
+    url: '/knowledge-bases/:kbId/entity-merge',
+    path: { kbId },
+    body: { keepId, mergeName }
+  })
