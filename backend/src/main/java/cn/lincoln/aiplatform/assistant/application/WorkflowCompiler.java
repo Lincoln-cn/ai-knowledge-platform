@@ -114,7 +114,9 @@ public final class WorkflowCompiler {
     }
 
     Map<String, List<String>> adjacency = new HashMap<>();
+    Map<String, List<String>> parents = new HashMap<>();
     Map<String, Integer> indegree = new HashMap<>();
+    Map<String, List<String>> handlesInto = new HashMap<>();
     for (String id : byId.keySet()) {
       indegree.put(id, 0);
     }
@@ -129,9 +131,12 @@ public final class WorkflowCompiler {
         continue;
       }
       adjacency.computeIfAbsent(edge.source(), key -> new ArrayList<>()).add(edge.target());
+      parents.computeIfAbsent(edge.target(), key -> new ArrayList<>()).add(edge.source());
       indegree.merge(edge.target(), 1, Integer::sum);
       if (edge.sourceHandle() != null) {
-        enterHandle.put(edge.target(), edge.sourceHandle());
+        handlesInto
+            .computeIfAbsent(edge.target(), key -> new ArrayList<>())
+            .add(edge.sourceHandle());
       }
     }
     if (!errors.isEmpty()) {
@@ -153,6 +158,14 @@ public final class WorkflowCompiler {
         queue.add(id);
       }
     }
+    // 每个节点落在哪条分支上（分支 id = 条件节点那条出边的 sourceHandle）。
+    //
+    // ★ 只标「直接目标」是不够的：条件节点后面往往还挂着好几个节点，执行器要跳过的是**整条链**。
+    // 所以这里沿拓扑序往下传播 —— 一个节点若只有一条入边，就继承上游的分支；
+    // 一旦有多条入边就是**汇合点**，两边合流之后再分「在哪个分支上」没有意义，置 null。
+    // 判据：同一张图按不同输入运行时，落在另一条分支上的节点整段不执行。
+    Map<String, String> branchOf = new HashMap<>();
+    Map<String, String> stepBranch = new HashMap<>();
     List<PlanStep> steps = new ArrayList<>();
     Set<String> placed = new HashSet<>();
     while (!queue.isEmpty()) {
@@ -161,7 +174,19 @@ public final class WorkflowCompiler {
         continue;
       }
       Node node = byId.get(id);
-      steps.add(new PlanStep(id, node.type(), steps.size(), enterHandle.get(id), node.config()));
+      List<String> entries = parents.getOrDefault(id, List.of());
+      String branch;
+      if (entries.isEmpty()) {
+        branch = null;
+      } else if (entries.size() > 1) {
+        branch = null;
+      } else {
+        String upstream = entries.get(0);
+        String handle = handlesInto.containsKey(id) ? handlesInto.get(id).get(0) : null;
+        branch = handle != null ? handle : stepBranch.get(upstream);
+      }
+      stepBranch.put(id, branch);
+      steps.add(new PlanStep(id, node.type(), steps.size(), branch, node.config()));
       for (String next : adjacency.getOrDefault(id, List.of())) {
         if (indegree.merge(next, -1, Integer::sum) == 0) {
           queue.add(next);

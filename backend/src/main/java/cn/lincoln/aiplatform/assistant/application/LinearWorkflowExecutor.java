@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,7 +38,12 @@ public class LinearWorkflowExecutor {
    * 将来加一个节点类型时必然漏改一处。
    */
   public static final Set<String> SUPPORTED_TYPES =
-      Set.of("START_NODE", "SEARCH_DATASET_NODE", "AI_CHAT_NODE", "REPLY_NODE");
+      Set.of("START_NODE", "SEARCH_DATASET_NODE", "CONDITION_NODE", "AI_CHAT_NODE", "REPLY_NODE");
+
+  /** 流程状态里放「这次走的是哪条分支」的键：值 = 条件节点那条出边的 {@code sourceHandle}。 */
+  public static final String ACTIVE_BRANCH = "active_branch";
+
+  private static final Logger log = LoggerFactory.getLogger(LinearWorkflowExecutor.class);
 
   private final WorkflowNodeExecutionRepository records;
   private final Map<String, NodeExecutor> registry;
@@ -73,9 +80,24 @@ public class LinearWorkflowExecutor {
   @Transactional(rollbackFor = Exception.class)
   public FlowState executeAndReturn(
       UUID executionId, WorkflowCompiler.ExecutionPlan plan, String input) {
-    requireLinearFourNode(plan);
+    requireRunnablePlan(plan);
     FlowState state = new FlowState();
     for (WorkflowCompiler.PlanStep step : plan.steps()) {
+      // ★ 条件分支：这一步落在某条分支上，而当前激活的不是那一条 ⇒ 整步跳过。
+      //
+      // 编译器把分支 id 沿拓扑序传播到整条链（见 WorkflowCompiler 里 branchOf 那段注释），
+      // 所以这里不需要知道"汇合点在哪"—— 汇合点的 branchHandle 是 null，天然放行。
+      // 跳过的节点**不写执行记录**：写了会让运行记录里出现"跑过但没做任何事"的节点，
+      // 而用户看记录是为了知道"这次到底走了哪条路"。
+      String active = state.read(LinearWorkflowExecutor.ACTIVE_BRANCH);
+      if (step.branchHandle() != null && active != null && !step.branchHandle().equals(active)) {
+        log.debug(
+            "#workflow 跳过分支外节点：node={} branch={} 本次走的是 {}",
+            step.nodeId(),
+            step.branchHandle(),
+            active);
+        continue;
+      }
       NodeExecutor executor = registry.get(step.type());
       if (executor == null) {
         throw new IllegalStateException("没有类型 " + step.type() + " 的节点执行器");
@@ -100,8 +122,14 @@ public class LinearWorkflowExecutor {
     return state;
   }
 
-  /** 只放行线性 4 节点计划；条件分支 / 循环 / 人工介入 / 其它类型一律拒绝。 */
-  private void requireLinearFourNode(WorkflowCompiler.ExecutionPlan plan) {
+  /**
+   * 只放行本版本真能跑的节点类型。
+   *
+   * <p>★ 0.7.2 之前这里还额外拒绝「任何带 {@code branchHandle} 的计划」—— 因为那时执行器不会跳过分支，
+   * 一张有条件节点的图跑起来会把两边都执行一遍。现在分支跳过已经实现，这条限制随之取消； 但**条件节点本身仍要在 {@link #SUPPORTED_TYPES}
+   * 里**，否则发布校验会先拦住。
+   */
+  private void requireRunnablePlan(WorkflowCompiler.ExecutionPlan plan) {
     List<WorkflowCompiler.PlanStep> steps = plan.steps();
     if (steps == null || steps.isEmpty()) {
       throw new IllegalArgumentException("执行计划为空");
@@ -110,12 +138,8 @@ public class LinearWorkflowExecutor {
       throw new IllegalArgumentException("线性计划必须以 START_NODE 开头");
     }
     for (WorkflowCompiler.PlanStep step : steps) {
-      if (step.branchHandle() != null) {
-        throw new IllegalArgumentException("本版本只接受线性计划，条件分支（" + step.nodeId() + "）不支持");
-      }
       if (!SUPPORTED_TYPES.contains(step.type())) {
-        throw new IllegalArgumentException(
-            "本版本只跑 " + SUPPORTED_TYPES + " 四种线性节点，不支持 " + step.type());
+        throw new IllegalArgumentException("本版本只跑 " + SUPPORTED_TYPES + " 这些节点，不支持 " + step.type());
       }
     }
   }
