@@ -30,6 +30,10 @@
                     <el-icon class="mr-4"><DocumentChecked /></el-icon>
                     保存
                 </el-button>
+                <el-button text :loading="trialing" @click="runTrial">
+                    <WorkFlowIcon icon="lucide:play" class="mr-4" />
+                    试用
+                </el-button>
                 <span class="top-sep"></span>
                 <el-button type="primary" @click="publicHandle"> 发布 </el-button>
                 <span class="top-sep"></span>
@@ -130,6 +134,7 @@ import { detail as getDetail, addSubmit, getVersionGraph } from '@/api/legacy/se
 import {
     validateWorkflow,
     publishWorkflow,
+    debugWorkflow,
     type WorkflowGraph,
     type WorkflowValidationIssue
 } from '@/api/workflow'
@@ -160,6 +165,8 @@ const saveTime = ref<any>('')
 const currentVersion = ref<any>({})
 const isSave = ref(false)
 const showPopover = ref(false)
+/** 「试用」进行中：按钮转圈，防重复点击（每次试用都会在后端留下一条运行记录）。 */
+const trialing = ref(false)
 const router = useRouter()
 const route = useRoute()
 /* 路由参数名必须与 `pages/workflow/route.ts` 声明的 `:appId` 一致 ——
@@ -573,6 +580,50 @@ function saveApplication(bool?: boolean) {
             const pending = pendingEndpointHint(error, '在编排里保存', '#198')
             MsgError(pending ?? '保存失败，请稍后重试')
         })
+}
+
+/**
+ * 「试用」：把当前图交给后端真执行引擎跑一次。
+ *
+ * ★ 这是 0.7.0 之前画布最容易被误判的一处：界面上一直有 `.workflow-debug-*` 的样式残留，
+ *   而后端 `POST …/workflow/debug` 只登记在 `ContractDriftTest` 的未实现清单里 ——
+ *   于是一个"看起来能试"的编排应用，试出来的轨迹从来不是后端产的真记录。
+ *
+ * ★ 先保存再试：试用的意义是"发布之前先看看这张图"，用上一次保存的图等于看的不是正在编的东西。
+ *   `saveApplication(false)` 不弹"保存成功"——试用的人关心的是结果不是保存。
+ *
+ * ★ 结果只给 `elapsedMs` / 轨迹 / `finalOutput`：画布页没有多余空间放完整调试面板，
+ *   而这一版要证明的是"运行记录真的多了一行"（在应用详情的运行记录里看），不是给一个富交互调试器。
+ */
+async function runTrial() {
+    try {
+        await saveApplication(false)
+        const graph = fromLogicFlow(getGraphData())
+        const { value } = await ElMessageBox.prompt('输入这次试用的用户问题', '试用', {
+            confirmButtonText: '运行',
+            cancelButtonText: '取消',
+            inputPlaceholder: '例如：住宿标准是多少？'
+        })
+        trialing.value = true
+        const result = await debugWorkflow(id, { graph, inputs: { entry: value ?? '' } })
+        const trail = result.nodeTrail
+            .map((step, index) => `${index + 1}. ${step.type}`)
+            .join('\n')
+        await ElMessageBox.alert(
+            `耗时 ${result.elapsedMs}ms\n\n节点轨迹：\n${trail}\n\n最终输出：\n${result.finalOutput ?? '（无）'}\n\n这次试用的执行记录已写入运行记录（conversationId 为空）。`,
+            '试用结果',
+            { confirmButtonText: '知道了' }
+        )
+    } catch (error: unknown) {
+        // ElMessageBox 的"取消"也是 reject，不该当成失败提示。
+        if (error === 'cancel' || error === 'close') {
+            return
+        }
+        const pending = pendingEndpointHint(error, '试用编排', '#326')
+        MsgError(pending ?? '试用失败，请稍后重试')
+    } finally {
+        trialing.value = false
+    }
 }
 </script>
 
