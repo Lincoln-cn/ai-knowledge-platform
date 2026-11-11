@@ -123,7 +123,7 @@ public class JdbcEntityMergeService implements EntityMergeService {
    * <p>★ 不用 Jackson 反序列化再比：{@code attributes} 是自由形状的 jsonb，转成 Map 再比会有类型差异 （数字 vs
    * 字符串）。这里只做<b>最保守</b>的判定 —— 描出 {@code "key": "value"} 这种字符串形态、且键值都相同。 判不准的那部分不报，比报错一堆让人跳过整份清单要好。
    */
-  static String sharedAttribute(String a, String b) {
+  public static String sharedAttribute(String a, String b) {
     if (a == null || b == null || a.isBlank() || b.isBlank()) {
       return null;
     }

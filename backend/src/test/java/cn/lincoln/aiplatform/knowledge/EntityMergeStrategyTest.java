@@ -3,6 +3,8 @@ package cn.lincoln.aiplatform.knowledge;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.knowledge.application.EntityMergeService;
+import cn.lincoln.aiplatform.knowledge.infrastructure.JdbcEntityMergeService;
+import cn.lincoln.aiplatform.support.PostgresImage;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;

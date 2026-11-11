@@ -60,8 +60,25 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
   private static final org.slf4j.Logger LOG =
       org.slf4j.LoggerFactory.getLogger(HanlpEntityRecognizer.class);
 
-  /** ★ `supportedTypes` 里**没有 PERSON**：见类注释第 3 条。 也没有 TERM（引号里的术语由规则层给）。 */
-  private static final List<String> TYPES = List.of("ORG", "DOC");
+  /**
+   * 抽哪几类实体。
+   *
+   * <p>★★ 2026-11-11 加回 <b>PERSON</b>（用户点名 0.6 要补的三块之一）。加回来靠的不是 HanLP 的 {@code enableNameRecognize}
+   * —— 实测它把「应于 / 须将 / 应在」当人名，在制度文本上误报率高到不可用。 这里走 {@link EntityExtractor}
+   * 的<b>职务词后缀</b>规则：名字后面必须跟职务词之一（{@link #PERSON_TITLES}），规则本身就把非人名挡在外面。
+   *
+   * <p>没有 TERM：引号里的术语由规则层给。
+   */
+  private static final List<String> TYPES = List.of("ORG", "DOC", "PERSON");
+
+  /**
+   * 职务词表 —— PERSON 抽取的唯一依据。
+   *
+   * <p>★ 为什么写死在这里而不是读 {@code kb_entity_dict}：识别器是<b>进程级单例</b>，构造时不知道会处理哪个库 （同 {@code
+   * EntityRecognizerConfig} 里那段后缀表的理由）。库级覆盖留给后面的字典层，这一层只承诺 「这些后缀算职务词」。
+   */
+  private static final List<String> PERSON_TITLES =
+      List.of("经理", "主任", "部长", "处长", "科长", "总监", "总裁", "总经理", "副局长", "副经理");
 
   private final Segment segment;
 
@@ -78,6 +95,20 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
    * 行**，两边都没有异常。所以这里把规则层实例化进来，关系标记词与机构后缀表同源。
    */
   private final EntityExtractor relationExtractor;
+
+  /**
+   * 人名抽取器 —— <b>只用规则</b>，不用 HanLP 的 {@code enableNameRecognize}。
+   *
+   * <p>★ 2026-11-11 的探针读数：HanLP 自己的 NER 在制度文本上把「应于 / 须将 / 应在」标成 {@code
+   * nr}（人名），三处全错。同一份语料里真正的机构名它倒标对了 —— 所以问题不是"模型差"， 是"制度文本里人名太少、没有足够的上下文让它收敛"。
+   *
+   * <p>规则版靠职务词后缀（{@link #PERSON_TITLES}）：名字后面必须跟「经理 / 主任 / 部长 …」 才算 PERSON。这条约束本身就是精度护栏 ——
+   * 「应于」后面没有任何职务词。
+   *
+   * <p>★ 与 {@link #relationExtractor} 分开实例化（各管一件事，不为省一个对象把词表混着传）： 关系抽取需要机构后缀表 +
+   * 标记词；人名抽取只要有职务词表。混在一起会让"改职务词"意外影响关系抽取。
+   */
+  private final EntityExtractor personExtractor;
 
   /**
    * Spring 用的无参构造器 —— 用 {@link #defaultSuffixes()} 的默认后缀表。
@@ -112,6 +143,14 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
                 this.orgSuffixes,
                 List.of(),
                 JdbcEntityDictionaryAdapter.builtin().relationMarks()));
+    // ★ 人名抽取器：职务词用 PERSON_TITLES。
+    //   机构后缀表**不能传空** —— EntityExtractor 的构造器在它为空时直接抛错
+    //   （"抽取器会一个实体都抽不出来"），那是给"调用方传了空字典"用的判据。
+    //   这里传 this.orgSuffixes 只是满足构造前置条件；extract 的调用点只取 PERSON 类型，
+    //   ORG 那条不出现在结果里。
+    this.personExtractor =
+        new EntityExtractor(
+            new EntityExtractor.Dictionary(this.orgSuffixes, PERSON_TITLES, java.util.Map.of()));
     // ★★ 必须开 enableOrganizationRecognize：不开的话 HanLP 会把「财务资产部」切成
     // `财务/n 资产/n 部/q`（"部"当量词），一个机构都切不出来（实测）。
     // 但开了它又会把「生产设备」标成 nt —— 所以下面还要用后缀表再过滤一遍。
@@ -156,6 +195,19 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
         out.add(new Recognized("DOC", name, 0.95));
       }
     }
+    // ③ 人名：走规则（职务词后缀），不用 HanLP 的 nr —— 见 personExtractor 的注释
+    for (EntityExtractor.Candidate c : personExtractor.extract(text)) {
+      if (!"PERSON".equals(c.type())) {
+        continue;
+      }
+      if (seen.add("PERSON:" + c.name())) {
+        // ★ 置信度 0.7 比 ORG 的 0.8 低一档：机构有后缀表兜底（「XX部」几乎不可能是别的），
+        //   而「XX经理」既可能是人名也可能是岗位口语（"报经理审批"里的"经理"前面没有名字，
+        //   但"销售经理"这种复合词会误判）。低一档让它在下游阈值更严的库上可以先被滤掉。
+        out.add(new Recognized("PERSON", c.name(), 0.7));
+      }
+    }
+
     return List.copyOf(out);
   }
 

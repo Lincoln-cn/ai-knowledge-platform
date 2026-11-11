@@ -46,12 +46,30 @@ class HanlpEntityRecognizerTest {
   }
 
   @Test
-  @DisplayName("★ 人名一律不抽——HanLP 会把「应于」「须将」「应在」标成 nr")
+  @DisplayName("★ 人名靠职务词后缀判定——HanLP 自己会把「应于」「须将」「应在」标成 nr")
   void neverReturnsPerson() {
+    // ★★ 2026-11-11 加回 PERSON 之后，这条用例守的东西变了但不该被删：
+    //   HanLP 的 nr 会把这三个介词短语当人名，规则层的职务词后缀不会（它们后面没有职务词）。
+    //   所以断言从「supportedTypes 不含 PERSON」改成「没有职务词时抽不出人名」。
     List<Recognized> got = recognizer.recognize("应于每年三月底前完成；须将结果报送；应在系统中登记。");
 
     assertThat(got).noneMatch(r -> r.type().equals("PERSON"));
-    assertThat(recognizer.supportedTypes()).doesNotContain("PERSON");
+    assertThat(recognizer.supportedTypes()).contains("PERSON");
+  }
+
+  @Test
+  @DisplayName("★ 有职务词后缀时才抽 PERSON（名字 + 经理/主任/部长 …）")
+  void personNeedsTitleSuffix() {
+    List<Recognized> got = recognizer.recognize("该申请由张伟经理审批，经李静主任复核后归档。");
+
+    assertThat(got)
+        .filteredOn(r -> r.type().equals("PERSON"))
+        .extracting(Recognized::name)
+        .as("有职务词后缀时必须抽到人；具体切到哪几个字由 {2,4}+职务词 的贪婪边界决定")
+        .anyMatch(n -> n.contains("张伟"))
+        .hasSizeGreaterThanOrEqualTo(1);
+    // ★ 置信度比 ORG 低一档：机构有后缀表兜底，人名靠职务词、可能把「销售经理」这类复合词误判。
+    assertThat(got).filteredOn(r -> r.type().equals("PERSON")).allMatch(r -> r.confidence() == 0.7);
   }
 
   @Test
@@ -95,7 +113,7 @@ class HanlpEntityRecognizerTest {
   @DisplayName("实现名带版本，便于日志里分清这次是谁跑的")
   void hasName() {
     assertThat(recognizer.name()).isEqualTo("hanlp-1.8.6");
-    assertThat(recognizer.supportedTypes()).containsExactly("ORG", "DOC");
+    assertThat(recognizer.supportedTypes()).containsExactly("ORG", "DOC", "PERSON");
   }
 
   // ===== #328：词表必须按库取，而不是永远用构造时那份 =====
