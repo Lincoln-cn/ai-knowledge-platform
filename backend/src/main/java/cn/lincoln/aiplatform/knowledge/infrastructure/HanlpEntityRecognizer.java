@@ -52,6 +52,9 @@ import org.springframework.stereotype.Component;
  * A 库的词影响 B 库的切分， 那是**静默的跨库污染**，比少抽几个实体糟得多。词典在这里只用于**判定**（一个切出来 的词是不是已登记实体），不参与切分。
  */
 @Component
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+    name = "app.entity.recognizer",
+    havingValue = "hanlp")
 public class HanlpEntityRecognizer implements EntityRecognizer {
 
   private static final org.slf4j.Logger LOG =

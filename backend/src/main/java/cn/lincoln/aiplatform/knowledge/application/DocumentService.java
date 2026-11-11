@@ -1241,7 +1241,39 @@ public class DocumentService {
           withIds.add(
               new EntityExtractionService.Segment(toSave.get(i).id(), plan.get(i).content()));
         }
-        entityExtraction.extractAndStore(document.kbId(), document.id(), withIds);
+        // ★ 0.6.5：异步 + 事务提交之后才跑。
+        //   异步的原因是抽取不影响文档可用性（BERT 每段几百毫秒，同步会让上传请求一直转圈）。
+        //   必须在 afterCommit 而不是这里直接提交任务：抽取会写 kb_entity_mention，而它引用
+        //   刚 saveAll 的段 —— 主事务还没提交时，异步线程读不到那些行，外键会直接失败。
+        //   没有事务上下文（测试里直接调）时 afterCommit 不会触发，就退化成同步调用 ——
+        //   "没有事务"不等于"可以不等它跑完"。
+        final java.util.List<EntityExtractionService.Segment> asyncPayload =
+            java.util.List.copyOf(withIds);
+        final UUID asyncKbId = document.kbId();
+        final UUID asyncDocId = document.id();
+        Runnable submitExtraction =
+            () ->
+                entityExtraction
+                    .extractAndStoreAsync(asyncKbId, asyncDocId, asyncPayload)
+                    .whenComplete(
+                        (inserted, error) -> {
+                          if (error != null) {
+                            log.warn("#实体抽取 异步任务异常（文档 {}）：{}", asyncDocId, error.toString());
+                          }
+                        });
+        if (org.springframework.transaction.support.TransactionSynchronizationManager
+            .isSynchronizationActive()) {
+          org.springframework.transaction.support.TransactionSynchronizationManager
+              .registerSynchronization(
+                  new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                      submitExtraction.run();
+                    }
+                  });
+        } else {
+          entityExtraction.extractAndStore(asyncKbId, asyncDocId, asyncPayload);
+        }
       }
 
       // ★ 回填进度列 + 状态置 PENDING_EMBEDDING（不是 SUCCEEDED —— 向量化还没做）

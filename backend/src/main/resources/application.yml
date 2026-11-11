@@ -365,6 +365,24 @@ app:
     # 图像预处理（deskew 等）。12 §11.4 要求 deskew 必开（扫描件常有倾斜）。
     preprocess: ${OCR_PREPROCESS:true}
 
+  entity:
+    # ★ 实体识别器：onnx | hanlp。2026-11-11 切到 onnx。
+    #
+    # 30 段人工验证集上的读数（backend/tools/ner_testset.jsonl，精确匹配）：
+    #   ONNX BERT  精度 100.0%  召回 97.4%  F1 98.7%
+    #   HanLP      精度  48.7%  召回 50.0%  F1 49.4%
+    # HanLP 的错法是分词把机构名切碎（采购供应部 -> 采购 + 供应部），一次切错在精确率
+    # 与召回率上各记一笔；ONNX 按字打标签，没有这个前提问题。
+    #
+    # ★ 配错（写成别的值）会**拒绝启动**：两个实现都装配不上，
+    # EntityExtractionService 构造失败。这是有意的 —— 静默退回 HanLP 意味着
+    # "你以为在跑 ONNX，实际在跑 HanLP"，两者差 49 个百分点且没有任何提示。
+    recognizer: ${AIP_ENTITY_RECOGNIZER:onnx}
+    onnx:
+      model-dir: ${AIP_NER_MODEL_DIR:models/bert-chinese-ner-onnx}
+      # 0 = 交给 ONNX Runtime 按核数决定
+      threads: ${AIP_NER_THREADS:0}
+
 server:
   port: ${SERVER_PORT:8080}
 

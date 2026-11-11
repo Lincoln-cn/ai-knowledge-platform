@@ -5,12 +5,18 @@ import cn.lincoln.aiplatform.knowledge.domain.EntityMentionRepository;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRelationRepository;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRepository;
+import jakarta.annotation.PreDestroy;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -37,6 +43,20 @@ public class EntityExtractionService {
   private final EntityDictionaryPort dictionaryPort;
   private final EntityMentionRepository mentionRepository;
   private final EntityRelationRepository relationRepository;
+
+  /**
+   * 跑异步抽取的执行器（虚拟线程）。
+   *
+   * <p>★ 为什么抽取要异步：一次 1 万字的文档会产生几十段，BERT 每段几百毫秒 —— 同步就意味 着用户上传后要盯着转圈等到抽取完， 而抽取**不影响文档可用性**（{@link
+   * #extractAndStore} 的注释已经说了）。所以把它移出请求线程。
+   *
+   * <p>★ 用虚拟线程而不是固定线程池：抽取是 IO（读库）+ CPU（前向）混合，且一次可能同时有多个 文档在上传。固定池在并发上传时会排队，而排队会让"抽取延迟"随上传量线性变长 ——
+   * 这正是 {@code 文档入库} 不该付出的代价。
+   */
+  private final ExecutorService extractionExecutor = Executors.newVirtualThreadPerTaskExecutor();
+
+  /** 已提交、未完成的任务数 —— 关停时要能等它们跑完。 */
+  private final AtomicLong inFlight = new AtomicLong();
 
   public EntityExtractionService(
       EntityRecognizer recognizer,
@@ -82,6 +102,52 @@ public class EntityExtractionService {
    */
   public int extractAndStore(UUID kbId, UUID documentId, List<Segment> segments) {
     return extract(kbId, documentId, segments);
+  }
+
+  /**
+   * 异步版：提交后就返回，抽取在虚拟线程上跑。
+   *
+   * <p>★ 返回 {@link CompletableFuture} 而不是 {@code void}：测试要能等它跑完再断言，
+   * 关停时也要能等它们收尾。**没有返回值就等于"提交了但不知道跑没跑"** —— 这正是本项目反复记账的 silent-failure 形状。
+   *
+   * @param kbId 知识库 id
+   * @param documentId 文档 id
+   * @param segments 段（已在主线程算好，捕获的是不可变快照）
+   * @return 完成时给出真正新插入的实体条数；期间失败为 0（不抛，{@link #extract} 内部已容错）
+   */
+  public CompletableFuture<Integer> extractAndStoreAsync(
+      UUID kbId, UUID documentId, List<Segment> segments) {
+    if (kbId == null || segments == null || segments.isEmpty()) {
+      return CompletableFuture.completedFuture(0);
+    }
+    // ★ 先拷一份：调用方传的 list 可能是主线程接着要复用的，异步读它就是在读可变状态。
+    List<Segment> snapshot = List.copyOf(segments);
+    inFlight.incrementAndGet();
+    return CompletableFuture.supplyAsync(
+            () -> extract(kbId, documentId, snapshot), extractionExecutor)
+        .whenComplete((ignored, error) -> inFlight.decrementAndGet());
+  }
+
+  /**
+   * 关停时等正在跑的抽取收尾。
+   *
+   * <p>★ 不等的后果：进程退出时正在写的实体被截断在事务中间，库里有半批实体、`kb_entity` 与 `kb_entity_mention` 对不上，而下一次启动不会有任何提示。
+   *
+   * <p>★ 上限 30 秒而不是无限等：抽取再慢也不该拖住关停；超时就记日志说清还有多少没跑完 —— 「等了一会儿没等到」和「已经全写完」必须能分开。
+   */
+  @PreDestroy
+  void shutdown() {
+    extractionExecutor.shutdown();
+    try {
+      if (!extractionExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+        log.warn("#实体抽取 关停时仍有 {} 个抽取任务未完成，已放弃等待", inFlight.get());
+        extractionExecutor.shutdownNow();
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      extractionExecutor.shutdownNow();
+      log.warn("#实体抽取 关停被中断，未完成的抽取任务已放弃（{} 个）", inFlight.get(), e);
+    }
   }
 
   private int extract(UUID kbId, UUID documentId, List<Segment> segments) {

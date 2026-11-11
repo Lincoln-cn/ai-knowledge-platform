@@ -264,4 +264,46 @@ class EntityExtractionServiceTest {
     //   跳过它则其余边照常写入 —— 这是"宁可少一条边，不可写入一条查不出端点的边"。
     verify(relations, never()).insertAll(any(), anyList());
   }
+
+  @Test
+  @DisplayName("异步抽取：提交即返回，join 之后实体真的写进去了")
+  void asyncExtractionCompletesAndPersists() {
+    EntityRepository repo = mock(EntityRepository.class);
+    when(repo.insertAll(any(), anyList())).thenReturn(2);
+    EntityExtractionService svc =
+        service(
+            recognizerOf(
+                Map.of("财务资产部负责预算", List.of(new EntityRecognizer.Recognized("ORG", "财务资产部", 0.9)))),
+            repo,
+            mock(EntityDictionaryPort.class));
+
+    try {
+      java.util.concurrent.CompletableFuture<Integer> future =
+          svc.extractAndStoreAsync(
+              KB,
+              UUID.randomUUID(),
+              List.of(new EntityExtractionService.Segment(UUID.randomUUID(), "财务资产部负责预算")));
+
+      // ★ 断言的是"join 之后结果真的落地"，不是"future 不是 null"。
+      //   后者在 supplyAsync 把异常吞进 future 时也成立 —— 那正是 silent-failure 的形状。
+      assertThat(future.join()).isEqualTo(2);
+      verify(repo).insertAll(eq(KB), anyList());
+    } finally {
+      svc.shutdown();
+    }
+  }
+
+  @Test
+  @DisplayName("异步抽取：空段不提交任务，直接给 0")
+  void asyncWithEmptySegmentsCompletesImmediately() {
+    EntityRepository repo = mock(EntityRepository.class);
+    EntityExtractionService svc =
+        service(recognizerOf(Map.of()), repo, mock(EntityDictionaryPort.class));
+    try {
+      assertThat(svc.extractAndStoreAsync(KB, UUID.randomUUID(), List.of()).join()).isZero();
+      verifyNoInteractions(repo);
+    } finally {
+      svc.shutdown();
+    }
+  }
 }
