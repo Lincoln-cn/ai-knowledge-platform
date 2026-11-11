@@ -7,6 +7,7 @@ import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.retrieval.EntityRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.ListwiseRerankPort;
+import cn.lincoln.aiplatform.platform.retrieval.RelationRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
@@ -129,7 +130,61 @@ class RerankWiringTest {
         listwise,
         // ★ 这个测试关心的是重排接线，不是实体扩召回 ⇒ 显式给"一路都没有"，
         //   不让它悄悄接上一个会改候选集的替身（那会让顺序断言失去意义）。
+        (kbId, question) -> java.util.List.of(),
+        // ★ 关系扩召回同理：空实现。
         (kbId, question) -> java.util.List.of());
+  }
+
+  /**
+   * ★★ 关系扩召回的接线（0.6.7）：{@code kb_relation} 的第一个消费方。
+   *
+   * <p>在此之前那张表的读数是「表在、写入方在、真栈 count(*) = 2、检索一次都不读它」—— 与 §11.32.3 第 1 条教训同一个形状。这条测试就是它的判据。
+   *
+   * <p>判据形状照抄 {@code entityRecallBringsInASegmentThatNoOtherPathFound}：**同一条测试里跑两次**， 一次关系路给空、一次给
+   * {@code S3}，断言第一次**不含**、第二次**含**。
+   *
+   * <p>★ 为什么只断言「接线时 S3 在」不算判据：注掉接线后它仍然绿 ⇒ 说明 S3 从别的路径也进来了，
+   * 那个断言根本没在看关系那一路上报的东西。判据必须能红，「只在接线时出现」才是这一路存在的证据。
+   */
+  @Test
+  void relationRecallContributesItsOwnPath() {
+    FakeSearch search = new FakeSearch();
+    search.answer(QUESTION, List.of(new SegmentSearchPort.Scored(S1, 0.9)));
+
+    // 反证用：同一个 FakeSearch、同一个 S1，但关系路给空。
+    List<UUID> withoutRelation =
+        serviceWithRelation(search, (kbId, question) -> java.util.List.of())
+            .hitTest(query())
+            .items()
+            .stream()
+            .map(HitTestView.Item::segmentId)
+            .toList();
+    assertThat(withoutRelation).as("关系路给空时，S3 不该出现在结果里 —— 出现就说明它从别处进来了，这条判据不成立").doesNotContain(S3);
+
+    List<UUID> withRelation =
+        serviceWithRelation(search, (kbId, question) -> java.util.List.of(S3))
+            .hitTest(query())
+            .items()
+            .stream()
+            .map(HitTestView.Item::segmentId)
+            .toList();
+    assertThat(withRelation).as("关系扩召回带进来的段必须出现在结果里").contains(S3);
+  }
+
+  /** 带关系扩召回的构造（0.6.7 的判据用）。 */
+  private static RetrievalService serviceWithRelation(
+      FakeSearch search, RelationRecallPort relationRecall) {
+    return new RetrievalService(
+        search,
+        new FakeEmbedding(),
+        new FakeUnderstanding(),
+        new FakeMultiHop(),
+        new RetrievalBudgetProperties(5000, 5000, 0.6, true, true),
+        RerankPort.noop(),
+        new RerankProperties(false, 3, "x", "y", false, 5),
+        ListwiseRerankPort.noop(),
+        (kbId, question) -> java.util.List.of(),
+        relationRecall);
   }
 
   /** 带实体扩召回的构造（0.6.2 的判据用）。 */
@@ -144,7 +199,9 @@ class RerankWiringTest {
         rerank,
         RerankProperties.defaults(),
         ListwiseRerankPort.noop(),
-        recall);
+        recall,
+        // ★ 这个构造只关心实体扩召回，关系那一路给空实现。
+        (kbId, question) -> java.util.List.of());
   }
 
   /**

@@ -5,6 +5,7 @@ import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.retrieval.EntityRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.ListwiseRerankPort;
+import cn.lincoln.aiplatform.platform.retrieval.RelationRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
@@ -156,6 +157,8 @@ public class RetrievalService {
    */
   private final EntityRecallPort entityRecallPort;
 
+  private final RelationRecallPort relationRecallPort;
+
   private final MultiHopService multiHop;
 
   /**
@@ -190,6 +193,8 @@ public class RetrievalService {
         rerankProperties,
         ListwiseRerankPort.noop(),
         // ★ 7 参这条路只服务既有测试（它们不关心实体扩召回）。
+        (kbId, question) -> java.util.List.of(),
+        // ★ 同理，关系扩召回也走空实现。
         (kbId, question) -> java.util.List.of());
   }
 
@@ -219,7 +224,8 @@ public class RetrievalService {
       RerankPort rerankPort,
       RerankProperties rerankProperties,
       ListwiseRerankPort listwiseRerankPort,
-      EntityRecallPort entityRecallPort) {
+      EntityRecallPort entityRecallPort,
+      RelationRecallPort relationRecallPort) {
     this.segmentSearch = segmentSearch;
     this.embeddingPort = embeddingPort;
     this.queryUnderstanding = queryUnderstanding;
@@ -229,6 +235,7 @@ public class RetrievalService {
     this.rerankProperties = rerankProperties;
     this.listwiseRerankPort = listwiseRerankPort;
     this.entityRecallPort = entityRecallPort;
+    this.relationRecallPort = relationRecallPort;
   }
 
   @Transactional(readOnly = true)
@@ -350,6 +357,25 @@ public class RetrievalService {
           // ★ 扩召回失败不拖累整次检索：它是「多一路」，不是必经之路。
           //   但必须留痕 —— 静默失效正是本项目反复记账的形状。
           log.warn("实体扩召回失败，本次少一路候选：{}", failure.toString());
+        }
+      }
+      // ★ 关系扩召回（0.6.7）：问题里的实体**参与过关系陈述**的那几段，作为又一路候选。
+      //   与实体扩召回不是同一件事：那个要的是"提到过这个实体"，这个要的是"这里说了它和谁有关系"。
+      //   后者精确得多（一段里有关系陈述，几乎必然与"X 与谁有什么关系"这类问题相关），
+      //   但覆盖面窄（只有抽到过关系的段才在里面）—— 两路都留着，让 RRF 去排。
+      if (!scope.isEmpty() && !scope.hasConversationScope()) {
+        try {
+          java.util.LinkedHashSet<UUID> byRelation = new java.util.LinkedHashSet<>();
+          for (UUID kbId : scope.sharedKbIds()) {
+            byRelation.addAll(relationRecallPort.segmentsWithRelations(kbId, request.question()));
+          }
+          if (!byRelation.isEmpty()) {
+            perQuery.add(new java.util.ArrayList<>(byRelation));
+            paths++;
+          }
+        } catch (RuntimeException failure) {
+          // ★ 与实体扩召回同口径：多一路不是必经之路，失败不拖累整次检索，但必须留痕。
+          log.warn("关系扩召回失败，本次少一路候选：{}", failure.toString());
         }
       }
       if (perQuery.isEmpty()) {
