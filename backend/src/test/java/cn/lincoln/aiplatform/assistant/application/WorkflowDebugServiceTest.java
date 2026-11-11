@@ -89,7 +89,12 @@ class WorkflowDebugServiceTest {
 
     WorkflowDebugService.Result result = service.debug(APP, fourNodeGraph(), "问题");
 
-    assertThat(result.ok()).isTrue();
+    // ★ 这里原来是 isTrue()，而且它“通过”了 —— 因为实现里写死了 true。
+    //   一条照着实现抄的期望值只能证明“实现没变”，证明不了“实现对不对”。
+    //   真栈验证时它表现为：试用对话框显示“成功”，记录表里是 FAILED。
+    assertThat(result.ok()).as("执行失败时 ok 必须是 false").isFalse();
+    assertThat(result.errors()).as("失败原因要带回给调用方，不能只写进记录表").hasSize(1);
+    assertThat(result.errors().getFirst()).contains("没有类型 AI_CHAT_NODE 的节点执行器");
     assertThat(result.finalOutput()).isNull();
 
     ArgumentCaptor<WorkflowRecord> saved = ArgumentCaptor.forClass(WorkflowRecord.class);

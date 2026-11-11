@@ -92,7 +92,12 @@ public class WorkflowDebugService {
             Instant.now());
     records.save(record);
 
-    return new Result(true, null, output, trail, elapsedMs, executionId);
+    // ★ ok 必须跟着 failReason 走，不能写死 true：真栈验证时这里返回 ok=True 而记录是 FAILED，
+    //   前端「试用」对话框会显示"成功"、记录表里却是失败 —— 正是项目一直在批的静默失败形状。
+    //   失败时把原因放进 errors，调用方不用再去查记录表才知道为什么没跑成。
+    boolean ok = failReason == null;
+    List<String> errors = ok ? null : List.of(failReason);
+    return new Result(ok, errors, output, trail, elapsedMs, executionId);
   }
 
   /** 轨迹取自编译后的计划：节点顺序与类型都在计划里，不需要再读一遍节点执行记录表。 */
