@@ -173,7 +173,68 @@ class Silent(http.server.SimpleHTTPRequestHandler):
         pass
 
 
+def shape_problems() -> list[str]:
+    """不启浏览器，只看期望表本身是否还自洽（`#332` 判据 2）。
+
+    ★ 这道闸门读的是**手写的期望表**（`MATRIX` / `NAV`），不是源码 ——
+    所以它的「形状失效」不是正则对不上，而是：表内部自相矛盾，
+    或表与实际菜单的对应关系已经没人维护。
+    下面三条都是真出过的：`NAV` 里写了菜名但 `MATRIX` 里没有那条路由（反之亦然）、
+    同一角色同一菜名写两遍（复制粘贴留下的）、某条路由没有任何角色能进（写了等于没写）。
+    """
+    problems: list[str] = []
+
+    seen_routes: set[str] = set()
+    for route, who in MATRIX:
+        if route in seen_routes:
+            problems.append(f"MATRIX 里 {route} 写了不止一次")
+        seen_routes.add(route)
+        if not who:
+            problems.append(f"MATRIX 里 {route} 没有任何角色能进 —— 这条断言永远不会失败")
+
+    for role, items in NAV.items():
+        if not items:
+            problems.append(f"NAV[{role}] 是空表")
+        dup = [x for x in set(items) if items.count(x) > 1]
+        if dup:
+            problems.append(f"NAV[{role}] 有重复项：{dup}")
+
+    unknown = set(NAV) - {u for _, who in MATRIX for u in who}
+    if unknown:
+        problems.append(f"NAV 里有 MATRIX 中不存在的角色：{sorted(unknown)}")
+
+    return problems
+
+
+def self_check() -> int:
+    """`--self-check`：不启浏览器，只验期望表自洽 + 一条「形状坏了会被抓到」的反证。"""
+    problems = shape_problems()
+    if problems:
+        for p in problems:
+            print(f"✗ {p}")
+        print(f"自检失败：期望表自身不自洽（{len(problems)} 处）")
+        return 1
+    print(f"✓ 期望表自洽：MATRIX {len(MATRIX)} 条路由 · NAV {len(NAV)} 个角色")
+
+    # ★ 反证：把一个角色的菜名复制一份，shape_problems 必须抓到。
+    #   没有这一步，「自洽」只证明"现在没坏"，不证明"坏了会报"。
+    sample_role = next(iter(NAV))
+    NAV[sample_role] = [*NAV[sample_role], NAV[sample_role][0]]
+    try:
+        caught = shape_problems()
+    finally:
+        NAV[sample_role] = NAV[sample_role][:-1]
+    if not caught:
+        print("✗ 反证失败：故意塞了重复菜名，shape_problems 却没报")
+        return 1
+    print(f"✓ 反证：塞重复菜名后如期报出「{caught[0]}」")
+    return 0
+
+
 def main() -> int:
+    if "--self-check" in sys.argv:
+        return self_check()
+
     base = f"http://127.0.0.1:{PORT}/"
     srv = None
 
@@ -182,6 +243,15 @@ def main() -> int:
         if not base.endswith("/"):
             base += "/"
     else:
+        # ★ `#332`：dist 不存在是「读不懂被检查的对象」，不是「权限配错了」。
+        #   以前这种情形会起一个空目录服务、然后在登录页上一路红到底，
+        #   维护者会去查权限点，而真因是没跑 `npm run build`。
+        if not (ROOT / "dist" / "index.html").exists():
+            print(f"✗ 闸门自身失效：{ROOT / 'dist' / 'index.html'} 不存在 —— 还没有可检查的构建产物。")
+            print("  这不是「检查不通过」，是「我读不懂被检查的对象了」。先跑 npm run build，")
+            print("  或者用 --base 指向已起的 dev server。")
+            return 3
+
         handler = functools.partial(Silent, directory=str(ROOT / "dist"))
 
         class Quiet(socketserver.ThreadingTCPServer):
