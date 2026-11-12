@@ -148,8 +148,12 @@ def check() -> int:
     try:
         ledger = read_backend_ledger()
     except LookupError as e:
-        print(f"✗ 台账读不出来（正则与 ContractDriftTest 的形状对不上了）⇒ 这道闸门已失效：{e}")
-        return 1
+        # ★ 退出码 3 = **闸门自身失效**（读不懂被检查的对象了），与 1（检查不通过）区分开。
+        #   这是 `#332` 的核心：以前两者都返回 1，"闸门坏了"与"产品坏了"在 CI 上长得一样，
+        #   维护者会朝错的方向修（`NAV` 期望表那次就是）。0 = 通过，1 = 不合规，3 = 闸门失效。
+        print(f"✗ 闸门自身失效：台账读不出来 —— {e}")
+        print("  这不是「检查不通过」，是「我读不懂被检查的对象了」。先修本脚本的正则或锚点。")
+        return 3
     decls = collect_declarations()
 
     # ★ 台账为空是**合法状态**（2026-11-12 起就是空的）：所有待实现端点都已落地。
@@ -216,6 +220,42 @@ def check() -> int:
     return 0
 
 
+def shape_check() -> int:
+    """形状自检：把锚点行故意改坏，闸门必须以退出码 3 失败。
+
+    ★ 为什么不写在 `check()` 里：`check()` 读的是仓库真实文件，跑它不能证明"读不懂时会报 3" ——
+    只有真的把锚点拿走一次，才能证明这条分支存在且生效（`#332` 判据 2、3）。
+
+    做法：复制一份 ContractDriftTest 到临时目录、删掉 `KNOWN_MISSING =` 那一行，
+    再让 `read_backend_ledger` 对着它跑（通过替换模块级 `DRIFT` 路径）。
+    """
+    import tempfile
+
+    global DRIFT
+
+    text = DRIFT.read_text(encoding="utf-8")
+    if "KNOWN_MISSING =" not in text:
+        print("✗ 形状自检无法进行：真实文件里就没有 KNOWN_MISSING =（它已经坏了）")
+        return 3
+
+    broken = text.replace("KNOWN_MISSING =", "KNOWN_MISSING_RENAMED =", 1)
+    original = DRIFT
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "ContractDriftTest.java"
+            fake.write_text(broken, encoding="utf-8")
+            DRIFT = fake
+            try:
+                read_backend_ledger()
+            except LookupError:
+                print("✓ 形状自检：锚点被改名后 read_backend_ledger 如期抛 LookupError（check 会返回 3）")
+                return 0
+            print("✗ 形状自检失败：锚点被改名了，read_backend_ledger 却没抛错 —— 这道闸门察觉不到形状变化")
+            return 1
+    finally:
+        DRIFT = original
+
+
 def self_check() -> int:
     """内置样本：三段匹配逻辑各自给出预期结果（这道闸门自己的金丝雀）。"""
     cases = [
@@ -235,7 +275,12 @@ def self_check() -> int:
             bad += 1
             print(f"✗ 自测失败：{a} vs {b} 期望 {expected} 实得 {got}")
     print(f"自测：{len(cases) - bad}/{len(cases)} 通过")
-    return 1 if bad else 0
+
+    # ★ 形状自检也进 --self-check（#332）：它证明的是「读不懂时会报 3」这条分支真的存在。
+    shape_rc = shape_check()
+    if bad or shape_rc != 0:
+        return 1
+    return 0
 
 
 def main() -> int:
