@@ -48,7 +48,7 @@ public class WorkflowAdmissionService {
       if (node == null || node.type() == null) {
         continue;
       }
-      if (catalog.known(node.type()) && !catalog.implemented(node.type())) {
+      if (catalog.known(node.type()) && !catalog.executable(node.type())) {
         issues.add(
             new WorkflowValidationService.Issue(
                 "ERROR",

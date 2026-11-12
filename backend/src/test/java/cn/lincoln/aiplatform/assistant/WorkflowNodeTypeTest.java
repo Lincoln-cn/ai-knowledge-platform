@@ -34,10 +34,37 @@ class WorkflowNodeTypeTest {
   }
 
   @Test
-  void exactlyEightAreImplemented() throws Exception {
-    long implemented =
-        load().stream().filter(m -> Boolean.TRUE.equals(m.get("implemented"))).count();
-    assertThat(implemented).as("★ 已实现必须恰好 8 个 —— 与画布注册的类型数一致（#20 的教训）").isEqualTo(8);
+  void exactlyEightAreInCatalog() throws Exception {
+    long enabled =
+        load().stream().filter(m -> Boolean.TRUE.equals(m.get("catalogEnabled"))).count();
+    assertThat(enabled).as("★ 画布可用的必须恰好 8 个 —— 与画布注册的类型数一致（#20 的教训）").isEqualTo(8);
+  }
+
+  @Test
+  void executableTypesMatchTheExecutor() throws Exception {
+    // ★ 这条是 #331 的判据 2：目录里 executable=true 的集合必须**正好等于**执行器的 SUPPORTED_TYPES。
+    //   改任一边都会红 —— 这正是"能放"与"能跑"两义性要防的东西。
+    Set<String> fromCatalog =
+        load().stream()
+            .filter(m -> Boolean.TRUE.equals(m.get("executable")))
+            .map(m -> String.valueOf(m.get("type")))
+            .collect(Collectors.toSet());
+    assertThat(fromCatalog)
+        .as("目录 executable 与执行器 SUPPORTED_TYPES 必须一致：多一个 ⇒ 发布放行但运行时抛，少一个 ⇒ 能跑却发布被拒")
+        .isEqualTo(
+            cn.lincoln.aiplatform.assistant.application.LinearWorkflowExecutor.SUPPORTED_TYPES);
+  }
+
+  @Test
+  void everyExecutableIsAlsoInCatalog() throws Exception {
+    // executable 蕴含 catalogEnabled：能跑却拖不进画布 = 这个类型谁也用不上。
+    for (Map<String, Object> row : load()) {
+      if (Boolean.TRUE.equals(row.get("executable"))) {
+        assertThat(row.get("catalogEnabled"))
+            .as("executable=true 但 catalogEnabled=false：" + row.get("type"))
+            .isEqualTo(Boolean.TRUE);
+      }
+    }
   }
 
   @Test

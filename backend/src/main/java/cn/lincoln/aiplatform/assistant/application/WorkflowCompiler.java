@@ -233,12 +233,12 @@ public final class WorkflowCompiler {
   }
 
   /**
-   * 中断点 = 人工介入节点（{@code QUESTION_NODE} 追问 / {@code FORM_NODE} 表单收集）+ 本版本不支持 的节点（{@code
-   * implemented=false}）。含中断点的图本版本不能自动跑完，见 {@code #113} 判据 2。
+   * 中断点 = 人工介入节点（{@code QUESTION_NODE} 追问 / {@code FORM_NODE} 表单收集）+ 本版本跑不了 的节点（{@code
+   * executable=false}）。含中断点的图本版本不能自动跑完，见 {@code #113} 判据 2。
    */
   private boolean isInterrupt(String type) {
     return "QUESTION_NODE".equals(type)
         || "FORM_NODE".equals(type)
-        || (catalog.known(type) && !catalog.implemented(type));
+        || (catalog.known(type) && !catalog.executable(type));
   }
 }

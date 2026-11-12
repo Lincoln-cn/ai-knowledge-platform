@@ -16,6 +16,16 @@ import tools.jackson.databind.ObjectMapper;
  *
  * <p>★ 目录有两个消费者：下发（`GET /workflow/node-types`）与校验（`POST …/workflow/validate`）。
  * 两处各读一遍文件不是错，但"哪些类型算已实现"很容易各算各的 —— 收成一处，免得 界面把某个节点标成可用、校验却认为它不存在。
+ *
+ * <p>★ <strong>两个布尔是两件事</strong>（`#331`，2026-11-12 从单个 `implemented` 拆开）：
+ *
+ * <ul>
+ *   <li>{@code catalogEnabled} —— 画布上能不能拖这个节点；
+ *   <li>{@code executable} —— 发布/运行时会不会被接受（等价于执行器真有它的 NodeExecutor）。
+ * </ul>
+ *
+ * <p>今天有 3 个类型停在中间态（`BASE_NODE` / `QUESTION_NODE` / `NUMBER_CONDITION_NODE`）：能拖进来、点发布才报错。
+ * 合并成一个布尔时，用户要摆完节点、连完线、调完参数，点发布才知道白做了。
  */
 @Component
 public class NodeTypeCatalog {
@@ -23,13 +33,13 @@ public class NodeTypeCatalog {
   private static final String RESOURCE = "workflow/node-types.json";
 
   private final List<NodeTypeMeta> all;
-  private final Set<String> implemented;
+  private final Set<String> executable;
 
   public NodeTypeCatalog(ObjectMapper objectMapper) {
     this.all = load(objectMapper);
-    this.implemented =
+    this.executable =
         all.stream()
-            .filter(NodeTypeMeta::implemented)
+            .filter(NodeTypeMeta::executable)
             .map(NodeTypeMeta::type)
             .collect(Collectors.toCollection(LinkedHashSet::new));
   }
@@ -52,11 +62,21 @@ public class NodeTypeCatalog {
     return all.stream().anyMatch(meta -> meta.type().equals(type));
   }
 
-  public boolean implemented(String type) {
-    return implemented.contains(type);
+  /**
+   * 这个类型能不能被<strong>发布</strong>（等价于执行器真能跑）。
+   *
+   * <p>★ 与 {@code catalogEnabled} 不是一回事：后者为真只说明画布上能拖，不代表发布能过。调用方要区分「不能放」与「放了也跑不了」时，两个都要看。
+   */
+  public boolean executable(String type) {
+    return executable.contains(type);
   }
 
-  /** 目录条目（契约 `NodeTypeMeta`）。 */
+  /** 目录条目（契约 {@code NodeTypeMeta}）。 */
   public record NodeTypeMeta(
-      String type, String label, String description, String category, boolean implemented) {}
+      String type,
+      String label,
+      String description,
+      String category,
+      boolean catalogEnabled,
+      boolean executable) {}
 }

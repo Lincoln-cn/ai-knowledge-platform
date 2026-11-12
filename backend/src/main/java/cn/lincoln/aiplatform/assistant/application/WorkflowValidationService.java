@@ -63,8 +63,8 @@ public class WorkflowValidationService {
                 "节点「" + node.title() + "」是人工介入节点（追问 / 表单收集），本版本不支持",
                 "把人工介入换成已实现的节点（例如「AI 对话」或「回复」），否则发布后这一步无法自动执行",
                 node.id()));
-      } else if (!catalog.implemented(node.type())) {
-        // 判据 2：implemented=false = 本版本不支持 ⇒ 从 WARNING 升为 ERROR，直接拒绝发布。
+      } else if (!catalog.executable(node.type())) {
+        // 判据 2：executable=false = 本版本跑不了 ⇒ 从 WARNING 升为 ERROR，直接拒绝发布。
         issues.add(
             issue(
                 "ERROR",
@@ -101,7 +101,7 @@ public class WorkflowValidationService {
     // 判据 1/2（04 BR-04-02 禁止成环）：图里不许有环 —— 有环执行器会一直转下去，这里直接拦下。
     issues.addAll(cycles(graph));
 
-    // 判据 3（轻引擎边界，§11.12）：执行器只跑 LinearWorkflowExecutor.SUPPORTED_TYPES 四种节点。
+    // 判据 3（轻引擎边界，§11.12）：执行器只跑 LinearWorkflowExecutor.SUPPORTED_TYPES 里的节点。
     // ★ 这个集合之外的类型（条件分支 / 问题优化 / 人工介入……）在**运行时**才抛
     // IllegalArgumentException —— 而发布校验不拦就等于"发布成功、点试用时才 500"。
     // 把拦截前移到发布：用户当场就能看到是哪一格、为什么、怎么办。
@@ -113,7 +113,7 @@ public class WorkflowValidationService {
                 "ERROR",
                 "NODE_NOT_EXECUTABLE",
                 "节点「" + node.title() + "」本版本执行引擎还跑不了",
-                "先删掉它；本版本只能跑开始 / 检索 / AI 对话 / 回复四种节点，条件分支与其它节点要等 V1.0 的执行引擎",
+                "先删掉它；本版本能跑的是开始 / 检索 / AI 对话 / 条件判断 / 回复五种节点，其余要等后续版本",
                 node.id()));
       }
     }
@@ -167,8 +167,8 @@ public class WorkflowValidationService {
    * 人工介入节点 = {@code #113} 的「中断点」：走到这里要停下来等用户填/答，本版本的执行器只跑 全自动线性流程，不支持 —— {@code QUESTION_NODE}（追问）/
    * {@code FORM_NODE}（表单收集）。
    *
-   * <p>★ 刻意按类型硬识别，而不是看 {@code implemented}：{@code QUESTION_NODE} 在 {@code node-types.json} 里被错标成
-   * {@code implemented:true}（账目不准、待订正），但它是人工介入节点，必须拦。
+   * <p>★ 刻意按类型硬识别，而不是看 {@code executable}：{@code QUESTION_NODE} 在 {@code node-types.json} 里标成
+   * {@code executable:false}（它确实是人工介入节点），这里按类型再硬拦一道，不依赖目录字段。
    */
   private static boolean isHumanInTheLoop(String type) {
     return "QUESTION_NODE".equals(type) || "FORM_NODE".equals(type);
