@@ -11,10 +11,10 @@
                                 <div
                                     class="workflow-dropdown-item"
                                     :class="
-                                        item.implemented && !isExhausted(item) ? 'cursor' : 'is-planned'
+                                        item.catalogEnabled && !isExhausted(item) ? 'cursor' : 'is-planned'
                                     "
                                     :title="item.description"
-                                    @click.stop="item.implemented && clickCatalog(item)"
+                                    @click.stop="item.catalogEnabled && clickCatalog(item)"
                                 >
                                     <component
                                         :is="nodeIcon(item.type)"
@@ -24,7 +24,15 @@
                                     <div class="item-body">
                                         <div class="item-name">
                                             {{ item.label }}
-                                            <el-tag v-if="!item.implemented" size="small" type="info" class="ml-4">
+                                            <el-tag
+      v-if="item.catalogEnabled && !item.executable"
+      size="small"
+      type="warning"
+      class="ml-4"
+    >
+      不能运行
+    </el-tag>
+    <el-tag v-if="!item.catalogEnabled" size="small" type="info" class="ml-4">
                                                 规划中
                                             </el-tag>
                                             <el-tag v-else-if="isExhausted(item)" size="small" type="warning" class="ml-4">
@@ -137,7 +145,7 @@ const groupedNodes = computed(() => {
  * 单例节点若图里已有，走统一闸门拒绝并给出可读原因（不静默忽略）。
  */
 function clickCatalog(meta: NodeTypeMeta) {
-    if (!meta.implemented) return
+    if (!meta.catalogEnabled) return
     refreshExistingTypes()
     if (rejectAddIfSingleton(props.workflowRef?.getGraphData?.(), meta.type, meta.singleton)) return
     const dict = nodeDict[meta.type]

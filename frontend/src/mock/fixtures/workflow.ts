@@ -24,16 +24,13 @@ import type {
 /* 节点目录（18 种：8 种已实现 + 10 种规划中）                            */
 /* ------------------------------------------------------------------ */
 
-const implementedExtras: Partial<NodeTypeMeta>[] = []
-
-void implementedExtras
-
 export const nodeTypeCatalog: NodeTypeMeta[] = [
   {
     type: 'START_NODE',
     label: '开始节点',
     category: '基础',
-    implemented: true,
+    catalogEnabled: true,
+    executable: true,
     singleton: true,
     canBeEntry: true,
     description: '流程唯一入口。配置开场白与推荐问题，可作为变量引用来源。'
@@ -42,7 +39,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'BASE_NODE',
     label: '基本信息收集',
     category: '基础',
-    implemented: true,
+    catalogEnabled: true,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '运行时向用户收集结构化字段（文本/单选/多选/日期/数字/文件），产出可被下游引用的变量。'
@@ -51,7 +49,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'QUESTION_NODE',
     label: '问题改写',
     category: '预处理',
-    implemented: true,
+    catalogEnabled: true,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '把多轮口语化问题改写成独立可检索的查询。可选改写模型，不选则原样透传。'
@@ -60,7 +59,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'SEARCH_DATASET_NODE',
     label: '知识库检索',
     category: '数据',
-    implemented: true,
+    catalogEnabled: true,
+    executable: true,
     singleton: false,
     canBeEntry: false,
     description: '按检索参数从绑定知识库召回片段，产出 snippets 供下游引用。'
@@ -69,7 +69,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'AI_CHAT_NODE',
     label: 'AI 对话',
     category: '模型',
-    implemented: true,
+    catalogEnabled: true,
+    executable: true,
     singleton: false,
     canBeEntry: false,
     description: '调用对话模型生成回答。可绑知识库、提示词，支持思考开关与多轮。'
@@ -78,7 +79,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'CONDITION_NODE',
     label: '语义判断',
     category: '逻辑',
-    implemented: true,
+    catalogEnabled: true,
+    executable: true,
     singleton: false,
     canBeEntry: false,
     description: '按自然语言条件把流程导向不同分支，条件由模型判定（不支持手写脚本），并要求配置兜底分支。'
@@ -87,7 +89,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'NUMBER_CONDITION_NODE',
     label: '数值判断',
     category: '逻辑',
-    implemented: true,
+    catalogEnabled: true,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '按「变量/操作符/值」结构化条件把流程导向不同分支，运行时比值判定，并要求配置兜底分支。'
@@ -96,7 +99,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'REPLY_NODE',
     label: '指定回复',
     category: '输出',
-    implemented: true,
+    catalogEnabled: true,
+    executable: true,
     singleton: false,
     canBeEntry: false,
     description: '流程出口。用固定模板回复，支持 {{节点id.字段名}} 变量引用。'
@@ -105,7 +109,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'FUNCTION_LIB_NODE',
     label: '函数库',
     category: '扩展',
-    implemented: false,
+    catalogEnabled: false,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '规划中：声明可复用的外部函数库，供函数调用节点选用。当前版本不可拖入画布。'
@@ -114,7 +119,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'FUNCTION_NODE',
     label: '函数调用',
     category: '扩展',
-    implemented: false,
+    catalogEnabled: false,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '规划中：按函数库定义发起 HTTP/内部调用，把结果写入变量。当前版本不可拖入画布。'
@@ -123,7 +129,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'RERANKER_NODE',
     label: '重排序',
     category: '数据',
-    implemented: false,
+    catalogEnabled: false,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '规划中：对检索结果做重排序，提升 TopN 质量。当前版本不可拖入画布。'
@@ -132,7 +139,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'APPLICATION_NODE',
     label: '应用调用',
     category: '扩展',
-    implemented: false,
+    catalogEnabled: false,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '规划中：编排中调用另一个已发布应用，实现能力复用。当前版本不可拖入画布。'
@@ -141,7 +149,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'DOCUMENT_EXTRACT_NODE',
     label: '文档提取',
     category: '预处理',
-    implemented: false,
+    catalogEnabled: false,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '规划中：从用户上传文档中抽取结构化字段。当前版本不可拖入画布。'
@@ -150,7 +159,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'IMAGE_UNDERSTAND_NODE',
     label: '图像理解',
     category: '多模态',
-    implemented: false,
+    catalogEnabled: false,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '规划中：调用视觉模型理解图片内容。当前版本不可拖入画布。'
@@ -159,7 +169,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'FORM_NODE',
     label: '表单',
     category: '基础',
-    implemented: false,
+    catalogEnabled: false,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '规划中：比基本信息收集更复杂的表单编排（联动/校验规则）。当前版本不可拖入画布。'
@@ -168,7 +179,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'TEXT_TO_SPEECH_NODE',
     label: '语音合成',
     category: '多模态',
-    implemented: false,
+    catalogEnabled: false,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '规划中：把回复文本合成语音。当前版本不可拖入画布。'
@@ -177,7 +189,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'SPEECH_TO_TEXT_NODE',
     label: '语音识别',
     category: '多模态',
-    implemented: false,
+    catalogEnabled: false,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '规划中：把用户语音转写为文本。当前版本不可拖入画布。'
@@ -186,7 +199,8 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'IMAGE_GENERATE_NODE',
     label: '图像生成',
     category: '多模态',
-    implemented: false,
+    catalogEnabled: false,
+    executable: false,
     singleton: false,
     canBeEntry: false,
     description: '规划中：按提示词生成配图。当前版本不可拖入画布。'

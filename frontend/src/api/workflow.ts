@@ -11,7 +11,7 @@ import type { PageQuery, PageResult } from './types'
  * 与旧系统的差异（有意为之）：
  *  - 旧系统枚举 17 种节点、只实现 7 种，10 种是「有枚举、有图标、无实现」的幽灵类型，
  *    在界面上会误导使用者。这里**保留全部枚举**（现 18 种：原 17 种 + 拆分出的数值判断），
- *    但用 `implemented` 显式标记，未实现的在节点菜单里标注「规划中」且不可拖拽
+ *    但用 `catalogEnabled` / `executable` 两个标记分开说「能不能拖」与「能不能跑」，
  *    —— 不让界面暗示一个不存在的能力。
  *  - 旧系统的节点配置散在各自的 `config` 里、无类型约束。这里按节点类型做成
  *    判别联合（discriminated union），配置面板与后端都按类型收窄。
@@ -60,7 +60,16 @@ export interface NodeTypeMeta {
    * 由后端下发而不是前端各写一份分组表（否则新增节点时两边要同时改）。
    */
   category: string
-  implemented: boolean
+  /**
+   * 画布上能不能拖这个节点。
+   *
+   * ★ 与 `executable` 是**两件事**（#331）：今天有 3 个类型停在中间态
+   * （`BASE_NODE` / `QUESTION_NODE` / `NUMBER_CONDITION_NODE`）——
+   * 能拖进来、点发布才报错。合并成一个布尔时用户要到最后一步才知道白做了。
+   */
+  catalogEnabled: boolean
+  /** 发布/运行时会不会被接受（等价于后端执行器真能跑它）。 */
+  executable: boolean
   /** 是否只允许出现一个（如开始节点） */
   singleton: boolean
   /** 是否允许作为流程入口 */
