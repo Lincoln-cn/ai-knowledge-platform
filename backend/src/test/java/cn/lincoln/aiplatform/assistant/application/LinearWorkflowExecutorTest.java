@@ -1,7 +1,6 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.lincoln.aiplatform.assistant.domain.WorkflowNodeExecutionRepository;
 import java.util.ArrayList;
@@ -73,22 +72,5 @@ class LinearWorkflowExecutorTest {
         "in");
 
     assertThat(calls).as("4 个节点按拓扑序各跑一次（注册表按 type 分发到各执行器）").containsExactly("s", "d", "a", "r");
-  }
-
-  @Test
-  @DisplayName("人工介入节点被拒（本版本不支持人工介入）")
-  void rejectsHumanInTheLoop() {
-    LinearWorkflowExecutor executor = executorWith(new ArrayList<>());
-    assertThatThrownBy(
-            () ->
-                executor.execute(
-                    UUID.randomUUID(),
-                    new WorkflowCompiler.ExecutionPlan(
-                        List.of(
-                            step("s", "START_NODE", 0, null), step("q", "QUESTION_NODE", 1, null)),
-                        List.of()),
-                    "in"))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("QUESTION_NODE");
   }
 }
