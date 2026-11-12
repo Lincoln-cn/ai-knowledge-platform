@@ -99,52 +99,37 @@ public class LinearWorkflowExecutor {
     FlowState state = new FlowState();
     int stepsDone = 0;
     for (WorkflowCompiler.PlanStep step : plan.steps()) {
-      // ★ 条件分支：这一步落在某条分支上，而当前激活的不是那一条 ⇒ 整步跳过。
-      //
-      // 编译器把分支 id 沿拓扑序传播到整条链（见 WorkflowCompiler 里 branchOf 那段注释），
-      // 所以这里不需要知道"汇合点在哪"—— 汇合点的 branchHandle 是 null，天然放行。
-      // 跳过的节点**不写执行记录**：写了会让运行记录里出现"跑过但没做任何事"的节点，
-      // 而用户看记录是为了知道"这次到底走了哪条路"。
-      String active = state.read(LinearWorkflowExecutor.ACTIVE_BRANCH);
-      if (step.branchHandle() != null && active != null && !step.branchHandle().equals(active)) {
-        log.debug(
-            "#workflow 跳过分支外节点：node={} branch={} 本次走的是 {}",
-            step.nodeId(),
-            step.branchHandle(),
-            active);
-        continue;
-      }
-      // ★ 人工介入：编译器把这类节点 id 填进 interruptNodeIds（这个字段从 0.7.0 起就有，
-      //   但执行器一直没读过它 —— 于是「人工介入节点」跑起来当普通节点执行完、继续往下走，
-      //   用户看不出中间少了什么）。现在到这儿就停：抛出去，让调用方把状态存住。
-      //   ★ 必须在 registry.get 之前：中断点本来没有执行器（它要做的是「等人」，不是「跑点什么」），
-      //     放到后面会先撞「没有类型的执行器」。
-      if (plan.interruptNodeIds().contains(step.nodeId())) {
-        log.info(
-            "#workflow 停在人工介入节点：node={} type={} 已走 {} 步", step.nodeId(), step.type(), stepsDone);
-        throw new WorkflowInterrupted(executionId, step.nodeId(), step.type(), stepsDone, state);
-      }
-      NodeExecutor executor = registry.get(step.type());
-      if (executor == null) {
-        throw new IllegalStateException("没有类型 " + step.type() + " 的节点执行器");
-      }
-      try {
-        executor.execute(
-            new WorkflowNodeContext(
-                executionId, step.nodeId(), step.type(), input, state, step.config()));
-      } catch (Exception ex) {
-        // ★ 抛出去让 @Transactional 整体回滚 —— L1：失败那跑的节点记录不得显示成功。
-        throw ex instanceof RuntimeException runtime ? runtime : new IllegalStateException(ex);
-      }
-      records.save(
-          new WorkflowNodeExecutionRecord(
-              UUID.randomUUID(),
-              executionId,
-              step.nodeId(),
-              step.type(),
-              step.order(),
-              "SUCCEEDED"));
-      stepsDone++;
+      stepsDone = runOne(executionId, step, plan, input, state, stepsDone);
+    }
+    return state;
+  }
+
+  /**
+   * 从一份已有的状态与第 {@code resumeAfter} 步之后接着跑。
+   *
+   * <p>★ 用「已经走完的步数」而不是节点 id 作为起点：同一个图里同一个节点可能出现在不同计划里， 而步数是这份计划的局部量 ——
+   * 但它也意味着**计划变了就不能恢复**，所以调用方要先比一次 {@code WorkflowPause.stepsDone}。
+   *
+   * <p>★ 跳过前 {@code resumeAfter} 步，不是「再跑一遍」：已经落过执行记录的节点不重跑， 否则记录表里会出现同一步两次。
+   */
+  @Transactional(rollbackFor = Exception.class, noRollbackFor = WorkflowInterrupted.class)
+  public FlowState resumeAndReturn(
+      UUID executionId,
+      WorkflowCompiler.ExecutionPlan plan,
+      String input,
+      int resumeAfter,
+      FlowState resumed) {
+    requireRunnablePlan(plan);
+    List<WorkflowCompiler.PlanStep> steps = plan.steps();
+    if (resumeAfter < 0 || resumeAfter > steps.size()) {
+      throw new IllegalArgumentException(
+          "恢复点越界：" + resumeAfter + " 不在 [0, " + steps.size() + "] 内");
+    }
+    FlowState state = resumed;
+    int stepsDone = resumeAfter;
+    for (int i = resumeAfter; i < steps.size(); i++) {
+      WorkflowCompiler.PlanStep step = steps.get(i);
+      stepsDone = runOne(executionId, step, plan, input, state, stepsDone);
     }
     return state;
   }
@@ -174,5 +159,59 @@ public class LinearWorkflowExecutor {
         throw new IllegalArgumentException("本版本只跑 " + SUPPORTED_TYPES + " 这些节点，不支持 " + step.type());
       }
     }
+  }
+
+  /**
+   * 跑一步，返回新的「已走步数」。
+   *
+   * <p>★ 被分支跳过、或停在中断点时都返回**原值** —— 那几步不算走完， 恢复时要从中断点本身重来。
+   */
+  private int runOne(
+      UUID executionId,
+      WorkflowCompiler.PlanStep step,
+      WorkflowCompiler.ExecutionPlan plan,
+      String input,
+      FlowState state,
+      int stepsDone) {
+    // ★ 条件分支：这一步落在某条分支上，而当前激活的不是那一条 ⇒ 整步跳过。
+    //
+    // 编译器把分支 id 沿拓扑序传播到整条链（见 WorkflowCompiler 里 branchOf 那段注释），
+    // 所以这里不需要知道「汇合点在哪」—— 汇合点的 branchHandle 是 null，天然放行。
+    // 跳过的节点**不写执行记录**：写了会让运行记录里出现「跑过但没做任何事」的节点，
+    // 而用户看记录是为了知道「这次到底走了哪条路」。
+    String active = state.read(LinearWorkflowExecutor.ACTIVE_BRANCH);
+    if (step.branchHandle() != null && active != null && !step.branchHandle().equals(active)) {
+      log.debug(
+          "#workflow 跳过分支外节点：node={} branch={} 本次走的是 {}",
+          step.nodeId(),
+          step.branchHandle(),
+          active);
+      return stepsDone;
+    }
+    // ★ 人工介入：编译器把这类节点 id 填进 interruptNodeIds（这个字段从 0.7.0 起就有，
+    //   但执行器一直没读过它 —— 于是「人工介入节点」跑起来当普通节点执行完、继续往下走，
+    //   用户看不出中间少了什么）。现在到这儿就停：抛出去，让调用方把状态存住。
+    //   ★ 必须在 registry.get 之前：中断点本来没有执行器（它要做的是「等人」，不是「跑点什么」），
+    //     放到后面会先撞「没有类型的执行器」。
+    if (plan.interruptNodeIds().contains(step.nodeId())) {
+      log.info("#workflow 停在人工介入节点：node={} type={} 已走 {} 步", step.nodeId(), step.type(), stepsDone);
+      throw new WorkflowInterrupted(executionId, step.nodeId(), step.type(), stepsDone, state);
+    }
+    NodeExecutor executor = registry.get(step.type());
+    if (executor == null) {
+      throw new IllegalStateException("没有类型 " + step.type() + " 的节点执行器");
+    }
+    try {
+      executor.execute(
+          new WorkflowNodeContext(
+              executionId, step.nodeId(), step.type(), input, state, step.config()));
+    } catch (Exception ex) {
+      // ★ 抛出去让 @Transactional 整体回滚 —— L1：失败那跑的节点记录不得显示成功。
+      throw ex instanceof RuntimeException runtime ? runtime : new IllegalStateException(ex);
+    }
+    records.save(
+        new WorkflowNodeExecutionRecord(
+            UUID.randomUUID(), executionId, step.nodeId(), step.type(), step.order(), "SUCCEEDED"));
+    return stepsDone + 1;
   }
 }
