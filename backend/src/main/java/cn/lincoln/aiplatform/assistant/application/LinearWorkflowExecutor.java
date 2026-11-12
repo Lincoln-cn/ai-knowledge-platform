@@ -46,7 +46,13 @@ public class LinearWorkflowExecutor {
    * 将来加一个节点类型时必然漏改一处。
    */
   public static final Set<String> SUPPORTED_TYPES =
-      Set.of("START_NODE", "SEARCH_DATASET_NODE", "CONDITION_NODE", "AI_CHAT_NODE", "REPLY_NODE");
+      Set.of(
+          "START_NODE",
+          "SEARCH_DATASET_NODE",
+          "CONDITION_NODE",
+          "NUMBER_CONDITION_NODE",
+          "AI_CHAT_NODE",
+          "REPLY_NODE");
 
   /** 流程状态里放「这次走的是哪条分支」的键：值 = 条件节点那条出边的 {@code sourceHandle}。 */
   public static final String ACTIVE_BRANCH = "active_branch";

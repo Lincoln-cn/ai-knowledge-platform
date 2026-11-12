@@ -183,6 +183,7 @@ class AiChatNodeExecutorTest {
             new StartNodeExecutor(),
             new SearchDatasetNodeExecutor(providerOf(mock(WorkflowSearchPort.class))),
             new ConditionNodeExecutor(mock(ChatPort.class)),
+            new NumberConditionNodeExecutor(),
             new AiChatNodeExecutor(mock(ChatPort.class)),
             new ReplyNodeExecutor())) {
       byType.put(executor.type(), executor);

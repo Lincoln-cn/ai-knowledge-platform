@@ -53,7 +53,7 @@
     "description": "按数值比较把流程分成多支",
     "category": "逻辑",
     "catalogEnabled": true,
-    "executable": false
+    "executable": true
   },
   {
     "type": "REPLY_NODE",
