@@ -1,5 +1,7 @@
 package cn.lincoln.aiplatform.assistant.application;
 
+import cn.lincoln.aiplatform.assistant.domain.WorkflowPause;
+import cn.lincoln.aiplatform.assistant.domain.WorkflowPauseRepository;
 import cn.lincoln.aiplatform.assistant.domain.WorkflowRecord;
 import cn.lincoln.aiplatform.assistant.domain.WorkflowRecordRepository;
 import java.time.Instant;
@@ -38,12 +40,17 @@ public class WorkflowDebugService {
   private final NodeTypeCatalog catalog;
   private final LinearWorkflowExecutor executor;
   private final WorkflowRecordRepository records;
+  private final WorkflowPauseRepository pauses;
 
   public WorkflowDebugService(
-      NodeTypeCatalog catalog, LinearWorkflowExecutor executor, WorkflowRecordRepository records) {
+      NodeTypeCatalog catalog,
+      LinearWorkflowExecutor executor,
+      WorkflowRecordRepository records,
+      WorkflowPauseRepository pauses) {
     this.catalog = catalog;
     this.executor = executor;
     this.records = records;
+    this.pauses = pauses;
   }
 
   /**
@@ -78,6 +85,18 @@ public class WorkflowDebugService {
       interruptedNode = interrupted.nodeId();
       output = null;
       failReason = null;
+      // ★ 把暂停那一刻的状态存住 —— 没有它，「恢复」无从谈起：
+      //   已走到的节点丢了，重跑一遍等于从头来。
+      pauses.save(
+          new WorkflowPause(
+              executionId,
+              assistantId,
+              interrupted.nodeId(),
+              interrupted.nodeType(),
+              interrupted.stateSnapshot(),
+              interrupted.stepsDone(),
+              Instant.now(),
+              null));
     } catch (RuntimeException ex) {
       failReason = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
       LOG.warn("#工作流试用 执行失败（assistant={}，execution={}）：{}", assistantId, executionId, failReason);

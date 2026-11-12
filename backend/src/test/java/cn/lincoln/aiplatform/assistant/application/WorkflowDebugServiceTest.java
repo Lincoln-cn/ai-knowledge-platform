@@ -32,6 +32,7 @@ class WorkflowDebugServiceTest {
   private NodeTypeCatalog catalog;
   private LinearWorkflowExecutor executor;
   private WorkflowRecordRepository records;
+  private cn.lincoln.aiplatform.assistant.domain.WorkflowPauseRepository pauses;
   private WorkflowDebugService service;
 
   @BeforeEach
@@ -39,8 +40,9 @@ class WorkflowDebugServiceTest {
     catalog = new NodeTypeCatalog(JsonMapper.builder().build());
     executor = Mockito.mock(LinearWorkflowExecutor.class);
     records = Mockito.mock(WorkflowRecordRepository.class);
+    pauses = Mockito.mock(cn.lincoln.aiplatform.assistant.domain.WorkflowPauseRepository.class);
     when(records.save(any(WorkflowRecord.class))).thenAnswer(inv -> inv.getArgument(0));
-    service = new WorkflowDebugService(catalog, executor, records);
+    service = new WorkflowDebugService(catalog, executor, records, pauses);
   }
 
   /** 编译不过 ⇒ 不产生运行记录（"图还不成立"不是"一次失败的运行"）。 */
