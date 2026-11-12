@@ -90,7 +90,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     label: '数值判断',
     category: '逻辑',
     catalogEnabled: true,
-    executable: false,
+    executable: true,
     singleton: false,
     canBeEntry: false,
     description: '按「变量/操作符/值」结构化条件把流程导向不同分支，运行时比值判定，并要求配置兜底分支。'
