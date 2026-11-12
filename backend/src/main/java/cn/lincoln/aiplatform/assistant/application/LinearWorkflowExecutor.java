@@ -13,12 +13,20 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 最小执行器（{@code #113} 判据 4）：只接受由 {@code START / SEARCH_DATASET / AI_CHAT / REPLY} 四种节点
- * <strong>线性</strong>组成的计划，逐节点执行、每节点写一条执行记录。
+ * 最小执行器（{@code #113} 判据 4）：接受由 {@code START / SEARCH_DATASET / AI_CHAT / CONDITION / REPLY} 五种节点
+ * 组成的计划，逐节点执行、每节点写一条执行记录。
  *
- * <p>★ <strong>只跑线性 4 节点</strong>：条件分支、循环、人工介入一律拒绝（不在 {@link #SUPPORTED_TYPES} 里、或带 {@code
- * branchHandle} 的计划直接抛）。真跑 {@code AI_CHAT / REPLY} 需接 {@code conversation} 的 {@code
- * ChatService}，会越模块边界，本版本用可注入的 {@link NodeExecutor} 假实现代替（见 {@link NodeExecutor} 注释）。
+ * <p>★ <strong>条件分支按 {@link #ACTIVE_BRANCH} 跳过</strong>（0.7.2 起）：条件节点执行时把选中的分支 id 写进 {@code
+ * FlowState} 的 {@link #ACTIVE_BRANCH}，之后带 {@code branchHandle} 且与它不等的节点直接跳过、<strong>不写执行记录</strong>
+ * （写了会让运行记录里出现"跑过但没做任何事"的节点）。{@code branchHandle} 由 {@link WorkflowCompiler} 沿入边向下传播， 汇合点（入边多于一条）回到
+ * {@code null}，因此汇合之后的节点照常执行。
+ *
+ * <p>★ <strong>AI 与回复节点是真实现，不是桩</strong>：{@code AI_CHAT} 走 {@code platform.model.ChatPort}、 {@code
+ * REPLY} 从 {@code FlowState} 取正文 —— 正因为端口在 {@code platform} 模块，才不必反过来依赖 {@code conversation} 的
+ * {@code ChatService}（那样 {@code ModuleBoundaryTest} 会红）。
+ *
+ * <p>★ <strong>仍未实现</strong>：人工介入（{@code QUESTION_NODE}，执行中暂停等待输入）与循环 —— 它们不在 {@link
+ * #SUPPORTED_TYPES} 里，发布时会被拦。
  *
  * <p>★ <strong>L1 检查点 = 每节点执行记录与业务同事务</strong>（判据 4）：{@link #execute} 上的
  * {@code @Transactional(rollbackFor = Exception.class)} 保证「执行节点 + 写节点记录」原子 —— 故意让某节点抛异常，这一跑的
