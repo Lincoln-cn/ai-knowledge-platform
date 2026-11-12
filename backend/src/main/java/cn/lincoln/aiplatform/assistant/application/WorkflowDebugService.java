@@ -66,9 +66,18 @@ public class WorkflowDebugService {
 
     String failReason = null;
     String output = null;
+    boolean paused = false;
+    String interruptedNode = null;
     try {
       FlowState state = executor.executeAndReturn(executionId, compiled.plan(), inputs);
       output = state.read("reply");
+    } catch (WorkflowInterrupted interrupted) {
+      // ★ 中断不是失败：它是「这次执行停在这里、状态还在、可以接着跑」。
+      //   所以单独一档，不能落进下面那个 catch 的 FAILED 分支。
+      paused = true;
+      interruptedNode = interrupted.nodeId();
+      output = null;
+      failReason = null;
     } catch (RuntimeException ex) {
       failReason = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
       LOG.warn("#工作流试用 执行失败（assistant={}，execution={}）：{}", assistantId, executionId, failReason);
@@ -85,7 +94,7 @@ public class WorkflowDebugService {
             inputs,
             trailToJson(trail),
             preview(output),
-            failReason == null ? "SUCCEEDED" : "FAILED",
+            statusOf(failReason, paused),
             failReason,
             elapsedMs,
             startedAt,
@@ -148,6 +157,18 @@ public class WorkflowDebugService {
    * text not null}（{@code V62__assistant_workflow_record.sql:37}）。这个差别只有真栈能发现 —— {@code
    * WorkflowDebugServiceTest} 用的是 Mock 仓储，不校验 SQL 约束，所以它在单元测试里一直是绿的。
    */
+  /**
+   * 运行记录的状态。
+   *
+   * <p>★ 三档而不是两档：中断既不是成功也不是失败 —— 它表示「停在这里、状态还在、可以接着跑」。 把它算成 FAILED 会让「试用了但停在中途」在列表里与「跑挂了」长得一样。
+   */
+  static String statusOf(String failReason, boolean paused) {
+    if (paused) {
+      return "PAUSED";
+    }
+    return failReason == null ? "SUCCEEDED" : "FAILED";
+  }
+
   private static String preview(String output) {
     if (output == null || output.isBlank()) {
       return "";

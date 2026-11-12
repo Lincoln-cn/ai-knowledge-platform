@@ -138,4 +138,20 @@ class WorkflowDebugServiceTest {
     return new WorkflowCompiler.Graph(
         List.of(start, reply), List.of(new WorkflowCompiler.Edge("n-start", "n-reply", null)));
   }
+
+  /**
+   * 中断是第三档状态（PAUSED），不是失败。
+   *
+   * <p>★ 这条测试盯的是「有人把 paused 忘了」—— 忘掉之后中断会被写成 FAILED， 而 FAILED 的约束要求 fail_reason 非空，于是记录写不进去、整次试用变成
+   * 500。
+   */
+  @Test
+  void interruptedRunIsPausedNotFailed() {
+    assertThat(WorkflowDebugService.statusOf(null, true)).isEqualTo("PAUSED");
+    assertThat(WorkflowDebugService.statusOf("模型超时", true))
+        .as("有失败原因时，中断仍然优先 —— 它表示流程没走完，而不是走完了出错")
+        .isEqualTo("PAUSED");
+    assertThat(WorkflowDebugService.statusOf(null, false)).isEqualTo("SUCCEEDED");
+    assertThat(WorkflowDebugService.statusOf("模型超时", false)).isEqualTo("FAILED");
+  }
 }
