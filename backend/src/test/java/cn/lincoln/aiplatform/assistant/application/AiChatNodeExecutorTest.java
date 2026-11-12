@@ -187,6 +187,7 @@ class AiChatNodeExecutorTest {
             new NumberConditionNodeExecutor(),
             new AiChatNodeExecutor(mock(ChatPort.class)),
             new ReplyNodeExecutor(),
+            new FormNodeExecutor(),
             new QuestionNodeExecutor())) {
       byType.put(executor.type(), executor);
     }

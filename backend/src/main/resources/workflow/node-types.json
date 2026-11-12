@@ -116,8 +116,8 @@
     "label": "表单收集",
     "description": "向用户收集多个字段",
     "category": "交互",
-    "catalogEnabled": false,
-    "executable": false
+    "catalogEnabled": true,
+    "executable": true
   },
   {
     "type": "TEXT_TO_SPEECH_NODE",

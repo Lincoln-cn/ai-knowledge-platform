@@ -37,7 +37,7 @@ class WorkflowNodeTypeTest {
   void exactlyEightAreInCatalog() throws Exception {
     long enabled =
         load().stream().filter(m -> Boolean.TRUE.equals(m.get("catalogEnabled"))).count();
-    assertThat(enabled).as("★ 画布可用的必须恰好 8 个 —— 与画布注册的类型数一致（#20 的教训）").isEqualTo(8);
+    assertThat(enabled).as("★ 画布可用的必须恰好 9 个 —— 与画布注册的类型数一致（#20 的教训）").isEqualTo(9);
   }
 
   @Test

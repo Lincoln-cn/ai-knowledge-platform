@@ -25,8 +25,9 @@ import org.springframework.transaction.annotation.Transactional;
  * REPLY} 从 {@code FlowState} 取正文 —— 正因为端口在 {@code platform} 模块，才不必反过来依赖 {@code conversation} 的
  * {@code ChatService}（那样 {@code ModuleBoundaryTest} 会红）。
  *
- * <p>★ <strong>仍未实现</strong>：人工介入（{@code QUESTION_NODE}，执行中暂停等待输入）与循环 —— 它们不在 {@link
- * #SUPPORTED_TYPES} 里，发布时会被拦。
+ * <p>★ <strong>人工介入已实现</strong>（{@code QUESTION_NODE} / {@code FORM_NODE}）：编译器把它们算成中断点，执行器跑到之前就停住、
+ * 由 {@code WorkflowResumeService} 恢复。仍<strong>未实现</strong>的只有循环 —— 它们不在 {@link #SUPPORTED_TYPES}
+ * 里，发布时会被拦。
  *
  * <p>★ <strong>L1 检查点 = 每节点执行记录与业务同事务</strong>（判据 4）：{@link #execute} 上的
  * {@code @Transactional(rollbackFor = Exception.class)} 保证「执行节点 + 写节点记录」原子 —— 故意让某节点抛异常，这一跑的
@@ -54,6 +55,7 @@ public class LinearWorkflowExecutor {
           "NUMBER_CONDITION_NODE",
           "AI_CHAT_NODE",
           "QUESTION_NODE",
+          "FORM_NODE",
           "REPLY_NODE");
 
   /** 流程状态里放「这次走的是哪条分支」的键：值 = 条件节点那条出边的 {@code sourceHandle}。 */
