@@ -32,4 +32,14 @@ public final class FlowState {
   public String read(String key) {
     return state.get(key);
   }
+
+  /**
+   * 整个变量表的一份只读快照。
+   *
+   * <p>★ 给中断用：{@code WorkflowInterrupted} 要在抛出去那一刻把状态存住， 而异常被捕获后原 {@link FlowState}
+   * 可能被复用或被回收。返回副本而不是底层 map —— 调用方改了它不该影响执行中的状态。
+   */
+  public java.util.Map<String, String> asMap() {
+    return Map.copyOf(state);
+  }
 }

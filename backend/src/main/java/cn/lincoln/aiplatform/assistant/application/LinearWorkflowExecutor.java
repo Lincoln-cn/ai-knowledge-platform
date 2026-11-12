@@ -92,11 +92,12 @@ public class LinearWorkflowExecutor {
    * <p>★ 事务语义与 {@code execute} 完全一致（节点抛异常整批回滚）。调用方若要**在失败时也留痕**，必须像 {@code WorkflowDebugService}
    * 那样先执行、再用自己的事务写记录 —— 记录放进这个事务会在失败时一起消失。
    */
-  @Transactional(rollbackFor = Exception.class)
+  @Transactional(rollbackFor = Exception.class, noRollbackFor = WorkflowInterrupted.class)
   public FlowState executeAndReturn(
       UUID executionId, WorkflowCompiler.ExecutionPlan plan, String input) {
     requireRunnablePlan(plan);
     FlowState state = new FlowState();
+    int stepsDone = 0;
     for (WorkflowCompiler.PlanStep step : plan.steps()) {
       // ★ 条件分支：这一步落在某条分支上，而当前激活的不是那一条 ⇒ 整步跳过。
       //
@@ -112,6 +113,16 @@ public class LinearWorkflowExecutor {
             step.branchHandle(),
             active);
         continue;
+      }
+      // ★ 人工介入：编译器把这类节点 id 填进 interruptNodeIds（这个字段从 0.7.0 起就有，
+      //   但执行器一直没读过它 —— 于是「人工介入节点」跑起来当普通节点执行完、继续往下走，
+      //   用户看不出中间少了什么）。现在到这儿就停：抛出去，让调用方把状态存住。
+      //   ★ 必须在 registry.get 之前：中断点本来没有执行器（它要做的是「等人」，不是「跑点什么」），
+      //     放到后面会先撞「没有类型的执行器」。
+      if (plan.interruptNodeIds().contains(step.nodeId())) {
+        log.info(
+            "#workflow 停在人工介入节点：node={} type={} 已走 {} 步", step.nodeId(), step.type(), stepsDone);
+        throw new WorkflowInterrupted(executionId, step.nodeId(), step.type(), stepsDone, state);
       }
       NodeExecutor executor = registry.get(step.type());
       if (executor == null) {
@@ -133,6 +144,7 @@ public class LinearWorkflowExecutor {
               step.type(),
               step.order(),
               "SUCCEEDED"));
+      stepsDone++;
     }
     return state;
   }
@@ -153,6 +165,11 @@ public class LinearWorkflowExecutor {
       throw new IllegalArgumentException("线性计划必须以 START_NODE 开头");
     }
     for (WorkflowCompiler.PlanStep step : steps) {
+      // ★ 中断点不算「跑不了」：人工介入节点本来就没有执行器 —— 它要做的是「等人」，
+      // 不是「跑点什么」。所以它在 SUPPORTED_TYPES 之外也照常放行，执行到它那里会停下来。
+      if (plan.interruptNodeIds().contains(step.nodeId())) {
+        continue;
+      }
       if (!SUPPORTED_TYPES.contains(step.type())) {
         throw new IllegalArgumentException("本版本只跑 " + SUPPORTED_TYPES + " 这些节点，不支持 " + step.type());
       }
