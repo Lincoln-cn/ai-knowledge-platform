@@ -53,6 +53,7 @@ public class LinearWorkflowExecutor {
           "CONDITION_NODE",
           "NUMBER_CONDITION_NODE",
           "AI_CHAT_NODE",
+          "QUESTION_NODE",
           "REPLY_NODE");
 
   /** 流程状态里放「这次走的是哪条分支」的键：值 = 条件节点那条出边的 {@code sourceHandle}。 */

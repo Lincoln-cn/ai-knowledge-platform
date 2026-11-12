@@ -37,7 +37,7 @@
     "description": "向用户追问一个问题并把回答带回流程",
     "category": "交互",
     "catalogEnabled": true,
-    "executable": false
+    "executable": true
   },
   {
     "type": "CONDITION_NODE",
