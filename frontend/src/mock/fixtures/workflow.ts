@@ -40,7 +40,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     label: '基本信息收集',
     category: '基础',
     catalogEnabled: true,
-    executable: false,
+    executable: true
     singleton: false,
     canBeEntry: false,
     description: '运行时向用户收集结构化字段（文本/单选/多选/日期/数字/文件），产出可被下游引用的变量。'

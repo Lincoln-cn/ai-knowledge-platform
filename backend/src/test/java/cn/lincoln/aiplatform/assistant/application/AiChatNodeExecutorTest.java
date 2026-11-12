@@ -181,6 +181,7 @@ class AiChatNodeExecutorTest {
     for (NodeExecutor executor :
         List.of(
             new StartNodeExecutor(),
+            new BaseNodeExecutor(),
             new SearchDatasetNodeExecutor(providerOf(mock(WorkflowSearchPort.class))),
             new ConditionNodeExecutor(mock(ChatPort.class)),
             new NumberConditionNodeExecutor(),

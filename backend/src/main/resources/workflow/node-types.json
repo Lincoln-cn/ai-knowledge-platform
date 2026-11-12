@@ -13,7 +13,7 @@
     "description": "只做数据传递的占位节点，用于整理连线",
     "category": "基础",
     "catalogEnabled": true,
-    "executable": false
+    "executable": true
   },
   {
     "type": "AI_CHAT_NODE",

@@ -48,6 +48,7 @@ public class LinearWorkflowExecutor {
   public static final Set<String> SUPPORTED_TYPES =
       Set.of(
           "START_NODE",
+          "BASE_NODE",
           "SEARCH_DATASET_NODE",
           "CONDITION_NODE",
           "NUMBER_CONDITION_NODE",
