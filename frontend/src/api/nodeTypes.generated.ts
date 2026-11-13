@@ -97,6 +97,16 @@ export interface NodeConfigField {
   readonly required: boolean;
   /** 只给面板用：执行器不读它（#336 的悬空字段就靠这一格表达）。 */
   readonly panelOnly: boolean;
+  /** 长文本的编辑形态：`markdown` 用 Markdown 编辑器，缺省是普通输入框。 */
+  readonly editor?: string;
+  /** 选项从哪来：`knowledge-bases`（全部知识库）/ `documents`（所选库里的文档）。 */
+  readonly optionsSource?: string;
+  /** 候选项依赖哪个字段（文档依赖库）。依赖为空 ⇒ 候选也为空。 */
+  readonly dependsOn?: string;
+  /** 固定选项（如回复形态只有一种取值）。 */
+  readonly options?: readonly string[];
+  /** 面板上的说明文字。 */
+  readonly hint?: string;
 }
 
 export const NODE_CONFIG_FIELDS: Record<ImplementedNodeType, readonly NodeConfigField[]> = {
@@ -133,12 +143,13 @@ export const NODE_CONFIG_FIELDS: Record<ImplementedNodeType, readonly NodeConfig
     { key: "fallbackBranchId", label: "兜底分支", type: "string", required: false, panelOnly: false },
   ],
   REPLY_NODE: [
-    { key: "content", label: "回复内容", type: "string", required: true, panelOnly: false },
-    { key: "replyType", label: "回复形态", type: "string", required: false, panelOnly: false },
+    { key: "content", label: "回复内容", type: "string", required: true, panelOnly: false, editor: "markdown" },
+    { key: "replyType", label: "回复形态", type: "string", required: false, panelOnly: false, options: ["content"], hint: "当前只有「自定义内容」一种。缺省即它，不必手选" },
+    { key: "asResult", label: "返回内容", type: "boolean", required: false, panelOnly: true, hint: "打开后这条回复作为流程结果呈现给用户" },
   ],
   DOCUMENT_EXTRACT_NODE: [
-    { key: "kbId", label: "知识库", type: "uuid", required: false, panelOnly: true },
-    { key: "docId", label: "文档", type: "uuid", required: true, panelOnly: false },
+    { key: "kbId", label: "知识库", type: "uuid", required: false, panelOnly: true, optionsSource: "knowledge-bases", hint: "先选库才能选文档。这一项只给面板用，执行器不读" },
+    { key: "docId", label: "文档", type: "uuid", required: true, panelOnly: false, optionsSource: "documents", dependsOn: "kbId", hint: "只有已解析出正文的文档能用；正文会写进流程变量 document_markdown" },
   ],
   FORM_NODE: [
     { key: "formFields", label: "收集字段", type: "object-list", required: false, panelOnly: true },

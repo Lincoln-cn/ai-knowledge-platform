@@ -266,6 +266,14 @@ export interface ReplyNodeConfig {
    * 于是「直接给契约形状」的调用方一定会碰到"缺少回复形态"（`#335`）。
    */
   replyType?: 'content'
+  /**
+   * 这条回复是否作为流程的结果呈现给用户。
+   *
+   * 键名与表单节点的同名（表单那边叫 `asResult`），旧画布名是 `is_result`。
+   * 以前画布上的开关直接读写 `is_result`、契约里没有这一项，于是这一格
+   * 只存在于"画布内部"（`#337` 第二步 B1 起统一到契约名）。
+   */
+  asResult: boolean
 }
 
 /**

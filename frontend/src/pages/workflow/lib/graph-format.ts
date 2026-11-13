@@ -542,10 +542,11 @@ function replyToLegacy(config: ReplyNodeConfig & Record<string, any>): LegacyBun
     node_data: {
       content: config.content ?? '',
       // 契约 replyType ↔ 旧 `reply_type`（后端两个名字都认，契约名优先）
-      reply_type: config.replyType ?? 'content',
-      // 契约缺：引用字段 / 是否返回
-      fields: config.fields ?? [],
-      is_result: config.is_result ?? false
+      replyType: config.replyType ?? 'content',
+      // 契约 asResult ↔ 旧 `is_result`：写契约名，旧名只在读取时兼容（#337 第二步 B1 的规矩）
+      asResult: config.asResult ?? false,
+      // 契约缺：引用字段
+      fields: config.fields ?? []
     }
   }
 }
@@ -556,9 +557,9 @@ function replyFromLegacy(nd: any): ReplyNodeConfig & Record<string, any> {
     // 今天只有「自定义内容」一种形态，所以恒为 content；旧数据里的其它取值还没有实现，
     // 等实现那天再在这里分支，不要提前把未实现的形态悄悄抹平成 content
     replyType: 'content',
+    asResult: nd?.asResult ?? nd?.is_result ?? false,
     // 契约缺以下字段，透传
-    fields: nd?.fields ?? [],
-    is_result: nd?.is_result ?? false
+    fields: nd?.fields ?? []
   }
 }
 

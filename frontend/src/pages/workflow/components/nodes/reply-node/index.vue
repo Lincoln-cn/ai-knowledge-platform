@@ -1,112 +1,28 @@
 <template>
-    <NodeContainer :nodeModel="nodeModel">
-        <el-card shadow="never" class="card-never" style="--el-card-padding: 12px">
-            <el-form @submit.prevent :model="form_data" label-position="top" require-asterisk-position="right"
-                label-width="auto" ref="replyNodeFormRef">
-                <el-form-item label="回复内容">
-                    <template #label>
-                        <div class="flex-between">
-                            <span>回复内容</span>
-                            <el-select v-model="form_data.reply_type" size="small"
-                                style="width: 85px">
-                                <el-option label="引用变量" value="referencing" />
-                                <el-option label="自定义" value="content" />
-                            </el-select>
-                        </div>
-                    </template>
-
-                    <MdEditorMagnify v-if="form_data.reply_type === 'content'" @wheel="wheel" title="回复内容"
-                        v-model="form_data.content" style="height: 150px" @submitDialog="submitDialog" />
-                    <NodeCascader v-else ref="nodeCascaderRef" :nodeModel="nodeModel" class="w-full"
-                        placeholder="请选择检索问题" v-model="form_data.fields" />
-                </el-form-item>
-                <el-form-item label="返回内容" @click.prevent>
-                    <template #label>
-                        <div class="flex align-center">
-                            <div class="mr-4">
-                                <span>返回内容<span class="danger">*</span></span>
-                            </div>
-                            <el-tooltip effect="dark" placement="right" popper-class="max-w-200">
-                                <template #content>
-                                    关闭后该节点的内容则不输出给用户。
-                                    如果你想让用户看到该节点的输出内容，请打开开关。
-                                </template>
-                                <WorkFlowIcon iconName="app-warning" class="app-warning-icon"></WorkFlowIcon>
-                            </el-tooltip>
-                        </div>
-                    </template>
-                    <el-switch size="small" v-model="form_data.is_result" />
-                </el-form-item>
-            </el-form>
-        </el-card>
-    </NodeContainer>
+  <NodeContainer :nodeModel="nodeModel">
+    <el-card shadow="never" class="card-never" style="--el-card-padding: 12px">
+      <SchemaForm :node-model="nodeModel" :fields="fields" />
+    </el-card>
+  </NodeContainer>
 </template>
+
 <script setup lang="ts">
-import { set } from 'lodash-es'
 import NodeContainer from '@/pages/workflow/components/common/NodeContainer.vue'
-import NodeCascader from '@/pages/workflow/components/common/NodeCascader.vue'
-import { ref, computed, onMounted } from 'vue'
-import { isLastNode } from '@/pages/workflow/components/common/data'
+import SchemaForm from '@/pages/workflow/components/common/SchemaForm.vue'
+import { NODE_CONFIG_FIELDS } from '@/api/workflow'
 
-const props = defineProps<{ nodeModel: any }>()
+/**
+ * 回复节点面板：控件全部由目录（`node-types.json`）声明，见 `SchemaForm` 的说明。
+ *
+ * ★ 这里**去掉**了原来那个「引用变量 / 自定义」的下拉与 `NodeCascader`。
+ *   不是顺手删的：后端 `ReplyNodeExecutor` 对 `replyType != content` 直接抛
+ *   「按上游字段回复要等 AI 对话节点落地」，而 `fields` 这个存值位置后端一个字都不读。
+ *   也就是说那一支是「选了能存、一跑就抛」的假功能 —— 留着一个跑不通的选项，
+ *   比没有这个选项更糟：它让用户以为配好了。
+ *   等真的实现了「按上游字段回复」，它应该在 `configFields` 里作为第二种
+ *   `replyType` 取值出现，并配一个 `visibleWhen` 之类的显隐声明 —— 而不是回到手写面板。
+ */
+defineProps<{ nodeModel: any }>()
 
-const wheel = (e: any) => {
-    if (e.ctrlKey === true) {
-        e.preventDefault()
-        return true
-    } else {
-        e.stopPropagation()
-        return true
-    }
-}
-const form = {
-    reply_type: 'content',
-    content: '',
-    fields: [],
-    is_result: false
-}
-
-const form_data = computed({
-    get: () => {
-        if (props.nodeModel.properties.node_data) {
-            return props.nodeModel.properties.node_data
-        } else {
-            set(props.nodeModel.properties, 'node_data', form)
-        }
-        return props.nodeModel.properties.node_data
-    },
-    set: (value) => {
-        set(props.nodeModel.properties, 'node_data', value)
-    }
-})
-
-function submitDialog(val: string) {
-    set(props.nodeModel.properties.node_data, 'content', val)
-}
-
-const replyNodeFormRef = ref()
-const nodeCascaderRef = ref()
-const validate = () => {
-    return Promise.all([
-        nodeCascaderRef.value ? nodeCascaderRef.value.validate() : Promise.resolve(''),
-        replyNodeFormRef.value?.validate()
-    ]).catch((err: any) => {
-        return Promise.reject({ node: props.nodeModel, errMessage: err })
-    })
-}
-
-onMounted(() => {
-    if (typeof props.nodeModel.properties.node_data?.is_result === 'undefined') {
-        if (isLastNode(props.nodeModel)) {
-            set(props.nodeModel.properties.node_data, 'is_result', true)
-        }
-    }
-
-    set(props.nodeModel, 'validate', validate)
-})
+const fields = NODE_CONFIG_FIELDS.REPLY_NODE
 </script>
-<style lang="scss" scoped>
-:deep(.el-form-item--label-top .el-form-item__label) {
-    padding-right: 0;
-}
-</style>

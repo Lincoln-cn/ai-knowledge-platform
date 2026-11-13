@@ -106,7 +106,27 @@ public class NodeTypeCatalog {
    * @param required 面板上必填（执行器另有自己的运行期判断，这里只描述"填不填得完"）
    * @param panelOnly ★ 只给面板用、执行器<strong>不读</strong> —— 让"悬空字段"从靠人记变成可声明的状态 （`#336` 的 {@code kbIds}
    *     与 {@code DOCUMENT_EXTRACT_NODE} 的 {@code kbId} 都是这一类）
+   * @param editor 长文本的编辑形态：{@code markdown} 用 Markdown 编辑器，空则普通输入框
+   * @param optionsSource 选项从哪来：{@code knowledge-bases}（全部知识库）/ {@code documents}（所选库里的文档）。 空则用
+   *     {@link #options}
+   * @param dependsOn 当前字段的候选项依赖哪个字段（{@code documents} 依赖库字段）。依赖为空时候选也为空， 这是"必然非法"的选项不放进候选的唯一表达方式
+   * @param options 固定选项（如回复形态只有一种取值时）
+   * @param hint 面板上的说明文字（"只有已解析出正文的文档能用"这类）
    */
   public record ConfigField(
-      String key, String label, String type, boolean required, boolean panelOnly) {}
+      String key,
+      String label,
+      String type,
+      boolean required,
+      boolean panelOnly,
+      String editor,
+      String optionsSource,
+      String dependsOn,
+      List<String> options,
+      String hint) {
+
+    public ConfigField {
+      options = options == null ? List.of() : List.copyOf(options);
+    }
+  }
 }

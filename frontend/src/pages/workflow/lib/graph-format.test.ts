@@ -155,3 +155,38 @@ test('开场白以基础节点上的编辑为准，写回开始节点的契约�
   assert.ok(startBack, '开始节点不该在往返里消失')
   assert.equal((startBack.config as Record<string, unknown>).prologue, '新开场白')
 })
+
+test('回复节点把「是否返回」写成契约名 asResult，旧画布的 is_result 仍能读出来', () => {
+  // ★ 这条钉的是 B2 的一处具体迁移：面板上的开关以前直接读写 node_data.is_result
+  //   （契约里根本没有这一项），现在与表单节点同名，都叫 asResult。
+  const lf = toLogicFlow(
+    graphOf([nodeOf('REPLY_NODE', { content: '结论如下', replyType: 'content', asResult: false })])
+  )
+  const nodeData = (only(lf.nodes).properties as Record<string, unknown>).node_data as Record<
+    string,
+    unknown
+  >
+
+  assert.equal(nodeData.asResult, false, '写进画布的名字必须是 asResult')
+  assert.equal(nodeData.is_result, undefined, '不该再写旧画布名 is_result')
+  assert.equal(nodeData.replyType, 'content', '回复形态也写契约名')
+
+  // 往返保住取值（不是恒真的 true）
+  const back = fromLogicFlow(lf)
+  assert.equal((only(back.nodes).config as Record<string, unknown>).asResult, false)
+
+  // 存量草稿只有旧名时，读回来要等价
+  const legacy = {
+    nodes: [
+      {
+        id: 'n-reply',
+        type: 'REPLY_NODE',
+        x: 0,
+        y: 0,
+        properties: { node_data: { content: '旧草稿', reply_type: 'content', is_result: true } }
+      }
+    ],
+    edges: []
+  }
+  assert.equal((only(fromLogicFlow(legacy as never).nodes).config as Record<string, unknown>).asResult, true)
+})

@@ -129,9 +129,21 @@ function build() {
   lines.push('  readonly required: boolean;');
   lines.push('  /** 只给面板用：执行器不读它（#336 的悬空字段就靠这一格表达）。 */');
   lines.push('  readonly panelOnly: boolean;');
+  lines.push('  /** 长文本的编辑形态：`markdown` 用 Markdown 编辑器，缺省是普通输入框。 */');
+  lines.push('  readonly editor?: string;');
+  lines.push('  /** 选项从哪来：`knowledge-bases`（全部知识库）/ `documents`（所选库里的文档）。 */');
+  lines.push('  readonly optionsSource?: string;');
+  lines.push('  /** 候选项依赖哪个字段（文档依赖库）。依赖为空 ⇒ 候选也为空。 */');
+  lines.push('  readonly dependsOn?: string;');
+  lines.push('  /** 固定选项（如回复形态只有一种取值）。 */');
+  lines.push('  readonly options?: readonly string[];');
+  lines.push('  /** 面板上的说明文字。 */');
+  lines.push('  readonly hint?: string;');
   lines.push('}');
   lines.push('');
-  lines.push('export const NODE_CONFIG_FIELDS: Record<ImplementedNodeType, readonly NodeConfigField[]> = {');
+  lines.push(
+    'export const NODE_CONFIG_FIELDS: Record<ImplementedNodeType, readonly NodeConfigField[]> = {'
+  );
   for (const type of implemented) {
     const fields = byType.get(type).configFields ?? [];
     if (fields.length === 0) {
@@ -140,10 +152,19 @@ function build() {
     }
     lines.push(`  ${type}: [`);
     for (const field of fields) {
+      const extras = [];
+      if (field.editor) extras.push(`editor: ${s(field.editor)}`);
+      if (field.optionsSource) extras.push(`optionsSource: ${s(field.optionsSource)}`);
+      if (field.dependsOn) extras.push(`dependsOn: ${s(field.dependsOn)}`);
+      if (Array.isArray(field.options) && field.options.length > 0) {
+        extras.push(`options: [${field.options.map(s).join(', ')}]`);
+      }
+      if (field.hint) extras.push(`hint: ${s(field.hint)}`);
+      const tail = extras.length > 0 ? `, ${extras.join(', ')}` : '';
       lines.push(
         `    { key: ${s(field.key)}, label: ${s(field.label)}, type: ${s(field.type)}, required: ${
           field.required === true
-        }, panelOnly: ${field.panelOnly === true} },`
+        }, panelOnly: ${field.panelOnly === true}${tail} },`
       );
     }
     lines.push('  ],');

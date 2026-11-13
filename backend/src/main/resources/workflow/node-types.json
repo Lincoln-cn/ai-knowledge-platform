@@ -236,14 +236,27 @@
         "label": "回复内容",
         "type": "string",
         "required": true,
-        "panelOnly": false
+        "panelOnly": false,
+        "editor": "markdown"
       },
       {
         "key": "replyType",
         "label": "回复形态",
         "type": "string",
         "required": false,
-        "panelOnly": false
+        "panelOnly": false,
+        "options": [
+          "content"
+        ],
+        "hint": "当前只有「自定义内容」一种。缺省即它，不必手选"
+      },
+      {
+        "key": "asResult",
+        "label": "返回内容",
+        "type": "boolean",
+        "required": false,
+        "panelOnly": true,
+        "hint": "打开后这条回复作为流程结果呈现给用户"
       }
     ],
     "outputs": [
@@ -295,14 +308,19 @@
         "label": "知识库",
         "type": "uuid",
         "panelOnly": true,
-        "required": false
+        "required": false,
+        "optionsSource": "knowledge-bases",
+        "hint": "先选库才能选文档。这一项只给面板用，执行器不读"
       },
       {
         "key": "docId",
         "label": "文档",
         "type": "uuid",
         "required": true,
-        "panelOnly": false
+        "panelOnly": false,
+        "optionsSource": "documents",
+        "dependsOn": "kbId",
+        "hint": "只有已解析出正文的文档能用；正文会写进流程变量 document_markdown"
       }
     ],
     "outputs": [

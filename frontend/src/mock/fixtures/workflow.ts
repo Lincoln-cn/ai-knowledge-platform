@@ -317,7 +317,8 @@ const validNodes: WorkflowNode[] = [
     position: { x: 1500, y: 60 },
     config: {
       content:
-        '⚠️ **高风险提示**\n\n{{ai-chat-1.answer}}\n\n建议在签署前完成条款修改并走法务复核。依据见：{{search-1.snippets}}'
+        '⚠️ **高风险提示**\n\n{{ai-chat-1.answer}}\n\n建议在签署前完成条款修改并走法务复核。依据见：{{search-1.snippets}}',
+      asResult: true
     }
   },
   {
@@ -326,7 +327,8 @@ const validNodes: WorkflowNode[] = [
     title: '一般结论',
     position: { x: 1500, y: 240 },
     config: {
-      content: '✅ **一般结论**\n\n{{ai-chat-1.answer}}\n\n如需逐条修改建议，请补充完整条款文本。'
+      content: '✅ **一般结论**\n\n{{ai-chat-1.answer}}\n\n如需逐条修改建议，请补充完整条款文本。',
+      asResult: true
     }
   },
   {
@@ -336,7 +338,8 @@ const validNodes: WorkflowNode[] = [
     position: { x: 1500, y: 420 },
     config: {
       content:
-        '已收到你的问题。\n\n{{ai-chat-1.answer}}\n\n若这不是你想问的，请换个说法再试一次。'
+        '已收到你的问题。\n\n{{ai-chat-1.answer}}\n\n若这不是你想问的，请换个说法再试一次。',
+      asResult: true
     }
   }
 ]
@@ -442,7 +445,7 @@ export const sampleInvalidGraph: WorkflowGraph = {
       type: 'REPLY_NODE',
       title: '孤立节点',
       position: { x: 320, y: 400 },
-      config: { content: '我是孤立节点，没有任何连线。' }
+      config: { content: '我是孤立节点，没有任何连线。', asResult: true }
     },
     {
       id: 'condition-x',
@@ -579,7 +582,7 @@ export const workflowVersions: Record<string, WorkflowVersionRecord[]> = {
             type: 'REPLY_NODE',
             title: '结论',
             position: { x: 600, y: 160 },
-            config: { content: '{{ai-chat-1.answer}}' }
+            config: { content: '{{ai-chat-1.answer}}', asResult: true }
           }
         ],
         edges: [

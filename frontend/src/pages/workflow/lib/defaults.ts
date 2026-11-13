@@ -110,7 +110,9 @@ export function defaultConfigFor(type: ImplementedNodeType): WorkflowNode['confi
       const config: ReplyNodeConfig = {
         content: '已为你整理如下：\n\n{{search-dataset-node-1.snippets}}\n\n如需进一步说明，请补充背景信息。',
         // 显式写出形态：后端按 `replyType` 判断能不能跑，见 `#335`
-        replyType: 'content'
+        replyType: 'content',
+        // 默认作为结果输出：回复节点的用途就是把话交给用户（旧画布名 is_result）
+        asResult: true
       }
       return config
     }

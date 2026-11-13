@@ -245,7 +245,8 @@ export const workflowDrafts: Record<string, WorkflowGraph> = {
         title: '指定回复',
         position: { x: 680, y: 160 },
         config: {
-          content: '研判完成。{{n-chat.answer}}'
+          content: '研判完成。{{n-chat.answer}}',
+          asResult: true
         }
       }
     ],

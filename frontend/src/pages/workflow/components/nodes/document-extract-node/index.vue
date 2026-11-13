@@ -2,176 +2,49 @@
   <NodeContainer :nodeModel="nodeModel">
     <!--
       画布卡片的只读摘要：这个节点最该一眼看到的是「抽哪一篇」。
-      ★ 不用 docId 本身（UUID 看不出来是什么），用文档名。
+      ★ 不用 docId 本身（UUID 看不出来是什么），用文档名；名字由表单组件回传。
     -->
     <template #essential>
       文档 ·
-      <template v-if="selectedDocument">{{ selectedDocument.name }}</template>
+      <template v-if="documentLabel">{{ documentLabel }}</template>
       <template v-else>未选择</template>
     </template>
 
     <h5 class="title-decoration-1 mb-8">节点设置</h5>
     <el-card shadow="never" class="card-never">
-      <el-form @submit.prevent :model="form_data" label-position="top" ref="DocExtractFormRef">
-        <el-form-item label="选择知识库">
-          <el-select
-            :model-value="form_data.kbId"
-            :loading="kbLoading"
-            placeholder="请选择知识库"
-            class="w-full"
-            @change="pickKb"
-          >
-            <el-option v-for="kb in kbList" :key="kb.id" :label="kb.name" :value="kb.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item
-          label="选择文档"
-          prop="docId"
-          :rules="{ required: true, message: '请选择要抽取正文的文档', trigger: 'change' }"
-        >
-          <el-select
-            :model-value="form_data.docId"
-            :loading="docLoading"
-            :disabled="!form_data.kbId"
-            :placeholder="form_data.kbId ? '请选择文档' : '先选知识库'"
-            class="w-full"
-            @change="pickDoc"
-          >
-            <el-option
-              v-for="doc in docList"
-              :key="doc.id"
-              :label="docOptionLabel(doc)"
-              :value="doc.id"
-            />
-          </el-select>
-          <div class="doc-hint">
-            ★ 只有已经解析出正文的文档才能用：还在解析中的文档会在运行时报「还没有解析出正文」，
-            括号里是它的当前状态。想先跑通流程，选状态为已完成的那篇。
-            <br />
-            ★ 正文会写进流程变量 document_markdown，下游节点按
-            「节点id.字段名」的方式引用它（节点id 见卡片左上角，如 doc-extract-1）。
-          </div>
-        </el-form-item>
-      </el-form>
+      <SchemaForm
+        ref="schemaFormRef"
+        :node-model="nodeModel"
+        :fields="fields"
+        @changed="schemaTick++"
+      />
     </el-card>
   </NodeContainer>
 </template>
 
 <script setup lang="ts">
-import { set } from 'lodash-es'
+import { computed, ref } from 'vue'
 import NodeContainer from '@/pages/workflow/components/common/NodeContainer.vue'
-import type { FormInstance } from 'element-plus'
-import { ref, computed, onMounted } from 'vue'
-import { listKnowledgeBases } from '@/api/knowledge'
-import { listDocuments } from '@/api/ingestion'
-
-const props = defineProps<{ nodeModel: any }>()
+import SchemaForm from '@/pages/workflow/components/common/SchemaForm.vue'
+import { NODE_CONFIG_FIELDS } from '@/api/workflow'
 
 /**
- * `props.nodeModel` 是 LogicFlow 的模型对象，不是 Vue 的响应式对象：
- * 只改 `properties.node_data` 里的字段，模板不会重渲染（同 search-dataset-node 的坑，
- * 那边留了详细说明）。这里同样用一个显式版本号 `tick` 建依赖。
+ * 这个面板的控件、标签、必填、候选项来源、提示文案全部来自目录（`node-types.json`）：
+ * 库 → 文档的级联由字段上的 `optionsSource` / `dependsOn` 表达。
+ *
+ * ★ 以前这里有 177 行手写表单（自己的 tick、自己的 kbList/docList、自己的校验、
+ *   自己的"未解析也列出来"逻辑）。那些逻辑不是节点特有的，是所有"选库里某个东西"的面板共用的。
  */
-const tick = ref(0)
+defineProps<{ nodeModel: any }>()
 
-const DocExtractFormRef = ref<FormInstance>()
+const fields = NODE_CONFIG_FIELDS.DOCUMENT_EXTRACT_NODE
 
-const form_data = computed({
-  get: () => {
-    void tick.value
-    if (props.nodeModel.properties.node_data) {
-      return props.nodeModel.properties.node_data
-    }
-    set(props.nodeModel.properties, 'node_data', { kbId: null, docId: null })
-    return props.nodeModel.properties.node_data
-  },
-  set: (value) => {
-    set(props.nodeModel.properties, 'node_data', value)
-    tick.value++
-  }
-})
+const schemaFormRef = ref<InstanceType<typeof SchemaForm>>()
+/** 表单组件改了值之后 +1，让下面的 computed 重新去问它要显示名。 */
+const schemaTick = ref(0)
 
-const kbList = ref<any[]>([])
-const docList = ref<any[]>([])
-const kbLoading = ref(false)
-const docLoading = ref(false)
-
-const selectedDocument = computed(() => {
-  void tick.value
-  const id = form_data.value?.docId
-  return docList.value.find((d) => d.id === id) ?? null
-})
-
-function pickKb(id: string) {
-  set(props.nodeModel.properties.node_data, 'kbId', id)
-  // 换库就把文档清掉 —— 留着上一库的 id 会指向一篇别的库的文档
-  set(props.nodeModel.properties.node_data, 'docId', null)
-  tick.value++
-  loadDocuments(id)
-}
-
-function pickDoc(id: string) {
-  set(props.nodeModel.properties.node_data, 'docId', id)
-  tick.value++
-}
-
-async function loadKbs() {
-  kbLoading.value = true
-  try {
-    const result = await listKnowledgeBases({ page: 1, size: 100 })
-    kbList.value = result.list ?? []
-  } catch {
-    // 库列表拿不到不该让画布崩掉；下拉空着，用户可以重开面板再试
-    kbList.value = []
-  } finally {
-    kbLoading.value = false
-  }
-}
-
-async function loadDocuments(kbId: string) {
-  if (!kbId) {
-    docList.value = []
-    return
-  }
-  docLoading.value = true
-  try {
-    const result = await listDocuments(kbId, { page: 1, size: 100 })
-    docList.value = result.list ?? []
-  } catch {
-    docList.value = []
-  } finally {
-    docLoading.value = false
-  }
-}
-
-/** 未解析完的文档照样列出来，但把状态写在名字后面 —— 隐藏它们会让用户以为文档丢了 */
-function docOptionLabel(doc: any): string {
-  return doc.status === 'SUCCEEDED' ? doc.name : `${doc.name}（${doc.status}）`
-}
-
-const validate = () => {
-  return DocExtractFormRef.value?.validate().catch((err) => {
-    return Promise.reject({ node: props.nodeModel, errMessage: err })
-  })
-}
-
-onMounted(() => {
-  loadKbs()
-  const kbId = props.nodeModel.properties?.node_data?.kbId
-  if (kbId) loadDocuments(kbId)
-  set(props.nodeModel, 'validate', validate)
+const documentLabel = computed(() => {
+  void schemaTick.value
+  return schemaFormRef.value?.labelOf('docId') ?? ''
 })
 </script>
-
-<style lang="scss" scoped>
-:deep(.el-form-item--label-top .el-form-item__label) {
-  padding-right: 0;
-}
-
-.doc-hint {
-  margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--el-text-color-secondary);
-}
-</style>

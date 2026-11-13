@@ -165,8 +165,10 @@ export const replyNode = {
     config: {
       fields: [
         {
-          label: '内容',
-          value: 'answer',
+          // 这个节点产出的是 `reply`（后端 `ReplyNodeExecutor.REPLY_KEY`，目录 outputs 也是它）；
+          // 以前这里写 `answer` 是 AI 对话节点的输出 —— 下游按「节点id.变量名」引用时永远取不到值。
+          label: '回复内容',
+          value: 'reply',
         },
       ],
     },
