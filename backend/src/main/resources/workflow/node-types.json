@@ -98,10 +98,10 @@
   {
     "type": "DOCUMENT_EXTRACT_NODE",
     "label": "文档抽取",
-    "description": "从文档里抽取结构化字段",
+    "description": "把库里选定文档的正文抽出来交给下游",
     "category": "检索",
-    "catalogEnabled": false,
-    "executable": false
+    "catalogEnabled": true,
+    "executable": true
   },
   {
     "type": "IMAGE_UNDERSTAND_NODE",

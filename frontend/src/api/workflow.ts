@@ -21,7 +21,7 @@ import type { PageQuery, PageResult } from './types'
 
 /* ────────────────────────── 节点类型 ────────────────────────── */
 
-/** 已实现的节点类型（8 种） */
+/** 已实现的节点类型（9 种） */
 export type ImplementedNodeType =
   | 'START_NODE'
   | 'BASE_NODE'
@@ -30,15 +30,15 @@ export type ImplementedNodeType =
   | 'QUESTION_NODE'
   | 'CONDITION_NODE'
   | 'NUMBER_CONDITION_NODE'
+  | 'DOCUMENT_EXTRACT_NODE'
   | 'REPLY_NODE'
 
-/** 规划中的节点类型（10 种）—— V1.0 之后逐批实现 */
+/** 规划中的节点类型（9 种）—— V1.0 之后逐批实现 */
 export type PlannedNodeType =
   | 'FUNCTION_LIB_NODE'
   | 'FUNCTION_NODE'
   | 'RERANKER_NODE'
   | 'APPLICATION_NODE'
-  | 'DOCUMENT_EXTRACT_NODE'
   | 'IMAGE_UNDERSTAND_NODE'
   | 'FORM_NODE'
   | 'TEXT_TO_SPEECH_NODE'
@@ -223,6 +223,27 @@ export interface ReplyNodeConfig {
   content: string
 }
 
+/**
+ * 文档抽取节点（`DOCUMENT_EXTRACT_NODE`，`#333`）。
+ *
+ * ★ 配置里给的是**文档 id 而不是文件**：执行时回库取已解析的正文。理由三条 ——
+ * ① 「解析库里已有的文档」比「解析刚上传的附件」常见（后者是会话附件链的事）；
+ * ② 不往流程状态里塞 base64（会撑爆 `FlowState`），也不收服务器路径（那等于凭空多一个文件系统概念，
+ * 且前端传路径就能读任意文件）；
+ * ③ id 是 UUID，权限将来可由知识库可见性判据兜住，传路径做不到。
+ */
+export interface DocumentExtractNodeConfig {
+  /**
+   * 界面回填用：上一次从哪个库选的文档。
+   *
+   * ★ 执行器**不读**它（后端只按 `docId` 回库取正文）。加它是因为节点面板重新打开时，
+   * 没有库 id 就没法把文档下拉列出来 —— 那样每次编辑都得先重选一遍库。
+   */
+  kbId: string | null
+  /** 要抽正文的文档 id（`kb_document.id`）；`null` 表示还没选 */
+  docId: string | null
+}
+
 /** 按节点类型取配置类型。规划中的节点暂无配置定义 */
 export type NodeConfigOf<T extends WorkflowNodeType> =
   T extends 'START_NODE' ? StartNodeConfig
@@ -233,6 +254,7 @@ export type NodeConfigOf<T extends WorkflowNodeType> =
   : T extends 'CONDITION_NODE' ? ConditionNodeConfig
   : T extends 'NUMBER_CONDITION_NODE' ? NumberConditionNodeConfig
   : T extends 'REPLY_NODE' ? ReplyNodeConfig
+  : T extends 'DOCUMENT_EXTRACT_NODE' ? DocumentExtractNodeConfig
   : Record<string, never>
 
 export interface WorkflowNode<T extends WorkflowNodeType = WorkflowNodeType> {

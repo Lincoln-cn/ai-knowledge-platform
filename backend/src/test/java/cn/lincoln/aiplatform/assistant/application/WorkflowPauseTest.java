@@ -84,8 +84,11 @@ class WorkflowPauseTest {
     WorkflowNodeExecutionRepository records = mock(WorkflowNodeExecutionRepository.class);
     LinearWorkflowExecutor executor =
         new LinearWorkflowExecutor(records, List.of(new StartNodeExecutor()));
-    WorkflowCompiler.PlanStep question =
-        new WorkflowCompiler.PlanStep("n-ask", "QUESTION_NODE", 1, null, Map.of());
+    // ★ 类型名刻意编一个**永不存在**的：这条测试要证的是"不在 SUPPORTED_TYPES 里就拒"，
+    //   若拿 QUESTION_NODE / DOCUMENT_EXTRACT_NODE 这类真实类型来当反例，等它被实现的那天，
+    //   这条测试会从"该拒"变成"该放行"，红得莫名其妙（上一轮 QUESTION_NODE 就踩过这一脚）。
+    WorkflowCompiler.PlanStep future =
+        new WorkflowCompiler.PlanStep("n-future", "FUTURE_NODE", 1, null, Map.of());
 
     assertThatThrownBy(
             () ->
@@ -95,7 +98,7 @@ class WorkflowPauseTest {
                         List.of(
                             new WorkflowCompiler.PlanStep(
                                 "n-start", "START_NODE", 0, null, Map.of()),
-                            question),
+                            future),
                         List.of()),
                     "你好"))
         .isInstanceOf(IllegalArgumentException.class)

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cn.lincoln.aiplatform.platform.assistant.WorkflowSearchPort;
+import cn.lincoln.aiplatform.platform.knowledge.DocumentExtractPort;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import java.time.Duration;
 import java.util.List;
@@ -188,6 +189,7 @@ class AiChatNodeExecutorTest {
             new AiChatNodeExecutor(mock(ChatPort.class)),
             new ReplyNodeExecutor(),
             new FormNodeExecutor(),
+            new DocumentExtractNodeExecutor(providerOf(mock(DocumentExtractPort.class))),
             new QuestionNodeExecutor())) {
       byType.put(executor.type(), executor);
     }
@@ -195,31 +197,34 @@ class AiChatNodeExecutorTest {
     assertThat(byType.keySet()).isEqualTo(LinearWorkflowExecutor.SUPPORTED_TYPES);
   }
 
-  /** 造一个只吐一个实例的 {@code ObjectProvider}：{@code SearchDatasetNodeExecutor} 要的是它而不是裸端口。 */
-  private static ObjectProvider<WorkflowSearchPort> providerOf(WorkflowSearchPort port) {
+  /**
+   * 造一个只吐一个实例的 {@code ObjectProvider}：{@code SearchDatasetNodeExecutor} / {@code
+   * DocumentExtractNodeExecutor} 要的是它而不是裸端口。
+   */
+  private static <T> ObjectProvider<T> providerOf(T port) {
     return new ObjectProvider<>() {
       @Override
-      public WorkflowSearchPort getObject(Object... args) {
+      public T getObject(Object... args) {
         return port;
       }
 
       @Override
-      public WorkflowSearchPort getIfAvailable() {
+      public T getIfAvailable() {
         return port;
       }
 
       @Override
-      public WorkflowSearchPort getIfUnique() {
+      public T getIfUnique() {
         return port;
       }
 
       @Override
-      public WorkflowSearchPort getObject() {
+      public T getObject() {
         return port;
       }
 
       @Override
-      public java.util.Iterator<WorkflowSearchPort> iterator() {
+      public java.util.Iterator<T> iterator() {
         return List.of(port).iterator();
       }
     };

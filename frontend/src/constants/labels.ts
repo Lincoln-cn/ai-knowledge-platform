@@ -287,6 +287,7 @@ export const WORKFLOW_NODE_TYPE_LABELS: Record<ImplementedNodeType, string> = {
   QUESTION_NODE: '问题改写',
   CONDITION_NODE: '语义判断',
   NUMBER_CONDITION_NODE: '数值判断',
+  DOCUMENT_EXTRACT_NODE: '文档抽取',
   REPLY_NODE: '指定回复'
 }
 
@@ -307,6 +308,7 @@ export const WORKFLOW_NODE_TYPE_VALUES: ImplementedNodeType[] = [
   'QUESTION_NODE',
   'CONDITION_NODE',
   'NUMBER_CONDITION_NODE',
+  'DOCUMENT_EXTRACT_NODE',
   'REPLY_NODE'
 ]
 

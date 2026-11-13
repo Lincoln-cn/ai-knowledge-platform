@@ -222,11 +222,18 @@ export const documentExtractNode = {
   height: 252,
   properties: {
     stepName: '文档内容提取',
+    // ★ 契约字段名（docId/kbId）而不是旧画布那套 snake —— 执行器读的就是 docId
+    node_data: {
+      docId: null,
+      kbId: null,
+    },
     config: {
       fields: [
         {
-          label: '文档内容',
-          value: 'content',
+          // 执行器写进流程状态的那个键就叫 document_markdown，变量目录也得叫这个名，
+          // 否则下游 NodeCascader 里选的是一个永远取不到值的字段
+          label: '文档正文',
+          value: 'document_markdown',
         },
       ],
     },

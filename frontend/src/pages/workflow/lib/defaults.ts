@@ -2,6 +2,7 @@ import type {
   AiChatNodeConfig,
   BaseNodeConfig,
   ConditionNodeConfig,
+  DocumentExtractNodeConfig,
   ImplementedNodeType,
   NumberConditionNodeConfig,
   QuestionNodeConfig,
@@ -13,7 +14,7 @@ import type {
 } from '@/api/workflow'
 
 /**
- * 八种已实现节点的默认配置。
+ * 九种已实现节点的默认配置。
  * 新建节点时用它落盘，保证 config 形状与 NodeConfigOf<T> 对齐。
  */
 
@@ -106,6 +107,11 @@ export function defaultConfigFor(type: ImplementedNodeType): WorkflowNode['confi
       }
       return config
     }
+    case 'DOCUMENT_EXTRACT_NODE': {
+      // ★ 默认不替用户选文档：随便挑一个 id 会让节点"看起来配好了"，跑起来才发现抓错文档
+      const config: DocumentExtractNodeConfig = { kbId: null, docId: null }
+      return config
+    }
   }
 }
 
@@ -118,6 +124,7 @@ export const defaultTitleFor: Record<ImplementedNodeType, string> = {
   'QUESTION_NODE': '问题改写',
   'CONDITION_NODE': '语义判断',
   'NUMBER_CONDITION_NODE': '数值判断',
+  'DOCUMENT_EXTRACT_NODE': '文档抽取',
   'REPLY_NODE': '指定回复'
 }
 
@@ -130,6 +137,7 @@ const idPrefix: Record<ImplementedNodeType, string> = {
   'QUESTION_NODE': 'question',
   'CONDITION_NODE': 'condition',
   'NUMBER_CONDITION_NODE': 'num-condition',
+  'DOCUMENT_EXTRACT_NODE': 'doc-extract',
   'REPLY_NODE': 'reply'
 }
 

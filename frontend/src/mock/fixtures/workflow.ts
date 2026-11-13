@@ -21,7 +21,7 @@ import type {
  */
 
 /* ------------------------------------------------------------------ */
-/* 节点目录（18 种：8 种已实现 + 10 种规划中）                            */
+/* 节点目录（18 种：9 种已实现 + 9 种规划中）                            */
 /* ------------------------------------------------------------------ */
 
 export const nodeTypeCatalog: NodeTypeMeta[] = [
@@ -40,7 +40,7 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     label: '基本信息收集',
     category: '基础',
     catalogEnabled: true,
-    executable: true
+    executable: true,
     singleton: false,
     canBeEntry: false,
     description: '运行时向用户收集结构化字段（文本/单选/多选/日期/数字/文件），产出可被下游引用的变量。'
@@ -147,13 +147,13 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
   },
   {
     type: 'DOCUMENT_EXTRACT_NODE',
-    label: '文档提取',
+    label: '文档抽取',
     category: '预处理',
-    catalogEnabled: false,
-    executable: false,
+    catalogEnabled: true,
+    executable: true,
     singleton: false,
     canBeEntry: false,
-    description: '规划中：从用户上传文档中抽取结构化字段。当前版本不可拖入画布。'
+    description: '把库里选定文档的正文抽出来交给下游，正文写进流程变量 document_markdown。'
   },
   {
     type: 'IMAGE_UNDERSTAND_NODE',

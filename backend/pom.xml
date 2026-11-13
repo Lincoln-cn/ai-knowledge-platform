@@ -353,7 +353,17 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
-          <argLine>-Dfile.encoding=UTF-8</argLine>
+          <!-- ★ Mockito 的 inline mock maker 默认靠 **self-attach**（起一个外部 JVM attach 到测试 JVM）。
+               JDK 21 起这条路径被标记弃用，JDK 25 在受限环境里直接失败，报：
+                 java.lang.IllegalStateException: Could not self-attach to current VM using external process
+               ⇒ 所有用到 Mockito 的测试类整类 ERROR（本项目约一半测试用 Mockito）。
+               ★ 显式在 JVM 启动期挂载 mockito-core 是官方推荐的写法（mockito-core 自带 Premain-Class），
+                 不依赖进程 attach，任何环境都一样。
+               ★ 判据：加上它之前 ConditionBranchTest = 2 ERROR，之后 = 3/3 绿；
+                 反证：把它去掉，同一条命令立刻退回 2 ERROR（本仓库实测过）。
+               ★ ${mockito.version} 由 spring-boot-starter-parent 管理；坐标写错会让 JVM 启动期直接失败
+                 （不是静默跳过）—— 这是刻意选的失败方式。 -->
+          <argLine>-Dfile.encoding=UTF-8 -javaagent:${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar</argLine>
           <!-- ★ `-Dtest=X` 指定的类**一条都没跑到**时必须失败，而不是 BUILD SUCCESS（Issue #50）。
                ★ 为什么它重要：`-Dtest=A,B`（多个类的写法）在过去静默不跑任何用例却报成功 ——
                  那次是"判据本身失效"：命令看起来跑了，读数却来自别的类（或什么都没跑）。

@@ -3,6 +3,7 @@ import type {
   BaseNodeConfig,
   ConditionBranch,
   ConditionNodeConfig,
+  DocumentExtractNodeConfig,
   ImplementedNodeType,
   NumberConditionBranch,
   NumberConditionItem,
@@ -521,6 +522,29 @@ function replyFromLegacy(nd: any): ReplyNodeConfig & Record<string, any> {
   }
 }
 
+function documentExtractToLegacy(
+  config: DocumentExtractNodeConfig & Record<string, any>
+): LegacyBundle {
+  return {
+    node_data: {
+      // ★ 键名与后端执行器读的完全一致（`docId`，camelCase）—— 这里再起个 `doc_id`
+      // 就会重现「契约一个名、执行器另一个名」那类断链
+      docId: config.docId ?? null,
+      // 界面回填用（执行器不读）：没有它，重开面板时文档下拉没得列
+      kbId: config.kbId ?? null
+    }
+  }
+}
+
+function documentExtractFromLegacy(nd: any): DocumentExtractNodeConfig & Record<string, any> {
+  const rawDoc = nd?.docId ?? nd?.doc_id
+  const rawKb = nd?.kbId ?? nd?.kb_id
+  return {
+    docId: typeof rawDoc === 'string' && rawDoc.trim() ? rawDoc.trim() : null,
+    kbId: typeof rawKb === 'string' && rawKb.trim() ? rawKb.trim() : null
+  }
+}
+
 function toLegacy(type: string, config: any): LegacyBundle {
   switch (type as ImplementedNodeType) {
     case 'START_NODE':
@@ -539,6 +563,8 @@ function toLegacy(type: string, config: any): LegacyBundle {
       return numberConditionToLegacy(config)
     case 'REPLY_NODE':
       return replyToLegacy(config)
+    case 'DOCUMENT_EXTRACT_NODE':
+      return documentExtractToLegacy(config)
     default:
       return { node_data: { ...config } }
   }
@@ -562,6 +588,8 @@ function fromLegacy(type: string, nd: any, props: any): Record<string, any> {
       return numberConditionFromLegacy(nd)
     case 'REPLY_NODE':
       return replyFromLegacy(nd)
+    case 'DOCUMENT_EXTRACT_NODE':
+      return documentExtractFromLegacy(nd)
     default:
       return { ...nd }
   }

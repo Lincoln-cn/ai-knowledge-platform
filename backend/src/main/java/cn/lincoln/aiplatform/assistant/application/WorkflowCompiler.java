@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.assistant.application;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -71,24 +72,52 @@ public final class WorkflowCompiler {
   /**
    * 节点。
    *
-   * <p>★ {@code properties} 是**原样保留**的画布节点配置（Jackson 直接反序列化这一层），里面装着 {@code config}。 加这一格之前它一直是丢的
-   * —— 于是 {@code SEARCH_DATASET_NODE} 拿不到 {@code dataset_id_list}、 {@code AI_CHAT_NODE}
-   * 拿不到模型，执行器即使写出来也没有可用的输入。
+   * <p>★ 节点配置有**两种真实形状**，两格都得认：
+   *
+   * <ul>
+   *   <li>{@code properties.config} —— 画布内部形状（{@code toLogicFlow} 产出，含 {@code stepName} / {@code
+   *       width} 等展示字段）；
+   *   <li>顶层 {@code config} —— 前端提交给后端的契约形状（{@code fromLogicFlow} 产出，**没有 properties**）。
+   * </ul>
+   *
+   * <p>只认前者会让生产路径上每一个节点的配置都是空的（{@code WorkflowDebugController} 反序列化 的就是契约形状），执行器全部空转 —— 这是 {@code
+   * DOCUMENT_EXTRACT_NODE} 之前必须补上的底座。 合并时**顶层优先**：契约形状是调用方显式给的，画布形状是内部的。
+   *
+   * @param properties 画布节点原样保留的那层（可为 null）
+   * @param config 合并后的配置，**永不 null**
    */
-  public record Node(String id, String type, Map<String, Object> properties) {
-    /** 只读 id / type 的场合（判据、日志）。 */
-    public Node(String id, String type) {
-      this(id, type, Map.of());
+  public record Node(
+      String id, String type, Map<String, Object> properties, Map<String, Object> config) {
+    public Node {
+      config = mergeConfig(properties, config);
     }
 
-    /** 画布节点上那段 {@code properties.config}；没有就给空 map，不返回 null。 */
-    @SuppressWarnings("unchecked")
-    public Map<String, Object> config() {
-      if (properties == null) {
-        return Map.of();
+    /** 只读 id / type 的场合（判据、日志）。 */
+    public Node(String id, String type) {
+      this(id, type, Map.of(), Map.of());
+    }
+
+    /** 只有画布形状的场合。 */
+    public Node(String id, String type, Map<String, Object> properties) {
+      this(id, type, properties, Map.of());
+    }
+
+    /**
+     * 合并两种形状的配置，顶层（契约）优先。
+     *
+     * <p>不用 {@code Map.copyOf} / {@code Map.of}：它们拒绝 null 值，而 Jackson 反序列化出来的 map 可以有
+     * null（前端某个字段没填就是 null）。空配置返回不可变的空 map，其余返回不可变视图。
+     */
+    private static Map<String, Object> mergeConfig(
+        Map<String, Object> properties, Map<String, Object> config) {
+      Map<String, Object> merged = new LinkedHashMap<>();
+      if (properties != null && properties.get("config") instanceof Map<?, ?> inner) {
+        inner.forEach((key, value) -> merged.put(String.valueOf(key), value));
       }
-      Object config = properties.get("config");
-      return config instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
+      if (config != null) {
+        merged.putAll(config);
+      }
+      return merged.isEmpty() ? Map.of() : Collections.unmodifiableMap(merged);
     }
   }
 
