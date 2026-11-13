@@ -22,7 +22,11 @@ export const IMPLEMENTED_NODE_TYPES = [
   "RERANKER_NODE",
   "APPLICATION_NODE",
   "DOCUMENT_EXTRACT_NODE",
+  "IMAGE_UNDERSTAND_NODE",
   "FORM_NODE",
+  "TEXT_TO_SPEECH_NODE",
+  "SPEECH_TO_TEXT_NODE",
+  "IMAGE_GENERATE_NODE",
 ] as const;
 
 export type ImplementedNodeType = (typeof IMPLEMENTED_NODE_TYPES)[number];
@@ -31,10 +35,6 @@ export type ImplementedNodeType = (typeof IMPLEMENTED_NODE_TYPES)[number];
 export const PLANNED_NODE_TYPES = [
   "FUNCTION_LIB_NODE",
   "FUNCTION_NODE",
-  "IMAGE_UNDERSTAND_NODE",
-  "TEXT_TO_SPEECH_NODE",
-  "SPEECH_TO_TEXT_NODE",
-  "IMAGE_GENERATE_NODE",
 ] as const;
 
 export type PlannedNodeType = (typeof PLANNED_NODE_TYPES)[number];
@@ -98,11 +98,11 @@ export const NODE_TYPE_DESCRIPTIONS: Record<WorkflowNodeTypeName, string> = {
   RERANKER_NODE: "把上游检索到的候选按与问题的相关性重新排序",
   APPLICATION_NODE: "把一个已发布的编排应用当成这一步的函数：用上游输入跑它，拿它的最终输出",
   DOCUMENT_EXTRACT_NODE: "把库里选定文档的正文抽出来交给下游",
-  IMAGE_UNDERSTAND_NODE: "识别图片内容并输出文字描述",
+  IMAGE_UNDERSTAND_NODE: "用对话模型看一张图，回答关于它的问题",
   FORM_NODE: "向用户收集多个字段",
-  TEXT_TO_SPEECH_NODE: "把文本转成语音输出",
-  SPEECH_TO_TEXT_NODE: "把用户语音转成文本",
-  IMAGE_GENERATE_NODE: "按描述生成图片",
+  TEXT_TO_SPEECH_NODE: "把一段文字念成音频：音频存进文件存储，流程变量里只留键",
+  SPEECH_TO_TEXT_NODE: "把音频转成文字：读音频键，写识别出的文本",
+  IMAGE_GENERATE_NODE: "按提示词生成图片：图片存进文件存储，流程变量里留键与类型",
 };
 
 /** 画布节点菜单里的类型（就绪的那一批，按目录顺序）。 */
@@ -127,6 +127,8 @@ export interface NodeConfigField {
   readonly dependsOn?: string;
   /** 固定选项（如回复形态只有一种取值）。 */
   readonly options?: readonly string[];
+  /** `optionsSource` 是 `models` 时按哪种模型种类过滤。 */
+  readonly modelKind?: string;
   /** 面板上的说明文字。 */
   readonly hint?: string;
   /** 新建节点时这个字段的默认值（目录里写了 default 才有这一格）。 */
@@ -185,15 +187,31 @@ export const NODE_CONFIG_FIELDS: Record<WorkflowNodeTypeName, readonly NodeConfi
     { key: "kbId", label: "知识库", type: "uuid", required: false, panelOnly: true, optionsSource: "knowledge-bases", hint: "先选库才能选文档。这一项只给面板用，执行器不读", defaultValue: null },
     { key: "docId", label: "文档", type: "uuid", required: true, panelOnly: false, optionsSource: "documents", dependsOn: "kbId", hint: "只有已解析出正文的文档能用；正文会写进流程变量 document_markdown", defaultValue: null },
   ],
-  IMAGE_UNDERSTAND_NODE: [],
+  IMAGE_UNDERSTAND_NODE: [
+    { key: "modelId", label: "模型", type: "uuid", required: true, panelOnly: false, optionsSource: "models", modelKind: "CHAT", hint: "选一个对话模型 —— 视觉输入是对话协议的扩展，不是另一种模型种类" },
+    { key: "question", label: "问题", type: "string", required: false, panelOnly: false, hint: "留空就问「请客观描述这张图片的内容。」" },
+    { key: "imageKey", label: "图片变量", type: "string", required: false, panelOnly: false, hint: "读哪个流程变量拿到图片键，留空读 image_key" },
+  ],
   FORM_NODE: [
     { key: "formFields", label: "收集字段", type: "object-list", required: false, panelOnly: true, defaultValue: [] },
     { key: "contentFormat", label: "引导文案", type: "string", required: false, panelOnly: true, defaultValue: "你好，请先填写下面表单内容：\n{{form}}\n填写后请点击【提交】按钮进行提交。" },
     { key: "asResult", label: "提交即结束", type: "boolean", required: false, panelOnly: true, defaultValue: true },
   ],
-  TEXT_TO_SPEECH_NODE: [],
-  SPEECH_TO_TEXT_NODE: [],
-  IMAGE_GENERATE_NODE: [],
+  TEXT_TO_SPEECH_NODE: [
+    { key: "modelId", label: "模型", type: "uuid", required: true, panelOnly: false, optionsSource: "models", modelKind: "TTS" },
+    { key: "voice", label: "音色", type: "string", required: true, panelOnly: false, hint: "各上游取值不同，如 alloy / nova / zh-CN-XiaoxiaoNeural" },
+    { key: "sourceKey", label: "文本变量", type: "string", required: false, panelOnly: false, hint: "读哪个流程变量拿到要念的文字，留空读 answer" },
+  ],
+  SPEECH_TO_TEXT_NODE: [
+    { key: "modelId", label: "模型", type: "uuid", required: true, panelOnly: false, optionsSource: "models", modelKind: "STT" },
+    { key: "audioKey", label: "音频变量", type: "string", required: false, panelOnly: false, hint: "读哪个流程变量拿到音频键，留空读 audio_key（与语音合成节点的产出一致）" },
+    { key: "filename", label: "文件名", type: "string", required: false, panelOnly: false, hint: "上游靠扩展名判容器格式，留空用 audio.mp3" },
+  ],
+  IMAGE_GENERATE_NODE: [
+    { key: "modelId", label: "模型", type: "uuid", required: true, panelOnly: false, optionsSource: "models", modelKind: "IMAGE" },
+    { key: "promptKey", label: "提示词变量", type: "string", required: false, panelOnly: false, hint: "读哪个流程变量拿到提示词，留空读 query" },
+    { key: "size", label: "尺寸", type: "string", required: false, panelOnly: false, hint: "如 1024x1024；留空由上游决定" },
+  ],
 };
 
 /**
@@ -218,11 +236,11 @@ export const NODE_OUTPUT_FIELDS: Record<WorkflowNodeTypeName, readonly NodeVaria
   RERANKER_NODE: [{ label: "重排后的资料", value: "rerank_result" }, { label: "重排后的命中明细", value: "rerank_hits" }],
   APPLICATION_NODE: [{ label: "被调应用的输出", value: "app_output" }],
   DOCUMENT_EXTRACT_NODE: [{ label: "文档正文", value: "document_markdown" }],
-  IMAGE_UNDERSTAND_NODE: [],
+  IMAGE_UNDERSTAND_NODE: [{ label: "图片描述", value: "image_description" }],
   FORM_NODE: [{ label: "表单内容", value: "form_data" }],
-  TEXT_TO_SPEECH_NODE: [],
-  SPEECH_TO_TEXT_NODE: [],
-  IMAGE_GENERATE_NODE: [],
+  TEXT_TO_SPEECH_NODE: [{ label: "音频文件键", value: "audio_key" }, { label: "音频格式", value: "audio_format" }],
+  SPEECH_TO_TEXT_NODE: [{ label: "识别文本", value: "speech_transcript" }],
+  IMAGE_GENERATE_NODE: [{ label: "图片文件键", value: "image_key" }, { label: "图片类型", value: "image_mime" }],
 };
 
 /** 变量目录里的一项（`properties.config.fields` 的元素）。 */
@@ -458,12 +476,12 @@ export const NODE_TYPE_META: readonly NodeTypeMetaRecord[] = [
   {
     type: "IMAGE_UNDERSTAND_NODE",
     label: "图像理解",
-    description: "识别图片内容并输出文字描述",
+    description: "用对话模型看一张图，回答关于它的问题",
     category: "多模态",
-    catalogEnabled: false,
-    executable: false,
+    catalogEnabled: true,
+    executable: true,
     configFields: NODE_CONFIG_FIELDS["IMAGE_UNDERSTAND_NODE"] ?? [],
-    outputs: []
+    outputs: [{ key: "image_description", label: "图片描述" }]
   },
   {
     type: "FORM_NODE",
@@ -478,31 +496,31 @@ export const NODE_TYPE_META: readonly NodeTypeMetaRecord[] = [
   {
     type: "TEXT_TO_SPEECH_NODE",
     label: "语音合成",
-    description: "把文本转成语音输出",
+    description: "把一段文字念成音频：音频存进文件存储，流程变量里只留键",
     category: "多模态",
-    catalogEnabled: false,
-    executable: false,
+    catalogEnabled: true,
+    executable: true,
     configFields: NODE_CONFIG_FIELDS["TEXT_TO_SPEECH_NODE"] ?? [],
-    outputs: []
+    outputs: [{ key: "audio_key", label: "音频文件键" }, { key: "audio_format", label: "音频格式" }]
   },
   {
     type: "SPEECH_TO_TEXT_NODE",
     label: "语音识别",
-    description: "把用户语音转成文本",
+    description: "把音频转成文字：读音频键，写识别出的文本",
     category: "多模态",
-    catalogEnabled: false,
-    executable: false,
+    catalogEnabled: true,
+    executable: true,
     configFields: NODE_CONFIG_FIELDS["SPEECH_TO_TEXT_NODE"] ?? [],
-    outputs: []
+    outputs: [{ key: "speech_transcript", label: "识别文本" }]
   },
   {
     type: "IMAGE_GENERATE_NODE",
     label: "图像生成",
-    description: "按描述生成图片",
+    description: "按提示词生成图片：图片存进文件存储，流程变量里留键与类型",
     category: "多模态",
-    catalogEnabled: false,
-    executable: false,
+    catalogEnabled: true,
+    executable: true,
     configFields: NODE_CONFIG_FIELDS["IMAGE_GENERATE_NODE"] ?? [],
-    outputs: []
+    outputs: [{ key: "image_key", label: "图片文件键" }, { key: "image_mime", label: "图片类型" }]
   },
 ];

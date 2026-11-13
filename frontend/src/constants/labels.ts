@@ -104,9 +104,12 @@ export const SUPPLIER_VALUES: Supplier[] = ['LOCAL_INFERENCE', 'EXTERNAL_API']
 
 export const MODEL_KIND_LABELS: Record<ModelKind, string> = {
   CHAT: '对话模型',
-  EMBEDDING: '向量模型'
+  EMBEDDING: '向量模型',
+  TTS: '语音合成',
+  STT: '语音识别',
+  IMAGE: '图像生成'
 }
-export const MODEL_KIND_VALUES: ModelKind[] = ['CHAT', 'EMBEDDING']
+export const MODEL_KIND_VALUES: ModelKind[] = ['CHAT', 'EMBEDDING', 'TTS', 'STT', 'IMAGE']
 
 /** 思考三态（取值已是规范大写，不动） */
 export const THINKING_MODE_LABELS: Record<ThinkingMode, string> = {

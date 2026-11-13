@@ -7,7 +7,7 @@ import type { PageQuery, PageResult } from './types'
 export type ThinkingMode = 'NONE' | 'TOGGLEABLE' | 'ALWAYS_ON'
 /** 工具调用能力三态。MVP 只声明不接口（V1.0 才可用） */
 export type ToolsMode = 'UNSUPPORTED' | 'SUPPORTED' | 'PARALLEL'
-export type ModelKind = 'CHAT' | 'EMBEDDING'
+export type ModelKind = 'CHAT' | 'EMBEDDING' | 'TTS' | 'STT' | 'IMAGE'
 export type ModelStatus = 'NOT_LOADED' | 'LOADING' | 'LOADED' | 'LOAD_FAILED'
 export type Supplier = 'LOCAL_INFERENCE' | 'EXTERNAL_API'
 

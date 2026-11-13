@@ -89,6 +89,7 @@ final class CaliberShape {
           "modelcatalog/V38__modelcatalog_e5_max_chars.sql",
           "modelcatalog/V45__modelcatalog_model_provider.sql",
           "modelcatalog/V46__modelcatalog_model_provider_id.sql",
+          "modelcatalog/V98__modelcatalog_media_kinds.sql",
           "knowledge/V12__knowledge_knowledge_base.sql",
           "knowledge/V13__knowledge_document.sql",
           "knowledge/V14__knowledge_document_parsed_content.sql",

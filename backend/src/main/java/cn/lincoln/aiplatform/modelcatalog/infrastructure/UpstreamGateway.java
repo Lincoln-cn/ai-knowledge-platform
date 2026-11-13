@@ -538,6 +538,187 @@ public class UpstreamGateway {
     return post(resolve(apiBase, "/chat/completions"), payload, apiKey, authStyle);
   }
 
+  // ────────────────────────── 多模态（#333 多模态四个节点） ──────────────────────────
+
+  /**
+   * 视觉理解：把一张图片 + 一个问题发给对话模型。
+   *
+   * <p>★ 为什么它不算"新的一种模型种类"：视觉模型就是对话模型，只是 {@code messages} 里的 {@code content} 是数组（文本块 +
+   * 图片块）。单开一种种类会逼人回答"既能对话又能看图的模型算哪种"， 而那个答案不该有二义。
+   *
+   * <p>★ 图片按 data URL 内联而不是传 URL：传 URL 等于要求上游能访问我们的存储，内网部署时它通常不能 —— 那种失败会表现成"模型说看不到图片"，看起来像模型能力问题。
+   */
+  public String chatWithImage(
+      String model,
+      String prompt,
+      byte[] image,
+      String mimeType,
+      String apiBase,
+      String apiKey,
+      AuthStyle authStyle) {
+    String mime = (mimeType == null || mimeType.isBlank()) ? "image/png" : mimeType;
+    String dataUrl =
+        "data:" + mime + ";base64," + java.util.Base64.getEncoder().encodeToString(image);
+    Map<String, Object> payload = new java.util.LinkedHashMap<>();
+    payload.put("model", model);
+    payload.put(
+        "messages",
+        List.of(
+            Map.of(
+                "role",
+                "user",
+                "content",
+                List.of(
+                    Map.of("type", "text", "text", prompt == null ? "" : prompt),
+                    Map.of("type", "image_url", "image_url", Map.of("url", dataUrl))))));
+    return post(resolve(apiBase, "/chat/completions"), writeJson(payload), apiKey, authStyle);
+  }
+
+  /**
+   * 图像生成：返回上游响应原文（{@code data[0].b64_json} 或 {@code data[0].url}）。
+   *
+   * <p>★ 显式要 {@code b64_json}：要 URL 就得再发一次 GET 把图取回来，而那个地址是上游的名字空间， 我们既不知道它会不会过期，也不知道内网部署时前端能不能访问它。
+   */
+  public String images(
+      String model,
+      String prompt,
+      String size,
+      String apiBase,
+      String apiKey,
+      AuthStyle authStyle) {
+    Map<String, Object> payload = new java.util.LinkedHashMap<>();
+    payload.put("model", model);
+    payload.put("prompt", prompt == null ? "" : prompt);
+    payload.put("n", 1);
+    payload.put("response_format", "b64_json");
+    if (size != null && !size.isBlank()) {
+      payload.put("size", size);
+    }
+    return post(resolve(apiBase, "/images/generations"), writeJson(payload), apiKey, authStyle);
+  }
+
+  /**
+   * 语音合成：文本进、音频字节出。
+   *
+   * <p>★ 走独立的读字节通道（{@link #postRaw}）：这条响应体不是 JSON，用 {@code BodyHandlers.ofString()}
+   * 读会把字节按平台默认编码糟蹋一遍 —— 音频回来是一堆替换字符， 而 HTTP 状态码是 200。
+   */
+  public byte[] speech(
+      String model,
+      String input,
+      String voice,
+      String format,
+      String apiBase,
+      String apiKey,
+      AuthStyle authStyle) {
+    Map<String, Object> payload = new java.util.LinkedHashMap<>();
+    payload.put("model", model);
+    payload.put("input", input == null ? "" : input);
+    if (voice != null && !voice.isBlank()) {
+      payload.put("voice", voice);
+    }
+    payload.put("response_format", (format == null || format.isBlank()) ? "mp3" : format);
+    return postRaw(
+        resolve(apiBase, "/audio/speech"),
+        writeJson(payload).getBytes(StandardCharsets.UTF_8),
+        "application/json",
+        apiKey,
+        authStyle,
+        Duration.ofSeconds(60));
+  }
+
+  /**
+   * 语音识别：音频进、文本出（上游回 JSON，取 {@code text}）。
+   *
+   * <p>★ 用 multipart 而不是 base64 塞 JSON —— 后者不是 OpenAI 兼容协议的形状， 而且会把音频撑大三分之一。
+   */
+  public String transcribe(
+      String model,
+      byte[] audio,
+      String filename,
+      String apiBase,
+      String apiKey,
+      AuthStyle authStyle) {
+    String boundary = "----aip" + java.util.UUID.randomUUID().toString().replace("-", "");
+    byte[] body = multipart(boundary, model, audio, filename);
+    byte[] raw =
+        postRaw(
+            resolve(apiBase, "/audio/transcriptions"),
+            body,
+            "multipart/form-data; boundary=" + boundary,
+            apiKey,
+            authStyle,
+            Duration.ofSeconds(60));
+    return new String(raw, StandardCharsets.UTF_8);
+  }
+
+  /** 拼一个 {@code model + file} 的 multipart 体。只有这两个字段 —— 多一个就得多一处转义。 */
+  private static byte[] multipart(String boundary, String model, byte[] audio, String filename) {
+    String name = (filename == null || filename.isBlank()) ? "audio" : filename;
+    java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+    String head =
+        "--"
+            + boundary
+            + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n"
+            + model
+            + "\r\n--"
+            + boundary
+            + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\""
+            + name
+            + "\"\r\nContent-Type: application/octet-stream\r\n\r\n";
+    out.writeBytes(head.getBytes(StandardCharsets.UTF_8));
+    out.writeBytes(audio);
+    out.writeBytes(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+    return out.toByteArray();
+  }
+
+  /**
+   * 发一次请求并把响应按字节读回来（音频 / 图片这类非 JSON 响应）。
+   *
+   * <p>★ 与 {@link #post} 一样把记账放在唯一出口：新加一条调用路径就漏记， 表现是"不可达率被算高"。
+   */
+  private byte[] postRaw(
+      String url,
+      byte[] body,
+      String contentType,
+      String apiKey,
+      AuthStyle authStyle,
+      Duration timeout) {
+    try {
+      HttpRequest.Builder builder =
+          HttpRequest.newBuilder(URI.create(url))
+              .timeout(timeout)
+              .header("Content-Type", contentType);
+      applyAuth(builder, apiKey, authStyle);
+      HttpRequest request = builder.POST(HttpRequest.BodyPublishers.ofByteArray(body)).build();
+      HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
+      if (response.statusCode() >= 400) {
+        // ★ 错误响应通常是 JSON 文本，回给调用方前先解码成字符串截断，别让人对着一堆二进制猜。
+        throw new UpstreamUnreachableException(
+            "上游返回 HTTP "
+                + response.statusCode()
+                + "：连接 "
+                + url
+                + " 失败。响应片段："
+                + abbreviate(new String(response.body(), StandardCharsets.UTF_8)));
+      }
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.OK);
+      return response.body();
+    } catch (UpstreamUnreachableException e) {
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.UNREACHABLE);
+      throw e;
+    } catch (IOException e) {
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.UNREACHABLE);
+      throw new UpstreamUnreachableException(
+          "网关不可达：连接 " + url + " 失败（" + e.getClass().getSimpleName() + "：" + e.getMessage() + "）",
+          e);
+    } catch (InterruptedException e) {
+      metrics.upstreamCall(BusinessMetrics.UpstreamOutcome.UNREACHABLE);
+      Thread.currentThread().interrupt();
+      throw new UpstreamUnreachableException("网关请求被中断：" + url, e);
+    }
+  }
+
   /** 响应体里是否出现了思考内容（OpenAI 兼容协议里的 {@code reasoning_content} / {@code reasoning}）。 */
   public static boolean sawReasoning(String responseBody) {
     return responseBody != null

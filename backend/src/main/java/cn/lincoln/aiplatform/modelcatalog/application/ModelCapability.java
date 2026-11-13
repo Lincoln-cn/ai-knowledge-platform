@@ -41,6 +41,11 @@ public record ModelCapability(
           null,
           source);
     }
+    // ★ 多模态三种与向量模型一样：没有思考模式、没有工具、没有对话窗口。
+    //   dimension 只有 EMBEDDING 才能带 —— 把 TTS 模型的维度填进向量列表是纯粹的脏数据。
+    if (kind != ModelKind.EMBEDDING) {
+      return new ModelCapability(ThinkingMode.NONE, ToolsMode.UNSUPPORTED, null, null, source);
+    }
     return new ModelCapability(ThinkingMode.NONE, ToolsMode.UNSUPPORTED, null, dimension, source);
   }
 }

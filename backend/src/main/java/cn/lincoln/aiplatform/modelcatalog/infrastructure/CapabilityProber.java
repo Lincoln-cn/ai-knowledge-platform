@@ -87,6 +87,14 @@ public class CapabilityProber {
           ModelCapabilitySource.PROBED);
     }
 
+    // ★ 多模态三种（TTS / STT / IMAGE）不探：它们没有 messages 语义，拿它们去调
+    //   /chat/completions 只会得到 400，而那次失败会被记成"模型不可用" —— 一个
+    //   配置正确却被判定坏的模型，比没有探测更糟。
+    if (kind != ModelKind.CHAT) {
+      return ModelCapability.of(
+          kind, ThinkingMode.NONE, ToolsMode.UNSUPPORTED, null, null, ModelCapabilitySource.PROBED);
+    }
+
     // ── 2b. 对话模型：行为探针测思考三态 ──
     ThinkingMode thinking = probeThinking(baseModel, apiBase, apiKey, authStyle);
     ToolsMode tools = parseTools(metaTools);

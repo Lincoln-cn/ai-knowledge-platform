@@ -197,6 +197,14 @@ public class Model {
       throw new IllegalArgumentException(
           "向量模型没有对话上下文窗口，contextWindow 必须为 null（填了它，界面会把「上下文窗口」渲染到一个根本没有对话能力的模型上）");
     }
+    // ★ 多模态三种（TTS / STT / IMAGE）两列都不该有值：它们既不对话也不产向量。
+    //   库层有 chk_ai_model_media_capacity 兜底，领域这道让错误在构造时就说清原因。
+    if (kind != ModelKind.CHAT
+        && kind != ModelKind.EMBEDDING
+        && (contextWindow != null || dimension != null)) {
+      throw new IllegalArgumentException(
+          "「" + kind + "」模型既没有对话上下文窗口，也不产出向量 —— contextWindow 与 dimension 都必须为 null");
+    }
   }
 
   // ────────────────────────── 四态状态机 ──────────────────────────

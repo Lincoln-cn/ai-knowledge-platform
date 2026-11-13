@@ -780,6 +780,17 @@ public class ModelService {
           "向量模型必须显式声明向量维度",
           "维度与向量表绑定，不能靠猜 —— 请填入实际输出维度（如 768 / 1024），或先用「探测」获取");
     }
+    // ★ 多模态三种不接受这两个字段。不在这里拦，就会掉到领域构造器抛
+    //   IllegalArgumentException（一次 500），而它的内容是给读代码的人看的，
+    //   不是给填表的人看的。
+    if (kind != ModelKind.CHAT
+        && kind != ModelKind.EMBEDDING
+        && (dimension != null || contextWindow != null)) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          kind + " 模型没有对话上下文窗口，也不产出向量",
+          "contextWindow 只有对话模型能填，dimension 只有向量模型能填 —— 这两个字段请留空");
+    }
   }
 
   private static void validateSupplier(Supplier supplier, String apiBase) {
@@ -796,11 +807,14 @@ public class ModelService {
    */
   private static void validateCapabilityFields(
       ModelKind kind, ThinkingMode thinking, ToolsMode tools) {
-    if (kind == ModelKind.EMBEDDING && (thinking != null || tools != null)) {
+    // ★ 只有对话模型有能力声明：向量模型与多模态三种都固定为 NONE / UNSUPPORTED。
+    //   原先是 `kind == EMBEDDING` 才拒 —— 加了多模态之后那个条件会让 TTS 模型
+    //   带着 thinking=ALWAYS_ON 存进库，而界面上它是一列永远不生效的开关。
+    if (kind != ModelKind.CHAT && (thinking != null || tools != null)) {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST,
-          "能力声明只对对话模型有意义：向量模型不接受 thinking / tools",
-          "思考模式与工具调用是对话模型的能力；向量模型固定为 NONE / UNSUPPORTED —— 请去掉这两个字段");
+          "能力声明只对对话模型有意义：" + kind + " 不接受 thinking / tools",
+          "思考模式与工具调用是对话模型的能力；其它种类固定为 NONE / UNSUPPORTED —— 请去掉这两个字段");
     }
   }
 
@@ -830,9 +844,29 @@ public class ModelService {
       return ModelKind.CHAT;
     }
     String id = m.id() == null ? "" : m.id().toLowerCase(Locale.ROOT);
-    return id.contains("embed") || id.contains("bge") || id.contains("vector")
-        ? ModelKind.EMBEDDING
-        : ModelKind.CHAT;
+    // ★ 名字启发式按"越具体越先判"排：`stable-diffusion` 里也含不了 embed，
+    //   但 `whisper-embed` 这种名字真的存在，所以 embedding 仍排第一。
+    if (id.contains("embed") || id.contains("bge") || id.contains("vector")) {
+      return ModelKind.EMBEDDING;
+    }
+    if (id.contains("whisper") || id.contains("transcri") || id.contains("stt")) {
+      return ModelKind.STT;
+    }
+    if (id.contains("tts")
+        || id.contains("speech")
+        || id.contains("flite")
+        || id.contains("piper")) {
+      return ModelKind.TTS;
+    }
+    if (id.contains("dall-e")
+        || id.contains("dalle")
+        || id.contains("stable-diffusion")
+        || id.contains("sdxl")
+        || id.contains("flux")
+        || id.contains("-image")) {
+      return ModelKind.IMAGE;
+    }
+    return ModelKind.CHAT;
   }
 
   private static ModelKind parseKind(String raw) {

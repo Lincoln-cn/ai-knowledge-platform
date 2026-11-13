@@ -120,7 +120,9 @@ public class NodeTypeCatalog {
    * @param optionsSource 选项从哪来：{@code knowledge-bases}（全部知识库）/ {@code documents}（所选库里的文档）。 空则用
    *     {@link #options}
    * @param dependsOn 当前字段的候选项依赖哪个字段（{@code documents} 依赖库字段）。依赖为空时候选也为空， 这是"必然非法"的选项不放进候选的唯一表达方式
-   * @param options 固定选项（如回复形态只有一种取值时）
+   * @param options 固定选项（如回复形态只有一种取值时）。要加一种"候选从别处来"的数据源，不需要改这一格 —— 在 {@link #optionsSource} 里加一个取值就够
+   * @param modelKind `optionsSource` 是 {@code models} 时按哪种模型种类过滤（`CHAT` / `TTS` / `STT` / `IMAGE`）。
+   *     ★ 这一步不能省：模型下拉里混进一个向量模型，用户选了它，节点要等到运行时才说"种类不对" —— 而"哪些模型能选"是可以在面板上就答对的事
    * @param hint 面板上的说明文字（"只有已解析出正文的文档能用"这类）
    * @param defaultValue 新建节点时这个字段的默认值（`#337` 第二步 B5）。★ 它承载的是<strong>业务默认</strong> ——
    *     开场白文案、示例字段、检索阈值、回复文案 —— 这些从 {@code type} 推不出来，从前散落在画布侧的 `data.ts`
@@ -136,6 +138,7 @@ public class NodeTypeCatalog {
       String optionsSource,
       String dependsOn,
       List<String> options,
+      String modelKind,
       String hint,
       @JsonProperty("default") Object defaultValue) {
 

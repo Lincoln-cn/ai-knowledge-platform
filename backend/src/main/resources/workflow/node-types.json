@@ -467,11 +467,44 @@
   {
     "type": "IMAGE_UNDERSTAND_NODE",
     "label": "图像理解",
-    "description": "识别图片内容并输出文字描述",
+    "description": "用对话模型看一张图，回答关于它的问题",
     "category": "多模态",
-    "catalogEnabled": false,
-    "executable": false,
-    "outputs": []
+    "catalogEnabled": true,
+    "executable": true,
+    "outputs": [
+      {
+        "key": "image_description",
+        "label": "图片描述"
+      }
+    ],
+    "configFields": [
+      {
+        "key": "modelId",
+        "label": "模型",
+        "type": "uuid",
+        "required": true,
+        "panelOnly": false,
+        "hint": "选一个对话模型 —— 视觉输入是对话协议的扩展，不是另一种模型种类",
+        "optionsSource": "models",
+        "modelKind": "CHAT"
+      },
+      {
+        "key": "question",
+        "label": "问题",
+        "type": "string",
+        "required": false,
+        "panelOnly": false,
+        "hint": "留空就问「请客观描述这张图片的内容。」"
+      },
+      {
+        "key": "imageKey",
+        "label": "图片变量",
+        "type": "string",
+        "required": false,
+        "panelOnly": false,
+        "hint": "读哪个流程变量拿到图片键，留空读 image_key"
+      }
+    ]
   },
   {
     "type": "FORM_NODE",
@@ -516,28 +549,132 @@
   {
     "type": "TEXT_TO_SPEECH_NODE",
     "label": "语音合成",
-    "description": "把文本转成语音输出",
+    "description": "把一段文字念成音频：音频存进文件存储，流程变量里只留键",
     "category": "多模态",
-    "catalogEnabled": false,
-    "executable": false,
-    "outputs": []
+    "catalogEnabled": true,
+    "executable": true,
+    "outputs": [
+      {
+        "key": "audio_key",
+        "label": "音频文件键"
+      },
+      {
+        "key": "audio_format",
+        "label": "音频格式"
+      }
+    ],
+    "configFields": [
+      {
+        "key": "modelId",
+        "label": "模型",
+        "type": "uuid",
+        "required": true,
+        "panelOnly": false,
+        "optionsSource": "models",
+        "modelKind": "TTS"
+      },
+      {
+        "key": "voice",
+        "label": "音色",
+        "type": "string",
+        "required": true,
+        "panelOnly": false,
+        "hint": "各上游取值不同，如 alloy / nova / zh-CN-XiaoxiaoNeural"
+      },
+      {
+        "key": "sourceKey",
+        "label": "文本变量",
+        "type": "string",
+        "required": false,
+        "panelOnly": false,
+        "hint": "读哪个流程变量拿到要念的文字，留空读 answer"
+      }
+    ]
   },
   {
     "type": "SPEECH_TO_TEXT_NODE",
     "label": "语音识别",
-    "description": "把用户语音转成文本",
+    "description": "把音频转成文字：读音频键，写识别出的文本",
     "category": "多模态",
-    "catalogEnabled": false,
-    "executable": false,
-    "outputs": []
+    "catalogEnabled": true,
+    "executable": true,
+    "outputs": [
+      {
+        "key": "speech_transcript",
+        "label": "识别文本"
+      }
+    ],
+    "configFields": [
+      {
+        "key": "modelId",
+        "label": "模型",
+        "type": "uuid",
+        "required": true,
+        "panelOnly": false,
+        "optionsSource": "models",
+        "modelKind": "STT"
+      },
+      {
+        "key": "audioKey",
+        "label": "音频变量",
+        "type": "string",
+        "required": false,
+        "panelOnly": false,
+        "hint": "读哪个流程变量拿到音频键，留空读 audio_key（与语音合成节点的产出一致）"
+      },
+      {
+        "key": "filename",
+        "label": "文件名",
+        "type": "string",
+        "required": false,
+        "panelOnly": false,
+        "hint": "上游靠扩展名判容器格式，留空用 audio.mp3"
+      }
+    ]
   },
   {
     "type": "IMAGE_GENERATE_NODE",
     "label": "图像生成",
-    "description": "按描述生成图片",
+    "description": "按提示词生成图片：图片存进文件存储，流程变量里留键与类型",
     "category": "多模态",
-    "catalogEnabled": false,
-    "executable": false,
-    "outputs": []
+    "catalogEnabled": true,
+    "executable": true,
+    "outputs": [
+      {
+        "key": "image_key",
+        "label": "图片文件键"
+      },
+      {
+        "key": "image_mime",
+        "label": "图片类型"
+      }
+    ],
+    "configFields": [
+      {
+        "key": "modelId",
+        "label": "模型",
+        "type": "uuid",
+        "required": true,
+        "panelOnly": false,
+        "optionsSource": "models",
+        "modelKind": "IMAGE"
+      },
+      {
+        "key": "promptKey",
+        "label": "提示词变量",
+        "type": "string",
+        "required": false,
+        "panelOnly": false,
+        "hint": "读哪个流程变量拿到提示词，留空读 query"
+      },
+      {
+        "key": "size",
+        "label": "尺寸",
+        "type": "string",
+        "required": false,
+        "panelOnly": false,
+        "hint": "如 1024x1024；留空由上游决定"
+      }
+    ]
   }
 ]

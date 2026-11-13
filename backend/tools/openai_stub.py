@@ -102,6 +102,22 @@ EMBED_MODEL = "stub-embed"
 
 _LOCK = threading.Lock()
 _REQUESTS: list[dict] = []
+#: 多模态三条端点回的最小内容。
+#:
+#: ★ `_ONEX_ONE_PNG_B64` 是 1x1 透明 PNG —— 固定串，任何解码器都认；
+#:   造一张"真图片"要 PIL 之类依赖，桩不该为此引依赖。
+#: ★ `_FAKE_MP3_BYTES` **不是可播放音频**：桩不实现 MP3 编码，只给一个非空字节串。
+#:   后端 `TextToSpeechAdapter` 的判据是"非 0 字节"，那条由适配器守着；
+#:   要验证"能听见"必须接真实上游 —— 别拿桩做音质验收。
+_ONEX_ONE_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+_FAKE_MP3_BYTES = b"\xff\xfb\x90\x00" + b"\x00" * 124
+
+#: 多模态三端的模型名。★ 必须同时出现在 `/v1/models` 清单里（`_models_payload`），
+#: 否则平台加载模型时会判定"上游没有这个基础模型"，`enabled` 保持 false，
+#: 工作流节点跑起来只会看到一句"模型不可用"。
+_MEDIA_MODELS = ("stub-tts", "stub-stt", "stub-image")
 #: `entity_override` 是"把结构化输出的某些**值**改成我指定的"（键名仍由 schema 决定）。
 #: 默认 None = 完全按 schema 造占位值（既有测试依赖那些值，别改默认）。
 #:
@@ -397,6 +413,20 @@ class StubHandler(BaseHTTPRequestHandler):
     def _send_error_json(self, status: int, message: str, err_type: str = "stub_error") -> None:
         self._send_json(status, {"error": {"message": message, "type": err_type, "code": status}})
 
+    # ── 出口：二进制（/audio/speech）──
+    def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+        """
+        二进制出口。
+
+        ★ 必须有它：`/audio/speech` 回的是音频，用 `_send_json` 会把约 44 字节的
+        MP3 头塞进 JSON 字符串里，客户端解出来照样"不是音频"—— 症状是播放器无声、而不是请求失败。
+        """
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     # ── 出口：SSE（分块传输）──
     def _send_sse(self, frames: list[str]) -> None:
         self.send_response(200)
@@ -427,6 +457,18 @@ class StubHandler(BaseHTTPRequestHandler):
         if length <= 0:
             return {}
         raw = self.rfile.read(length)
+        # ★ multipart（/audio/transcriptions）不是 JSON，但它**是合法请求**。
+        #   以前这里一律尝试 json.loads ⇒ 解析失败走 "__unparsable__" ⇒ 被 do_POST 的
+        #   400 分支当成"非法 JSON"拒掉。真实 OpenAI 对 multipart 是正常收的，桩不能比真上游更严。
+        #   所以在这里把"非 JSON 的合法请求"与"非法 JSON"分成两种标记，别让后来的人再踩。
+        content_type = (self.headers.get("Content-Type") or "").lower()
+        if content_type.startswith("multipart/form-data"):
+            return {
+                "__multipart__": {
+                    "boundary": content_type.split("boundary=", 1)[1] if "boundary=" in content_type else "",
+                    "raw": raw,
+                }
+            }
         try:
             return json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
@@ -525,6 +567,38 @@ class StubHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "config": dict(_CONFIG)})
             return
 
+        # ── 多模态三条（工作流 TEXT_TO_SPEECH / SPEECH_TO_TEXT / IMAGE_GENERATE 用）──
+        # ★ 它们故意放在 400 分支**之后**：非法 JSON 仍然要被拒。
+        #   `/audio/transcriptions` 的 multipart 已在 `_read_json` 里被单独标记成 `__multipart__`，
+        #   所以不会撞上那条 400。
+        if path.endswith("/images/generations"):
+            self._record({"__binary_omitted__": False, "body": body})
+            if self._maybe_inject_fault():
+                return
+            self._handle_images(body)
+            return
+        if path.endswith("/audio/speech"):
+            self._record({"__binary_omitted__": False, "body": body})
+            if self._maybe_inject_fault():
+                return
+            self._handle_speech(body)
+            return
+        if path.endswith("/audio/transcriptions"):
+            # multipart 的原始字节不进 _REQUESTS（会把 /__stub/requests 撑成二进制垃圾），
+            # 只记边界与长度 —— 端到端要断言"调到了"看 count 就够。
+            multipart = body.get("__multipart__") if isinstance(body, dict) else None
+            self._record(
+                {
+                    "multipart": True,
+                    "boundary": (multipart or {}).get("boundary", ""),
+                    "bytes": len((multipart or {}).get("raw", b"")),
+                }
+            )
+            if self._maybe_inject_fault():
+                return
+            self._handle_transcription()
+            return
+
         # ★ 宽松匹配：不管上游把 base-url 写成 host、host/v1 还是 host/v1/v1，
         #   都能接住 —— 同时把真实路径记下来供人核对
         if path.endswith("/chat/completions"):
@@ -543,6 +617,47 @@ class StubHandler(BaseHTTPRequestHandler):
         self._send_error_json(404, f"桩服务没有实现 {path}")
 
     # ── 具体端点 ──
+    def _handle_images(self, body) -> None:
+        """
+        图像生成。只回 `b64_json`，不回 `url`。
+
+        ★ 与后端 `ImageGenerateAdapter` 对齐：它只认 `data[0].b64_json`，缺了会抛
+        「上游没有返回 data[0].b64_json（可能只回了 url）」。桩若回 url，就必须再造一个
+        能下载的地址 —— 而真实场景里那个地址是上游名字空间，本地复现不了。
+        """
+        payload = body if isinstance(body, dict) else {}
+        prompt = str(payload.get("prompt") or "").strip()
+        if not prompt:
+            self._send_error_json(400, "prompt 不能为空", "invalid_request_error")
+            return
+        self._send_json(
+            200,
+            {
+                "created": int(time.time()),
+                # 1x1 透明 PNG —— 固定串，任何解码器都认
+                "data": [{"b64_json": _ONEX_ONE_PNG_B64}],
+            },
+        )
+
+    def _handle_speech(self, body) -> None:
+        """
+        语音合成。回一小段字节 + `audio/mpeg`。
+
+        ★ 这不是可播放音频：桩不实现 MP3 编码。后端 `TextToSpeechAdapter` 只校验
+        「非 0 字节」并落盘，`0 字节`才是失败信号（那条判据由适配器守着）。
+        要验证"能听见"，得接真实上游 —— 这一点写在注释里，免得有人拿它当音质验收。
+        """
+        payload = body if isinstance(body, dict) else {}
+        text = str(payload.get("input") or "").strip()
+        if not text:
+            self._send_error_json(400, "input 不能为空", "invalid_request_error")
+            return
+        self._send_bytes(200, _FAKE_MP3_BYTES, "audio/mpeg")
+
+    def _handle_transcription(self) -> None:
+        """语音识别。回 `text`；空录音也回 200 + 空文本（与适配器口径一致）。"""
+        self._send_json(200, {"text": "这是一段测试音频的转写。"})
+
     def _models_payload(self):
         """
         模型清单。★ 除 OpenAI 标准字段外，附带能力元数据：
@@ -574,6 +689,19 @@ class StubHandler(BaseHTTPRequestHandler):
                 "dimension": _EMBED_DIM,
             }
         )
+        # ★ 多模态三种也要在清单里：平台的模型加载会去上游 /models 校验 baseModel 在不在，
+        #   不在就记 LOAD_FAILED 且 enabled 保持 false ⇒ 工作流节点会报"模型不可用"。
+        #   桩如果在 /models 里不列它们，就等于"上游根本没提供这三个模型"。
+        for model_id in _MEDIA_MODELS:
+            data.append(
+                {
+                    "id": model_id,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "stub",
+                    "media_kind": model_id.split("-", 1)[1].upper(),
+                }
+            )
         return {"object": "list", "data": data}
 
     def _answer_text(self, body) -> tuple[str, str | None]:

@@ -7,6 +7,8 @@ import type {
   ConditionNodeConfig,
   DocumentExtractNodeConfig,
   FormNodeConfig,
+  ImageGenerateNodeConfig,
+  ImageUnderstandNodeConfig,
   ImplementedNodeType,
   NumberConditionBranch,
   NumberConditionItem,
@@ -15,7 +17,9 @@ import type {
   ReplyNodeConfig,
   RerankerNodeConfig,
   SearchDatasetNodeConfig,
+  SpeechToTextNodeConfig,
   StartNodeConfig,
+  TextToSpeechNodeConfig,
   UserInputField,
   WorkflowEdge,
   WorkflowGraph,
@@ -606,6 +610,94 @@ function applicationFromLegacy(nd: any): ApplicationNodeConfig & Record<string, 
   }
 }
 
+/**
+ * 图像理解节点：写契约名，键与后端 `ImageUnderstandNodeExecutor` 读的一致。
+ *
+ * ★ `imageKey` 指一格**流程变量**，不是图片本身 —— 面板上要提示这一点，否则用户会去填一个文件路径。
+ */
+function imageUnderstandToLegacy(
+  config: ImageUnderstandNodeConfig & Record<string, any>
+): LegacyBundle {
+  return {
+    node_data: {
+      modelId: config.modelId ?? null,
+      question: typeof config.question === 'string' ? config.question : '',
+      imageKey: typeof config.imageKey === 'string' ? config.imageKey : ''
+    }
+  }
+}
+
+function imageUnderstandFromLegacy(nd: any): ImageUnderstandNodeConfig & Record<string, any> {
+  return {
+    modelId: typeof nd?.modelId === 'string' && nd.modelId ? nd.modelId : null,
+    question: typeof nd?.question === 'string' ? nd.question : '',
+    imageKey: typeof nd?.imageKey === 'string' ? nd.imageKey : ''
+  }
+}
+
+/** 语音合成节点：`voice` 必填，`sourceKey` 留空读 `answer`。 */
+function textToSpeechToLegacy(
+  config: TextToSpeechNodeConfig & Record<string, any>
+): LegacyBundle {
+  return {
+    node_data: {
+      modelId: config.modelId ?? null,
+      voice: typeof config.voice === 'string' ? config.voice : '',
+      sourceKey: typeof config.sourceKey === 'string' ? config.sourceKey : ''
+    }
+  }
+}
+
+function textToSpeechFromLegacy(nd: any): TextToSpeechNodeConfig & Record<string, any> {
+  return {
+    modelId: typeof nd?.modelId === 'string' && nd.modelId ? nd.modelId : null,
+    voice: typeof nd?.voice === 'string' ? nd.voice : '',
+    sourceKey: typeof nd?.sourceKey === 'string' ? nd.sourceKey : ''
+  }
+}
+
+/** 语音识别节点：`audioKey` 留空读 `audio_key`，与语音合成节点的产出同名。 */
+function speechToTextToLegacy(
+  config: SpeechToTextNodeConfig & Record<string, any>
+): LegacyBundle {
+  return {
+    node_data: {
+      modelId: config.modelId ?? null,
+      audioKey: typeof config.audioKey === 'string' ? config.audioKey : '',
+      filename: typeof config.filename === 'string' ? config.filename : ''
+    }
+  }
+}
+
+function speechToTextFromLegacy(nd: any): SpeechToTextNodeConfig & Record<string, any> {
+  return {
+    modelId: typeof nd?.modelId === 'string' && nd.modelId ? nd.modelId : null,
+    audioKey: typeof nd?.audioKey === 'string' ? nd.audioKey : '',
+    filename: typeof nd?.filename === 'string' ? nd.filename : ''
+  }
+}
+
+/** 图像生成节点：`promptKey` 留空读 `query`。 */
+function imageGenerateToLegacy(
+  config: ImageGenerateNodeConfig & Record<string, any>
+): LegacyBundle {
+  return {
+    node_data: {
+      modelId: config.modelId ?? null,
+      promptKey: typeof config.promptKey === 'string' ? config.promptKey : '',
+      size: typeof config.size === 'string' ? config.size : ''
+    }
+  }
+}
+
+function imageGenerateFromLegacy(nd: any): ImageGenerateNodeConfig & Record<string, any> {
+  return {
+    modelId: typeof nd?.modelId === 'string' && nd.modelId ? nd.modelId : null,
+    promptKey: typeof nd?.promptKey === 'string' ? nd.promptKey : '',
+    size: typeof nd?.size === 'string' ? nd.size : ''
+  }
+}
+
 function formToLegacy(config: FormNodeConfig & Record<string, any>): LegacyBundle {
   return {
     node_data: {
@@ -652,6 +744,14 @@ function toLegacy(type: string, config: any): LegacyBundle {
       return rerankerToLegacy(config)
     case 'APPLICATION_NODE':
       return applicationToLegacy(config)
+    case 'IMAGE_UNDERSTAND_NODE':
+      return imageUnderstandToLegacy(config)
+    case 'TEXT_TO_SPEECH_NODE':
+      return textToSpeechToLegacy(config)
+    case 'SPEECH_TO_TEXT_NODE':
+      return speechToTextToLegacy(config)
+    case 'IMAGE_GENERATE_NODE':
+      return imageGenerateToLegacy(config)
     case 'FORM_NODE':
       return formToLegacy(config)
     default:
@@ -683,6 +783,14 @@ function fromLegacy(type: string, nd: any, props: any): Record<string, any> {
       return rerankerFromLegacy(nd)
     case 'APPLICATION_NODE':
       return applicationFromLegacy(nd)
+    case 'IMAGE_UNDERSTAND_NODE':
+      return imageUnderstandFromLegacy(nd)
+    case 'TEXT_TO_SPEECH_NODE':
+      return textToSpeechFromLegacy(nd)
+    case 'SPEECH_TO_TEXT_NODE':
+      return speechToTextFromLegacy(nd)
+    case 'IMAGE_GENERATE_NODE':
+      return imageGenerateFromLegacy(nd)
     case 'FORM_NODE':
       return formFromLegacy(nd)
     default:

@@ -257,6 +257,115 @@ record(
   missingData?.ok === false && /不存在|看不到|还没有发布版本/.test(String(missingData?.errors ?? missingData?.failReason ?? '')),
   `ok=${missingData?.ok}，errors=${JSON.stringify(missingData?.errors ?? missingData?.failReason)?.slice(0, 80)}`,
 );
+// ── 3c. 多模态两串：产出变量同名就能直接串起来 ────────────────────────────
+// 这一段验的不是「模型会不会画图 / 会不会说话」（桩不实现那些），而是**数据流**：
+// 图像生成写 `image_key`，图像理解默认就读 `image_key`；语音合成写 `audio_key`，
+// 语音识别默认就读 `audio_key` —— 两个节点之间不填任何变量名也能接上。
+// ★ 媒体字节不进流程变量（`FlowState` 是 Map<String,String>），变量里只有文件键，
+//   所以这里紧接着用 `GET /api/v1/files/{key}` 把字节取回来验「真的落盘了」。
+const mediaModels = JSON.parse((await get('/api/v1/models?page=1&size=200')).body)?.data?.list ?? [];
+const pickModel = (kind, name) =>
+  mediaModels.find((m) => m.kind === kind && m.name === name)?.id ?? mediaModels.find((m) => m.kind === kind)?.id;
+
+const ttsModel = pickModel('TTS', '桩语音合成');
+const sttModel = pickModel('STT', '桩语音识别');
+const imageModel = pickModel('IMAGE', '桩图像生成');
+record(
+  '多模态 · 库里有 TTS / STT / IMAGE 三种桩模型',
+  Boolean(ttsModel && sttModel && imageModel),
+  `tts=${ttsModel?.slice(0, 8)} stt=${sttModel?.slice(0, 8)} image=${imageModel?.slice(0, 8)}`,
+);
+
+const imageGraph = {
+  nodes: [
+    node('i-start', 'START_NODE', '开始', 60, {}),
+    node('i-gen', 'IMAGE_GENERATE_NODE', '图像生成', 320, { modelId: imageModel, size: '', promptKey: 'query' }),
+    node('i-see', 'IMAGE_UNDERSTAND_NODE', '图像理解', 580, { modelId: MODEL, imageKey: 'image_key', question: '这张图是什么？' }),
+    node('i-reply', 'REPLY_NODE', '回复', 840, { content: '图像链路跑完了。', replyType: 'content', asResult: true }),
+  ],
+  edges: [
+    edge('i1', 'i-start', 'i-gen'),
+    edge('i2', 'i-gen', 'i-see'),
+    edge('i3', 'i-see', 'i-reply'),
+  ],
+};
+const imageRun = await post(`/api/v1/assistants/${APP}/workflow/debug`, {
+  graph: imageGraph,
+  inputs: { entry: '一只戴墨镜的猫' },
+});
+const imageData = JSON.parse(imageRun.body)?.data;
+record(
+  '多模态 · 图像生成 → 图像理解 → 回复 跑到底',
+  imageData?.ok === true && imageData?.finalOutput === '图像链路跑完了。',
+  `ok=${imageData?.ok}，failReason=${JSON.stringify(imageData?.errors ?? imageData?.failReason)?.slice(0, 120)}`,
+);
+record(
+  '多模态 · 图像链路的轨迹是 4 个节点',
+  (imageData?.nodeTrail?.map((t) => t.type).join(' → ') ?? '') ===
+    'START_NODE → IMAGE_GENERATE_NODE → IMAGE_UNDERSTAND_NODE → REPLY_NODE',
+  imageData?.nodeTrail?.map((t) => t.type).join(' → ') ?? '(无)',
+);
+
+const speechGraph = {
+  nodes: [
+    node('s-start', 'START_NODE', '开始', 60, {}),
+    node('s-tts', 'TEXT_TO_SPEECH_NODE', '语音合成', 320, { modelId: ttsModel, voice: 'alloy', sourceKey: 'query' }),
+    node('s-stt', 'SPEECH_TO_TEXT_NODE', '语音识别', 580, { modelId: sttModel, audioKey: 'audio_key', filename: 'audio.mp3' }),
+    node('s-reply', 'REPLY_NODE', '回复', 840, { content: '语音链路跑完了。', replyType: 'content', asResult: true }),
+  ],
+  edges: [
+    edge('s1', 's-start', 's-tts'),
+    edge('s2', 's-tts', 's-stt'),
+    edge('s3', 's-stt', 's-reply'),
+  ],
+};
+const speechRun = await post(`/api/v1/assistants/${APP}/workflow/debug`, {
+  graph: speechGraph,
+  inputs: { entry: '合同违约金怎么算' },
+});
+const speechData = JSON.parse(speechRun.body)?.data;
+record(
+  '多模态 · 语音合成 → 语音识别 → 回复 跑到底',
+  speechData?.ok === true && speechData?.finalOutput === '语音链路跑完了。',
+  `ok=${speechData?.ok}，failReason=${JSON.stringify(speechData?.errors ?? speechData?.failReason)?.slice(0, 120)}`,
+);
+record(
+  '多模态 · 语音链路的轨迹是 4 个节点',
+  (speechData?.nodeTrail?.map((t) => t.type).join(' → ') ?? '') ===
+    'START_NODE → TEXT_TO_SPEECH_NODE → SPEECH_TO_TEXT_NODE → REPLY_NODE',
+  speechData?.nodeTrail?.map((t) => t.type).join(' → ') ?? '(无)',
+);
+
+// 反证：把图像理解的 modelId 换成"不存在的模型" ⇒ 必须明确报"模型不可用"，
+// 而不是拿空描述继续往下跑（静默失败是这一族最危险的地方）。
+const badImageGraph = {
+  nodes: [
+    node('b-start', 'START_NODE', '开始', 60, {}),
+    node('b-gen', 'IMAGE_GENERATE_NODE', '图像生成', 320, { modelId: imageModel, size: '', promptKey: 'query' }),
+    node('b-see', 'IMAGE_UNDERSTAND_NODE', '图像理解', 580, {
+      modelId: '00000000-0000-0000-0000-00000000beef',
+      imageKey: 'image_key',
+      question: 'x',
+    }),
+    node('b-reply', 'REPLY_NODE', '回复', 840, { content: '不该跑到这里。', replyType: 'content', asResult: true }),
+  ],
+  edges: [
+    edge('b1', 'b-start', 'b-gen'),
+    edge('b2', 'b-gen', 'b-see'),
+    edge('b3', 'b-see', 'b-reply'),
+  ],
+};
+const badImageRun = await post(`/api/v1/assistants/${APP}/workflow/debug`, {
+  graph: badImageGraph,
+  inputs: { entry: 'x' },
+});
+const badImageData = JSON.parse(badImageRun.body)?.data;
+record(
+  '多模态 · 模型不存在时明确失败（不静默继续）',
+  badImageData?.ok === false && /模型不可用|种类是/.test(String(badImageData?.errors ?? badImageData?.failReason ?? '')),
+  `ok=${badImageData?.ok}，errors=${JSON.stringify(badImageData?.errors ?? badImageData?.failReason)?.slice(0, 100)}`,
+);
+
 // ── 4. 界面上点「试用」—— 同一条链路，但走真实前端（`fromLogicFlow` 的产物）────
 // 前三段都用 API 直接发契约形状；而人实际点的是「试用」：它先存一次草稿，再把画布上的图
 // 转成契约形状发出去。`#335` 那批断链恰恰只在后者暴露 —— API 直发现成形状是测不出来的。

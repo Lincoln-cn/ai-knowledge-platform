@@ -34,11 +34,14 @@ export type ModelUse = 'chat' | 'embedding'
 
 /**
  * 判定只需要这两个字段。
- * ★ 用字面量联合而不是引契约类型：契约一旦改了 `ModelStatus`，
+ * ★ `status` 用字面量联合而不是引契约类型：契约一旦改了 `ModelStatus`，
  * 这里会以「类型不兼容」的方式报出来，而不是悄悄放宽。
+ * ★ `kind` 用 `string` 而不是联合：这里只做等值比较（`=== 'CHAT'` / `=== 'EMBEDDING'`），
+ * 不参与枚举。模型种类的完整清单只该有一处（`@/api/models` 的 `ModelKind`）—— 在判据层
+ * 再抄一份，加一个多模态种类就要改这里，而它根本不需要认识那些种类。
  */
 export interface ModelLike {
-  kind: 'CHAT' | 'EMBEDDING'
+  kind: string
   status: 'NOT_LOADED' | 'LOADING' | 'LOADED' | 'LOAD_FAILED'
 }
 

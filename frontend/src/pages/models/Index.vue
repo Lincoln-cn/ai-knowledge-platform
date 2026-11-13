@@ -346,7 +346,13 @@ import { MODEL_STATUS_LABELS, SUPPLIER_LABELS, labelOf } from '@/constants/label
 
 const STATUSES: ModelStatus[] = ['NOT_LOADED', 'LOADING', 'LOADED', 'LOAD_FAILED']
 
-const KIND_LABEL: Record<ModelKind, string> = { CHAT: '对话', EMBEDDING: '向量' }
+const KIND_LABEL: Record<ModelKind, string> = {
+  CHAT: '对话',
+  EMBEDDING: '向量',
+  TTS: '语音合成',
+  STT: '语音识别',
+  IMAGE: '图像生成'
+}
 const THINKING_LABEL = {
   NONE: '无',
   TOGGLEABLE: '可开关',

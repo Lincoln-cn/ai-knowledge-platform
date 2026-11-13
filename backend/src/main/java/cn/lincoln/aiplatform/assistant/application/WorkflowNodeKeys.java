@@ -70,6 +70,27 @@ public final class WorkflowNodeKeys {
     /** 要调用的那个应用的版本（版本号或版本主键）；留空 = 最新已发布版本。与 {@link #APPLICATION_ID} 是一对。 */
     public static final String VERSION = "version";
 
+    /** 图片在文件存储里的键；不给就用流程变量 {@code image_key}。 */
+    public static final String IMAGE_KEY = "imageKey";
+
+    /** 音频在文件存储里的键；不给就用流程变量 {@code audio_key}。 */
+    public static final String AUDIO_KEY = "audioKey";
+
+    /** 合成用的音色名。各上游取值不同（{@code alloy} / {@code nova} / {@code zh-CN-XiaoxiaoNeural}…），所以必填。 */
+    public static final String VOICE = "voice";
+
+    /** 生成图片的尺寸（{@code 1024x1024} 这类）；留空 = 不传，由上游决定。 */
+    public static final String SIZE = "size";
+
+    /** 提示词从哪个流程变量取；不给就用 {@code query}。 */
+    public static final String PROMPT_KEY = "promptKey";
+
+    /** 待合成 / 待识别的文本从哪个流程变量取；不给就用 {@code answer}。 */
+    public static final String SOURCE_KEY = "sourceKey";
+
+    /** 上传给识别上游的文件名：它只用来让上游按扩展名判容器格式。 */
+    public static final String FILENAME = "filename";
+
     public static final String PROLOGUE = "prologue";
     public static final String QUICK_QUESTIONS = "quickQuestions";
     public static final String ROLE_PROMPT = "rolePrompt";
@@ -139,6 +160,24 @@ public final class WorkflowNodeKeys {
 
     /** 被调应用的最终输出（与「试用」同一口径：先读 {@code reply}，没有再读 {@code answer}）。 */
     public static final String APP_OUTPUT = "app_output";
+
+    /** 图片在文件存储里的键（多模态四个节点只传键，不传字节）。 */
+    public static final String IMAGE_KEY = "image_key";
+
+    /** 图片类型（{@code image/png}）；下游要按它决定扩展名。 */
+    public static final String IMAGE_MIME = "image_mime";
+
+    /** 图像理解的回答。 */
+    public static final String IMAGE_DESCRIPTION = "image_description";
+
+    /** 合成出的音频在文件存储里的键。 */
+    public static final String AUDIO_KEY = "audio_key";
+
+    /** 合成出的音频格式（{@code mp3} 等）。 */
+    public static final String AUDIO_FORMAT = "audio_format";
+
+    /** 语音识别出的文本。 */
+    public static final String SPEECH_TRANSCRIPT = "speech_transcript";
   }
 
   /** 契约键集合（不含旧名与数组项键）：{@code node-types.json} 的 {@code configFields[].key} 必须落在这个集合里。 */
@@ -165,6 +204,13 @@ public final class WorkflowNodeKeys {
         Config.TOP_K,
         Config.QUESTION,
         Config.VERSION,
+        Config.IMAGE_KEY,
+        Config.AUDIO_KEY,
+        Config.VOICE,
+        Config.SIZE,
+        Config.PROMPT_KEY,
+        Config.SOURCE_KEY,
+        Config.FILENAME,
         Config.PROLOGUE,
         Config.QUICK_QUESTIONS,
         Config.ROLE_PROMPT,
@@ -193,16 +239,10 @@ public final class WorkflowNodeKeys {
                 Item.VALUE,
                 Item.NAME,
                 CONFIG),
-            List.of(
-                Output.QUERY,
-                Output.ANSWER,
-                Output.RETRIEVAL_RESULT,
-                Output.ACTIVE_BRANCH,
-                Output.REPLY,
-                Output.DOCUMENT_MARKDOWN,
-                Output.FORM_DATA,
-                Output.BASIC_INFO_FIELDS,
-                Output.BASIC_INFO_INPUT))
+            // ★ 输出键整组并进来，而不是在这里再抄一份：抄一份的下场是加了
+            //   RETRIEVAL_HITS 却忘了这里，而扫描器只在这个白名单里查 —— 症状是
+            //   "执行器读了它自己刚写的变量，测试却报它不在词表里"。
+            List.copyOf(outputKeys()))
         .flatMap(List::stream)
         .collect(java.util.stream.Collectors.toUnmodifiableSet());
   }
@@ -222,6 +262,12 @@ public final class WorkflowNodeKeys {
         Output.RETRIEVAL_HITS,
         Output.RERANK_RESULT,
         Output.RERANK_HITS,
-        Output.APP_OUTPUT);
+        Output.APP_OUTPUT,
+        Output.IMAGE_KEY,
+        Output.IMAGE_MIME,
+        Output.IMAGE_DESCRIPTION,
+        Output.AUDIO_KEY,
+        Output.AUDIO_FORMAT,
+        Output.SPEECH_TRANSCRIPT);
   }
 }

@@ -379,6 +379,57 @@ export interface ApplicationNodeConfig {
   version?: string
 }
 
+/**
+ * 图像理解节点的配置。
+ *
+ * ★ 用的是**对话模型**：视觉输入是对话协议的扩展（`messages[].content` 传数组），
+ * 不是另一种模型种类。选模型时按 `kind=CHAT` 过滤，别去找"视觉模型"。
+ *
+ * ★ `imageKey` 指的是一格**流程变量**，那格里放的是文件键（`store` 返回的），不是图片本身。
+ */
+export interface ImageUnderstandNodeConfig {
+  /** 对话模型 */
+  modelId: string | null
+  /** 问它什么；留空问「请客观描述这张图片的内容。」 */
+  question: string
+  /** 读哪个流程变量拿到图片键；留空读 `image_key` */
+  imageKey: string
+}
+
+/**
+ * 语音合成节点的配置。
+ *
+ * ★ `voice` 是必填：各上游的可选值完全不同（`alloy` / `nova` / `zh-CN-XiaoxiaoNeural`…），
+ * 没有能给所有上游都成立的默认值 —— 猜一个的结果是"大部分时候能跑、换了服务商就 400"。
+ */
+export interface TextToSpeechNodeConfig {
+  /** TTS 模型 */
+  modelId: string | null
+  /** 音色，上游决定取值范围 */
+  voice: string
+  /** 读哪个流程变量拿到要念的文字；留空读 `answer` */
+  sourceKey: string
+}
+
+/** 语音识别节点的配置。`audioKey` 留空读 `audio_key`（与语音合成节点的产出一致，串起来不用改）。 */
+export interface SpeechToTextNodeConfig {
+  /** STT 模型 */
+  modelId: string | null
+  /** 读哪个流程变量拿到音频键；留空读 `audio_key` */
+  audioKey: string
+  /** 传给上游的文件名；留空用 `audio.mp3`（上游靠扩展名判容器格式） */
+  filename: string
+}
+
+/** 图像生成节点的配置。`promptKey` 留空读 `query` —— 提示词通常来自用户问题或上游的总结。 */
+export interface ImageGenerateNodeConfig {
+  /** IMAGE 模型 */
+  modelId: string | null
+  /** 读哪个流程变量拿到提示词；留空读 `query` */
+  promptKey: string
+  /** 如 `1024x1024`；留空由上游决定 */
+  size: string
+}
 
 export type NodeConfigOf<T extends WorkflowNodeType> =
   T extends 'START_NODE' ? StartNodeConfig
@@ -392,6 +443,10 @@ export type NodeConfigOf<T extends WorkflowNodeType> =
   : T extends 'DOCUMENT_EXTRACT_NODE' ? DocumentExtractNodeConfig
   : T extends 'RERANKER_NODE' ? RerankerNodeConfig
   : T extends 'APPLICATION_NODE' ? ApplicationNodeConfig
+  : T extends 'IMAGE_UNDERSTAND_NODE' ? ImageUnderstandNodeConfig
+  : T extends 'TEXT_TO_SPEECH_NODE' ? TextToSpeechNodeConfig
+  : T extends 'SPEECH_TO_TEXT_NODE' ? SpeechToTextNodeConfig
+  : T extends 'IMAGE_GENERATE_NODE' ? ImageGenerateNodeConfig
   : T extends 'FORM_NODE' ? FormNodeConfig
   : Record<string, never>
 

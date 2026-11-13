@@ -143,6 +143,8 @@ function build() {
   lines.push('  readonly dependsOn?: string;');
   lines.push('  /** 固定选项（如回复形态只有一种取值）。 */');
   lines.push('  readonly options?: readonly string[];');
+  lines.push('  /** `optionsSource` 是 `models` 时按哪种模型种类过滤。 */');
+  lines.push('  readonly modelKind?: string;');
   lines.push('  /** 面板上的说明文字。 */');
   lines.push('  readonly hint?: string;');
   lines.push('  /** 新建节点时这个字段的默认值（目录里写了 default 才有这一格）。 */');
@@ -165,6 +167,7 @@ function build() {
       if (Array.isArray(field.options) && field.options.length > 0) {
         extras.push(`options: [${field.options.map(s).join(', ')}]`);
       }
+      if (field.modelKind) extras.push(`modelKind: ${s(field.modelKind)}`);
       if (field.hint) extras.push(`hint: ${s(field.hint)}`);
       if (field.default !== undefined) extras.push(`defaultValue: ${s(field.default)}`);
       const tail = extras.length > 0 ? `, ${extras.join(', ')}` : '';

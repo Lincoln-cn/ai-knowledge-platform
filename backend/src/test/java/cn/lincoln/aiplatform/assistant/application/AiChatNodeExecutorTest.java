@@ -10,8 +10,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cn.lincoln.aiplatform.platform.assistant.ApplicationInvokePort;
+import cn.lincoln.aiplatform.platform.assistant.ImageGeneratePort;
+import cn.lincoln.aiplatform.platform.assistant.ImageUnderstandPort;
+import cn.lincoln.aiplatform.platform.assistant.SpeechToTextPort;
+import cn.lincoln.aiplatform.platform.assistant.TextToSpeechPort;
 import cn.lincoln.aiplatform.platform.assistant.WorkflowRerankPort;
 import cn.lincoln.aiplatform.platform.assistant.WorkflowSearchPort;
+import cn.lincoln.aiplatform.platform.domain.FileStorePort;
 import cn.lincoln.aiplatform.platform.knowledge.DocumentExtractPort;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import java.io.IOException;
@@ -195,6 +200,14 @@ class AiChatNodeExecutorTest {
             new DocumentExtractNodeExecutor(providerOf(mock(DocumentExtractPort.class))),
             new RerankerNodeExecutor(providerOf(mock(WorkflowRerankPort.class))),
             new ApplicationNodeExecutor(providerOf(mock(ApplicationInvokePort.class))),
+            new ImageUnderstandNodeExecutor(
+                providerOf(mock(ImageUnderstandPort.class)), providerOf(mock(FileStorePort.class))),
+            new ImageGenerateNodeExecutor(
+                providerOf(mock(ImageGeneratePort.class)), providerOf(mock(FileStorePort.class))),
+            new TextToSpeechNodeExecutor(
+                providerOf(mock(TextToSpeechPort.class)), providerOf(mock(FileStorePort.class))),
+            new SpeechToTextNodeExecutor(
+                providerOf(mock(SpeechToTextPort.class)), providerOf(mock(FileStorePort.class))),
             new QuestionNodeExecutor())) {
       byType.put(executor.type(), executor);
     }

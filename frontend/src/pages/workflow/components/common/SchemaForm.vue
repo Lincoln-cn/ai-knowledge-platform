@@ -56,6 +56,25 @@
         />
       </el-select>
 
+      <!-- ②' 选项来自模型列表，按 `modelKind` 过滤（视觉理解也要按 CHAT 过滤，见目录里的说明） -->
+      <el-select
+        v-else-if="field.optionsSource === 'models'"
+        :model-value="read(field.key)"
+        size="small"
+        filterable
+        clearable
+        :placeholder="modelsOf(field).length ? '选择模型' : '没有这种种类的模型，先去模型管理里加'"
+        style="width: 100%"
+        @change="(value: string | null) => write(field.key, value || null)"
+      >
+        <el-option
+          v-for="model in modelsOf(field)"
+          :key="model.value"
+          :label="model.label"
+          :value="model.value"
+        />
+      </el-select>
+
       <!-- ③ Markdown 长文本 -->
       <MdEditorMagnify
         v-else-if="field.editor === 'markdown'"
@@ -113,8 +132,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { get, set } from 'lodash-es'
 import type { NodeConfigField } from '@/api/workflow'
+import type { ModelKind } from '@/api/models'
 import { listKnowledgeBases } from '@/api/knowledge'
 import { listDocuments } from '@/api/ingestion'
+import { listModels } from '@/api/models'
 
 interface Option {
   label: string
@@ -140,6 +161,8 @@ const tick = ref(0)
 
 const kbs = ref<Option[]>([])
 const documents = ref<Record<string, Option[]>>({})
+/** 模型候选，按种类分开缓存：同一个面板里可能既有对话模型字段又有图像模型字段。 */
+const models = ref<Record<string, Option[]>>({})
 
 const visibleFields = computed(() => props.fields)
 
@@ -175,6 +198,9 @@ function labelOf(key: string): string {
   if (field.optionsSource === 'documents') {
     return documentsOf(field).find((option) => option.value === value)?.label ?? ''
   }
+  if (field.optionsSource === 'models') {
+    return modelsOf(field).find((option) => option.value === value)?.label ?? ''
+  }
   return ''
 }
 
@@ -202,6 +228,10 @@ function documentsOf(field: NodeConfigField): Option[] {
   const dependsOn = field.dependsOn
   if (!dependsOn) return []
   return documents.value[dependencyValue(field)] ?? []
+}
+
+function modelsOf(field: NodeConfigField): Option[] {
+  return models.value[field.modelKind ?? ''] ?? []
 }
 
 function optionLabel(field: NodeConfigField, option: string): string {
@@ -241,6 +271,25 @@ async function loadDocuments(kbId: string): Promise<void> {
   emit('changed')
 }
 
+/**
+ * 模型候选：按 `modelKind` 拉一次，缓存起来。
+ *
+ * ★ 只列**已加载可用**的？不 —— 与文档候选同一个取舍：列出来并标注状态，让用户看到
+ *   "我加过这个模型但它没加载"，而不是以为它不存在。
+ */
+async function loadModels(kind: ModelKind): Promise<void> {
+  if (models.value[kind]) return
+  const result = await listModels({ kind, page: 1, size: 100 })
+  models.value = {
+    ...models.value,
+    [kind]: (result.list ?? []).map((model) => ({
+      label: model.status === 'LOADED' ? model.name : `${model.name}（${model.status}）`,
+      value: model.id
+    }))
+  }
+  emit('changed')
+}
+
 /** 供节点面板挂到 `nodeModel.validate`（发请求前跑一遍）。 */
 function validate(): boolean {
   for (const field of props.fields) {
@@ -258,6 +307,14 @@ function validate(): boolean {
 onMounted(async () => {
   if (props.fields.some((field) => field.optionsSource === 'knowledge-bases')) {
     await loadKnowledgeBases()
+  }
+  const kinds = new Set(
+    props.fields
+      .filter((field) => field.optionsSource === 'models' && field.modelKind)
+      .map((field) => field.modelKind as ModelKind)
+  )
+  for (const kind of kinds) {
+    await loadModels(kind)
   }
   for (const field of props.fields) {
     const dependsOn = field.dependsOn
