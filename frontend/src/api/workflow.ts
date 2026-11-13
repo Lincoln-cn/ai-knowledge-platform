@@ -358,6 +358,14 @@ export interface FormFieldConfig {
   options?: string[]
 }
 
+/** 重排节点（`RERANKER_NODE`）的配置 —— 它只对上游检索到的候选重新排序，不自己去查库。 */
+export interface RerankerNodeConfig {
+  /** 只重排前几名，其余保持原序；默认 5（与 `RerankPort` 的离线读数一致） */
+  topK: number
+  /** 用来比对的问题；留空则用流程变量 `query` */
+  question: string
+}
+
 export type NodeConfigOf<T extends WorkflowNodeType> =
   T extends 'START_NODE' ? StartNodeConfig
   : T extends 'BASE_NODE' ? BaseNodeConfig
@@ -368,6 +376,7 @@ export type NodeConfigOf<T extends WorkflowNodeType> =
   : T extends 'NUMBER_CONDITION_NODE' ? NumberConditionNodeConfig
   : T extends 'REPLY_NODE' ? ReplyNodeConfig
   : T extends 'DOCUMENT_EXTRACT_NODE' ? DocumentExtractNodeConfig
+  : T extends 'RERANKER_NODE' ? RerankerNodeConfig
   : T extends 'FORM_NODE' ? FormNodeConfig
   : Record<string, never>
 
@@ -594,6 +603,30 @@ export const debugWorkflow = (appId: string, body: DebugWorkflowBody) =>
   request<DebugWorkflowResult>({
     method: 'POST',
     url: '/assistants/:appId/workflow/debug',
+    path: { appId },
+    body
+  })
+
+/** 从暂停点恢复一次执行。`graph` 必须与调试时同一张（后端要用它重编译计划、比对已完成的步数） */
+export interface ResumeWorkflowBody {
+  executionId: string
+  /** 人工介入节点要的答复；表单节点给序列化后的 form_data */
+  answer: string
+  graph: WorkflowGraph
+}
+
+/**
+ * 提交一次恢复。
+ *
+ * ★ 后端有这个端点了（`WorkflowResumeController`），但**界面还没有恢复入口** ——
+ * 今天只有 e2e（`frontend/e2e/workflow-full-run.mjs`）直接调它。登记在这里的理由与 `#79` 的三格台账一致：
+ * 「后端已落 + 契约已登记 + 零消费点」是一格可以核对的空白；不登记则连这格空白都看不见，
+ * 而 `ContractDriftTest` 的规则 1 也正是为此存在（它第一次真的跑起来就抓到了这条）。
+ */
+export const resumeWorkflow = (appId: string, body: ResumeWorkflowBody) =>
+  request<{ finalOutput: string; nodeTrail: WorkflowRecord['nodeTrail']; elapsedMs: number }>({
+    method: 'POST',
+    url: '/assistants/:appId/workflow/resume',
     path: { appId },
     body
   })

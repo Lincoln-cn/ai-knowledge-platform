@@ -38,13 +38,14 @@ class WorkflowContractShapeTest {
   private static final UUID EXECUTION_ID = UUID.fromString("00000000-0000-0000-0000-0000000000c1");
   private static final UUID KB_ID = UUID.fromString("00000000-0000-0000-0000-0000000000b9");
   private static final UUID MODEL_ID = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+  private static final UUID SEGMENT_ID = UUID.fromString("00000000-0000-0000-0000-0000000000c9");
 
   private static final JsonMapper MAPPER = JsonMapper.builder().build();
 
   /** 只回定值、并记下调用参数的替身端口。 */
   private static final class RecordingPort implements WorkflowSearchPort {
     final List<String> calls = new ArrayList<>();
-    List<Snippet> snippets = List.of(new Snippet("差旅费管理办法.pdf", "第三十一条：住宿标准按职级执行。"));
+    List<Snippet> snippets = List.of(new Snippet(SEGMENT_ID, "差旅费管理办法.pdf", "第三十一条：住宿标准按职级执行。"));
 
     @Override
     public List<Snippet> search(UUID kbId, String query, int topN) {

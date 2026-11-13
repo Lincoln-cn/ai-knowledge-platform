@@ -61,6 +61,9 @@ const autoGraph = {
       kbIds: [KB],
       retrieval: { mode: 'HYBRID', threshold: 0.2, topN: 3, noRefStrategy: 'REFUSE' },
     }),
+    // ★ 重排节点夹在检索与生成之间：它读检索写的结构化命中（retrieval_hits），
+    //   重排后写 rerank_result —— AI 对话节点优先读那一份，所以这一段真的改变了送进模型的前 3 条顺序。
+    node('n-rerank', 'RERANKER_NODE', '重排', 540, { topK: 3, question: '' }),
     node('n-ai', 'AI_CHAT_NODE', 'AI 对话', 640, {
       modelId: MODEL,
       rolePrompt: '你是合同顾问，只根据检索结果回答，简短。',
@@ -79,7 +82,8 @@ const autoGraph = {
   edges: [
     edge('e1', 'n-start', 'n-base'),
     edge('e2', 'n-base', 'n-search'),
-    edge('e3', 'n-search', 'n-ai'),
+    edge('e3', 'n-search', 'n-rerank'),
+    edge('e3b', 'n-rerank', 'n-ai'),
     edge('e4', 'n-ai', 'n-reply'),
   ],
 };
@@ -104,8 +108,8 @@ record(
   `finalOutput=${JSON.stringify(autoData?.finalOutput)?.slice(0, 80)}`,
 );
 record(
-  '自动链路 · 轨迹覆盖 5 个节点',
-  (autoData?.nodeTrail?.length ?? 0) === 5,
+  '自动链路 · 轨迹覆盖 6 个节点（含重排）',
+  (autoData?.nodeTrail?.length ?? 0) === 6,
   autoData?.nodeTrail?.map((t) => t.type).join(' → ') ?? '(无)',
 );
 const stubAfter = await stubCount();

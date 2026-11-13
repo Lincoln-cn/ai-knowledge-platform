@@ -12,6 +12,7 @@ import type {
   NumberConditionNodeConfig,
   QuestionNodeConfig,
   ReplyNodeConfig,
+  RerankerNodeConfig,
   SearchDatasetNodeConfig,
   StartNodeConfig,
   UserInputField,
@@ -565,6 +566,25 @@ function documentExtractFromLegacy(nd: any): DocumentExtractNodeConfig & Record<
   }
 }
 
+function rerankerToLegacy(config: RerankerNodeConfig & Record<string, any>): LegacyBundle {
+  return {
+    node_data: {
+      // 键名与后端 `RerankerNodeExecutor` 读的一致（camelCase）。这两个字段都没有旧画布名，
+      // 所以不需要回退分支 —— 回退分支只该为"库里已经存过的形状"存在。
+      topK: config.topK ?? 5,
+      question: config.question ?? ''
+    }
+  }
+}
+
+function rerankerFromLegacy(nd: any): RerankerNodeConfig & Record<string, any> {
+  const rawTopK = nd?.topK
+  return {
+    topK: typeof rawTopK === 'number' && rawTopK > 0 ? rawTopK : 5,
+    question: typeof nd?.question === 'string' ? nd.question : ''
+  }
+}
+
 function formToLegacy(config: FormNodeConfig & Record<string, any>): LegacyBundle {
   return {
     node_data: {
@@ -607,6 +627,8 @@ function toLegacy(type: string, config: any): LegacyBundle {
       return replyToLegacy(config)
     case 'DOCUMENT_EXTRACT_NODE':
       return documentExtractToLegacy(config)
+    case 'RERANKER_NODE':
+      return rerankerToLegacy(config)
     case 'FORM_NODE':
       return formToLegacy(config)
     default:
@@ -634,6 +656,8 @@ function fromLegacy(type: string, nd: any, props: any): Record<string, any> {
       return replyFromLegacy(nd)
     case 'DOCUMENT_EXTRACT_NODE':
       return documentExtractFromLegacy(nd)
+    case 'RERANKER_NODE':
+      return rerankerFromLegacy(nd)
     case 'FORM_NODE':
       return formFromLegacy(nd)
     default:

@@ -2,11 +2,13 @@ package cn.lincoln.aiplatform.assistant.application;
 
 import cn.lincoln.aiplatform.platform.assistant.WorkflowSearchPort;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 检索节点（{@code SEARCH_DATASET_NODE}）的执行器（{@code #326}）。
@@ -32,6 +34,18 @@ public class SearchDatasetNodeExecutor implements NodeExecutor {
 
   /** 检索结果写进 state 的键。 */
   public static final String RESULT_KEY = WorkflowNodeKeys.Output.RETRIEVAL_RESULT;
+
+  /**
+   * 结构化命中（JSON 数组）写进 state 的键 —— 给下游重排节点用。
+   *
+   * <p>★ 为什么不复用 {@link #RESULT_KEY}：那个键是**给模型看的拼接文本**，（{@code [文档名] 正文}，段与段之间空行）， 拼接之后 id 就没了。而重排要按
+   * id 排序（{@code RerankPort} 的契约是收 id 列表返回 id 排列）， 从一段文本里反解 id 等于把"检索侧给的事实"再猜一遍。两个键，两种用途，各写一份。
+   *
+   * <p>★ 每项形状：{@code {"segmentId": "...", "docName": "...", "content": "..."}}。
+   */
+  public static final String HITS_KEY = WorkflowNodeKeys.Output.RETRIEVAL_HITS;
+
+  private static final JsonMapper MAPPER = JsonMapper.builder().build();
 
   /** 配置里读知识库列表的键：与前端契约 {@code SearchDatasetNodeConfig.kbIds} 同名。 */
   static final String CONFIG_KB_IDS = WorkflowNodeKeys.Config.KB_IDS;
@@ -66,6 +80,7 @@ public class SearchDatasetNodeExecutor implements NodeExecutor {
     int topN = topN(context.nodeConfig());
 
     StringBuilder merged = new StringBuilder();
+    List<Map<String, Object>> hits = new ArrayList<>();
     for (String raw : kbIds) {
       UUID kbId;
       try {
@@ -83,9 +98,16 @@ public class SearchDatasetNodeExecutor implements NodeExecutor {
           merged.append("\n\n");
         }
         merged.append('[').append(snippet.docName()).append("] ").append(snippet.content());
+        // 同一次遍历里产出两份：给模型的文本、给重排的 id + 正文。两处各写一遍会漂。
+        Map<String, Object> hit = new LinkedHashMap<>();
+        hit.put("segmentId", snippet.segmentId() == null ? null : snippet.segmentId().toString());
+        hit.put("docName", snippet.docName());
+        hit.put("content", snippet.content());
+        hits.add(hit);
       }
     }
     context.state().write(RESULT_KEY, merged.toString(), KeyUpdate.REPLACE);
+    context.state().write(HITS_KEY, MAPPER.writeValueAsString(hits), KeyUpdate.REPLACE);
   }
 
   /**

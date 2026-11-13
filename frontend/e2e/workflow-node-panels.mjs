@@ -19,6 +19,12 @@ const CATALOG = JSON.parse(
   fs.readFileSync('../backend/src/main/resources/workflow/node-types.json', 'utf8'),
 );
 const EXECUTABLE = CATALOG.filter((n) => n.executable);
+// ★ E2E_NODE=RERANKER_NODE 只跑一个节点（可用逗号给多个）：全量一轮要十来分钟，
+//   排查某个节点时不该等其余十个。
+const ONLY = process.env.E2E_NODE;
+const LIST = ONLY
+  ? EXECUTABLE.filter((n) => ONLY.split(',').map((s) => s.trim()).includes(n.type))
+  : EXECUTABLE;
 const SCHEMA_DRIVEN = new Set(['REPLY_NODE', 'DOCUMENT_EXTRACT_NODE']);
 
 const EMPTY_GRAPH = {
@@ -228,7 +234,7 @@ async function readSavedConfig(type) {
   return node?.config ?? null;
 }
 
-for (const node of EXECUTABLE) {
+for (const node of LIST) {
   await resetDraft();
   await openCanvas();
 

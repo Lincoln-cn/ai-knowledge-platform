@@ -60,6 +60,13 @@ public final class WorkflowNodeKeys {
     public static final String AS_RESULT = "asResult";
     public static final String RETRIEVAL = "retrieval";
     public static final String TOP_N = "topN";
+
+    /** 重排窗口（只重排前几名）。与 {@link #TOP_N} 分开：前者是"取几条"，后者是"排几条"。 */
+    public static final String TOP_K = "topK";
+
+    /** 重排时用来比对的问题；不给就用流程变量 {@code query}。 */
+    public static final String QUESTION = "question";
+
     public static final String PROLOGUE = "prologue";
     public static final String QUICK_QUESTIONS = "quickQuestions";
     public static final String ROLE_PROMPT = "rolePrompt";
@@ -104,6 +111,16 @@ public final class WorkflowNodeKeys {
     public static final String QUERY = "query";
     public static final String ANSWER = "answer";
     public static final String RETRIEVAL_RESULT = "retrieval_result";
+
+    /** 结构化命中（JSON 数组，每项含 segmentId / docName / content），给重排节点用。 */
+    public static final String RETRIEVAL_HITS = "retrieval_hits";
+
+    /** 重排后的文本（与 {@link #RETRIEVAL_RESULT} 同形状，但按重排结果排序）。 */
+    public static final String RERANK_RESULT = "rerank_result";
+
+    /** 重排后的结构化命中（JSON 数组，每项比 {@link #RETRIEVAL_HITS} 多一个 {@code rank}）。 */
+    public static final String RERANK_HITS = "rerank_hits";
+
     public static final String ACTIVE_BRANCH = "active_branch";
     public static final String REPLY = "reply";
     public static final String DOCUMENT_MARKDOWN = "document_markdown";
@@ -133,6 +150,8 @@ public final class WorkflowNodeKeys {
         Config.AS_RESULT,
         Config.RETRIEVAL,
         Config.TOP_N,
+        Config.TOP_K,
+        Config.QUESTION,
         Config.PROLOGUE,
         Config.QUICK_QUESTIONS,
         Config.ROLE_PROMPT,

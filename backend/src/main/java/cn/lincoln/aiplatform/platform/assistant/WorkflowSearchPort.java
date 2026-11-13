@@ -22,10 +22,12 @@ public interface WorkflowSearchPort {
   /**
    * 一段命中的正文。
    *
+   * @param segmentId 分段 id —— ★ 不是给显示用的，是给下游**重排**用的：{@code RerankPort.rerank} 收的是 id 列表，
+   *     判定"哪几条排前面"必须能指回同一段。少了它，重排节点只能对着一串拼接好的文本干瞪眼。
    * @param docName 文档名（给引用显示用；检索侧应保证不为 {@code null}，缺失时给空串）
    * @param content 正文
    */
-  record Snippet(String docName, String content) {}
+  record Snippet(UUID segmentId, String docName, String content) {}
 
   /**
    * 在一个知识库里检索。

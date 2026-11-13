@@ -12,9 +12,9 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * 节点目录（`#198` 第二块）：18 个节点、10 个已实现、类型名不重复。
+ * 节点目录（`#198` 第二块）：18 个节点、11 个已实现、类型名不重复。
  *
- * <p>★ 为什么断言"10 个已实现"：画布只注册了这 10 个（`check_workflow_node_types.py` 守的是同一件事）。 目录里把某个标成
+ * <p>★ 为什么断言"11 个已实现"：画布只注册了这 11 个（`check_workflow_node_types.py` 守的是同一件事）。 目录里把某个标成
  * `implemented=true` 而画布没注册，用户点它会掉进"找不到节点模型"的空画布 —— 那正是 `#20` 那次事故的形状。这条断言把两边的数字钉在一起。
  */
 class WorkflowNodeTypeTest {
@@ -30,14 +30,14 @@ class WorkflowNodeTypeTest {
 
   @Test
   void catalogCoversAllEighteenTypes() throws Exception {
-    assertThat(load()).as("18 个节点：10 已实现 + 8 规划中").hasSize(18);
+    assertThat(load()).as("18 个节点：11 已实现 + 7 规划中").hasSize(18);
   }
 
   @Test
-  void exactlyTenAreInCatalog() throws Exception {
+  void exactlyElevenAreInCatalog() throws Exception {
     long enabled =
         load().stream().filter(m -> Boolean.TRUE.equals(m.get("catalogEnabled"))).count();
-    assertThat(enabled).as("★ 画布可用的必须恰好 10 个 —— 与画布注册的类型数一致（#20 的教训）").isEqualTo(10);
+    assertThat(enabled).as("★ 画布可用的必须恰好 11 个 —— 与画布注册的类型数一致（#20 的教训）").isEqualTo(11);
   }
 
   @Test

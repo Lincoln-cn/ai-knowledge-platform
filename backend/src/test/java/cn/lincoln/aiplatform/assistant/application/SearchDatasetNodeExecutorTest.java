@@ -18,11 +18,12 @@ class SearchDatasetNodeExecutorTest {
 
   private static final UUID EXECUTION_ID = UUID.fromString("00000000-0000-0000-0000-0000000000e1");
   private static final UUID KB_ID = UUID.fromString("00000000-0000-0000-0000-0000000000b1");
+  private static final UUID SEGMENT_ID = UUID.fromString("00000000-0000-0000-0000-0000000000c8");
 
   /** 只回定值、并记下调用参数的替身端口。 */
   private static final class RecordingPort implements WorkflowSearchPort {
     final List<String> calls = new ArrayList<>();
-    List<Snippet> snippets = List.of(new Snippet("制度汇编.pdf", "固定资产归口部门是财务资产部"));
+    List<Snippet> snippets = List.of(new Snippet(SEGMENT_ID, "制度汇编.pdf", "固定资产归口部门是财务资产部"));
 
     @Override
     public List<Snippet> search(UUID kbId, String query, int topN) {
@@ -88,6 +89,11 @@ class SearchDatasetNodeExecutorTest {
     assertThat(state.read(SearchDatasetNodeExecutor.RESULT_KEY))
         .as("命中的正文必须写进 state，否则下游节点拿不到资料")
         .contains("固定资产归口部门是财务资产部");
+    // ★ 结构化命中要一起写：重排节点按 id 排序，只有拼接好的文本它没法排（#333）。
+    assertThat(state.read(SearchDatasetNodeExecutor.HITS_KEY))
+        .as("结构化命中必须带 segmentId，否则重排节点无从下手")
+        .contains(SEGMENT_ID.toString())
+        .contains("制度汇编.pdf");
   }
 
   @Test

@@ -52,6 +52,8 @@ public class WorkflowSearchAdapter implements WorkflowSearchPort {
                 null,
                 null,
                 null));
-    return view.items().stream().map(item -> new Snippet(item.docName(), item.content())).toList();
+    return view.items().stream()
+        .map(item -> new Snippet(item.segmentId(), item.docName(), item.content()))
+        .toList();
   }
 }

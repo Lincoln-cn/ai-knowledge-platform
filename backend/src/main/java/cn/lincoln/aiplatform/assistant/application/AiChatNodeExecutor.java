@@ -57,10 +57,7 @@ public class AiChatNodeExecutor implements NodeExecutor {
       throw new IllegalStateException("AI 对话节点没有拿到问题：START_NODE 之前没跑，或者这次执行没有输入");
     }
 
-    String retrieval =
-        Optional.ofNullable(context.state().read(SearchDatasetNodeExecutor.RESULT_KEY))
-            .map(Object::toString)
-            .orElse("");
+    String retrieval = Optional.ofNullable(retrievalText(context)).orElse("");
 
     UUID modelId = modelIdOf(context.nodeConfig());
     String prompt = buildPrompt(question, retrieval);
@@ -73,6 +70,23 @@ public class AiChatNodeExecutor implements NodeExecutor {
     }
 
     context.state().write(ANSWER_KEY, answer, KeyUpdate.REPLACE);
+  }
+
+  /**
+   * 取这段对话要用的资料正文。
+   *
+   * <p>★ 顺序是 <b>{@code rerank_result} 优先、{@code retrieval_result} 兜底</b>：
+   * 图里接了重排节点时，用户要的是重排后的顺序（重排改变的是"哪几条排最前面"，而这里恰好按顺序拼进提示词）， 读回原序等于让重排白跑一次 ——
+   * 那种"跑成功了但没影响任何东西"正是本项目最难发现的形状。
+   *
+   * <p>没接重排节点时 {@code rerank_result} 不存在，行为与以前逐字一样。
+   */
+  private static String retrievalText(WorkflowNodeContext context) {
+    String reranked = context.state().read(RerankerNodeExecutor.RESULT_KEY);
+    if (reranked != null && !reranked.isBlank()) {
+      return reranked;
+    }
+    return context.state().read(SearchDatasetNodeExecutor.RESULT_KEY);
   }
 
   /**
