@@ -58,9 +58,12 @@ const searchModeToRetrieval: Record<string, RetrievalMode> = {
 /**
  * 节点没有配置检索参数时的兜底值。
  *
- * 与 `defaults.ts` 的 `defaultConfigFor('SEARCH_DATASET_NODE')` 同值；写成这里的常量而不是去 import，
- * 是因为 `defaults.ts` 才是"新建节点时给什么"，而这里是"读到一个没有检索参数的节点时按什么解释"——
- * 两件事会分开演化（前者跟着新建流程变，后者不能跟着变，否则老草稿的解释会静默漂移）。
+ * 「新建节点时默认给什么」在 `components/common/data.ts` 的 `nodeDict`（拖进画布时复制它的
+ * `properties.node_data`），而这里是"读到一个没有检索参数的节点时按什么解释"。两件事本来就该分开
+ * 演化：前者跟着新建流程变，后者不能跟着变，否则老草稿的解释会静默漂移。
+ *
+ * 曾经这里 import 的是 `lib/defaults.ts` 的 `defaultConfigFor`，而那个文件**没有任何导入方**
+ * （新建走的是 `nodeDict`）—— 一份没人读的第二真源，已于 #337 第二步删除。
  */
 const FALLBACK_RETRIEVAL: RetrievalParams = {
   mode: 'HYBRID',
