@@ -133,7 +133,7 @@ export interface NodeConfigField {
   readonly defaultValue?: unknown;
 }
 
-export const NODE_CONFIG_FIELDS: Record<ImplementedNodeType, readonly NodeConfigField[]> = {
+export const NODE_CONFIG_FIELDS: Record<WorkflowNodeTypeName, readonly NodeConfigField[]> = {
   START_NODE: [],
   BASE_NODE: [
     { key: "fields", label: "收集字段", type: "object-list", required: false, panelOnly: false, defaultValue: [] },
@@ -171,15 +171,23 @@ export const NODE_CONFIG_FIELDS: Record<ImplementedNodeType, readonly NodeConfig
     { key: "replyType", label: "回复形态", type: "string", required: false, panelOnly: false, options: ["content"], hint: "当前只有「自定义内容」一种。缺省即它，不必手选", defaultValue: "content" },
     { key: "asResult", label: "返回内容", type: "boolean", required: false, panelOnly: true, hint: "打开后这条回复作为流程结果呈现给用户", defaultValue: true },
   ],
+  FUNCTION_LIB_NODE: [],
+  FUNCTION_NODE: [],
+  RERANKER_NODE: [],
+  APPLICATION_NODE: [],
   DOCUMENT_EXTRACT_NODE: [
     { key: "kbId", label: "知识库", type: "uuid", required: false, panelOnly: true, optionsSource: "knowledge-bases", hint: "先选库才能选文档。这一项只给面板用，执行器不读", defaultValue: null },
     { key: "docId", label: "文档", type: "uuid", required: true, panelOnly: false, optionsSource: "documents", dependsOn: "kbId", hint: "只有已解析出正文的文档能用；正文会写进流程变量 document_markdown", defaultValue: null },
   ],
+  IMAGE_UNDERSTAND_NODE: [],
   FORM_NODE: [
     { key: "formFields", label: "收集字段", type: "object-list", required: false, panelOnly: true, defaultValue: [] },
     { key: "contentFormat", label: "引导文案", type: "string", required: false, panelOnly: true, defaultValue: "你好，请先填写下面表单内容：\n{{form}}\n填写后请点击【提交】按钮进行提交。" },
     { key: "asResult", label: "提交即结束", type: "boolean", required: false, panelOnly: true, defaultValue: true },
   ],
+  TEXT_TO_SPEECH_NODE: [],
+  SPEECH_TO_TEXT_NODE: [],
+  IMAGE_GENERATE_NODE: [],
 };
 
 /**
@@ -284,3 +292,208 @@ export const NODE_DEFAULT_DATA: Record<WorkflowNodeTypeName, Record<string, unkn
  *   目录条目（NodeTypeMeta）覆盖全部 18 种，而画布模块只覆盖已就绪的那一批。
  */
 export type WorkflowNodeTypeName = (typeof NODE_TYPE_ORDER)[number];
+
+/**
+ * 目录条目的完整镜像 —— 后端 `NodeTypeMeta` 的等价物。
+ *
+ * ★ mock 的数据与画布菜单都从这里取。以前 `mock/fixtures/workflow.ts` 手写过一份 180 行的
+ *   目录，结果 `QUESTION_NODE` 在它上面一直标着 `executable: false`（真值是 true），
+ *   演示里显示「不能运行」—— 目录只有一处真源，mock 也不例外。
+ *
+ * ★ `singleton` / `canBeEntry` 不在这里：它们是画布概念（能不能复制、能不能当入口），
+ *   后端不下发，由 mock 侧补。
+ */
+export interface NodeTypeMetaRecord {
+  readonly type: WorkflowNodeTypeName;
+  readonly label: string;
+  readonly description: string;
+  readonly category: string;
+  readonly catalogEnabled: boolean;
+  readonly executable: boolean;
+  readonly configFields: readonly NodeConfigField[];
+  /** 后端目录形状 `{key,label}`（画布用的 `{label,value}` 在 NODE_OUTPUT_FIELDS）。 */
+  readonly outputs: readonly { readonly key: string; readonly label: string }[];
+}
+
+export const NODE_TYPE_META: readonly NodeTypeMetaRecord[] = [
+  {
+    type: "START_NODE",
+    label: "开始",
+    description: "流程入口：接收用户输入，本身没有可配置项",
+    category: "基础",
+    catalogEnabled: true,
+    executable: true,
+    configFields: NODE_CONFIG_FIELDS["START_NODE"] ?? [],
+    outputs: [{ key: "query", label: "用户问题" }]
+  },
+  {
+    type: "BASE_NODE",
+    label: "基础节点",
+    description: "只做数据传递的占位节点，用于整理连线",
+    category: "基础",
+    catalogEnabled: true,
+    executable: true,
+    configFields: NODE_CONFIG_FIELDS["BASE_NODE"] ?? [],
+    outputs: [{ key: "basic_info_fields", label: "基本信息字段" }, { key: "basic_info_input", label: "基本信息输入" }]
+  },
+  {
+    type: "AI_CHAT_NODE",
+    label: "AI 对话",
+    description: "调用大模型生成回复，可带检索结果作为上下文",
+    category: "生成",
+    catalogEnabled: true,
+    executable: true,
+    configFields: NODE_CONFIG_FIELDS["AI_CHAT_NODE"] ?? [],
+    outputs: [{ key: "answer", label: "AI 回答内容" }]
+  },
+  {
+    type: "SEARCH_DATASET_NODE",
+    label: "知识库检索",
+    description: "在指定知识库里检索相关分段",
+    category: "检索",
+    catalogEnabled: true,
+    executable: true,
+    configFields: NODE_CONFIG_FIELDS["SEARCH_DATASET_NODE"] ?? [],
+    outputs: [{ key: "retrieval_result", label: "检索结果" }]
+  },
+  {
+    type: "QUESTION_NODE",
+    label: "提问",
+    description: "向用户追问一个问题并把回答带回流程",
+    category: "交互",
+    catalogEnabled: true,
+    executable: true,
+    configFields: NODE_CONFIG_FIELDS["QUESTION_NODE"] ?? [],
+    outputs: [{ key: "query", label: "改写后的问题" }]
+  },
+  {
+    type: "CONDITION_NODE",
+    label: "条件判断",
+    description: "按条件把流程分成两支",
+    category: "逻辑",
+    catalogEnabled: true,
+    executable: true,
+    configFields: NODE_CONFIG_FIELDS["CONDITION_NODE"] ?? [],
+    outputs: [{ key: "active_branch", label: "命中的分支" }]
+  },
+  {
+    type: "NUMBER_CONDITION_NODE",
+    label: "数值条件",
+    description: "按数值比较把流程分成多支",
+    category: "逻辑",
+    catalogEnabled: true,
+    executable: true,
+    configFields: NODE_CONFIG_FIELDS["NUMBER_CONDITION_NODE"] ?? [],
+    outputs: [{ key: "active_branch", label: "命中的分支" }]
+  },
+  {
+    type: "REPLY_NODE",
+    label: "回复",
+    description: "直接输出一段固定文案",
+    category: "生成",
+    catalogEnabled: true,
+    executable: true,
+    configFields: NODE_CONFIG_FIELDS["REPLY_NODE"] ?? [],
+    outputs: [{ key: "reply", label: "回复内容" }]
+  },
+  {
+    type: "FUNCTION_LIB_NODE",
+    label: "函数库",
+    description: "调用预先登记的公共函数",
+    category: "扩展",
+    catalogEnabled: false,
+    executable: false,
+    configFields: NODE_CONFIG_FIELDS["FUNCTION_LIB_NODE"] ?? [],
+    outputs: []
+  },
+  {
+    type: "FUNCTION_NODE",
+    label: "函数",
+    description: "在流程里直接写一段函数逻辑",
+    category: "扩展",
+    catalogEnabled: false,
+    executable: false,
+    configFields: NODE_CONFIG_FIELDS["FUNCTION_NODE"] ?? [],
+    outputs: []
+  },
+  {
+    type: "RERANKER_NODE",
+    label: "重排",
+    description: "对检索结果重新排序",
+    category: "检索",
+    catalogEnabled: false,
+    executable: false,
+    configFields: NODE_CONFIG_FIELDS["RERANKER_NODE"] ?? [],
+    outputs: []
+  },
+  {
+    type: "APPLICATION_NODE",
+    label: "应用调用",
+    description: "调用另一个已发布的编排应用",
+    category: "扩展",
+    catalogEnabled: false,
+    executable: false,
+    configFields: NODE_CONFIG_FIELDS["APPLICATION_NODE"] ?? [],
+    outputs: []
+  },
+  {
+    type: "DOCUMENT_EXTRACT_NODE",
+    label: "文档抽取",
+    description: "把库里选定文档的正文抽出来交给下游",
+    category: "检索",
+    catalogEnabled: true,
+    executable: true,
+    configFields: NODE_CONFIG_FIELDS["DOCUMENT_EXTRACT_NODE"] ?? [],
+    outputs: [{ key: "document_markdown", label: "文档正文" }]
+  },
+  {
+    type: "IMAGE_UNDERSTAND_NODE",
+    label: "图像理解",
+    description: "识别图片内容并输出文字描述",
+    category: "多模态",
+    catalogEnabled: false,
+    executable: false,
+    configFields: NODE_CONFIG_FIELDS["IMAGE_UNDERSTAND_NODE"] ?? [],
+    outputs: []
+  },
+  {
+    type: "FORM_NODE",
+    label: "表单收集",
+    description: "向用户收集多个字段",
+    category: "交互",
+    catalogEnabled: true,
+    executable: true,
+    configFields: NODE_CONFIG_FIELDS["FORM_NODE"] ?? [],
+    outputs: [{ key: "form_data", label: "表单内容" }]
+  },
+  {
+    type: "TEXT_TO_SPEECH_NODE",
+    label: "语音合成",
+    description: "把文本转成语音输出",
+    category: "多模态",
+    catalogEnabled: false,
+    executable: false,
+    configFields: NODE_CONFIG_FIELDS["TEXT_TO_SPEECH_NODE"] ?? [],
+    outputs: []
+  },
+  {
+    type: "SPEECH_TO_TEXT_NODE",
+    label: "语音识别",
+    description: "把用户语音转成文本",
+    category: "多模态",
+    catalogEnabled: false,
+    executable: false,
+    configFields: NODE_CONFIG_FIELDS["SPEECH_TO_TEXT_NODE"] ?? [],
+    outputs: []
+  },
+  {
+    type: "IMAGE_GENERATE_NODE",
+    label: "图像生成",
+    description: "按描述生成图片",
+    category: "多模态",
+    catalogEnabled: false,
+    executable: false,
+    configFields: NODE_CONFIG_FIELDS["IMAGE_GENERATE_NODE"] ?? [],
+    outputs: []
+  },
+];

@@ -149,10 +149,8 @@ function build() {
   lines.push('  readonly defaultValue?: unknown;');
   lines.push('}');
   lines.push('');
-  lines.push(
-    'export const NODE_CONFIG_FIELDS: Record<ImplementedNodeType, readonly NodeConfigField[]> = {'
-  );
-  for (const type of implemented) {
+  lines.push('export const NODE_CONFIG_FIELDS: Record<WorkflowNodeTypeName, readonly NodeConfigField[]> = {');
+  for (const type of order) {
     const fields = byType.get(type).configFields ?? [];
     if (fields.length === 0) {
       lines.push(`  ${type}: [],`);
@@ -242,6 +240,46 @@ function build() {
   lines.push(' *   目录条目（NodeTypeMeta）覆盖全部 18 种，而画布模块只覆盖已就绪的那一批。');
   lines.push(' */');
   lines.push('export type WorkflowNodeTypeName = (typeof NODE_TYPE_ORDER)[number];');
+  lines.push('');
+
+  lines.push('/**');
+  lines.push(' * 目录条目的完整镜像 —— 后端 `NodeTypeMeta` 的等价物。');
+  lines.push(' *');
+  lines.push(' * ★ mock 的数据与画布菜单都从这里取。以前 `mock/fixtures/workflow.ts` 手写过一份 180 行的');
+  lines.push(' *   目录，结果 `QUESTION_NODE` 在它上面一直标着 `executable: false`（真值是 true），');
+  lines.push(' *   演示里显示「不能运行」—— 目录只有一处真源，mock 也不例外。');
+  lines.push(' *');
+  lines.push(' * ★ `singleton` / `canBeEntry` 不在这里：它们是画布概念（能不能复制、能不能当入口），');
+  lines.push(' *   后端不下发，由 mock 侧补。');
+  lines.push(' */');
+  lines.push('export interface NodeTypeMetaRecord {');
+  lines.push('  readonly type: WorkflowNodeTypeName;');
+  lines.push('  readonly label: string;');
+  lines.push('  readonly description: string;');
+  lines.push('  readonly category: string;');
+  lines.push('  readonly catalogEnabled: boolean;');
+  lines.push('  readonly executable: boolean;');
+  lines.push('  readonly configFields: readonly NodeConfigField[];');
+  lines.push('  /** 后端目录形状 `{key,label}`（画布用的 `{label,value}` 在 NODE_OUTPUT_FIELDS）。 */');
+  lines.push('  readonly outputs: readonly { readonly key: string; readonly label: string }[];');
+  lines.push('}');
+  lines.push('');
+  lines.push('export const NODE_TYPE_META: readonly NodeTypeMetaRecord[] = [');
+  for (const type of order) {
+    const meta = byType.get(type);
+    const outputs = (meta.outputs ?? []).map((o) => `{ key: ${s(o.key)}, label: ${s(o.label)} }`);
+    lines.push('  {');
+    lines.push(`    type: ${s(type)},`);
+    lines.push(`    label: ${s(meta.label)},`);
+    lines.push(`    description: ${s(meta.description)},`);
+    lines.push(`    category: ${s(meta.category)},`);
+    lines.push(`    catalogEnabled: ${meta.catalogEnabled === true},`);
+    lines.push(`    executable: ${meta.executable === true},`);
+    lines.push(`    configFields: NODE_CONFIG_FIELDS[${s(type)}] ?? [],`);
+    lines.push(`    outputs: [${outputs.join(', ')}]`);
+    lines.push('  },');
+  }
+  lines.push('];');
   lines.push('');
 
   if (backendOnly.length > 0) {

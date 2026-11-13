@@ -6,6 +6,8 @@ import type {
   WorkflowRecord,
   WorkflowVersion
 } from '@/api/workflow'
+import { NODE_TYPE_META } from '@/api/nodeTypes.generated'
+import type { WorkflowNodeTypeName } from '@/api/nodeTypes.generated'
 
 /**
  * 编排（画布）mock 数据。**这是流程图数据的唯一真相源**。
@@ -21,191 +23,36 @@ import type {
  */
 
 /* ------------------------------------------------------------------ */
-/* 节点目录（18 种：10 种已实现 + 8 种规划中）                            */
+/* 节点目录：全部来自 node-types.json（#337 之后不再手写一份）              */
 /* ------------------------------------------------------------------ */
 
-export const nodeTypeCatalog: NodeTypeMeta[] = [
-  {
-    type: 'START_NODE',
-    label: '开始节点',
-    category: '基础',
-    catalogEnabled: true,
-    executable: true,
-    singleton: true,
-    canBeEntry: true,
-    description: '流程唯一入口。配置开场白与推荐问题，可作为变量引用来源。'
-  },
-  {
-    type: 'BASE_NODE',
-    label: '基本信息收集',
-    category: '基础',
-    catalogEnabled: true,
-    executable: true,
-    singleton: false,
-    canBeEntry: false,
-    description: '运行时向用户收集结构化字段（文本/单选/多选/日期/数字/文件），产出可被下游引用的变量。'
-  },
-  {
-    type: 'QUESTION_NODE',
-    label: '问题改写',
-    category: '预处理',
-    catalogEnabled: true,
-    executable: false,
-    singleton: false,
-    canBeEntry: false,
-    description: '把多轮口语化问题改写成独立可检索的查询。可选改写模型，不选则原样透传。'
-  },
-  {
-    type: 'SEARCH_DATASET_NODE',
-    label: '知识库检索',
-    category: '数据',
-    catalogEnabled: true,
-    executable: true,
-    singleton: false,
-    canBeEntry: false,
-    description: '按检索参数从绑定知识库召回片段，产出 snippets 供下游引用。'
-  },
-  {
-    type: 'AI_CHAT_NODE',
-    label: 'AI 对话',
-    category: '模型',
-    catalogEnabled: true,
-    executable: true,
-    singleton: false,
-    canBeEntry: false,
-    description: '调用对话模型生成回答。可绑知识库、提示词，支持思考开关与多轮。'
-  },
-  {
-    type: 'CONDITION_NODE',
-    label: '语义判断',
-    category: '逻辑',
-    catalogEnabled: true,
-    executable: true,
-    singleton: false,
-    canBeEntry: false,
-    description: '按自然语言条件把流程导向不同分支，条件由模型判定（不支持手写脚本），并要求配置兜底分支。'
-  },
-  {
-    type: 'NUMBER_CONDITION_NODE',
-    label: '数值判断',
-    category: '逻辑',
-    catalogEnabled: true,
-    executable: true,
-    singleton: false,
-    canBeEntry: false,
-    description: '按「变量/操作符/值」结构化条件把流程导向不同分支，运行时比值判定，并要求配置兜底分支。'
-  },
-  {
-    type: 'REPLY_NODE',
-    label: '指定回复',
-    category: '输出',
-    catalogEnabled: true,
-    executable: true,
-    singleton: false,
-    canBeEntry: false,
-    description: '流程出口。用固定模板回复，支持 {{节点id.字段名}} 变量引用。'
-  },
-  {
-    type: 'FUNCTION_LIB_NODE',
-    label: '函数库',
-    category: '扩展',
-    catalogEnabled: false,
-    executable: false,
-    singleton: false,
-    canBeEntry: false,
-    description: '规划中：声明可复用的外部函数库，供函数调用节点选用。当前版本不可拖入画布。'
-  },
-  {
-    type: 'FUNCTION_NODE',
-    label: '函数调用',
-    category: '扩展',
-    catalogEnabled: false,
-    executable: false,
-    singleton: false,
-    canBeEntry: false,
-    description: '规划中：按函数库定义发起 HTTP/内部调用，把结果写入变量。当前版本不可拖入画布。'
-  },
-  {
-    type: 'RERANKER_NODE',
-    label: '重排序',
-    category: '数据',
-    catalogEnabled: false,
-    executable: false,
-    singleton: false,
-    canBeEntry: false,
-    description: '规划中：对检索结果做重排序，提升 TopN 质量。当前版本不可拖入画布。'
-  },
-  {
-    type: 'APPLICATION_NODE',
-    label: '应用调用',
-    category: '扩展',
-    catalogEnabled: false,
-    executable: false,
-    singleton: false,
-    canBeEntry: false,
-    description: '规划中：编排中调用另一个已发布应用，实现能力复用。当前版本不可拖入画布。'
-  },
-  {
-    type: 'DOCUMENT_EXTRACT_NODE',
-    label: '文档抽取',
-    category: '预处理',
-    catalogEnabled: true,
-    executable: true,
-    singleton: false,
-    canBeEntry: false,
-    description: '把库里选定文档的正文抽出来交给下游，正文写进流程变量 document_markdown。'
-  },
-  {
-    type: 'IMAGE_UNDERSTAND_NODE',
-    label: '图像理解',
-    category: '多模态',
-    catalogEnabled: false,
-    executable: false,
-    singleton: false,
-    canBeEntry: false,
-    description: '规划中：调用视觉模型理解图片内容。当前版本不可拖入画布。'
-  },
-  {
-    type: 'FORM_NODE',
-    label: '表单',
-    category: '基础',
-    catalogEnabled: true,
-    executable: true,
-    singleton: false,
-    canBeEntry: false,
-    description: '在流程中间收一份表单再继续，填的内容写进流程变量 form_data。'
-  },
-  {
-    type: 'TEXT_TO_SPEECH_NODE',
-    label: '语音合成',
-    category: '多模态',
-    catalogEnabled: false,
-    executable: false,
-    singleton: false,
-    canBeEntry: false,
-    description: '规划中：把回复文本合成语音。当前版本不可拖入画布。'
-  },
-  {
-    type: 'SPEECH_TO_TEXT_NODE',
-    label: '语音识别',
-    category: '多模态',
-    catalogEnabled: false,
-    executable: false,
-    singleton: false,
-    canBeEntry: false,
-    description: '规划中：把用户语音转写为文本。当前版本不可拖入画布。'
-  },
-  {
-    type: 'IMAGE_GENERATE_NODE',
-    label: '图像生成',
-    category: '多模态',
-    catalogEnabled: false,
-    executable: false,
-    singleton: false,
-    canBeEntry: false,
-    description: '规划中：按提示词生成配图。当前版本不可拖入画布。'
-  }
-]
+/**
+ * 画布概念（后端不下发）：能不能复制出第二个、能不能当流程入口。
+ *
+ * ★ 其余字段（label / category / catalogEnabled / executable / configFields / outputs）
+ *   全部来自 `@/api/nodeTypes.generated`，即
+ *   `backend/src/main/resources/workflow/node-types.json`。
+ *
+ *   这里以前手写过一整份 180 行的目录（第三份真源），漂得很厉害：
+ *   `QUESTION_NODE` 一直标着 `executable: false`（真值是 true），演示里显示「不能运行」；
+ *   `category` 用的是「预处理 / 数据」，而目录里是「生成 / 检索」。
+ */
+const CANVAS_FLAGS: Partial<Record<WorkflowNodeTypeName, { singleton: boolean; canBeEntry: boolean }>> = {
+  START_NODE: { singleton: true, canBeEntry: true }
+}
+
+export const nodeTypeCatalog: NodeTypeMeta[] = NODE_TYPE_META.map((meta) => ({
+  type: meta.type,
+  label: meta.label,
+  description: meta.description,
+  category: meta.category,
+  catalogEnabled: meta.catalogEnabled,
+  executable: meta.executable,
+  singleton: CANVAS_FLAGS[meta.type]?.singleton ?? false,
+  canBeEntry: CANVAS_FLAGS[meta.type]?.canBeEntry ?? false,
+  configFields: [...meta.configFields],
+  outputs: [...meta.outputs]
+}))
 
 /* ------------------------------------------------------------------ */
 /* 可跑示例图：as5 合同风险研判（覆盖 7 种已实现节点）                     */
