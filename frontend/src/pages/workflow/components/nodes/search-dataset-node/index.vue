@@ -6,11 +6,11 @@
         -->
         <template #essential>
             知识库 ·
-            <template v-if="form_data.dataset_id_list?.length">
-                {{ form_data.dataset_id_list.slice(0, 2)
+            <template v-if="form_data.kbIds?.length">
+                {{ form_data.kbIds.slice(0, 2)
                     .map((i: any) => (relatedObject(datasetList, i, 'id') as any)?.name)
                     .filter(Boolean).join('、')
-                }}<template v-if="form_data.dataset_id_list.length > 2"> 等 {{ form_data.dataset_id_list.length }} 个</template>
+                }}<template v-if="form_data.kbIds.length > 2"> 等 {{ form_data.kbIds.length }} 个</template>
             </template>
             <template v-else>未选择</template>
         </template>
@@ -60,45 +60,35 @@
                     </div>
                 </el-form-item>
                 <el-form-item label="检索参数">
-                    <template #label>
-                        <div class="flex-between">
-                            <span>检索参数</span>
-                            <el-button type="primary" link @click="openParamSettingDialog">
-                                <el-icon>
-                                    <Setting />
-                                </el-icon>
-                            </el-button>
-                        </div>
-                    </template>
                     <div class="w-full">
-                        <el-row>
-                            <el-col :span="12" class="color-secondary lighter">检索模式</el-col>
-                            <el-col :span="12" class="lighter">
-                                {{
-        SearchMode[form_data.dataset_setting.search_mode as keyof typeof SearchMode]
-    }}</el-col>
-                            <el-col :span="12" class="color-secondary lighter"> 相似度高于</el-col>
-                            <el-col :span="12" class="lighter">
-                                {{ form_data.dataset_setting.similarity?.toFixed(3) }}</el-col>
-                            <el-col :span="12" class="color-secondary lighter"> 引用分段 Top</el-col>
-                            <el-col :span="12" class="lighter"> {{ form_data.dataset_setting.top_n }}</el-col>
-                            <el-col :span="12" class="color-secondary lighter"> 最大引用字符数</el-col>
-                            <el-col :span="12" class="lighter">
-                                {{ form_data.dataset_setting.max_paragraph_char_number }}</el-col>
+                        <el-select v-model="modeForm" size="small" class="w-full mb-8">
+                            <el-option v-for="mode in RETRIEVAL_MODE_VALUES" :key="mode"
+                                :label="RETRIEVAL_MODE_LABELS[mode]" :value="mode" />
+                        </el-select>
+                        <el-row :gutter="12">
+                            <el-col :span="12">
+                                <div class="param-label">相似度高于</div>
+                                <el-input-number v-model="thresholdForm" size="small" :min="0" :max="1"
+                                    :step="0.05" :precision="3" controls-position="right" class="w-full" />
+                            </el-col>
+                            <el-col :span="12">
+                                <div class="param-label">引用分段 Top</div>
+                                <el-input-number v-model="topNForm" size="small" :min="1" :max="100"
+                                    controls-position="right" class="w-full" />
+                            </el-col>
                         </el-row>
                     </div>
                 </el-form-item>
-                <el-form-item label="检索问题" prop="question_reference_address" :rules="{
+                <el-form-item label="检索问题" prop="questionReferenceAddress" :rules="{
         message: '请选择检索问题',
         trigger: 'blur',
         required: true
     }">
                     <NodeCascader ref="nodeCascaderRef" :nodeModel="nodeModel" class="w-full" placeholder="请选择检索问题"
-                        v-model="form_data.question_reference_address" />
+                        v-model="form_data.questionReferenceAddress" />
                 </el-form-item>
             </el-form>
         </el-card>
-        <ParamSettingDialog ref="ParamSettingDialogRef" @refresh="refreshParam" />
         <AddDatasetDialog ref="AddDatasetDialogRef" @addData="addDataset" :data="datasetList" @refresh="refresh"
             :loading="datasetLoading" />
     </NodeContainer>
@@ -108,29 +98,34 @@ import { set } from 'lodash-es'
 import NodeContainer from '@/pages/workflow/components/common/NodeContainer.vue'
 import NodeCascader from '@/pages/workflow/components/common/NodeCascader.vue'
 import AddDatasetDialog from '@/pages/workflow/components/common/AddDatasetDialog.vue'
-import ParamSettingDialog from '@/pages/workflow/components/common/ParamSettingDialog.vue'
 import type { FormInstance } from 'element-plus'
 import { ref, computed, onMounted } from 'vue'
 import { relatedObject } from '@/utils/utils'
-import { SearchMode } from '@/pages/workflow/enums/application'
+import { RETRIEVAL_MODE_LABELS, RETRIEVAL_MODE_VALUES } from '@/constants/labels'
 import { allList } from '@/api/legacy/document';
 
 const props = defineProps<{ nodeModel: any }>()
 const nodeCascaderRef = ref()
+/**
+ * 键名全部用契约名（`SearchDatasetNodeConfig`）。旧画布用的是 `dataset_id_list` /
+ * `dataset_setting` / `question_reference_address`；`#337` 第二步 B3 起画布内部也只认契约名。
+ */
 const form = {
-    dataset_id_list: [],
-    dataset_setting: {
-        top_n: 3,
-        similarity: 0.6,
-        max_paragraph_char_number: 5000,
-        search_mode: 'embedding'
+    kbIds: [],
+    retrieval: {
+        mode: 'HYBRID',
+        threshold: 0.6,
+        topN: 5,
+        noRefStrategy: 'REFUSE'
     },
-    question_reference_address: []
+    questionReferenceAddress: []
 }
+
+/** 检索模式的展示名走全局 `RETRIEVAL_MODE_LABELS`（`@/constants/labels`），此处不再本地重复一份 */
 
 /**
  * `props.nodeModel` 是 LogicFlow 的节点模型，**不是 Vue 的响应式对象**：
- * 对它做 `set(node_data, 'dataset_id_list', ...)`，数据确实写进去了，
+ * 对它做 `set(node_data, 'kbIds', ...)`，数据确实写进去了，
  * 但 `computed` 的 `get` 只依赖 `props.nodeModel` 这个 **prop 引用**，
  * 引用没变 ⇒ 不会重算 ⇒ 模板不重新渲染。
  * 表现就是「勾了两个知识库、点确定，面板上还是原来那一个」——
@@ -144,13 +139,13 @@ const tick = ref(0)
 
 /**
  * 列表渲染专用：**每次都返回新数组**。
- * `props.nodeModel.properties.node_data.dataset_id_list` 是 LogicFlow 对象里的普通数组，
+ * `props.nodeModel.properties.node_data.kbIds` 是 LogicFlow 对象里的普通数组，
  * 不是 Vue 的响应式数组 —— `v-for` 遍历它建立不了依赖，改了长度也不会重新渲染。
  * 返回副本 + 读一次 `tick` 之后，模板才有机会看到变化。
  */
 const kbList = computed(() => {
     void tick.value
-    const list = (form_data.value?.dataset_id_list ?? []) as any[]
+    const list = (form_data.value?.kbIds ?? []) as any[]
     return Array.isArray(list) ? [...list] : []
 })
 
@@ -172,9 +167,27 @@ const form_data = computed({
 })
 
 const DatasetNodeFormRef = ref<FormInstance>()
-const ParamSettingDialogRef = ref<InstanceType<typeof ParamSettingDialog>>()
 const AddDatasetDialogRef = ref<InstanceType<typeof AddDatasetDialog>>()
 const datasetList = ref<any>([])
+
+/**
+ * 检索参数三个控件各自双向绑定到 `node_data.retrieval.<key>`。
+ *
+ * 为什么不用一个 `retrievalForm` 对象 + `v-model`：`node_data` 是 LogicFlow 对象里的普通对象，
+ * 对它的子对象直接 `v-model` 只会改内存、不触发面板重渲染（原因见上面 `tick` 的注释）；
+ * 而每次写回都整体替换对象又会让另外两个控件短暂丢值。逐键 computed + `set` 是最不容易出错的一种。
+ */
+const retrievalKey = (key: string, fallback: any) =>
+    computed({
+        get: () => props.nodeModel.properties.node_data?.retrieval?.[key] ?? fallback,
+        set: (value: any) => {
+            set(props.nodeModel.properties.node_data, `retrieval.${key}`, value)
+            tick.value++
+        }
+    })
+const modeForm = retrievalKey('mode', 'HYBRID')
+const thresholdForm = retrievalKey('threshold', 0.6)
+const topNForm = retrievalKey('topN', 5)
 
 /** 取某知识库的图标字符串（契约里是 emoji，不是 URL） */
 const iconOf = (id: string): string => {
@@ -183,28 +196,20 @@ const iconOf = (id: string): string => {
 }
 const datasetLoading = ref(false)
 
-function refreshParam(data: any) {
-    set(props.nodeModel.properties.node_data, 'dataset_setting', data.dataset_setting)
-}
-
-const openParamSettingDialog = () => {
-    ParamSettingDialogRef.value?.open(form_data.value, 'WORK_FLOW')
-}
-
 function removeDataset(id: any) {
-    const list = props.nodeModel.properties.node_data.dataset_id_list.filter((v: any) => v !== id)
-    set(props.nodeModel.properties.node_data, 'dataset_id_list', list)
+    const list = props.nodeModel.properties.node_data.kbIds.filter((v: any) => v !== id)
+    set(props.nodeModel.properties.node_data, 'kbIds', list)
     tick.value++
 }
 
 function addDataset(val: Array<string>) {
-    set(props.nodeModel.properties.node_data, 'dataset_id_list', val)
+    set(props.nodeModel.properties.node_data, 'kbIds', val)
     tick.value++
 }
 
 function openDatasetDialog() {
     if (AddDatasetDialogRef.value) {
-        AddDatasetDialogRef.value.open(form_data.value.dataset_id_list)
+        AddDatasetDialogRef.value.open(form_data.value.kbIds)
     }
 }
 

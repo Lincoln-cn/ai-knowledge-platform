@@ -54,10 +54,19 @@ const searchModeToRetrieval: Record<string, RetrievalMode> = {
   keywords: 'FULLTEXT',
   blend: 'HYBRID'
 }
-const retrievalToSearchMode: Record<string, string> = {
-  向量检索: 'embedding',
-  全文检索: 'keywords',
-  混合检索: 'blend'
+
+/**
+ * 节点没有配置检索参数时的兜底值。
+ *
+ * 与 `defaults.ts` 的 `defaultConfigFor('SEARCH_DATASET_NODE')` 同值；写成这里的常量而不是去 import，
+ * 是因为 `defaults.ts` 才是"新建节点时给什么"，而这里是"读到一个没有检索参数的节点时按什么解释"——
+ * 两件事会分开演化（前者跟着新建流程变，后者不能跟着变，否则老草稿的解释会静默漂移）。
+ */
+const FALLBACK_RETRIEVAL: RetrievalParams = {
+  mode: 'HYBRID',
+  threshold: 0.6,
+  topN: 5,
+  noRefStrategy: 'REFUSE'
 }
 
 /** 旧 `dataset_setting` → 契约 `RetrievalParams`；契约缺 `max_paragraph_char_number`，放进 extras */
@@ -81,27 +90,6 @@ function datasetSettingToRetrieval(ds: any): { retrieval: RetrievalParams; extra
         value: '{question}'
       }
     }
-  }
-}
-
-function retrievalToDatasetSetting(
-  retrieval: RetrievalParams | undefined,
-  extras?: Record<string, unknown>
-): Record<string, unknown> {
-  const r = retrieval ?? { mode: '混合检索', threshold: 0.6, topN: 5, noRefStrategy: 'REFUSE' }
-  const maxChars = (extras?.max_paragraph_char_number as number) ?? 5000
-  const noRef = (extras?.no_references_setting as any) ?? {
-    status: r.noRefStrategy === 'FREE_ANSWER' ? 'ai_questioning' : 'designated_answer',
-    value: r.noRefStrategy === 'FREE_ANSWER' ? '{question}' : ''
-  }
-  return {
-    search_mode: retrievalToSearchMode[r.mode] ?? 'blend',
-    similarity: r.threshold,
-    top_n: r.topN,
-    // 契约缺：最大引用字符数
-    max_paragraph_char_number: maxChars,
-    // 契约缺：无引用完整策略
-    no_references_setting: noRef
   }
 }
 
@@ -300,24 +288,19 @@ function baseFromLegacy(nd: any, props: any): BaseNodeConfig & Record<string, an
 }
 
 function aiChatToLegacy(config: AiChatNodeConfig & Record<string, any>): LegacyBundle {
-  const { retrieval, extra } = { retrieval: config.retrieval, extra: config }
   return {
     node_data: {
-      model_id: config.modelId ?? '',
-      system: config.rolePrompt ?? '',
-      // 契约缺：提示词正文（契约只有 promptIds）
+      // `#337` 第二步 B3：画布内部存储也用契约名 —— 名字只此一份，面板与转换层不再各写一个
+      modelId: config.modelId ?? '',
+      rolePrompt: config.rolePrompt ?? '',
       prompt: config.prompt ?? defaultChatPrompt(),
-      // 契约缺：历史轮数 / 范围 / 是否返回
-      dialogue_number: config.dialogue_number ?? (config.multiTurn ? 1 : 0),
-      dialogue_type: config.dialogue_type ?? 'WORKFLOW',
-      is_result: config.is_result ?? false,
-      model_params_setting: config.model_params_setting,
-      // 检索：UI 在 search-dataset 节点编辑，但契约在 ai-chat 上也有，保留
-      dataset_id_list: config.kbIds ?? [],
-      dataset_setting: retrievalToDatasetSetting(retrieval, extra as any),
-      // 契约有、旧 UI 无编辑点
-      prompt_ids: config.promptIds ?? [],
-      thinking_enabled: !!config.thinkingEnabled
+      promptIds: config.promptIds ?? [],
+      kbIds: config.kbIds ?? [],
+      retrieval: config.retrieval ?? FALLBACK_RETRIEVAL,
+      thinkingEnabled: !!config.thinkingEnabled,
+      dialogueNumber: config.dialogueNumber ?? (config.multiTurn ? 1 : 0),
+      asResult: config.asResult ?? false,
+      modelParams: config.modelParams
     }
   }
 }
@@ -330,98 +313,88 @@ function defaultChatPrompt() {
 }
 
 function aiChatFromLegacy(nd: any): AiChatNodeConfig & Record<string, any> {
-  const { retrieval, extra } = datasetSettingToRetrieval(nd?.dataset_setting)
+  const dialogueNumber = nd?.dialogueNumber ?? nd?.dialogue_number ?? 0
+  const retrieval = nd?.retrieval ?? datasetSettingToRetrieval(nd?.dataset_setting).retrieval
   return {
-    modelId: nd?.model_id ?? '',
-    rolePrompt: nd?.system ?? '',
-    promptIds: nd?.prompt_ids ?? [],
-    kbIds: nd?.dataset_id_list ?? [],
-    retrieval,
-    thinkingEnabled: !!nd?.thinking_enabled,
-    multiTurn: (nd?.dialogue_number ?? 0) > 0,
-    // 契约缺以下字段，透传
+    modelId: nd?.modelId ?? nd?.model_id ?? '',
+    rolePrompt: nd?.rolePrompt ?? nd?.system ?? '',
     prompt: nd?.prompt,
-    dialogue_number: nd?.dialogue_number,
-    dialogue_type: nd?.dialogue_type,
-    is_result: nd?.is_result,
-    model_params_setting: nd?.model_params_setting,
-    ...extra
+    promptIds: nd?.promptIds ?? nd?.prompt_ids ?? [],
+    kbIds: nd?.kbIds ?? nd?.dataset_id_list ?? [],
+    retrieval,
+    thinkingEnabled: !!(nd?.thinkingEnabled ?? nd?.thinking_enabled),
+    dialogueNumber,
+    multiTurn: dialogueNumber > 0,
+    asResult: nd?.asResult ?? nd?.is_result ?? false,
+    modelParams: nd?.modelParams ?? nd?.model_params_setting
   }
 }
 
 function searchToLegacy(config: SearchDatasetNodeConfig & Record<string, any>): LegacyBundle {
   return {
     node_data: {
-      dataset_id_list: config.kbIds ?? [],
-      dataset_setting: retrievalToDatasetSetting(config.retrieval, config as any),
-      // 契约缺：检索问题引用地址
-      question_reference_address: config.question_reference_address ?? []
+      kbIds: config.kbIds ?? [],
+      retrieval: config.retrieval ?? FALLBACK_RETRIEVAL,
+      questionReferenceAddress: config.questionReferenceAddress ?? []
     }
   }
 }
 
 function searchFromLegacy(nd: any): SearchDatasetNodeConfig & Record<string, any> {
-  const { retrieval, extra } = datasetSettingToRetrieval(nd?.dataset_setting)
   return {
-    kbIds: nd?.dataset_id_list ?? [],
-    retrieval,
-    // 契约缺以下字段，透传
-    question_reference_address: nd?.question_reference_address ?? [],
-    ...extra
+    kbIds: nd?.kbIds ?? nd?.dataset_id_list ?? [],
+    retrieval: nd?.retrieval ?? datasetSettingToRetrieval(nd?.dataset_setting).retrieval,
+    questionReferenceAddress: nd?.questionReferenceAddress ?? nd?.question_reference_address ?? []
   }
 }
 
 function questionToLegacy(config: QuestionNodeConfig & Record<string, any>): LegacyBundle {
   return {
     node_data: {
-      model_id: config.modelId ?? '',
-      // 改写提示词 ↔ 旧 `prompt`
-      prompt: config.rewritePrompt ?? '',
-      // 契约 defaultAnswer ↔ 旧 `default_answer`（后端也认这个旧名作回退）
-      default_answer: config.defaultAnswer ?? '',
-      // 契约缺：角色设定
+      modelId: config.modelId ?? '',
+      rewritePrompt: config.rewritePrompt ?? '',
+      defaultAnswer: config.defaultAnswer ?? '',
       system: config.system ?? '你是一个问题优化大师',
-      // 契约缺：历史轮数 / 是否返回 / 模型参数
-      dialogue_number: config.dialogue_number ?? 1,
-      is_result: config.is_result ?? false,
-      model_params_setting: config.model_params_setting
+      dialogueNumber: config.dialogueNumber ?? 1,
+      asResult: config.asResult ?? false,
+      modelParams: config.modelParams
     }
   }
 }
 
 function questionFromLegacy(nd: any): QuestionNodeConfig & Record<string, any> {
   return {
-    modelId: nd?.model_id || null,
-    rewritePrompt: nd?.prompt ?? '',
-    defaultAnswer: nd?.default_answer ?? '',
-    // 契约缺以下字段，透传
+    modelId: nd?.modelId ?? nd?.model_id ?? null,
+    rewritePrompt: nd?.rewritePrompt ?? nd?.prompt ?? '',
+    defaultAnswer: nd?.defaultAnswer ?? nd?.default_answer ?? '',
     system: nd?.system,
-    dialogue_number: nd?.dialogue_number,
-    is_result: nd?.is_result,
-    model_params_setting: nd?.model_params_setting
+    dialogueNumber: nd?.dialogueNumber ?? nd?.dialogue_number,
+    asResult: nd?.asResult ?? nd?.is_result ?? false,
+    modelParams: nd?.modelParams ?? nd?.model_params_setting
   }
 }
 
 function conditionToLegacy(config: ConditionNodeConfig & Record<string, any>): LegacyBundle {
   const branches = config.branches ?? []
   const fallback = config.fallbackBranchId
-  const branch = branches.map((b: ConditionBranch & Record<string, any>, i: number) => ({
+  const normalized = branches.map((b: ConditionBranch & Record<string, any>, i: number) => ({
     id: b.id,
     type: b.type ?? (b.id === fallback ? 'ELSE' : i === 0 ? 'IF' : `ELSE IF ${i}`),
     condition: b.condition ?? 'and',
-    // 契约缺：结构化条件列表
+    // 契约缺：结构化条件列表（`NumberConditionNodeExecutor` 与条件面板都要用）
     conditions: b.conditions ?? [{ field: [], compare: '', value: '' }],
     label: b.label,
     expression: b.expression
   }))
   return {
     node_data: {
-      branch,
-      // 契约缺：兜底分支 id（旧用 type==='ELSE' 表达，这里双写保证可逆）
-      _fallbackBranchId: fallback
+      // `#337` B3：画布内部也用契约名（旧名 `branch` / `_fallbackBranchId` 只在读存量草稿时认）
+      branches: normalized,
+      fallbackBranchId: fallback
     },
-    // 条件节点锚点靠这张表算 y 坐标，缺了会报「无法获取 endAnchor」
-    branch_condition_list: branch.map((b: any, i: number) => ({
+    // 条件节点锚点靠这张表算 y 坐标，缺了会报「无法获取 endAnchor」。它是画布渲染数据，不是节点配置，
+    // 所以留在 bundle 顶层而不是塞进 node_data。
+    branch_condition_list: normalized.map((b: any, i: number) => ({
       id: b.id,
       height: 12,
       index: i
@@ -430,8 +403,8 @@ function conditionToLegacy(config: ConditionNodeConfig & Record<string, any>): L
 }
 
 function conditionFromLegacy(nd: any): ConditionNodeConfig & Record<string, any> {
-  const branch: any[] = nd?.branch ?? []
-  const branches: Array<ConditionBranch & Record<string, any>> = branch.map((b) => ({
+  const raw: any[] = nd?.branches ?? nd?.branch ?? []
+  const branches: Array<ConditionBranch & Record<string, any>> = raw.map((b) => ({
     id: b.id,
     label: b.label ?? b.type ?? b.id,
     expression: b.expression ?? '',
@@ -441,7 +414,10 @@ function conditionFromLegacy(nd: any): ConditionNodeConfig & Record<string, any>
     conditions: b.conditions
   }))
   const fallback =
-    nd?._fallbackBranchId ?? branch.find((b) => b.type === 'ELSE')?.id ?? null
+    nd?.fallbackBranchId ??
+    nd?._fallbackBranchId ??
+    raw.find((b) => b.type === 'ELSE')?.id ??
+    null
   return {
     branches,
     fallbackBranchId: fallback

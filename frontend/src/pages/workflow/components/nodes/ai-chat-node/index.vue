@@ -6,13 +6,13 @@
           而校验上下文在弹窗那张表单里，两处各放一个可编辑控件会让必填在两棵 DOM 树里各判一次。
         -->
         <template #essential>
-            AI 模型 · {{ modelOptions?.find((m: any) => m.id === chat_data.model_id)?.modelName || '未选择' }}
+            AI 模型 · {{ modelOptions?.find((m: any) => m.id === chat_data.modelId)?.modelName || '未选择' }}
         </template>
         <h5 class="title-decoration-1 mb-8">节点设置</h5>
         <el-card shadow="never" class="card-never" style="--el-card-padding: 12px">
             <el-form @submit.prevent :model="chat_data" label-position="top" require-asterisk-position="right"
                 class="mb-24" label-width="auto" ref="aiChatNodeFormRef" hide-required-asterisk>
-                <el-form-item label="AI 模型" prop="model_id" :rules="{
+                <el-form-item label="AI 模型" prop="modelId" :rules="{
         required: true,
         message: '请选择 AI 模型',
         trigger: 'change'
@@ -22,20 +22,20 @@
                             <div>
                                 <span>AI 模型<span class="danger">*</span></span>
                             </div>
-                            <!-- <el-button :disabled="!chat_data.model_id" type="primary" link
-                                @click="openAIParamSettingDialog(chat_data.model_id)" @refreshForm="refreshParam">
+                            <!-- <el-button :disabled="!chat_data.modelId" type="primary" link
+                                @click="openAIParamSettingDialog(chat_data.modelId)" @refreshForm="refreshParam">
                                 参数设置
                             </el-button> -->
                         </div>
                     </template>
-                    <el-select @change="model_change" @wheel="wheel" v-model="chat_data.model_id"
+                    <el-select @change="model_change" @wheel="wheel" v-model="chat_data.modelId"
                         placeholder="请选择 AI 模型" class="w-full" popper-class="select-model" :clearable="true">
                         <el-option v-for="item in modelOptions" :key="item.id" :label="item.modelName" :value="item.id"
                             :disabled="item.status !== 'LOADED'" class="flex-between">
                             <span>{{ item.modelName }}</span>
                             <!-- 不是「已加载」的选了也调不动，所以禁用 + 写明原因，而不是藏起来 -->
                             <span v-if="item.status !== 'LOADED'" class="model-status">{{ labelOf(MODEL_STATUS_LABELS, item.status) }}</span>
-                            <el-icon class="check-icon" v-else-if="item.id === chat_data.model_id">
+                            <el-icon class="check-icon" v-else-if="item.id === chat_data.modelId">
                                 <Check />
                             </el-icon>
                         </el-option>
@@ -53,7 +53,7 @@
                 </el-form-item>
 
                 <el-form-item label="角色设定">
-                    <MdEditorMagnify title="角色设定" v-model="chat_data.system" style="height: 100px"
+                    <MdEditorMagnify title="角色设定" v-model="chat_data.rolePrompt" style="height: 100px"
                         @submitDialog="submitSystemDialog" placeholder="角色设定" />
                 </el-form-item>
                 <el-form-item label="提示词" prop="prompt" :rules="{
@@ -86,7 +86,7 @@
                             </el-select>
                         </div>
                     </template>
-                    <el-input-number v-model="chat_data.dialogue_number" :min="0" :value-on-clear="0"
+                    <el-input-number v-model="chat_data.dialogueNumber" :min="0" :value-on-clear="0"
                         controls-position="right" class="w-full" :step="1" :step-strictly="true" />
                 </el-form-item>
                 <el-form-item label="返回内容" @click.prevent>
@@ -104,7 +104,7 @@
                             </el-tooltip>
                         </div>
                     </template>
-                    <el-switch size="small" v-model="chat_data.is_result" />
+                    <el-switch size="small" v-model="chat_data.asResult" />
                 </el-form-item>
             </el-form>
         </el-card>
@@ -142,7 +142,7 @@ const wheel = (e: any) => {
 }
 
 function submitSystemDialog(val: string) {
-    set(props.nodeModel.properties.node_data, 'system', val)
+    set(props.nodeModel.properties.node_data, 'rolePrompt', val)
 }
 
 function submitDialog(val: string) {
@@ -163,12 +163,22 @@ const defaultPrompt = `已知信息：
 {{知识库检索.data}}
 问题：
 {{开始.question}}`
+/**
+ * 键名全部用契约名（`AiChatNodeConfig`）。
+ *
+ * 旧画布用的是 `model_id` / `system` / `dialogue_number` / `is_result` / `model_params_setting`；
+ * `#337` 第二步 B3 起画布内部也只认契约名，转换层（`graph-format.ts`）只在读存量草稿时回退旧名。
+ *
+ * `dialogueType` / `temperature` / `maxTokens` 仍是画布私有键：后端 `AiChatNodeExecutor` 一字不读，
+ * 而且契约里没有对应字段。留在这里而不是塞进 `modelParams`，是因为它们由本面板独占，
+ * 塞进去会让 `modelParams` 同时承载两种来源（弹窗设置 + 面板固定项）。
+ */
 const form = {
-    model_id: '',
-    system: '',
+    modelId: '',
+    rolePrompt: '',
     prompt: defaultPrompt,
-    dialogue_number: 1,
-    is_result: false,
+    dialogueNumber: 1,
+    asResult: false,
     temperature: null,
     max_tokens: null,
     dialogue_type: 'WORKFLOW'
@@ -216,14 +226,14 @@ const openCreateModel = (provider?: Provider) => {
 }
 
 function refreshParam(data: any) {
-    set(props.nodeModel.properties.node_data, 'model_params_setting', data)
+    set(props.nodeModel.properties.node_data, 'modelParams', data)
 }
 
 onMounted(() => {
     getModel()
-    if (typeof props.nodeModel.properties.node_data?.is_result === 'undefined') {
+    if (typeof props.nodeModel.properties.node_data?.asResult === 'undefined') {
         if (isLastNode(props.nodeModel)) {
-            set(props.nodeModel.properties.node_data, 'is_result', true)
+            set(props.nodeModel.properties.node_data, 'asResult', true)
         }
     }
     set(props.nodeModel, 'validate', validate)

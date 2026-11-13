@@ -2,13 +2,13 @@
     <NodeContainer :nodeModel="nodeModel">
         <!-- 「必要信息」只读摘要，见 ai-chat-node 里的同款说明。 -->
         <template #essential>
-            AI 模型 · {{ modelOptions?.find((m: any) => m.id === form_data.model_id)?.modelName || '未选择' }}
+            AI 模型 · {{ modelOptions?.find((m: any) => m.id === form_data.modelId)?.modelName || '未选择' }}
         </template>
         <h5 class="title-decoration-1 mb-8">节点设置</h5>
         <el-card shadow="never" class="card-never" style="--el-card-padding: 12px">
             <el-form @submit.prevent :model="form_data" label-position="top" require-asterisk-position="right"
                 class="mb-24" label-width="auto" ref="questionNodeFormRef" hide-required-asterisk>
-                <el-form-item label="AI 模型" prop="model_id" :rules="{
+                <el-form-item label="AI 模型" prop="modelId" :rules="{
         required: true,
         message: '请选择 AI 模型',
         trigger: 'change'
@@ -18,20 +18,20 @@
                             <div>
                                 <span>AI 模型<span class="danger">*</span></span>
                             </div>
-                            <!-- <el-button type="primary" link :disabled="!form_data.model_id"
-                                @click="openAIParamSettingDialog(form_data.model_id)" @refreshForm="refreshParam">
+                            <!-- <el-button type="primary" link :disabled="!form_data.modelId"
+                                @click="openAIParamSettingDialog(form_data.modelId)" @refreshForm="refreshParam">
                                 {{ $t('views.application.applicationForm.form.paramSetting') }}
                             </el-button> -->
                         </div>
                     </template>
-                    <el-select @change="model_change" @wheel="wheel" v-model="form_data.model_id"
+                    <el-select @change="model_change" @wheel="wheel" v-model="form_data.modelId"
                         placeholder="请选择 AI 模型" class="w-full" popper-class="select-model" :clearable="true">
                         <el-option v-for="item in modelOptions" :key="item.id" :label="item.modelName" :value="item.id"
                             :disabled="item.status !== 'LOADED'" class="flex-between">
                             <span>{{ item.modelName }}</span>
                             <!-- 不是「已加载」的选了也调不动，所以禁用 + 写明原因，而不是藏起来 -->
                             <span v-if="item.status !== 'LOADED'" class="model-status">{{ labelOf(MODEL_STATUS_LABELS, item.status) }}</span>
-                            <el-icon class="check-icon" v-else-if="item.id === form_data.model_id">
+                            <el-icon class="check-icon" v-else-if="item.id === form_data.modelId">
                                 <Check />
                             </el-icon>
                         </el-option>
@@ -51,7 +51,7 @@
                     <MdEditorMagnify title="角色设定" v-model="form_data.system" style="height: 100px"
                         @submitDialog="submitSystemDialog" placeholder="角色设定" />
                 </el-form-item>
-                <el-form-item label="提示词" prop="prompt" :rules="{
+                <el-form-item label="提示词" prop="rewritePrompt" :rules="{
         required: true,
         message: '请输入提示词',
         trigger: 'blur'
@@ -70,11 +70,11 @@
                             </el-tooltip>
                         </div>
                     </template>
-                    <MdEditorMagnify @wheel="wheel" title="提示词" v-model="form_data.prompt" style="height: 150px"
+                    <MdEditorMagnify @wheel="wheel" title="提示词" v-model="form_data.rewritePrompt" style="height: 150px"
                         @submitDialog="submitDialog" />
                 </el-form-item>
                 <el-form-item label="历史聊天记录">
-                    <el-input-number v-model="form_data.dialogue_number" :min="0" :value-on-clear="0"
+                    <el-input-number v-model="form_data.dialogueNumber" :min="0" :value-on-clear="0"
                         controls-position="right" class="w-full" :step="1" :step-strictly="true" />
                 </el-form-item>
                 <el-form-item label="返回内容" @click.prevent>
@@ -92,7 +92,7 @@
                             </el-tooltip>
                         </div>
                     </template>
-                    <el-switch size="small" v-model="form_data.is_result" />
+                    <el-switch size="small" v-model="form_data.asResult" />
                 </el-form-item>
             </el-form>
         </el-card>
@@ -137,7 +137,7 @@ const model_change = (model_id?: string) => {
     }
 }
 function submitDialog(val: string) {
-    set(props.nodeModel.properties.node_data, 'prompt', val)
+    set(props.nodeModel.properties.node_data, 'rewritePrompt', val)
 }
 
 function submitSystemDialog(val: string) {
@@ -148,15 +148,22 @@ const id = getAppId()
 // @ts-ignore
 const defaultPrompt = `根据上下文优化和完善用户问题：{{开始.question}}
 请输出一个优化后的问题。`
+/**
+ * 键名全部用契约名（`QuestionNodeConfig`）。
+ *
+ * 旧画布用的是 `model_id` / `prompt` / `dialogue_number` / `is_result`；`#337` 第二步 B3 起画布内部
+ * 也只认契约名 —— 转换层（`graph-format.ts`）只在读存量草稿时回退旧名。
+ */
 const form = {
-    model_id: '',
+    modelId: '',
     system: '你是一个问题优化大师',
-    prompt: defaultPrompt,
-    dialogue_number: 1,
-    is_result: false
+    rewritePrompt: defaultPrompt,
+    defaultAnswer: '',
+    dialogueNumber: 1,
+    asResult: false
 }
 function refreshParam(data: any) {
-    set(props.nodeModel.properties.node_data, 'model_params_setting', data)
+    set(props.nodeModel.properties.node_data, 'modelParams', data)
 }
 
 const form_data = computed({
@@ -202,9 +209,9 @@ const openCreateModel = (provider?: Provider) => {
 
 onMounted(() => {
     getModel()
-    if (typeof props.nodeModel.properties.node_data?.is_result === 'undefined') {
+    if (typeof props.nodeModel.properties.node_data?.asResult === 'undefined') {
         if (isLastNode(props.nodeModel)) {
-            set(props.nodeModel.properties.node_data, 'is_result', true)
+            set(props.nodeModel.properties.node_data, 'asResult', true)
         }
     }
     set(props.nodeModel, 'validate', validate)

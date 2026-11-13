@@ -2,7 +2,7 @@
     <NodeContainer :nodeModel="nodeModel">
         <el-form :model="form_data" label-position="top" require-asterisk-position="right" label-width="auto"
             ref="ConditionNodeFormRef" @submit.prevent>
-            <template v-for="(item, index) in form_data.branch" :key="item.id">
+            <template v-for="(item, index) in form_data.branches" :key="item.id">
                 <el-card v-resize="(wh: any) => resizeCondition(wh, item, index)" shadow="never" class="card-never mb-8"
                     style="--el-card-padding: 12px">
                     <div class="flex-between lighter">
@@ -10,14 +10,14 @@
                             {{ branchTypeLabel(item.type) }}
                             <el-tag v-if="isFallback(item)" size="small" type="warning" class="ml-4">兜底</el-tag>
                         </span>
-                        <el-switch v-model="item._isFallback" size="small" active-text="兜底"
+                        <el-switch :model-value="isFallback(item)" size="small" active-text="兜底"
                             @change="(v: any) => changeFallback(item, v)" />
                     </div>
                     <div class="mt-8">
                         <el-form-item label="分支名">
                             <el-input v-model="item.label" placeholder="例如：高风险 / 一般" maxlength="20" />
                         </el-form-item>
-                        <el-form-item label="判定条件（自然语言）" :prop="'branch.' + index + '.expression'" :rules="{
+                        <el-form-item label="判定条件（自然语言）" :prop="'branches.' + index + '.expression'" :rules="{
                             required: true,
                             message: '请填写判定条件',
                             trigger: 'blur'
@@ -29,7 +29,7 @@
                             条件由模型按语义判定，不支持手写脚本表达式。
                         </el-text>
                     </div>
-                    <el-button v-if="form_data.branch.length > 1" link type="info" class="mt-4"
+                    <el-button v-if="form_data.branches.length > 1" link type="info" class="mt-4"
                         @click="deleteBranch(index)">
                         <el-icon class="mr-4">
                             <Delete />
@@ -70,12 +70,11 @@ const makeBranch = (label: string, expression: string, isFallback: boolean) => (
     // 旧属性字段：结构化条件在语义判断里不用，保留空数组保证格式可逆
     condition: 'and',
     conditions: [],
-    _isFallback: isFallback
 })
 
 const form = {
-    branch: [makeBranch('条件 A', '', false), makeBranch('兜底', '以上条件都不命中', true)],
-    _fallbackBranchId: ''
+    branches: [makeBranch('条件 A', '', false), makeBranch('兜底', '以上条件都不命中', true)],
+    fallbackBranchId: ''
 }
 
 const wheel = (e: any) => {
@@ -102,20 +101,19 @@ const resizeCondition = (wh: any, row: any, index: number) => {
         return item
     })
     set(props.nodeModel.properties, 'branch_condition_list', new_branch_condition_list)
-    refreshBranchAnchor(props.nodeModel.properties.node_data.branch, true)
+    refreshBranchAnchor(props.nodeModel.properties.node_data.branches, true)
 }
 
 function isFallback(item: any): boolean {
-    return props.nodeModel.properties.node_data?._fallbackBranchId === item.id
+    return props.nodeModel.properties.node_data?.fallbackBranchId === item.id
 }
 
 function syncFallbackTypes() {
     const nd = props.nodeModel.properties.node_data
     if (!nd) return
-    const fallbackId = nd._fallbackBranchId
+    const fallbackId = nd.fallbackBranchId
     let ifIndex = 0
-    nd.branch.forEach((b: any) => {
-        b._isFallback = b.id === fallbackId
+    nd.branches.forEach((b: any) => {
         if (b.id === fallbackId) {
             b.type = 'ELSE'
         } else {
@@ -131,9 +129,9 @@ const form_data = computed({
             return props.nodeModel.properties.node_data
         } else {
             set(props.nodeModel.properties, 'node_data', form)
-            form._fallbackBranchId = form.branch[1].id
+            form.fallbackBranchId = form.branches[1].id
             syncFallbackTypes()
-            refreshBranchAnchor(form.branch, true)
+            refreshBranchAnchor(form.branches, true)
         }
         return props.nodeModel.properties.node_data
     },
@@ -146,11 +144,11 @@ function changeFallback(item: any, on: boolean | string | number) {
     const nd = props.nodeModel.properties.node_data
     if (!nd) return
     if (on) {
-        nd._fallbackBranchId = item.id
-    } else if (nd._fallbackBranchId === item.id) {
+        nd.fallbackBranchId = item.id
+    } else if (nd.fallbackBranchId === item.id) {
         // 关掉当前兜底时改指最后一条，保证始终有兜底出口
-        const last = nd.branch[nd.branch.length - 1]
-        nd._fallbackBranchId = last && last.id !== item.id ? last.id : (nd.branch[0]?.id ?? null)
+        const last = nd.branches[nd.branches.length - 1]
+        nd.fallbackBranchId = last && last.id !== item.id ? last.id : (nd.branches[0]?.id ?? null)
     }
     syncFallbackTypes()
 }
@@ -163,19 +161,19 @@ const validate = () => {
 }
 
 function addBranch() {
-    const list = cloneDeep(props.nodeModel.properties.node_data.branch)
+    const list = cloneDeep(props.nodeModel.properties.node_data.branches)
     const obj = makeBranch(`分支 ${list.length}`, '', false)
     // 新分支插在兜底之前
-    const fallbackIndex = list.findIndex((b: any) => b.id === props.nodeModel.properties.node_data._fallbackBranchId)
+    const fallbackIndex = list.findIndex((b: any) => b.id === props.nodeModel.properties.node_data.fallbackBranchId)
     const at = fallbackIndex >= 0 ? fallbackIndex : list.length
     list.splice(at, 0, obj)
-    set(props.nodeModel.properties.node_data, 'branch', list)
+    set(props.nodeModel.properties.node_data, 'branches', list)
     syncFallbackTypes()
     refreshBranchAnchor(list, true)
 }
 
 function deleteBranch(index: number) {
-    const list = cloneDeep(props.nodeModel.properties.node_data.branch)
+    const list = cloneDeep(props.nodeModel.properties.node_data.branches)
     const removed = list.splice(index, 1)[0]
     if (!removed) return
     // 分支没了，挂在它上面的出边一并删掉
@@ -186,10 +184,10 @@ function deleteBranch(index: number) {
             .filter((item: any) => item.sourceAnchorId === deletedAnchorId)
             .map((item: any) => item.id)
     )
-    if (props.nodeModel.properties.node_data._fallbackBranchId === removed.id) {
-        props.nodeModel.properties.node_data._fallbackBranchId = list[list.length - 1]?.id ?? null
+    if (props.nodeModel.properties.node_data.fallbackBranchId === removed.id) {
+        props.nodeModel.properties.node_data.fallbackBranchId = list[list.length - 1]?.id ?? null
     }
-    set(props.nodeModel.properties.node_data, 'branch', list)
+    set(props.nodeModel.properties.node_data, 'branches', list)
     syncFallbackTypes()
     refreshBranchAnchor(list, false)
 }
@@ -221,12 +219,12 @@ onMounted(() => {
     // 兜底标记与 type 展示对齐一次（可能是从旧图/契约映射进来的）
     if (props.nodeModel.properties.node_data) {
         const nd = props.nodeModel.properties.node_data
-        if (!nd._fallbackBranchId) {
-            const byType = nd.branch?.find((b: any) => b.type === 'ELSE')
-            nd._fallbackBranchId = byType?.id ?? nd.branch?.[nd.branch.length - 1]?.id ?? null
+        if (!nd.fallbackBranchId) {
+            const byType = nd.branches?.find((b: any) => b.type === 'ELSE')
+            nd.fallbackBranchId = byType?.id ?? nd.branches?.[nd.branches.length - 1]?.id ?? null
         }
         syncFallbackTypes()
-        refreshBranchAnchor(nd.branch ?? [], true)
+        refreshBranchAnchor(nd.branches ?? [], true)
     }
     set(props.nodeModel, 'validate', validate)
 })

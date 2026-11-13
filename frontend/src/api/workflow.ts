@@ -152,13 +152,28 @@ export interface AiChatNodeConfig {
   kbIds: string[]
   retrieval: RetrievalParams
   thinkingEnabled: boolean
-  /** 是否开启多轮上下文 */
+  /** 是否开启多轮上下文（`dialogueNumber > 0` 的布尔投影） */
   multiTurn: boolean
+  /**
+   * 提示词正文（旧画布名 `prompt`）。
+   *
+   * 契约里以前只有 `promptIds`（模板 id），而面板编辑的是正文 —— 于是正文只存在于画布侧
+   * （`#337` 第二步 B3 起补成契约字段）。
+   */
+  prompt?: string
+  /** 带几轮历史（旧画布名 `dialogue_number`）；0 表示不带 */
+  dialogueNumber?: number
+  /** 是否作为结果输出（旧画布名 `is_result`） */
+  asResult?: boolean
+  /** 模型参数（旧画布名 `model_params_setting`），形状由模型提供方决定 */
+  modelParams?: Record<string, unknown>
 }
 
 export interface SearchDatasetNodeConfig {
   kbIds: string[]
   retrieval: RetrievalParams
+  /** 检索问题从上游哪些变量取（旧画布名 `question_reference_address`） */
+  questionReferenceAddress?: string[]
 }
 
 export interface QuestionNodeConfig {
@@ -173,6 +188,14 @@ export interface QuestionNodeConfig {
    * 早先后端读的是旧画布名 `default_answer`，而契约里根本没有这一项，于是"配了默认答复"从来没生效过（`#335`）。
    */
   defaultAnswer: string
+  /** 角色设定（旧画布名 `system`） */
+  system?: string
+  /** 带几轮历史（旧画布名 `dialogue_number`） */
+  dialogueNumber?: number
+  /** 是否作为结果输出（旧画布名 `is_result`） */
+  asResult?: boolean
+  /** 模型参数（旧画布名 `model_params_setting`） */
+  modelParams?: Record<string, unknown>
 }
 
 /**
