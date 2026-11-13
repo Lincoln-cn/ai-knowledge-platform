@@ -75,9 +75,13 @@ public class WorkflowResumeService {
    * <ol>
    *   <li>暂停快照还在
    *   <li>它还没被恢复过
-   *   <li><b>当前的图与暂停时是同一份计划</b> —— 用 {@code stepsDone} 比：暂停时走了 N 步， 现在编译出来的计划第 N 步必须仍存在。图被改过之后同一个 N
-   *       会指向另一个节点， 硬跑等于把状态灌进一张陌生的图。
+   *   <li><b>当前的图与暂停时是同一份计划</b> —— 用 {@code stepsDone} 比：暂停时走了 N 步， 现在编译出来的计划第 N
+   *       步必须仍存在，**且仍是快照里那个中断点**（{@code #338}：只比步数等于「位置还在」，比不出「那个位置换了节点」）。 图被改过之后同一个 N 会指向另一个节点，
+   *       硬跑等于把状态灌进一张陌生的图。
    * </ol>
+   *
+   * <p>★ 恢复点传的是 {@code stepsDone + 1}：暂停点那一步就是中断点本身，用户这一次的答复把它「走完」了。 传 {@code stepsDone}
+   * 原值会让执行器从同一个中断点重来，答复永远到不了下游。
    */
   public Result resume(
       UUID assistantId, UUID executionId, WorkflowCompiler.Graph graph, String answer) {
@@ -100,7 +104,7 @@ public class WorkflowResumeService {
       return Result.rejectedResult(compiled.errors());
     }
     List<WorkflowCompiler.PlanStep> steps = compiled.plan().steps();
-    if (pause.stepsDone() > steps.size()) {
+    if (pause.stepsDone() >= steps.size()) {
       return Result.rejectedResult(
           List.of(
               "图改过了：这次执行停在走了 "
@@ -109,6 +113,20 @@ public class WorkflowResumeService {
                   + steps.size()
                   + " 步。"
                   + "换一份计划去接着跑会把状态灌进一张陌生的图，所以拒绝。"));
+    }
+    // ★ 第 stepsDone 步必须仍是快照里那个中断点（#338）：比步数只证明「位置还在」，不证明「那个位置还是
+    //   同一个节点」—— 图被改过之后步数相同、节点不同是常有的事，而那样接下去跑等于把答复灌给另一个节点。
+    WorkflowCompiler.PlanStep interruptStep = steps.get(pause.stepsDone());
+    if (!interruptStep.nodeId().equals(pause.nodeId())) {
+      return Result.rejectedResult(
+          List.of(
+              "图改过了：这次执行停在第 "
+                  + pause.stepsDone()
+                  + " 步「"
+                  + pause.nodeId()
+                  + "」上，而当前这张图那一步是「"
+                  + interruptStep.nodeId()
+                  + "」。换一份计划接着跑会把状态灌进一张陌生的图，所以拒绝。"));
     }
 
     FlowState state = new FlowState();
@@ -125,8 +143,13 @@ public class WorkflowResumeService {
     boolean pausedAgain = false;
     String pausedAt = null;
     try {
+      // ★ +1：暂停点那一步就是中断点本身，用户这一次的答复把它「走完」了。
+      //   传 stepsDone 原值会让执行器从同一个中断点重来 ⇒ 立刻又抛一次 WorkflowInterrupted，
+      //   答复永远到不了下游（#338：原来那四条测试只覆盖「还没开始跑就被挡下」的路径，
+      //   所以这条一直没被发现 —— 恢复一次，图上什么都不会发生，只是又多了一张暂停快照）。
       FlowState finished =
-          executor.resumeAndReturn(executionId, compiled.plan(), answer, pause.stepsDone(), state);
+          executor.resumeAndReturn(
+              executionId, compiled.plan(), answer, pause.stepsDone() + 1, state);
       output = finished.read("reply");
     } catch (WorkflowInterrupted again) {
       // 图里还有第二个人工介入节点 ⇒ 停在新位置，把新快照覆盖上去（同一次执行）。

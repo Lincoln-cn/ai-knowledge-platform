@@ -54,15 +54,6 @@ public class WorkflowValidationService {
                 "画布上有未知类型：" + node.type(),
                 "这个节点可能来自更新的版本，请升级后再编辑",
                 node.id()));
-      } else if (isHumanInTheLoop(node.type())) {
-        // 判据 2（09 §5.3.2 ②）：人工介入节点 = 中断点，本版本不支持，含它的图拒绝发布。
-        issues.add(
-            issue(
-                "ERROR",
-                "INTERRUPT_NODE",
-                "节点「" + node.title() + "」是人工介入节点（追问 / 表单收集），本版本不支持",
-                "把人工介入换成已实现的节点（例如「AI 对话」或「回复」），否则发布后这一步无法自动执行",
-                node.id()));
       } else if (!catalog.executable(node.type())) {
         // 判据 2：executable=false = 本版本跑不了 ⇒ 从 WARNING 升为 ERROR，直接拒绝发布。
         issues.add(
@@ -153,16 +144,18 @@ public class WorkflowValidationService {
     return new Result(passed, issues);
   }
 
-  /**
-   * 人工介入节点 = {@code #113} 的「中断点」：走到这里要停下来等用户填/答，本版本的执行器只跑 全自动线性流程，不支持 —— {@code QUESTION_NODE}（追问）/
-   * {@code FORM_NODE}（表单收集）。
+  /*
+   * 这里曾有一条 INTERRUPT_NODE 拒绝规则：把 QUESTION_NODE / FORM_NODE 这两类人工介入节点按类型硬拦下来，
+   * 理由是「本版本不支持中断点」。
    *
-   * <p>★ 刻意按类型硬识别，而不是看 {@code executable}：{@code QUESTION_NODE} 在 {@code node-types.json} 里标成
-   * {@code executable:false}（它确实是人工介入节点），这里按类型再硬拦一道，不依赖目录字段。
+   * #338 把它删了，因为那个理由已经不成立：0.7.4 落地了中断与恢复（WorkflowInterrupted → as_workflow_pause
+   * → WorkflowResumeService），执行到人工介入节点会停下来等用户答复、答复到了再从下一步接着跑；目录里这两个
+   * 节点也是 executable:true。再拦一道的结果是「能跑的图发不出去」。
+   *
+   * 删除时同步补了一条测试（WorkflowResumeServiceTest#resumeStartsAfterTheInterruptAndFinishesTheGraph）：
+   * 恢复链路原来是原地打转的（恢复点传成了中断点本身），而原来四条测试只覆盖「还没开始跑就被挡下」的路径，
+   * 所以这条一直没人发现 —— 闸门放开之前必须先确认它真的能跑完。
    */
-  private static boolean isHumanInTheLoop(String type) {
-    return "QUESTION_NODE".equals(type) || "FORM_NODE".equals(type);
-  }
 
   /** 只报环（{@code CYCLE}）—— 结构、可达性与类型校验在 {@link #validate} 里做。 */
   private static List<Issue> cycles(Graph graph) {
