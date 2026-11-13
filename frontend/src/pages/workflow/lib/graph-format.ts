@@ -1,6 +1,7 @@
 import type {
   AiChatNodeConfig,
   ApiFieldConfig,
+  ApplicationNodeConfig,
   BaseNodeConfig,
   ConditionBranch,
   ConditionNodeConfig,
@@ -585,6 +586,26 @@ function rerankerFromLegacy(nd: any): RerankerNodeConfig & Record<string, any> {
   }
 }
 
+/**
+ * 应用调用节点：写契约名，键与后端 `ApplicationNodeExecutor` 读的一致（`applicationId` / `version`）。
+ * 这两个字段没有旧画布名（节点一直是灰的），所以不需要回退分支。
+ */
+function applicationToLegacy(config: ApplicationNodeConfig & Record<string, any>): LegacyBundle {
+  return {
+    node_data: {
+      applicationId: config.applicationId ?? null,
+      version: typeof config.version === 'string' ? config.version : ''
+    }
+  }
+}
+
+function applicationFromLegacy(nd: any): ApplicationNodeConfig & Record<string, any> {
+  return {
+    applicationId: typeof nd?.applicationId === 'string' && nd.applicationId ? nd.applicationId : null,
+    version: typeof nd?.version === 'string' ? nd.version : ''
+  }
+}
+
 function formToLegacy(config: FormNodeConfig & Record<string, any>): LegacyBundle {
   return {
     node_data: {
@@ -629,6 +650,8 @@ function toLegacy(type: string, config: any): LegacyBundle {
       return documentExtractToLegacy(config)
     case 'RERANKER_NODE':
       return rerankerToLegacy(config)
+    case 'APPLICATION_NODE':
+      return applicationToLegacy(config)
     case 'FORM_NODE':
       return formToLegacy(config)
     default:
@@ -658,6 +681,8 @@ function fromLegacy(type: string, nd: any, props: any): Record<string, any> {
       return documentExtractFromLegacy(nd)
     case 'RERANKER_NODE':
       return rerankerFromLegacy(nd)
+    case 'APPLICATION_NODE':
+      return applicationFromLegacy(nd)
     case 'FORM_NODE':
       return formFromLegacy(nd)
     default:

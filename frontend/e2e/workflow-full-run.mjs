@@ -185,6 +185,78 @@ if (executionId) {
   record('恢复 · 拿到 executionId', false, '调试返回里没有 executionId');
 }
 
+// ── 3b. 应用调用：把另一个已发布的应用当成这一步的函数 ─────────────────────
+// 这一段的重点不是「能不能调用」，而是「只认已发布版本 + 递归有上限」：
+// 子应用先发布一个版本，父流程指名调它；再造一个不存在的 id 看它是不是明确失败。
+const childName = '__e2e 子应用__';
+const existing = JSON.parse(
+  (await get(`/api/v1/assistants?page=1&size=100&type=WORKFLOW`)).body,
+)?.data;
+const existingList = Array.isArray(existing) ? existing : (existing?.list ?? []);
+const found = existingList.find((a) => a.name === childName);
+const childId = found?.id
+  ?? JSON.parse(
+    (await post(`/api/v1/assistants`, { name: childName, type: 'WORKFLOW', description: '被 application 节点调用' })).body,
+  )?.data?.id;
+
+const childGraph = {
+  nodes: [
+    node('c-start', 'START_NODE', '开始', 60, {}),
+    node('c-reply', 'REPLY_NODE', '回复', 320, { content: '子系统给的结论：按第 31 条。', replyType: 'content', asResult: true }),
+  ],
+  edges: [edge('c1', 'c-start', 'c-reply')],
+};
+await fetch(`${API_URL}/api/v1/assistants/${childId}/workflow/draft`, {
+  method: 'PUT',
+  headers: auth,
+  body: JSON.stringify({ graph: childGraph }),
+});
+const pub = await post(`/api/v1/assistants/${childId}/workflow/publish`, { graph: childGraph, note: 'e2e 应用调用' });
+record('应用调用 · 子应用发布出一个版本', pub.status === 200, `HTTP ${pub.status}`);
+
+const appGraph = {
+  nodes: [
+    node('a-start', 'START_NODE', '开始', 60, {}),
+    node('a-call', 'APPLICATION_NODE', '应用调用', 320, { applicationId: childId, version: '' }),
+    node('a-reply', 'REPLY_NODE', '回复', 580, { content: '父流程收尾。', replyType: 'content', asResult: true }),
+  ],
+  edges: [edge('a1', 'a-start', 'a-call'), edge('a2', 'a-call', 'a-reply')],
+};
+const called = await post(`/api/v1/assistants/${APP}/workflow/debug`, {
+  graph: appGraph,
+  inputs: { entry: '看一下子系统怎么说' },
+});
+const calledData = JSON.parse(called.body)?.data;
+record(
+  '应用调用 · 父流程跑到回复节点',
+  calledData?.ok === true && calledData?.finalOutput === '父流程收尾。',
+  `ok=${calledData?.ok}，finalOutput=${JSON.stringify(calledData?.finalOutput)?.slice(0, 60)}`,
+);
+record(
+  '应用调用 · 轨迹是 开始 → 应用调用 → 回复',
+  (calledData?.nodeTrail?.map((t) => t.type).join(' → ') ?? '') === 'START_NODE → APPLICATION_NODE → REPLY_NODE',
+  calledData?.nodeTrail?.map((t) => t.type).join(' → ') ?? '(无)',
+);
+
+// 反证：指向一个不存在的应用，必须明确报错，而不是当作空输出继续往下跑
+const missingGraph = {
+  nodes: [
+    node('m-start', 'START_NODE', '开始', 60, {}),
+    node('m-call', 'APPLICATION_NODE', '应用调用', 320, { applicationId: '00000000-0000-0000-0000-00000000dead', version: '' }),
+    node('m-reply', 'REPLY_NODE', '回复', 580, { content: '不该跑到这里。', replyType: 'content', asResult: true }),
+  ],
+  edges: [edge('m1', 'm-start', 'm-call'), edge('m2', 'm-call', 'm-reply')],
+};
+const missing = await post(`/api/v1/assistants/${APP}/workflow/debug`, {
+  graph: missingGraph,
+  inputs: { entry: 'x' },
+});
+const missingData = JSON.parse(missing.body)?.data;
+record(
+  '应用调用 · 应用不存在时明确失败（不静默继续）',
+  missingData?.ok === false && /不存在|看不到|还没有发布版本/.test(String(missingData?.errors ?? missingData?.failReason ?? '')),
+  `ok=${missingData?.ok}，errors=${JSON.stringify(missingData?.errors ?? missingData?.failReason)?.slice(0, 80)}`,
+);
 // ── 4. 界面上点「试用」—— 同一条链路，但走真实前端（`fromLogicFlow` 的产物）────
 // 前三段都用 API 直接发契约形状；而人实际点的是「试用」：它先存一次草稿，再把画布上的图
 // 转成契约形状发出去。`#335` 那批断链恰恰只在后者暴露 —— API 直发现成形状是测不出来的。

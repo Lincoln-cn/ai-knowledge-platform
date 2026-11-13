@@ -84,13 +84,13 @@ public class RerankerNodeExecutor implements NodeExecutor {
     Map<UUID, String> texts = new LinkedHashMap<>();
     List<UUID> ordered = new ArrayList<>(hits.size());
     for (Map<String, Object> hit : hits) {
-      UUID id = asUuid(hit.get("segmentId"));
+      UUID id = asUuid(hit.get(WorkflowNodeKeys.Item.SEGMENT_ID));
       if (id == null) {
         // ★ 缺 id 的候选不能悄悄丢掉：丢几个，重排就是在另一批候选上做排序，读数看起来正常。
         throw new IllegalStateException("检索命中里有一条没有 segmentId，重排无法按 id 排序");
       }
       ordered.add(id);
-      String docName = asText(hit.get("docName"));
+      String docName = asText(hit.get(WorkflowNodeKeys.Item.DOC_NAME));
       String content = asText(hit.get("content"));
       texts.put(id, docName.isEmpty() ? content : docName + "\n" + content);
     }
@@ -106,7 +106,7 @@ public class RerankerNodeExecutor implements NodeExecutor {
 
     Map<UUID, Map<String, Object>> byId = new LinkedHashMap<>();
     for (Map<String, Object> hit : hits) {
-      byId.put(asUuid(hit.get("segmentId")), hit);
+      byId.put(asUuid(hit.get(WorkflowNodeKeys.Item.SEGMENT_ID)), hit);
     }
 
     StringBuilder merged = new StringBuilder();
@@ -117,7 +117,7 @@ public class RerankerNodeExecutor implements NodeExecutor {
       if (hit == null) {
         continue;
       }
-      String docName = asText(hit.get("docName"));
+      String docName = asText(hit.get(WorkflowNodeKeys.Item.DOC_NAME));
       String content = asText(hit.get("content"));
       if (!merged.isEmpty()) {
         merged.append("\n\n");

@@ -9,6 +9,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.lincoln.aiplatform.platform.assistant.ApplicationInvokePort;
 import cn.lincoln.aiplatform.platform.assistant.WorkflowRerankPort;
 import cn.lincoln.aiplatform.platform.assistant.WorkflowSearchPort;
 import cn.lincoln.aiplatform.platform.knowledge.DocumentExtractPort;
@@ -193,6 +194,7 @@ class AiChatNodeExecutorTest {
             new FormNodeExecutor(),
             new DocumentExtractNodeExecutor(providerOf(mock(DocumentExtractPort.class))),
             new RerankerNodeExecutor(providerOf(mock(WorkflowRerankPort.class))),
+            new ApplicationNodeExecutor(providerOf(mock(ApplicationInvokePort.class))),
             new QuestionNodeExecutor())) {
       byType.put(executor.type(), executor);
     }

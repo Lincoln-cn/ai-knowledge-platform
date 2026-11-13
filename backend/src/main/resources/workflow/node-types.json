@@ -399,11 +399,33 @@
   {
     "type": "APPLICATION_NODE",
     "label": "应用调用",
-    "description": "调用另一个已发布的编排应用",
+    "description": "把一个已发布的编排应用当成这一步的函数：用上游输入跑它，拿它的最终输出",
     "category": "扩展",
-    "catalogEnabled": false,
-    "executable": false,
-    "outputs": []
+    "catalogEnabled": true,
+    "executable": true,
+    "configFields": [
+      {
+        "key": "applicationId",
+        "label": "被调应用",
+        "type": "uuid",
+        "required": true,
+        "panelOnly": false
+      },
+      {
+        "key": "version",
+        "label": "版本",
+        "type": "string",
+        "required": false,
+        "panelOnly": false,
+        "hint": "留空 = 最新已发布版本；也可以填版本号或版本主键"
+      }
+    ],
+    "outputs": [
+      {
+        "key": "app_output",
+        "label": "被调应用的输出"
+      }
+    ]
   },
   {
     "type": "DOCUMENT_EXTRACT_NODE",

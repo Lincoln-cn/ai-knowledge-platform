@@ -366,6 +366,20 @@ export interface RerankerNodeConfig {
   question: string
 }
 
+/**
+ * 应用调用节点的配置。
+ *
+ * ★ 被调应用必须是**已发布**的编排应用：草稿允许不合规（`PUT /workflow/draft` 明确允许），
+ * 把它接进别人的流程等于让"这条链的出口是谁"随时会变。运行时会拒绝，面板据此提前提示。
+ */
+export interface ApplicationNodeConfig {
+  /** 被调应用（编排类型） */
+  applicationId: string | null
+  /** 版本号或版本主键；留空 = 最新已发布版本 */
+  version?: string
+}
+
+
 export type NodeConfigOf<T extends WorkflowNodeType> =
   T extends 'START_NODE' ? StartNodeConfig
   : T extends 'BASE_NODE' ? BaseNodeConfig
@@ -377,6 +391,7 @@ export type NodeConfigOf<T extends WorkflowNodeType> =
   : T extends 'REPLY_NODE' ? ReplyNodeConfig
   : T extends 'DOCUMENT_EXTRACT_NODE' ? DocumentExtractNodeConfig
   : T extends 'RERANKER_NODE' ? RerankerNodeConfig
+  : T extends 'APPLICATION_NODE' ? ApplicationNodeConfig
   : T extends 'FORM_NODE' ? FormNodeConfig
   : Record<string, never>
 

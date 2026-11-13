@@ -20,6 +20,7 @@ export const IMPLEMENTED_NODE_TYPES = [
   "NUMBER_CONDITION_NODE",
   "REPLY_NODE",
   "RERANKER_NODE",
+  "APPLICATION_NODE",
   "DOCUMENT_EXTRACT_NODE",
   "FORM_NODE",
 ] as const;
@@ -30,7 +31,6 @@ export type ImplementedNodeType = (typeof IMPLEMENTED_NODE_TYPES)[number];
 export const PLANNED_NODE_TYPES = [
   "FUNCTION_LIB_NODE",
   "FUNCTION_NODE",
-  "APPLICATION_NODE",
   "IMAGE_UNDERSTAND_NODE",
   "TEXT_TO_SPEECH_NODE",
   "SPEECH_TO_TEXT_NODE",
@@ -96,7 +96,7 @@ export const NODE_TYPE_DESCRIPTIONS: Record<WorkflowNodeTypeName, string> = {
   FUNCTION_LIB_NODE: "调用预先登记的公共函数",
   FUNCTION_NODE: "在流程里直接写一段函数逻辑",
   RERANKER_NODE: "把上游检索到的候选按与问题的相关性重新排序",
-  APPLICATION_NODE: "调用另一个已发布的编排应用",
+  APPLICATION_NODE: "把一个已发布的编排应用当成这一步的函数：用上游输入跑它，拿它的最终输出",
   DOCUMENT_EXTRACT_NODE: "把库里选定文档的正文抽出来交给下游",
   IMAGE_UNDERSTAND_NODE: "识别图片内容并输出文字描述",
   FORM_NODE: "向用户收集多个字段",
@@ -177,7 +177,10 @@ export const NODE_CONFIG_FIELDS: Record<WorkflowNodeTypeName, readonly NodeConfi
     { key: "topK", label: "重排前几名", type: "number", required: false, panelOnly: false, hint: "只重排前几名，其余保持原序。实测重排前 5 个 +10.3 点引用准确率，全量反而更慢", defaultValue: 5 },
     { key: "question", label: "用来比对的问题", type: "string", required: false, panelOnly: false, hint: "留空则用流程变量 query（上游问题改写节点的输出）", defaultValue: "" },
   ],
-  APPLICATION_NODE: [],
+  APPLICATION_NODE: [
+    { key: "applicationId", label: "被调应用", type: "uuid", required: true, panelOnly: false },
+    { key: "version", label: "版本", type: "string", required: false, panelOnly: false, hint: "留空 = 最新已发布版本；也可以填版本号或版本主键" },
+  ],
   DOCUMENT_EXTRACT_NODE: [
     { key: "kbId", label: "知识库", type: "uuid", required: false, panelOnly: true, optionsSource: "knowledge-bases", hint: "先选库才能选文档。这一项只给面板用，执行器不读", defaultValue: null },
     { key: "docId", label: "文档", type: "uuid", required: true, panelOnly: false, optionsSource: "documents", dependsOn: "kbId", hint: "只有已解析出正文的文档能用；正文会写进流程变量 document_markdown", defaultValue: null },
@@ -213,7 +216,7 @@ export const NODE_OUTPUT_FIELDS: Record<WorkflowNodeTypeName, readonly NodeVaria
   FUNCTION_LIB_NODE: [],
   FUNCTION_NODE: [],
   RERANKER_NODE: [{ label: "重排后的资料", value: "rerank_result" }, { label: "重排后的命中明细", value: "rerank_hits" }],
-  APPLICATION_NODE: [],
+  APPLICATION_NODE: [{ label: "被调应用的输出", value: "app_output" }],
   DOCUMENT_EXTRACT_NODE: [{ label: "文档正文", value: "document_markdown" }],
   IMAGE_UNDERSTAND_NODE: [],
   FORM_NODE: [{ label: "表单内容", value: "form_data" }],
@@ -435,12 +438,12 @@ export const NODE_TYPE_META: readonly NodeTypeMetaRecord[] = [
   {
     type: "APPLICATION_NODE",
     label: "应用调用",
-    description: "调用另一个已发布的编排应用",
+    description: "把一个已发布的编排应用当成这一步的函数：用上游输入跑它，拿它的最终输出",
     category: "扩展",
-    catalogEnabled: false,
-    executable: false,
+    catalogEnabled: true,
+    executable: true,
     configFields: NODE_CONFIG_FIELDS["APPLICATION_NODE"] ?? [],
-    outputs: []
+    outputs: [{ key: "app_output", label: "被调应用的输出" }]
   },
   {
     type: "DOCUMENT_EXTRACT_NODE",

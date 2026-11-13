@@ -67,6 +67,9 @@ public final class WorkflowNodeKeys {
     /** 重排时用来比对的问题；不给就用流程变量 {@code query}。 */
     public static final String QUESTION = "question";
 
+    /** 要调用的那个应用的版本（版本号或版本主键）；留空 = 最新已发布版本。与 {@link #APPLICATION_ID} 是一对。 */
+    public static final String VERSION = "version";
+
     public static final String PROLOGUE = "prologue";
     public static final String QUICK_QUESTIONS = "quickQuestions";
     public static final String ROLE_PROMPT = "rolePrompt";
@@ -101,6 +104,12 @@ public final class WorkflowNodeKeys {
     public static final String LOGIC = "logic";
     public static final String VALUE = "value";
     public static final String NAME = "name";
+
+    /** 检索命中里的分段 id：重排按它排序，所以它是 JSON 字段名而不是流程变量。 */
+    public static final String SEGMENT_ID = "segmentId";
+
+    /** 检索命中里的文档名：给下游拼引用用。 */
+    public static final String DOC_NAME = "docName";
   }
 
   /** 执行器写进流程状态的键：与 {@code node-types.json} 的 {@code outputs} 逐字一致。 */
@@ -127,6 +136,9 @@ public final class WorkflowNodeKeys {
     public static final String FORM_DATA = "form_data";
     public static final String BASIC_INFO_FIELDS = "basic_info_fields";
     public static final String BASIC_INFO_INPUT = "basic_info_input";
+
+    /** 被调应用的最终输出（与「试用」同一口径：先读 {@code reply}，没有再读 {@code answer}）。 */
+    public static final String APP_OUTPUT = "app_output";
   }
 
   /** 契约键集合（不含旧名与数组项键）：{@code node-types.json} 的 {@code configFields[].key} 必须落在这个集合里。 */
@@ -152,6 +164,7 @@ public final class WorkflowNodeKeys {
         Config.TOP_N,
         Config.TOP_K,
         Config.QUESTION,
+        Config.VERSION,
         Config.PROLOGUE,
         Config.QUICK_QUESTIONS,
         Config.ROLE_PROMPT,
@@ -205,6 +218,10 @@ public final class WorkflowNodeKeys {
         Output.DOCUMENT_MARKDOWN,
         Output.FORM_DATA,
         Output.BASIC_INFO_FIELDS,
-        Output.BASIC_INFO_INPUT);
+        Output.BASIC_INFO_INPUT,
+        Output.RETRIEVAL_HITS,
+        Output.RERANK_RESULT,
+        Output.RERANK_HITS,
+        Output.APP_OUTPUT);
   }
 }
