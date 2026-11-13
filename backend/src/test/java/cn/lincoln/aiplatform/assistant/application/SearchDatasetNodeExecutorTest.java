@@ -68,7 +68,10 @@ class SearchDatasetNodeExecutorTest {
         .execute(
             context(
                 Map.of(
-                    "dataset_id_list", List.of(KB_ID.toString()), "retrieval", Map.of("topN", 3))));
+                    SearchDatasetNodeExecutor.CONFIG_KB_IDS,
+                    List.of(KB_ID.toString()),
+                    "retrieval",
+                    Map.of("topN", 3))));
 
     assertThat(port.calls).as("必须真的调一次检索").containsExactly(KB_ID + "|固定资产的归口部门|3");
 
@@ -81,7 +84,7 @@ class SearchDatasetNodeExecutorTest {
                 "SEARCH_DATASET_NODE",
                 "固定资产的归口部门",
                 state,
-                Map.of("dataset_id_list", List.of(KB_ID.toString()))));
+                Map.of(SearchDatasetNodeExecutor.CONFIG_KB_IDS, List.of(KB_ID.toString()))));
     assertThat(state.read(SearchDatasetNodeExecutor.RESULT_KEY))
         .as("命中的正文必须写进 state，否则下游节点拿不到资料")
         .contains("固定资产归口部门是财务资产部");
@@ -105,7 +108,11 @@ class SearchDatasetNodeExecutorTest {
     SearchDatasetNodeExecutor executor = new SearchDatasetNodeExecutor(provider(null));
 
     assertThatThrownBy(
-            () -> executor.execute(context(Map.of("dataset_id_list", List.of(KB_ID.toString())))))
+            () ->
+                executor.execute(
+                    context(
+                        Map.of(
+                            SearchDatasetNodeExecutor.CONFIG_KB_IDS, List.of(KB_ID.toString())))))
         .as("「检索没命中」与「检索能力没装配」不能长得一样")
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("检索能力还没装配");

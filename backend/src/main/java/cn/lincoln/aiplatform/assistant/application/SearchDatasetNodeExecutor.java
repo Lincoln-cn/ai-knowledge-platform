@@ -14,10 +14,10 @@ import org.springframework.stereotype.Component;
  * <p>★ 它在 {@code #326} 之前一直不存在，而发布校验却把 {@code SEARCH_DATASET_NODE} 当作"当前能跑" —— 结果是发布放行、点试用时报「没有类型
  * SEARCH_DATASET_NODE 的节点执行器」。
  *
- * <p>★ 它读两样配置（都在 {@code properties.config} 里，{@code #326} 那一刀才把它们接到上下文）：
+ * <p>★ 它读两样配置（都在节点的 {@code config} 里）：
  *
  * <ul>
- *   <li>{@code dataset_id_list}：要检索哪些知识库
+ *   <li>{@link #CONFIG_KB_IDS}（{@code kbIds}）：要检索哪些知识库；旧画布名 {@link #LEGACY_KB_IDS} 作回退
  *   <li>{@code retrieval.topN}：取前几条（缺省 5）
  * </ul>
  *
@@ -32,6 +32,12 @@ public class SearchDatasetNodeExecutor implements NodeExecutor {
 
   /** 检索结果写进 state 的键。 */
   public static final String RESULT_KEY = "retrieval_result";
+
+  /** 配置里读知识库列表的键：与前端契约 {@code SearchDatasetNodeConfig.kbIds} 同名。 */
+  static final String CONFIG_KB_IDS = "kbIds";
+
+  /** 旧画布形状的键，只作回退（老草稿里存的是这个）。 */
+  static final String LEGACY_KB_IDS = "dataset_id_list";
 
   private static final int DEFAULT_TOP_N = 5;
 
@@ -82,9 +88,18 @@ public class SearchDatasetNodeExecutor implements NodeExecutor {
     context.state().write(RESULT_KEY, merged.toString(), KeyUpdate.REPLACE);
   }
 
-  /** 要检索的知识库列表；缺失或类型不对给空列表（由调用方决定报错）。 */
+  /**
+   * 要检索的知识库列表；缺失或类型不对给空列表（由调用方决定报错）。
+   *
+   * <p>★ <strong>先读契约名 {@code kbIds}</strong>（{@code #335}）：前端 {@code graph-format.ts} 的 {@code
+   * searchFromLegacy} 发出的就是 {@code kbIds}，而 {@code NodeConfigReader} 也按 {@code kbIds} 做执行准入 ——
+   * 只有本执行器读旧画布名 {@code dataset_id_list}，于是出现"准入说可以跑、执行器说没绑库"。旧名保留为回退读取， 因为库里存过的老草稿是那个形状。
+   */
   private static List<String> kbIds(Map<String, Object> config) {
-    Object raw = config == null ? null : config.get("dataset_id_list");
+    Object raw = config == null ? null : config.get(CONFIG_KB_IDS);
+    if (!(raw instanceof List<?>) && config != null) {
+      raw = config.get(LEGACY_KB_IDS);
+    }
     if (!(raw instanceof List<?> list)) {
       return List.of();
     }

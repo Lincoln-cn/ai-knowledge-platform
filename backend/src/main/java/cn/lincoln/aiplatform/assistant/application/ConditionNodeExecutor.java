@@ -29,10 +29,20 @@ public class ConditionNodeExecutor implements NodeExecutor {
 
   private static final Logger log = LoggerFactory.getLogger(ConditionNodeExecutor.class);
 
-  /** 节点 {@code properties.config} 里放分支清单的键。 */
-  static final String CONFIG_BRANCH = "branch";
+  /**
+   * 节点配置里放分支清单的键：与前端契约 {@code ConditionNodeConfig.branches} 同名（{@code #335}）。
+   *
+   * <p>★ 旧画布把它叫 {@code branch}（单数），而执行器当初就照那个名字读、前端契约却是复数 —— 于是生产路径上一个分支都读不到， 节点必抛"没有任何分支"。旧名保留为回退。
+   */
+  static final String CONFIG_BRANCHES = "branches";
 
-  /** 分支里标「其它情况」的类型名（与画布 {@code branchTypeLabel} 同口径）。 */
+  /** 旧画布形状的分支键，只作回退。 */
+  static final String LEGACY_BRANCH = "branch";
+
+  /** 兜底分支在配置里的键：值是 {@code branches[].id} 之一（契约里的表达方式）。 */
+  static final String CONFIG_FALLBACK = "fallbackBranchId";
+
+  /** 旧画布用分支类型标「其它情况」；大小写都认，因为转换层写的是 {@code ELSE}。 */
   static final String ELSE_TYPE = "else";
 
   static final Duration TIMEOUT = Duration.ofSeconds(30);
@@ -55,8 +65,12 @@ public class ConditionNodeExecutor implements NodeExecutor {
       throw new IllegalStateException("条件节点没有任何分支：这张图没法决定走哪条路");
     }
 
+    Branch fallback = fallbackOf(branches, context.nodeConfig());
+    // 兜底分支不参与「让模型选」，否则模型会为了省事直接选它（见 decide 的注释）。
+    List<Branch> named = branches.stream().filter(branch -> branch != fallback).toList();
+
     String question = context.input() == null ? "" : context.input().trim();
-    Branch chosen = decide(branches, question);
+    Branch chosen = decide(named, fallback, question);
     if (chosen == null) {
       throw new IllegalStateException(
           "条件节点判不出该走哪条分支（分支：" + branches.stream().map(Branch::id).toList() + "）");
@@ -66,18 +80,44 @@ public class ConditionNodeExecutor implements NodeExecutor {
     context.state().write(LinearWorkflowExecutor.ACTIVE_BRANCH, chosen.id(), KeyUpdate.REPLACE);
   }
 
+  /**
+   * 找兜底分支：先认契约的 {@code fallbackBranchId}，再退到旧画布的 {@code type = ELSE}。
+   *
+   * <p>★ 为什么两个都认：契约把兜底表达成"某个分支 id"，旧画布表达成"某个分支的类型"，两种都出现在真实数据里 （{@code conditionFromLegacy} 会同时带上
+   * {@code fallbackBranchId} 与 {@code type}）。只认一种就会在另一条路径上把兜底当普通分支， 于是"模型答不上来走兜底"退化成"抛异常"。
+   */
+  private static Branch fallbackOf(List<Branch> branches, Map<String, Object> config) {
+    Object raw = config == null ? null : config.get(CONFIG_FALLBACK);
+    if (raw instanceof String id && !id.isBlank()) {
+      for (Branch branch : branches) {
+        if (id.equals(branch.id())) {
+          return branch;
+        }
+      }
+    }
+    for (Branch branch : branches) {
+      if (ELSE_TYPE.equalsIgnoreCase(branch.type())) {
+        return branch;
+      }
+    }
+    return null;
+  }
+
   /** 一条分支：{@code id} 与画布出边的 {@code sourceHandle} 同值，{@code expression} 是自然语言判定条件。 */
   record Branch(String id, String type, String expression) {}
 
   /**
-   * 从节点配置里读分支清单。
+   * 从节点配置里读分支清单：先读契约名 {@code branches}，再回退旧画布的 {@code branch}。
    *
-   * <p>★ 兼容两种形状：{@code branch} 是 {@code List<Map>}（画布存的原样）或 {@code List<Branch>}（测试直接给的）。
-   * 前者是生产路径，后者方便单测 —— 让判据不必伪造一整个 {@code Map} 结构。
+   * <p>★ 兼容两种元素形状：{@code List<Map>}（画布存的原样）或 {@code List<Branch>}（测试直接给的）。 前者是生产路径，后者方便单测 ——
+   * 让判据不必伪造一整个 {@code Map} 结构。
    */
   @SuppressWarnings("unchecked")
   static List<Branch> branchesOf(Map<String, Object> config) {
-    Object raw = config == null ? null : config.get(CONFIG_BRANCH);
+    Object raw = config == null ? null : config.get(CONFIG_BRANCHES);
+    if (!(raw instanceof List<?>) && config != null) {
+      raw = config.get(LEGACY_BRANCH);
+    }
     if (!(raw instanceof List<?> list)) {
       return List.of();
     }
@@ -102,16 +142,13 @@ public class ConditionNodeExecutor implements NodeExecutor {
   }
 
   /**
-   * 让模型在分支里选一个。
+   * 让模型在**具名分支**里选一个；选不出来才落 {@code fallback}。
    *
-   * <p>★ 有 {@code else} 分支时**不把它列进候选**：让模型在「A / B / 其它」里选，它会为了省事直接选「其它」。 正确顺序是先用模型在**具名分支**里选，选不出再落
-   * {@code else}。
+   * <p>★ 兜底分支**不列进候选**：让模型在「A / B / 其它」里选，它会为了省事直接选「其它」。正确顺序是先用模型在具名分支里选，选不出再落兜底。
+   *
+   * <p>★ 兜底由调用方按配置算好再传进来（契约是 {@code fallbackBranchId}，旧画布是 {@code type = ELSE}），本方法不再自己按类型猜。
    */
-  private Branch decide(List<Branch> branches, String question) {
-    List<Branch> named = branches.stream().filter(b -> !ELSE_TYPE.equals(b.type())).toList();
-    Branch fallback =
-        branches.stream().filter(b -> ELSE_TYPE.equals(b.type())).findFirst().orElse(null);
-
+  private Branch decide(List<Branch> named, Branch fallback, String question) {
     if (named.isEmpty()) {
       return fallback;
     }

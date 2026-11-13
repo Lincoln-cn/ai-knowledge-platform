@@ -343,6 +343,8 @@ function questionToLegacy(config: QuestionNodeConfig & Record<string, any>): Leg
       model_id: config.modelId ?? '',
       // 改写提示词 ↔ 旧 `prompt`
       prompt: config.rewritePrompt ?? '',
+      // 契约 defaultAnswer ↔ 旧 `default_answer`（后端也认这个旧名作回退）
+      default_answer: config.defaultAnswer ?? '',
       // 契约缺：角色设定
       system: config.system ?? '你是一个问题优化大师',
       // 契约缺：历史轮数 / 是否返回 / 模型参数
@@ -357,6 +359,7 @@ function questionFromLegacy(nd: any): QuestionNodeConfig & Record<string, any> {
   return {
     modelId: nd?.model_id || null,
     rewritePrompt: nd?.prompt ?? '',
+    defaultAnswer: nd?.default_answer ?? '',
     // 契约缺以下字段，透传
     system: nd?.system,
     dialogue_number: nd?.dialogue_number,
@@ -504,8 +507,9 @@ function replyToLegacy(config: ReplyNodeConfig & Record<string, any>): LegacyBun
   return {
     node_data: {
       content: config.content ?? '',
-      // 契约缺：回复类型 / 引用字段 / 是否返回
-      reply_type: config.reply_type ?? 'content',
+      // 契约 replyType ↔ 旧 `reply_type`（后端两个名字都认，契约名优先）
+      reply_type: config.replyType ?? 'content',
+      // 契约缺：引用字段 / 是否返回
       fields: config.fields ?? [],
       is_result: config.is_result ?? false
     }
@@ -515,8 +519,10 @@ function replyToLegacy(config: ReplyNodeConfig & Record<string, any>): LegacyBun
 function replyFromLegacy(nd: any): ReplyNodeConfig & Record<string, any> {
   return {
     content: nd?.content ?? '',
+    // 今天只有「自定义内容」一种形态，所以恒为 content；旧数据里的其它取值还没有实现，
+    // 等实现那天再在这里分支，不要提前把未实现的形态悄悄抹平成 content
+    replyType: 'content',
     // 契约缺以下字段，透传
-    reply_type: nd?.reply_type ?? 'content',
     fields: nd?.fields ?? [],
     is_result: nd?.is_result ?? false
   }

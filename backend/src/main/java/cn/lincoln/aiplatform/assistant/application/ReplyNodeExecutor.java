@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
  * <p>★ <strong>为什么零依赖</strong>：与 {@link StartNodeExecutor} 同因 —— {@code assistant} 的 {@code
  * allowedDependencies} 不含 {@code conversation}／{@code retrieval}。回复节点只读自己那一格配置，不需要跨模块服务，所以它可以做真的。
  *
- * <p>★ <strong>只认 {@code reply_type = content}</strong>：另一种形态（按上游节点产出的字段回复，即 {@code fields}
+ * <p>★ <strong>只认 {@code replyType = content}</strong>：另一种形态（按上游节点产出的字段回复，即 {@code fields}
  * 非空）的语义是"把上游某个 节点的输出原样透出"，而上游那个节点是 {@code AI_CHAT_NODE} —— 它今天还没有执行器。这里**宁可明确失败**，也不要做成"拿不到就回空串"：
  * 后者会让一条配置错的流程看起来跑通了，而用户收到的是空白答复。
  *
@@ -22,6 +22,12 @@ public class ReplyNodeExecutor implements NodeExecutor {
 
   /** 本轮答复在 {@link FlowState} 里的键名。下游（记录 / 展示）读它，不要再各自定义一份。 */
   public static final String REPLY_KEY = "reply";
+
+  /** 回复形态的配置键：与前端契约 {@code ReplyNodeConfig.replyType} 同名（{@code #335}）。 */
+  static final String CONFIG_REPLY_TYPE = "replyType";
+
+  /** 旧画布形状的键，只作回退。 */
+  static final String LEGACY_REPLY_TYPE = "reply_type";
 
   /** 只支持自定义内容这一种形态；另一种要等 {@code AI_CHAT_NODE} 落地。 */
   private static final String REPLY_TYPE_CONTENT = "content";
@@ -37,14 +43,18 @@ public class ReplyNodeExecutor implements NodeExecutor {
     if (config == null || config.isEmpty()) {
       throw new IllegalStateException("回复节点没有配置：这条流程的回复内容还没填");
     }
-    String replyType = text(config.get("reply_type"));
+    String replyType = text(config.get(CONFIG_REPLY_TYPE));
     if (replyType == null || replyType.isBlank()) {
-      // 前端默认就是 content；缺这一项说明配置来自别处（或旧版本）。按"没配"处理，不猜。
-      throw new IllegalStateException("回复节点缺少 reply_type，无法判断回复形态");
+      replyType = text(config.get(LEGACY_REPLY_TYPE));
+    }
+    if (replyType == null || replyType.isBlank()) {
+      // ★ 缺失按 content（{@code #335}）：契约里这一项是可选的，且当前只有一种形态；
+      //   早先这里会直接抛，于是「没写 replyType 的图」与「配错的图」得到同一个错，而前者的正解就是走 content。
+      replyType = REPLY_TYPE_CONTENT;
     }
     if (!REPLY_TYPE_CONTENT.equals(replyType)) {
       throw new IllegalStateException(
-          "回复节点当前只支持自定义内容（reply_type=content），按上游字段回复要等 AI 对话节点落地：reply_type=" + replyType);
+          "回复节点当前只支持自定义内容（replyType=content），按上游字段回复要等 AI 对话节点落地：replyType=" + replyType);
     }
     String content = text(config.get("content"));
     if (content == null || content.isBlank()) {

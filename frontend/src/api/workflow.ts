@@ -136,6 +136,13 @@ export interface QuestionNodeConfig {
   modelId: string | null
   /** 改写提示词 */
   rewritePrompt: string
+  /**
+   * 非人工场景下的默认答复（定时触发等直接往下走时用）。
+   *
+   * 键名必须与后端 `QuestionNodeExecutor.CONFIG_DEFAULT_ANSWER`（`defaultAnswer`）一致 ——
+   * 早先后端读的是旧画布名 `default_answer`，而契约里根本没有这一项，于是"配了默认答复"从来没生效过（`#335`）。
+   */
+  defaultAnswer: string
 }
 
 /**
@@ -221,6 +228,14 @@ export interface NumberConditionNodeConfig {
 export interface ReplyNodeConfig {
   /** 回复内容，支持 {{变量}} 引用 */
   content: string
+  /**
+   * 回复形态。当前只有「自定义内容」一种，所以是可选且固定为 `'content'`。
+   *
+   * 键名必须与后端 `ReplyNodeExecutor.CONFIG_REPLY_TYPE`（`replyType`）一致 ——
+   * 早先只有转换层会补旧画布名 `reply_type`，**默认配置里没有这一项**，
+   * 于是「直接给契约形状」的调用方一定会碰到"缺少回复形态"（`#335`）。
+   */
+  replyType?: 'content'
 }
 
 /**

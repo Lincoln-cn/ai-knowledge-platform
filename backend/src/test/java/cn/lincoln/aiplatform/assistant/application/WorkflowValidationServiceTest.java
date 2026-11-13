@@ -1,6 +1,9 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -70,17 +73,40 @@ class WorkflowValidationServiceTest {
         .isEmpty();
   }
 
+  /**
+   * ★ 这条的判据在 {@code #335} 被订正过，原因值得记住：它原本拿 {@code QUESTION_NODE} 当"标了可执行却没有执行器" 的反例，而 {@code
+   * 6c779130} 把 QUESTION_NODE 真的实现了 —— 于是它变成"已实现"、只报 INTERRUPT_NODE，测试转红。 这与 {@code
+   * WorkflowPauseTest} 上一轮踩的是同一个坑：<strong>拿真实类型当反例</strong>。
+   *
+   * <p>更根本的问题是：{@code NODE_NOT_EXECUTABLE} 判的是"{@code catalog.executable(type)} 为真、但不在 {@code
+   * LinearWorkflowExecutor.SUPPORTED_TYPES} 里"，而真实目录与执行器集合由 {@code
+   * WorkflowNodeTypeTest.executableTypesMatchTheExecutor} 钉成<strong>完全相等</strong> ⇒ 用真目录永远构造不出这个
+   * 场景。所以要验这一档，必须把"目录状态"注入进来：这里用替身目录说"FUTURE_NODE 能跑"，而引擎里没有它。
+   */
   @Test
-  @DisplayName("问题优化：implemented=true 但执行器没有它的执行器，同样在发布前拦住")
-  void questionNodeIsRejectedAtPublishTime() {
+  @DisplayName("目录说能跑、执行引擎里没有：发布前拦住（用替身目录构造，不拿真实类型当反例）")
+  void questionedTypeWithoutExecutorIsRejectedAtPublishTime() {
+    NodeTypeCatalog catalog = mock(NodeTypeCatalog.class);
+    when(catalog.known(anyString())).thenReturn(true);
+    // 默认"目录里标着不能跑"；只有下面这几个是能跑的
+    when(catalog.executable(anyString())).thenReturn(false);
+    when(catalog.executable("START_NODE")).thenReturn(true);
+    when(catalog.executable("AI_CHAT_NODE")).thenReturn(true);
+    when(catalog.executable("FUTURE_NODE")).thenReturn(true);
+
     WorkflowValidationService.Result result =
-        service.validate(
-            new WorkflowValidationService.Graph(
-                List.of(
-                    node("a", "START_NODE"), node("b", "QUESTION_NODE"), node("c", "AI_CHAT_NODE")),
-                List.of(edge("a", "b"), edge("b", "c"))));
+        new WorkflowValidationService(catalog)
+            .validate(
+                new WorkflowValidationService.Graph(
+                    List.of(
+                        node("a", "START_NODE"),
+                        node("b", "FUTURE_NODE"),
+                        node("c", "AI_CHAT_NODE")),
+                    List.of(edge("a", "b"), edge("b", "c"))));
 
     assertThat(codes(result)).contains("NODE_NOT_EXECUTABLE");
+    // 精确一点：它不该同时被当成"未知类型"或"规划中" —— 那两条就说明替身目录没生效
+    assertThat(codes(result)).doesNotContain("UNKNOWN_TYPE").doesNotContain("PLANNED_TYPE");
     assertThat(result.passed()).isFalse();
   }
 

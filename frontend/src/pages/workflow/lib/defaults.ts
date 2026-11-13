@@ -65,7 +65,9 @@ export function defaultConfigFor(type: ImplementedNodeType): WorkflowNode['confi
     case 'QUESTION_NODE': {
       const config: QuestionNodeConfig = {
         modelId: null,
-        rewritePrompt: '结合对话上下文，把用户问题改写成独立、完整、可检索的一句话。只输出改写结果。'
+        rewritePrompt: '结合对话上下文，把用户问题改写成独立、完整、可检索的一句话。只输出改写结果。',
+        // 空串 = 没有默认答复（人工场景由用户现场回答）。字段本身必须存在，见 `#335`
+        defaultAnswer: ''
       }
       return config
     }
@@ -103,7 +105,9 @@ export function defaultConfigFor(type: ImplementedNodeType): WorkflowNode['confi
     }
     case 'REPLY_NODE': {
       const config: ReplyNodeConfig = {
-        content: '已为你整理如下：\n\n{{search-dataset-node-1.snippets}}\n\n如需进一步说明，请补充背景信息。'
+        content: '已为你整理如下：\n\n{{search-dataset-node-1.snippets}}\n\n如需进一步说明，请补充背景信息。',
+        // 显式写出形态：后端按 `replyType` 判断能不能跑，见 `#335`
+        replyType: 'content'
       }
       return config
     }
