@@ -54,6 +54,10 @@ public final class WorkflowNodeKeys {
     public static final String REPLY_TYPE = "replyType";
     public static final String CONTENT = "content";
     public static final String FIELDS = "fields";
+    public static final String API_FIELDS = "apiFields";
+    public static final String FORM_FIELDS = "formFields";
+    public static final String CONTENT_FORMAT = "contentFormat";
+    public static final String AS_RESULT = "asResult";
     public static final String RETRIEVAL = "retrieval";
     public static final String TOP_N = "topN";
     public static final String PROLOGUE = "prologue";
@@ -123,6 +127,10 @@ public final class WorkflowNodeKeys {
         Config.REPLY_TYPE,
         Config.CONTENT,
         Config.FIELDS,
+        Config.API_FIELDS,
+        Config.FORM_FIELDS,
+        Config.CONTENT_FORMAT,
+        Config.AS_RESULT,
         Config.RETRIEVAL,
         Config.TOP_N,
         Config.PROLOGUE,

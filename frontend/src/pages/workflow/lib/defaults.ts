@@ -39,6 +39,8 @@ export function defaultConfigFor(type: ImplementedNodeType): WorkflowNode['confi
             placeholder: '一句话概括你的诉求'
           }
         ],
+        // 接口传参表：契约必填（`#337` 第二步 B1 给它起了名字），默认空表
+        apiFields: [],
         allowFileUpload: false,
         fileAccept: ['.pdf', '.docx', '.md']
       }

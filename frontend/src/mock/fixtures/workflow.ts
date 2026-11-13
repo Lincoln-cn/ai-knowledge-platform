@@ -252,6 +252,7 @@ const validNodes: WorkflowNode[] = [
           placeholder: '选填'
         }
       ],
+      apiFields: [],
       allowFileUpload: false,
       fileAccept: ['.pdf', '.docx']
     }

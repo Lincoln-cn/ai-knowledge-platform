@@ -39,6 +39,9 @@ export const baseNode = {
     node_data: {
       name: '',
       desc: '',
+      // 两张字段表与契约同名，且都在 node_data 里（`#337` 第二步 B1：以前挂在 properties 顶层）
+      fields: [],
+      apiFields: [],
       // @ts-ignore
       prologue: '111111',
     },
@@ -199,9 +202,10 @@ export const formNode = {
     width: 600,
     stepName: '表单收集',
     node_data: {
-      is_result: true,
-      form_field_list: [],
-      form_content_format: `你好，请先填写下面表单内容：
+      // 键名与面板读写的位置、契约字段名三者一致（`#337` 第二步 B1）
+      asResult: true,
+      formFields: [],
+      contentFormat: `你好，请先填写下面表单内容：
 {{form}}
 填写后请点击【提交】按钮进行提交。`,
     },

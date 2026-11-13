@@ -87,15 +87,19 @@ const props = defineProps<{ nodeModel: any }>()
 
 const UserFieldFormDialogRef = ref()
 /**
- * 字段列表。**必须是普通数组**并同步回 `properties.user_input_field_list`：
+ * 字段列表。**必须是普通数组**并同步回 `properties.node_data.fields`：
  * 旧实现把整个 ref 塞进 properties，模板读 `.length` 读到的是 Ref 自身，表格永远空。
+ *
+ * <p>★ 写回位置在 `#337` 第二步 B1 改过：以前写 `properties.user_input_field_list`（顶层），
+ * 与其它所有节点（都写在 `node_data` 里）不一致，于是画布上存在三种写回位置。现在统一进
+ * `node_data.fields`，与契约名 `BaseNodeConfig.fields` 同名。
  */
 const fieldList = ref<any[]>([])
 
 function syncToProperties() {
     // 换新数组引用，避免「push 进普通对象后再改」导致的静默不更新
     fieldList.value = [...fieldList.value]
-    set(props.nodeModel.properties, 'user_input_field_list', fieldList.value)
+    set(props.nodeModel.properties.node_data, 'fields', fieldList.value)
 }
 
 function openAddDialog(data?: any, index?: any) {
@@ -115,7 +119,7 @@ function refreshFieldList(data: any, index: any) {
             return
         }
     }
-    const arr = props.nodeModel.properties.api_input_field_list ?? []
+    const arr = props.nodeModel.properties.node_data?.apiFields ?? []
     for (let i = 0; i < arr.length; i++) {
         if (arr[i].variable === data.field) {
             MsgError('参数已存在: ' + data.field)
@@ -146,7 +150,9 @@ const getDefaultValue = (row: any) => {
 }
 
 onMounted(() => {
-    const existing = props.nodeModel.properties.user_input_field_list
+    // 兼容存量：本版之前存的是 `properties.user_input_field_list`（顶层）
+    const existing =
+        props.nodeModel.properties.node_data?.fields ?? props.nodeModel.properties.user_input_field_list
     if (Array.isArray(existing)) {
         // 深拷贝：禁止与 properties 共享内层 option_list 等引用
         fieldList.value.push(...existing.map((i: any) => cloneDeep(i)))

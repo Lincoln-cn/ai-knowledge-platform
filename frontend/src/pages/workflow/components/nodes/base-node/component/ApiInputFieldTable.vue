@@ -52,12 +52,13 @@ const props = defineProps<{ nodeModel: any }>()
 
 const currentIndex = ref<number | null>(null)
 const ApiFieldFormDialogRef = ref()
-/** 普通数组并同步回 properties —— 同 UserInputFieldTable，避免 Ref 塞进 properties */
+/** 普通数组并同步回 `node_data.apiFields` —— 同 UserInputFieldTable，避免 Ref 塞进 properties。
+ *  ★ 写回位置在 `#337` 第二步 B1 从顶层 `properties.api_input_field_list` 改为 `node_data.apiFields`。 */
 const fieldList = ref<any[]>([])
 
 function syncToProperties() {
   fieldList.value = [...fieldList.value]
-  set(props.nodeModel.properties, 'api_input_field_list', fieldList.value)
+  set(props.nodeModel.properties.node_data, 'apiFields', fieldList.value)
 }
 
 function openAddDialog(data?: any, index?: any) {
@@ -80,7 +81,8 @@ function refreshFieldList(data: any) {
       return
     }
   }
-  const arr = props.nodeModel.properties.user_input_field_list ?? []
+  const arr =
+    props.nodeModel.properties.node_data?.fields ?? props.nodeModel.properties.user_input_field_list ?? []
   for (let i = 0; i < arr.length; i++) {
     if (arr[i].field === data.variable) {
       MsgError('参数已存在: ' + data.variable)
@@ -99,7 +101,9 @@ function refreshFieldList(data: any) {
 }
 
 onMounted(() => {
-  const existing = props.nodeModel.properties.api_input_field_list
+  // 兼容存量：本版之前存的是 `properties.api_input_field_list`（顶层）
+  const existing =
+    props.nodeModel.properties.node_data?.apiFields ?? props.nodeModel.properties.api_input_field_list
   if (Array.isArray(existing)) {
     fieldList.value.push(...existing.map((i: any) => cloneDeep(i)))
   } else if (Array.isArray(props.nodeModel.properties.input_field_list)) {

@@ -118,9 +118,26 @@ export interface UserInputField {
   options?: string[]
 }
 
+/**
+ * 接口传参表的每一项（`#337` 补的契约名）。
+ *
+ * <p>以前这张表只有画布侧的名字（`api_input_field_list`，项内是 `variable` / `name` /
+ * `is_required`），契约里没有对应字段 —— `graph-format.ts` 自己写着「契约缺」。没有契约名就删不掉
+ * legacy 转换函数，所以先给它起名。
+ */
+export interface ApiFieldConfig {
+  /** 参数名 */
+  key: string
+  label: string
+  required: boolean
+  defaultValue?: string
+}
+
 export interface BaseNodeConfig {
   /** 基本信息收集的输入字段 */
   fields: UserInputField[]
+  /** 调外部接口时传过去的参数（`#337` 补的契约名，面板在「接口传参」表里编辑） */
+  apiFields: ApiFieldConfig[]
   /** 是否允许上传附件 */
   allowFileUpload: boolean
   /** 允许的文件类型（空表示不限） */

@@ -214,6 +214,7 @@ export const workflowDrafts: Record<string, WorkflowGraph> = {
               placeholder: '粘贴需要审查的条款原文'
             }
           ],
+          apiFields: [],
           allowFileUpload: false,
           fileAccept: []
         }

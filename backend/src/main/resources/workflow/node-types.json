@@ -2,26 +2,11 @@
   {
     "type": "START_NODE",
     "label": "开始",
-    "description": "流程入口：配置开场白与用户输入的接收方式",
+    "description": "流程入口：接收用户输入，本身没有可配置项",
     "category": "基础",
     "catalogEnabled": true,
     "executable": true,
-    "configFields": [
-      {
-        "key": "prologue",
-        "label": "开场白",
-        "type": "string",
-        "panelOnly": true,
-        "required": false
-      },
-      {
-        "key": "quickQuestions",
-        "label": "快捷提问",
-        "type": "string-list",
-        "panelOnly": true,
-        "required": false
-      }
-    ],
+    "configFields": [],
     "outputs": [
       "query"
     ]
@@ -40,6 +25,20 @@
         "type": "object-list",
         "required": false,
         "panelOnly": false
+      },
+      {
+        "key": "prologue",
+        "label": "开场白",
+        "type": "string",
+        "required": false,
+        "panelOnly": true
+      },
+      {
+        "key": "apiFields",
+        "label": "接口传参",
+        "type": "object-list",
+        "required": false,
+        "panelOnly": true
       }
     ],
     "outputs": [
@@ -325,7 +324,29 @@
     "category": "交互",
     "catalogEnabled": true,
     "executable": true,
-    "configFields": [],
+    "configFields": [
+      {
+        "key": "formFields",
+        "label": "收集字段",
+        "type": "object-list",
+        "required": false,
+        "panelOnly": true
+      },
+      {
+        "key": "contentFormat",
+        "label": "引导文案",
+        "type": "string",
+        "required": false,
+        "panelOnly": true
+      },
+      {
+        "key": "asResult",
+        "label": "提交即结束",
+        "type": "boolean",
+        "required": false,
+        "panelOnly": true
+      }
+    ],
     "outputs": [
       "form_data"
     ]

@@ -100,12 +100,11 @@ export interface NodeConfigField {
 }
 
 export const NODE_CONFIG_FIELDS: Record<ImplementedNodeType, readonly NodeConfigField[]> = {
-  START_NODE: [
-    { key: "prologue", label: "开场白", type: "string", required: false, panelOnly: true },
-    { key: "quickQuestions", label: "快捷提问", type: "string-list", required: false, panelOnly: true },
-  ],
+  START_NODE: [],
   BASE_NODE: [
     { key: "fields", label: "收集字段", type: "object-list", required: false, panelOnly: false },
+    { key: "prologue", label: "开场白", type: "string", required: false, panelOnly: true },
+    { key: "apiFields", label: "接口传参", type: "object-list", required: false, panelOnly: true },
   ],
   AI_CHAT_NODE: [
     { key: "modelId", label: "模型", type: "uuid", required: false, panelOnly: false },
@@ -141,7 +140,11 @@ export const NODE_CONFIG_FIELDS: Record<ImplementedNodeType, readonly NodeConfig
     { key: "kbId", label: "知识库", type: "uuid", required: false, panelOnly: true },
     { key: "docId", label: "文档", type: "uuid", required: true, panelOnly: false },
   ],
-  FORM_NODE: [],
+  FORM_NODE: [
+    { key: "formFields", label: "收集字段", type: "object-list", required: false, panelOnly: true },
+    { key: "contentFormat", label: "引导文案", type: "string", required: false, panelOnly: true },
+    { key: "asResult", label: "提交即结束", type: "boolean", required: false, panelOnly: true },
+  ],
 };
 
 /** 目录里声明的流程变量（node-types.json 的 outputs）。 */

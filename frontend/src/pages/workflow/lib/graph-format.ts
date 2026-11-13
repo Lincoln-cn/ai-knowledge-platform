@@ -1,5 +1,6 @@
 import type {
   AiChatNodeConfig,
+  ApiFieldConfig,
   BaseNodeConfig,
   ConditionBranch,
   ConditionNodeConfig,
@@ -169,17 +170,45 @@ function userFieldFromLegacy(f: any): UserInputField & Record<string, any> {
   }
 }
 
+/**
+ * 接口传参表的一项：契约 `ApiFieldConfig` ↔ 画布旧形状。
+ *
+ * <p>旧形状是 `{ variable, name, is_required, default_value }`（`ApiFieldFormDialog.vue` 写出来的），
+ * 契约名是 `{ key, label, required, defaultValue }`。两边的名字没有一处相同，正是 `#337` 要消灭的那类分叉 ——
+ * 这里是它唯一的翻译点。
+ */
+function apiFieldToLegacy(f: ApiFieldConfig & Record<string, any>): Record<string, any> {
+  return {
+    variable: f.key ?? f.variable ?? '',
+    name: f.label ?? f.name ?? '',
+    is_required: !!(f.required ?? f.is_required),
+    default_value: f.defaultValue ?? f.default_value ?? ''
+  }
+}
+
+function apiFieldFromLegacy(f: any): ApiFieldConfig & Record<string, any> {
+  return {
+    key: f?.key ?? f?.variable ?? '',
+    label: f?.label ?? f?.name ?? '',
+    required: !!(f?.required ?? f?.is_required),
+    ...(f?.defaultValue ?? f?.default_value ? { defaultValue: f.defaultValue ?? f.default_value } : {})
+  }
+}
+
 /* ────────────────────────── 按节点类型：config → 旧 node_data ────────────────────────── */
 
 type LegacyBundle = {
   node_data: Record<string, any>
-  /** base-node 的用户输入字段表（properties.user_input_field_list） */
-  user_input_field_list?: any[]
-  /** base-node 的接口传参表（properties.api_input_field_list）——契约缺 */
-  api_input_field_list?: any[]
-  /** condition-node 的分支锚点表（properties.branch_condition_list） */
+  /**
+   * condition-node 的分支锚点表（`properties.branch_condition_list`）。
+   *
+   * <p>★ 这里曾经还有两个键：`user_input_field_list` / `api_input_field_list`（base-node 的两张字段表）。
+   * 它们被放在 `properties` 顶层而不是 `node_data` 里，与其它所有节点不一致，导致「写回位置」有三种
+   * （`#337` 第二步 B1 的实测发现）。现在两张表统一进 `node_data.fields` / `node_data.apiFields`，
+   * 与契约名同名 —— 少了这一层翻译，面板读写的位置也就只剩一种。
+   */
   branch_condition_list?: any[]
-  /** condition-node 的分支锚点高度表（properties.branch_condition_list 旧键） */
+  /** condition-node 的分支锚点高度表（`properties.branch_condition_list` 旧键） */
   width?: number
   height?: number
 }
@@ -202,6 +231,7 @@ function startFromLegacy(nd: any): StartNodeConfig & Record<string, any> {
 
 function baseToLegacy(config: BaseNodeConfig & Record<string, any>): LegacyBundle {
   const fields = (config.fields ?? []).map(userFieldToLegacy)
+  const apiFields = (config.apiFields ?? []).map(apiFieldToLegacy)
   const accept = config.fileAccept ?? []
   const setting = config.file_upload_setting ?? {
     maxFiles: 3,
@@ -218,6 +248,9 @@ function baseToLegacy(config: BaseNodeConfig & Record<string, any>): LegacyBundl
       desc: config.desc ?? '',
       // 开场白在契约里属 StartNodeConfig；旧 UI 在 base-node 上编辑，这里镜像一份
       prologue: config.prologue ?? '',
+      // 两张字段表：与契约同名，且都在 node_data 里（不再挂 properties 顶层）
+      fields,
+      apiFields,
       file_upload_enable: !!config.allowFileUpload,
       file_upload_setting: setting,
       // 契约缺：tts / stt
@@ -227,16 +260,16 @@ function baseToLegacy(config: BaseNodeConfig & Record<string, any>): LegacyBundl
       tts_model_params_setting: config.tts_model_params_setting,
       stt_model_enable: config.stt_model_enable ?? false,
       stt_model_id: config.stt_model_id ?? ''
-    },
-    user_input_field_list: fields,
-    // 契约缺：接口传参表
-    api_input_field_list: config.api_input_field_list ?? []
+    }
   }
 }
 
 function baseFromLegacy(nd: any, props: any): BaseNodeConfig & Record<string, any> {
-  const legacyFields: any[] = props?.user_input_field_list ?? []
-  const fields = legacyFields.map(userFieldFromLegacy)
+  // 兼容存量：本版之前两张字段表挂在 `properties.user_input_field_list` / `properties.api_input_field_list`
+  const rawFields: any[] = Array.isArray(nd?.fields) ? nd.fields : (props?.user_input_field_list ?? [])
+  const rawApiFields: any[] = Array.isArray(nd?.apiFields) ? nd.apiFields : (props?.api_input_field_list ?? [])
+  const fields = rawFields.map(userFieldFromLegacy)
+  const apiFields = rawApiFields.map(apiFieldFromLegacy)
   const setting = nd?.file_upload_setting
   const accept: string[] = Array.isArray(nd?.fileAccept)
     ? nd.fileAccept
@@ -248,6 +281,7 @@ function baseFromLegacy(nd: any, props: any): BaseNodeConfig & Record<string, an
       : []
   return {
     fields,
+    apiFields,
     allowFileUpload: !!nd?.file_upload_enable,
     fileAccept: accept,
     // 契约缺以下字段，透传
@@ -261,8 +295,7 @@ function baseFromLegacy(nd: any, props: any): BaseNodeConfig & Record<string, an
     tts_model_id: nd?.tts_model_id,
     tts_model_params_setting: nd?.tts_model_params_setting,
     stt_model_enable: nd?.stt_model_enable,
-    stt_model_id: nd?.stt_model_id,
-    api_input_field_list: props?.api_input_field_list ?? []
+    stt_model_id: nd?.stt_model_id
   }
 }
 
@@ -555,11 +588,12 @@ function documentExtractFromLegacy(nd: any): DocumentExtractNodeConfig & Record<
 function formToLegacy(config: FormNodeConfig & Record<string, any>): LegacyBundle {
   return {
     node_data: {
-      // 旧画布那三个键直接沿用：`form_field_list` / `form_content_format` / `is_result`
-      // 已经存在于存量草稿里，改名会让老图重开后表单字段凭空消失
-      form_field_list: Array.isArray(config.formFields) ? config.formFields : [],
-      form_content_format: config.contentFormat ?? '',
-      is_result: config.asResult ?? true
+      // 键名必须与面板读写的位置一致：`form-node/index.vue` 读 `node_data.formFields`。
+      // 本版之前这里写的是旧画布名 `form_field_list`，面板写 `formFields` —— 两个名字不同时，
+      // 画布加载后重开面板会显示空表（`#337` 第二步 B1 修）。存量草稿里的旧名由 `formFromLegacy` 兼容。
+      formFields: Array.isArray(config.formFields) ? config.formFields : [],
+      contentFormat: config.contentFormat ?? '',
+      asResult: config.asResult ?? true
     }
   }
 }
@@ -673,8 +707,6 @@ export function toLogicFlow(graph: WorkflowGraph): LogicFlowGraph {
       width,
       height
     }
-    if (bundle.user_input_field_list) properties.user_input_field_list = bundle.user_input_field_list
-    if (bundle.api_input_field_list) properties.api_input_field_list = bundle.api_input_field_list
     if (bundle.branch_condition_list) properties.branch_condition_list = bundle.branch_condition_list
 
     return {

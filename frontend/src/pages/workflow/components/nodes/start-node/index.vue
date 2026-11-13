@@ -29,9 +29,13 @@ const globalFields = [
 ]
 
 const getRefreshFieldList = () => {
+    // 两张表在 `#337` 第二步 B1 从 `properties` 顶层挪进了 `node_data`（与契约同名），
+    // 这里仍兼容旧键，避免存量草稿的变量目录凭空少几项
     const user_input_fields = props.nodeModel.graphModel.nodes
         .filter((v: any) => v.type === 'BASE_NODE')
-        .map((v: any) => cloneDeep(v.properties.user_input_field_list ?? []))
+        .map((v: any) =>
+            cloneDeep(v.properties.node_data?.fields ?? v.properties.user_input_field_list ?? [])
+        )
         .reduce((x: any, y: any) => [...x, ...y], [])
         .map((i: any) => {
             if (i.label && i.label.input_type === 'TooltipLabel') {
@@ -41,9 +45,11 @@ const getRefreshFieldList = () => {
         })
     const api_input_fields = props.nodeModel.graphModel.nodes
         .filter((v: any) => v.type === 'BASE_NODE')
-        .map((v: any) => cloneDeep(v.properties.api_input_field_list ?? []))
+        .map((v: any) =>
+            cloneDeep(v.properties.node_data?.apiFields ?? v.properties.api_input_field_list ?? [])
+        )
         .reduce((x: any, y: any) => [...x, ...y], [])
-        .map((i: any) => ({ label: i.name || i.variable, value: i.variable }))
+        .map((i: any) => ({ label: i.name || i.label || i.variable || i.key, value: i.variable || i.key }))
 
     return [...user_input_fields, ...api_input_fields]
 }
