@@ -21,13 +21,13 @@ import org.springframework.stereotype.Component;
 public class ReplyNodeExecutor implements NodeExecutor {
 
   /** 本轮答复在 {@link FlowState} 里的键名。下游（记录 / 展示）读它，不要再各自定义一份。 */
-  public static final String REPLY_KEY = "reply";
+  public static final String REPLY_KEY = WorkflowNodeKeys.Output.REPLY;
 
   /** 回复形态的配置键：与前端契约 {@code ReplyNodeConfig.replyType} 同名（{@code #335}）。 */
-  static final String CONFIG_REPLY_TYPE = "replyType";
+  static final String CONFIG_REPLY_TYPE = WorkflowNodeKeys.Config.REPLY_TYPE;
 
   /** 旧画布形状的键，只作回退。 */
-  static final String LEGACY_REPLY_TYPE = "reply_type";
+  static final String LEGACY_REPLY_TYPE = WorkflowNodeKeys.Legacy.REPLY_TYPE;
 
   /** 只支持自定义内容这一种形态；另一种要等 {@code AI_CHAT_NODE} 落地。 */
   private static final String REPLY_TYPE_CONTENT = "content";
@@ -56,7 +56,7 @@ public class ReplyNodeExecutor implements NodeExecutor {
       throw new IllegalStateException(
           "回复节点当前只支持自定义内容（replyType=content），按上游字段回复要等 AI 对话节点落地：replyType=" + replyType);
     }
-    String content = text(config.get("content"));
+    String content = text(config.get(WorkflowNodeKeys.Config.CONTENT));
     if (content == null || content.isBlank()) {
       throw new IllegalStateException("回复节点的回复内容为空");
     }

@@ -31,13 +31,13 @@ import org.springframework.stereotype.Component;
 public class SearchDatasetNodeExecutor implements NodeExecutor {
 
   /** 检索结果写进 state 的键。 */
-  public static final String RESULT_KEY = "retrieval_result";
+  public static final String RESULT_KEY = WorkflowNodeKeys.Output.RETRIEVAL_RESULT;
 
   /** 配置里读知识库列表的键：与前端契约 {@code SearchDatasetNodeConfig.kbIds} 同名。 */
-  static final String CONFIG_KB_IDS = "kbIds";
+  static final String CONFIG_KB_IDS = WorkflowNodeKeys.Config.KB_IDS;
 
   /** 旧画布形状的键，只作回退（老草稿里存的是这个）。 */
-  static final String LEGACY_KB_IDS = "dataset_id_list";
+  static final String LEGACY_KB_IDS = WorkflowNodeKeys.Legacy.DATASET_ID_LIST;
 
   private static final int DEFAULT_TOP_N = 5;
 
@@ -114,9 +114,9 @@ public class SearchDatasetNodeExecutor implements NodeExecutor {
 
   /** 取前几条；缺失或不是正整数时给 {@link #DEFAULT_TOP_N}。 */
   private static int topN(Map<String, Object> config) {
-    Object retrieval = config == null ? null : config.get("retrieval");
+    Object retrieval = config == null ? null : config.get(WorkflowNodeKeys.Config.RETRIEVAL);
     if (retrieval instanceof Map<?, ?> map) {
-      Object topN = map.get("topN");
+      Object topN = map.get(WorkflowNodeKeys.Config.TOP_N);
       if (topN instanceof Number number && number.intValue() > 0) {
         return number.intValue();
       }

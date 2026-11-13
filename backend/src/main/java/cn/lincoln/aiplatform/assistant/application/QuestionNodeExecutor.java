@@ -25,7 +25,7 @@ import org.springframework.stereotype.Component;
 public class QuestionNodeExecutor implements NodeExecutor {
 
   /** 追问的答复落在哪个键。与 {@code WorkflowResumeService.answerKey} 必须是同一个名字。 */
-  public static final String QUERY_KEY = "query";
+  public static final String QUERY_KEY = WorkflowNodeKeys.Output.QUERY;
 
   /**
    * 配置里可以带一个默认答复，用于非人工场景（定时触发）直接往下走。
@@ -33,10 +33,10 @@ public class QuestionNodeExecutor implements NodeExecutor {
    * <p>★ 键名与前端契约 {@code QuestionNodeConfig.defaultAnswer} 同名（{@code #335}）：旧名 {@code
    * default_answer} 在契约里根本不存在，所以生产路径上"配了默认答复"这件事从来没生效过 —— 读不到就落空串，被当成"用户没答"。 旧名保留为回退。
    */
-  static final String CONFIG_DEFAULT_ANSWER = "defaultAnswer";
+  static final String CONFIG_DEFAULT_ANSWER = WorkflowNodeKeys.Config.DEFAULT_ANSWER;
 
   /** 旧画布形状的键，只作回退。 */
-  static final String LEGACY_DEFAULT_ANSWER = "default_answer";
+  static final String LEGACY_DEFAULT_ANSWER = WorkflowNodeKeys.Legacy.DEFAULT_ANSWER;
 
   @Override
   public String type() {

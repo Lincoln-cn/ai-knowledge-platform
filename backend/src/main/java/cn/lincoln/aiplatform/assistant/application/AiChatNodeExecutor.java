@@ -31,10 +31,10 @@ public class AiChatNodeExecutor implements NodeExecutor {
   private static final Logger log = LoggerFactory.getLogger(AiChatNodeExecutor.class);
 
   /** 本节点写进流程状态的键：模型产出的回答。 */
-  public static final String ANSWER_KEY = "answer";
+  public static final String ANSWER_KEY = WorkflowNodeKeys.Output.ANSWER;
 
   /** 节点的 {@code properties.config} 里读模型 id 的键。 */
-  static final String CONFIG_MODEL_ID = "modelId";
+  static final String CONFIG_MODEL_ID = WorkflowNodeKeys.Config.MODEL_ID;
 
   /** 一次补全的上限。与对话链路的口径一致，慢于此值多半是上游不可达。 */
   static final Duration TIMEOUT = Duration.ofSeconds(60);

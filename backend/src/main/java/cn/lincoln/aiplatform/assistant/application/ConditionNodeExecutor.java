@@ -34,13 +34,13 @@ public class ConditionNodeExecutor implements NodeExecutor {
    *
    * <p>★ 旧画布把它叫 {@code branch}（单数），而执行器当初就照那个名字读、前端契约却是复数 —— 于是生产路径上一个分支都读不到， 节点必抛"没有任何分支"。旧名保留为回退。
    */
-  static final String CONFIG_BRANCHES = "branches";
+  static final String CONFIG_BRANCHES = WorkflowNodeKeys.Config.BRANCHES;
 
   /** 旧画布形状的分支键，只作回退。 */
-  static final String LEGACY_BRANCH = "branch";
+  static final String LEGACY_BRANCH = WorkflowNodeKeys.Legacy.BRANCH;
 
   /** 兜底分支在配置里的键：值是 {@code branches[].id} 之一（契约里的表达方式）。 */
-  static final String CONFIG_FALLBACK = "fallbackBranchId";
+  static final String CONFIG_FALLBACK = WorkflowNodeKeys.Config.FALLBACK_BRANCH_ID;
 
   /** 旧画布用分支类型标「其它情况」；大小写都认，因为转换层写的是 {@code ELSE}。 */
   static final String ELSE_TYPE = "else";
@@ -126,9 +126,9 @@ public class ConditionNodeExecutor implements NodeExecutor {
       if (item instanceof Branch branch) {
         out.add(branch);
       } else if (item instanceof Map<?, ?> map) {
-        Object id = map.get("id");
-        Object type = map.get("type");
-        Object expression = map.get("expression");
+        Object id = map.get(WorkflowNodeKeys.Item.ID);
+        Object type = map.get(WorkflowNodeKeys.Item.TYPE);
+        Object expression = map.get(WorkflowNodeKeys.Item.EXPRESSION);
         if (id != null) {
           out.add(
               new Branch(

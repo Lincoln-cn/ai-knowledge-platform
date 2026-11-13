@@ -32,7 +32,7 @@ import org.springframework.stereotype.Component;
 public class DocumentExtractNodeExecutor implements NodeExecutor {
 
   /** 抽出来的正文写进 state 的键。 */
-  public static final String RESULT_KEY = "document_markdown";
+  public static final String RESULT_KEY = WorkflowNodeKeys.Output.DOCUMENT_MARKDOWN;
 
   /**
    * 配置里给文档 id 的键名。
@@ -41,7 +41,7 @@ public class DocumentExtractNodeExecutor implements NodeExecutor {
    * 前端契约（{@code frontend/src/pages/workflow/lib/graph-format.ts}）给后端的是 camelCase，节点配置一路原样
    * 传到执行器。既有那几个 snake 键与契约对不上是另一笔账（{@code #333} 评论里记了），新节点不再跟着错。
    */
-  static final String CONFIG_DOC_ID = "docId";
+  static final String CONFIG_DOC_ID = WorkflowNodeKeys.Config.DOC_ID;
 
   private final ObjectProvider<DocumentExtractPort> extractPort;
 

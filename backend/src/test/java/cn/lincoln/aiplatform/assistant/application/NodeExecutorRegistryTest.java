@@ -3,18 +3,12 @@ package cn.lincoln.aiplatform.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * 执行器注册表的装配判据（{@code #326}）。
@@ -37,48 +31,39 @@ import org.junit.jupiter.api.Test;
  */
 class NodeExecutorRegistryTest {
 
-  /** 读出主代码里所有 {@code implements NodeExecutor} 的类，以及它们 {@code type()} 返回的字面量。 */
+  /**
+   * 主代码里所有实现了 {@code NodeExecutor} 的类型。
+   *
+   * <p>★ `#337` 之后这份扫描搬到了 {@link NodeExecutorSources}，因为 {@code WorkflowNodeTypeTest} 也要读它 ——
+   * 两处各写一份正则，就会在"哪份才是准的"这一步重新长出第二个真源。这里只做转发。
+   */
   private static Set<String> implementedTypes() throws IOException {
-    Path sourceRoot = Path.of("src", "main", "java");
-    assertThat(sourceRoot).as("测试工作目录应在 backend/，实际 %s", Path.of("").toAbsolutePath()).exists();
-
-    Pattern typeReturn =
-        Pattern.compile(
-            "String\\s+type\\s*\\(\\s*\\)\\s*\\{\\s*return\\s*\"([A-Z_]+)\"", Pattern.DOTALL);
-
-    Set<String> types = new LinkedHashSet<>();
-    try (Stream<Path> files = Files.walk(sourceRoot)) {
-      List<Path> javaFiles = files.filter(p -> p.toString().endsWith(".java")).toList();
-      for (Path file : javaFiles) {
-        String src = Files.readString(file, StandardCharsets.UTF_8);
-        if (!src.contains("implements NodeExecutor")) {
-          continue;
-        }
-        Matcher m = typeReturn.matcher(src);
-        if (!m.find()) {
-          throw new AssertionError(
-              file
-                  + " 实现了 NodeExecutor 但 type() 不是 `return \"字面量\"` 的形式，本判据读不出它处理哪种节点"
-                  + " —— 请改成返回字面量，或同步更新本判据");
-        }
-        types.add(m.group(1));
-      }
-    }
-    return types;
+    return NodeExecutorSources.implementedTypes();
   }
 
   /**
-   * 尚未实现执行器的节点类型 —— <strong>反向断言的数据源</strong>。
+   * 尚未有执行器的节点类型 —— <strong>反向断言的数据源</strong>。
    *
    * <p>每补一个就删一行。这份清单与 {@link #actualGap()} 必须一致，否则说明有人补了实现却没更新清单（下面第二条用例会红）。
    */
   private static final Set<String> KNOWN_UNIMPLEMENTED = Set.of();
 
+  /**
+   * 目录声明"能跑"、主代码却没有执行器的类型。
+   *
+   * <p>★ `#337` 换了声明侧：原来是手写的 {@code SUPPORTED_TYPES}，现在读节点目录的 {@code executable} ——
+   * 那才是用户能看见的那份"能跑"的承诺。差集非空 = 「发布放行、点试用时 500」。
+   */
   private static Set<String> actualGap() throws IOException {
     Set<String> implemented = implementedTypes();
-    return LinearWorkflowExecutor.SUPPORTED_TYPES.stream()
-        .filter(type -> !implemented.contains(type))
-        .collect(Collectors.toCollection(LinkedHashSet::new));
+    Set<String> declared =
+        new NodeTypeCatalog(new ObjectMapper())
+            .all().stream()
+                .filter(NodeTypeCatalog.NodeTypeMeta::executable)
+                .map(NodeTypeCatalog.NodeTypeMeta::type)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    declared.removeAll(implemented);
+    return declared;
   }
 
   @Test
@@ -94,9 +79,14 @@ class NodeExecutorRegistryTest {
   void knownUnimplementedMatchesActualGap() throws IOException {
     assertThat(actualGap())
         .as(
-            "SUPPORTED_TYPES = %s，主代码实际实现 = %s。若这次失败是因为你刚补了一个执行器，"
+            "目录 executable = %s，主代码实际实现 = %s。若这次失败是因为你刚补了一个执行器，"
                 + "请把 KNOWN_UNIMPLEMENTED 里对应那行删掉（#326）",
-            LinearWorkflowExecutor.SUPPORTED_TYPES, implementedTypes())
+            new NodeTypeCatalog(new ObjectMapper())
+                .all().stream()
+                    .filter(NodeTypeCatalog.NodeTypeMeta::executable)
+                    .map(NodeTypeCatalog.NodeTypeMeta::type)
+                    .collect(Collectors.toCollection(LinkedHashSet::new)),
+            implementedTypes())
         .isEqualTo(KNOWN_UNIMPLEMENTED);
   }
 

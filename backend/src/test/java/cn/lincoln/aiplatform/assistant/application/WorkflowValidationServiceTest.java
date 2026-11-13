@@ -1,9 +1,6 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -52,7 +49,7 @@ class WorkflowValidationServiceTest {
   }
 
   @Test
-  @DisplayName("条件分支：0.7.2 之后能发布，不再被 NODE_NOT_EXECUTABLE 拦住")
+  @DisplayName("条件分支：0.7.2 之后能发布")
   void conditionNodeIsNoLongerRejectedAtPublishTime() {
     WorkflowValidationService.Result result =
         service.validate(
@@ -64,54 +61,21 @@ class WorkflowValidationServiceTest {
                 List.of(edge("a", "b"), edge("b", "c"))));
 
     // 这条断言原来是反的：它守的是「条件分支在发布前就被拦住，而不是发布成功、
-    // 点试用时才 500」。0.7.2 给了 CONDITION_NODE 一个真的执行器之后前提没了 ——
-    // 现在该拦住的是「目录标了 implemented 却没有执行器」的类型，而 CONDITION_NODE
-    // 两边都有。
-    assertThat(codes(result)).doesNotContain("NODE_NOT_EXECUTABLE");
-    assertThat(result.issues())
-        .filteredOn(issue -> "NODE_NOT_EXECUTABLE".equals(issue.code()))
-        .isEmpty();
+    // 点试用时才 500」。0.7.2 给了 CONDITION_NODE 一个真的执行器之后前提没了。
+    // `#337` 又删掉了 NODE_NOT_EXECUTABLE 这条规则本身（它判的"目录说能跑但引擎没有"已由
+    // WorkflowNodeTypeTest 的源码扫描在构建期钉住），所以这里只剩"能发布"这一件事。
+    assertThat(result.passed()).isTrue();
+    assertThat(codes(result)).isEmpty();
   }
 
-  /**
-   * ★ 这条的判据在 {@code #335} 被订正过，原因值得记住：它原本拿 {@code QUESTION_NODE} 当"标了可执行却没有执行器" 的反例，而 {@code
-   * 6c779130} 把 QUESTION_NODE 真的实现了 —— 于是它变成"已实现"、只报 INTERRUPT_NODE，测试转红。 这与 {@code
-   * WorkflowPauseTest} 上一轮踩的是同一个坑：<strong>拿真实类型当反例</strong>。
-   *
-   * <p>更根本的问题是：{@code NODE_NOT_EXECUTABLE} 判的是"{@code catalog.executable(type)} 为真、但不在 {@code
-   * LinearWorkflowExecutor.SUPPORTED_TYPES} 里"，而真实目录与执行器集合由 {@code
-   * WorkflowNodeTypeTest.executableTypesMatchTheExecutor} 钉成<strong>完全相等</strong> ⇒ 用真目录永远构造不出这个
-   * 场景。所以要验这一档，必须把"目录状态"注入进来：这里用替身目录说"FUTURE_NODE 能跑"，而引擎里没有它。
-   */
-  @Test
-  @DisplayName("目录说能跑、执行引擎里没有：发布前拦住（用替身目录构造，不拿真实类型当反例）")
-  void questionedTypeWithoutExecutorIsRejectedAtPublishTime() {
-    NodeTypeCatalog catalog = mock(NodeTypeCatalog.class);
-    when(catalog.known(anyString())).thenReturn(true);
-    // 默认"目录里标着不能跑"；只有下面这几个是能跑的
-    when(catalog.executable(anyString())).thenReturn(false);
-    when(catalog.executable("START_NODE")).thenReturn(true);
-    when(catalog.executable("AI_CHAT_NODE")).thenReturn(true);
-    when(catalog.executable("FUTURE_NODE")).thenReturn(true);
-
-    WorkflowValidationService.Result result =
-        new WorkflowValidationService(catalog)
-            .validate(
-                new WorkflowValidationService.Graph(
-                    List.of(
-                        node("a", "START_NODE"),
-                        node("b", "FUTURE_NODE"),
-                        node("c", "AI_CHAT_NODE")),
-                    List.of(edge("a", "b"), edge("b", "c"))));
-
-    assertThat(codes(result)).contains("NODE_NOT_EXECUTABLE");
-    // 精确一点：它不该同时被当成"未知类型"或"规划中" —— 那两条就说明替身目录没生效
-    assertThat(codes(result)).doesNotContain("UNKNOWN_TYPE").doesNotContain("PLANNED_TYPE");
-    assertThat(result.passed()).isFalse();
-  }
+  // ★ 这里原来有一条 questionedTypeWithoutExecutorIsRejectedAtPublishTime：用替身目录说
+  //   "FUTURE_NODE 能跑"、引擎里却没有它，验发布前拦住。`#337` 把那条规则（NODE_NOT_EXECUTABLE）
+  //   连同它依赖的手写 SUPPORTED_TYPES 一起删了 —— 那个场景现在由构建期闸门兜住
+  //   （WorkflowNodeTypeTest 断言目录 executable 集合 == 主代码真实执行器），发布时不必再判一遍。
+  //   测试跟着规则一起删，不是为了让谁变绿。
 
   @Test
-  @DisplayName("四种可执行节点：不报 NODE_NOT_EXECUTABLE（防这条规则一概拦死）")
+  @DisplayName("四种可执行节点：能发布（防规则一概拦死）")
   void fourExecutableTypesDoNotTriggerThatRule() {
     WorkflowValidationService.Result result =
         service.validate(
@@ -123,7 +87,6 @@ class WorkflowValidationServiceTest {
                     node("d", "REPLY_NODE")),
                 List.of(edge("a", "b"), edge("b", "c"), edge("c", "d"))));
 
-    assertThat(codes(result)).doesNotContain("NODE_NOT_EXECUTABLE");
     assertThat(result.passed()).isTrue();
   }
 

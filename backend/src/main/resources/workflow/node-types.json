@@ -5,7 +5,26 @@
     "description": "流程入口：配置开场白与用户输入的接收方式",
     "category": "基础",
     "catalogEnabled": true,
-    "executable": true
+    "executable": true,
+    "configFields": [
+      {
+        "key": "prologue",
+        "label": "开场白",
+        "type": "string",
+        "panelOnly": true,
+        "required": false
+      },
+      {
+        "key": "quickQuestions",
+        "label": "快捷提问",
+        "type": "string-list",
+        "panelOnly": true,
+        "required": false
+      }
+    ],
+    "outputs": [
+      "query"
+    ]
   },
   {
     "type": "BASE_NODE",
@@ -13,7 +32,20 @@
     "description": "只做数据传递的占位节点，用于整理连线",
     "category": "基础",
     "catalogEnabled": true,
-    "executable": true
+    "executable": true,
+    "configFields": [
+      {
+        "key": "fields",
+        "label": "收集字段",
+        "type": "object-list",
+        "required": false,
+        "panelOnly": false
+      }
+    ],
+    "outputs": [
+      "basic_info_fields",
+      "basic_info_input"
+    ]
   },
   {
     "type": "AI_CHAT_NODE",
@@ -21,7 +53,61 @@
     "description": "调用大模型生成回复，可带检索结果作为上下文",
     "category": "生成",
     "catalogEnabled": true,
-    "executable": true
+    "executable": true,
+    "configFields": [
+      {
+        "key": "modelId",
+        "label": "模型",
+        "type": "uuid",
+        "required": false,
+        "panelOnly": false
+      },
+      {
+        "key": "rolePrompt",
+        "label": "角色提示词",
+        "type": "string",
+        "panelOnly": true,
+        "required": false
+      },
+      {
+        "key": "promptIds",
+        "label": "提示词模板",
+        "type": "string-list",
+        "panelOnly": true,
+        "required": false
+      },
+      {
+        "key": "kbIds",
+        "label": "知识库",
+        "type": "string-list",
+        "panelOnly": true,
+        "required": false
+      },
+      {
+        "key": "retrieval",
+        "label": "检索参数",
+        "type": "object",
+        "panelOnly": true,
+        "required": false
+      },
+      {
+        "key": "thinkingEnabled",
+        "label": "深度思考",
+        "type": "boolean",
+        "panelOnly": true,
+        "required": false
+      },
+      {
+        "key": "multiTurn",
+        "label": "多轮对话",
+        "type": "boolean",
+        "panelOnly": true,
+        "required": false
+      }
+    ],
+    "outputs": [
+      "answer"
+    ]
   },
   {
     "type": "SEARCH_DATASET_NODE",
@@ -29,7 +115,26 @@
     "description": "在指定知识库里检索相关分段",
     "category": "检索",
     "catalogEnabled": true,
-    "executable": true
+    "executable": true,
+    "configFields": [
+      {
+        "key": "kbIds",
+        "label": "知识库",
+        "type": "string-list",
+        "required": true,
+        "panelOnly": false
+      },
+      {
+        "key": "retrieval",
+        "label": "检索参数",
+        "type": "object",
+        "required": false,
+        "panelOnly": false
+      }
+    ],
+    "outputs": [
+      "retrieval_result"
+    ]
   },
   {
     "type": "QUESTION_NODE",
@@ -37,7 +142,33 @@
     "description": "向用户追问一个问题并把回答带回流程",
     "category": "交互",
     "catalogEnabled": true,
-    "executable": true
+    "executable": true,
+    "configFields": [
+      {
+        "key": "modelId",
+        "label": "模型",
+        "type": "uuid",
+        "panelOnly": true,
+        "required": false
+      },
+      {
+        "key": "rewritePrompt",
+        "label": "改写提示词",
+        "type": "string",
+        "panelOnly": true,
+        "required": false
+      },
+      {
+        "key": "defaultAnswer",
+        "label": "默认答复",
+        "type": "string",
+        "required": false,
+        "panelOnly": false
+      }
+    ],
+    "outputs": [
+      "query"
+    ]
   },
   {
     "type": "CONDITION_NODE",
@@ -45,7 +176,26 @@
     "description": "按条件把流程分成两支",
     "category": "逻辑",
     "catalogEnabled": true,
-    "executable": true
+    "executable": true,
+    "configFields": [
+      {
+        "key": "branches",
+        "label": "分支",
+        "type": "branch-list",
+        "required": true,
+        "panelOnly": false
+      },
+      {
+        "key": "fallbackBranchId",
+        "label": "兜底分支",
+        "type": "string",
+        "required": false,
+        "panelOnly": false
+      }
+    ],
+    "outputs": [
+      "active_branch"
+    ]
   },
   {
     "type": "NUMBER_CONDITION_NODE",
@@ -53,7 +203,26 @@
     "description": "按数值比较把流程分成多支",
     "category": "逻辑",
     "catalogEnabled": true,
-    "executable": true
+    "executable": true,
+    "configFields": [
+      {
+        "key": "branches",
+        "label": "分支",
+        "type": "branch-list",
+        "required": true,
+        "panelOnly": false
+      },
+      {
+        "key": "fallbackBranchId",
+        "label": "兜底分支",
+        "type": "string",
+        "required": false,
+        "panelOnly": false
+      }
+    ],
+    "outputs": [
+      "active_branch"
+    ]
   },
   {
     "type": "REPLY_NODE",
@@ -61,7 +230,26 @@
     "description": "直接输出一段固定文案",
     "category": "生成",
     "catalogEnabled": true,
-    "executable": true
+    "executable": true,
+    "configFields": [
+      {
+        "key": "content",
+        "label": "回复内容",
+        "type": "string",
+        "required": true,
+        "panelOnly": false
+      },
+      {
+        "key": "replyType",
+        "label": "回复形态",
+        "type": "string",
+        "required": false,
+        "panelOnly": false
+      }
+    ],
+    "outputs": [
+      "reply"
+    ]
   },
   {
     "type": "FUNCTION_LIB_NODE",
@@ -101,7 +289,26 @@
     "description": "把库里选定文档的正文抽出来交给下游",
     "category": "检索",
     "catalogEnabled": true,
-    "executable": true
+    "executable": true,
+    "configFields": [
+      {
+        "key": "kbId",
+        "label": "知识库",
+        "type": "uuid",
+        "panelOnly": true,
+        "required": false
+      },
+      {
+        "key": "docId",
+        "label": "文档",
+        "type": "uuid",
+        "required": true,
+        "panelOnly": false
+      }
+    ],
+    "outputs": [
+      "document_markdown"
+    ]
   },
   {
     "type": "IMAGE_UNDERSTAND_NODE",
@@ -117,7 +324,11 @@
     "description": "向用户收集多个字段",
     "category": "交互",
     "catalogEnabled": true,
-    "executable": true
+    "executable": true,
+    "configFields": [],
+    "outputs": [
+      "form_data"
+    ]
   },
   {
     "type": "TEXT_TO_SPEECH_NODE",

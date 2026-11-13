@@ -101,22 +101,12 @@ public class WorkflowValidationService {
     // 判据 1/2（04 BR-04-02 禁止成环）：图里不许有环 —— 有环执行器会一直转下去，这里直接拦下。
     issues.addAll(cycles(graph));
 
-    // 判据 3（轻引擎边界，§11.12）：执行器只跑 LinearWorkflowExecutor.SUPPORTED_TYPES 里的节点。
-    // ★ 这个集合之外的类型（条件分支 / 问题优化 / 人工介入……）在**运行时**才抛
-    // IllegalArgumentException —— 而发布校验不拦就等于"发布成功、点试用时才 500"。
-    // 把拦截前移到发布：用户当场就能看到是哪一格、为什么、怎么办。
-    // ★ 集合从执行器读，不在这里另抄一份（抄一份就一定会漏改）。
-    for (Node node : byId.values()) {
-      if (!LinearWorkflowExecutor.SUPPORTED_TYPES.contains(node.type())) {
-        issues.add(
-            issue(
-                "ERROR",
-                "NODE_NOT_EXECUTABLE",
-                "节点「" + node.title() + "」本版本执行引擎还跑不了",
-                "先删掉它；本版本能跑的是开始 / 检索 / AI 对话 / 条件判断 / 回复五种节点，其余要等后续版本",
-                node.id()));
-      }
-    }
+    // ★ 这里曾有一条 NODE_NOT_EXECUTABLE 规则：拿 LinearWorkflowExecutor.SUPPORTED_TYPES 再判一遍
+    // 「目录说能跑，执行器真的能跑吗」。`#337` 把那份手写集合删掉了 —— 它本身就是"同一件事两处各判一遍"
+    // 的第二份，而目录侧那条 `PLANNED_TYPE`（catalog.executable）已经覆盖了用户能撞到的全部情形。
+    // 剩下的那一格「目录 executable=true 但主代码没有执行器」不可能躲过构建：`WorkflowNodeTypeTest`
+    // 的 executableTypesMatchTheExecutor 扫 `src/main/java` 里所有 NodeExecutor 的 type()，
+    // 与目录 executable 集合断言**完全相等**。构建期能钉住的事不必在发布时再判一次。
 
     String startId =
         byId.values().stream()

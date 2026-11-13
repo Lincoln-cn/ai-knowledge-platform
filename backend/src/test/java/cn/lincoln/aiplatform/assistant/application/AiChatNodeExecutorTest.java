@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import cn.lincoln.aiplatform.platform.assistant.WorkflowSearchPort;
 import cn.lincoln.aiplatform.platform.knowledge.DocumentExtractPort;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -39,13 +40,12 @@ class AiChatNodeExecutorTest {
   }
 
   @Test
-  @DisplayName("实时：节点声明的类型就是 SUPPORTED_TYPES 里那一个")
-  void declaresTheTypeThatPublishValidationChecks() {
-    // 发布校验读的就是 LinearWorkflowExecutor.SUPPORTED_TYPES；类型字符串对不上，
-    // 校验会放行而运行时 registry 找不到执行器 —— 那正是 0.7.0 的洞。
-    assertThat(new AiChatNodeExecutor(mock(ChatPort.class)).type())
-        .isEqualTo("AI_CHAT_NODE")
-        .isIn(LinearWorkflowExecutor.SUPPORTED_TYPES);
+  @DisplayName("实时：节点声明的类型就是主代码里那一个")
+  void declaresTheTypeThatPublishValidationChecks() throws IOException {
+    // 类型字符串对不上，发布校验会放行而运行时 registry 找不到执行器 —— 那正是 0.7.0 的洞。
+    // `#337` 之后「能跑哪些类型」不再是一份手写常量，而是主代码里真实的执行器（扫源码）。
+    assertThat(new AiChatNodeExecutor(mock(ChatPort.class)).type()).isEqualTo("AI_CHAT_NODE");
+    assertThat(NodeExecutorSources.implementedTypes()).contains("AI_CHAT_NODE");
   }
 
   @Test
@@ -173,11 +173,12 @@ class AiChatNodeExecutorTest {
   }
 
   @Test
-  @DisplayName("SUPPORTED_TYPES 里的每个类型都真有执行器 —— 这才是「发布放行、运行时不炸」的判据")
-  void everySupportedTypeHasAnExecutor() {
-    // 0.7.0 的洞：SUPPORTED_TYPES 写着 AI_CHAT_NODE，而实现只有三个 ——
-    // 发布校验读的就是这个集合，于是校验放行、点试用时 registry.get 拿不到执行器。
-    // 这里把四个实现都摆出来断「集合相等」：以后往集合里加类型而忘了加实现，这条会红。
+  @DisplayName("目录声明能跑的每个类型都真有执行器 —— 这才是「发布放行、运行时不炸」的判据")
+  void everySupportedTypeHasAnExecutor() throws IOException {
+    // 0.7.0 的洞：目录写着 AI_CHAT_NODE 能跑，而实现只有三个 ——
+    // 发布校验放行，点试用时 registry.get 拿不到执行器。
+    // 这里把全部实现都摆出来断「集合相等」：以后加一个执行器却忘了加进任何一个测试，
+    // 或者加进这里却忘了写源码，两边的差集都会被这条抓住（#337 之后比对的是主代码扫描，不再是手写常量）。
     Map<String, NodeExecutor> byType = new java.util.LinkedHashMap<>();
     for (NodeExecutor executor :
         List.of(
@@ -194,7 +195,7 @@ class AiChatNodeExecutorTest {
       byType.put(executor.type(), executor);
     }
 
-    assertThat(byType.keySet()).isEqualTo(LinearWorkflowExecutor.SUPPORTED_TYPES);
+    assertThat(byType.keySet()).isEqualTo(NodeExecutorSources.implementedTypes());
   }
 
   /**

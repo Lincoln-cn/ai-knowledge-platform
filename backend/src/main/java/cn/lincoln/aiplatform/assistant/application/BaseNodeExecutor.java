@@ -34,10 +34,10 @@ public class BaseNodeExecutor implements NodeExecutor {
   private static final Logger log = LoggerFactory.getLogger(BaseNodeExecutor.class);
 
   /** 配置的字段名（逗号分隔）写进状态的键。 */
-  public static final String FIELDS_KEY = "basic_info_fields";
+  public static final String FIELDS_KEY = WorkflowNodeKeys.Output.BASIC_INFO_FIELDS;
 
   /** 用户这次提供的基本信息写进状态的键。 */
-  public static final String INPUT_KEY = "basic_info_input";
+  public static final String INPUT_KEY = WorkflowNodeKeys.Output.BASIC_INFO_INPUT;
 
   @Override
   public String type() {
@@ -67,7 +67,7 @@ public class BaseNodeExecutor implements NodeExecutor {
     if (config == null) {
       return List.of();
     }
-    Object raw = config.get("fields");
+    Object raw = config.get(WorkflowNodeKeys.Config.FIELDS);
     if (!(raw instanceof List<?> list)) {
       return List.of();
     }
@@ -78,7 +78,7 @@ public class BaseNodeExecutor implements NodeExecutor {
                 return s;
               }
               if (item instanceof Map<?, ?> m) {
-                Object name = ((Map<String, Object>) m).get("name");
+                Object name = ((Map<String, Object>) m).get(WorkflowNodeKeys.Item.NAME);
                 return name == null ? "" : String.valueOf(name);
               }
               return "";

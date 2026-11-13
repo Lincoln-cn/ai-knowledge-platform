@@ -42,7 +42,9 @@ class WorkflowNodeTypeTest {
 
   @Test
   void executableTypesMatchTheExecutor() throws Exception {
-    // ★ 这条是 #331 的判据 2：目录里 executable=true 的集合必须**正好等于**执行器的 SUPPORTED_TYPES。
+    // ★ 这条是 #331 的判据 2，`#337` 换了比对对象：原来比对手写的 LinearWorkflowExecutor.SUPPORTED_TYPES
+    //   （那是"同一件事的第二份清单"，加节点时要同时改两处），现在比**主代码里真实的执行器**
+    //   （扫 src/main/java 里所有 NodeExecutor 的 type()）。
     //   改任一边都会红 —— 这正是"能放"与"能跑"两义性要防的东西。
     Set<String> fromCatalog =
         load().stream()
@@ -50,9 +52,9 @@ class WorkflowNodeTypeTest {
             .map(m -> String.valueOf(m.get("type")))
             .collect(Collectors.toSet());
     assertThat(fromCatalog)
-        .as("目录 executable 与执行器 SUPPORTED_TYPES 必须一致：多一个 ⇒ 发布放行但运行时抛，少一个 ⇒ 能跑却发布被拒")
+        .as("目录 executable 与主代码真实执行器必须一致：多一个 ⇒ 发布放行但运行时抛，少一个 ⇒ 能跑却拖不进画布")
         .isEqualTo(
-            cn.lincoln.aiplatform.assistant.application.LinearWorkflowExecutor.SUPPORTED_TYPES);
+            cn.lincoln.aiplatform.assistant.application.NodeExecutorSources.implementedTypes());
   }
 
   @Test

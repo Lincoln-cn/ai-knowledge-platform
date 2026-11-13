@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
 public class StartNodeExecutor implements NodeExecutor {
 
   /** 用户提问在 {@link FlowState} 里的键名。下游节点读它，不要再各自定义一份。 */
-  public static final String QUERY_KEY = "query";
+  public static final String QUERY_KEY = WorkflowNodeKeys.Output.QUERY;
 
   @Override
   public String type() {

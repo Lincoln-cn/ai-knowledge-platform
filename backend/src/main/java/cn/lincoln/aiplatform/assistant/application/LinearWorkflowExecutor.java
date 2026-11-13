@@ -26,8 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
  * {@code ChatService}（那样 {@code ModuleBoundaryTest} 会红）。
  *
  * <p>★ <strong>人工介入已实现</strong>（{@code QUESTION_NODE} / {@code FORM_NODE}）：编译器把它们算成中断点，执行器跑到之前就停住、
- * 由 {@code WorkflowResumeService} 恢复。仍<strong>未实现</strong>的只有循环 —— 它们不在 {@link #SUPPORTED_TYPES}
- * 里，发布时会被拦。
+ * 由 {@code WorkflowResumeService} 恢复。仍<strong>未实现</strong>的只有循环 —— 它们不在装配好的执行器里，发布时会被拦。
  *
  * <p>★ <strong>L1 检查点 = 每节点执行记录与业务同事务</strong>（判据 4）：{@link #execute} 上的
  * {@code @Transactional(rollbackFor = Exception.class)} 保证「执行节点 + 写节点记录」原子 —— 故意让某节点抛异常，这一跑的
@@ -39,26 +38,6 @@ public class LinearWorkflowExecutor {
 
   private static final String START = "START_NODE";
 
-  /**
-   * 本版本执行器真正能跑的节点类型。
-   *
-   * <p>★ 对外可见是因为 {@link WorkflowValidationService} 要用它做<strong>发布前</strong>拦截： 这个集合之外的类型在运行时才会抛
-   * {@code IllegalArgumentException}，而发布校验不拦就等于 "发布成功、点试用时 500"。判据必须与执行器读同一份常量，不许各写一份 —— 两处各写一份，
-   * 将来加一个节点类型时必然漏改一处。
-   */
-  public static final Set<String> SUPPORTED_TYPES =
-      Set.of(
-          "START_NODE",
-          "BASE_NODE",
-          "SEARCH_DATASET_NODE",
-          "CONDITION_NODE",
-          "NUMBER_CONDITION_NODE",
-          "AI_CHAT_NODE",
-          "QUESTION_NODE",
-          "FORM_NODE",
-          "DOCUMENT_EXTRACT_NODE",
-          "REPLY_NODE");
-
   /** 流程状态里放「这次走的是哪条分支」的键：值 = 条件节点那条出边的 {@code sourceHandle}。 */
   public static final String ACTIVE_BRANCH = "active_branch";
 
@@ -66,6 +45,19 @@ public class LinearWorkflowExecutor {
 
   private final WorkflowNodeExecutionRepository records;
   private final Map<String, NodeExecutor> registry;
+
+  /**
+   * 本版本执行器真正能跑的节点类型 —— <strong>从装配好的执行器派生，不存第二份清单</strong>（{@code #337}）。
+   *
+   * <p>★ 原来这里是一个手写的 {@code public static final Set<String> SUPPORTED_TYPES}，它的 javadoc
+   * 自己写着"判据必须与执行器读同一份常量， 不许各写一份"——
+   * 而它<strong>本身就是那份多出来的清单</strong>：加一个节点类型要同时改常量与执行器，漏一处就是「发布放行、运行时抛」或 「能跑却发布被拒」。现在唯一真源是构造器注入的
+   * {@link NodeExecutor} 列表，运行时看到的就是真装配了什么。
+   *
+   * <p>★ 目录侧（{@code workflow/node-types.json} 的 {@code executable}）这份"能跑"的声明由 {@code
+   * WorkflowNodeTypeTest} 钉成与主代码实现完全相等 —— 那是构建期判据，不再在发布校验里重复判一遍。
+   */
+  private final Set<String> supportedTypes;
 
   public LinearWorkflowExecutor(
       WorkflowNodeExecutionRepository records, List<NodeExecutor> executors) {
@@ -75,6 +67,12 @@ public class LinearWorkflowExecutor {
       byType.put(executor.type(), executor);
     }
     this.registry = Map.copyOf(byType);
+    this.supportedTypes = Set.copyOf(byType.keySet());
+  }
+
+  /** 本版本真能跑的类型（从执行器派生；给观测与测试读，不用于发布校验）。 */
+  public Set<String> supportedTypes() {
+    return supportedTypes;
   }
 
   /**
@@ -142,8 +140,7 @@ public class LinearWorkflowExecutor {
    * 只放行本版本真能跑的节点类型。
    *
    * <p>★ 0.7.2 之前这里还额外拒绝「任何带 {@code branchHandle} 的计划」—— 因为那时执行器不会跳过分支，
-   * 一张有条件节点的图跑起来会把两边都执行一遍。现在分支跳过已经实现，这条限制随之取消； 但**条件节点本身仍要在 {@link #SUPPORTED_TYPES}
-   * 里**，否则发布校验会先拦住。
+   * 一张有条件节点的图跑起来会把两边都执行一遍。现在分支跳过已经实现，这条限制随之取消； 但**条件节点本身仍要真的装好执行器**，否则发布校验会先拦住。
    */
   private void requireRunnablePlan(WorkflowCompiler.ExecutionPlan plan) {
     List<WorkflowCompiler.PlanStep> steps = plan.steps();
@@ -155,12 +152,12 @@ public class LinearWorkflowExecutor {
     }
     for (WorkflowCompiler.PlanStep step : steps) {
       // ★ 中断点不算「跑不了」：人工介入节点本来就没有执行器 —— 它要做的是「等人」，
-      // 不是「跑点什么」。所以它在 SUPPORTED_TYPES 之外也照常放行，执行到它那里会停下来。
+      // 不是「跑点什么」。所以它在可执行集合之外也照常放行，执行到它那里会停下来。
       if (plan.interruptNodeIds().contains(step.nodeId())) {
         continue;
       }
-      if (!SUPPORTED_TYPES.contains(step.type())) {
-        throw new IllegalArgumentException("本版本只跑 " + SUPPORTED_TYPES + " 这些节点，不支持 " + step.type());
+      if (!supportedTypes.contains(step.type())) {
+        throw new IllegalArgumentException("本版本只跑 " + supportedTypes + " 这些节点，不支持 " + step.type());
       }
     }
   }

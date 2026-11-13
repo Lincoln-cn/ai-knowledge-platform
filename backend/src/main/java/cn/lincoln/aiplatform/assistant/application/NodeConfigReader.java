@@ -41,12 +41,14 @@ public class NodeConfigReader {
     if (node == null) {
       return new NodeConfig(null, List.of(), null);
     }
-    JsonNode config = node.get("config");
+    JsonNode config = node.get(WorkflowNodeKeys.CONFIG);
     if (config == null || !config.isObject()) {
       return new NodeConfig(null, List.of(), null);
     }
     return new NodeConfig(
-        text(config, "modelId"), texts(config, "kbIds"), text(config, "applicationId"));
+        text(config, WorkflowNodeKeys.Config.MODEL_ID),
+        texts(config, WorkflowNodeKeys.Config.KB_IDS),
+        text(config, WorkflowNodeKeys.Config.APPLICATION_ID));
   }
 
   private static String text(JsonNode config, String field) {

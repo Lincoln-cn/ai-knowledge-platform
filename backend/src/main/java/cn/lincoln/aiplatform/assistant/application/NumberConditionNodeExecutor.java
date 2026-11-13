@@ -31,10 +31,10 @@ public class NumberConditionNodeExecutor implements NodeExecutor {
   private static final Logger log = LoggerFactory.getLogger(NumberConditionNodeExecutor.class);
 
   /** 分支列表在节点配置里的键，与契约 {@code NumberConditionNodeConfig.branches} 同名。 */
-  static final String CONFIG_BRANCHES = "branches";
+  static final String CONFIG_BRANCHES = WorkflowNodeKeys.Config.BRANCHES;
 
   /** 兜底分支 id 在节点配置里的键。 */
-  static final String CONFIG_FALLBACK = "fallbackBranchId";
+  static final String CONFIG_FALLBACK = WorkflowNodeKeys.Config.FALLBACK_BRANCH_ID;
 
   @Override
   public String type() {
@@ -179,15 +179,17 @@ public class NumberConditionNodeExecutor implements NodeExecutor {
                 item instanceof Branch b
                     ? b
                     : new Branch(
-                        String.valueOf(((Map<String, Object>) item).get("id")),
-                        String.valueOf(((Map<String, Object>) item).getOrDefault("logic", "AND")),
+                        String.valueOf(((Map<String, Object>) item).get(WorkflowNodeKeys.Item.ID)),
+                        String.valueOf(
+                            ((Map<String, Object>) item)
+                                .getOrDefault(WorkflowNodeKeys.Item.LOGIC, "AND")),
                         conditionsOf((Map<String, Object>) item)))
         .toList();
   }
 
   @SuppressWarnings("unchecked")
   private static List<Condition> conditionsOf(Map<String, Object> branch) {
-    Object raw = branch.get("conditions");
+    Object raw = branch.get(WorkflowNodeKeys.Item.CONDITIONS);
     if (!(raw instanceof List<?> list)) {
       return List.of();
     }
@@ -195,15 +197,17 @@ public class NumberConditionNodeExecutor implements NodeExecutor {
         .map(
             item -> {
               Map<String, Object> m = (Map<String, Object>) item;
-              Object variable = m.get("variable");
+              Object variable = m.get(WorkflowNodeKeys.Item.VARIABLE);
               String[] pair = null;
               if (variable instanceof List<?> v && v.size() >= 2) {
                 pair = new String[] {String.valueOf(v.get(0)), String.valueOf(v.get(1))};
               }
               return new Condition(
                   pair,
-                  String.valueOf(m.getOrDefault("operator", "")),
-                  m.get("value") == null ? null : String.valueOf(m.get("value")));
+                  String.valueOf(m.getOrDefault(WorkflowNodeKeys.Item.OPERATOR, "")),
+                  m.get(WorkflowNodeKeys.Item.VALUE) == null
+                      ? null
+                      : String.valueOf(m.get(WorkflowNodeKeys.Item.VALUE)));
             })
         .toList();
   }

@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
 public class FormNodeExecutor implements NodeExecutor {
 
   /** 表单内容落在哪个键。与 {@code WorkflowResumeService.answerKey} 必须是同一个名字。 */
-  public static final String FORM_DATA_KEY = "form_data";
+  public static final String FORM_DATA_KEY = WorkflowNodeKeys.Output.FORM_DATA;
 
   @Override
   public String type() {
