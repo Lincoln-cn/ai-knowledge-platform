@@ -1,394 +1,94 @@
-import { WorkflowType } from '@/pages/workflow/enums/workflow';
-// import { t } from '@/locales'
-
-export const startNode = {
-  id: WorkflowType.Start,
-  type: WorkflowType.Start,
-  x: 180,
-  y: 720,
-  properties: {
-    height: 200,
-    stepName: '开始',
-    config: {
-      fields: [
-        {
-          label: '用户问题',
-          value: 'question',
-        },
-      ],
-      globalFields: [
-        {
-          value: 'time',
-          label: '当前时间',
-        },
-      ],
-    },
-  },
-};
-export const baseNode = {
-  id: WorkflowType.Base,
-  type: WorkflowType.Base,
-  x: 200,
-  y: 270,
-  text: '',
-  properties: {
-    width: 420,
-    height: 200,
-    stepName: '基本信息',
-    input_field_list: [],
-    node_data: {
-      name: '',
-      desc: '',
-      // 两张字段表与契约同名，且都在 node_data 里（`#337` 第二步 B1：以前挂在 properties 顶层）
-      fields: [],
-      apiFields: [],
-      // @ts-ignore
-      prologue: '111111',
-    },
-    config: {},
-  },
-};
-/**
- * 说明
- * type 与 nodes 文件对应
- */
-export const baseNodes = [baseNode, startNode];
-/**
- * ai对话节点配置数据
- */
-export const aiChatNode = {
-  type: WorkflowType.AiChat,
-  text: '与 AI 大模型进行对话',
-  label: 'AI 对话',
-  height: 340,
-  properties: {
-    stepName: 'AI 对话',
-    config: {
-      fields: [
-        {
-          label: 'AI 回答内容',
-          value: 'answer',
-        },
-      ],
-    },
-  },
-};
-/**
- * 知识库检索配置数据
- */
-export const searchDatasetNode = {
-  type: WorkflowType.SearchDataset,
-  text: '关联知识库，查找与问题相关的分段',
-  label: '知识库检索',
-  height: 355,
-  properties: {
-    stepName: '知识库检索',
-    config: {
-      fields: [
-        { label: '检索结果的分段列表', value: 'paragraph_list' },
-        { label: '满足直接回答的分段列表', value: 'is_hit_handling_method_list' },
-        {
-          label: '检索结果',
-          value: 'data',
-        },
-        {
-          label: '满足直接回答的分段内容',
-          value: 'directly_return',
-        },
-      ],
-    },
-  },
-};
-export const questionNode = {
-  type: WorkflowType.Question,
-  text: '根据历史聊天记录优化完善当前问题，更利于匹配知识库分段',
-  label: '问题优化',
-  height: 345,
-  properties: {
-    stepName: '问题优化',
-    config: {
-      fields: [
-        {
-          label: '问题优化结果',
-          value: 'answer',
-        },
-      ],
-    },
-  },
-};
-export const conditionNode = {
-  type: WorkflowType.Condition,
-  text: '按自然语言条件执行不同的节点，条件由模型判定',
-  label: '语义判断',
-  height: 175,
-  properties: {
-    width: 600,
-    stepName: '语义判断',
-    config: {
-      fields: [
-        {
-          label: '分支名称',
-          value: 'branch_name',
-        },
-      ],
-    },
-  },
-};
-/**
- * 数值判断：变量/操作符/值 的结构化判定（与语义判断互补）
- */
-export const numberConditionNode = {
-  type: WorkflowType.NumberCondition,
-  text: '按变量/操作符/值结构化条件执行不同的节点',
-  label: '数值判断',
-  height: 175,
-  properties: {
-    width: 600,
-    stepName: '数值判断',
-    config: {
-      fields: [
-        {
-          label: '分支名称',
-          value: 'branch_name',
-        },
-      ],
-    },
-  },
-};
-export const replyNode = {
-  type: WorkflowType.Reply,
-  text: '指定回复内容，引用变量会转换为字符串进行输出',
-  label: '指定回复',
-  height: 210,
-  properties: {
-    stepName: '指定回复',
-    config: {
-      fields: [
-        {
-          // 这个节点产出的是 `reply`（后端 `ReplyNodeExecutor.REPLY_KEY`，目录 outputs 也是它）；
-          // 以前这里写 `answer` 是 AI 对话节点的输出 —— 下游按「节点id.变量名」引用时永远取不到值。
-          label: '回复内容',
-          value: 'reply',
-        },
-      ],
-    },
-  },
-};
-export const rerankerNode = {
-  type: WorkflowType.RrerankerNode,
-  text: '使用重排模型对多个知识库的检索结果进行二次召回',
-  label: '多路召回',
-  height: 252,
-  properties: {
-    stepName: '多路召回',
-    config: {
-      fields: [
-        {
-          label: '重排结果列表',
-          value: 'result_list',
-        },
-        {
-          label: '重排结果',
-          value: 'result',
-        },
-      ],
-    },
-  },
-};
-export const formNode = {
-  type: WorkflowType.FormNode,
-  text: '在问答过程中用于收集用户信息，可以根据收集到表单数据执行后续流程',
-  label: '表单收集',
-  height: 252,
-  properties: {
-    width: 600,
-    stepName: '表单收集',
-    node_data: {
-      // 键名与面板读写的位置、契约字段名三者一致（`#337` 第二步 B1）
-      asResult: true,
-      formFields: [],
-      contentFormat: `你好，请先填写下面表单内容：
-{{form}}
-填写后请点击【提交】按钮进行提交。`,
-    },
-    config: {
-      fields: [
-        {
-          label: '表单全部内容',
-          value: 'form_data',
-        },
-      ],
-    },
-  },
-};
-export const documentExtractNode = {
-  type: WorkflowType.DocumentExtractNode,
-  text: '提取文档中的内容',
-  label: '文档内容提取',
-  height: 252,
-  properties: {
-    stepName: '文档内容提取',
-    // ★ 契约字段名（docId/kbId）而不是旧画布那套 snake —— 执行器读的就是 docId
-    node_data: {
-      docId: null,
-      kbId: null,
-    },
-    config: {
-      fields: [
-        {
-          // 执行器写进流程状态的那个键就叫 document_markdown，变量目录也得叫这个名，
-          // 否则下游 NodeCascader 里选的是一个永远取不到值的字段
-          label: '文档正文',
-          value: 'document_markdown',
-        },
-      ],
-    },
-  },
-};
-export const imageUnderstandNode = {
-  type: WorkflowType.ImageUnderstandNode,
-  text: '识别出图片中的对象、场景等信息回答用户问题',
-  label: '图片理解',
-  height: 252,
-  properties: {
-    stepName: '图片理解',
-    config: {
-      fields: [
-        {
-          label: 'AI 回答内容',
-          value: 'answer',
-        },
-      ],
-    },
-  },
-};
-
-export const imageGenerateNode = {
-  type: WorkflowType.ImageGenerateNode,
-  text: '根据提供的文本内容生成图片',
-  label: '图片生成',
-  height: 252,
-  properties: {
-    stepName: '图片生成',
-    config: {
-      fields: [
-        {
-          label: 'AI 回答内容',
-          value: 'answer',
-        },
-        {
-          label: '图片',
-          value: 'image',
-        },
-      ],
-    },
-  },
-};
-
-export const speechToTextNode = {
-  type: WorkflowType.SpeechToTextNode,
-  text: '将音频通过语音识别模型转换为文本',
-  label: '语音转文本',
-  height: 252,
-  properties: {
-    stepName: '语音转文本',
-    config: {
-      fields: [
-        {
-          label: '结果',
-          value: 'result',
-        },
-      ],
-    },
-  },
-};
-export const textToSpeechNode = {
-  type: WorkflowType.TextToSpeechNode,
-  text: '将文本通过语音合成模型转换为音频',
-  label: '文本转语音',
-  height: 252,
-  properties: {
-    stepName: '文本转语音',
-    config: {
-      fields: [
-        {
-          label: '结果',
-          value: 'result',
-        },
-      ],
-    },
-  },
-};
-export const menuNodes = [
-  aiChatNode,
-  // imageUnderstandNode,
-  // imageGenerateNode,
-  searchDatasetNode,
-  // rerankerNode,
-  conditionNode,
-  replyNode,
-  // formNode,
-  questionNode,
-  // documentExtractNode,
-  // speechToTextNode,
-  // textToSpeechNode
-];
+// ★ 直接引生成物而不是 `@/api/workflow` 门面：门面会连带拉起 http / mock 那一整条链，
+//   而这里要的只是五张纯常量表。单测能跑（node --test 不认 `@/lib/http` 的下游）。
+import {
+  NODE_DEFAULT_DATA,
+  NODE_OUTPUT_FIELDS,
+  NODE_TYPE_DESCRIPTIONS,
+  NODE_TYPE_LABELS,
+  NODE_TYPE_ORDER,
+} from '@/api/nodeTypes.generated';
+import type { NodeVariableField, WorkflowNodeTypeName } from '@/api/nodeTypes.generated';
 
 /**
- * 自定义函数配置数据
+ * 画布节点目录（`nodeDict`）。
+ *
+ * ★ 这里<b>不再手写 18 条节点定义</b>（`#337` 第二步 B5）。显示名、描述、变量目录、新建节点
+ *   的默认配置全部来自 `node-types.json` → `node-types.generated.ts`。
+ *
+ * ★ 从前每条都手写一份，结果最严重的一处不是"重复"，而是<b>对不上</b>：检索节点的变量目录写着
+ *   `paragraph_list` / `is_hit_handling_method_list` / `data` / `directly_return` 四个键，
+ *   而 `SearchDatasetNodeExecutor` 实际只写 `retrieval_result`；问题改写节点写的是 `answer`，
+ *   而执行器写 `query`。下游在变量选择器里选到的是一个<b>永远取不到值</b>的字段，
+ *   而两边都能编译、都能单测通过 —— 只有真跑一遍才看得见。
+ *
+ * ★ 只剩两件事留在前端：画布视觉高度（属布局，不进后端目录）与这段拼装逻辑。
  */
-export const functionNode = {
-  type: WorkflowType.FunctionLibCustom,
-  text: '通过执行自定义脚本，实现数据处理',
-  label: '自定义函数',
-  height: 260,
-  properties: {
-    stepName: '自定义函数',
-    config: {
-      fields: [
-        {
-          label: '结果',
-          value: 'result',
-        },
-      ],
-    },
-  },
-};
-export const functionLibNode = {
-  type: WorkflowType.FunctionLib,
-  text: '通过执行自定义脚本，实现数据处理',
-  label: '自定义函数',
-  height: 170,
-  properties: {
-    stepName: '自定义函数',
-    config: {
-      fields: [
-        {
-          label: '结果',
-          value: 'result',
-        },
-      ],
-    },
-  },
+
+/** 画布节点高度（布局数据；没有列出的按 {@link DEFAULT_HEIGHT}）。 */
+const NODE_HEIGHTS: Partial<Record<WorkflowNodeTypeName, number>> = {
+  START_NODE: 200,
+  BASE_NODE: 200,
+  AI_CHAT_NODE: 340,
+  SEARCH_DATASET_NODE: 355,
+  QUESTION_NODE: 345,
+  CONDITION_NODE: 175,
+  NUMBER_CONDITION_NODE: 175,
+  REPLY_NODE: 210,
+  FUNCTION_LIB_NODE: 170,
+  FUNCTION_NODE: 260,
+  APPLICATION_NODE: 260,
 };
 
-export const applicationNode = {
-  type: WorkflowType.Application,
-  text: '应用节点',
-  label: '应用节点',
-  height: 260,
+const DEFAULT_HEIGHT = 252;
+
+/**
+ * 开始节点没有配置字段，但它的「全局变量」是画布级数据（`properties.config.globalFields`），
+ * 不是节点配置 —— 目录里只描述"节点自己读什么"，所以这一格留在这里。
+ */
+const START_GLOBAL_FIELDS = [{ value: 'time', label: '当前时间' }];
+
+interface NodeDictEntry {
+  type: WorkflowNodeTypeName;
+  text: string;
+  label: string;
+  height: number;
   properties: {
-    stepName: '应用节点',
-    config: {
-      fields: [
-        {
-          label: '结果',
-          value: 'result',
-        },
-      ],
+    stepName: string;
+    node_data?: Record<string, unknown>;
+    config: { fields: { label: string; value: string }[]; globalFields?: { value: string; label: string }[] };
+  };
+}
+
+function entry(type: WorkflowNodeTypeName): NodeDictEntry {
+  const label = NODE_TYPE_LABELS[type] ?? type;
+  const fields: readonly NodeVariableField[] = NODE_OUTPUT_FIELDS[type] ?? [];
+  const dict: NodeDictEntry = {
+    type,
+    text: NODE_TYPE_DESCRIPTIONS[type] ?? '',
+    label,
+    height: NODE_HEIGHTS[type] ?? DEFAULT_HEIGHT,
+    properties: {
+      stepName: label,
+      // structuredClone：每个节点实例都要一份独立的默认值，共用同一个对象会让拖第二个节点时
+      // 改到第一个节点的数据。
+      node_data: structuredClone(NODE_DEFAULT_DATA[type] ?? {}),
+      config: {
+        fields: fields.map((field) => ({ label: field.label, value: field.value })),
+      },
     },
-  },
-};
+  };
+  // 开始节点以前只有 config.fields（用户问题）与 config.globalFields（全局变量），没有 node_data。
+  if (type === 'START_NODE') {
+    dict.properties.config.globalFields = structuredClone(START_GLOBAL_FIELDS);
+    delete dict.properties.node_data;
+  }
+  return dict;
+}
+
+/** 类型 → 画布节点定义。三个消费方：`graph-format` 读变量目录、`app-node` 补默认属性、菜单克隆新建。 */
+export const nodeDict: Record<string, NodeDictEntry> = Object.fromEntries(
+  NODE_TYPE_ORDER.map((type) => [type, entry(type)])
+);
 
 export const compareList = [
   { value: 'is_null', label: '为空' },
@@ -407,26 +107,6 @@ export const compareList = [
   { value: 'len_lt', label: '长度小于' },
 ];
 
-export const nodeDict: any = {
-  [WorkflowType.AiChat]: aiChatNode,
-  [WorkflowType.SearchDataset]: searchDatasetNode,
-  [WorkflowType.Question]: questionNode,
-  [WorkflowType.Condition]: conditionNode,
-  [WorkflowType.NumberCondition]: numberConditionNode,
-  [WorkflowType.Base]: baseNode,
-  [WorkflowType.Start]: startNode,
-  [WorkflowType.Reply]: replyNode,
-  [WorkflowType.FunctionLib]: functionLibNode,
-  [WorkflowType.FunctionLibCustom]: functionNode,
-  [WorkflowType.RrerankerNode]: rerankerNode,
-  [WorkflowType.FormNode]: formNode,
-  [WorkflowType.Application]: applicationNode,
-  [WorkflowType.DocumentExtractNode]: documentExtractNode,
-  [WorkflowType.ImageUnderstandNode]: imageUnderstandNode,
-  [WorkflowType.TextToSpeechNode]: textToSpeechNode,
-  [WorkflowType.SpeechToTextNode]: speechToTextNode,
-  [WorkflowType.ImageGenerateNode]: imageGenerateNode,
-};
 export function isWorkFlow(type: string | undefined) {
   return type === 'WORK_FLOW';
 }

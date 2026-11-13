@@ -1,5 +1,6 @@
 package cn.lincoln.aiplatform.assistant.application;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.LinkedHashSet;
@@ -88,13 +89,22 @@ public class NodeTypeCatalog {
       boolean catalogEnabled,
       boolean executable,
       List<ConfigField> configFields,
-      List<String> outputs) {
+      List<OutputField> outputs) {
 
     public NodeTypeMeta {
       configFields = configFields == null ? List.of() : List.copyOf(configFields);
       outputs = outputs == null ? List.of() : List.copyOf(outputs);
     }
   }
+
+  /**
+   * 一个流程变量的声明（节点会往流程状态里写什么）。
+   *
+   * @param key 写进 {@code FlowState} 的键（必须与执行器 {@code state.write(...)} 的那个常量同名， 由 {@code
+   *     WorkflowNodeKeysTest} 钉住）
+   * @param label 下游"引用变量"下拉里显示的中文标签
+   */
+  public record OutputField(String key, String label) {}
 
   /**
    * 一个配置字段的声明。
@@ -112,6 +122,9 @@ public class NodeTypeCatalog {
    * @param dependsOn 当前字段的候选项依赖哪个字段（{@code documents} 依赖库字段）。依赖为空时候选也为空， 这是"必然非法"的选项不放进候选的唯一表达方式
    * @param options 固定选项（如回复形态只有一种取值时）
    * @param hint 面板上的说明文字（"只有已解析出正文的文档能用"这类）
+   * @param defaultValue 新建节点时这个字段的默认值（`#337` 第二步 B5）。★ 它承载的是<strong>业务默认</strong> ——
+   *     开场白文案、示例字段、检索阈值、回复文案 —— 这些从 {@code type} 推不出来，从前散落在画布侧的 `data.ts`
+   *     里，与这里各写一份。搬进目录之后，新建节点给什么也由目录说了算。 省略时是 {@code null} （与"默认值为 null"无法区分，所以只有真有默认值的字段才写这一格）。
    */
   public record ConfigField(
       String key,
@@ -123,7 +136,8 @@ public class NodeTypeCatalog {
       String optionsSource,
       String dependsOn,
       List<String> options,
-      String hint) {
+      String hint,
+      @JsonProperty("default") Object defaultValue) {
 
     public ConfigField {
       options = options == null ? List.of() : List.copyOf(options);

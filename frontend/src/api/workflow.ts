@@ -31,13 +31,18 @@ import type { PageQuery, PageResult } from './types'
 export type {
   ImplementedNodeType,
   NodeConfigField,
+  NodeVariableField,
   PlannedNodeType,
   WorkflowNodeTypeName,
 } from './nodeTypes.generated';
 export {
   IMPLEMENTED_NODE_TYPES,
   NODE_CONFIG_FIELDS,
+  NODE_DEFAULT_DATA,
   NODE_OUTPUT_FIELDS,
+  NODE_TYPE_DESCRIPTIONS,
+  NODE_TYPE_LABELS,
+  NODE_TYPE_ORDER,
   PLANNED_NODE_TYPES,
   WORKFLOW_NODE_TYPE_VALUES,
 } from './nodeTypes.generated';

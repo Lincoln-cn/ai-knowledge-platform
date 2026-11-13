@@ -8,7 +8,10 @@
     "executable": true,
     "configFields": [],
     "outputs": [
-      "query"
+      {
+        "key": "query",
+        "label": "用户问题"
+      }
     ]
   },
   {
@@ -24,7 +27,8 @@
         "label": "收集字段",
         "type": "object-list",
         "required": false,
-        "panelOnly": false
+        "panelOnly": false,
+        "default": []
       },
       {
         "key": "prologue",
@@ -38,12 +42,19 @@
         "label": "接口传参",
         "type": "object-list",
         "required": false,
-        "panelOnly": true
+        "panelOnly": true,
+        "default": []
       }
     ],
     "outputs": [
-      "basic_info_fields",
-      "basic_info_input"
+      {
+        "key": "basic_info_fields",
+        "label": "基本信息字段"
+      },
+      {
+        "key": "basic_info_input",
+        "label": "基本信息输入"
+      }
     ]
   },
   {
@@ -59,28 +70,32 @@
         "label": "模型",
         "type": "uuid",
         "required": false,
-        "panelOnly": false
+        "panelOnly": false,
+        "default": null
       },
       {
         "key": "rolePrompt",
         "label": "角色提示词",
         "type": "string",
         "panelOnly": true,
-        "required": false
+        "required": false,
+        "default": ""
       },
       {
         "key": "promptIds",
         "label": "提示词模板",
         "type": "string-list",
         "panelOnly": true,
-        "required": false
+        "required": false,
+        "default": []
       },
       {
         "key": "kbIds",
         "label": "知识库",
         "type": "string-list",
         "panelOnly": true,
-        "required": false
+        "required": false,
+        "default": []
       },
       {
         "key": "retrieval",
@@ -94,18 +109,23 @@
         "label": "深度思考",
         "type": "boolean",
         "panelOnly": true,
-        "required": false
+        "required": false,
+        "default": false
       },
       {
         "key": "multiTurn",
         "label": "多轮对话",
         "type": "boolean",
         "panelOnly": true,
-        "required": false
+        "required": false,
+        "default": false
       }
     ],
     "outputs": [
-      "answer"
+      {
+        "key": "answer",
+        "label": "AI 回答内容"
+      }
     ]
   },
   {
@@ -121,18 +141,28 @@
         "label": "知识库",
         "type": "string-list",
         "required": true,
-        "panelOnly": false
+        "panelOnly": false,
+        "default": []
       },
       {
         "key": "retrieval",
         "label": "检索参数",
         "type": "object",
         "required": false,
-        "panelOnly": false
+        "panelOnly": false,
+        "default": {
+          "mode": "HYBRID",
+          "threshold": 0.6,
+          "topN": 5,
+          "noRefStrategy": "REFUSE"
+        }
       }
     ],
     "outputs": [
-      "retrieval_result"
+      {
+        "key": "retrieval_result",
+        "label": "检索结果"
+      }
     ]
   },
   {
@@ -155,18 +185,23 @@
         "label": "改写提示词",
         "type": "string",
         "panelOnly": true,
-        "required": false
+        "required": false,
+        "default": ""
       },
       {
         "key": "defaultAnswer",
         "label": "默认答复",
         "type": "string",
         "required": false,
-        "panelOnly": false
+        "panelOnly": false,
+        "default": ""
       }
     ],
     "outputs": [
-      "query"
+      {
+        "key": "query",
+        "label": "改写后的问题"
+      }
     ]
   },
   {
@@ -182,18 +217,36 @@
         "label": "分支",
         "type": "branch-list",
         "required": true,
-        "panelOnly": false
+        "panelOnly": false,
+        "default": [
+          {
+            "id": "branch-1",
+            "type": "IF",
+            "label": "条件 1",
+            "expression": ""
+          },
+          {
+            "id": "branch-2",
+            "type": "ELSE",
+            "label": "否则",
+            "expression": ""
+          }
+        ]
       },
       {
         "key": "fallbackBranchId",
         "label": "兜底分支",
         "type": "string",
         "required": false,
-        "panelOnly": false
+        "panelOnly": false,
+        "default": "branch-2"
       }
     ],
     "outputs": [
-      "active_branch"
+      {
+        "key": "active_branch",
+        "label": "命中的分支"
+      }
     ]
   },
   {
@@ -209,18 +262,36 @@
         "label": "分支",
         "type": "branch-list",
         "required": true,
-        "panelOnly": false
+        "panelOnly": false,
+        "default": [
+          {
+            "id": "branch-1",
+            "type": "IF",
+            "label": "条件 1",
+            "conditions": []
+          },
+          {
+            "id": "branch-2",
+            "type": "ELSE",
+            "label": "否则",
+            "conditions": []
+          }
+        ]
       },
       {
         "key": "fallbackBranchId",
         "label": "兜底分支",
         "type": "string",
         "required": false,
-        "panelOnly": false
+        "panelOnly": false,
+        "default": "branch-2"
       }
     ],
     "outputs": [
-      "active_branch"
+      {
+        "key": "active_branch",
+        "label": "命中的分支"
+      }
     ]
   },
   {
@@ -237,7 +308,8 @@
         "type": "string",
         "required": true,
         "panelOnly": false,
-        "editor": "markdown"
+        "editor": "markdown",
+        "default": "已为你整理如下："
       },
       {
         "key": "replyType",
@@ -248,7 +320,8 @@
         "options": [
           "content"
         ],
-        "hint": "当前只有「自定义内容」一种。缺省即它，不必手选"
+        "hint": "当前只有「自定义内容」一种。缺省即它，不必手选",
+        "default": "content"
       },
       {
         "key": "asResult",
@@ -256,11 +329,15 @@
         "type": "boolean",
         "required": false,
         "panelOnly": true,
-        "hint": "打开后这条回复作为流程结果呈现给用户"
+        "hint": "打开后这条回复作为流程结果呈现给用户",
+        "default": true
       }
     ],
     "outputs": [
-      "reply"
+      {
+        "key": "reply",
+        "label": "回复内容"
+      }
     ]
   },
   {
@@ -269,7 +346,8 @@
     "description": "调用预先登记的公共函数",
     "category": "扩展",
     "catalogEnabled": false,
-    "executable": false
+    "executable": false,
+    "outputs": []
   },
   {
     "type": "FUNCTION_NODE",
@@ -277,7 +355,8 @@
     "description": "在流程里直接写一段函数逻辑",
     "category": "扩展",
     "catalogEnabled": false,
-    "executable": false
+    "executable": false,
+    "outputs": []
   },
   {
     "type": "RERANKER_NODE",
@@ -285,7 +364,8 @@
     "description": "对检索结果重新排序",
     "category": "检索",
     "catalogEnabled": false,
-    "executable": false
+    "executable": false,
+    "outputs": []
   },
   {
     "type": "APPLICATION_NODE",
@@ -293,7 +373,8 @@
     "description": "调用另一个已发布的编排应用",
     "category": "扩展",
     "catalogEnabled": false,
-    "executable": false
+    "executable": false,
+    "outputs": []
   },
   {
     "type": "DOCUMENT_EXTRACT_NODE",
@@ -310,7 +391,8 @@
         "panelOnly": true,
         "required": false,
         "optionsSource": "knowledge-bases",
-        "hint": "先选库才能选文档。这一项只给面板用，执行器不读"
+        "hint": "先选库才能选文档。这一项只给面板用，执行器不读",
+        "default": null
       },
       {
         "key": "docId",
@@ -320,11 +402,15 @@
         "panelOnly": false,
         "optionsSource": "documents",
         "dependsOn": "kbId",
-        "hint": "只有已解析出正文的文档能用；正文会写进流程变量 document_markdown"
+        "hint": "只有已解析出正文的文档能用；正文会写进流程变量 document_markdown",
+        "default": null
       }
     ],
     "outputs": [
-      "document_markdown"
+      {
+        "key": "document_markdown",
+        "label": "文档正文"
+      }
     ]
   },
   {
@@ -333,7 +419,8 @@
     "description": "识别图片内容并输出文字描述",
     "category": "多模态",
     "catalogEnabled": false,
-    "executable": false
+    "executable": false,
+    "outputs": []
   },
   {
     "type": "FORM_NODE",
@@ -348,25 +435,31 @@
         "label": "收集字段",
         "type": "object-list",
         "required": false,
-        "panelOnly": true
+        "panelOnly": true,
+        "default": []
       },
       {
         "key": "contentFormat",
         "label": "引导文案",
         "type": "string",
         "required": false,
-        "panelOnly": true
+        "panelOnly": true,
+        "default": "你好，请先填写下面表单内容：\n{{form}}\n填写后请点击【提交】按钮进行提交。"
       },
       {
         "key": "asResult",
         "label": "提交即结束",
         "type": "boolean",
         "required": false,
-        "panelOnly": true
+        "panelOnly": true,
+        "default": true
       }
     ],
     "outputs": [
-      "form_data"
+      {
+        "key": "form_data",
+        "label": "表单内容"
+      }
     ]
   },
   {
@@ -375,7 +468,8 @@
     "description": "把文本转成语音输出",
     "category": "多模态",
     "catalogEnabled": false,
-    "executable": false
+    "executable": false,
+    "outputs": []
   },
   {
     "type": "SPEECH_TO_TEXT_NODE",
@@ -383,7 +477,8 @@
     "description": "把用户语音转成文本",
     "category": "多模态",
     "catalogEnabled": false,
-    "executable": false
+    "executable": false,
+    "outputs": []
   },
   {
     "type": "IMAGE_GENERATE_NODE",
@@ -391,6 +486,7 @@
     "description": "按描述生成图片",
     "category": "多模态",
     "catalogEnabled": false,
-    "executable": false
+    "executable": false,
+    "outputs": []
   }
 ]

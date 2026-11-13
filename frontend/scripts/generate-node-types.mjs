@@ -114,6 +114,12 @@ function build() {
   lines.push('};');
   lines.push('');
 
+  lines.push('/** 类型 → 一句话描述（node-types.json 的 description），菜单与节点卡片用它。 */');
+  lines.push('export const NODE_TYPE_DESCRIPTIONS: Record<WorkflowNodeTypeName, string> = {');
+  for (const meta of catalog) lines.push(`  ${meta.type}: ${s(meta.description)},`);
+  lines.push('};');
+  lines.push('');
+
   lines.push('/** 画布节点菜单里的类型（就绪的那一批，按目录顺序）。 */');
   lines.push('export const WORKFLOW_NODE_TYPE_VALUES: ImplementedNodeType[] = [');
   lines.push('  ...IMPLEMENTED_NODE_TYPES,');
@@ -139,6 +145,8 @@ function build() {
   lines.push('  readonly options?: readonly string[];');
   lines.push('  /** 面板上的说明文字。 */');
   lines.push('  readonly hint?: string;');
+  lines.push('  /** 新建节点时这个字段的默认值（目录里写了 default 才有这一格）。 */');
+  lines.push('  readonly defaultValue?: unknown;');
   lines.push('}');
   lines.push('');
   lines.push(
@@ -160,6 +168,7 @@ function build() {
         extras.push(`options: [${field.options.map(s).join(', ')}]`);
       }
       if (field.hint) extras.push(`hint: ${s(field.hint)}`);
+      if (field.default !== undefined) extras.push(`defaultValue: ${s(field.default)}`);
       const tail = extras.length > 0 ? `, ${extras.join(', ')}` : '';
       lines.push(
         `    { key: ${s(field.key)}, label: ${s(field.label)}, type: ${s(field.type)}, required: ${
@@ -172,11 +181,56 @@ function build() {
   lines.push('};');
   lines.push('');
 
-  lines.push('/** 目录里声明的流程变量（node-types.json 的 outputs）。 */');
-  lines.push('export const NODE_OUTPUT_FIELDS: Record<ImplementedNodeType, readonly string[]> = {');
-  for (const type of implemented) {
+  lines.push('/**');
+  lines.push(' * 目录里声明的流程变量（node-types.json 的 outputs）。');
+  lines.push(' *');
+  lines.push(' * ★ 形状与画布 `properties.config.fields` 相同（`{label, value}`），因为那个字段就是');
+  lines.push(' *   "这个节点产出什么"的变量目录 —— 以前手写在 components/common/data.ts 里，与执行器');
+  lines.push(' *   实际 `state.write(...)` 的键对不上（检索节点写的是 `retrieval_result`，目录里却是');
+  lines.push(' *   `paragraph_list` / `data` 四个键），下游选到的是永远取不到值的字段。');
+  lines.push(' */');
+  lines.push(
+    'export const NODE_OUTPUT_FIELDS: Record<WorkflowNodeTypeName, readonly NodeVariableField[]> = {'
+  );
+  for (const type of order) {
     const outputs = byType.get(type).outputs ?? [];
-    lines.push(`  ${type}: [${outputs.map((key) => s(key)).join(', ')}],`);
+    lines.push(
+      `  ${type}: [${outputs
+        .map((o) => `{ label: ${s(o.label)}, value: ${s(o.key)} }`)
+        .join(', ')}],`
+    );
+  }
+  lines.push('};');
+  lines.push('');
+
+  lines.push('/** 变量目录里的一项（`properties.config.fields` 的元素）。 */');
+  lines.push('export interface NodeVariableField {');
+  lines.push('  readonly label: string;');
+  lines.push('  readonly value: string;');
+  lines.push('}');
+  lines.push('');
+
+  lines.push('/**');
+  lines.push(' * 节点被拖进画布时落在 `properties.node_data` 里的默认值（目录的 `configFields[].default`）。');
+  lines.push(' *');
+  lines.push(' * ★ 这里只放"从类型能推出来"的东西：空数组、null、默认检索参数、默认文案。');
+  lines.push(' *   业务上会变的取值由面板填，不进这里 —— 否则改一个默认值要发两次版本（后端目录 + 前端）。');
+  lines.push(' */');
+  lines.push(
+    'export const NODE_DEFAULT_DATA: Record<WorkflowNodeTypeName, Record<string, unknown>> = {'
+  );
+  for (const type of order) {
+    const fields = byType.get(type).configFields ?? [];
+    const defaults = fields.filter((field) => field.default !== undefined);
+    if (defaults.length === 0) {
+      lines.push(`  ${type}: {},`);
+      continue;
+    }
+    lines.push(`  ${type}: {`);
+    for (const field of defaults) {
+      lines.push(`    ${field.key}: ${s(field.default)},`);
+    }
+    lines.push('  },');
   }
   lines.push('};');
   lines.push('');

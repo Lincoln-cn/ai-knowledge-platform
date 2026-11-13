@@ -184,8 +184,10 @@ class WorkflowNodeKeysTest {
       Object outRaw = node.get("outputs");
       if (outRaw instanceof List<?> list) {
         for (Object item : list) {
-          if (item != null) {
-            outputs.add(String.valueOf(item));
+          // outputs 是 [{key, label}]（#337 第二步 B5 起）：变量目录要显示中文标签，
+          // 只给键名会让下游下拉里出现一串英文。
+          if (item instanceof Map<?, ?> map && map.get("key") != null) {
+            outputs.add(String.valueOf(map.get("key")));
           }
         }
       }
