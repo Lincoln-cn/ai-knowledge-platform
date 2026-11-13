@@ -257,7 +257,63 @@ record(
   missingData?.ok === false && /不存在|看不到|还没有发布版本/.test(String(missingData?.errors ?? missingData?.failReason ?? '')),
   `ok=${missingData?.ok}，errors=${JSON.stringify(missingData?.errors ?? missingData?.failReason)?.slice(0, 80)}`,
 );
-// ── 3c. 多模态两串：产出变量同名就能直接串起来 ────────────────────────────
+// ── 3c. 函数：START → 函数库(upper) → 函数(substring) → 回复 ──────────────
+// ★ 这里用「负空间」证明函数真的被调了：第二步读的是第一步写出的 `function_result`，
+//   而 `substring("", 0, 2)` 会抛「结束位置 2 不在 [0, 0] 之内」⇒ 第一步没写出值，这条必红。
+//   比去读 debug 响应的 state 更稳（那个响应里根本没有 state 字段）。
+const funcGraph = {
+  nodes: [
+    node('f-start', 'START_NODE', '开始', 60, {}),
+    node('f-lib', 'FUNCTION_LIB_NODE', '转大写', 320, {
+      functionName: 'upper',
+      args: [{ from: 'variable', value: 'query' }],
+      outputKey: '',
+    }),
+    node('f-node', 'FUNCTION_NODE', '取前两位', 580, {
+      functionName: 'substring',
+      args: [
+        { from: 'variable', value: 'function_result' },
+        { from: 'literal', value: '0' },
+        { from: 'literal', value: '2' },
+      ],
+      outputKey: 'head_two',
+    }),
+    node('f-reply', 'REPLY_NODE', '回复', 840, { content: '函数链跑完了。', replyType: 'content', asResult: true }),
+  ],
+  edges: [edge('f1', 'f-start', 'f-lib'), edge('f2', 'f-lib', 'f-node'), edge('f3', 'f-node', 'f-reply')],
+};
+const funcRun = await post(`/api/v1/assistants/${APP}/workflow/debug`, {
+  graph: funcGraph,
+  inputs: { entry: 'abc' },
+});
+const funcData = JSON.parse(funcRun.body)?.data;
+record(
+  '函数 · 两个函数节点串联跑到底',
+  funcData?.ok === true && funcData?.finalOutput === '函数链跑完了。',
+  `ok=${funcData?.ok}，finalOutput=${JSON.stringify(funcData?.finalOutput)?.slice(0, 40)}`,
+);
+record(
+  '函数 · 轨迹是 开始 → 函数库 → 函数 → 回复',
+  (funcData?.nodeTrail?.map((t) => t.type).join(' → ') ?? '') ===
+    'START_NODE → FUNCTION_LIB_NODE → FUNCTION_NODE → REPLY_NODE',
+  funcData?.nodeTrail?.map((t) => t.type).join(' → ') ?? '(无)',
+);
+
+// 反证：把第二步的变量名改成不存在的，它就会收到空串 ⇒ substring 越界 ⇒ 必须红
+const badFuncGraph = structuredClone(funcGraph);
+badFuncGraph.nodes[2].config.args[0].value = '从来没写过的变量';
+const badFuncRun = await post(`/api/v1/assistants/${APP}/workflow/debug`, {
+  graph: badFuncGraph,
+  inputs: { entry: 'abc' },
+});
+const badFuncData = JSON.parse(badFuncRun.body)?.data;
+record(
+  '函数 · 变量不存在时明确失败（反证第一步确实写了值）',
+  badFuncData?.ok === false && /substring|超出范围/.test(String(badFuncData?.errors ?? '')),
+  `ok=${badFuncData?.ok}，errors=${JSON.stringify(badFuncData?.errors)?.slice(0, 100)}`,
+);
+
+// ── 3d. 多模态两串：产出变量同名就能直接串起来 ────────────────────────────
 // 这一段验的不是「模型会不会画图 / 会不会说话」（桩不实现那些），而是**数据流**：
 // 图像生成写 `image_key`，图像理解默认就读 `image_key`；语音合成写 `audio_key`，
 // 语音识别默认就读 `audio_key` —— 两个节点之间不填任何变量名也能接上。

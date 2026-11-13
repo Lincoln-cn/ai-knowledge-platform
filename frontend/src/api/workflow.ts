@@ -431,6 +431,27 @@ export interface ImageGenerateNodeConfig {
   size: string
 }
 
+/** 一条函数参数：要么是写死的字面量，要么点名一个流程变量。 */
+export interface FunctionArgConfig {
+  /** 省略按 `'literal'` 解释 —— 与执行器一致，见 `FunctionInvocation.resolveArgs` */
+  from?: 'literal' | 'variable'
+  value: string
+}
+
+/**
+ * 函数节点的配置。
+ *
+ * <p>★ 它调的是**平台内置函数**（`upper` / `concat` / `jsonpath` 这一批），**不执行用户写的代码** ——
+ * 执行自定义脚本要等 0.9.0 的沙箱（`ROADMAP §11.27.3`，判据是「沙箱能起、超时能杀」）。
+ * 面板上要把这句写出来：一个"看起来能跑代码、实际跑不了"的节点比没有更糟。
+ */
+export interface FunctionNodeConfig {
+  functionName: string | null
+  args: FunctionArgConfig[]
+  /** 结果写进哪个流程变量；留空写 `function_result` */
+  outputKey: string
+}
+
 export type NodeConfigOf<T extends WorkflowNodeType> =
   T extends 'START_NODE' ? StartNodeConfig
   : T extends 'BASE_NODE' ? BaseNodeConfig
@@ -447,6 +468,8 @@ export type NodeConfigOf<T extends WorkflowNodeType> =
   : T extends 'TEXT_TO_SPEECH_NODE' ? TextToSpeechNodeConfig
   : T extends 'SPEECH_TO_TEXT_NODE' ? SpeechToTextNodeConfig
   : T extends 'IMAGE_GENERATE_NODE' ? ImageGenerateNodeConfig
+  : T extends 'FUNCTION_LIB_NODE' ? FunctionNodeConfig
+  : T extends 'FUNCTION_NODE' ? FunctionNodeConfig
   : T extends 'FORM_NODE' ? FormNodeConfig
   : Record<string, never>
 
@@ -594,6 +617,15 @@ export interface DebugWorkflowResult {
 /** 节点目录。界面据此渲染节点菜单，并标注「规划中」的不可拖拽 */
 export const listNodeTypes = () =>
   request<NodeTypeMeta[]>({ method: 'GET', url: '/workflow/node-types' })
+
+/**
+ * 内置函数名清单（函数节点 / 函数库节点的面板用）。
+ *
+ * <p>★ 由后端下发而不是前端写一份：后端加一个函数时前端不用改，且这份清单与执行器查的是同一张表，
+ * 面板上能选的一定跑得通。端口没装配时后端返回空表（不报错）—— 面板据此仍允许手填函数名。
+ */
+export const listWorkflowFunctions = () =>
+  request<string[]>({ method: 'GET', url: '/workflow/functions' })
 
 /** 取编排应用的流程草稿 */
 export const getWorkflowDraft = (appId: string) =>

@@ -69,7 +69,7 @@ test('基础节点的字段表往返不丢内容（含接口传参的四个字�
   }
 
   const back = fromLogicFlow(toLogicFlow(graphOf([nodeOf('BASE_NODE', config)])))
-  const got = only(back.nodes).config as Record<string, unknown>
+  const got = only(back.nodes).config as unknown as Record<string, unknown>
 
   assert.deepEqual(got.apiFields, config.apiFields, '接口传参表应逐字段还原')
   const fields = got.fields as Array<Record<string, unknown>>
@@ -98,7 +98,7 @@ test('存量草稿：字段表还挂在 properties 顶层时仍能读出来', ()
     edges: []
   }
 
-  const got = only(fromLogicFlow(legacy as never).nodes).config as Record<string, unknown>
+  const got = only(fromLogicFlow(legacy as never).nodes).config as unknown as Record<string, unknown>
   const fields = got.fields as Array<Record<string, unknown>>
   assert.equal(fields.length, 1)
   assert.equal(fields[0].field, 'title')
@@ -133,7 +133,7 @@ test('表单节点的三个键与面板读写的位置同名', () => {
 
   // 面板写 node_data.formFields 之后保存，契约里也要是 formFields
   const back = fromLogicFlow(lf)
-  assert.deepEqual((only(back.nodes).config as Record<string, unknown>).formFields, config.formFields)
+  assert.deepEqual((only(back.nodes).config as unknown as Record<string, unknown>).formFields, config.formFields)
 })
 
 test('开场白以基础节点上的编辑为准，写回开始节点的契约字段', () => {
@@ -153,7 +153,7 @@ test('开场白以基础节点上的编辑为准，写回开始节点的契约�
   const back = fromLogicFlow(toLogicFlow(graphOf([start, base])))
   const startBack = back.nodes.find((n) => n.type === 'START_NODE')
   assert.ok(startBack, '开始节点不该在往返里消失')
-  assert.equal((startBack.config as Record<string, unknown>).prologue, '新开场白')
+  assert.equal((startBack.config as unknown as Record<string, unknown>).prologue, '新开场白')
 })
 
 test('回复节点把「是否返回」写成契约名 asResult，旧画布的 is_result 仍能读出来', () => {
@@ -173,7 +173,7 @@ test('回复节点把「是否返回」写成契约名 asResult，旧画布的 i
 
   // 往返保住取值（不是恒真的 true）
   const back = fromLogicFlow(lf)
-  assert.equal((only(back.nodes).config as Record<string, unknown>).asResult, false)
+  assert.equal((only(back.nodes).config as unknown as Record<string, unknown>).asResult, false)
 
   // 存量草稿只有旧名时，读回来要等价
   const legacy = {
@@ -188,5 +188,5 @@ test('回复节点把「是否返回」写成契约名 asResult，旧画布的 i
     ],
     edges: []
   }
-  assert.equal((only(fromLogicFlow(legacy as never).nodes).config as Record<string, unknown>).asResult, true)
+  assert.equal((only(fromLogicFlow(legacy as never).nodes).config as unknown as Record<string, unknown>).asResult, true)
 })

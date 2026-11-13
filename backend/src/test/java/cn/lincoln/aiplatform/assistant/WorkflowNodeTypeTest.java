@@ -12,9 +12,9 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * 节点目录（`#198` 第二块）：18 个节点、16 个已实现、类型名不重复。
+ * 节点目录（`#198` 第二块）：18 个节点、18 个已实现、类型名不重复。
  *
- * <p>★ 为什么断言"16 个已实现"：画布只注册了这 16 个（`check_workflow_node_types.py` 守的是同一件事，它从这份 json 的 `executable`
+ * <p>★ 为什么断言"18 个已实现"：画布注册了这 18 个（`check_workflow_node_types.py` 守的是同一件事，它从这份 json 的 `executable`
  * 取集合）。目录里把某个标成可执行而画布没注册，用户点它会掉进"找不到节点模型"的空画布 —— 那正是 `#20` 那次事故的形状。这条断言把两边的数字钉在一起。
  */
 class WorkflowNodeTypeTest {
@@ -34,10 +34,10 @@ class WorkflowNodeTypeTest {
   }
 
   @Test
-  void exactlySixteenAreInCatalog() throws Exception {
+  void exactlyEighteenAreInCatalog() throws Exception {
     long enabled =
         load().stream().filter(m -> Boolean.TRUE.equals(m.get("catalogEnabled"))).count();
-    assertThat(enabled).as("★ 画布可用的必须恰好 16 个 —— 与画布注册的类型数一致（#20 的教训）").isEqualTo(16);
+    assertThat(enabled).as("★ 画布可用的必须恰好 18 个 —— 与画布注册的类型数一致（#20 的教训）").isEqualTo(18);
   }
 
   @Test

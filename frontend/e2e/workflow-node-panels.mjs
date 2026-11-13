@@ -156,9 +156,11 @@ async function closeMenu() {
 }
 
 function nodeCard(text) {
-  // 按卡片文本开头匹配：`hasText` 是「包含」，会把「回复」匹到「兜底回复」、
-  // 把「AI 对话」匹到描述里写着"生成回复"的别的项 —— 加错节点时症状是"点不开面板"。
-  return page.locator('.lf-node').filter({ hasText: new RegExp('^\\s*' + escapeRe(text)) }).first();
+  // 按卡片标题元素的 `title` 属性精确匹配，不靠文本前缀：
+  // 「函数」是「函数库」的前缀、「回复」是「兜底回复」的后缀，前缀匹配会点到另一张卡片，
+  // 症状是"面板标题对不上"，很像面板没更新，其实是点在别的节点上。
+  // 卡片里标题是 `<h4 :title="stepName">`（`NodeContainer.vue` 第 41 行），这是唯一无歧义的定位点。
+  return page.locator(`.lf-node:has(h4[title="${text}"])`).first();
 }
 
 function escapeRe(s) {
@@ -186,7 +188,10 @@ async function addNode(label) {
   // "生成回复"，`hasText: '回复'` 就会先命中它）⇒ 按**标题开头**认，并且认不出来就报出来。
   const idx = await page.evaluate((title) => {
     const els = Array.from(document.querySelectorAll('.workflow-dropdown-item'));
-    return els.findIndex((el) => (el.textContent ?? '').trim().startsWith(title));
+    // ★ 不能按 textContent 前缀认：整项的文本是「标题 + 描述」，而「函数」是「函数库」的前缀、
+    //   「回复」是「兜底回复」的后缀，靠长度或顺序都会挑错（挑错的症状是"加了个名字相近的节点"，
+    //   然后面板标题对不上，看起来像面板坏了）。标题在 `.item-name` 里，直接比对它。
+    return els.findIndex((el) => (el.querySelector('.item-name')?.textContent ?? '').trim() === title);
   }, label);
   if (idx < 0) {
     await closeMenu();

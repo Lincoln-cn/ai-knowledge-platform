@@ -343,20 +343,82 @@
   {
     "type": "FUNCTION_LIB_NODE",
     "label": "函数库",
-    "description": "调用预先登记的公共函数",
+    "description": "调用平台内置的公共函数（不是执行自定义脚本 —— 沙箱在 0.9.0），结果写进流程变量",
     "category": "扩展",
-    "catalogEnabled": false,
-    "executable": false,
-    "outputs": []
+    "catalogEnabled": true,
+    "executable": true,
+    "configFields": [
+      {
+        "key": "functionName",
+        "label": "函数",
+        "type": "string",
+        "required": true,
+        "panelOnly": false,
+        "hint": "内置函数：upper / lower / trim / length / concat / substring / replace / split / join / default / jsonpath"
+      },
+      {
+        "key": "args",
+        "label": "参数",
+        "type": "object-list",
+        "required": false,
+        "panelOnly": true,
+        "hint": "每条参数选「字面量」或「流程变量」；省略来源时按字面量"
+      },
+      {
+        "key": "outputKey",
+        "label": "输出到变量",
+        "type": "string",
+        "required": false,
+        "panelOnly": true,
+        "default": "function_result"
+      }
+    ],
+    "outputs": [
+      {
+        "key": "function_result",
+        "label": "函数结果"
+      }
+    ]
   },
   {
     "type": "FUNCTION_NODE",
     "label": "函数",
-    "description": "在流程里直接写一段函数逻辑",
+    "description": "直接指定内置函数名调一次（不执行自定义脚本 —— 沙箱在 0.9.0），结果写进流程变量",
     "category": "扩展",
-    "catalogEnabled": false,
-    "executable": false,
-    "outputs": []
+    "catalogEnabled": true,
+    "executable": true,
+    "configFields": [
+      {
+        "key": "functionName",
+        "label": "函数",
+        "type": "string",
+        "required": true,
+        "panelOnly": false,
+        "hint": "内置函数：upper / lower / trim / length / concat / substring / replace / split / join / default / jsonpath"
+      },
+      {
+        "key": "args",
+        "label": "参数",
+        "type": "object-list",
+        "required": false,
+        "panelOnly": true,
+        "hint": "每条参数选「字面量」或「流程变量」；省略来源时按字面量"
+      },
+      {
+        "key": "outputKey",
+        "label": "输出到变量",
+        "type": "string",
+        "required": false,
+        "panelOnly": true,
+        "default": "function_result"
+      }
+    ],
+    "outputs": [
+      {
+        "key": "function_result",
+        "label": "函数结果"
+      }
+    ]
   },
   {
     "type": "RERANKER_NODE",

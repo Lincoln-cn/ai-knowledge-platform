@@ -7,6 +7,7 @@ import type {
   ConditionNodeConfig,
   DocumentExtractNodeConfig,
   FormNodeConfig,
+  FunctionNodeConfig,
   ImageGenerateNodeConfig,
   ImageUnderstandNodeConfig,
   ImplementedNodeType,
@@ -698,6 +699,35 @@ function imageGenerateFromLegacy(nd: any): ImageGenerateNodeConfig & Record<stri
   }
 }
 
+function functionToLegacy(config: FunctionNodeConfig & Record<string, any>): LegacyBundle {
+  // 参数项只保留两个键：来源与值。多留一个键，将来它就会变成"有些人读、有些人不读"的第三份。
+  const args = Array.isArray(config.args)
+    ? config.args.map((arg) => ({
+        from: arg?.from === 'variable' ? 'variable' : 'literal',
+        value: typeof arg?.value === 'string' ? arg.value : ''
+      }))
+    : []
+  return {
+    node_data: {
+      functionName: typeof config.functionName === 'string' ? config.functionName : null,
+      args,
+      outputKey: typeof config.outputKey === 'string' ? config.outputKey : ''
+    }
+  }
+}
+
+function functionFromLegacy(nd: any): FunctionNodeConfig & Record<string, any> {
+  const rawArgs = Array.isArray(nd?.args) ? nd.args : []
+  return {
+    functionName: typeof nd?.functionName === 'string' && nd.functionName ? nd.functionName : null,
+    args: rawArgs.map((arg: any) => ({
+      from: arg?.from === 'variable' ? 'variable' : 'literal',
+      value: typeof arg?.value === 'string' ? arg.value : ''
+    })),
+    outputKey: typeof nd?.outputKey === 'string' ? nd.outputKey : ''
+  }
+}
+
 function formToLegacy(config: FormNodeConfig & Record<string, any>): LegacyBundle {
   return {
     node_data: {
@@ -752,6 +782,9 @@ function toLegacy(type: string, config: any): LegacyBundle {
       return speechToTextToLegacy(config)
     case 'IMAGE_GENERATE_NODE':
       return imageGenerateToLegacy(config)
+    case 'FUNCTION_LIB_NODE':
+    case 'FUNCTION_NODE':
+      return functionToLegacy(config)
     case 'FORM_NODE':
       return formToLegacy(config)
     default:
@@ -791,6 +824,9 @@ function fromLegacy(type: string, nd: any, props: any): Record<string, any> {
       return speechToTextFromLegacy(nd)
     case 'IMAGE_GENERATE_NODE':
       return imageGenerateFromLegacy(nd)
+    case 'FUNCTION_LIB_NODE':
+    case 'FUNCTION_NODE':
+      return functionFromLegacy(nd)
     case 'FORM_NODE':
       return formFromLegacy(nd)
     default:

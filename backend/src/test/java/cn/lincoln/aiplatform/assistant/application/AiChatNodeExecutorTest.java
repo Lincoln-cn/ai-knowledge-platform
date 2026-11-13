@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cn.lincoln.aiplatform.platform.assistant.ApplicationInvokePort;
+import cn.lincoln.aiplatform.platform.assistant.FunctionInvokePort;
 import cn.lincoln.aiplatform.platform.assistant.ImageGeneratePort;
 import cn.lincoln.aiplatform.platform.assistant.ImageUnderstandPort;
 import cn.lincoln.aiplatform.platform.assistant.SpeechToTextPort;
@@ -208,6 +209,8 @@ class AiChatNodeExecutorTest {
                 providerOf(mock(TextToSpeechPort.class)), providerOf(mock(FileStorePort.class))),
             new SpeechToTextNodeExecutor(
                 providerOf(mock(SpeechToTextPort.class)), providerOf(mock(FileStorePort.class))),
+            new FunctionLibNodeExecutor(providerOf(mock(FunctionInvokePort.class))),
+            new FunctionNodeExecutor(providerOf(mock(FunctionInvokePort.class))),
             new QuestionNodeExecutor())) {
       byType.put(executor.type(), executor);
     }

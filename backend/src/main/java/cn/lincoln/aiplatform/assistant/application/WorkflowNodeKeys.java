@@ -97,6 +97,15 @@ public final class WorkflowNodeKeys {
     public static final String PROMPT_IDS = "promptIds";
     public static final String THINKING_ENABLED = "thinkingEnabled";
     public static final String MULTI_TURN = "multiTurn";
+
+    /** 要调用的内置函数名（{@code upper} / {@code trim} / {@code jsonpath} …）。 */
+    public static final String FUNCTION_NAME = "functionName";
+
+    /** 函数参数数组，每项 {@code {"from":"literal"|"variable","value":"…"}}。 */
+    public static final String FUNCTION_ARGS = "args";
+
+    /** 结果写进哪个流程变量；不给就用 {@code function_result}。 */
+    public static final String OUTPUT_KEY = "outputKey";
   }
 
   /** 画布旧名：迁移期回退，`#337` 第 4 步删。每一条都对应前端一个 {@code *ToLegacy} 写出的键。 */
@@ -178,6 +187,9 @@ public final class WorkflowNodeKeys {
 
     /** 语音识别出的文本。 */
     public static final String SPEECH_TRANSCRIPT = "speech_transcript";
+
+    /** 内置函数的执行结果（两个函数节点共用的默认输出变量）。 */
+    public static final String FUNCTION_RESULT = "function_result";
   }
 
   /** 契约键集合（不含旧名与数组项键）：{@code node-types.json} 的 {@code configFields[].key} 必须落在这个集合里。 */
@@ -216,7 +228,10 @@ public final class WorkflowNodeKeys {
         Config.ROLE_PROMPT,
         Config.PROMPT_IDS,
         Config.THINKING_ENABLED,
-        Config.MULTI_TURN);
+        Config.MULTI_TURN,
+        Config.FUNCTION_NAME,
+        Config.FUNCTION_ARGS,
+        Config.OUTPUT_KEY);
   }
 
   /** 所有配置键（契约 + 旧名 + 数组项）：源码扫描测试的白名单。 */
@@ -268,6 +283,7 @@ public final class WorkflowNodeKeys {
         Output.IMAGE_DESCRIPTION,
         Output.AUDIO_KEY,
         Output.AUDIO_FORMAT,
-        Output.SPEECH_TRANSCRIPT);
+        Output.SPEECH_TRANSCRIPT,
+        Output.FUNCTION_RESULT);
   }
 }
