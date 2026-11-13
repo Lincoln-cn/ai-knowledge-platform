@@ -21,29 +21,32 @@ import type { PageQuery, PageResult } from './types'
 
 /* ────────────────────────── 节点类型 ────────────────────────── */
 
-/** 已实现的节点类型（9 种） */
-export type ImplementedNodeType =
-  | 'START_NODE'
-  | 'BASE_NODE'
-  | 'AI_CHAT_NODE'
-  | 'SEARCH_DATASET_NODE'
-  | 'QUESTION_NODE'
-  | 'CONDITION_NODE'
-  | 'NUMBER_CONDITION_NODE'
-  | 'DOCUMENT_EXTRACT_NODE'
-  | 'REPLY_NODE'
+/**
+ * 类型名单不在这里手写：它由 `scripts/generate-node-types.mjs` 从
+ * `backend/src/main/resources/workflow/node-types.json` + 画布模块目录生成（#337）。
+ *
+ * ★ 以前这里是两份手写的联合类型（已实现 9 / 规划中 9），加一个节点要同时改后端 json、这里、
+ *   `labels.ts`、`defaults.ts`、`graph-format.ts`、`data.ts` 六处 —— 漏一处不会报错，只会静默不生效。
+ */
+export type {
+  ImplementedNodeType,
+  NodeConfigField,
+  PlannedNodeType,
+  WorkflowNodeTypeName,
+} from './nodeTypes.generated';
+export {
+  IMPLEMENTED_NODE_TYPES,
+  NODE_CONFIG_FIELDS,
+  NODE_OUTPUT_FIELDS,
+  PLANNED_NODE_TYPES,
+  WORKFLOW_NODE_TYPE_VALUES,
+} from './nodeTypes.generated';
 
-/** 规划中的节点类型（9 种）—— V1.0 之后逐批实现 */
-export type PlannedNodeType =
-  | 'FUNCTION_LIB_NODE'
-  | 'FUNCTION_NODE'
-  | 'RERANKER_NODE'
-  | 'APPLICATION_NODE'
-  | 'IMAGE_UNDERSTAND_NODE'
-  | 'FORM_NODE'
-  | 'TEXT_TO_SPEECH_NODE'
-  | 'SPEECH_TO_TEXT_NODE'
-  | 'IMAGE_GENERATE_NODE'
+import type {
+  ImplementedNodeType,
+  NodeConfigField,
+  PlannedNodeType
+} from './nodeTypes.generated';
 
 export type WorkflowNodeType = ImplementedNodeType | PlannedNodeType
 
@@ -74,6 +77,16 @@ export interface NodeTypeMeta {
   singleton: boolean
   /** 是否允许作为流程入口 */
   canBeEntry: boolean
+  /**
+   * 后端目录声明的配置字段（#337）。规划中的节点是空表。
+   *
+   * ★ 面板的最终形态由它驱动；今天 9+1 个面板还是手写的，所以这两个字段暂时只是
+   *   「已经可用、还没人用」的状态 —— 与 `#336` 里那些悬空字段同形，但方向相反：
+   *   这个是有真源、缺消费者；那个是有消费者假象、缺真源。
+   */
+  configFields?: NodeConfigField[]
+  /** 这个节点写进流程变量的键（#337），变量目录用 */
+  outputs?: string[]
 }
 
 /* ────────────────────────── 节点配置（按类型判别） ────────────────────────── */
@@ -260,6 +273,33 @@ export interface DocumentExtractNodeConfig {
 }
 
 /** 按节点类型取配置类型。规划中的节点暂无配置定义 */
+/**
+ * 表单收集节点（人工介入）。
+ *
+ * ★ 今天后端 `FormNodeExecutor` **不读任何配置**：它只把入口输入原样写进 `form_data`，
+ *   目录里这个节点的 `configFields` 就是空数组。下面三个键是画布侧的表单定义，
+ *   负责面板编辑与持久化往返；把它们接进执行期（字段级映射到 `form_data`）是另一笔账。
+ */
+export interface FormNodeConfig {
+  /** 表单字段定义 */
+  formFields: FormFieldConfig[]
+  /** 提交前的引导文案，`{{form}}` 会被替换成表单本身 */
+  contentFormat: string
+  /** 填完是否作为整条流程的最终结果 */
+  asResult: boolean
+}
+
+/** 表单里的一个字段 */
+export interface FormFieldConfig {
+  /** 写进 `form_data` 的键 */
+  key: string
+  label: string
+  type: 'text' | 'textarea' | 'number' | 'date' | 'select'
+  required: boolean
+  /** `type === 'select'` 时的候选值 */
+  options?: string[]
+}
+
 export type NodeConfigOf<T extends WorkflowNodeType> =
   T extends 'START_NODE' ? StartNodeConfig
   : T extends 'BASE_NODE' ? BaseNodeConfig
@@ -270,6 +310,7 @@ export type NodeConfigOf<T extends WorkflowNodeType> =
   : T extends 'NUMBER_CONDITION_NODE' ? NumberConditionNodeConfig
   : T extends 'REPLY_NODE' ? ReplyNodeConfig
   : T extends 'DOCUMENT_EXTRACT_NODE' ? DocumentExtractNodeConfig
+  : T extends 'FORM_NODE' ? FormNodeConfig
   : Record<string, never>
 
 export interface WorkflowNode<T extends WorkflowNodeType = WorkflowNodeType> {

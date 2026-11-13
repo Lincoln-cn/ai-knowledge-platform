@@ -3,6 +3,7 @@ import type {
   BaseNodeConfig,
   ConditionNodeConfig,
   DocumentExtractNodeConfig,
+  FormNodeConfig,
   ImplementedNodeType,
   NumberConditionNodeConfig,
   QuestionNodeConfig,
@@ -14,7 +15,7 @@ import type {
 } from '@/api/workflow'
 
 /**
- * 九种已实现节点的默认配置。
+ * 已实现节点的默认配置（种类数随后端目录变化，不要再在这里写数字）。
  * 新建节点时用它落盘，保证 config 形状与 NodeConfigOf<T> 对齐。
  */
 
@@ -116,6 +117,15 @@ export function defaultConfigFor(type: ImplementedNodeType): WorkflowNode['confi
       const config: DocumentExtractNodeConfig = { kbId: null, docId: null }
       return config
     }
+    case 'FORM_NODE': {
+      // 默认给一个空表单：先有框，用户再往里加字段
+      const config: FormNodeConfig = {
+        formFields: [],
+        contentFormat: '你好，请先填写下面的内容：\n{{form}}\n填写后点击【提交】。',
+        asResult: true
+      }
+      return config
+    }
   }
 }
 
@@ -128,6 +138,7 @@ export const defaultTitleFor: Record<ImplementedNodeType, string> = {
   'QUESTION_NODE': '问题改写',
   'CONDITION_NODE': '语义判断',
   'NUMBER_CONDITION_NODE': '数值判断',
+  'FORM_NODE': '表单收集',
   'DOCUMENT_EXTRACT_NODE': '文档抽取',
   'REPLY_NODE': '指定回复'
 }
@@ -141,6 +152,7 @@ const idPrefix: Record<ImplementedNodeType, string> = {
   'QUESTION_NODE': 'question',
   'CONDITION_NODE': 'condition',
   'NUMBER_CONDITION_NODE': 'num-condition',
+  'FORM_NODE': 'form',
   'DOCUMENT_EXTRACT_NODE': 'doc-extract',
   'REPLY_NODE': 'reply'
 }

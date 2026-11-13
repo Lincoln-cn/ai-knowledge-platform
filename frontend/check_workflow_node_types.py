@@ -13,25 +13,30 @@ LogicFlow 找不到节点模型，一个节点都渲染不出来（控制台一�
   那条路线今天根本跑不起来（见 #21）。而 #20 这一类回归是纯静态可判的：
   它坏在"注册的类型名与契约取值不是同一个字符串"，与后端在不在无关。
 
-核三件事：
+核四件事（真源 = `backend/src/main/resources/workflow/node-types.json` 的 `executable`）：
 
-  ① 契约 `ImplementedNodeType`（8 种）里的每一种，都**恰好有一个**画布节点模块
-     用**同一个取值**注册自己
-  ② 画布上不许再出现契约取值之外的注册名（即 `start-node` 那类 kebab 残留）
+  ① 后端目录里每一个可执行类型，都**恰好有一个**画布节点模块用**同一个取值**注册自己
+  ② 画布上不许再出现目录取值之外的注册名（即 `start-node` 那类 kebab 残留）
   ③ 每个注册类型都能解析到一个图标文件
      —— `nodeIcon()` 是按机械规则推文件名的，取不到就是**静默没有图标**（又一例"不报错的降级"）
+  ④ 注册集合与可执行集合互为一一对应
+
+★ #337 之后「已实现种类」不再由前端手写联合回答：`api/nodeTypes.generated.ts` 是
+  `scripts/generate-node-types.mjs` 的产物，而生成器又读本文件的同一个 json。
+  所以本闸门必须自己读 json —— 拿生成物来比模块目录，第 ①④ 项会恒真。
 
 ★ 判据来源：设计册 14 号 §2.3（`start-node` → `START_NODE` 是**取值**要改）
   与 §三（**文件名 / 目录名 / 组件名不动**）。两套词汇只在 `icons/utils.ts` 相遇。
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CONTRACT = ROOT / "frontend/src/api/workflow.ts"
+CATALOG = ROOT / "backend/src/main/resources/workflow/node-types.json"
 NODES_DIR = ROOT / "frontend/src/pages/workflow/components/nodes"
 ICONS_DIR = ROOT / "frontend/src/pages/workflow/components/icons"
 
@@ -43,12 +48,17 @@ def check(cond: bool, msg: str) -> None:
     print(("  ✓ " if cond else "  ✗ ") + msg)
 
 
-def union_members(text: str, type_name: str) -> list[str]:
-    """取 `export type X = 'A' | 'B' ...` 里的成员。"""
-    m = re.search(rf"export type {type_name} =(.*?)(?:\n\n|\nexport )", text, re.S)
-    if not m:
-        raise SystemExit(f"★ 解析不出契约里的 {type_name} —— 闸门本身失效了，先修它")
-    return re.findall(r"'([^']+)'", m.group(1))
+def catalog_types() -> tuple[list[str], list[str]]:
+    """后端目录里的（可执行, 规划中）类型。
+
+    ★ 这里是唯一真源：`node-types.json` 的 `executable` 就是「这个节点能不能跑」。
+      以前本脚本读 `workflow.ts` 里的手写联合，而那份联合现在已经由生成器从**本文件的
+      输入**（json + 模块目录）推出来 —— 再拿它比模块目录就是同义反复，第 ①④ 项会恒真。
+    """
+    entries = json.loads(CATALOG.read_text(encoding="utf-8"))
+    executable = [e["type"] for e in entries if e.get("executable")]
+    planned = [e["type"] for e in entries if not e.get("executable")]
+    return executable, planned
 
 
 def registered_types() -> dict[str, str]:
@@ -66,14 +76,12 @@ def registered_types() -> dict[str, str]:
 
 
 def main() -> int:
-    contract_text = CONTRACT.read_text(encoding="utf-8")
-    implemented = union_members(contract_text, "ImplementedNodeType")
-    planned = union_members(contract_text, "PlannedNodeType")
+    implemented, planned = catalog_types()
     all_types = set(implemented) | set(planned)
     registered = registered_types()
 
     print(
-        f"契约：已实现 {len(implemented)} 种 · 规划中 {len(planned)} 种"
+        f"后端目录：可执行 {len(implemented)} 种 · 规划中 {len(planned)} 种"
         f" · 画布注册了 {len(registered)} 个模块\n"
     )
 

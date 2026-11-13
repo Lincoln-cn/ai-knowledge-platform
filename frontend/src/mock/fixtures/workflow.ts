@@ -21,7 +21,7 @@ import type {
  */
 
 /* ------------------------------------------------------------------ */
-/* 节点目录（18 种：9 种已实现 + 9 种规划中）                            */
+/* 节点目录（18 种：10 种已实现 + 8 种规划中）                            */
 /* ------------------------------------------------------------------ */
 
 export const nodeTypeCatalog: NodeTypeMeta[] = [
@@ -169,11 +169,11 @@ export const nodeTypeCatalog: NodeTypeMeta[] = [
     type: 'FORM_NODE',
     label: '表单',
     category: '基础',
-    catalogEnabled: false,
-    executable: false,
+    catalogEnabled: true,
+    executable: true,
     singleton: false,
     canBeEntry: false,
-    description: '规划中：比基本信息收集更复杂的表单编排（联动/校验规则）。当前版本不可拖入画布。'
+    description: '在流程中间收一份表单再继续，填的内容写进流程变量 form_data。'
   },
   {
     type: 'TEXT_TO_SPEECH_NODE',

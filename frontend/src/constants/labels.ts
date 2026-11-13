@@ -42,7 +42,6 @@ import type {
 } from '@/api/assistants'
 import type {
   ConditionLogic,
-  ImplementedNodeType,
   NumberConditionOperator,
   UserInputFieldType,
   WorkflowNodeType
@@ -275,21 +274,14 @@ export const ASSISTANT_ORIGIN_VALUES: AssistantOrigin[] = ['OFFICIAL', 'SHARED',
 
 /* ────────────────────────── 工作流 ────────────────────────── */
 
-/**
- * 节点类型默认标题（放入画布时的初始 title）。
- * 集中自 `pages/workflow/lib/defaults.ts` 的 `defaultTitleFor`。
+/*
+ * 这里曾有 WORKFLOW_NODE_TYPE_LABELS（节点类型默认标题）与 WORKFLOW_NODE_TYPE_VALUES（已实现类型取值）
+ * 两份手写清单。
+ *
+ * ★ #337 把它们删了：名单与显示名已经由 `scripts/generate-node-types.mjs` 从后端目录生成到
+ *   `api/nodeTypes.generated.ts`（`NODE_TYPE_LABELS` / `WORKFLOW_NODE_TYPE_VALUES`），
+ *   而这两份在本仓**没有任何消费方** —— 留着只会让"加一个节点要改六处"变成七处。
  */
-export const WORKFLOW_NODE_TYPE_LABELS: Record<ImplementedNodeType, string> = {
-  START_NODE: '开始',
-  BASE_NODE: '基本信息收集',
-  AI_CHAT_NODE: 'AI 对话',
-  SEARCH_DATASET_NODE: '知识库检索',
-  QUESTION_NODE: '问题改写',
-  CONDITION_NODE: '语义判断',
-  NUMBER_CONDITION_NODE: '数值判断',
-  DOCUMENT_EXTRACT_NODE: '文档抽取',
-  REPLY_NODE: '指定回复'
-}
 
 /**
  * 单例节点在删除确认里的称呼（比默认标题更完整）。
@@ -298,19 +290,6 @@ export const WORKFLOW_NODE_TYPE_LABELS: Record<ImplementedNodeType, string> = {
 export const WORKFLOW_NODE_SINGLETON_LABELS: Record<string, string> = {
   START_NODE: '开始节点'
 }
-
-/** 已实现节点类型取值数组（菜单 / 校验用） */
-export const WORKFLOW_NODE_TYPE_VALUES: ImplementedNodeType[] = [
-  'START_NODE',
-  'BASE_NODE',
-  'AI_CHAT_NODE',
-  'SEARCH_DATASET_NODE',
-  'QUESTION_NODE',
-  'CONDITION_NODE',
-  'NUMBER_CONDITION_NODE',
-  'DOCUMENT_EXTRACT_NODE',
-  'REPLY_NODE'
-]
 
 /**
  * 数值判断操作符。

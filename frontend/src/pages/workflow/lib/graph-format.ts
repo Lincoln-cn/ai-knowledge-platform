@@ -4,6 +4,7 @@ import type {
   ConditionBranch,
   ConditionNodeConfig,
   DocumentExtractNodeConfig,
+  FormNodeConfig,
   ImplementedNodeType,
   NumberConditionBranch,
   NumberConditionItem,
@@ -551,6 +552,27 @@ function documentExtractFromLegacy(nd: any): DocumentExtractNodeConfig & Record<
   }
 }
 
+function formToLegacy(config: FormNodeConfig & Record<string, any>): LegacyBundle {
+  return {
+    node_data: {
+      // 旧画布那三个键直接沿用：`form_field_list` / `form_content_format` / `is_result`
+      // 已经存在于存量草稿里，改名会让老图重开后表单字段凭空消失
+      form_field_list: Array.isArray(config.formFields) ? config.formFields : [],
+      form_content_format: config.contentFormat ?? '',
+      is_result: config.asResult ?? true
+    }
+  }
+}
+
+function formFromLegacy(nd: any): FormNodeConfig & Record<string, any> {
+  const rawFields = nd?.formFields ?? nd?.form_field_list
+  return {
+    formFields: Array.isArray(rawFields) ? rawFields : [],
+    contentFormat: nd?.contentFormat ?? nd?.form_content_format ?? '',
+    asResult: nd?.asResult ?? nd?.is_result ?? true
+  }
+}
+
 function toLegacy(type: string, config: any): LegacyBundle {
   switch (type as ImplementedNodeType) {
     case 'START_NODE':
@@ -571,6 +593,8 @@ function toLegacy(type: string, config: any): LegacyBundle {
       return replyToLegacy(config)
     case 'DOCUMENT_EXTRACT_NODE':
       return documentExtractToLegacy(config)
+    case 'FORM_NODE':
+      return formToLegacy(config)
     default:
       return { node_data: { ...config } }
   }
@@ -596,6 +620,8 @@ function fromLegacy(type: string, nd: any, props: any): Record<string, any> {
       return replyFromLegacy(nd)
     case 'DOCUMENT_EXTRACT_NODE':
       return documentExtractFromLegacy(nd)
+    case 'FORM_NODE':
+      return formFromLegacy(nd)
     default:
       return { ...nd }
   }
