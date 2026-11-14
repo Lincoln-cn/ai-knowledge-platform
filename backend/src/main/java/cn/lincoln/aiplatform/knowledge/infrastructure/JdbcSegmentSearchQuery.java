@@ -5,9 +5,11 @@ import cn.lincoln.aiplatform.knowledge.domain.KnowledgeBaseRepository;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import cn.lincoln.aiplatform.platform.retrieval.HnswScanProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.vector.VectorIndexPort;
+import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -18,6 +20,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -188,20 +192,39 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
           // ★ 左连接（见类注释的内连接陷阱）：会话临时的分段没有库行
           + " left join kb_knowledge_base k on k.id = s.kb_id";
 
+  private static final Logger LOG = LoggerFactory.getLogger(JdbcSegmentSearchQuery.class);
+
   private final JdbcTemplate jdbc;
   private final KnowledgeBaseRepository bases;
   private final AccessScopePort accessScope;
   private final VectorIndexPort vectorIndex;
+  private final HnswScanProperties hnsw;
 
   public JdbcSegmentSearchQuery(
       JdbcTemplate jdbc,
       KnowledgeBaseRepository bases,
       AccessScopePort accessScope,
-      VectorIndexPort vectorIndex) {
+      VectorIndexPort vectorIndex,
+      HnswScanProperties hnsw) {
     this.jdbc = jdbc;
     this.bases = bases;
     this.accessScope = accessScope;
     this.vectorIndex = vectorIndex;
+    this.hnsw = hnsw;
+  }
+
+  /**
+   * 启动时把两个会话参数的有效值打一次。
+   *
+   * <p>★ 这一行是 0.8.0 的判据之一：{@code ef_search} 以前<strong>从未被设置</strong>（跑 pgvector 默认 40），
+   * 所以没有任何地方能回答"今天用的是 40 还是别的"。日志里没有这一行，就等于"配了但没人知道生效没有" —— 而那正是本项目最贵的病（{@code silent-failure}）。
+   */
+  @PostConstruct
+  void logScanSettings() {
+    LOG.info(
+        "检索向量路：hnsw.ef_search={}、hnsw.iterative_scan={}（会话级参数，在检索事务里 set local 生效）",
+        hnsw.efSearch(),
+        hnsw.iterativeScan());
   }
 
   /**
@@ -501,8 +524,13 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
       // 这个维度还没有任何向量 ⇒ **空结果**，不是错误（也不建表：读路径不跑 DDL）
       return List.of();
     }
-    // ★ 打开迭代扫描：高选择性过滤下自动多扫几轮（PG 16 + pgvector 0.8+）
-    jdbc.execute("set local hnsw.iterative_scan = strict_order");
+    // ★ 扫描参数：高选择性过滤下自动多扫几轮（PG 16 + pgvector 0.8+）。
+    //   ★ SET LOCAL 不支持占位符 ⇒ 两个值都拼字符串，所以都在 HnswScanProperties 里做过白名单校验；
+    //     且必须与下面的查询在**同一条连接、同一个事务**里才生效 —— 本方法由 @Transactional 的
+    //     RetrievalService#hitTest 调用（脱离事务时 set local 会随语句结束失效，而查询照样能返回结果，
+    //     所以"没生效"表现为"结果偏少"而不是报错）。
+    jdbc.execute("set local hnsw.ef_search = " + hnsw.efSearch());
+    jdbc.execute("set local hnsw.iterative_scan = " + hnsw.iterativeScan());
     RetrievalScope scope = query.scope();
 
     List<Object> args = new ArrayList<>();

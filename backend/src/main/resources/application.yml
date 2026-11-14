@@ -161,6 +161,16 @@ app:
     query-understanding-enabled: ${RETRIEVAL_QU_ENABLED:true}
     # ★ 低配可关：解析失败时不再调第二次模型（CPU 上省 4–5s）
     query-understanding-retry-on-parse-failure: ${RETRIEVAL_QU_RETRY:true}
+    # ─── HNSW 扫描参数（pgvector 的**会话级**参数，不在索引定义里）───
+    #
+    # ★★ 0.8.0（#343）：这里以前是"写死的 strict_order + ef_search 从未设置（跑 pgvector 默认 40）"，
+    #    所以没有任何地方能回答"今天扫了多少候选"。现在两个都可配，且启动时打一条日志。
+    # ★ ef_search 调大只增加**扫描完整性**，不增加**质量** —— 高选择性过滤下"过滤后为空"这一档
+    #    已经由 iterative_scan=strict_order 兜住；质量要靠重排（见下方 rerank 段）与 B3 台账。
+    hnsw:
+      ef-search: ${RETRIEVAL_HNSW_EF_SEARCH:40}
+      # off / relaxed_order / strict_order（★ 白名单校验：这个值会拼进 SQL，SET LOCAL 不支持占位符）
+      iterative-scan: ${RETRIEVAL_HNSW_ITERATIVE_SCAN:strict_order}
     # ─── cross-encoder 重排（只重排前 topK 个候选）───
     #
     # ★ 离线实测（`BAAI/bge-reranker-base`，同一份语料）：只重排前 5 个 ⇒ B3 引用准确率
