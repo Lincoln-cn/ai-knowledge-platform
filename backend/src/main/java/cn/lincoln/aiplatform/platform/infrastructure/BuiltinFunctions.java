@@ -8,6 +8,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 平台内置函数表。
@@ -28,6 +29,14 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class BuiltinFunctions implements FunctionInvokePort {
+
+  /**
+   * 序列化器。
+   *
+   * <p>★ 用 Jackson 3（{@code tools.jackson}）而不是 2 —— 全仓统一，且 {@code JacksonTwoUsageTest} 会红：
+   * "用另一台序列化器断形状，绿了也不说明生产发出去的是什么"。
+   */
+  private static final JsonMapper JSON = JsonMapper.builder().build();
 
   private static final Set<String> NAMES =
       new LinkedHashSet<>(
@@ -148,7 +157,7 @@ public class BuiltinFunctions implements FunctionInvokePort {
     }
     Object node;
     try {
-      node = new com.fasterxml.jackson.databind.ObjectMapper().readValue(json, Object.class);
+      node = JSON.readValue(json, Object.class);
     } catch (Exception e) {
       throw new IllegalArgumentException("jsonpath 的第一个参数不是合法 JSON：" + e.getMessage());
     }
@@ -197,7 +206,7 @@ public class BuiltinFunctions implements FunctionInvokePort {
     }
     if (node instanceof java.util.Map<?, ?> || node instanceof List<?>) {
       try {
-        return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(node);
+        return JSON.writeValueAsString(node);
       } catch (Exception e) {
         throw new IllegalArgumentException("jsonpath 取到的子结构不能转成文本：" + e.getMessage());
       }

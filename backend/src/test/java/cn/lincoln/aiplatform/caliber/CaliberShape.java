@@ -149,7 +149,8 @@ final class CaliberShape {
           "assistant/V89__assistant_template_center.sql",
           "assistant/V90__assistant_template_builtin_seed.sql",
           "assistant/V91__assistant_workflow_record_user.sql",
-          "assistant/V97__assistant_workflow_pause.sql");
+          "assistant/V97__assistant_workflow_pause.sql",
+          "assistant/V99__assistant_trigger_schedule.sql");
 
   private CaliberShape() {}
 
