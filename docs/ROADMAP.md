@@ -5670,3 +5670,42 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 - **`NodeTypeCatalog` 的 `implemented` 仍是一维布尔**：它同时表达"界面上能放"与"执行器能跑"，
   而 `BASE_NODE` / `QUESTION_NODE` / `CONDITION_NODE` / `NUMBER_CONDITION_NODE` 四个
   今天的状态是「界面能放、发布被拒」。拆成两个字段要动契约与前端，属 0.8。
+  ★ **这条在 0.7.4 已解决**：`catalogEnabled` 与 `executable` 拆成两个字段，
+  18 个节点现在两者皆真。
+
+## 11.40 0.7.4 发版口径与剩余缺口（2026-11-14）
+
+沿用 `§11.39.5` 的先例：`v0.7.1`–`v0.7.3` 的 tag 都没打出，内容并进本版，
+版本号四处（`backend/pom.xml` · `frontend/package.json` · `frontend/package-lock.json` 两处）
+一次性升到 **0.7.4**。**0.7.3（触发器）仍然没做**，理由见 `§11.39.4`。
+
+### 11.40.1 本版交付的四块
+
+| 块 | 判据 | 读数 |
+|---|---|---|
+| 画布 18 个组件全部可执行 | 目录 `executable` 集合 == 源码里 `implements NodeExecutor` 的类型 | `WorkflowNodeTypeTest` 7/7 · `NodeExecutorRegistryTest` 4/4 |
+| 人工介入（提问 / 表单）能停能续 | 图停在中断点、`POST /workflow/resume` 接着跑完 | 编排 e2e 的暂停段与恢复段 |
+| 检索节点不再是空壳 | 检索端口有生产实现，命中带 `segmentId` | 自动链路 e2e `ok=true` |
+| 节点定义一份真源 | 加一个节点只需改目录条目 + 执行器类（+ 面板） | 生成器 `--check` · 节点闸门 5/5 |
+
+### 11.40.2 两处明写的缺口（不是待办，是这一版的边界）
+
+1. **机制节点只有单测与面板级读数**：`CONDITION_NODE` · `NUMBER_CONDITION_NODE` ·
+   `DOCUMENT_EXTRACT_NODE` · `FORM_NODE` 四个在逐节点 e2e（88/88）里验过
+   "能拖、面板能开、字段能写、保存后还在"，但**没有在真实栈上跑到底的一遍**。
+   ⇒ 有端到端读数的节点是 **14/18**，不是 18/18。
+2. **函数库 / 函数不执行用户脚本**：它们调的是平台内置的 11 个函数。
+   执行用户代码是沙箱的活（`§11.27.3`，0.9.0，判据「沙箱能起、超时能杀」）。
+   ⇒ 语义已写进 `#333` 评论请拍板；若该语义不被接受，正确处置是把这两个节点退回
+   `executable: false`，而不是让它们假装能跑代码。
+
+### 11.40.3 这一版反复咬人的一件事
+
+**同一个事实写两份，就会有一份先漂。** 本版被这一点咬到的实例：
+`SUPPORTED_TYPES` 与执行器列表 · 执行器读的键与前端契约的键 · 节点定义与目录 ·
+变量目录与执行器真正写入的键 · mock 夹具里的节点目录。
+
+共同症状都一样：**两边各自单测全绿，只有把一方的真实产物喂给另一方才会红。**
+⇒ 处置不是"以后小心"，而是把第二份删掉（`SUPPORTED_TYPES`）或让闸门扫出来
+（`WorkflowNodeKeysTest` 扫执行器取键的字面量、节点闸门扫契约与模块、`--check` 扫生成物）。
+
