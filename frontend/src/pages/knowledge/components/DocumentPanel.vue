@@ -885,7 +885,7 @@ tr:hover .rename-btn {
 .ocr-progress {
   display: block;
   margin-top: 2px;
-  color: var(--color-text-3);
+  color: var(--color-muted);
 }
 
 .rp-bar {

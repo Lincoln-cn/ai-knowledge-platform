@@ -907,7 +907,7 @@ const forceRemove = async () => {
   margin-bottom: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
   border: 1px solid var(--color-accent-line);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   background: var(--color-accent-soft);
 }
 
@@ -1147,7 +1147,7 @@ const forceRemove = async () => {
    所以用 min-width: 0 + overflow-wrap，否则 flex 子项会被撑破而不是折行。 */
 .ref-loading {
   padding: var(--space-md) 0;
-  color: var(--text-3);
+  color: var(--color-muted);
   font-size: 14px;
 }
 
@@ -1171,7 +1171,7 @@ const forceRemove = async () => {
 
 .ref-key {
   flex: 0 0 68px;
-  color: var(--text-3);
+  color: var(--color-muted);
   font-size: 13px;
 }
 

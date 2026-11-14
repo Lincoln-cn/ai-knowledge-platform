@@ -841,6 +841,10 @@ async function runTrial() {
 }
 
 .workflow-debug-container {
+    /* 调试浮层标题栏的高度：header 与内容区高度共用这一个值，改一处两处一起变。
+       ★ 原来只写了 `var(--app-header-height)` 而**没有任何地方定义它** ——
+       var() 解析失败不报错，三处（两处 height/line-height + 一处 calc）全部静默失效。 */
+    --app-header-height: 40px;
     z-index: var(--z-modal);
     position: relative;
     border-radius: var(--radius-lg);
@@ -1005,8 +1009,10 @@ async function runTrial() {
 }
 
 /* 补跑是"异常但已恢复"，用警示色而不是错误色：它跑成功了，只是中间漏过 */
+/* ★ token 名是 `--color-warn` 不是 `--color-warning`：写错不会报错，只会静默失效
+   （`tokens.css` 里没有的设备上，`var()` 整体回落成继承色 —— 与 `--color-fill` 那次同一个坑）。 */
 .trigger-meta-warn {
-    color: var(--color-warning);
+    color: var(--color-warn);
 }
 
 /* 最近一次的产出 / 失败原因：等宽断行留在那里就好，不截断（截断后就看不出是哪一步出的问题） */

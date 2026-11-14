@@ -91,7 +91,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import BrandMark from '@/components/BrandMark.vue'
 import { ApiError, identityApi } from '@/api'
-import { APP_TITLE, USE_MOCK } from '@/config/env'
+import { APP_TITLE, DATA_MODE_TEXT } from '@/config/env'
 import { useSessionStore } from '@/stores/session'
 
 const route = useRoute()
@@ -108,10 +108,12 @@ const form = reactive({ username: 'admin', password: 'admin', captchaCode: '' })
  * 底部说明里的「当前走哪条链路」必须**跟着环境变**。
  *
  * ★ 之前写死「当前走 mock」：`VITE_USE_MOCK=false` 真联调时界面在说谎 ——
- *   排查「怎么还在走 mock」会白白绕一圈。文案与 USE_MOCK 同源，
- *   切 .env 即换口径，不留第二处会漂移的说法。
+ *   排查「怎么还在走 mock」会白白绕一圈。
+ * ★ 现在这句话**不再在本文件里成句**：口径搬到 `@/config/env` 的 `DATA_MODE_TEXT`，
+ *   与外壳顶栏那个常驻角标共用一份（`#340`：登录之后也要看得见）。
+ *   在这里另写一份，就正好是 `ROADMAP §11.40.3` 说的"同一事实写两份，必有一份先漂"。
  */
-const dataModeText = USE_MOCK ? '当前走 mock' : '当前连的是真后端'
+const dataModeText = DATA_MODE_TEXT
 
 /**
  * 验证码（等保要求）。

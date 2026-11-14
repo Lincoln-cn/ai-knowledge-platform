@@ -744,7 +744,7 @@ onMounted(fetchList)
 /* ── 强制删除确认框（#301）── 与 models/Index.vue 的引用弹框同款版式 */
 .ref-loading {
   padding: var(--space-md) 0;
-  color: var(--text-3);
+  color: var(--color-muted);
   font-size: 14px;
 }
 
@@ -768,7 +768,7 @@ onMounted(fetchList)
 
 .ref-key {
   flex: 0 0 110px;
-  color: var(--text-3);
+  color: var(--color-muted);
   font-size: 13px;
 }
 

@@ -99,13 +99,13 @@ defineExpose({ open })
   font-family: var(--font-display);
   font-size: var(--text-lg);
   letter-spacing: 0;
-  color: var(--color-text-1);
+  color: var(--color-ink);
 }
 
 .about-line {
   margin: 0;
   font-size: var(--text-sm);
-  color: var(--color-text-3);
+  color: var(--color-muted);
 }
 
 .about-section h4 {
@@ -113,7 +113,7 @@ defineExpose({ open })
   font-family: var(--font-display);
   font-size: var(--text-sm);
   letter-spacing: 0;
-  color: var(--color-text-1);
+  color: var(--color-ink);
 }
 
 .about-scroll {
@@ -130,20 +130,20 @@ defineExpose({ open })
   margin: 0 0 2px;
   font-size: var(--text-sm);
   font-weight: 600;
-  color: var(--color-text-1);
+  color: var(--color-ink);
 }
 
 .about-paragraph {
   margin: 0 0 var(--space-xs);
   font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-  color: var(--color-text-2);
+  line-height: var(--leading-ui);
+  color: var(--color-ink-2);
 }
 
 .about-note {
   margin: 0;
   font-size: var(--text-xs);
-  line-height: var(--leading-normal);
-  color: var(--color-text-3);
+  line-height: var(--leading-ui);
+  color: var(--color-muted);
 }
 </style>

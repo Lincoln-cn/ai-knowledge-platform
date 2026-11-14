@@ -55,6 +55,20 @@
 
       <div class="grow" />
 
+      <!-- 模拟数据角标（#340）：dev 默认 VITE_USE_MOCK=true 时界面跑在夹具上。
+           登录页底部那句「当前走 mock」只在登录页，进来就看不见了 —— 这里常驻一个。 -->
+      <span
+        v-if="USE_MOCK"
+        class="mode-badge"
+        role="note"
+        data-mock-badge
+        :title="DATA_MODE_HINT"
+        :aria-label="`${DATA_MODE_BADGE}：${DATA_MODE_HINT}`"
+      >
+        <span class="mode-dot" aria-hidden="true" />
+        {{ DATA_MODE_BADGE }}
+      </span>
+
       <button
         ref="hintEl"
         class="hint"
@@ -116,7 +130,7 @@ import { AGREEMENT_VERSION } from '@/constants/agreement'
 
 /** 协议状态拉不到时的已提示过标记（每个会话只提示一次）。 */
 const CONSENT_WARNED_KEY = 'agreement-consent-warned'
-import { APP_TITLE } from '@/config/env'
+import { APP_TITLE, DATA_MODE_BADGE, DATA_MODE_HINT, USE_MOCK } from '@/config/env'
 import { canReach } from '@/lib/reach'
 import { navGroups } from '@/router/routes'
 import { useSessionStore } from '@/stores/session'
@@ -488,6 +502,33 @@ const onCommand = async (command: string) => {
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   color: var(--color-muted);
+}
+
+/* ── 模拟数据角标（#340）──
+   虚线框 + 圆点，是为了「可见但不喧哗」：它不该盖过真错误，但绝不能看不见。
+   颜色用 --color-warn（tokens.css 里没有 --color-warning，写错会静默失效）。 */
+.mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  height: 24px;
+  padding: 0 var(--space-xs);
+  border: 1px dashed var(--color-warn);
+  border-radius: var(--radius-pill);
+  background: var(--color-warn-soft);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-label);
+  color: var(--color-warn);
+  cursor: help;
+  white-space: nowrap;
+}
+
+.mode-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 /* ── 带框的 ⌘K 提示：mono 大写 + 1px 框，点它等同按键 ── */

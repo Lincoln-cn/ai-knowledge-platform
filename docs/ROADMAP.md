@@ -5840,3 +5840,58 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 - **已知读数冲突**：检索链路真模型 **25.7s** vs 桩 8–11s，与 `§二` B4 的 10s 线正面冲突
   （不是本版引入的，但定时触发会让它更容易被撞上——到点的批量任务会与人工试用抢上游）。
 
+
+## 11.43 0.7 收尾：数据来源口径（`#340`，2026-11-14）
+
+起因是 0.7.3 的界面走查翻车：前半段读数（画布 9 节点、变量目录显示契约键、添加组件菜单）
+取自 `VITE_USE_MOCK=true` 的夹具，而我把它当成了"前后端打通"的证据。
+`frontend/.env.development` 的注释自称"后端未就绪前走 mock，接上后端时改成 false"——
+后端早就就绪，这一行没改，且**界面本身毫无提示**。
+
+### 11.43.1 处置选了 B（把看不见变成看得见），不选 A（改默认值）
+
+| | A：dev 默认改 `false` | B：保留默认，界面自己说出来 |
+|---|---|---|
+| 好处 | 默认路径指向真实 | 不动既有流程 |
+| 代价 | `ci-frontend-gates.yml:69` 是**裸 `npm run dev`**（依赖默认 true）；`build:mock` 靠 `--mode development`；README 六处说法要改 | 多一个角标要维护 |
+
+**真正让人选 B 的是 CI 那一行**：mock 闸门与真栈闸门现在是"同一个命令靠 env 覆盖"，
+改成两个显式命令（`dev` / `dev:mock`）是一次**独立**的收尾（值得做，但属另一批）。
+
+### 11.43.2 口径只写一处
+
+- `frontend/src/config/env.ts` 新增 `DATA_MODE_TEXT` / `DATA_MODE_BADGE` / `DATA_MODE_HINT`。
+- **外壳顶栏常驻角标**（`_shell/Index.vue` 的 `data-mock-badge`，`v-if="USE_MOCK"`）：
+  登录之后也看得见。登录页底部那句「接口已固定、当前走 mock」改为从同一常量取，
+  不再在本地成句 —— 那正是 §11.40.3 说的"同一事实写两份，必有一份先漂"。
+- 角标文案是「模拟数据」不是「mock」：英文缩写在这个位置上没人知道它是什么意思。
+
+### 11.43.3 守卫顺手扫出两类真问题（21 处引用）
+
+`frontend/scripts/check-data-mode.mjs`（`node --run check:data-mode`）不只查口径，还扫
+`var(--xxx)` 引用的 token 是否真的定义过 —— `var()` 解析失败**不报错**，只会静默回落。
+
+1. **六个 token 根本不存在**：`--color-text-1/2/3`（Element Plus 风格命名混进来）·
+   `--text-3`（更糟：`color` 用了一个字号 token）· `--radius-md` · `--leading-normal`。
+   分布在 `DocumentPanel.vue` · `models/Index.vue` · `ProviderPanel.vue` ·
+   `AboutDialog.vue` · `AgreementDialog.vue`，共 21 处，全部改成真 token
+   （`--color-ink` / `--color-ink-2` / `--color-muted` / `--radius` / `--leading-ui`）。
+2. **`--app-header-height` 用了三次、全仓零定义**：`workflow/Index.vue` 的调试浮层标题栏
+   `height` + `line-height` + `calc(100% - var(...) - 24px)` **三处同时失效**。
+   在 `.workflow-debug-container` 上定义 `40px`（连同注释说明为什么以前是坏的）。
+
+★ 这两类是"写错了也不会红"的典型：单测、`typecheck`、`build` 全绿，界面只是**悄悄**少了一点样式。
+本仓库在 0.7.3 里已经被同类问题咬过两次（`--color-fill` → `--color-sunken`、
+`--color-warning` → `--color-warn`），这次把它变成一条能红的检查。
+
+### 11.43.4 读数
+
+- `node --run check:data-mode` **9 项全过**。
+- **反证**：把 `workflow/Index.vue` 里刚修好的 `var(--color-warn)` 写回 `var(--color-warning)`
+  ⇒ 报 `--color-warning（src/pages/workflow/Index.vue）` 并 `exit 1`；恢复 ⇒ 9 项全过。
+- `node --run typecheck` 0 错；`node --run build` 35.15s 成功（仅既有 chunk 体积警告）。
+
+### 11.43.5 仍不做
+
+- A（dev 默认改 `false` + `dev:mock` 显式命令 + CI 那一行）—— 见 11.43.1，另立一批。
+- 把上面那些 `font-size: 14px` / `13px` 硬编码换成 token —— 属"设计 token 收口"，不在本批。

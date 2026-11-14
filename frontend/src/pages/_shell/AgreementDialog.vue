@@ -70,8 +70,8 @@ defineExpose({ open })
 .agree-intro {
   margin: 0 0 var(--space-sm);
   font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-  color: var(--color-text-2);
+  line-height: var(--leading-ui);
+  color: var(--color-ink-2);
 }
 
 .agree-scroll {
@@ -90,13 +90,13 @@ defineExpose({ open })
   font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0;
-  color: var(--color-text-1);
+  color: var(--color-ink);
 }
 
 .agree-paragraph {
   margin: 0 0 var(--space-xs);
   font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-  color: var(--color-text-2);
+  line-height: var(--leading-ui);
+  color: var(--color-ink-2);
 }
 </style>
