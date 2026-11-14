@@ -5956,7 +5956,21 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 `§11.27.2` 给了 0.8 的四小版骨架，`§11.26.4` 给了三件事。本节把两者合成可执行的计划：
 每小版写清**起点读数 / 任务 / 判据（能红的那个）/ 风险**。
 
-### 11.45.0 起点与前置
+### 11.45.0 一个版本一条目标
+
+0.8 的总目标（一句话）：**把"检索好不好、慢在哪"从两个说不清的数字，变成能复查的读数 + 一条守得住的延迟线。**
+
+| 小版 | 那条目标（只一条） | 判据 |
+|---|---|---|
+| **0.8.0** | **检索走没走 HNSW 变成可读** | 报告里 `ef_search` 与 `hnsw_scan` 两个字段都在，且改配置后两个字段都跟着变 |
+| **0.8.1** | **单跳首字 ≤10s，且 B3 掉点 ≤1** | `sla/probes/synthetic.py` 单跳 ≤10s 且 `tools/check_b1_b3_quality.py` 的 B3 ≥ 基线 −1 |
+| **0.8.2** | **B3 ≥80%（全量 195 条）** | 同上脚本全量 ≥80%；做不到时 `#312` 必须有逐类错误分布 |
+| **0.8.3** | **`toolkit` 有接口，且能证明"今天没有工具调用"** | 那条断言能红（往上游请求塞 `tools` 字段必失败） |
+
+★ **每小版只有一条目标**。任何"顺手也做了"的东西，要么进这一版的判据，
+要么不放进这个版本 —— 否则版本号会变成"这段时间干了什么"的标签，而不是"什么被确认了"。
+
+### 11.45.0.1 起点与前置
 
 | 项 | 当前读数 | 出处 |
 |---|---|---|
@@ -5976,6 +5990,8 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 - `sla/evidence/report.py` —— 把上面两份读数合成 `sla/reports/report.json`
 
 ### 11.45.1 `0.8.0` HNSW 从"固定值"变成"可调 + 有读数"
+
+**目标（唯一一条）：检索走没走 HNSW 变成可读 —— 报告里 `ef_search` 与 `hnsw_scan` 都在，改配置它们就跟着变。**
 
 **现状（已核实，不是推断）**：
 - `set local hnsw.iterative_scan = strict_order` **已经落了**：`JdbcSegmentSearchQuery.java:505`
@@ -6002,6 +6018,8 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 
 ### 11.45.2 `0.8.1` 重排提速：把质量与延迟解耦
 
+**目标（唯一一条）：单跳首字 ≤10s，且 B3 掉点 ≤1。**
+
 **现状**：`app.retrieval.rerank.enabled` 默认 **true**、`top-k` 默认 **10**（`RerankProperties`）；
 窗口 10 的单条重排 = **8.5s**，占 B4 的大头。已实测的三条：
 - **窗口 5** 只把 `doc_top1` 从 93 提到 100，**B1/B3 一动不动** ⇒ 窗口是可缩的
@@ -6019,6 +6037,8 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 ★ **不做**：把 listwise 默认打开（它是有收益的增益件，但在本机装不下 —— 这一条已经是结论，不要重开）。
 
 ### 11.45.3 `0.8.2` B3 冲刺 80%
+
+**目标（唯一一条）：全量 195 条 B3 ≥80%。做不到就如实写"没做到"，并交出逐类错误分布。**
 
 **现状 70.26%，差 9.74 点。** `#312` 记着四条**已证伪**的路，**不许重试**：
 
@@ -6039,6 +6059,8 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 **风险**：语料是合成的 ⇒ 改进可能不迁移。这一条由 `0.9.2`（真语料验收）兜，本版不承担。
 
 ### 11.45.4 `0.8.3` `toolkit` 占位（不是真功能）
+
+**目标（唯一一条）：有一处接口，且有一条断言能证明"今天没有任何工具调用发生"。**
 
 用户 2026-11-10 已定：**只立接口与空实现**，不做"模型能调外部 API"。理由是没有场景的工具调用只能做成 demo。
 
