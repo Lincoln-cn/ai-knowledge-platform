@@ -57,7 +57,23 @@ public record AssistantView(
     String visibility,
     List<Grant> grants,
     List<String> tags,
-    Instant createdAt) {
+    Instant createdAt,
+    /**
+     * 定时触发的 cron（{@code #295}）。{@code null} = 不自动触发。
+     *
+     * <p>★ 界面靠"这一格是不是空"判断触发是否开启，所以它必须出现在视图里 —— 否则前端只能靠 另一个端点单独查一次，而那个端点的存在与否又成了新的不一致点。
+     */
+    String triggerCron,
+    /** 下一次该跑的时刻；{@code null} 表示不会自动跑（与 {@code triggerCron} 同时为 null）。 */
+    Instant triggerNextAt,
+    /** 最近一次真的跑起来的时刻。 */
+    Instant triggerLastAt,
+    /**
+     * 最近一轮**跳过了几班**（服务停机跨过的周期数）。
+     *
+     * <p>★ 界面上要能说"这次是补跑，中间漏了 N 次" —— 静默补跑会让人以为"它一直都在跑"。
+     */
+    int triggerMissed) {
 
   /**
    * 检索参数（契约 {@code RetrievalParams}）。
@@ -182,7 +198,11 @@ public record AssistantView(
         assistant.visibility().name(),
         assistant.grants(),
         copyOf(assistant.tags()),
-        assistant.createdAt());
+        assistant.createdAt(),
+        assistant.triggerCron(),
+        assistant.triggerNextAt(),
+        assistant.triggerLastAt(),
+        assistant.triggerMissed());
   }
 
   /**

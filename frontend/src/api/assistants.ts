@@ -65,6 +65,19 @@ export interface Assistant {
   createdAt?: string
   /** 当前用户是否已收藏。收藏按用户存，故在响应装饰里下发 */
   favorited?: boolean
+  /**
+   * 定时触发的 cron（`#295`，5 段：分 时 日 月 周）。`null` / 缺省 = 不自动触发。
+   *
+   * ★ 判断"触发器开着没有"只认这一格：它是**配置的输入**，而 `triggerNextAt` 是它的产物 ——
+   * 拿产物判断会得到一个奇怪的中间态（"配了 cron 但这辈子不会再触发"时产物是 null）。
+   */
+  triggerCron?: string | null
+  /** 下一次该跑的时刻（由后端算，前端只显示）。`null` = 不会自动跑 */
+  triggerNextAt?: string | null
+  /** 最近一次真的跑起来的时刻 */
+  triggerLastAt?: string | null
+  /** 上一轮**跳过了几班**（服务停机跨过的周期数）。界面要能说"这是补跑，中间漏了 N 次" */
+  triggerMissed?: number
 }
 
 /**
@@ -250,6 +263,21 @@ export const setAssistantPublished = (id: string, published: boolean) =>
     url: '/assistants/:id/published',
     path: { id },
     body: { published }
+  })
+
+/**
+ * 设置 / 清除定时触发（`#295`，0.7.3）。
+ *
+ * ★ **传空串等价于关掉触发器**（后端会把 `next_at` 与 `missed` 一起清空），所以"关闭"不需要另一个端点。
+ * ★ 不用 `updateAssistant` 送这一格：那是 `Partial<UpsertAssistantBody>`，而触发时间不属于草稿 ——
+ * 它一旦生效就与画布草稿无关（草稿没发布也会按时跑，跑的是**已发布版本**）。
+ */
+export const setAssistantTrigger = (id: string, cron: string | null) =>
+  request<Assistant>({
+    method: 'PUT',
+    url: '/assistants/:id/trigger',
+    path: { id },
+    body: { cron }
   })
 
 /** 调试问答不产生正式会话记录，故走独立接口 */

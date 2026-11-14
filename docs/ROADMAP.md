@@ -1064,6 +1064,10 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 | **SSO / LDAP / OIDC** | `#82`（留缝已完成） | 做实体 | ★ **提到第二批**（政企采购硬门槛；RBAC 已有，差的只是"人怎么进来"） |
 | **工具调用协议 / MCP 客户端** | ✅ **已在账**（`§11.7.2` A 类：只记账不留缝；`§11.7.5` 不做清单） | ★ **只记账**（本行），动作 = `#76` 补版本号与判据入口 | `0.5.x` 之后 |
 | **触发器（定时/事件）** | `#295` | ★ **只记账**（自纠：原写"留缝"→ 两条判据都不满足） | `0.5.x` 之后 |
+
+★★ **2026-11-14 订正**：本行已作废。触发器（cron 那半边）**已在 `0.7.3` 交付**（`§11.42`），
+不再是"只记账/0.5.x 之后"。仍属 `0.5.x` 之后的只剩**事件触发**（webhook / 消息队列那一类），
+而"定时"这一项连留缝都收了尾：`V88` 的两列 + `V99` 的五列都已有读写方与真栈读数。
 | **模板中心** | `#295` | ★ **只记账**（内容运营产物，不是工程件） | `0.5.x` 之后 |
 | **函数库沙箱 · 长期记忆 · 多模态 · Excel · 网页抓取** | `#296`（五条汇总账） | ★ **只记账** | `0.5.x` 之后 |
 
@@ -4950,6 +4954,9 @@ kb_entity_alias(id, entity_id, alias_name, source, confidence, created_at)
 | **0.7.2** | 条件分支运行时判定 | 同一张图按不同输入走不同分支 |
 | **0.7.3** | 触发器从留缝转实体（`#295`） | 定时触发的图能自己跑，不需要人点 |
 
+★ **0.7.3 已于 2026-11-14 交付**（`§11.42`）：判据有真栈读数（配 cron 到点自己跑，`triggerSource=CRON`），
+不再是"推给 V1.0 的活"。
+
 ★ **0.7.0 必须一次做完三层**：`WorkflowRecordRepository` 的 javadoc 写着"加写方法应当与它的写入方同一批进"，
 单独加 `save` 会让缺口从"看得见"变成"看起来没有缺口"。
 
@@ -5658,6 +5665,13 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 ⇒ 0.7 的边界是：**「图能被告触发着跑一轮、并且留下可查的记录」已经成立**（0.7.0 的判据），
 **「应用会按时间自己跑」仍未开始**，且这一状态在 `#295` 与本节两处都写着。
 
+★★ **2026-11-14 后续（本节结论已被取代，保留作历史记录）**：用户当天下令
+**「既然规划了 0.7.3 那就推进完吧，别留，把 1.0 的移除，在 0.7.3 处理」** ⇒ 上述四件事全部做完，
+`TriggerSlotTest` 的两条否定断言退役，判据有真栈读数。详见 **`§11.42`**。
+本节保留的理由不是"它还对"，而是它记下了一段**被推翻的判断**：
+当时说"不是一次提交能做完的"是对的（实际是 1 个迁移 + 9 个类 + 3 处接线 + 3 个测试类 + 2 套 e2e），
+但"所以推给 V1.0"这个结论是错的 —— **工作量不是推迟的理由，归属才是**。
+
 ### 11.39.5 没做的另外两件
 
 - **`v0.6.0` 的 tag 最终没有打，改打 `v0.7.0`（2026-11-12 决定）**：`§11.36.1` 对 E 的判据是
@@ -5683,6 +5697,7 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 沿用 `§11.39.5` 的先例：`v0.7.1`–`v0.7.3` 的 tag 都没打出，内容并进本版，
 版本号四处（`backend/pom.xml` · `frontend/package.json` · `frontend/package-lock.json` 两处）
 一次性升到 **0.7.4**。**0.7.3（触发器）仍然没做**，理由见 `§11.39.4`。
+（★ 2026-11-14 当天下版：`0.7.3` 已交付，见 `§11.42`；本句是发 0.7.4 那一刻的状态，不改。）
 
 ### 11.40.1 本版交付的四块
 
@@ -5749,4 +5764,70 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 ⇒ 所以 e2e 的条件段只配**一个具名分支**：执行器对 `named.size()==1` 是不问模型的，
 断言因此确定。**"模型真的被问了"这件事在端到端里没有读数**，要验它得另造一条
 能看见模型请求的用例（入口：桩的请求记录）。这条差异记在这里，不掩盖成"测试已覆盖"。
+
+## 11.42 0.7.3 触发器交付：留缝转实体（2026-11-14）
+
+用户 2026-11-14 的指令是 **「既然规划了 0.7.3 那就推进完吧，别留，把 1.0 的移除，在 0.7.3 处理」**。
+`§11.39.4` 当时把触发器推给 V1.0，理由是"不是一次提交能做完的"。这个理由现在作废：
+本版把它做完了，并且 `§11.27.1` 的判据（**定时触发的图能自己跑，不需要人点**）有真栈读数。
+
+### 11.42.1 交付面
+
+| 层 | 落点 |
+|---|---|
+| 迁移 | `assistant/V99__assistant_trigger_schedule.sql`：加 `trigger_next_at` / `trigger_last_at` / `trigger_missed`，两组 `chk_` 约束，一条部分索引 `idx_as_assistant_trigger_due`（只索引发起得到的行）；`as_workflow_record` 加 `trigger_source`（`MANUAL` / `CRON`） |
+| 领域 | `TriggerType`（只有 `CRON`；**不自动触发用 null 而不是 `NONE`**）· `Assistant.schedule/clearTrigger/markTriggerFired` · `AssistantRepository.findDueTriggers/claimTrigger` · `WorkflowRecord.triggerSource` |
+| 解析 | `TriggerCron`：`validate`（错误文案给人看）· `next` · `countBetween`（逐次推进）· `describe`。**只收 5 段**，内部补 `"0 "` 交给 Spring 的 `CronExpression.parse` —— 日和周的"与/或"、月末没有 31 日、闰年 2/29 这些日历语义自己写等于重踩 `GregorianCalendar` |
+| 执行 | `WorkflowRunRecorder`：把"跑 + 接中断 + 判三档 + 写记录"从 `WorkflowDebugService` 抽成一处，**调试与定时共用**（`WorkflowDebugService` 因此变成薄壳）· `WorkflowTriggerSweeper`：扫到期 → 抢 → 跑 · `WorkflowTriggerSchedule`：`@Scheduled(fixedDelayString="${app.trigger.scan-ms:10000}")`，默认开 |
+| 接口 | `PUT /assistants/{id}/trigger`（`assistant:edit`）。**不能塞进 `PUT /assistants/{id}`**：那个是 Partial 语义，只改触发时间也得带整份草稿，漏一格就是清空 |
+| 界面 | 画布顶栏「定时」/「已定时」→ 对话框：状态（下次/最近一次/漏了 N 次）+ cron 输入 + 四个预设 + 「最近一次运行」（时刻 · 成功失败 · 定时还是手动 · 输出摘要或失败原因） |
+
+### 11.42.2 四条设计决定与理由
+
+1. **停机跨过的周期只补跑一次**，`trigger_missed` 记被跳过几轮。
+   把三天的班全补跑会在启动瞬间起三倍模型调用，而那三天的结果对用户早已过期。
+   ⇒ `missedPeriods = countBetween(expected, now)`，**不减 1**：`countBetween` 从 `expected` 之后开始数，
+   它本身就是"漏掉几次"（第一版写了 `-1`，断"漏 3"得到 2）。
+2. **失败不立即重试**：`trigger_next_at` 在抢占时就顺延。坏图因此是每天失败一次，而不是每十秒一次。
+3. **乐观锁而不是分布式锁**：`update ... where id = ? and trigger_next_at = ?`（精确相等），抢到才跑。
+   只比 id 不够 —— 两个副本可能都读到"该跑了"，只有"下一次时间还是我看到的那一个"才证明没人先动过。
+4. **定时触发按应用所有者身份跑**（没有"当前用户"），且**入口输入是空串而不是占位文案**
+   （占位文案会进流程变量、被模型当成问题）。
+
+### 11.42.3 读数（判据逐条）
+
+- **正证（`frontend/e2e/workflow-trigger-sweep.mjs`，17/17）**：配 `now+2min` 的 cron ⇒
+  `triggerNextAt` 与输入偏差 ≤90s（分钟取整）⇒ 到点后 **1.0–3.7s** 自行跑起来 ⇒ `next` 顺延到次日同一分钟 ⇒
+  `missed=0` ⇒ 运行记录 **`triggerSource=CRON`**、`status=SUCCEEDED`、有输出 ⇒ 6 段 cron 400 且说清段数 ⇒
+  `0 0 30 2 *` 400（"这个 cron 不会再有下一次"）⇒ 被拒两次不改动已存的 cron ⇒ 清空后三格全空。
+- **界面（`frontend/e2e/workflow-trigger-panel.mjs`，14/14）**：顶栏入口 → 未开启文案 → 预设填入 → 保存后提示
+  "已保存，下次 …" → 顶栏变「已定时」→ 再打开显示"已开启 · 下次 …"与最近一次运行 → 写错 cron 报错且对话框不关 → 停用后回「定时」→ 全程零控制台错误。
+- **反证（做过）**：把 `WorkflowTriggerSweeper` 的 `if (!assistants.claimTrigger(...))` 改成
+  `if (false && !assistants.claimTrigger(...))` ⇒ `WorkflowTriggerSweeperTest` **4 红**
+  （`onlyOneRunnerWinsTheClaim` 报 `expected: 0 but was: 1`，另三条 `Wanted but not invoked`）。
+  ★ 恢复后**仍然 4 红**，真因是 `Copy-Item` 保留了备份的旧 mtime、Maven 增量编译没重编 ⇒
+  **反证恢复后必须确认 class 真的重编了**，否则"绿回来"和"红回去"都会被读反。
+- **逐类**：`TriggerCronTest` 9 · `WorkflowTriggerSweeperTest` 7 · `WorkflowDebugServiceTest` 5 ·
+  `AssistantTriggerTest` 4 · `WorkflowRecordsHttpTest` 6（真容器）· `AssistantPublishCheckTest` 22 ·
+  `AssistantUnknownSubPathTest` 2 · `MigrationInventoryTest` 1 · `JacksonTwoUsageTest` 2 · `JacksonUnificationTest` 1。
+
+### 11.42.4 这一版顺手补的三处真缺口（都不是触发器本身）
+
+1. **`clearTrigger` 只清三格、留着 `triggerLastAt` / `triggerMissed`** ⇒ 停用再开一个新 cron，
+   界面立刻显示"上次是补跑，中间漏了 3 次"，而那说的是**上一份配置**。改成五格全清。
+2. **`trigger_source` 列在库里、没人读** ⇒ 界面上完全看不出"这次是人点的还是到点自己跑的"，
+   正好是 0.7.3 要收掉的那类。`WorkflowRecordQueryService.View` 加这一格。
+3. **`errorText` 只取 `message`、丢掉 `hint`** ⇒ cron 写错时用户只看到"触发时间写错了"，
+   不知道改哪里（真正的说明"cron 要 5 段……现在写了 6 段"在后端的 `hint` 里）。
+   这是全局改进：发布校验、节点校验的报错同样受益。
+
+### 11.42.5 退役的口径与不做的边界
+
+- `backend/src/test/java/cn/lincoln/aiplatform/assistant/TriggerSlotTest.java` **已删**。
+  它的两条否定断言（"没有调度器碰触发列"、"触发列没有读写方"）按它自己的 javadoc 退役——
+  那两条钉的是"留缝状态"，本版之后它们会成为**阻止实体的墙**。
+- **不做**：事件触发（只做 cron）· 多个触发时间（一个应用一条）· 失败告警与重试策略（只记账 `FAILED` 记录）·
+  "暂停"与"停用"的区分（今天只有一个开关）· 每用户时区（按服务器时区，界面明写）。
+- **已知读数冲突**：检索链路真模型 **25.7s** vs 桩 8–11s，与 `§二` B4 的 10s 线正面冲突
+  （不是本版引入的，但定时触发会让它更容易被撞上——到点的批量任务会与人工试用抢上游）。
 

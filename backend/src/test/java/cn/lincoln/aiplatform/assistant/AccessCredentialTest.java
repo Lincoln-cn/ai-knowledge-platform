@@ -434,6 +434,23 @@ class AccessCredentialTest {
       return Optional.ofNullable(store.get(id)).filter(a -> !a.isDeleted());
     }
 
+    /** 本测试不涉及定时触发（{@code #295}）—— 假实现给"没有到期"这个中性答案。 */
+    @Override
+    public java.util.List<Assistant> findDueTriggers(java.time.Instant now, int limit) {
+      return java.util.List.of();
+    }
+
+    /** 本测试不涉及定时触发：永远"没抢到"，因此不会真的跑任何图。 */
+    @Override
+    public boolean claimTrigger(
+        UUID id,
+        java.time.Instant expectedNextAt,
+        java.time.Instant firedAt,
+        java.time.Instant nextAt,
+        int missed) {
+      return false;
+    }
+
     @Override
     public Optional<Assistant> findByClientRequestIdAndOwnerId(String key, UUID ownerId) {
       return Optional.empty();

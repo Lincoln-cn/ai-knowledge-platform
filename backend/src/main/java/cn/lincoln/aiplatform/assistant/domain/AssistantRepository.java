@@ -49,6 +49,35 @@ public interface AssistantRepository {
   List<String> listTags(ScopeFilter scope);
 
   /**
+   * 到期的定时触发（{@code #295} / 0.7.3）。
+   *
+   * <p>★ 按 {@code trigger_next_at} 取而不是每次全表算 cron："到期"要是可索引的谓词，服务停机后
+   * 也才回答得出"这一班错过了没有"。已软删的应用不算（删了还在后台跑是一类最难查的问题）。
+   *
+   * @param now 判定"到期"的时刻
+   * @param limit 单轮上限 —— 停机很久之后可能有大量应用同时到期，一次全拉出来会同时起一堆模型调用
+   */
+  List<Assistant> findDueTriggers(java.time.Instant now, int limit);
+
+  /**
+   * 抢占一次触发（乐观锁）。
+   *
+   * <p>★ 条件是 {@code trigger_next_at = expected}（<b>精确相等</b>，不是 {@code <=}）：调用方刚读到
+   * 的那个值就是基准，谁先改谁赢。多副本部署时这是唯一能保证"同一个周期只跑一次"的机制 —— 分布式锁要引入外部依赖，而这里的争用粒度只是"一个应用一秒一次"。
+   *
+   * <p>★ 抢到之后立刻顺延 {@code trigger_next_at}：执行期间不会被下一轮扫描再抢一次。代价是 "抢到但执行崩了"同样会顺延 ——
+   * 那是刻意接受的（失败后等下个周期重跑，而不是原地立即重试， 否则一个坏图会以每秒一次的频率打外部模型）。
+   *
+   * @return {@code true} 表示抢到了（本次真的跑），{@code false} 表示别人先改了
+   */
+  boolean claimTrigger(
+      UUID id,
+      java.time.Instant expectedNextAt,
+      java.time.Instant firedAt,
+      java.time.Instant nextAt,
+      int missed);
+
+  /**
    * 列表筛选条件（契约 {@code AssistantQuery}）。
    *
    * <p>★ 为什么收成一个 record 而不是多个位置参数：里面有两个 {@code Boolean}（{@code published} / {@code mine}）

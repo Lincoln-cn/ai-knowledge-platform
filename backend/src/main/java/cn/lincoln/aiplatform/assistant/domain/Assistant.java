@@ -195,6 +195,42 @@ public class Assistant implements OwnedResource {
   @Column(name = "deleted_at")
   private Instant deletedAt;
 
+  // ────────────────────────── 触发器（#295 / 0.7.3） ──────────────────────────
+
+  /**
+   * 触发方式；{@code null} = 不自动触发。
+   *
+   * <p>★ 与 {@link #triggerCron} / {@link #triggerNextAt} 要么同时为 null、要么同时有值 —— 库里 {@code
+   * chk_as_assistant_trigger_cron} 钉住这条。半配置（有 cron 没 next_at）会让调度器永远 扫不到它，而界面上又显示"已启用定时"。
+   */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "trigger_type", length = 16)
+  private TriggerType triggerType;
+
+  /** 5 段 UNIX cron（分 时 日 月 周）。 */
+  @Column(name = "trigger_cron", length = 64)
+  private String triggerCron;
+
+  /**
+   * 下次该跑的时刻 —— 调度器唯一的到期判据，也是乐观锁的比对基准。
+   *
+   * <p>★ 不每次全表扫 cron 现算：那样"到期"无法索引，也没法回答"这一班错过了没有"。
+   */
+  @Column(name = "trigger_next_at")
+  private Instant triggerNextAt;
+
+  /** 上次真的跑起来的时刻（不是"上次扫到"）。排障第一问是"它到底跑过没"。 */
+  @Column(name = "trigger_last_at")
+  private Instant triggerLastAt;
+
+  /**
+   * 服务停机跨过的周期数。
+   *
+   * <p>★ 每次只补跑一次，这里记被跳过几次 —— 把期间每一次都补跑会在启动瞬间把外部模型打满。
+   */
+  @Column(name = "trigger_missed", nullable = false)
+  private int triggerMissed;
+
   // ────────────────────────── 绑定关系 ──────────────────────────
 
   /** 绑定的知识库。<b>子表</b>而不是数组：删除保护要反查"哪些应用绑了它"。 */
@@ -318,6 +354,62 @@ public class Assistant implements OwnedResource {
    */
   public void changeRerankListwise(Boolean value) {
     this.retrievalRerankListwise = value;
+  }
+
+  /**
+   * 启用定时触发（{@code #295}）。
+   *
+   * @param cron 已校验过的 5 段 cron（校验在 {@code TriggerCron}，领域只认结果）
+   * @param nextAt 第一次该跑的时刻 —— <b>由调用方算好传进来</b>：领域层不解析 cron，它只持有"下次什么时候"
+   * @throws IllegalArgumentException 三者缺一（有 cron 没下次时刻的实体存进去就是半配置）
+   */
+  public void schedule(String cron, Instant nextAt, UUID updatedBy) {
+    if (cron == null || cron.isBlank()) {
+      throw new IllegalArgumentException("启用定时触发必须给出 cron");
+    }
+    if (nextAt == null) {
+      throw new IllegalArgumentException("启用定时触发必须给出下一次触发的时刻");
+    }
+    this.triggerType = TriggerType.CRON;
+    this.triggerCron = cron.trim();
+    this.triggerNextAt = nextAt;
+    this.updatedBy = updatedBy;
+  }
+
+  /**
+   * 关掉定时触发。
+   *
+   * <p>★ 把三列一起清空（而不是只把 {@code triggerType} 置 null 留着 cron）：留着的那份 cron 会在 下次有人打开界面时看起来像"还配着" ——
+   * 用户关掉的意图是"别再跑了"，不是"参数先存着"。
+   *
+   * <p>★ 连 {@code triggerLastAt} 与 {@code triggerMissed} 一起清：它们描述的是"上一次配置跑得怎么样"（什么时候跑的、中间漏过几轮），
+   * 换一份配置之后这两格就属于**另一次约定的历史**。留着的话，重新开启一个 cron 会立刻显示"上次是补跑，中间漏了 3 次" ——
+   * 而那是上一次的事（同一类坏味：`#40`"同一状态四处各写一份"，这里是"旧状态挂在新配置上"）。 真正要留的运行历史在 {@code as_workflow_record}
+   * 里，不靠这两列。
+   */
+  public void clearTrigger(UUID updatedBy) {
+    this.triggerType = null;
+    this.triggerCron = null;
+    this.triggerNextAt = null;
+    this.triggerLastAt = null;
+    this.triggerMissed = 0;
+    this.updatedBy = updatedBy;
+  }
+
+  /**
+   * 记一次真的跑过了：更新 last / next / missed。
+   *
+   * @param firedAt 这一跑开始的时刻
+   * @param nextAt 下次该跑的时刻（按 cron 顺延）
+   * @param missed 本次被跳过几个周期（服务停机跨过的轮数；正常情况是 0）
+   */
+  public void markTriggerFired(Instant firedAt, Instant nextAt, int missed) {
+    if (nextAt == null) {
+      throw new IllegalArgumentException("跑完必须算出下一次触发的时刻，否则这一跑之后就再也不会触发");
+    }
+    this.triggerLastAt = firedAt;
+    this.triggerNextAt = nextAt;
+    this.triggerMissed = Math.max(0, missed);
   }
 
   /** 覆盖式写入绑定关系（先清后加，交给 Hibernate 处理子表）。 */
@@ -536,6 +628,31 @@ public class Assistant implements OwnedResource {
 
   public Instant deletedAt() {
     return deletedAt;
+  }
+
+  /** 触发方式；{@code null} = 不自动触发（{@code #295}）。 */
+  public TriggerType triggerType() {
+    return triggerType;
+  }
+
+  /** 5 段 cron；未启用时为 {@code null}。 */
+  public String triggerCron() {
+    return triggerCron;
+  }
+
+  /** 下次该跑的时刻；未启用时为 {@code null}。 */
+  public Instant triggerNextAt() {
+    return triggerNextAt;
+  }
+
+  /** 上次真的跑起来的时刻；从没跑过时为 {@code null}。 */
+  public Instant triggerLastAt() {
+    return triggerLastAt;
+  }
+
+  /** 服务停机跨过的周期数。 */
+  public int triggerMissed() {
+    return triggerMissed;
   }
 
   /** 幂等键（创建请求用）。 */

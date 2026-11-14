@@ -42,7 +42,7 @@ class WorkflowDebugServiceTest {
     records = Mockito.mock(WorkflowRecordRepository.class);
     pauses = Mockito.mock(cn.lincoln.aiplatform.assistant.domain.WorkflowPauseRepository.class);
     when(records.save(any(WorkflowRecord.class))).thenAnswer(inv -> inv.getArgument(0));
-    service = new WorkflowDebugService(catalog, executor, records, pauses);
+    service = new WorkflowDebugService(catalog, new WorkflowRunRecorder(executor, records, pauses));
   }
 
   /** 编译不过 ⇒ 不产生运行记录（"图还不成立"不是"一次失败的运行"）。 */
@@ -149,11 +149,11 @@ class WorkflowDebugServiceTest {
    */
   @Test
   void interruptedRunIsPausedNotFailed() {
-    assertThat(WorkflowDebugService.statusOf(null, true)).isEqualTo("PAUSED");
-    assertThat(WorkflowDebugService.statusOf("模型超时", true))
+    assertThat(WorkflowRunRecorder.statusOf(null, true)).isEqualTo("PAUSED");
+    assertThat(WorkflowRunRecorder.statusOf("模型超时", true))
         .as("有失败原因时，中断仍然优先 —— 它表示流程没走完，而不是走完了出错")
         .isEqualTo("PAUSED");
-    assertThat(WorkflowDebugService.statusOf(null, false)).isEqualTo("SUCCEEDED");
-    assertThat(WorkflowDebugService.statusOf("模型超时", false)).isEqualTo("FAILED");
+    assertThat(WorkflowRunRecorder.statusOf(null, false)).isEqualTo("SUCCEEDED");
+    assertThat(WorkflowRunRecorder.statusOf("模型超时", false)).isEqualTo("FAILED");
   }
 }

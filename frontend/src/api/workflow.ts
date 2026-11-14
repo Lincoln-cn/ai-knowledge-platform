@@ -548,6 +548,16 @@ export interface WorkflowRecord {
   /** 整条记录的总耗时。不让界面自己把 trail 加起来 —— 两者的口径会漂移 */
   elapsedMs: number
   startedAt: string
+  /**
+   * 这次是谁发起的（`#295`）：`MANUAL` = 有人点了「试用」，`CRON` = 定时触发到点自己跑的。
+   *
+   * ★ 为什么记录里必须有这一格：定时触发的产出**没有人在场**，界面不标出来，用户看到一条新记录
+   * 会以为是别人点的；反过来，排查"它到底有没有按点跑"也只能靠这一格。
+   *
+   * ★ 为什么是可选：0.7.3 之前的存量记录没有这一列的值（迁移给的默认值虽是 `MANUAL`，
+   * 但契约只加不删、不轻易收紧 —— 同 `graphVersion` 的理由）。
+   */
+  triggerSource?: 'MANUAL' | 'CRON'
 }
 
 export interface WorkflowRecordQuery extends PageQuery {

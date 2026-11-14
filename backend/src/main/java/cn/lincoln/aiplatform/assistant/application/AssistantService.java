@@ -460,8 +460,43 @@ public class AssistantService {
     return view(assistants.save(assistant));
   }
 
-  // ────────────────────────── 发布校验与发布（判据 ①）──────────────────────────
+  /**
+   * 设置 / 清除定时触发（`#295`，0.7.3）。
+   *
+   * <p>★ 只改这一件事：{@code cron} 空 ⇒ 三列一起清空（含 {@code next_at} 与 {@code missed}）。 "留着 next_at
+   * 只是不跑"是更糟的形状 —— 那样库里有到期时间却没人消费，排查时看不出是关了还是坏了。
+   *
+   * <p>★ 校验在这里而不是在 {@link TriggerCron} 里抛：{@code TriggerCron} 要能返回<strong>给用户看的 文案</strong>（"cron 要
+   * 5 段"），而"变成哪个 HTTP 状态码"是服务层的事。
+   */
+  @Transactional
+  public AssistantView setTrigger(UUID id, String cron, UUID actorId) {
+    Assistant assistant = requireVisible(id);
+    if (assistant.builtin()) {
+      throw new BusinessException(ErrorCode.FORBIDDEN, "内置应用不可修改", "内置应用仅供问答；要定时跑请先复制一份再改");
+    }
+    if (cron == null || cron.isBlank()) {
+      assistant.clearTrigger(actorId);
+      return view(assistants.save(assistant));
+    }
+    TriggerCron.validate(cron)
+        .ifPresent(
+            message -> {
+              throw new BusinessException(ErrorCode.BAD_REQUEST, "触发时间写错了", message);
+            });
+    Instant next =
+        TriggerCron.next(cron, Instant.now())
+            .orElseThrow(
+                () ->
+                    new BusinessException(
+                        ErrorCode.BAD_REQUEST,
+                        "这个 cron 不会再有下一次",
+                        "例如写死了某年某月某日，那一天过去之后它就再也不会触发；请换成会重复发生的时间"));
+    assistant.schedule(cron.trim(), next, actorId);
+    return view(assistants.save(assistant));
+  }
 
+  // ────────────────────────── 发布校验与发布（判据 ①）──────────────────────────
   /**
    * 发布前校验（契约 {@code checkAssistantBeforePublish}）。
    *

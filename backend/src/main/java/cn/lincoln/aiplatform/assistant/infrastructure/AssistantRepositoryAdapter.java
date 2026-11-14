@@ -75,6 +75,21 @@ public class AssistantRepositoryAdapter implements AssistantRepository {
   }
 
   @Override
+  public List<Assistant> findDueTriggers(Instant now, int limit) {
+    // ★ 领域给的是"最多几条"；Spring Data 要的是页对象，limit 恒 > 0（调用方已归一化）
+    return jpa.findDueTriggers(now, PageRequest.of(0, Math.max(1, limit)));
+  }
+
+  @Override
+  @org.springframework.transaction.annotation.Transactional
+  public boolean claimTrigger(
+      UUID id, Instant expectedNextAt, Instant firedAt, Instant nextAt, int missed) {
+    // ★ 必须开事务：{@code @Modifying} 的批量 update 在没有事务时会抛 TransactionRequiredException，
+    //   而调用方（调度器）刻意不把它们包在一个大事务里 —— 跑图要调外部模型，不能按分钟占着连接。
+    return jpa.claimTrigger(id, expectedNextAt, firedAt, nextAt, missed) == 1;
+  }
+
+  @Override
   public Optional<Assistant> findByClientRequestIdAndOwnerId(String clientRequestId, UUID ownerId) {
     return jpa
         .findAll(

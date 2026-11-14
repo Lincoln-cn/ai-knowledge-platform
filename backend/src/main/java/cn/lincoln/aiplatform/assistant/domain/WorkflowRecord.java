@@ -71,8 +71,18 @@ public class WorkflowRecord {
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
+  /**
+   * 这一跑的发起方：{@code MANUAL}（人点试用）/ {@code CRON}（定时触发，{@code #295}）。
+   *
+   * <p>★ 为什么不用 {@code conversationId} 是否为空来区分：试用也是空的，而"有人盯着跑"与"没人盯着跑"
+   * 在排障时是完全不同的两个问题（前者能问用户当时输入了什么，后者只能看记录）。
+   */
+  @Column(name = "trigger_source", nullable = false, length = 16)
+  private String triggerSource;
+
   protected WorkflowRecord() {}
 
+  /** 人点试用（{@code MANUAL}）与定时触发（{@code CRON}）之外的来源暂不存在，缺省按人点。 */
   public WorkflowRecord(
       UUID id,
       UUID assistantId,
@@ -85,6 +95,34 @@ public class WorkflowRecord {
       int elapsedMs,
       Instant startedAt,
       Instant createdAt) {
+    this(
+        id,
+        assistantId,
+        conversationId,
+        input,
+        nodeTrail,
+        finalOutputPreview,
+        status,
+        failReason,
+        elapsedMs,
+        startedAt,
+        createdAt,
+        "MANUAL");
+  }
+
+  public WorkflowRecord(
+      UUID id,
+      UUID assistantId,
+      UUID conversationId,
+      String input,
+      String nodeTrail,
+      String finalOutputPreview,
+      String status,
+      String failReason,
+      int elapsedMs,
+      Instant startedAt,
+      Instant createdAt,
+      String triggerSource) {
     this.id = id;
     this.assistantId = assistantId;
     this.conversationId = conversationId;
@@ -96,6 +134,7 @@ public class WorkflowRecord {
     this.elapsedMs = elapsedMs;
     this.startedAt = startedAt;
     this.createdAt = createdAt;
+    this.triggerSource = triggerSource == null ? "MANUAL" : triggerSource;
   }
 
   public UUID id() {
@@ -140,5 +179,10 @@ public class WorkflowRecord {
 
   public Instant createdAt() {
     return createdAt;
+  }
+
+  /** {@code MANUAL} 或 {@code CRON}。 */
+  public String triggerSource() {
+    return triggerSource;
   }
 }

@@ -1,17 +1,9 @@
 package cn.lincoln.aiplatform.assistant.application;
 
-import cn.lincoln.aiplatform.assistant.domain.WorkflowPause;
-import cn.lincoln.aiplatform.assistant.domain.WorkflowPauseRepository;
-import cn.lincoln.aiplatform.assistant.domain.WorkflowRecord;
-import cn.lincoln.aiplatform.assistant.domain.WorkflowRecordRepository;
-import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -21,36 +13,19 @@ import org.springframework.stereotype.Service;
  * debugLinear}），后端执行引擎虽然能跑，却没有任何请求能到它 —— 于是 {@code as_workflow_record} 恒空、 {@code
  * listWorkflowRecords} 也恒空，两处都没有异常。<strong>「读数为 0」与「功能没接」长得一样</strong>，这是本项目第七次。
  *
- * <p>★ <strong>为什么执行与写记录不在同一个事务里</strong>：{@code LinearWorkflowExecutor#executeAndReturn}
- * 在节点抛异常时整批回滚 （L1：失败那跑的节点记录不得显示成功）。如果记录也放进那个事务，<strong>失败的试用就不会留下任何痕迹</strong> ——
- * 而失败恰恰是最需要回查的那一次。所以这里先执行、拿到成败，再用自己的事务写一行记录（{@code status} 区分 {@code SUCCEEDED} / {@code FAILED}）。
- *
- * <p>★ 调试可以写记录这件事<strong>与 {@link WorkflowRecordRepository} 原来的 javadoc 相反</strong>：那里写着"运行记录刻意不在调试
- * 时写入"，理由是调试不是正式会话、写进去会污染统计。现在改成写，是因为<strong>不写就无从证明执行引擎真的跑过</strong> —— 宁可让统计口径里多一类 {@code
- * conversationId} 为空的记录（可筛），也不要留一个"跑成功了但查不到"的黑洞。那段 javadoc 已同步改写。
+ * <p>★ 0.7.3 起<strong>跑与写记录都交给 {@link WorkflowRunRecorder}</strong>（{@code #295}）：定时触发也要
+ * 跑同一张图、写同一张表，而"接中断、判三档状态、截预览"这些细节各写一份的话，两处迟早分叉 —— 一边把中断算成 FAILED、另一边算成
+ * PAUSED，各自都"看起来对"。这里只剩"图从哪来"这一件它还负责的事。
  */
 @Service
 public class WorkflowDebugService {
 
-  private static final Logger LOG = LoggerFactory.getLogger(WorkflowDebugService.class);
-
-  /** 最终输出的预览长度上限（与列表页展示口径一致，避免记录表存下整段长文本）。 */
-  private static final int PREVIEW_LIMIT = 500;
-
   private final NodeTypeCatalog catalog;
-  private final LinearWorkflowExecutor executor;
-  private final WorkflowRecordRepository records;
-  private final WorkflowPauseRepository pauses;
+  private final WorkflowRunRecorder recorder;
 
-  public WorkflowDebugService(
-      NodeTypeCatalog catalog,
-      LinearWorkflowExecutor executor,
-      WorkflowRecordRepository records,
-      WorkflowPauseRepository pauses) {
+  public WorkflowDebugService(NodeTypeCatalog catalog, WorkflowRunRecorder recorder) {
     this.catalog = catalog;
-    this.executor = executor;
-    this.records = records;
-    this.pauses = pauses;
+    this.recorder = recorder;
   }
 
   /**
@@ -67,139 +42,27 @@ public class WorkflowDebugService {
       return Result.rejected(compiled.errors());
     }
 
-    UUID executionId = UUID.randomUUID();
-    Instant startedAt = Instant.now();
-    long began = System.nanoTime();
+    WorkflowRunRecorder.Outcome outcome =
+        recorder.run(assistantId, compiled.plan(), inputs, null, "MANUAL");
 
-    String failReason = null;
-    String output = null;
-    boolean paused = false;
-    String interruptedNode = null;
-    try {
-      FlowState state = executor.executeAndReturn(executionId, compiled.plan(), inputs);
-      output = state.read("reply");
-    } catch (WorkflowInterrupted interrupted) {
-      // ★ 中断不是失败：它是「这次执行停在这里、状态还在、可以接着跑」。
-      //   所以单独一档，不能落进下面那个 catch 的 FAILED 分支。
-      paused = true;
-      interruptedNode = interrupted.nodeId();
-      output = null;
-      failReason = null;
-      // ★ 把暂停那一刻的状态存住 —— 没有它，「恢复」无从谈起：
-      //   已走到的节点丢了，重跑一遍等于从头来。
-      pauses.save(
-          new WorkflowPause(
-              executionId,
-              assistantId,
-              interrupted.nodeId(),
-              interrupted.nodeType(),
-              interrupted.stateSnapshot(),
-              interrupted.stepsDone(),
-              Instant.now(),
-              null));
-    } catch (RuntimeException ex) {
-      failReason = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
-      LOG.warn("#工作流试用 执行失败（assistant={}，execution={}）：{}", assistantId, executionId, failReason);
-    }
-
-    int elapsedMs = (int) ((System.nanoTime() - began) / 1_000_000L);
-    List<TrailStep> trail = trailOf(compiled.plan());
-
-    WorkflowRecord record =
-        new WorkflowRecord(
-            UUID.randomUUID(),
-            assistantId,
-            null, // 调试不是正式会话：conversationId 留空，统计口径据此把"试用"与"真问答"分开筛
-            inputs,
-            trailToJson(trail),
-            preview(output),
-            statusOf(failReason, paused),
-            failReason,
-            elapsedMs,
-            startedAt,
-            Instant.now());
-    records.save(record);
-
-    // ★ ok 必须跟着 failReason 走，不能写死 true：真栈验证时这里返回 ok=True 而记录是 FAILED，
+    // ★ ok 必须跟着结果走，不能写死 true：真栈验证时这里返回 ok=True 而记录是 FAILED，
     //   前端「试用」对话框会显示"成功"、记录表里却是失败 —— 正是项目一直在批的静默失败形状。
     //   失败时把原因放进 errors，调用方不用再去查记录表才知道为什么没跑成。
-    boolean ok = failReason == null;
-    List<String> errors = ok ? null : List.of(failReason);
-    return new Result(ok, errors, output, trail, elapsedMs, executionId);
-  }
-
-  /** 轨迹取自编译后的计划：节点顺序与类型都在计划里，不需要再读一遍节点执行记录表。 */
-  private static List<TrailStep> trailOf(WorkflowCompiler.ExecutionPlan plan) {
-    List<TrailStep> trail = new ArrayList<>();
-    for (WorkflowCompiler.PlanStep step : plan.steps()) {
-      trail.add(new TrailStep(step.nodeId(), step.type(), step.order()));
-    }
-    return trail;
-  }
-
-  /**
-   * 轨迹序列化成 JSON。
-   *
-   * <p>★ 手写而不是用序列化器：这里只有三个字段、形状固定，引一个序列化器要处理泛型与转义，反而更容易在中文节点名上出错。
-   */
-  private static String trailToJson(List<TrailStep> trail) {
-    StringBuilder sb = new StringBuilder("[");
-    for (int i = 0; i < trail.size(); i++) {
-      TrailStep step = trail.get(i);
-      if (i > 0) {
-        sb.append(',');
-      }
-      sb.append("{\"nodeId\":\"")
-          .append(escape(step.nodeId()))
-          .append("\",")
-          .append("\"type\":\"")
-          .append(escape(step.type()))
-          .append("\",")
-          .append("\"order\":")
-          .append(step.order())
-          .append('}');
-    }
-    return sb.append(']').toString();
-  }
-
-  private static String escape(String value) {
-    if (value == null) {
-      return "";
-    }
-    return value.replace("\\", "\\\\").replace("\"", "\\\"");
-  }
-
-  /**
-   * 输出预览。
-   *
-   * <p>★ 空输出返回 <b>空串</b>而不是 {@code null}：{@code as_workflow_record.final_output_preview} 是 {@code
-   * text not null}（{@code V62__assistant_workflow_record.sql:37}）。这个差别只有真栈能发现 —— {@code
-   * WorkflowDebugServiceTest} 用的是 Mock 仓储，不校验 SQL 约束，所以它在单元测试里一直是绿的。
-   */
-  /**
-   * 运行记录的状态。
-   *
-   * <p>★ 三档而不是两档：中断既不是成功也不是失败 —— 它表示「停在这里、状态还在、可以接着跑」。 把它算成 FAILED 会让「试用了但停在中途」在列表里与「跑挂了」长得一样。
-   */
-  static String statusOf(String failReason, boolean paused) {
-    if (paused) {
-      return "PAUSED";
-    }
-    return failReason == null ? "SUCCEEDED" : "FAILED";
-  }
-
-  private static String preview(String output) {
-    if (output == null || output.isBlank()) {
-      return "";
-    }
-    return output.length() <= PREVIEW_LIMIT ? output : output.substring(0, PREVIEW_LIMIT);
+    List<String> errors = outcome.ok() ? null : List.of(outcome.failReason());
+    return new Result(
+        outcome.ok(),
+        errors,
+        outcome.output(),
+        outcome.trail(),
+        outcome.elapsedMs(),
+        outcome.executionId());
   }
 
   /**
    * 试用结果（契约 {@code DebugWorkflowResult}）。
    *
-   * @param ok 图能不能跑（{@code false} 表示编译就没过，此时 {@code errors} 非空、没有产生运行记录）
-   * @param errors 编译错误（给人看的句子，不是错误码）
+   * @param ok 图能不能跑（{@code false} 表示编译就没过或执行失败，此时 {@code errors} 非空）
+   * @param errors 编译错误或失败原因（给人看的句子，不是错误码）
    */
   public record Result(
       boolean ok,

@@ -34,6 +34,11 @@
                     <WorkFlowIcon icon="lucide:play" class="mr-4" />
                     试用
                 </el-button>
+                <!-- 定时触发（`#295`）：图标随开关状态变 —— 开着的时候顶栏就能看出「它会自己跑」 -->
+                <el-button text @click="openTrigger">
+                    <WorkFlowIcon :icon="triggerCron ? 'lucide:alarm-clock-check' : 'lucide:alarm-clock'" class="mr-4" />
+                    {{ triggerCron ? '已定时' : '定时' }}
+                </el-button>
                 <span class="top-sep"></span>
                 <el-button type="primary" @click="publicHandle"> 发布 </el-button>
                 <span class="top-sep"></span>
@@ -104,6 +109,62 @@
             <DropdownMenu :show="showPopover" :id="id" v-click-outside="clickoutside" @clickNodes="clickNodes"
                 :workflowRef="workflowRef" />
         </el-collapse-transition>
+
+        <!-- 定时触发（`#295`）：只管一件事 —— 什么时候自动跑**已发布版本**。
+             所以这里刻意不提供「输入」一栏：定时触发没有提问的人，入口输入恒为空。 -->
+        <el-dialog v-model="showTrigger" title="定时触发" width="460px" append-to-body>
+            <div class="trigger-body">
+                <el-alert v-if="triggerCron && triggerNextAt" type="success" :closable="false" show-icon
+                    :title="`已开启 · 下次 ${datetimeFormat(triggerNextAt)}`">
+                    <template #default>
+                        <p class="trigger-meta">
+                            最近一次运行（{{ triggerLastAt ? datetimeFormat(triggerLastAt) : '还没有跑过' }}）：
+                            <template v-if="lastRecord">
+                                {{ datetimeFormat(lastRecord.startedAt) }} ·
+                                {{ lastRecord.status === 'SUCCEEDED' ? '成功' : '失败' }} ·
+                                {{ lastRecord.triggerSource === 'CRON' ? '定时' : '手动试用' }}
+                            </template>
+                            <template v-else>查不到运行记录</template>
+                        </p>
+                        <!-- ★ 定时触发没有会话可翻（conversation_id 为 null），产出只能从记录里看 ——
+                             所以这一行不是装饰，它是「它刚跑了什么」的唯一出口 -->
+                        <p v-if="lastRecord" class="trigger-output">
+                            {{ lastRecord.status === 'SUCCEEDED'
+                                ? (lastRecord.finalOutputPreview || '（这次没有输出）')
+                                : (lastRecord.failReason || '（没有写失败原因）') }}
+                        </p>
+                        <p v-if="triggerMissed > 0" class="trigger-meta trigger-meta-warn">
+                            上次是补跑，中间漏了 {{ triggerMissed }} 次（服务停机跨过的周期不会逐次补，只补一次）
+                        </p>
+                    </template>
+                </el-alert>
+                <el-alert v-else type="info" :closable="false" show-icon title="未开启 —— 这张图只会在你点「试用」时跑" />
+
+                <el-form label-width="88px" class="mt-16">
+                    <el-form-item label="触发时间">
+                        <el-input v-model="triggerCron" placeholder="0 9 * * 1-5"
+                            @keyup.enter="saveTrigger" />
+                    </el-form-item>
+                </el-form>
+
+                <!-- 预设：cron 是给写过程序的人看的，大多数人只需要"每天九点"这种说法 -->
+                <div class="trigger-presets">
+                    <el-tag v-for="preset in TRIGGER_PRESETS" :key="preset.cron" class="trigger-preset"
+                        effect="plain" @click="triggerCron = preset.cron">
+                        {{ preset.label }}
+                    </el-tag>
+                </div>
+                <p class="trigger-hint">
+                    5 段（分 时 日 月 周），按服务器时区解释。留空并保存 = 关闭。
+                    ★ 跑的是**已发布版本** —— 改了草稿没发布，定时跑的还是上一次发布的流程。
+                </p>
+            </div>
+            <template #footer>
+                <el-button @click="showTrigger = false">关闭</el-button>
+                <el-button type="danger" plain :disabled="!triggerCron" @click="clearTrigger">停用</el-button>
+                <el-button type="primary" :loading="triggerBusy" @click="saveTrigger">保存</el-button>
+            </template>
+        </el-dialog>
     </div>
 </template>
 
@@ -128,14 +189,16 @@ import { datetimeFormat } from '@/utils/time'
 import { toLogicFlow, fromLogicFlow } from './lib/graph-format'
 import { setAppId } from './lib/context'
 import { validateGraph, hasBlockingError, type ValidateContext } from './lib/validate'
-import { getAssistant } from '@/api/assistants'
+import { getAssistant, setAssistantTrigger } from '@/api/assistants'
 import { modelsApi, knowledgeApi } from '@/api'
 import { detail as getDetail, addSubmit, getVersionGraph } from '@/api/legacy/setting'
 import {
     validateWorkflow,
     publishWorkflow,
     debugWorkflow,
+    listWorkflowRecords,
     type WorkflowGraph,
+    type WorkflowRecord,
     type WorkflowValidationIssue
 } from '@/api/workflow'
 import { ErrorCode } from '@/api/types'
@@ -165,6 +228,25 @@ const saveTime = ref<any>('')
 const currentVersion = ref<any>({})
 const isSave = ref(false)
 const showPopover = ref(false)
+/**
+ * 定时触发（`#295`，0.7.3）。
+ *
+ * ★ 状态**全部来自后端**：cron 是输入，`triggerNextAt` 是后端用同一套 cron 解释算出来的产物 ——
+ * 前端自己再算一遍就会出现"界面说周一九点、后端实际周二九点"的偏差（时区、日与周的与/或规则）。
+ */
+const showTrigger = ref(false)
+const triggerCron = ref('')
+const triggerNextAt = ref<string | null>(null)
+const triggerLastAt = ref<string | null>(null)
+const triggerMissed = ref(0)
+const triggerBusy = ref(false)
+/**
+ * 最近一条运行记录。
+ *
+ * ★ 定时触发的产出**没有人在场**，也没有会话可翻（`conversation_id` 是 null）—— 记录是唯一能看到
+ * "它按点跑了什么、成没成功"的地方。所以这里必须把最新一条捞出来显示，否则「已定时」只是个绿灯。
+ */
+const lastRecord = ref<WorkflowRecord | null>(null)
 /** 「试用」进行中：按钮转圈，防重复点击（每次试用都会在后端留下一条运行记录）。 */
 const trialing = ref(false)
 const router = useRouter()
@@ -339,10 +421,86 @@ function clearPublishIssues() {
     publishIssueSummary.value = ''
 }
 
-/** 错误对象上能给人看的那句话。`ApiError.message` 一定非空（网络失败时是 http 兜底文案） */
+/**
+ * 错误对象上能给人看的那句话。`ApiError.message` 一定非空（网络失败时是 http 兜底文案）。
+ *
+ * ★ 必须把 `hint` 一起拼上：后端把"为什么错、错在哪"放在 `hint` 里（例如 cron 写错时
+ *   `message` 只是"触发时间写错了"，`hint` 才是"cron 要 5 段……现在写了 6 段"）。
+ *   只取 `message` 的后果是——用户知道错了，但不知道改哪里，只能反复试。
+ */
 function errorText(error: unknown): string | null {
-    const message = (error as { message?: unknown } | null)?.message
-    return typeof message === 'string' && message.trim().length > 0 ? message : null
+    const e = error as { message?: unknown; hint?: unknown } | null
+    const message = typeof e?.message === 'string' && e.message.trim().length > 0 ? e.message.trim() : null
+    const hint = typeof e?.hint === 'string' && e.hint.trim().length > 0 ? e.hint.trim() : null
+    if (message && hint) return `${message}：${hint}`
+    return message ?? hint
+}
+
+/**
+ * 定时触发的预设（`#295`）。
+ *
+ * ★ 只给四个：cron 的难点不在**记得住语法**，而在"想清楚它到底什么时候跑" —— 预设覆盖了绝大多数
+ * 真实需求（每天 / 工作日 / 每周 / 每小时），剩下的让人自己写。
+ */
+const TRIGGER_PRESETS = [
+    { label: '每天 09:00', cron: '0 9 * * *' },
+    { label: '工作日 09:00', cron: '0 9 * * 1-5' },
+    { label: '每周一 09:00', cron: '0 9 * * 1' },
+    { label: '每小时整点', cron: '0 * * * *' }
+]
+
+/**
+ * 打开定时触发对话框：顺手把最近一条运行记录捞出来。
+ *
+ * ★ 读记录失败就降级成"查不到运行记录"，不让它挡住对话框 —— 打开一个设置面板这个动作，
+ * 不该因为一条辅助信息而失败（用户会以为定时触发坏了）。
+ */
+async function openTrigger() {
+    showTrigger.value = true
+    lastRecord.value = null
+    try {
+        const page = await listWorkflowRecords(id, { page: 1, size: 1 })
+        lastRecord.value = page.list?.[0] ?? null
+    } catch {
+        lastRecord.value = null
+    }
+}
+
+/**
+ * 保存定时触发。
+ *
+ * ★ 保存后**用后端返回的值回填**（而不是用输入框里的字符串）：后端会把 `0 9 * * *` 解释成下一次的
+ * 具体时刻，"界面说九点、后端实际跑在别的时刻"这种偏差只有靠回填才能发现。
+ */
+async function saveTrigger() {
+    triggerBusy.value = true
+    try {
+        const app = await setAssistantTrigger(id, triggerCron.value.trim() || null)
+        triggerCron.value = app.triggerCron ?? ''
+        triggerNextAt.value = app.triggerNextAt ?? null
+        triggerLastAt.value = app.triggerLastAt ?? null
+        triggerMissed.value = app.triggerMissed ?? 0
+        if (triggerCron.value && triggerNextAt.value) {
+            MsgSuccess(`已保存，下次 ${datetimeFormat(triggerNextAt.value)}`)
+        } else if (triggerCron.value) {
+            // 配了但从今往后再也不会到点 —— 这不是成功，必须说清
+            MsgError('已保存，但这个 cron 不会再有下一次触发，请换一个会重复发生的时间')
+        } else {
+            MsgSuccess('已关闭定时触发')
+        }
+        showTrigger.value = false
+    } catch (error: unknown) {
+        // 后端 400 的 message 是"为什么写错了"（段数不对 / 永不发生），照原样给人看
+        MsgError(errorText(error) ?? '保存定时触发失败，请稍后重试')
+    } finally {
+        triggerBusy.value = false
+    }
+}
+
+/** 停用：把 cron 清空再保存（后端会连带清掉 next_at 与 missed）。 */
+async function clearTrigger() {
+    triggerCron.value = ''
+    await saveTrigger()
 }
 
 /**
@@ -500,6 +658,11 @@ function getWokFlowDetail() {
     // 应用名来自 assistant（图里没有名称），流程来自草稿
     getAssistant(id).then((app) => {
         detail.value = { ...(detail.value ?? {}), name: app.name, applyName: app.name }
+        // 定时触发的状态也随应用一起回来（`#295`）：三个字段都是后端算的，前端只负责显示。
+        triggerCron.value = app.triggerCron ?? ''
+        triggerNextAt.value = app.triggerNextAt ?? null
+        triggerLastAt.value = app.triggerLastAt ?? null
+        triggerMissed.value = app.triggerMissed ?? 0
     })
     getDetail({ id: id })
         .then((res) => {
@@ -818,6 +981,63 @@ async function runTrial() {
     margin: 0;
     white-space: pre-line;
     color: var(--color-ink-2);
+    font-size: var(--text-sm);
+    line-height: 1.6;
+}
+
+/* ───────── 定时触发（`#295`）───────── */
+
+.trigger-body {
+    display: flex;
+    flex-direction: column;
+}
+
+/* 两种 aler 之间的留白由这里统一给，避免"有的地方 12、有的地方 16" */
+.trigger-body .el-alert {
+    margin-bottom: var(--space-md);
+}
+
+.trigger-meta {
+    margin: var(--space-3xs) 0 0;
+    color: var(--color-muted);
+    font-size: var(--text-sm);
+    line-height: 1.6;
+}
+
+/* 补跑是"异常但已恢复"，用警示色而不是错误色：它跑成功了，只是中间漏过 */
+.trigger-meta-warn {
+    color: var(--color-warning);
+}
+
+/* 最近一次的产出 / 失败原因：等宽断行留在那里就好，不截断（截断后就看不出是哪一步出的问题） */
+.trigger-output {
+    margin: var(--space-3xs) 0 0;
+    padding: var(--space-2xs) var(--space-xs);
+    background: var(--color-sunken);
+    border-radius: var(--radius-sm);
+    color: var(--color-ink-2);
+    font-size: var(--text-sm);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 88px;
+    overflow-y: auto;
+}
+
+.trigger-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-xs);
+    margin-bottom: var(--space-sm);
+}
+
+.trigger-preset {
+    cursor: pointer;
+}
+
+.trigger-hint {
+    margin: 0;
+    color: var(--color-muted);
     font-size: var(--text-sm);
     line-height: 1.6;
 }

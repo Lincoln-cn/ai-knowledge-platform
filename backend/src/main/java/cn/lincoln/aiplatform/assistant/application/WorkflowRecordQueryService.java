@@ -18,16 +18,14 @@ import tools.jackson.databind.ObjectMapper;
  * 编排运行记录的<strong>只读</strong>查询（{@code #198} 剩余端点之一；契约 {@code GET
  * /assistants/{appId}/workflow/records}）。
  *
- * <h3>★★ 这条端点在真实系统里今天<strong>产生不了一行数据</strong></h3>
+ * <h3>写入方（0.7.3 起的实际状态）</h3>
  *
- * <p>运行记录的唯一写入方是"把用户画的图真的跑一遍"的执行引擎，而 {@code 08 §二} 与 {@code 09 §5.3} 把它排在 <strong>V1.0</strong>；今天
- * {@code workflow} 模块里只有一个 {@code package-info}（准入判据见 {@code caliber/WorkflowEngineAdmissionTest}）。
+ * <p>两类写入方，都经过 {@link WorkflowRunRecorder}：<strong>人点「试用」</strong>（{@code trigger_source = MANUAL}）
+ * 与<strong>定时触发</strong>（{@code trigger_source = CRON}，{@code #295}）。所以这一页今天不是空的 ——
+ * 之前这里写着"产生不了一行数据、永远是空列表"，那是 0.7.0 之前的实情，已经作废。
  *
- * <p>★ 也<strong>不是</strong>画布调试：{@code POST …/workflow/debug} 刻意不写这张表（设计册与 mock 同一口径 ——
- * 调试不产生正式运行记录，否则每点一次「试运行」都会污染真实账）。
- *
- * <p>所以今天这一页<strong>永远是 200 + 空列表</strong>。这不是缺陷的隐写，而是如实状态： 端点、表、契约、隔离与分页都在位，等执行引擎落地就是同一个端点、同一张表。
- * 这句话必须留在代码里 —— 否则下一个人看到"端点有了、表有了"，会以为差的是一个页面。
+ * <p>★ 两类写入方走同一个记录器，是为了让"跑完了怎么判、失败怎么记"只有一份实现：分成两份之后， 定时那一路漏记一次就会表现为"界面上看不出它跑过"（`#40`
+ * 同族：同一状态两处各写一份）。
  *
  * <h3>三条判定都落在本类，而不是控制器</h3>
  *
@@ -118,7 +116,8 @@ public class WorkflowRecordQueryService {
         row.status(),
         row.failReason(),
         row.elapsedMs(),
-        row.startedAt());
+        row.startedAt(),
+        row.triggerSource());
   }
 
   /**
@@ -131,6 +130,9 @@ public class WorkflowRecordQueryService {
    *
    * <p>★ {@code finalOutputPreview} 在失败的那次是<strong>空串</strong>（不是 null），{@code failReason} 在成功的那次是
    * {@code null}（不是空串）—— 与契约的 {@code string} / {@code string | null} 逐一对齐。
+   *
+   * <p>★ {@code triggerSource} 是 {@code MANUAL} / {@code CRON}（{@code #295}）。界面靠它回答"这次是这个人在看、
+   * 还是它自己到点跑的" —— 不暴露它的话，定时触发的效果在界面上完全看不见（列在库里、没人读，正是 0.7.3 要收掉的那类）。
    */
   public record View(
       UUID id,
@@ -142,5 +144,6 @@ public class WorkflowRecordQueryService {
       String status,
       String failReason,
       int elapsedMs,
-      Instant startedAt) {}
+      Instant startedAt,
+      String triggerSource) {}
 }

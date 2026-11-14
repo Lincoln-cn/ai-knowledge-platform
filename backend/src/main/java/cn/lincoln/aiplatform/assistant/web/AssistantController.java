@@ -241,6 +241,27 @@ public class AssistantController {
         assistants.publish(id, body.published(), UUID.fromString(jwt.getSubject())));
   }
 
+  /**
+   * 设置 / 清除定时触发（`#295`，0.7.3）。
+   *
+   * <p>★ 单独一个端点而不是塞进 {@code PUT /assistants/{id}}：后者是 {@code Partial<UpsertAssistantBody>}，
+   * 但一次"只改触发时间"的请求若走它，就要带齐整份草稿 —— 而带漏一格的后果是清空，不是保持。
+   *
+   * <p>{@code cron} 为 {@code null} / 空串 ⇒ <strong>关掉</strong>触发器（连带清空 next_at 与 missed）， 所以前端不需要另一个
+   * "DELETE" 语义的端点。
+   */
+  @PutMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/trigger")
+  @PreAuthorize("hasAuthority('assistant:edit')")
+  public ApiResponse<AssistantView> setTrigger(
+      @PathVariable UUID id,
+      @RequestBody(required = false) TriggerBody body,
+      @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        assistants.setTrigger(
+            id, body == null ? null : body.cron(), UUID.fromString(jwt.getSubject())));
+  }
+
   /** 导出 JSON 包（配置 + 依赖清单）。★ {@code includeDocuments} 当前只回显，不影响包内容（见服务层注释）。 */
   @GetMapping(
       "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/export")
@@ -565,6 +586,9 @@ public class AssistantController {
 
   /** API Key 启停（契约 {@code setApiKeyEnabled} 的 {@code { enabled }}）。 */
   public record ApiKeyEnabledBody(Boolean enabled) {}
+
+  /** 定时触发（{@code #295}）：{@code cron} 为 5 段 UNIX cron；缺省 ⇒ 关掉触发器。 */
+  public record TriggerBody(String cron) {}
 
   /** 契约里的 {@code grants} 是可选的；{@code null} 与空数组同义 —— 都是"把名单清空"。 */
   private static List<Grant> toGrants(GrantsBody body) {
