@@ -20,6 +20,10 @@ const STUB = process.env.AIP_STUB ?? 'http://localhost:11434';
 const APP = process.env.AIP_E2E_APP ?? '30fc12bd-5dd8-460f-a8c7-5bf4dacd2721';
 const KB = process.env.AIP_KB ?? '05f0a754-6c67-4604-986d-ea8f32d54aa8';
 const MODEL = process.env.AIP_MODEL ?? '10ba5063-c0aa-4423-8d50-391f8b7ac4c5';
+// 一个库里已经解析出正文的文档（DOCUMENT_EXTRACT_NODE 要 docId，不是文件路径）：
+// 它是"文档已经过解析链"这件事的现成证据，也是这个节点唯一可能被做成假实现的地方 ——
+// 真正的风险是"以为传个 id 就能抽，实际库里那一列是空的"。
+const DOC = process.env.AIP_DOC ?? '0ff99adf-7a9d-47b9-930a-c686095cc4ee';
 
 const results = [];
 function record(name, ok, detail) {
@@ -36,8 +40,8 @@ const token = JSON.parse(await lr.text())?.data?.accessToken;
 if (!token) throw new Error('登录失败（后端是不是开着验证码？用 CAPTCHA_ENABLED=false）');
 const auth = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
 
-const post = async (path, body) => {
-  const r = await fetch(`${API_URL}${path}`, { method: 'POST', headers: auth, body: JSON.stringify(body) });
+const post = async (path, body, base = API_URL) => {
+  const r = await fetch(`${base}${path}`, { method: 'POST', headers: auth, body: JSON.stringify(body) });
   return { status: r.status, body: await r.text() };
 };
 const get = async (path) => {
@@ -50,7 +54,9 @@ const stubCount = async () => {
 };
 
 const node = (id, type, title, x, config) => ({ id, type, title, position: { x, y: 200 }, config });
-const edge = (id, source, target) => ({ id, source, target });
+// 第四个参数是分支句柄：条件类节点的出边靠 sourceHandle 认「这条边走的是哪个分支」，
+// 不带它的出边在运行时会被当成"不属于任何分支"而跳过。
+const edge = (id, source, target, sourceHandle) => ({ id, source, target, ...(sourceHandle ? { sourceHandle } : {}) });
 
 // ── 1. 自动链路 ────────────────────────────────────────────────────────────
 const autoGraph = {
@@ -421,6 +427,176 @@ record(
   badImageData?.ok === false && /模型不可用|种类是/.test(String(badImageData?.errors ?? badImageData?.failReason ?? '')),
   `ok=${badImageData?.ok}，errors=${JSON.stringify(badImageData?.errors ?? badImageData?.failReason)?.slice(0, 100)}`,
 );
+
+// ── 3e. 机制节点：条件 / 数值条件 / 文档抽取 / 表单 ────────────────────────
+// 这四个节点此前的读数只到"面板能开、字段能写"，没有在真实栈上跑到底的一遍。
+// 它们的共同难点是**看不到流程变量**（调试响应里没有 state），所以每一段都用
+// 「走哪条分支 ⇒ 哪个回复的文案」或「下游能不能取到值」来当证据，而不是去读内部状态。
+
+// 3e-1 条件判断：按选中的分支走，其它分支整段跳过。
+// ★ 这里只配**一个具名分支**：执行器对「只有一个具名分支」是不问模型的（直接走它），
+//    所以这条断言是确定的 —— 而「两个具名分支」时选哪条取决于模型回答，桩的回答一变
+//    断言就会莫名其妙地红（实测：桩的 override 并没有进到条件节点，它照样选同一个）。
+//    要验"模型真的被问了"，得单独造一条能看见模型请求的用例，不该混进这条。
+const condGraph = {
+  nodes: [
+    node('c-start', 'START_NODE', '开始', 60, {}),
+    node('c-cond', 'CONDITION_NODE', '条件判断', 300, {
+      branches: [{ id: 'c-break', type: 'IF', expression: '问题在问违约与赔偿' }],
+      fallbackBranchId: 'c-fallback',
+    }),
+    node('c-reply-break', 'REPLY_NODE', '违约分支', 600, { content: '走的是违约分支。', replyType: 'content', asResult: true }),
+    node('c-reply-fb', 'REPLY_NODE', '兜底', 600, { content: '落进了兜底。', replyType: 'content', asResult: true }),
+  ],
+  edges: [
+    edge('c1', 'c-start', 'c-cond'),
+    edge('c3', 'c-cond', 'c-reply-break', 'c-break'),
+    edge('c4', 'c-cond', 'c-reply-fb', 'c-fallback'),
+  ],
+};
+const condRun = await post(`/api/v1/assistants/${APP}/workflow/debug`, {
+  graph: condGraph,
+  inputs: { entry: '违约金怎么算？' },
+});
+const condData = JSON.parse(condRun.body)?.data;
+// 兜底分支的文案也是"会跑到底"，所以只断言 ok 不够 —— 必须断到具体是哪一个分支的文案。
+record(
+  '机制 · 条件判断按选中的分支走（兜底那条被跳过）',
+  condData?.ok === true && condData?.finalOutput === '走的是违约分支。',
+  `ok=${condData?.ok}，finalOutput=${JSON.stringify(condData?.finalOutput)?.slice(0, 40)}，errors=${JSON.stringify(condData?.errors)?.slice(0, 80)}`,
+);
+
+// 3e-2 数值条件：纯计算，不用模型。
+// 用「长度函数的结果」当变量，同一条图两种输入走不同分支 —— 一条断言同时钉住两个方向，
+// 比"只跑一遍命中"强：只跑命中时，"永远走第一条分支"的 bug 也是绿的。
+const numGraph = {
+  nodes: [
+    node('q-start', 'START_NODE', '开始', 60, {}),
+    node('q-len', 'FUNCTION_NODE', '取长度', 300, {
+      functionName: 'length',
+      args: [{ from: 'variable', value: 'query' }],
+      outputKey: 'len_value',
+    }),
+    node('q-cond', 'NUMBER_CONDITION_NODE', '数值条件', 540, {
+      branches: [
+        { id: 'q-hit', logic: 'AND', conditions: [{ variable: ['q-len', 'len_value'], operator: 'GT', value: '3' }] },
+        { id: 'q-miss', logic: 'AND', conditions: [{ variable: ['q-len', 'len_value'], operator: 'LT', value: '1' }] },
+      ],
+      fallbackBranchId: 'q-fallback',
+    }),
+    node('q-reply-hit', 'REPLY_NODE', '命中', 820, { content: '命中了长度大于三。', replyType: 'content', asResult: true }),
+    node('q-reply-fb', 'REPLY_NODE', '兜底', 820, { content: '落进了兜底。', replyType: 'content', asResult: true }),
+  ],
+  edges: [
+    edge('q1', 'q-start', 'q-len'),
+    edge('q2', 'q-len', 'q-cond'),
+    edge('q3', 'q-cond', 'q-reply-hit', 'q-hit'),
+    edge('q4', 'q-cond', 'q-reply-fb', 'q-fallback'),
+  ],
+};
+const numHitRun = await post(`/api/v1/assistants/${APP}/workflow/debug`, {
+  graph: numGraph,
+  inputs: { entry: '合同违约金' },
+});
+const numHit = JSON.parse(numHitRun.body)?.data;
+record(
+  '机制 · 数值条件命中分支（长度 5 > 3）',
+  numHit?.ok === true && numHit?.finalOutput === '命中了长度大于三。',
+  `ok=${numHit?.ok}，finalOutput=${JSON.stringify(numHit?.finalOutput)?.slice(0, 40)}`,
+);
+const numMissRun = await post(`/api/v1/assistants/${APP}/workflow/debug`, {
+  graph: numGraph,
+  inputs: { entry: '合同' },
+});
+const numMiss = JSON.parse(numMissRun.body)?.data;
+record(
+  '机制 · 数值条件不命中时落兜底（同一条图换输入）',
+  numMiss?.ok === true && numMiss?.finalOutput === '落进了兜底。',
+  `ok=${numMiss?.ok}，finalOutput=${JSON.stringify(numMiss?.finalOutput)?.slice(0, 40)}`,
+);
+
+// 3e-3 文档抽取：读一个库里已解析出正文的文档。
+// ★ docId 是库里的真实文档主键；解析失败与"文档不存在"是两种文案，反证要分别能分辨。
+const docGraph = {
+  nodes: [
+    node('d-start', 'START_NODE', '开始', 60, {}),
+    node('d-ext', 'DOCUMENT_EXTRACT_NODE', '文档抽取', 320, { kbId: KB, docId: DOC }),
+    node('d-reply', 'REPLY_NODE', '回复', 600, { content: '文档抽取跑完了。', replyType: 'content', asResult: true }),
+  ],
+  edges: [edge('d1', 'd-start', 'd-ext'), edge('d2', 'd-ext', 'd-reply')],
+};
+const docRun = await post(`/api/v1/assistants/${APP}/workflow/debug`, { graph: docGraph, inputs: { entry: 'x' } });
+const docData = JSON.parse(docRun.body)?.data;
+record(
+  '机制 · 文档抽取出正文并往下走',
+  docData?.ok === true && docData?.finalOutput === '文档抽取跑完了。',
+  `ok=${docData?.ok}，errors=${JSON.stringify(docData?.errors)?.slice(0, 100)}`,
+);
+const badDocGraph = {
+  nodes: [
+    node('dd-start', 'START_NODE', '开始', 60, {}),
+    node('dd-ext', 'DOCUMENT_EXTRACT_NODE', '文档抽取', 320, {
+      kbId: KB,
+      docId: '00000000-0000-0000-0000-00000000dead',
+    }),
+    node('dd-reply', 'REPLY_NODE', '回复', 600, { content: '不该跑到这里。', replyType: 'content', asResult: true }),
+  ],
+  edges: [edge('dd1', 'dd-start', 'dd-ext'), edge('dd2', 'dd-ext', 'dd-reply')],
+};
+const badDocRun = await post(`/api/v1/assistants/${APP}/workflow/debug`, { graph: badDocGraph, inputs: { entry: 'x' } });
+const badDocData = JSON.parse(badDocRun.body)?.data;
+record(
+  '机制 · 文档不存在时明确失败（不静默继续）',
+  badDocData?.ok === false && /文档不存在/.test(String(badDocData?.errors ?? '')),
+  `ok=${badDocData?.ok}，errors=${JSON.stringify(badDocData?.errors)?.slice(0, 100)}`,
+);
+
+// 3e-4 表单：它属于**人工介入**族 —— 编译器把它算成中断点，执行器跑到它之前就停，
+// 等有人把表单填回来。所以端到端不是"一口气跑到底"，而是「停住 → 交回表单 → 接着跑」。
+// 后半段靠「取前两个字」的函数证明 form_data 真的被写进去了：没写就会因越界而炸。
+const formGraph = {
+  nodes: [
+    node('f-start', 'START_NODE', '开始', 60, {}),
+    node('f-form', 'FORM_NODE', '表单收集', 300, { formFields: [], contentFormat: '', asResult: true }),
+    node('f-head', 'FUNCTION_NODE', '取前两字', 540, {
+      functionName: 'substring',
+      args: [
+        { from: 'variable', value: 'form_data' },
+        { from: 'literal', value: '0' },
+        { from: 'literal', value: '2' },
+      ],
+      outputKey: 'form_head',
+    }),
+    node('f-reply', 'REPLY_NODE', '回复', 800, { content: '表单链路跑完了。', replyType: 'content', asResult: true }),
+  ],
+  edges: [edge('f1', 'f-start', 'f-form'), edge('f2', 'f-form', 'f-head'), edge('f3', 'f-head', 'f-reply')],
+};
+const formRun = await post(`/api/v1/assistants/${APP}/workflow/debug`, {
+  graph: formGraph,
+  inputs: { entry: '' },
+});
+const formData = JSON.parse(formRun.body)?.data;
+record(
+  '机制 · 表单节点把流程停住等人填（不是自己往下跑）',
+  formData?.ok === true && !formData?.finalOutput && Boolean(formData?.executionId),
+  `ok=${formData?.ok}，finalOutput=${JSON.stringify(formData?.finalOutput)}，executionId=${formData?.executionId ? '有' : '无'}`,
+);
+if (formData?.executionId) {
+  const formResumed = await post(`/api/v1/assistants/${APP}/workflow/resume`, {
+    executionId: formData.executionId,
+    // 表单的答复写回 form_data（提问节点写回 query）—— 同一个恢复端点，两种落点
+    answer: '合同事项',
+    graph: formGraph,
+  });
+  const formResumedData = JSON.parse(formResumed.body)?.data;
+  record(
+    '机制 · 交回表单后接着跑到底（form_data 下游取得到前两个字）',
+    formResumed.status === 200 && formResumedData?.ok === true && formResumedData?.finalOutput === '表单链路跑完了。',
+    `HTTP ${formResumed.status}，ok=${formResumedData?.ok}，finalOutput=${JSON.stringify(formResumedData?.finalOutput)?.slice(0, 40)}，errors=${JSON.stringify(formResumedData?.errors)?.slice(0, 80)}`,
+  );
+} else {
+  record('机制 · 交回表单后接着跑到底', false, '表单段没有拿到 executionId');
+}
 
 // ── 4. 界面上点「试用」—— 同一条链路，但走真实前端（`fromLogicFlow` 的产物）────
 // 前三段都用 API 直接发契约形状；而人实际点的是「试用」：它先存一次草稿，再把画布上的图
