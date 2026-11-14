@@ -5999,22 +5999,68 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 - **`ef_search` 没有任何地方设置** ⇒ 跑的是 pgvector 默认 40，而**默认值是多少、改它会怎样，仓里没有读数**
 - 索引参数已定死：`m=16, ef_construction=64`（`JdbcVectorIndex.java:23`），本版不动
 
-**任务**：
-1. `application.yml` 加 `app.retrieval.hnsw.ef-search: 40` 与 `app.retrieval.hnsw.iterative-scan: strict_order`；
-   启动时打印一次生效值（否则"配了但没生效"与"没配"在日志里长得一样）
-2. `JdbcSegmentSearchQuery` 在同一事务里把它 `set local` 下去（与 `iterative_scan` 同一处，
-   否则两者会落在不同连接上）
-3. `sla/probes/synthetic.py` 的报告加三个字段：`ef_search`（生效值）、`hnsw_scan`（`explain analyze` 里有没有 `Index Scan using …hnsw`）、`p95_ms`
-4. `sla/contract.json` 的 `targetRange` 从 `>=0.4.9 <0.6.0` 更新 —— **它已经过期到 0.7.6 了**，
-   而它自己的 `_note_2026_11_08` 写着"到 0.5.0 发版时应该回来确认一次，而不是等它自动失效"
+**任务**（✅ = 已交付，见下方读数）：
+1. ✅ `app.retrieval.hnsw.ef-search` / `iterative-scan` 进 `application.yml`（`RETRIEVAL_HNSW_EF_SEARCH` /
+   `RETRIEVAL_HNSW_ITERATIVE_SCAN` 可覆盖）+ `HnswScanProperties`（默认 40 / `strict_order`，与改动前逐字一致）
+   + `HnswScanConfig` + `JdbcSegmentSearchQuery` 的 `@PostConstruct` 启动日志（否则"配了没生效"与"没配"在日志里一样）
+2. ✅ `JdbcSegmentSearchQuery.vectorSearch` 在同一事务里 `set local` 两个参数
+   （`RetrievalService.hitTest` 的 `@Transactional(readOnly = true)` 是它真生效的前提）
+3. ✅ **改为独立探针** `sla/probes/hnsw.py` 而不是塞进 `synthetic.py`：`synthetic.py` 是走 HTTP 的端到端压测，
+   而"走没走索引"必须看 `explain analyze`。混进压测报告会让一个库内计划问题看起来像接口延迟问题
+4. ✅ `sla/contract.json` 的 `targetRange` `>=0.4.9 <0.6.0` → `>=0.4.9 <0.8.0`，`toolingVersion` `0.1.0` → `0.1.1`
 
-**判据**：同一查询在 `ef-search=40` 与 `100` 下，报告里两个值都出现且不同；
-`hnsw_scan` 字段在"高选择性过滤"的用例上为 true。
-**反证**：把 `set local` 那行注释掉 ⇒ `ef_search` 字段应报"未生效"或与配置值不一致（不是静默按 40 跑）。
+**判据（改过一次，原因见读数 ①）**：
+- 同一查询在 `ef-search=40` 与 `100` 下，报告里两个值都出现且不同 ✅
+- ~~`hnsw_scan` 在高选择性过滤的用例上为 true~~ → **改成"报告能说清这条查询用了什么计划、以及为什么没走索引"**。
+  原判据在 195 行的库上做不到：规划器**主动**不选 HNSW（走 Seq Scan 只要 0.5ms，强制走索引 86ms）。
+  按原判据写，唯一能"过"的办法是把 `enable_seqscan` 关掉 —— 那是为了让指标好看而改测量条件。
 
-**风险与取舍**：`ef_search` 调大**不改善质量**（`iterative_scan=strict_order` 已经兜住了"过滤后为空"），
-它改善的是**扫描完整性**。⇒ 本版只把它变成"可观测 + 可调"，**不以调参当质量手段**；
-它的收益要用 B1 读数证明，而不是"看起来更稳"。
+**反证**：把 `set local` 那两行注释掉 ⇒ `ef_search` 仍是配置值（`set local` 缺失时 pg 用默认 40），
+所以反证不能靠"值变了"，要靠**强制走索引的过滤用例行数**：`iterative_scan=off` 时返回 2 行、
+`strict_order` 时 4 行（真值）—— 见下表最后三行。
+
+**风险与取舍（原文有半句说错了，已订正）**：`ef_search` 调大**不改善检索质量**（排序不变），
+它改善的是**扫描完整性**。原写"`iterative_scan=strict_order` 已经兜住了过滤后为空"是**不完整**的：
+实测 `ef=100` 时连 `iterative_scan=off` 也能返回全 4 行（候选池够大就不需要迭代）。两者的关系是
+"ef 决定候选池多大、iterative_scan 决定候选被过滤光之后要不要继续扫"，**兜住丢行的是两者之一，不是只有后者**。
+⇒ 本版仍然**不以调参当质量手段**（质量看 B1/B3），但**不许再把 ef_search 描述成与正确性无关**。
+
+**已交付读数（2026-11-14，`sla/probes/hnsw.py`，pg 16.15 / pgvector 0.8.6 / `vec_embedding_768` 195 行）**：
+
+| ef_search | 用例 | 计划 | 行数 | 耗时 |
+|---|---|---|---|---|
+| 40 | 默认 / 全表 | Seq Scan | 10 | 1.4ms |
+| 40 | 默认 / 过滤 | Seq Scan | **4**（真值） | 0.5ms |
+| 40 | 强制索引 / 全表 | hnsw | 10 | 170.5ms |
+| 40 | 强制索引 / 过滤 · `iter=off` | hnsw | **2** ← 少一半 | 86.1ms |
+| 40 | 强制索引 / 过滤 · `iter=strict_order` | hnsw | **4** ← 修回来 | 95.3ms |
+| 100 | 强制索引 / 过滤 · `iter=off` | hnsw | 4 | 79.6ms |
+| 100 | 强制索引 / 过滤 · `iter=strict_order` | hnsw | 4 | 70.9ms |
+
+① **"没走索引"不等于"索引坏了"** —— 小表上 `Seq Scan` 是正确选择，强制走索引慢 30–100 倍。
+② **`iterative_scan=strict_order` 有第一个可核对证据**：不是"看起来更稳"，是"少返回 4→2 行"这个真的会丢召回。
+③ ★ **一个"读得到、写不报错"的 GUC**（本条是唯一一处"推断被实测推翻"的地方，留着当样本）：
+先假设"模块没加载时 `set local hnsw.ef_search` 会抛 `unrecognized configuration parameter`"，
+于是加了一行 `select '[0]'::vector` 先把模块拉起来；**反证发现加不加都绿**，回头用 psql 三组对照才定论：
+
+| 连接上的动作 | 结果 |
+|---|---|
+| 新连接 → `show hnsw.ef_search` | ❌ `unrecognized configuration parameter` |
+| 新连接 → `set hnsw.ef_search = 100` → `show` | `SET` 成功，读回 **100**（存成 placeholder） |
+| 新连接 → `set = 100` → 碰一次 `'[0]'::vector`（模块加载）→ `show` | 仍读回 **100**（值保留，没被重置成默认 40） |
+
+⇒ **`set` 不需要预热，`show` 才需要**。那行 `select '[0]'::vector` 已删除（无必要的一次往返）。
+探针 `sla/probes/hnsw.py` 要"整段拼一次 `psql`"**仍然成立**，但理由不是 set，而是它**只读不写**
+（`show` 在全新连接上查无可查）。
+★ 方法上的教训：一条"防御性代码"加进去之后测试**照绿**，不能记成"防御生效"—— 那只能证明它无害。
+要判定它是否必要，必须先能让它红。
+
+★ **读数的载体不在仓库里**：上表由 `sla/probes/hnsw.py` 产出（`docker exec psql` 跑 `explain analyze`），
+而 `sla/` 整个目录按 `.gitignore:92` **不进仓**（2026-11-08 用户明令：该目录含真实语料路径与环境地址，
+属交付侧资产）。⇒ 上表是**一次真实测量**，但**别人无法在本仓重跑**。
+已登记 `#341`（"被保护的是数据，不该连工具一起排除"）。
+本节的取舍：**先把读数拿到手、把口径写死**，复现能力作为独立一笔处置 —— 因为一个没写下来的读数连一次都没有。
+
 
 ### 11.45.2 `0.8.1` 重排提速：把质量与延迟解耦
 

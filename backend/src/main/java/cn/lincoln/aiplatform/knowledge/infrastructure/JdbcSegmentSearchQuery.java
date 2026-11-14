@@ -529,6 +529,11 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
     //     且必须与下面的查询在**同一条连接、同一个事务**里才生效 —— 本方法由 @Transactional 的
     //     RetrievalService#hitTest 调用（脱离事务时 set local 会随语句结束失效，而查询照样能返回结果，
     //     所以"没生效"表现为"结果偏少"而不是报错）。
+    //   ★ 关于"模块没加载时 set 会报错"—— 实测**不会**（PG 16 / pgvector 0.8.6）：
+    //     新连接上 `set hnsw.ef_search = 100` 成功（存成 placeholder），随后 vector 模块被
+    //     首次使用时值**保留**（实测仍读回 100）。会报 `unrecognized configuration parameter`
+    //     的是 **show**（全新连接上既没加载模块、也没 set 过，查无可查）。
+    //     ⇒ 这里不需要额外"先把模块拉起来"的语句；`sla/probes/hnsw.py` 因为只读不写才要先碰一次。
     jdbc.execute("set local hnsw.ef_search = " + hnsw.efSearch());
     jdbc.execute("set local hnsw.iterative_scan = " + hnsw.iterativeScan());
     RetrievalScope scope = query.scope();
