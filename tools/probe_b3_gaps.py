@@ -19,7 +19,29 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PSQL = ["docker", "exec", "aip-postgres", "psql", "-U", "aiplatform", "-d", "aiplatform", "-t", "-A", "-F", "|"]
+# ★ 两件事缺一不可：① SQL 走 stdin（Windows 下把含中文的参数交给 docker exec
+#   会在编码转换上出岔子）；② 显式把 client_encoding 钉成 UTF8 —— 否则 psql 按
+#   Windows 的 GBK 解释 stdin 里的 UTF-8 字节，中文文档名匹配不上，表现为
+#   "文档不在库"（本轮踩过，看起来像数据缺失，其实是编码）。
+PSQL = [
+    "docker",
+    "exec",
+    # ★ -i 不能省：没有它 docker 不转发 stdin，psql 读到 EOF 后**返回码 0、输出为空**，
+    #   看起来像"查到了 0 行"（本轮踩过：全部查询都返回 []，连 count(*) 都是空）。
+    "-i",
+    "-e",
+    "PGCLIENTENCODING=UTF8",
+    "aip-postgres",
+    "psql",
+    "-U",
+    "aiplatform",
+    "-d",
+    "aiplatform",
+    "-t",
+    "-A",
+    "-F",
+    "|",
+]
 
 
 def sql(q):
@@ -27,8 +49,10 @@ def sql(q):
     #   会在编码转换上出岔子（表现为"查得到、查不到"随机），stdin 是二进制的。
     out = subprocess.run(PSQL, input=q.encode("utf-8"), capture_output=True, text=False)
     if out.returncode != 0:
-        raise SystemExit(f"psql 失败：{out.stderr.strip()}")
-    return [line.split("|") for line in out.stdout.strip().split("\n") if line.strip()]
+        raise SystemExit(f"psql 失败：{out.stderr.decode('utf-8', 'replace').strip()}")
+    # ★ 这里 text=False 是有意的（中文走二进制更稳），所以 stdout 是 bytes：
+    #   原来直接在 bytes 上 split("\n") 会抛 a bytes-like object is required。
+    return [line.split("|") for line in out.stdout.decode("utf-8", "replace").strip().split("\n") if line.strip()]
 
 
 def load_gaps(path, kb_id):
@@ -52,7 +76,7 @@ def segments_of(doc_name, kb_id):
         "select id from kb_document where kb_id='%s' and name='%s' limit 1" % (kb_id, doc_name.replace("'", "''"))
     )
     if not doc:
-        return None, []
+        return None, [], []
     doc_id = doc[0][0]
     rows = sql(
         "select ordinal, char_count, coalesce(title,''), left(replace(content, chr(10), ' '), 60) "
@@ -67,6 +91,9 @@ def segments_of(doc_name, kb_id):
         "from kb_segment where document_id='%s' order by ordinal" % doc_id
     )
     full = [(i + 1, r[0]) for i, r in enumerate(rows)]
+    # ★ 原来这里没有 return：函数算完 full 就结束，调用方解包 None 必然抛
+    #   「cannot unpack non-sequence NoneType」⇒ 这个探针在本轮之前根本跑不起来。
+    return doc_id, full, segs
 
 
 def main():
@@ -78,8 +105,6 @@ def main():
 
     d, gaps, qa = load_gaps(Path(args.readings), None or "")
     kb_id = d["kbId"]
-    # load_gaps 需要 kb_id 才能查段，先重读一次
-    d, gaps, qa = load_gaps(Path(args.readings), kb_id)
     print(f"库 {kb_id}；读数 {d['mode']} topN={d['topn']} 阈值={d['threshold']}")
     print(f"「文档对、段没进前5」= {len(gaps)} 条（全量 {d['total']}）\n")
 
