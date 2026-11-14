@@ -190,6 +190,13 @@ app:
       # 模型文件**不进仓库**（`models/*` 被 .gitignore 忽略），落盘步骤见 `models/README.md`
       model-path: ${RETRIEVAL_RERANK_MODEL_PATH:models/bge-reranker-base/model.onnx}
       tokenizer-path: ${RETRIEVAL_RERANK_TOKENIZER_PATH:models/bge-reranker-base/tokenizer.json}
+      # ★ 单次前向的条数：0 = 整个窗口一次算完；默认 5 = 与历史行为一致。
+      #   ★ 0.8.1 实测（10 条 × 4 组，同一批问题）：四种组合的中位是 9.37 / 7.93 / 8.53 / 7.99 秒，
+      #     **差别主要来自"查询理解要不要重试一次"**（−1.44s），批大小 5 与 0 的差落在噪声内
+      #     （关重试时 7.93 vs 7.99，批 5 反而略优）⇒ 这个默认值**不改**，配置项留给好机器上试。
+      #   ★ 为什么它不是"越大越好"：批内要按最长那条补齐，条数越多 pad 越浪费 —— 快慢取决于这批
+      #     候选的长度分布，写死任何一个值都是在猜。
+      forward-batch: ${RETRIEVAL_RERANK_FORWARD_BATCH:5}
       # ★★ LLM listwise（cross-encoder 之后再让对话模型排一次）——默认关。
       #   20 条试跑：B3 65.00% → 70.00%（+5.00 点），但单条 3.12s（p95 11.69s）⇒ 叠加后单跳 11.6s 破 B4。
       #   用户 2026-11-08 口径：本机算力不够，好机器上延迟能压下来 ⇒ 做成配置、好机器上开。

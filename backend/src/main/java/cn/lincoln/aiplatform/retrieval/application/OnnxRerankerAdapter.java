@@ -48,8 +48,8 @@ import org.springframework.stereotype.Component;
  *   <li>输入 {@code input_ids} / {@code attention_mask}（int64 {@code [batch, seq]}）；{@code
  *       token_type_ids} <b>可选</b> —— 用 {@code session.getInputNames().contains(...)} 判定有没有再喂；
  *   <li>输出 logits {@code [batch, 1]}：取 {@code [:, 0]} 再 sigmoid 当分数；
- *   <li>{@code max_length} 512，{@code pad_id} 0 —— 批内按最长补齐（pad 补 0、mask 补 0），单次前向 {@value
- *       #FORWARD_BATCH} 条。
+ *   <li>{@code max_length} 512，{@code pad_id} 0 —— 批内按最长补齐（pad 补 0、mask 补 0），单次前向 {@code
+ *       app.retrieval.rerank.forward-batch} 条（0 = 整个窗口一次算完）。
  * </ul>
  */
 @Component
@@ -57,8 +57,17 @@ public class OnnxRerankerAdapter implements RerankPort {
 
   private static final Logger log = LoggerFactory.getLogger(OnnxRerankerAdapter.class);
 
-  /** 单次前向的批量条数（离线评测就是按 5 条一批量的）。 */
-  private static final int FORWARD_BATCH = 5;
+  /**
+   * 单次前向的条数（{@code app.retrieval.rerank.forward-batch}；0 = 一次算完整个窗口）。
+   *
+   * <p>★ 这个数是<b>可调的</b>而不是常量：2026-11-14 之前写死 5（离线 Python 评测就是按 5 条一批量的）， 于是"窗口 10 =
+   * 两次前向"。批大小同时影响两件事 —— 矩阵乘的摊薄与批内补齐的浪费 —— 而两者方向相反：
+   * 批越大，算力摊得越薄（好），但按批内<b>最长</b>那条补齐的浪费也越多（坏）。哪个占上风只能实测， 所以它必须是配置项，不能是写死的直觉值。
+   */
+  private int batchSize(int window) {
+    int configured = properties.forwardBatch();
+    return configured <= 0 ? window : Math.min(configured, window);
+  }
 
   /** 模型的最大输入长度（超过截断）：{@code bge-reranker-base} 是 512。 */
   private static final int MAX_LENGTH = 512;
@@ -202,14 +211,15 @@ public class OnnxRerankerAdapter implements RerankPort {
     }
   }
 
-  /** 按 {@value #FORWARD_BATCH} 条一批算分。 */
+  /** 按 {@link #batchSize(int)} 条一批算分。 */
   private double[] score(Bundle ready, String query, List<UUID> head, Map<UUID, String> texts)
       throws Exception {
     double[] all = new double[head.size()];
-    for (int from = 0; from < head.size(); from += FORWARD_BATCH) {
-      int to = Math.min(from + FORWARD_BATCH, head.size());
-      double[] batch = forward(ready, query, head, texts, from, to);
-      System.arraycopy(batch, 0, all, from, batch.length);
+    int batch = batchSize(head.size());
+    for (int from = 0; from < head.size(); from += batch) {
+      int to = Math.min(from + batch, head.size());
+      double[] chunk = forward(ready, query, head, texts, from, to);
+      System.arraycopy(chunk, 0, all, from, chunk.length);
     }
     return all;
   }

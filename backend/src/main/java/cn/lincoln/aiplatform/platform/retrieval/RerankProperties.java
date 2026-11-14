@@ -61,6 +61,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param tokenizerPath tokenizer.json 路径
  * @param listwiseEnabled 是否在 cross-encoder 之后再做一次 LLM listwise（默认关，见类注释）
  * @param listwiseTopK 交给 listwise 的候选数（默认 5；只排 1 个等于没排）
+ * @param forwardBatch 单次前向的条数（<b>0 = 用窗口大小</b>，即整个窗口一次算完；默认 5 与历史行为一致）。 ★ 0.8.1
+ *     实测批大小的差落在噪声内，**默认值不改**，读数与理由见 {@code application.yml} 该键的注释
  */
 @ConfigurationProperties(prefix = "app.retrieval.rerank")
 public record RerankProperties(
@@ -69,7 +71,8 @@ public record RerankProperties(
     @DefaultValue("models/bge-reranker-base/model.onnx") String modelPath,
     @DefaultValue("models/bge-reranker-base/tokenizer.json") String tokenizerPath,
     @DefaultValue("false") boolean listwiseEnabled,
-    @DefaultValue("5") int listwiseTopK) {
+    @DefaultValue("5") int listwiseTopK,
+    @DefaultValue("5") int forwardBatch) {
 
   /**
    * 全默认值实例 —— 给"重排与被测行为无关"的测试夹具用。
@@ -83,6 +86,7 @@ public record RerankProperties(
         "models/bge-reranker-base/model.onnx",
         "models/bge-reranker-base/tokenizer.json",
         false,
+        5,
         5);
   }
 
@@ -107,5 +111,9 @@ public record RerankProperties(
     }
     Objects.requireNonNull(modelPath, "app.retrieval.rerank.model-path 不许为空");
     Objects.requireNonNull(tokenizerPath, "app.retrieval.rerank.tokenizer-path 不许为空");
+    if (forwardBatch < 0) {
+      throw new IllegalArgumentException(
+          "app.retrieval.rerank.forward-batch 必须 ≥ 0（0 = 一次前向算完整个窗口）：实际 " + forwardBatch);
+    }
   }
 }

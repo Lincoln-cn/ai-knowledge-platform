@@ -29,7 +29,7 @@ class RerankDegradeTest {
   @Test
   void missingModelFileDegradesToOriginalOrder() {
     RerankProperties missing =
-        new RerankProperties(true, 5, "no/such/model.onnx", "no/such/tokenizer.json", false, 5);
+        new RerankProperties(true, 5, "no/such/model.onnx", "no/such/tokenizer.json", false, 5, 5);
     OnnxRerankerAdapter adapter = new OnnxRerankerAdapter(missing);
 
     // ★ 模型文件不存在 ⇒ 返回原顺序、不抛任何异常（第一次调用 = 冷启动加载路径）
@@ -53,7 +53,7 @@ class RerankDegradeTest {
     OnnxRerankerAdapter adapter =
         new OnnxRerankerAdapter(
             new RerankProperties(
-                true, 5, "no/such/model.onnx", "no/such/tokenizer.json", false, 5));
+                true, 5, "no/such/model.onnx", "no/such/tokenizer.json", false, 5, 5));
 
     assertThat(adapter.rerank("问题", List.of(S1), TEXTS, 5))
         .as("单条候选没什么可排的 ⇒ 原序")
