@@ -5807,6 +5807,10 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
   `0 0 30 2 *` 400（"这个 cron 不会再有下一次"）⇒ 被拒两次不改动已存的 cron ⇒ 清空后三格全空。
 - **界面（`frontend/e2e/workflow-trigger-panel.mjs`，14/14）**：顶栏入口 → 未开启文案 → 预设填入 → 保存后提示
   "已保存，下次 …" → 顶栏变「已定时」→ 再打开显示"已开启 · 下次 …"与最近一次运行 → 写错 cron 报错且对话框不关 → 停用后回「定时」→ 全程零控制台错误。
+  ★ **这条读数必须在 `VITE_USE_MOCK=false` 下跑**：`frontend/.env.development` 默认是 `true`
+  （注释写着"后端未就绪前走 mock"），mock 下同一批断言会"看起来更顺" —— 数据来自夹具，与后端无关。
+  本次走查的前半段（画布节点、变量目录、添加组件菜单）就是在 mock 下取的，**不能算前后端打通**。
+  已记账 `#340`（dev 默认值在骗人，属 `silent-failure`）。
 - **反证（做过）**：把 `WorkflowTriggerSweeper` 的 `if (!assistants.claimTrigger(...))` 改成
   `if (false && !assistants.claimTrigger(...))` ⇒ `WorkflowTriggerSweeperTest` **4 红**
   （`onlyOneRunnerWinsTheClaim` 报 `expected: 0 but was: 1`，另三条 `Wanted but not invoked`）。
