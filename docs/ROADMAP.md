@@ -6271,6 +6271,37 @@ doc_top1 97.4%。⇒ 离 80% 差 8.7 点 / 56 条。
 
 **判据**：那条断言能红 —— 往上游请求里塞一个 `tools` 字段，它必须失败。
 
+#### 11.45.4.1 交付与读数（2026-11-15）
+
+**接口** `platform/model/ToolProvider.java`（与 `ChatPort` 同包：它属于对话能力）：
+`List<ToolSpec> toolsFor(UUID modelId)` + `record ToolSpec(String name, String description, Map<String, Object> parameters)`。
+★ 空表 = **不启用**，指的是**连 `tools` 键都不出现**（不是空数组）—— 有些上游把"出现 tools 键"
+当成"客户端支持工具调用"，给个空数组会让它走进另一条分支。
+
+**实现** `platform/infrastructure/NoopToolProvider.java`（`@Component`，恒返回 `List.of()`）。
+★ 为什么装配它、而不是干脆不装配：不装配时"今天没有工具"与"有人忘了装配"在代码里长得一模一样，
+正是本项目反复记录的头号病 `silent-failure` 的形状；装配之后"没有工具"变成一个可读的读数。
+
+**三条断言**（`backend/src/test/java/cn/lincoln/aiplatform/modelcatalog/NoToolCallingTest.java`）：
+1. `nonStreamingRequestCarriesNoTools` —— 桩服务收到的请求体里 `"tools"` 与 `"tool_choice"` 都不出现；
+2. `streamingRequestCarriesNoTools` —— 同上，走流式路径（桩按请求体里的 `"stream":true` 返回 SSE）；
+3. `theOnlyProviderTodayOffersNothing` —— 端口今天唯一的实现给出空表。
+
+★ 三条读的都是**真正上网的字节**（`exchange.getRequestBody().readAllBytes()`），不是"我们以为发了什么"。
+
+**读数**：`NoToolCallingTest` **3/3** · `-Dtest=cn.lincoln.aiplatform.*Test` **38/38**（1 skipped）。
+
+**反证（真跑过）**：在 `UpstreamGateway.java:313` 的 payload 里加 `"tools", java.util.List.of()` ⇒
+`nonStreamingRequestCarriesNoTools:94` 精确红，其余两条仍绿；改回 + `(Get-Item …).LastWriteTime = Get-Date`
+后 3/3 绿。（复位要 touch —— Maven 增量编译按 mtime 判断，本项目因此误判过两次。）
+
+**两条边界（写下来免得被读成"已经做了"）**：
+- `Model.tools`（`ToolsMode` 的 `UNSUPPORTED / SUPPORTED / PARALLEL`）是**模型能力声明**，
+  与"这次请求发不发 `tools`"是两件事：今天就算某个模型标了 `SUPPORTED`，请求体里也不会出现 `tools`。
+  本版只回答"**谁来给出工具清单**"，"谁执行 `tool_calls` 并把结果回填下一轮"仍然不存在（排在 0.9.0 沙箱之后）。
+- 等到真做工具调用时，这条测试应当被**改写**成"`tools` 只在该发的时候发"，
+  **不是删掉** —— 删掉之后"没有工具调用"会重新变成一句无法证伪的话。
+
 ### 11.45.5 顺序、依赖与横向纪律
 
 ```
