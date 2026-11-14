@@ -22,6 +22,7 @@
     "test": "node --import ./scripts/register-ts-alias.mjs --experimental-transform-types --test src/lib/degrade.test.ts src/lib/http-error.test.ts src/lib/modelReadiness.test.ts src/lib/onboarding.test.ts src/lib/pendingEndpoint.test.ts src/lib/providerPublic.test.ts src/lib/publishIssues.test.ts src/lib/ssePayload.test.ts src/mock/modelDeleteGuard.test.ts src/pages/workflow/lib/graph-format.test.ts src/pages/workflow/lib/contract-keys.test.ts",
     "test:e2e:nodes": "node e2e/workflow-node-panels.mjs",
     "test:e2e:func": "node e2e/workflow-function-node.mjs",
+    "test:e2e:real": "node e2e/workflow-real-model-smoke.mjs",
     "test:e2e:run": "node e2e/workflow-full-run.mjs"
   },
   "dependencies": {
