@@ -197,6 +197,17 @@ public final class QueryUnderstandingParser {
     if (subQuestions.isArray()) {
       return readSubQuestions(subQuestions, events);
     }
+    // ★★ 容错：模型把 JSON Schema 的外壳一起抄了（`#342` 的真根因，实测原文）：
+    //   {"properties":{"subQuestions":[{"question":"…","queries":["…","…"]}]}}
+    //   数据完全正确，只是外面多包了一层 properties。**剥掉它**，但要记住"我剥过"。
+    // ★ 只认"properties.subQuestions 是数组"这一种。若它是 {"type":"array","items":…}（那是 **schema 定义**、
+    //   不是数据），仍然返回 null 判失败 —— 否则会把"模型没产出数据"记成"解析成功"，而失败率正是
+    //   #342 要量的那个数（第二条纪律：不能让它被一次"看起来成功了"的解析掩盖）。
+    JsonNode enveloped = root.path("properties").path("subQuestions");
+    if (enveloped.isArray()) {
+      events.add("模型多包了一层 properties，已剥掉");
+      return readSubQuestions(enveloped, events);
+    }
     // 容错：顶层直接是一个数组（模型很常这么给）；元素既可能是对象，也可能直接是字符串
     if (root.isArray()) {
       if (root.isEmpty() || root.get(0).isObject()) {

@@ -35,9 +35,16 @@ public class QueryUnderstandingService {
   /** 单次调用的默认时间预算（毫秒）。与 {@code 10 §6.2} 第 6 项的检索阶段预算同量级。 */
   public static final long DEFAULT_BUDGET_MS = 5_000;
 
-  /** 重试时追加的提醒 —— 只针对"解析失败"，所以它只教一件事：形状。 */
+  /**
+   * 重试时追加的提醒 —— 只针对"解析失败"，所以它只教一件事：形状。
+   *
+   * <p>★★ 第二句是 {@code #342} 换来的：实测模型会把格式说明里那层 {@code properties} 一起抄进输出 （{@code
+   * {"properties":{"subQuestions":[ … 真数据 … ]}}}），数据本身完全正确。 光说"只输出 json"救不了它，必须点名"不要包 properties"。
+   */
   private static final String RETRY_REMINDER =
-      "\n\n上一次的输出无法解析成上面的 json。请**只**输出那个 json 对象本身：" + "不要解释、不要 markdown 代码块、不要前后的任何文字。";
+      "\n\n上一次的输出无法解析。请只输出 json 对象本身：不要解释、不要 markdown 代码块、不要前后的任何文字。"
+          + "注意：对象里直接就是 subQuestions 数组，外面不要包一层 properties"
+          + "（properties 只是格式说明里的写法，不属于输出）。";
 
   private final ChatPort chat;
 
@@ -150,12 +157,12 @@ public class QueryUnderstandingService {
     // ★★ 重试开关（低配建议关掉）：CPU 上第二次调用再花 4–5s，只救「模型多说了句话」这一类问题。
     //    关掉时**如实**置 parseFailed 并说明「已按配置关闭重试」，不假装尝试过。
     if (!parsed.usable() && !budget.queryUnderstandingRetryOnParseFailure()) {
-      log.warn("查询理解解析失败，且已按配置关闭重试：{}", parsed.failure());
+      log.warn("查询理解解析失败，且已按配置关闭重试：{}｜模型原始输出：{}", parsed.failure(), sample(raw));
       return fallback(question, startedAt, "解析模型输出失败（已按配置关闭重试）：" + parsed.failure(), true);
     }
     if (!parsed.usable()) {
       // ★ 只对解析失败重试一次（理由见类注释）
-      log.warn("查询理解解析失败，重试一次：{}", parsed.failure());
+      log.warn("查询理解解析失败，重试一次：{}｜模型原始输出：{}", parsed.failure(), sample(raw));
       try {
         raw = chat.complete(modelId.get(), prompt + RETRY_REMINDER, Duration.ofMillis(timeoutMs));
       } catch (BusinessException e) {
@@ -165,7 +172,7 @@ public class QueryUnderstandingService {
           QueryUnderstandingParser.parse(
               raw, question, queryCount, maxSubQuestions, decomposeEnabled);
       if (!parsed.usable()) {
-        log.warn("查询理解解析连续两次失败，退回原始问题单路：{}", parsed.failure());
+        log.warn("查询理解解析连续两次失败，退回原始问题单路：{}｜模型原始输出：{}", parsed.failure(), sample(raw));
         return fallback(question, startedAt, "解析模型输出失败（已重试一次）：" + parsed.failure(), true);
       }
     }
@@ -238,8 +245,12 @@ public class QueryUnderstandingService {
             7. 只有当问题确实包含**多个互不相干的意图**时才拆子问题，最多 %d 个；只有一个意图时只输出一个子问题；
             8. 每个子问题的 queries 最多 %d 条。
 
-            只输出一个 json 对象，不要任何解释、不要 markdown 代码块。json 结构严格照下面这个形状：
-            {"properties":{"subQuestions":{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"},"queries":{"type":"array","items":{"type":"string"}}}}}}}
+            只输出一个 json 对象，不要任何解释、不要 markdown 代码块。
+            ★ 下面第一行是**格式说明**（schema），第二行是它对应的**数据样例** —— 请照样例那种形状产出数据：
+            产出的对象里**直接**就是 subQuestions 数组，外面**不要**再包一层 properties。
+
+            格式说明：{"properties":{"subQuestions":{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"},"queries":{"type":"array","items":{"type":"string"}}}}}}}
+            数据样例：{"subQuestions":[{"question":"固定资产的归口管理部门是哪个部门？","queries":["固定资产归口管理部门","固定资产归口管理由哪个部门负责"]}]}
 
             用户问题：%s
             """)
@@ -262,4 +273,23 @@ public class QueryUnderstandingService {
   private static long elapsedMs(long startedAtNanos) {
     return (System.nanoTime() - startedAtNanos) / 1_000_000;
   }
+
+  /**
+   * 记日志用的模型原始输出片段（{@code #342} 的判据 3）。
+   *
+   * <p>★ 没有这一格，「解析失败」只能靠猜 —— 模型是回了自然语言、回了 schema、还是被截断了， 三种的形状完全不同，处置也完全不同（改提示词 / 改提示词 / 调
+   * max_tokens），但日志里只有一句 "既不是 json、也不是多行查询列表"。
+   *
+   * <p>★ 只留前 {@value #SAMPLE_LIMIT} 字并把换行压成空格：够看清形状，又不让日志被整段回显灌满。
+   */
+  private static String sample(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return "（空）";
+    }
+    String flat = raw.replaceAll("\\s+", " ").strip();
+    return flat.length() <= SAMPLE_LIMIT ? flat : flat.substring(0, SAMPLE_LIMIT) + "…";
+  }
+
+  /** {@link #sample(String)} 的截断长度。 */
+  private static final int SAMPLE_LIMIT = 200;
 }

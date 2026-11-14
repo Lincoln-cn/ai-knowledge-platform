@@ -201,6 +201,43 @@ class QueryUnderstandingParserTest {
   }
 
   @Test
+  void propertiesEnvelopeIsUnwrapped() {
+    // ★ #342 的实测原文（逐字）：模型把格式说明里那层 properties 一起抄进了输出。
+    //   数据本身完全正确 —— 剥掉外壳必须能用，否则每次都白跑两趟 LLM。
+    QueryUnderstandingParser.Parsed parsed =
+        QueryUnderstandingParser.parse(
+            "{\"properties\":{\"subQuestions\":[{\"question\":\"固定资产的归口管理部门是哪个部门？\","
+                + "\"queries\":[\"固定资产归口管理部门是哪个部门\",\"固定资产归口管理部门 部门\"]}]}}",
+            QUESTION,
+            3,
+            3,
+            true);
+
+    assertThat(parsed.usable()).isTrue();
+    assertThat(parsed.understanding().totalQueries()).isEqualTo(2);
+    assertThat(parsed.events())
+        .as("剥过外壳要留痕 —— 否则看不出模型一直在抄 schema")
+        .anyMatch(event -> event.contains("properties"));
+  }
+
+  @Test
+  void schemaEchoIsStillAFailure() {
+    // ★ 同一次实测里的另一种输出：模型**只**回了 schema 定义（subQuestions 是对象而不是数组）。
+    //   这一条必须仍判失败 —— 否则"模型没产出数据"会被记成"解析成功"，而失败率正是 #342 要量的那个数。
+    QueryUnderstandingParser.Parsed parsed =
+        QueryUnderstandingParser.parse(
+            "{\"properties\":{\"subQuestions\":{\"type\":\"array\",\"items\":{\"type\":\"object\","
+                + "\"properties\":{\"question\":{\"type\":\"string\"}}}}}}",
+            QUESTION,
+            3,
+            3,
+            true);
+
+    assertThat(parsed.usable()).isFalse();
+    assertThat(parsed.failure()).isNotBlank();
+  }
+
+  @Test
   void overlongQueryIsTruncatedToTheLengthLimit() {
     String longQuery = "这是一条特别长的查询".repeat(12);
 
