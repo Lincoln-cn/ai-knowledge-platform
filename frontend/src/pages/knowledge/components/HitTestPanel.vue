@@ -102,7 +102,12 @@
             <span class="grow" />
             <span class="hc-score num">{{ item.score.toFixed(2) }}</span>
           </div>
-          <p class="hc-content">{{ item.content }}</p>
+          <p class="hc-content" data-hit-content>
+            <template v-for="(part, i) in highlightParts(item.content, submittedQuery)" :key="i">
+              <mark v-if="part.hit" class="hit">{{ part.text }}</mark>
+              <span v-else>{{ part.text }}</span>
+            </template>
+          </p>
           <div class="hc-foot micro muted">
             {{ item.docName }} · {{ item.kbName }}
           </div>
@@ -135,7 +140,12 @@
               <span class="grow" />
               <span class="cc-score num">{{ item.score.toFixed(2) }}</span>
             </div>
-            <p class="cc-item-content">{{ item.content }}</p>
+            <p class="cc-item-content" data-hit-content>
+              <template v-for="(part, i) in highlightParts(item.content, submittedQuery)" :key="i">
+                <mark v-if="part.hit" class="hit">{{ part.text }}</mark>
+                <span v-else>{{ part.text }}</span>
+              </template>
+            </p>
             <div class="micro muted">{{ item.docName }}</div>
           </div>
         </div>
@@ -152,6 +162,7 @@ import { retrievalApi } from '@/api'
 import { ApiError } from '@/api/types'
 import type { HitTestResult, HitTestTrace, RetrievalMode, RetrievalParams } from '@/api/retrieval'
 import { RETRIEVAL_MODE_LABELS, labelOf } from '@/constants/labels'
+import { highlightParts } from '@/utils/highlight'
 
 const props = defineProps<{ kbId?: string }>()
 
@@ -185,6 +196,12 @@ const form = reactive<RetrievalForm>({
 })
 
 const question = ref('')
+/**
+ * 最近一次**实际发出**的查询 —— 命中高亮跟它走，不跟输入框走。
+ *
+ * ★ 空串表示"还没有结果"：此时 `highlightParts` 返回整段未命中，不会画错。
+ */
+const submittedQuery = ref('')
 const testing = ref(false)
 const comparing = ref(false)
 const singleResult = ref<HitTestResult | null>(null)
@@ -226,11 +243,15 @@ const runSingle = async () => {
   testing.value = true
   compareResults.value = []
   try {
+    const asked = question.value.trim()
     singleResult.value = await retrievalApi.hitTest({
       ...form,
       kbIds: props.kbId ? [props.kbId] : undefined,
-      question: question.value.trim()
+      question: asked
     })
+    // ★ 快照"这一次实际发出去的查询"：高亮必须跟结果走，不能跟输入框走 ——
+    //   否则用户改一个字还没回车，上一次结果里的高亮就飘了。
+    submittedQuery.value = asked
   } catch (error) {
     // P1 失败必须清掉上一次结果 —— 否则旧结果会被当成这次的结论
     singleResult.value = null
@@ -248,6 +269,7 @@ const runCompare = async () => {
   comparing.value = true
   singleResult.value = null
   try {
+    const asked = question.value.trim()
     compareResults.value = await retrievalApi.hitTestCompare({
       threshold: form.threshold,
       topN: form.topN,
@@ -259,8 +281,9 @@ const runCompare = async () => {
       multiHopEnabled: form.multiHopEnabled,
       maxHops: form.maxHops,
       kbIds: props.kbId ? [props.kbId] : undefined,
-      question: question.value.trim()
+      question: asked
     })
+    submittedQuery.value = asked
   } catch (error) {
     // P1 同上：失败清空，不残留上一次对比结果
     compareResults.value = []
@@ -458,6 +481,18 @@ onMounted(loadParams)
   -webkit-box-orient: vertical;
   overflow: hidden;
   flex: 1;
+}
+
+/* 命中片段：只加底色与字重，不加下划线 —— 连续多段命中时下划线会连成一条横线，
+   看起来像链接而不是"这几截是命中的"。底色用 warn-soft：它在浅色主题里对比度最低，
+   高亮 10 段也不会让整段读不下去。 */
+.hc-content .hit,
+.cc-item-content .hit {
+  background: var(--color-warn-soft);
+  color: inherit;
+  font-weight: 600;
+  border-radius: 2px;
+  padding: 0 1px;
 }
 
 .hc-foot {

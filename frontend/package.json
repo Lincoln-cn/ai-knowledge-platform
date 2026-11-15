@@ -26,7 +26,8 @@
     "test:e2e:real": "node e2e/workflow-real-model-smoke.mjs",
     "test:e2e:run": "node e2e/workflow-full-run.mjs",
     "test:e2e:trigger": "node e2e/workflow-trigger-sweep.mjs",
-    "test:e2e:trigger-panel": "node e2e/workflow-trigger-panel.mjs"
+    "test:e2e:trigger-panel": "node e2e/workflow-trigger-panel.mjs",
+    "test:e2e:hit": "node e2e/hit-test-highlight.mjs"
   },
   "dependencies": {
     "@antv/layout": "^0.3.25",
