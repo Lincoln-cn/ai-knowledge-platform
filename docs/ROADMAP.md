@@ -6372,3 +6372,45 @@ doc_top1 97.4%。⇒ 离 80% 差 8.7 点 / 56 条。
 - 改 B3 门槛（80% 是 `§二` 的，不改）
 - late interaction / 真 listwise（前者 5.8GB 存储，后者破 B4，都已拍板推后）
 - `AutoRAG` 那类"自动搜索最优检索配置"（没有真语料时它只是在合成语料上过拟合）
+
+### 11.45.7 `0.8.4` 检索引擎运行参数落库 + 配置页（2026-11-15）
+
+**目标（唯一一条）**：那些"已经被 B1/B3/耗时读数引用过"的检索旋钮，改一次不用改环境变量重启 ——
+页面上改完，**下一次检索就按新值跑**。
+
+#### 11.45.7.1 交付面
+
+| 层 | 文件 |
+|---|---|
+| 迁移 | `platform/V100__platform_retrieval_engine_settings.sql`（`pf_retrieval_settings` 单行表，7 个策略格 + `updated_at`/`updated_by`） |
+| 领域 | `platform/retrieval/RetrievalEngineSettings`（`checked()` 范围校验，文案各带当前值） |
+| 存取 | `...Store`（volatile 快照、零查询读、读不到回落 yml 并 WARN 说清"现在用的是哪一套"）+ `...Service` |
+| 接口 | `web/RetrievalSettingsController`：`GET`（登录即可）/ `PUT`（`platform:retrieval:manage`） |
+| 权限 | 新增 `platform:retrieval:manage`；**不借 `system:manage`** —— 改一次影响所有人的延迟与口径 |
+| 消费点 | `RetrievalService`（窗口/开关，一次读数取整组）· `OnnxRerankerAdapter.batchSize`（setter 注入，避免拖进无关测试）· `QueryUnderstandingService`（重试开关） |
+| 界面 | `/settings/retrieval`（`pages/settings/route.ts`，读权限给 `knowledgeView`） |
+
+#### 11.45.7.2 判据读数（真栈，2026-11-15）
+
+| 判据 | 读数 |
+|---|---|
+| V100 应用到真库 | `Migrating schema "public" to version "100 - platform retrieval engine settings"` → `Successfully applied 1 migration` |
+| `GET` 返回默认值 | 200，七个格与 `application.yml` 逐字一致 |
+| `PUT` 窗口 20 后 `GET` 复读 | **20**（即时生效） |
+| `PUT` 越界 99 | 400 `重排窗口要在 1～50 之间，现在写的是 99` |
+| 页面往返（`frontend/e2e/retrieval-settings-page.mjs`） | **6/6**：标题/三分组/保存提示「已保存，下一次检索就按新值跑」/刷新回读 20/恢复 10/零控制台错误 |
+
+#### 11.45.7.3 交付时踩到的一个坑（`silent-failure` 同族）
+
+权限点只加进 `Permissions.ALL`、**没加进 `PermissionCatalog.ITEMS`** ⇒ `catalogCodes` 把新点过滤掉 ⇒
+启动同步不写库 ⇒ **连 ADMIN 也 403**（实测 `PUT /retrieval/settings` 返回「无权限」）。
+补进 `ITEMS` 重启后 `iam_permission` 才出现 `platform:retrieval:manage`。
+
+★ 教训：**"加了一个权限点"有三个落点** —— `Permissions` 常量、`Permissions.ALL`、`PermissionCatalog.ITEMS`。
+缺第三个时没有任何报错，表现是"界面/接口用不了"，而排查方向会被引向角色授权表（那里看起来也没问题）。
+
+#### 11.45.7.4 仍不做
+
+- **按库分参数**：成本与延迟是整机共享的；挂到库上会让"谁拖慢了机器"无法回答
+- `@RefreshScope`：会改 15 处构造器签名，且刷新时机不可控
+- **逐格 PATCH**：中间状态会被别的请求读到 ⇒ 同一次检索里有的按新窗口、有的按旧窗口
