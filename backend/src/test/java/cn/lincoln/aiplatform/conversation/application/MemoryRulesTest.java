@@ -103,7 +103,7 @@ class MemoryRulesTest {
     UUID conversation = UUID.randomUUID();
     when(memories.findRecallsAcrossLevels(any(), any(), anyInt(), anyInt())).thenReturn(List.of());
 
-    new MemoryRetriever(memories, service(), settings).recall(owner, conversation);
+    new MemoryRetriever(memories, service(), settings).recall(owner, conversation, "这个问题的问法");
 
     /* ★ 合并成一次查询之后，"隔离"这件事的判据从"四次调用里那一次带了 scope"
      * 变成"那一次调用带的是当前会话" —— 断言对象变了，保护的东西没变。 */
@@ -121,7 +121,7 @@ class MemoryRulesTest {
 
     MemoryRetriever.Recall recall =
         new MemoryRetriever(memories, service(), settings)
-            .recall(UUID.randomUUID(), UUID.randomUUID());
+            .recall(UUID.randomUUID(), UUID.randomUUID(), "这个问题的问法");
 
     assertThat(recall.present()).isFalse();
     // ★ skipReason 只带异常类型、不带 message：它是给日志与界面看的短句，不该把内部细节漏出去
@@ -182,7 +182,7 @@ class MemoryRulesTest {
                 memory(owner, MemoryLevel.USER, MemoryKind.FACT, "用户在核合同。")));
 
     MemoryRetriever.Recall recall =
-        new MemoryRetriever(memories, service(), settings).recall(owner, conversation);
+        new MemoryRetriever(memories, service(), settings).recall(owner, conversation, "这个问题的问法");
 
     assertThat(recall.usedMemoryIds()).hasSize(2);
   }
@@ -221,7 +221,7 @@ class MemoryRulesTest {
         .thenReturn(List.of(personaHigh, conversationWin));
 
     MemoryRetriever.Recall recall =
-        new MemoryRetriever(memories, service(), settings).recall(owner, conversation);
+        new MemoryRetriever(memories, service(), settings).recall(owner, conversation, "这个问题的问法");
 
     /* 两条都在配额内，所以断言的是"顺序"：会话那条排在前面。 */
     assertThat(recall.block().indexOf("含税")).isLessThan(recall.block().indexOf("先结论"));
@@ -234,5 +234,15 @@ class MemoryRulesTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("1～20")
         .hasMessageContaining("99");
+  }
+
+  /** 相似度只作加分：没有向量的那条不能被算成负分而被挤掉。 */
+  @Test
+  void cosineNeedsTwoVectorsOfTheSameLength() {
+    assertThat(MemoryRetriever.cosine(new float[] {1f, 0f}, new float[] {1f, 0f})).isEqualTo(1f);
+    assertThat(MemoryRetriever.cosine(new float[] {1f, 0f}, new float[] {0f, 1f})).isEqualTo(0f);
+    assertThat(MemoryRetriever.cosine(new float[] {1f, 0f}, new float[] {1f, 0f, 0f}))
+        .isEqualTo(0f);
+    assertThat(MemoryRetriever.cosine(new float[0], new float[0])).isEqualTo(0f);
   }
 }

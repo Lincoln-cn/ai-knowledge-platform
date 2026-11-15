@@ -4,9 +4,13 @@ import cn.lincoln.aiplatform.conversation.domain.Memory;
 import cn.lincoln.aiplatform.conversation.domain.MemoryLevel;
 import cn.lincoln.aiplatform.conversation.domain.MemoryRepository;
 import cn.lincoln.aiplatform.conversation.domain.UserProfile;
+import cn.lincoln.aiplatform.conversation.infrastructure.MemoryEmbeddingWriter;
 import cn.lincoln.aiplatform.conversation.infrastructure.MemorySettingsStore;
+import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,12 +51,34 @@ public class MemoryRetriever {
   private final MemoryRepository memories;
   private final MemoryService memoryService;
   private final MemorySettingsStore settings;
+  private MemoryEmbeddingWriter vectors;
+  private EmbeddingPort embeddingPort;
 
   public MemoryRetriever(
       MemoryRepository memories, MemoryService memoryService, MemorySettingsStore settings) {
     this.memories = memories;
     this.memoryService = memoryService;
     this.settings = settings;
+  }
+
+  /**
+   * ★ setter 可选注入：向量读取只在"要按相似度排序"时才需要，而排序本身是可选的增强 （没有向量的记忆仍按重要度参与）。用构造器参数会逼所有脱离容器的测试都提供一份。
+   *
+   * @param vectors 向量读取器（空 = 不按相似度排序）
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  public void setVectors(MemoryEmbeddingWriter vectors) {
+    this.vectors = vectors;
+  }
+
+  /**
+   * ★ setter 可选注入：没装向量模型时"记忆不参与相似度排序"，这是合法部署而不是错误。
+   *
+   * @param embeddingPort 向量化端口（空 = 只用重要度与层权重排序）
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  public void setEmbeddingPort(EmbeddingPort embeddingPort) {
+    this.embeddingPort = embeddingPort;
   }
 
   /**
@@ -63,9 +89,10 @@ public class MemoryRetriever {
    *
    * @param userId 用户
    * @param conversationId 当前会话（可为 {@code null}：新建会话时还没有 id）
+   * @param question 这次的问题（用于跨会话层的相似度排序；空则可跳过向量这一步）
    * @return 召回结果（永不为 {@code null}）
    */
-  public Recall recall(UUID userId, UUID conversationId) {
+  public Recall recall(UUID userId, UUID conversationId, String question) {
     if (userId == null) {
       return Recall.empty("没有用户，跳过召回");
     }
@@ -89,11 +116,84 @@ public class MemoryRetriever {
           current.injectProfile()
               ? memoryService.profileOf(userId)
               : UserProfile.empty(userId, null);
-      return build(current, persona, user, cross, conversation, profile);
+      Map<UUID, Float> relevance = relevanceOf(rows, question);
+      return build(current, persona, user, cross, conversation, profile, relevance);
     } catch (RuntimeException e) {
       LOG.warn("记忆召回失败，本次对话不带记忆：{}", e.toString());
       return Recall.empty("召回异常：" + e.getClass().getSimpleName());
     }
+  }
+
+  /**
+   * 候选记忆与这次问题的相似度（只对<strong>有向量</strong>的那批算）。
+   *
+   * <p>★ 只有跨会话层真正需要它：用户与人格化是"恒定背景"（每次都在，相似度没有意义）， 会话层只放约定（条数极少且已按会话过滤）。设计册 §6.2 的原话是"这一层最依赖相关"。
+   *
+   * <p>★ 任何一步失败都退化成空表（= 全部按重要度排），<b>不抛也不重试</b>： 召回是每轮对话都要走的路，为了一路排序信号去多等一次模型或重试一次数据库不值得。
+   *
+   * @param rows 候选
+   * @param question 问题
+   * @return 记忆 id → 余弦相似度（-1..1）
+   */
+  private Map<UUID, Float> relevanceOf(List<Memory> rows, String question) {
+    if (embeddingPort == null || vectors == null || question == null || question.isBlank()) {
+      return Map.of();
+    }
+    List<Memory> crossOnly =
+        rows.stream().filter(m -> m.level() == MemoryLevel.CROSS_SESSION).toList();
+    if (crossOnly.isEmpty()) {
+      return Map.of();
+    }
+    try {
+      Map<UUID, float[]> stored = vectors.loadVectors(ids(crossOnly));
+      if (stored.isEmpty()) {
+        return Map.of();
+      }
+      Optional<UUID> modelId = vectors.currentModelId();
+      if (modelId.isEmpty()) {
+        return Map.of();
+      }
+      List<float[]> embedded = embeddingPort.embed(modelId.get(), List.of(question));
+      if (embedded == null || embedded.isEmpty() || embedded.getFirst() == null) {
+        return Map.of();
+      }
+      float[] q = embedded.getFirst();
+      Map<UUID, Float> scores = new java.util.HashMap<>();
+      stored.forEach((id, v) -> scores.put(id, cosine(q, v)));
+      return scores;
+    } catch (RuntimeException e) {
+      LOG.warn("记忆相似度排序失败，本次退回按重要度排序：{}", e.toString());
+      return Map.of();
+    }
+  }
+
+  private static List<UUID> ids(List<Memory> rows) {
+    return rows.stream().map(Memory::id).toList();
+  }
+
+  /**
+   * ★ 两个向量长度不同时返回 0 而不是抛：维度不一致说明换了模型（列上写死 384）， 那是配置问题，不该让一次对话失败 —— 只是这一条退到按重要度参与。
+   *
+   * @param a 向量
+   * @param b 向量
+   * @return 余弦相似度（-1..1；任一为零向量时返回 0）
+   */
+  static float cosine(float[] a, float[] b) {
+    if (a == null || b == null || a.length == 0 || a.length != b.length) {
+      return 0f;
+    }
+    double dot = 0;
+    double na = 0;
+    double nb = 0;
+    for (int i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+      na += a[i] * a[i];
+      nb += b[i] * b[i];
+    }
+    if (na == 0 || nb == 0) {
+      return 0f;
+    }
+    return (float) (dot / (Math.sqrt(na) * Math.sqrt(nb)));
   }
 
   /**
@@ -126,20 +226,22 @@ public class MemoryRetriever {
       List<Memory> user,
       List<Memory> cross,
       List<Memory> conversation,
-      UserProfile profile) {
+      UserProfile profile,
+      Map<UUID, Float> relevance) {
     List<Memory> candidates = new ArrayList<>();
     candidates.addAll(persona);
     candidates.addAll(user);
     candidates.addAll(cross);
     candidates.addAll(conversation);
-    /* ★ 按「层权重 × 重要度」排序后再截到 recallLimit（设计册 §6.2 的合计上限规则）。
+    /* ★ 按「层权重 × (重要度 + 相似度加分)」排序后再截到 recallLimit（设计册 §6.2 的合计上限规则）。
      *
      * 上一版是"先按层拼接、再截前 N 条" —— 人格化那 3 条排在前面，于是 recallLimit=5 时
      * 会话细节几乎永远进不来。而这个错误看起来完全正常：注入的记忆段确实有条数，只是
      * 全是"这个人是谁"这种恒定背景，从来不是"这次用得上"的那几条。 */
     List<Memory> picked =
         candidates.stream()
-            .sorted(java.util.Comparator.comparingDouble(MemoryRetriever::score).reversed())
+            .sorted(
+                java.util.Comparator.comparingDouble((Memory m) -> score(m, relevance)).reversed())
             .limit(current.recallLimit())
             .toList();
     /* ★ 命中计数在召回之后写：它衡量的是"这条记忆被用上了"，而不是"被查出来了"。 */
@@ -164,25 +266,30 @@ public class MemoryRetriever {
     return new Recall(block, used, truncated, null);
   }
 
+  /** 相似度在排序分里占几倍的重要度。 */
+  private static final double RELEVANCE_WEIGHT = 2.0;
+
   /**
    * 一条记忆的排序分。
    *
    * <p>★ 层权重不是"哪层更重要"，而是"哪层这次更用得上"：用户与人格化是<strong>恒定背景</strong>
    * （每次都在，价值随重复下降），会话与跨会话是<strong>这次用得上</strong>（错过就没有）。 设计册 §6.2 的原话是"恒定背景占了配额，会话细节就进不来"。
    *
-   * <p>★ 重要度直接相乘而不归一化：1–5 已经是同一把尺子，用它当分值最直观； 而"新的优先"已经在 SQL 的 {@code order by updatedAt desc}
-   * 里作为同分时的次序。
+   * <p>★ 相似度只作<strong>加分</strong>不作基准：没有向量的那条（或向量模型不可用）仍能靠重要度被召回， 这正是 {@code embedding} 列可空要保住的语义
+   * —— 否则"向量化失败"会变成"这条记忆消失"。
    *
    * @param memory 记忆
+   * @param relevance 相似度（可能为空表）
    * @return 分值（越大越先注入）
    */
-  private static double score(Memory memory) {
+  private static double score(Memory memory, Map<UUID, Float> relevance) {
     double weight =
         switch (memory.level()) {
           case CONVERSATION, CROSS_SESSION -> 1.5;
           default -> 1.0;
         };
-    return weight * memory.importance();
+    float cosine = relevance.getOrDefault(memory.id(), 0f);
+    return weight * (memory.importance() + RELEVANCE_WEIGHT * cosine);
   }
 
   /**

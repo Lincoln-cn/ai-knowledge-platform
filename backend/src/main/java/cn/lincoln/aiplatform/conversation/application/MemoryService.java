@@ -6,6 +6,7 @@ import cn.lincoln.aiplatform.conversation.domain.MemoryLevel;
 import cn.lincoln.aiplatform.conversation.domain.MemoryRepository;
 import cn.lincoln.aiplatform.conversation.domain.UserProfile;
 import cn.lincoln.aiplatform.conversation.infrastructure.JpaUserProfileRepository;
+import cn.lincoln.aiplatform.conversation.infrastructure.MemoryEmbeddingWriter;
 import cn.lincoln.aiplatform.conversation.infrastructure.MemoryRepositoryAdapter;
 import cn.lincoln.aiplatform.conversation.infrastructure.MemorySettingsStore;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
@@ -44,6 +45,7 @@ public class MemoryService {
   private final MemoryRepositoryAdapter embeddings;
   private final JpaUserProfileRepository profiles;
   private final MemorySettingsStore settings;
+  private MemoryEmbeddingWriter embeddingWriter;
 
   public MemoryService(
       MemoryRepository memories,
@@ -54,6 +56,17 @@ public class MemoryService {
     this.embeddings = embeddings;
     this.profiles = profiles;
     this.settings = settings;
+  }
+
+  /**
+   * ★ setter 可选注入：{@code MemoryRepositoryAdapter} 已作为构造器参数（旧测试直接 new 它），
+   * 但向量写入是"装了向量模型才有的附加能力"，用构造器参数会逼所有测试都提供一份。
+   *
+   * @param embeddingWriter 向量写入器（空 = 记忆不参与相似度排序）
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  public void setEmbeddingWriter(MemoryEmbeddingWriter embeddingWriter) {
+    this.embeddingWriter = embeddingWriter;
   }
 
   /**
@@ -98,7 +111,13 @@ public class MemoryService {
             draft.confidence(),
             draft.dedupKey(),
             Instant.now());
-    return Optional.of(memories.save(memory));
+    Memory saved = memories.save(memory);
+    /* ★ 写完立刻补向量：设计册 §6.2 要求 CROSS_SESSION 按相似度排序，而没有向量的那条
+     * 只能退到重要度那一档。失败由 writer 自己吞掉（记忆已经写好了，向量没写上不是这次丢了）。 */
+    if (embeddingWriter != null) {
+      embeddingWriter.write(saved.id(), saved.content());
+    }
+    return Optional.of(saved);
   }
 
   /**
@@ -154,7 +173,13 @@ public class MemoryService {
             1.0f,
             null,
             Instant.now());
-    return memories.save(memory);
+    Memory saved = memories.save(memory);
+    /* ★ 手动新增也必须补向量：否则"用户自己加的那几条"永远只按重要度参与召回，
+     * 而它恰恰是最该被理解的几条（用户主动写下来说明他认为重要）。 */
+    if (embeddingWriter != null) {
+      embeddingWriter.write(saved.id(), saved.content());
+    }
+    return saved;
   }
 
   /**

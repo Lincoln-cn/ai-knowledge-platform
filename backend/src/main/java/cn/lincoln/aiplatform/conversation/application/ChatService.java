@@ -826,7 +826,7 @@ public class ChatService {
     // ★ 记忆段在本方法（调用方线程）里取好：与下面读历史同理，模型线程上没有访问范围。
     //   ★ 只取一次，两条分支（多轮 / 单轮）共用同一段 —— 否则"第 1 轮没记忆、第 2 轮有"这种
     //     只在多轮时出现的差异没人查得出来。
-    final String memoryBlock = memoryBlockOf(turn);
+    final String memoryBlock = memoryBlockOf(turn, question);
     if (turn.multiTurn()) {
       List<cn.lincoln.aiplatform.platform.model.ChatMessage> previous =
           turns.historyBefore(turn.conversationId(), turn.userMessageId(), historyLimit);
@@ -1997,12 +1997,12 @@ public class ChatService {
    * <p>★★ 它<b>不抛</b>：记忆是增强项。一次记忆库抖动让用户的问题答不出来，是把"少一点上下文"升级成了"服务不可用" —— 这正是 {@code ROADMAP §11.51}
    * 里"记忆缺失不许报错"那条硬约束。
    */
-  private String memoryBlockOf(ChatTurnWriter.PreparedTurn turn) {
+  private String memoryBlockOf(ChatTurnWriter.PreparedTurn turn, String question) {
     if (memoryRetriever == null || turn.userId() == null) {
       return "";
     }
     try {
-      return memoryRetriever.recall(turn.userId(), turn.conversationId()).block();
+      return memoryRetriever.recall(turn.userId(), turn.conversationId(), question).block();
     } catch (RuntimeException failure) {
       // ★ recall 内部已经吞过一次并 WARN；这里再兜一层，保证"prompt 的构造"这条路径上没有记忆的异常出口。
       log.warn("记忆召回失败，本轮不带记忆：{}", failure.getMessage());
