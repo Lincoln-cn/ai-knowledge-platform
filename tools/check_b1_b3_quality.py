@@ -328,7 +328,7 @@ def stage_eval(token: str, kb_id: str, args: argparse.Namespace) -> int:
     qa = [json.loads(line) for line in Path(args.qa).read_text(encoding="utf-8").splitlines() if line.strip()]
     if args.limit:
         qa = qa[: args.limit]
-    print(f"  · 问题 {len(qa)} 条 · 模式 {args.mode} · topN {args.topn} · 阈值 {args.threshold}")
+    print(f"  · 问题 {len(qa)} 条 · 模式 {args.mode} · 改写 {args.query_count} 条 · topN {args.topn} · 阈值 {args.threshold}")
 
     records: list[dict] = []
     started = time.time()
@@ -342,6 +342,10 @@ def stage_eval(token: str, kb_id: str, args: argparse.Namespace) -> int:
             {
                 "question": item["question"],
                 "mode": args.mode,
+                # ★ 必须显式传：不传时后端按 `HitTestQuery.DEFAULT_QUERY_COUNT`（今天 = 3）走，
+                #   而生产链路上是**每个应用自己配的值**（e2e 应用 `30fc12bd` 配的是 0）。
+                #   两边不一致时，"评测读数"与"用户体感"说的就不是同一条链路。
+                "queryCount": args.query_count,
                 "threshold": args.threshold,
                 "topN": args.topn,
                 "noRefStrategy": "REFUSE",
@@ -401,7 +405,7 @@ def stage_eval(token: str, kb_id: str, args: argparse.Namespace) -> int:
     b1_core = sum(1 for r in ok if r["hit5_core"])
     b3_core = sum(1 for r in ok if r["b3_core"])
     doc_top1 = sum(1 for r in ok if r["doc_top1_right"])
-    print(f"\n== B1/B3 读数（{args.mode} · topN {args.topn} · 阈值 {args.threshold}）==")
+    print(f"\n== B1/B3 读数（{args.mode} · 改写 {args.query_count} 条 · topN {args.topn} · 阈值 {args.threshold}）==")
     print(f"  · 有效 {len(ok)} 条（报错 {len(records) - len(ok)}）")
     print(f"  · **B1 命中率（前 5，core）** = {b1_core}/{n} = **{b1_core / n:.1%}**")
     print(f"  · B1 命中率（前 5，exact 整句） = {b1_exact}/{n} = {b1_exact / n:.1%}")
@@ -453,6 +457,9 @@ def main() -> int:
     ap.add_argument("--limit-docs", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--mode", default="HYBRID")
+    # ★ 默认 3 = 后端 `HitTestQuery.DEFAULT_QUERY_COUNT`，**不是**任何应用的配置值。
+    #   读这套读数的人必须知道这一点：应用链路上的改写条数由每个应用自己配（e2e 应用是 0）。
+    ap.add_argument("--query-count", type=int, default=3)
     ap.add_argument("--topn", type=int, default=10)
     ap.add_argument("--threshold", type=float, default=0.6)
     ap.add_argument("--embed-model", default="bge-m3")
