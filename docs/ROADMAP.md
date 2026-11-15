@@ -6535,6 +6535,8 @@ csv  / tsv   ──(解析)─┘
 - 受构造器改动影响的四个既有类全绿：`DocumentParseTest` 10 · `OcrPageInventoryTest` 4 · `ParseMetricsTest` 2 · `PdfPlaceholderNoiseTest` 4。
 - 架构闸门：`-Dtest=cn.lincoln.aiplatform.*Test` **38/38**（1 skipped）· `caliber.*Test` **34/34**。
 - 前端：`typecheck` exit 0 · `build` 26.33s exit 0。
+- ★★ **真栈判据（本节的目标）已过**：同一份台账存成 `台账-编制.csv` 与 `台账-编制-一致.xlsx`（openpyxl 从 csv 逐格生成），上传到库 `52f02f99-2468-46a5-91e9-e85f935c7761` 后**各切出 1 段**，两段的 `content` 逐字相同（`string_agg(content, E'\n' order by ordinal)` 相等 ⇒ `SEGMENTS_IDENTICAL=yes`），`is_table = true`。段落内容 = 表头行 + 分隔行 + 三条数据行。
+- ★ **第一版夹具没过，但错在夹具不在代码**：我手写的 xlsx 漏填了「板块」列的值（csv 有、xlsx 空），切出来是 136 vs 144 字符。这条本身值得记 —— **验收夹具必须从同一份数据生成**，手写两份"看起来一样"的表会把夹具缺陷伪装成代码缺陷，而且第一次看到差异时最容易去翻解析器代码。
 - ★ **反证**：把 `toGfmTable` 的数据行起始从 `r = 1` 改成 `r = 0` ⇒ `xlsxBecomesGfmTable:44` 与 `csvBecomesGfmTable` 两条精确红；改回并 touch 后 11/11 绿。
 - ★ **踩坑**：给 `TikaMarkdownParser` 加第二个构造器后，Spring 报的是 `Failed to instantiate …: No default constructor found` —— 看起来像"没有构造器"，其实是"有多个、没标 `@Autowired`"。两个构造器时必须显式标注，错误文案不会告诉你这一点。
 
