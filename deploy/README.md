@@ -426,6 +426,9 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.retrieval.rerank.tokenizer-path`（`RETRIEVAL_RERANK_TOKENIZER_PATH`） | `models/bge-reranker-base/tokenizer.json` | 分词器（约 16MB） |
 | `app.retrieval.rerank.listwise-enabled`（`RETRIEVAL_RERANK_LISTWISE_ENABLED`） | **false** | LLM listwise：对重排后的前 N 个再让对话模型排一次。20 条试跑 B3 65.00%→70.00%（+5 点），但单条 **3.12s**（p95 11.69s）⇒ 叠加检索 8.5s 后单跳 11.6s，**在本机破 B4 的 10s**。所以默认关：**它是"好机器上再打开"的增益件**。★ 三档覆盖顺序：请求体 `rerankListwise` > 应用 `retrieval.rerankListwise` > 这个全局值，`null` = 跟随下一级 |
 | `app.retrieval.rerank.listwise-top-k`（`RETRIEVAL_RERANK_LISTWISE_TOP_K`） | 5 | 交给 listwise 的候选数。只排 1 个等于没排，所以下限是 2（配 1 会在启动时被拒） |
+| `app.retrieval.rerank.forward-batch`（`RETRIEVAL_RERANK_FORWARD_BATCH`） | 5 | 重排一次前向算几条。`0` = 整个窗口一次算完。★ 实测批大小对总耗时的影响在噪声内（关重试时批 5 是 7.93s、批 0 是 7.99s）—— **不要指望它省时间**；批内要按最长补齐，所以快慢取决于窗口里的长度分布，写死任何值都是猜。这也是它默认保持在 5 的原因 |
+| `app.retrieval.hnsw.ef-search`（`RETRIEVAL_HNSW_EF_SEARCH`） | 40 | 近似索引的搜索广度。★ 调大只增加"扫描完整性"，**不增加排序质量**。195 段的小库上规划器根本不走索引（强制走 hnsw 反而慢 30–100 倍）；高选择性过滤下近似扫描会漏行，那由下一条兜 |
+| `app.retrieval.hnsw.iterative-scan`（`RETRIEVAL_HNSW_ITERATIVE_SCAN`） | `strict_order` | pgvector 的"过滤后继续扫"模式，可选 `off` / `relaxed_order` / `strict_order`。★ 它的作用是**修真实的丢行**：实测同一查询在 `off` 下只返回 2 条、`strict_order` 下返回 4 条（真值 4）。★ 这个值会被拼进 SQL（`SET LOCAL` 不支持占位符），所以代码侧是白名单校验，配错会在启动时被拒 |
 
 ### 实体识别
 
@@ -453,6 +456,19 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.ingestion.pending-parse-reaper.enabled`（`INGESTION_PENDING_PARSE_REAPER_ENABLED`） | true | 自愈扫描开关（`#304`）。★ 与其它定时任务相反，**默认开着** —— 关掉就等于回到「解析任务没起来时永远没人管」，只在排查"回收得太积极"时才临时关 |
 | `app.ingestion.pending-parse-reaper.interval-ms`（`INGESTION_PENDING_PARSE_REAPER_INTERVAL_MS`） | 60000 | 扫描间隔（`fixedDelay`：一轮扫完再计下一轮，不是固定频率） |
 | `spring.datasource.hikari.maximum-pool-size`（`DB_POOL_SIZE`） | 10 | 连接池上限。★ 并发高于它时多出来的虚拟线程拿不到连接，表现为「与文件内容无关的向量化失败」（`#227`）；★ 调大前先看库端 `max_connections`：**实例数 × 这个数**才是库看到的连接数 |
+
+### 数据库、端口与上游
+
+这一节是**交付必填**的四项：不配它们，容器起来也会连不上库或连不上模型。默认值都是
+开发机口径（`localhost:15432`），生产直接沿用等于连错库。
+
+| 键（ENV） | 默认 | 改了会怎样 |
+|---|---|---|
+| `spring.datasource.url`（`DB_URL`） | `jdbc:postgresql://localhost:15432/aiplatform` | 数据库地址。★ **本机开发时特别注意**：`15432` 是另一个项目（JAiRouter）的库端口，本项目的容器映射在 `15433`（`AIP_DB_PORT`）—— 端口配错的表现是 `FATAL: password authentication failed`，看起来像密码错 |
+| `spring.datasource.username`（`DB_USER`） | `aiplatform` | 库用户名。容器初始化时建的就是它 |
+| `spring.datasource.password`（`DB_PASSWORD`） | `aiplatform` | 库密码。★ 非本地环境必须覆盖，且与 `deploy/docker-compose.yml` 里的 `POSTGRES_PASSWORD` 同值 |
+| `server.port`（`SERVER_PORT`） | `8080` | 应用监听端口。★ 宿主机上 8080 常被占用，交付示例用 `18088`；改它不影响容器内健康检查（容器内仍看 `8080`，除非同时改 compose） |
+| `app.ai.base-url`（`AI_BASE_URL`） | `http://localhost:11434/v1` | 旧式直连的上游地址（未绑定服务商时用）。★ 建议改走 `## 八之补三`：登记成服务商之后才有出站密级、认证方式与连通性检查 |
 
 ### 出站与文件
 
