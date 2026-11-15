@@ -6473,6 +6473,19 @@ doc_top1 97.4%。⇒ 离 80% 差 8.7 点 / 56 条。
 
 建议 **先落 B**（不依赖语料判断），**C 等 `0.9.2` 真语料基线出来再定**。
 
+★ **改默认为 B 时要动的地方（今天有四套默认值，不一致）**：
+
+| 落点 | 今天 | 说明 |
+|---|---|---|
+| `Assistant.java:129` | `retrievalQueryCount = 3` | 新建应用 |
+| `KnowledgeBase.java:153` | `retrievalQueryCount = 3` | 新建知识库 |
+| `HitTestQuery.DEFAULT_QUERY_COUNT` | `3` | `/retrieval/test` 不传时（**评测脚本默认走这个**） |
+| `RetrievalParams.platformDefaults()` | **`0`** | "通用问答"没有应用时走这条 |
+
+"平台设置"路径关改写是**有理由的**（`RetrievalParams` 的 javadoc：与 `#297` 之前的行为逐字一致，不是笔误）；
+但两个实体的 `3` 没有同样的理由，而 `§11.45.8.3` 的矩阵显示 **3 是最慢且 B3 最低的那一档**。
+⇒ 拍板 B 时要四处同改（含 `frontend/src/mock/handlers/*` 里与 yml 一致的初值），否则"改了默认"只改了其中一条链路。
+
 #### 11.45.8.7 读数出处
 
 `.build/matrix.json`（耗时矩阵 12 组）· `.build/matrix-hybrid.json`（HYBRID 补测）· `.build/matrix-quality.json`（质量矩阵 5 组）· `.build/full-fulltext-qc0.json`（全量 195 条）。
