@@ -6909,4 +6909,41 @@ csv  / tsv   ──(解析)─┘
 - **不把记忆做成知识库**：记忆不是可检索的语料，它按人隔离、按层召回，混进 KB 会污染密级 pre-filter。
 - **不给"记忆条数"设硬上限**：遗忘是按重要度与命中率算的，不是按条数截断。
 
+### 11.51.8 抽取从同步改异步（2026-11-16）
+
+**改之前是什么样**：`ChatService.maybeExtractMemories` 在 `awaitTerminal(...)` 之后**同步**调
+`MemoryExtractor.extract`（内含一次模型调用，超时 20 秒）与 `MemoryService.write`（每次一个事务）。
+
+**为什么这仍然是性能问题**：用户看不到延迟（回答早已推给前端），但**那条请求线程被按住了**。
+性能退化不会以"变慢"的形态出现，而是以"并发一上来就排队"出现 —— 而排队在单条请求的耗时读数里
+完全看不出来。这是本项目反复记账的那类"症状不在被观测的那条链上"。
+
+**改成什么**：新增 `MemoryExtractionRunner`（虚拟线程 + `CompletableFuture` + `inFlight` 计数 +
+`@PreDestroy` 关停等待 30 秒），照抄 `EntityExtractionService.extractAndStoreAsync` 的形状
+（本仓已有五个同类执行器，不引入新范式）。`ChatService` 的写半边**只依赖这个 runner** ——
+"抽取在哪条线程上跑"对它是个不透明的决定，以后再改不必动 `ChatService`。
+
+| 判据 | 读数 |
+|---|---|
+| `submit` 不等抽取跑完 | `MemoryExtractionRunnerTest.submitReturnsBeforeTheExtractionFinishes`（500ms 抽取，`submit` < 300ms） |
+| 反证能红 | 把 `supplyAsync` 换成 `completedFuture(extractAndWrite(turn))` ⇒ 精确红在 `:57`，消息就是「submit 必须立刻返回」 |
+| 抽取抛错不让问答失败 | `extractionFailureYieldsZeroInsteadOfThrowing` |
+| 空回答不白起线程 | `blankAnswerDoesNotEvenSubmit`（断言 `extract` **从未**被调用） |
+| 没有归属人不提交 | `turnWithoutOwnerDoesNotSubmit` |
+
+读数：`MemoryExtractionRunnerTest` 4/4 · `MemoryRulesTest` 5/5 · 顶层闸门 38/38 · 口径闸门 34/34。
+
+**边界（必须一起读）**
+
+- **召回仍然同步**：它要拼进 prompt，异步化没有意义 —— 只有"写"这一半能挪。
+- **单条写失败不影响同批其它条目**：一条撞了 `dedup_key` 的竞态，不该把另外两条也丢掉。
+- **关停等 30 秒**、超时放弃并打日志说清还剩几个：「等了一会儿没等到」与「已经全写完」必须能分开。
+
+**仍不做**
+
+- **不引入消息队列**：一个中间件只为了"三个记忆的旁路"不值得；虚拟线程已经解决了"不阻塞"，
+  而"进程退出丢任务"由 `@PreDestroy` 的等待收窄。
+- **不做失败重试**：抽取失败的正确结局是"这次没记下来"，重试会把一次故障放大成三次模型调用。
+
+
 

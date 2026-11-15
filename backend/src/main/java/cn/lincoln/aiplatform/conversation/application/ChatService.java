@@ -256,11 +256,14 @@ public class ChatService {
    */
   private MemoryRetriever memoryRetriever;
 
-  /** 对话结束后异步抽取记忆（0.9.0）。未装配时整条旁路不启动。 */
-  private MemoryExtractor memoryExtractor;
-
-  /** 记忆的写入口（0.9.0）。抽取器只产草稿，落库的校验与去重在这一层。 */
-  private MemoryService memoryService;
+  /**
+   * 对话结束后的记忆抽取（0.9.0）。
+   *
+   * <p>★ 它自己是<strong>异步</strong>的：{@link MemoryExtractionRunner#submit} 把"抽一次模型 + 写几条
+   * 记忆"整段搬到虚拟线程上，调用方拿到 {@code CompletableFuture} 立刻返回。原本这里直接持有 {@code MemoryExtractor} + {@code
+   * MemoryService} 并同步调用，代价是<strong>聊天线程被按在 20 秒 超时的抽取上</strong> —— 回答早已落库，用户看不到延迟，但并发一上来就是线程排队。
+   */
+  private MemoryExtractionRunner memoryExtraction;
 
   /** 并行开关本身（`app.chat.suggestions.parallel`，默认 false）。 */
   @Value("${app.chat.suggestions.parallel:false}")
@@ -331,20 +334,20 @@ public class ChatService {
   }
 
   /**
-   * 注入长期记忆（0.9.0）：召回 + 抽取。
+   * 注入长期记忆（0.9.0）：召回 + 异步抽取。
    *
    * <p>★ 两者一起注入：它们是同一个能力的读半边与写半边，只接一半的系统更难解释（"能记住但不记得用" / "用了但从没记下"）。
+   *
+   * <p>★ 写半边只依赖 {@link MemoryExtractionRunner}（它内部持有抽取器与写入口）： 这样"抽取在哪条线程上跑"对 {@code ChatService}
+   * 是一个不透明的决定，改异步不必再动本类。
    *
    * <p>★ {@code required = false}，理由见字段 javadoc。
    */
   @Autowired(required = false)
   public void setMemories(
-      MemoryRetriever memoryRetriever,
-      MemoryExtractor memoryExtractor,
-      MemoryService memoryService) {
+      MemoryRetriever memoryRetriever, MemoryExtractionRunner memoryExtraction) {
     this.memoryRetriever = memoryRetriever;
-    this.memoryExtractor = memoryExtractor;
-    this.memoryService = memoryService;
+    this.memoryExtraction = memoryExtraction;
   }
 
   /**
@@ -1967,52 +1970,23 @@ public class ChatService {
   }
 
   /**
-   * 从这一轮问答里抽取记忆（0.9.0）。
+   * 把这一轮问答交给记忆抽取（0.9.0）。
    *
-   * <p>★ 放在<b>终态落库之后</b>：用户已经看到回答，抽取多花的那点时间不该体现在首字延迟上。
+   * <p>★ 放在<b>终态落库之后</b>：用户已经看到回答，抽取不该体现在首字延迟上。
    *
-   * <p>★★ 它不抛：抽取是旁路。一次模型抖动或解析失败，正确结局是"这次没记下来"，不是"这一轮问答失败" —— 后者会把增强项变成故障源。
+   * <p>★★ 这里<b>只提交、不执行</b>：真正的"抽一次模型 + 写几条记忆"在 {@link MemoryExtractionRunner#submit}
+   * 里跑在虚拟线程上。原先它是同步的 —— 回答落库了， 但聊天线程仍被一次最长 20 秒的抽取按着，并发一上来就是线程排队。
    *
-   * <p>★ 三种情况整条跳过：没有装配抽取器（脱离容器的测试）、这一轮没有归属人（调试）、回答为空 （拒答或上游一个字都没吐 —— 没有回答就没有可提炼的东西）。
+   * <p>★ 三种情况整条跳过：没有装配记忆（脱离容器的测试）、这一轮没有归属人（调试）、 回答为空（拒答或上游一个字都没吐 —— 没有回答就没有可提炼的东西）。
    */
   private void maybeExtractMemories(
       ChatTurnWriter.PreparedTurn turn, String question, String answer) {
-    if (memoryExtractor == null || turn.userId() == null) {
+    if (memoryExtraction == null || turn.userId() == null) {
       return;
     }
-    if (answer == null || answer.isBlank()) {
-      return;
-    }
-    try {
-      List<MemoryService.MemoryDraft> drafts =
-          memoryExtractor.extract(
-              turn.userId(), turn.conversationId(), turn.userMessageId(), question, answer);
-      if (drafts.isEmpty()) {
-        return;
-      }
-      int saved = 0;
-      for (MemoryService.MemoryDraft draft : drafts) {
-        if (memoryServiceWrite(draft)) {
-          saved++;
-        }
-      }
-      log.info("本轮抽取记忆 {} 条，写入 {} 条（会话 {}）", drafts.size(), saved, turn.conversationId());
-    } catch (RuntimeException failure) {
-      log.warn("记忆抽取失败，本轮不记记忆：{}", failure.getMessage());
-    }
-  }
-
-  /** 写一条抽取结果；失败只影响这一条（不中断同一轮的其它条目）。 */
-  private boolean memoryServiceWrite(MemoryService.MemoryDraft draft) {
-    if (memoryService == null) {
-      return false;
-    }
-    try {
-      return memoryService.write(draft).isPresent();
-    } catch (RuntimeException failure) {
-      log.warn("写记忆失败（{}）：{}", draft.kind(), failure.getMessage());
-      return false;
-    }
+    memoryExtraction.submit(
+        new MemoryExtractionRunner.Turn(
+            turn.userId(), turn.conversationId(), turn.userMessageId(), question, answer));
   }
 
   /**
