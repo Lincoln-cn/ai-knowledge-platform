@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -47,6 +48,11 @@ class MemoryRulesTest {
       UUID owner, MemoryLevel level, UUID scopeId, MemoryKind kind, String content, String key) {
     return new MemoryService.MemoryDraft(
         owner, level, scopeId, kind, content, new UUID[0], 3, 0.7f, key);
+  }
+
+  private static Memory memory(UUID owner, MemoryLevel level, MemoryKind kind, String content) {
+    return Memory.create(
+        owner, level, null, kind, content, new UUID[0], 3, 0.7f, null, Instant.now());
   }
 
   /** 总开关关着时 write 返回空 —— 而不是抛：调用方是旁路抽取。 */
@@ -95,20 +101,22 @@ class MemoryRulesTest {
     when(settings.load()).thenReturn(view(true, 5));
     UUID owner = UUID.randomUUID();
     UUID conversation = UUID.randomUUID();
-    when(memories.findRecalls(any(), any(), any(), anyInt(), anyInt())).thenReturn(List.of());
+    when(memories.findRecallsAcrossLevels(any(), any(), anyInt(), anyInt())).thenReturn(List.of());
 
     new MemoryRetriever(memories, service(), settings).recall(owner, conversation);
 
-    verify(memories).findRecalls(owner, MemoryLevel.CONVERSATION, conversation, 3, 5);
-    // ★ 关键的一条：**没有任何一次**以"别的会话"为条件去查会话层
-    verify(memories, never()).findRecalls(owner, MemoryLevel.CONVERSATION, null, 3, 5);
+    /* ★ 合并成一次查询之后，"隔离"这件事的判据从"四次调用里那一次带了 scope"
+     * 变成"那一次调用带的是当前会话" —— 断言对象变了，保护的东西没变。 */
+    verify(memories).findRecallsAcrossLevels(eq(owner), eq(conversation), eq(3), eq(5 * 3 + 3));
+    // ★ 关键的一条：**没有任何一次**以"别的会话 / 空会话"为条件去查会话层
+    verify(memories, never()).findRecalls(any(), any(), any(), anyInt(), anyInt());
   }
 
   /** 召回失败不抛：记忆是增强项，库抖动不能升级成"答不出来"。 */
   @Test
   void recallFailureDegradesQuietly() {
     when(settings.load()).thenReturn(view(true, 5));
-    when(memories.findRecalls(any(), any(), any(), anyInt(), anyInt()))
+    when(memories.findRecallsAcrossLevels(any(), any(), anyInt(), anyInt()))
         .thenThrow(new IllegalStateException("db down"));
 
     MemoryRetriever.Recall recall =
@@ -118,6 +126,46 @@ class MemoryRulesTest {
     assertThat(recall.present()).isFalse();
     // ★ skipReason 只带异常类型、不带 message：它是给日志与界面看的短句，不该把内部细节漏出去
     assertThat(recall.skipReason()).contains("召回异常").contains("IllegalStateException");
+  }
+
+  /** 会话约定必须落会话层 —— 落错层会让它在下一次对话里继续生效。 */
+  @Test
+  void conventionLandsOnTheConversationLevel() {
+    assertThat(MemoryKind.CONVENTION.code()).isEqualTo("convention");
+  }
+
+  /** 画像能从 USER 层推出来 —— 上一版只读 PERSONA，而没有任何路径写 PERSONA。 */
+  @Test
+  void profileFallsBackToUserLevel() {
+    UUID owner = UUID.randomUUID();
+    when(memories.findRecalls(owner, MemoryLevel.PERSONA, null, 1, 20)).thenReturn(List.of());
+    when(memories.findRecalls(owner, MemoryLevel.USER, null, 1, 20))
+        .thenReturn(
+            List.of(
+                memory(owner, MemoryLevel.USER, MemoryKind.FACT, "用户在一家制造企业的法务部。"),
+                memory(owner, MemoryLevel.USER, MemoryKind.CONSTRAINT, "不要用英文缩写。")));
+    when(profiles.findById(any()))
+        .thenReturn(
+            Optional.of(
+                cn.lincoln.aiplatform.conversation.domain.UserProfile.empty(owner, Instant.now())));
+    when(profiles.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    var profile = service().recomputeProfile(owner);
+
+    assertThat(profile.summary()).contains("法务部");
+    assertThat(profile.taboosList()).containsExactly("不要用英文缩写。");
+  }
+
+  /** 没有去重键时不该白跑一趟查重。 */
+  @Test
+  void blankDedupKeySkipsTheDuplicateLookup() {
+    when(settings.load()).thenReturn(view(true, 5));
+    UUID owner = UUID.randomUUID();
+    when(memories.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    service().write(draft(owner, MemoryLevel.USER, null, MemoryKind.FACT, "用户在做合同审核。", null));
+
+    verify(memories, never()).findByDedupKey(any(), any(), any(), any());
   }
 
   /** 设定越界要带当前值 —— 只看"报错了"分不清是 99 还是 -1。 */

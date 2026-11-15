@@ -34,6 +34,22 @@ public class MemorySettingsStore {
   /** 单行表的主键恒为 true。 */
   private static final boolean SINGLETON = true;
 
+  /**
+   * 设定的缓存时长。
+   *
+   * <p>★ 5 秒是"一个人改了设定、整机马上按新的跑"与"每轮对话省一次 SQL"的折中： {@link #load()}
+   * 在<strong>每一轮</strong>对话的召回与写入路径上都会被调用， 而设定是那种"一天改一次"的东西 —— 不缓存等于每轮白跑一次查询。
+   *
+   * <p>★ 取 5 秒而不是 30 秒：管理员改完设定会立刻刷新页面看数字变没变， 等半分钟才生效看起来像"没保存上"。
+   */
+  private static final java.time.Duration CACHE_TTL = java.time.Duration.ofSeconds(5);
+
+  /** 缓存里的一条（设定 + 它是什么时候读到的）。 */
+  private record Cached(MemorySettingsView view, Instant loadedAt) {}
+
+  /** 缓存的当前值（{@code null} = 还没读过）。 */
+  private volatile Cached cached;
+
   /** 落不下配置时的默认值（与迁移里的 insert 逐字一致）。 */
   private static final MemorySettingsView DEFAULTS =
       new MemorySettingsView(true, 3, 5, true, "0 40 3 * * *", 90, null, null, null, null);
@@ -45,13 +61,28 @@ public class MemorySettingsStore {
   }
 
   /**
-   * 读当前设定。
+   * 读当前设定（带 {@link #CACHE_TTL} 缓存）。
    *
    * <p>★ 读不到（迁移没跑 / 行被删）时回落 {@link #DEFAULTS} 并打 WARN，<strong>不抛</strong>：见类注释。
    *
    * @return 当前设定
    */
   public MemorySettingsView load() {
+    Cached snapshot = cached;
+    if (snapshot != null && Instant.now().isBefore(snapshot.loadedAt().plus(CACHE_TTL))) {
+      return snapshot.view();
+    }
+    MemorySettingsView fresh = readFromDb();
+    cached = new Cached(fresh, Instant.now());
+    return fresh;
+  }
+
+  /**
+   * 真正查库。
+   *
+   * @return 设定
+   */
+  private MemorySettingsView readFromDb() {
     List<MemorySettingsView> found =
         jdbc.query(
             "select enabled, min_importance, recall_limit, inject_profile, dream_cron,"
@@ -110,6 +141,8 @@ public class MemorySettingsStore {
       throw new IllegalStateException(
           "cv_memory_setting 没有那一行，无法更新 —— 请先跑迁移 V101" + "（★ 不要在这里 insert，否则「单行」这条约束会变成两行）");
     }
+    /* ★ 保存后立刻失效缓存：否则接下来的 CACHE_TTL 内读到的还是旧值，用户会以为没保存上。 */
+    cached = null;
     return load();
   }
 
@@ -129,6 +162,8 @@ public class MemorySettingsStore {
         at == null ? null : OffsetDateTime.ofInstant(at, java.time.ZoneOffset.UTC),
         clipped,
         SINGLETON);
+    /* ★ 同上：上一行改的是"上次做梦"，界面读它；不清缓存的话点开记忆页会看到旧时间。 */
+    cached = null;
   }
 
   /**

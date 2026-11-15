@@ -57,6 +57,13 @@ public class MemoryService {
   }
 
   /**
+   * 重算画像时最多看几条记忆。
+   *
+   * <p>★ 20 而不是"全部"：画像的输入是"这个人稳定的样子"，最近 20 条已经足够； 把所有记忆都拉出来会让一次做梦的开销随记忆条数线性增长，而收益很快饱和。
+   */
+  private static final int PROFILE_LIMIT = 20;
+
+  /**
    * 写入一条记忆（幂等：同一 {@code dedup_key} 只留一条）。
    *
    * <p>★ 总开关关着时<strong>直接返回空</strong>而不是抛：调用方是对话后的异步抽取， 用户关了记忆并不意味着那次对话有问题。
@@ -69,12 +76,15 @@ public class MemoryService {
     if (!settings.load().enabled()) {
       return Optional.empty();
     }
-    Optional<Memory> existing =
-        memories.findByDedupKey(draft.ownerId(), draft.level(), draft.kind(), draft.dedupKey());
-    if (existing.isPresent()) {
-      Memory hit = existing.get();
-      hit.touchHit(Instant.now());
-      return Optional.of(memories.save(hit));
+    /* ★ 没有 dedupKey 就没有"同一条"可言：此时去查一次库必然空手而归，纯属白跑一趟 SQL。 */
+    if (draft.dedupKey() != null && !draft.dedupKey().isBlank()) {
+      Optional<Memory> existing =
+          memories.findByDedupKey(draft.ownerId(), draft.level(), draft.kind(), draft.dedupKey());
+      if (existing.isPresent()) {
+        Memory hit = existing.get();
+        hit.touchHit(Instant.now());
+        return Optional.of(memories.save(hit));
+      }
     }
     Memory memory =
         Memory.create(
@@ -234,25 +244,42 @@ public class MemoryService {
   }
 
   /**
-   * 用若干条记忆重算画像。
+   * 用用户级记忆重算画像。
    *
-   * <p>★ 只取 PERSONA 层：其它三层要么是会话级、要么是零散事实，把它们综合成"你是什么样的人"会让画像变成 一次没有依据的概括。
+   * <p>★★ 上一版只取 {@link MemoryLevel#PERSONA} 层，而<strong>没有任何路径写这一层</strong> （抽取器只产出 {@code FACT} /
+   * {@code CONSTRAINT} / {@code GOAL} / {@code CONVENTION}） ⇒ 自动画像永远是空的，注入给模型的那段"关于这个人"从来没出现过。这条
+   * bug 不会报错、 不会变慢，只会让"人格化"这个能力静静地不生效。
+   *
+   * <p>★ 现在从 {@link MemoryLevel#USER} 层推导：那里已经有 {@code FACT}（部门/公司/项目）、 {@code
+   * PREFERENCE}（表达倾向）、{@code CONSTRAINT}（不能违反的边界）—— 正是画像该用的原料。
+   *
+   * <p>★ {@code PERSONA} 层仍然优先：它是<strong>人工设定</strong>的那一份（管理员或用户自己在
+   * 记忆页写下"他喜欢简洁"），机器推导出来的东西不该覆盖人写下的判断。所以取"人工层非空则用人工层， 否则用 USER 层"。
    *
    * @param userId 用户
    * @return 重算后的画像
    */
   @Transactional
   public UserProfile recomputeProfile(UUID userId) {
-    List<Memory> persona = memories.findRecalls(userId, MemoryLevel.PERSONA, null, 1, 20);
+    List<Memory> persona =
+        memories.findRecalls(userId, MemoryLevel.PERSONA, null, 1, PROFILE_LIMIT);
+    /* ★ 人工设定优先；没有人工设定才从 USER 层推导。 */
+    List<Memory> source =
+        persona.isEmpty()
+            ? memories.findRecalls(userId, MemoryLevel.USER, null, 1, PROFILE_LIMIT)
+            : persona;
     UserProfile profile = profileOf(userId);
-    if (persona.isEmpty()) {
-      profile.recompute(profile.tone(), null, null, null, List.of(), Instant.now());
+    if (source.isEmpty()) {
+      profile.recompute(null, null, null, null, List.of(), Instant.now());
       return profiles.save(profile);
     }
-    String tone = firstOf(persona, MemoryKind.PREFERENCE);
-    String summary = summarize(persona);
     profile.recompute(
-        tone, null, null, summary, persona.stream().map(Memory::id).toList(), Instant.now());
+        firstOf(source, MemoryKind.PREFERENCE),
+        List.of(),
+        taboosOf(source),
+        summarize(source),
+        source.stream().map(Memory::id).toList(),
+        Instant.now());
     return profiles.save(profile);
   }
 
@@ -267,6 +294,22 @@ public class MemoryService {
         .map(Memory::content)
         .findFirst()
         .orElse(null);
+  }
+
+  /**
+   * 把 {@code CONSTRAINT} 类记忆收成画像的"禁忌"清单。
+   *
+   * <p>★ 只取前三条：画像是一段要在每轮对话里重复注入的文本，越长越容易被模型当成"用户说了这么多"， 而不是"这几条是规矩"。
+   *
+   * @param rows 记忆
+   * @return 禁忌清单（可能为空）
+   */
+  private static List<String> taboosOf(List<Memory> rows) {
+    return rows.stream()
+        .filter(m -> m.kind() == MemoryKind.CONSTRAINT)
+        .map(Memory::content)
+        .limit(3)
+        .toList();
   }
 
   /**

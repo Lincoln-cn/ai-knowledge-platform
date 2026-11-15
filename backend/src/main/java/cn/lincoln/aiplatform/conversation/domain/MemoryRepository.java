@@ -61,6 +61,24 @@ public interface MemoryRepository {
       UUID ownerId, MemoryLevel level, UUID scopeId, int minImportance, int limit);
 
   /**
+   * 召回用的查询：<strong>一次取回四层</strong>。
+   *
+   * <p>★ 上一版是四次 {@link #findRecalls}（每层一次），其中三次查的是"必然空"的结果 （{@code CONVERSATION} 层此前没有写入方、{@code
+   * PERSONA} 层没有自动来源）—— 因为一个 bug 而多付三次往返，是最难发现的浪费：它不报错、也不慢到能被注意到，只是每轮对话都多花几十毫秒。
+   *
+   * <p>★ 会话层的隔离条件仍然是硬的：{@code m.level = 'CONVERSATION' and m.scopeId = :conversationId} 与其他三层的
+   * {@code or} 并列出现，<strong>不会</strong>因为合并成一条语句而丢掉。
+   *
+   * @param ownerId 归属用户
+   * @param conversationId 当前会话（会话层只取它）
+   * @param minImportance 重要度下限
+   * @param limit 条数上限
+   * @return 候选记忆（重要度、更新时间倒序）
+   */
+  List<Memory> findRecallsAcrossLevels(
+      UUID ownerId, UUID conversationId, int minImportance, int limit);
+
+  /**
    * 页面列表：某人的全部记忆（含已被取代的，前端可以折叠显示）。
    *
    * @param ownerId 归属用户

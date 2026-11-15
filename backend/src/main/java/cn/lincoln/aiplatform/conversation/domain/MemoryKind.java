@@ -31,7 +31,18 @@ public enum MemoryKind {
   EVENT("event"),
 
   /** 摘要：一段对话的提炼（做梦产出，通常带 {@code source_message_ids}）。 */
-  SUMMARY("summary");
+  SUMMARY("summary"),
+
+  /**
+   * 会话约定：这一次会话里说定的做法（"按 2025 版算""用中文回答"）。
+   *
+   * <p>★ 它<strong>只许出现在会话层</strong>（迁移 {@code V102} 的 {@code chk_cv_memory_convention_scope}
+   * 把这条约束钉在库里）：一个"只在这次会话成立的 约定"被升到 {@code USER} 层，下一次对话就会按一个早已结束的约定办事，而用户完全不知道。
+   *
+   * <p>★ 与 {@link #EVENT} 的区别：{@code EVENT} 是"发生过的事"（历史），{@code CONVENTION}
+   * 是"说定的做法"（规则）。混在一起会让"忘掉一条旧事件"和"违反一条约定"变得无法区分。
+   */
+  CONVENTION("convention");
 
   private final String code;
 

@@ -147,6 +147,7 @@ final class CaliberShape {
           "conversation/V63__conversation_file.sql",
           "conversation/V87__conversation_message_prologue.sql",
           "conversation/V101__conversation_memory.sql",
+          "conversation/V102__conversation_memory_convention.sql",
           "assistant/V88__assistant_trigger_slots.sql",
           "assistant/V89__assistant_template_center.sql",
           "assistant/V90__assistant_template_builtin_seed.sql",

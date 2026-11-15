@@ -85,10 +85,7 @@ public class MemoryExtractor {
         }
         MemoryKind kind = MemoryKind.of(item.kind());
         int importance = Math.max(1, Math.min(5, item.importance()));
-        MemoryLevel level =
-            kind == MemoryKind.GOAL
-                ? MemoryLevel.CROSS_SESSION
-                : (kind == MemoryKind.CONSTRAINT ? MemoryLevel.USER : MemoryLevel.USER);
+        MemoryLevel level = levelOf(kind);
         drafts.add(
             new MemoryService.MemoryDraft(
                 userId,
@@ -112,6 +109,33 @@ public class MemoryExtractor {
   }
 
   /**
+   * 种类 → 落到哪一层。
+   *
+   * <p>★ 上一版这里是 `kind == GOAL ? CROSS_SESSION : (kind == CONSTRAINT ? USER : USER)` —— 两个分支都返回
+   * {@code USER}，是个<strong>死分支</strong>，而且它掩盖了一个更严重的事实： {@code CONVERSATION}
+   * 层因此<strong>从来没有写入方</strong>（"会话记忆"名存实亡）。
+   *
+   * <p>★ 映射只有三条规则，每一条都有它的代价：
+   *
+   * <ul>
+   *   <li>{@code GOAL} → {@code CROSS_SESSION}：目标本来就是跨会话的；
+   *   <li>{@code CONVENTION} → {@code CONVERSATION}：约定<strong>只对本次对话有效</strong>， 升到 {@code USER}
+   *       层会让下一次对话按一个早已结束的约定办事（{@code V102} 的 {@code chk_cv_memory_convention_scope} 在库里也钉住了这条）；
+   *   <li>其余 → {@code USER}：事实、偏好、约束都是"这个人是谁"的一部分。
+   * </ul>
+   *
+   * @param kind 种类
+   * @return 层级
+   */
+  private static MemoryLevel levelOf(MemoryKind kind) {
+    return switch (kind) {
+      case GOAL -> MemoryLevel.CROSS_SESSION;
+      case CONVENTION -> MemoryLevel.CONVERSATION;
+      default -> MemoryLevel.USER;
+    };
+  }
+
+  /**
    * 拼提示词。
    *
    * @param question 用户问题
@@ -120,10 +144,11 @@ public class MemoryExtractor {
    */
   private static String prompt(String question, String answer) {
     return """
-    从下面这一轮对话里抽取"值得长期记住的用户信息"。只抽三类：
+    从下面这一轮对话里抽取"值得长期记住的用户信息"。只抽四类：
     1. FACT：用户说的关于自己的事实（部门、职务、公司、用的制度版本、正在做的项目名）；
     2. CONSTRAINT：用户对答案的纠正、或者明确说"必须/不能怎样"；
-    3. GOAL：用户说的长期目标（跨这次对话之后还要做的事）。
+    3. GOAL：用户说的长期目标（跨这次对话之后还要做的事）；
+    4. CONVENTION：只对**这一次对话**有效的做法约定（"这份合同按 2025 版算""后面都用表格给我"）。
 
     不要抽：
     - 用户这次问的问题本身；
@@ -131,9 +156,13 @@ public class MemoryExtractor {
     - "用户问了一个问题"这种元信息；
     - 任何你不确定的信息（宁可不记）。
 
+    ★ CONVENTION 的判据比另外三类严：只有当这句话**离开这次对话就不再成立**时才是约定。
+      "不要用英文缩写"是用户的长期偏好（CONSTRAINT），不是本次约定；
+      "这一段先别按旧版算"是本次约定（CONVENTION）。拿不准就归到另外三类，别归到 CONVENTION。
+
     每条 content 用一句话陈述，主语写"用户"，不要抄原文长句。
-    kind 只能是 FACT / CONSTRAINT / GOAL。
-    importance 1-5：纠正类给 5，明确的事实给 3-4，目标给 3。
+    kind 只能是 FACT / CONSTRAINT / GOAL / CONVENTION。
+    importance 1-5：纠正类给 5，明确的事实给 3-4，目标给 3，会话约定给 2-3。
     dedupKey 给一个稳定的机器可读键（如 "dept-财务部"），同一条信息下次抽到必须是同一个键。
 
     用户：%s

@@ -77,6 +77,37 @@ public interface JpaMemoryRepository extends JpaRepository<Memory, UUID> {
       Pageable pageable);
 
   /**
+   * 召回候选：一次取回四层。
+   *
+   * <p>★ 会话层的隔离写在同一句 {@code where} 里（{@code m.level = CONVERSATION and m.scopeId =
+   * :conversationId}）， 与其余三层是 {@code or} 关系 —— 合并成一条语句<strong>不会</strong>把隔离条件弄丢， 但它比四次单层查询少三次往返。
+   *
+   * @param ownerId 归属用户
+   * @param conversationId 当前会话
+   * @param minImportance 重要度下限
+   * @param now 当前时间（判过期）
+   * @param pageable 分页
+   * @return 候选
+   */
+  @Query(
+      "select m from Memory m where m.ownerId = :ownerId"
+          + " and (m.level = cn.lincoln.aiplatform.conversation.domain.MemoryLevel.USER"
+          + " or m.level = cn.lincoln.aiplatform.conversation.domain.MemoryLevel.PERSONA"
+          + " or m.level = cn.lincoln.aiplatform.conversation.domain.MemoryLevel.CROSS_SESSION"
+          + " or (m.level = cn.lincoln.aiplatform.conversation.domain.MemoryLevel.CONVERSATION"
+          + " and m.scopeId = :conversationId))"
+          + " and m.importance >= :minImportance"
+          + " and m.deletedAt is null and m.supersededBy is null"
+          + " and (m.expiresAt is null or m.expiresAt > :now)"
+          + " order by m.importance desc, m.updatedAt desc")
+  List<Memory> findRecallsAcrossLevels(
+      @Param("ownerId") UUID ownerId,
+      @Param("conversationId") UUID conversationId,
+      @Param("minImportance") int minImportance,
+      @Param("now") Instant now,
+      Pageable pageable);
+
+  /**
    * 页面列表（含已被取代的，但已删的不显示）。
    *
    * @param ownerId 归属用户

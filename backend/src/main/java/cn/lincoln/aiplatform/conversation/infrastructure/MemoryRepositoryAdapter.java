@@ -20,6 +20,14 @@ import org.springframework.stereotype.Component;
 @Component
 public class MemoryRepositoryAdapter implements MemoryRepository {
 
+  /**
+   * "没有会话"时的哨兵值。
+   *
+   * <p>★ 用一个不可能出现在库里的 UUID 而不是 {@code null}：{@code null} 会让 {@code :conversationId is null}
+   * 这类写法把<strong>整层会话记忆</strong>都放进来， 而那种错误的表现是"多带了别人的会话细节"，不会报错。
+   */
+  private static final UUID NO_CONVERSATION = new UUID(0L, 0L);
+
   private final JpaMemoryRepository jpa;
 
   public MemoryRepositoryAdapter(JpaMemoryRepository jpa) {
@@ -50,6 +58,15 @@ public class MemoryRepositoryAdapter implements MemoryRepository {
       UUID ownerId, MemoryLevel level, UUID scopeId, int minImportance, int limit) {
     requireScopeMatches(level, scopeId);
     return jpa.findRecalls(ownerId, level, scopeId, minImportance, Instant.now(), page(limit));
+  }
+
+  @Override
+  public List<Memory> findRecallsAcrossLevels(
+      UUID ownerId, UUID conversationId, int minImportance, int limit) {
+    /* ★ 没有会话 id 时给一个不可能匹配的哨兵，而不是允许"全取会话层"：
+    漏传 conversationId 会把别人的会话细节混进这次回答，而且不会报错。 */
+    UUID scope = conversationId == null ? NO_CONVERSATION : conversationId;
+    return jpa.findRecallsAcrossLevels(ownerId, scope, minImportance, Instant.now(), page(limit));
   }
 
   @Override

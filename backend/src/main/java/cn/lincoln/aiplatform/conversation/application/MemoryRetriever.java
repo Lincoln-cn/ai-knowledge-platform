@@ -74,28 +74,17 @@ public class MemoryRetriever {
       if (!current.enabled()) {
         return Recall.empty("记忆总开关是关的");
       }
+      /* ★ 一次取回四层（旧实现是四次单层查询，其中三次今天查的是必然空的结果）。 */
+      List<Memory> rows =
+          memories.findRecallsAcrossLevels(
+              userId, conversationId, current.minImportance(), recalleableBudget(current));
       List<Memory> persona =
-          memories.findRecalls(
-              userId, MemoryLevel.PERSONA, null, current.minImportance(), PERSONA_LIMIT);
-      List<Memory> user =
-          memories.findRecalls(
-              userId, MemoryLevel.USER, null, current.minImportance(), current.recallLimit());
+          rows.stream().filter(m -> m.level() == MemoryLevel.PERSONA).limit(PERSONA_LIMIT).toList();
+      List<Memory> user = rows.stream().filter(m -> m.level() == MemoryLevel.USER).toList();
       List<Memory> cross =
-          memories.findRecalls(
-              userId,
-              MemoryLevel.CROSS_SESSION,
-              null,
-              current.minImportance(),
-              current.recallLimit());
+          rows.stream().filter(m -> m.level() == MemoryLevel.CROSS_SESSION).toList();
       List<Memory> conversation =
-          conversationId == null
-              ? List.of()
-              : memories.findRecalls(
-                  userId,
-                  MemoryLevel.CONVERSATION,
-                  conversationId,
-                  current.minImportance(),
-                  current.recallLimit());
+          rows.stream().filter(m -> m.level() == MemoryLevel.CONVERSATION).toList();
       UserProfile profile =
           current.injectProfile()
               ? memoryService.profileOf(userId)
@@ -105,6 +94,19 @@ public class MemoryRetriever {
       LOG.warn("记忆召回失败，本次对话不带记忆：{}", e.toString());
       return Recall.empty("召回异常：" + e.getClass().getSimpleName());
     }
+  }
+
+  /**
+   * 一次查询要取多少条。
+   *
+   * <p>★ 四层各取 {@code recallLimit} 条（再加上人格化的 {@link #PERSONA_LIMIT}）：
+   * 合并成一条语句之后，条数上限也必须在<strong>同一条语句里</strong>给足， 否则"上层截断"会变成"随机少了某一层的记忆"—— 那种错误看起来像模型记性不好。
+   *
+   * @param current 当前设定
+   * @return 条数上限
+   */
+  private static int recalleableBudget(MemorySettingsView current) {
+    return current.recallLimit() * 3 + PERSONA_LIMIT;
   }
 
   /**
