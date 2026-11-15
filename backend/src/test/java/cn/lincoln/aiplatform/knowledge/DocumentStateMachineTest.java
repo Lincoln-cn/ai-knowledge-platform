@@ -49,6 +49,9 @@ class DocumentStateMachineTest {
     "EMBEDDING_FAILED, PENDING_EMBEDDING",
     // 分段被编辑/删除后向量旧了（SEG-I7）
     "SUCCEEDED, PENDING_EMBEDDING",
+    // 重新切分能用的起点（PENDING_EMBEDDING 本来就合法；SUCCEEDED 由 reSegment 自带的
+    // 白名单放行，刻意不进这张表 —— 见 DocumentStatus 的 javadoc）
+    "PENDING_EMBEDDING, SEGMENTING",
   })
   void 合法转移(DocumentStatus from, DocumentStatus to) {
     assertThat(to.canMoveFrom(from)).as("%s → %s 应当合法", from, to).isTrue();
@@ -71,6 +74,8 @@ class DocumentStateMachineTest {
     "EMBEDDING, PENDING_PARSE",
     // 成功后回退到加工前
     "SUCCEEDED, PENDING_PARSE",
+    // ★ 成功态回「分段中」在这张表里非法：它对「重新解析」确实非法（没有原始字节）。
+    //   0.9.0 的「重新切分」能这么做，但它走 reSegment 自己的白名单，不经这张表。
     "SUCCEEDED, SEGMENTING",
     "SUCCEEDED, EMBEDDING",
   })
@@ -195,6 +200,60 @@ class DocumentStateMachineTest {
     doc.markEmbeddingFailed("向量模型调用失败", "检查模型配置");
     assertThatThrownBy(doc::startEmbedding).isInstanceOf(IllegalStateException.class);
     assertThat(doc.status()).isEqualTo(DocumentStatus.EMBEDDING_FAILED);
+  }
+
+  // ────────────────────────── 3 · 重新切分（0.9.0） ──────────────────────────
+
+  /**
+   * ★ 重新切分**不重新解析** ⇒ OCR 计数必须原样保留。
+   *
+   * <p>这一条是它与被它替换掉的 {@code retrySegmentation} 的实质区别：那条会清零页数口径（因为它要重解析）， 这一条不清 —— 清了就等于"这次重切把 OCR
+   * 覆盖率读数擦掉了"，而正文一点没变。
+   */
+  @Test
+  void reSegmentFromSucceededKeepsOcrCounts() {
+    Document doc = newDocument();
+    doc.startParse(5);
+    doc.reportOcrPageDone(3);
+    doc.recordParseSuccess("# 第一章 总则\n\n本制度适用于公司各部门。", 5);
+    doc.recordSegmentSuccess(2, 100);
+    doc.startEmbedding();
+    doc.reportEmbeddingProgress(2);
+    doc.markEmbedded();
+    assertThat(doc.status()).isEqualTo(DocumentStatus.SUCCEEDED);
+
+    UUID operator = UUID.randomUUID();
+    int totalBefore = doc.ocrTotalPages();
+    int doneBefore = doc.ocrDonePages();
+    doc.reSegment(operator);
+
+    assertThat(doc.status()).isEqualTo(DocumentStatus.SEGMENTING);
+    assertThat(doc.ocrTotalPages()).as("重新切分不重解析，页数口径不动").isEqualTo(totalBefore);
+    assertThat(doc.ocrDonePages()).as("已完成的页数也不动").isEqualTo(doneBefore);
+    assertThat(doc.parsedContent()).as("正文不动 —— 本版没有原始字节，改不了它").contains("总则");
+  }
+
+  /** 待向量化的文档可以重切（最常见的那条：切分规则升级后回填旧文档）。 */
+  @Test
+  void pendingEmbeddingCanReSegment() {
+    Document doc = segmented(3);
+    doc.reSegment(UUID.randomUUID());
+    assertThat(doc.status()).isEqualTo(DocumentStatus.SEGMENTING);
+  }
+
+  /** ★ 向量化进行中不许重切：段正在被读，改掉结构会让这一轮写回错行。 */
+  @Test
+  void embeddingRejectsReSegment() {
+    Document doc = segmented(3);
+    doc.startEmbedding();
+    int ocrBefore = doc.ocrTotalPages();
+    assertThatThrownBy(() -> doc.reSegment(UUID.randomUUID()))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("不能重新切分")
+        .hasMessageContaining("EMBEDDING")
+        .hasMessageContaining("状态未改变");
+    assertThat(doc.status()).isEqualTo(DocumentStatus.EMBEDDING);
+    assertThat(doc.ocrTotalPages()).isEqualTo(ocrBefore);
   }
 
   static Document newDocument() {

@@ -6556,3 +6556,57 @@ csv  / tsv   ──(解析)─┘
 - **超大表**：单 sheet 最多读 5000 行（防止一张 50 万行的流水账把内存撑爆）；超出部分静默截断，**未记账 —— 这是本批的遗留，应开 issue**。
 - **CSV 分隔符自动探测**：按扩展名定（csv = 逗号、tsv = 制表符），不做"分号 / 竖线"猜测 —— 猜错就是把整表切成一列。
 
+## 11.47 0.9.0 第二项：重新切分（2026-11-15）
+
+切分规则是代码：代码升级后，库里按旧规则切好的段就落后了（0.9.0 的表格族就是一次）。
+没有这个入口，唯一的办法是删档重传 —— 而那会一并丢掉解析结果、实体抽取结果与人工改过的段标题。
+
+★ **它叫「重新切分」不叫「重新解析」**：本版不保留上传的字节（`DocumentService.retry` 的注释早已写明
+"分段失败的重试需要原始文件，而本版不保留 ⇒ 如实拒绝"），所以正文改不了，只是拿**已解析的正文**
+按当前规则重跑分块。命名与注释都按这个事实写，避免用户以为它能修"解析错了"。
+
+### 11.47.1 交付面
+
+| 层 | 落点 | 说明 |
+|---|---|---|
+| 领域 | `Document.reSegment(UUID by)` | 替换原先**零调用方**的 `retrySegmentation()`（一条只写了方法、从没接入口的死路径） |
+| 应用 | `DocumentService.reSegment(documentId, currentUserId)` | 与建档路径共用 `segmentAndPersist`（先删后写，段与向量一起清） |
+| 接口 | `POST /knowledge-bases/{kbId}/documents/{documentId}/resegment` | `knowledge:manage`；用 POST 因为它不幂等（会清掉现有分段与向量） |
+| 界面 | 文档行「重新切分」 | 状态 ∈ `PENDING_EMBEDDING / SUCCEEDED / SEGMENT_FAILED`，二次确认写明"现有 N 段与向量都会被清掉重建" |
+
+### 11.47.2 状态机：为什么 `SUCCEEDED → SEGMENTING` 不进迁移表
+
+`DocumentStatus` 迁移表里 `SEGMENTING` 的合法来源仍然只有 `PENDING_PARSE / SEGMENT_FAILED / PENDING_EMBEDDING`。
+重新切分能从「成功」态发起，但那是**流水线之外的动作**，它自带白名单（`PENDING_EMBEDDING / SEGMENT_FAILED / SUCCEEDED`），
+不走 `requireLegal`。
+
+★ 第一版把 `SUCCEEDED` 直接加进迁移表，`DocumentStateMachineTest.已成功的文档不允许重新走解析` 立刻红 ——
+`startParse` 用的正是 `requireLegal(status, SEGMENTING, ...)`。**同一对状态在「重新解析」上非法、在「重新切分」上合法，
+一张表表达不了两种含义**。把这条塞进去等于顺手放开了"已完成的文档可以重新解析"，而那是做不到的事（没有原始字节）。
+
+### 11.47.3 读数与反证
+
+真栈（`YH-YA-2026-031_火灾事故应急预案.md`，重切前 `SUCCEEDED / 101 段`）：
+
+| 动作 | 结果 |
+|---|---|
+| 第 1 次 `POST .../resegment` | HTTP 200，`status= PENDING_EMBEDDING`，`segmentCount= 193` |
+| 第 2 次 | HTTP 200，`PENDING_EMBEDDING`，`segmentCount= 193` |
+| 第 3 次 | HTTP 200，`PENDING_EMBEDDING`，`segmentCount= 193` |
+| 库里 `kb_segment` 行数 | **193** |
+
+两件事一起读才有意义：
+
+- **101 → 193**：段数变了 ⇒ 确实是按**当前规则**重算，不是"把旧结果原样再存一遍"
+  （`#338` 那个 off-by-one 的对照组：那次恢复链路"跑了但什么都没发生"，读数一模一样）。
+- **193 → 193 → 193 且库行数 193**：重复调用不翻倍 ⇒ 先删后写是真的，没有叠加。
+
+单元测试：`DocumentStateMachineTest` **36/36**（含 `reSegmentFromSucceededKeepsOcrCounts`、
+`pendingEmbeddingCanReSegment`、`embeddingRejectsReSegment`）· `DocumentProgressTest` 10/10 · `DocumentParseTest` 10/10。
+
+### 11.47.4 仍不做
+
+- **重新解析**：需要原始字节，等"保留上传文件"立项（`#75` 的数据生命周期）。
+- **按文档选切分参数**：切分规则是全局行为，按文档开参数会让"为什么这两份文档切得不一样"无法回答。
+- **重切后自动向量化**：切开就清向量，要不要马上再向量化由人决定（模型可能没加载、配额可能不够）。
+

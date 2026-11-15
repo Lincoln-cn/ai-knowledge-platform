@@ -80,6 +80,23 @@ public class DocumentController {
   public record AssignOrgBody(UUID orgId) {}
 
   /**
+   * 重新切分（0.9.0）—— 用已解析的正文按当前切分规则重跑分块。
+   *
+   * <p>★ 不是「重新解析」：本版不保留上传的字节，所以改不了正文，只能改切分规则对正文的用法。 两者在界面上必须说清，否则用户点完发现"内容还是旧的"会以为是没生效。
+   *
+   * <p>★ 用 {@code POST} 而不是 {@code PATCH}：这个动作会**清掉现有分段与向量**（先删后写），不是幂等的局部修改 ——
+   * 重复点它的副作用是"又重算了一遍"，而不是"状态没变"。
+   *
+   * <p>★ 权限点 {@code knowledge:manage}：重切会改掉检索用的分段与向量，影响面是整个库，不是单份文档的编辑动作。
+   */
+  @PostMapping("/{kbId}/documents/{documentId}/resegment")
+  @PreAuthorize("hasAuthority('knowledge:manage')")
+  public ApiResponse<DocumentView> reSegment(
+      @PathVariable UUID kbId, @PathVariable UUID documentId, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(documentService.reSegment(documentId, UUID.fromString(jwt.getSubject())));
+  }
+
+  /**
    * 按库分页列文档（契约 {@code listDocuments}）。
    *
    * <p>★ 库不可见 ⇒ 404（文档可见性继承库）。

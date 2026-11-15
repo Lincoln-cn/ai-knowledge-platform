@@ -150,6 +150,14 @@
               @click="reembed(row)"
             >重新向量化</el-button>
 
+            <!-- 0.9.0 重新切分：切分规则升级后，用已解析的正文按新规则重跑分块。
+                 能从成功态发起 —— 不然旧文档只能删了重传，会丢解析结果与人工改过的段标题。 -->
+            <el-button
+              v-if="canManage && ['PENDING_EMBEDDING', 'SUCCEEDED', 'SEGMENT_FAILED'].includes(row.status)"
+              link size="small"
+              @click="reSegment(row)"
+            >重新切分</el-button>
+
             <template v-if="isFailed(row.status)">
               <el-button link size="small" @click="toggleFail(row.id)">
                 {{ expandedFails.has(row.id) ? '收起原因' : '查看原因' }}
@@ -616,6 +624,34 @@ const reembed = async (row: DocumentItem) => {
     schedule()
   } catch (error) {
     ElMessage.error(errText(error, '重新向量化失败').reason)
+  }
+}
+
+/**
+ * 重新切分（0.9.0）—— 用**已解析的正文**按当前切分规则重跑分块。
+ *
+ * ★ 与「重新解析」不是一回事：本版不保留上传字节，正文改不了。
+ * ★ 它会清掉现有分段与向量（后端先删后写）⇒ 必须让用户确认。
+ */
+const reSegment = async (row: DocumentItem) => {
+  try {
+    await ElMessageBox.confirm(
+      `「${row.name}」会按当前的切分规则重新分段，现有的 ${row.segmentCount ?? 0} 段与它们的向量都会被清掉重建。` +
+        `正文不变（本版不保留上传的文件本身）。确认？`,
+      '确认重新切分',
+      { type: 'warning', confirmButtonText: '重新切分', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await ingestionApi.reSegmentDocument(props.kbId, row.id)
+    ElMessage.success(`已重新切分「${row.name}」，需要再向量化一次`)
+    pollAttempts = 0
+    await refreshAll()
+    schedule()
+  } catch (error) {
+    ElMessage.error(errText(error, '重新切分失败').reason)
   }
 }
 

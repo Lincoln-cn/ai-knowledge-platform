@@ -448,6 +448,40 @@ public class DocumentService {
     return DocumentView.from(documents.findById(documentId).orElse(document));
   }
 
+  /**
+   * 重新切分（契约待登记，0.9.0）—— 让<strong>已经解析过</strong>的文档按当前切分规则重来一遍。
+   *
+   * <p>★ 存在的理由：切分规则是代码，代码一升级，库里按旧规则切好的分段就落后了 （0.9.0 上线结构化表格族就是一次）。 没有这个入口，用户只能删档重传 ——
+   * 而那会丢掉解析结果、实体抽取结果、以及人工改过的段标题。
+   *
+   * <p>★ 与「重新解析」划清界限：本版**不保留上传的字节**，所以这里只重跑 {@code Segmenter#plan}， 用的是库里已有的 {@code
+   * parsedContent}。{@code Document#reSegment} 的 javadoc 记了为什么连 OCR 计数都不清。
+   *
+   * <p>★ 正文为空时**明确拒绝**，不假装跑了一遍：那种文档的解析本身就没成功，重切只会得到 0 段， 而状态会被记成"分段成功"——又变成一次 {@code
+   * silent-failure}。
+   */
+  public DocumentView reSegment(UUID documentId, UUID currentUserId) {
+    Document document = requireVisibleDocument(documentId);
+    if (document.parsedContent() == null || document.parsedContent().isBlank()) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, "这份文档还没有解析出正文，无法重新切分", "重新切分用的是已解析的正文；没有正文说明解析没成功 —— 请重新上传该文件");
+    }
+    if (document.status() != DocumentStatus.PENDING_EMBEDDING
+        && document.status() != DocumentStatus.SEGMENT_FAILED
+        && document.status() != DocumentStatus.SUCCEEDED) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "当前状态不能重新切分：" + document.status(),
+          "允许的起点是「待向量化」「分段失败」「已完成」；向量化进行中（EMBEDDING）不能重切，等它结束或失败后再试");
+    }
+    document.reSegment(currentUserId);
+    documents.save(document);
+    // ★ 与建档路径同一条：先删后写，段与向量一起清（segmentAndPersist 的幂等口径）
+    segmentAndPersist(document, currentUserId);
+    documents.save(document);
+    return DocumentView.from(documents.findById(documentId).orElse(document));
+  }
+
   // ────────────────────────── 文档管理：改名 / 启停 / 删除 ──────────────────────────
 
   /**

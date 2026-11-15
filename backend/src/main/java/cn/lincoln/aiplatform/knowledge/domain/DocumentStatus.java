@@ -51,6 +51,9 @@ public enum DocumentStatus {
    *       PENDING_EMBEDDING} 进入：解析或分块任一步失败；{@code PENDING_EMBEDDING} 也允许，因为重新分块失败是它的真实形态
    *   <li>重试：{@code SEGMENT_FAILED → SEGMENTING}（重新分段）、{@code EMBEDDING_FAILED →
    *       PENDING_EMBEDDING}（重新排队向量化）
+   *   <li>★ {@code SUCCEEDED} <strong>不在这张表里回到 {@code SEGMENTING}</strong>：0.9.0 的「重新切分」能从成功态
+   *       发起，但那是<strong>流水线之外</strong>的动作（{@link Document#reSegment}），它自己带白名单。把这条塞进本表会让 {@code
+   *       startParse} 也放行 —— 同一对状态在「重解析」上非法、在「重切分」上合法，一张表表达不了两种含义。
    *   <li>{@code SUCCEEDED → PENDING_EMBEDDING}：分段被编辑或删除后向量就旧了（{@code SEG-I7}）
    *   <li>★ {@code PENDING_EMBEDDING} <strong>可以是自己的来源</strong>：解析成功后紧接着回填分段结果 （{@code
    *       DocumentService} 的「建档即解析 + 入库即分块」就是这条路径），状态不变但那几个字段要更新。

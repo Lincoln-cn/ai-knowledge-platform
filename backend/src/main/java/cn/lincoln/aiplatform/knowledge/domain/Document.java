@@ -621,20 +621,39 @@ public class Document {
   }
 
   /**
-   * 重试分段：{@code SEGMENT_FAILED → SEGMENTING}（重新解析与分块）。
+   * 重新切分：按<strong>已解析的正文</strong>重跑一遍切分规则（0.9.0）。
    *
-   * <p>保留已解析出的正文（{@code 12 §2.1}：中途失败的部分内容要留下，便于定位与人工兜底）。
+   * <p>★ 与「重新解析」不是一回事：本版不保留上传的字节（{@code Document#rejectUploadHint} 那条）， 所以这里**不碰 {@link
+   * #parsedContent}、不碰 OCR 计数** —— 只把状态退回「分段中」，让调用方拿现有正文重跑 {@code Segmenter#plan}。
+   *
+   * <p>★ 合法来源三种，各有理由：
+   *
+   * <ul>
+   *   <li>{@code PENDING_EMBEDDING} —— 最常见：切分规则改了（比如 0.9.0 的表格族），旧分段要按新规则重来
+   *   <li>{@code SUCCEEDED} —— 同上，只是这份已经向量化完了；重切之后向量必然过期，所以一并退回
+   *   <li>{@code SEGMENT_FAILED} —— 那次失败若发生在**分段**阶段，正文是完整的，重切就有意义； 若失败在解析阶段（正文为空/残缺）， 调用方必须先挡住（见
+   *       {@code DocumentService#reSegment}）
+   * </ul>
+   *
+   * <p>★ 为什么不清 OCR 计数（对比这条方法替换掉的 {@code retrySegmentation}）：那一条的语义是"重新解析"， 会产出新的一轮页数口径；
+   * 这一条不重新解析，页数口径没变，清掉反而让"OCR 覆盖率"这个读数无故归零。
    */
-  public void retrySegmentation() {
-    DocumentStatus.requireLegal(status, DocumentStatus.SEGMENTING, "重试分段");
+  public void reSegment(UUID by) {
+    // ★ 不走 requireLegal：本动作在流水线之外（见 DocumentStatus 的 javadoc），来源白名单写在这里
+    boolean allowed =
+        status == DocumentStatus.PENDING_EMBEDDING
+            || status == DocumentStatus.SEGMENT_FAILED
+            || status == DocumentStatus.SUCCEEDED;
+    if (!allowed) {
+      throw new IllegalStateException(
+          "不能重新切分：当前状态 "
+              + status
+              + "（允许的起点是 PENDING_EMBEDDING / SEGMENT_FAILED / SUCCEEDED；状态未改变）");
+    }
     this.status = DocumentStatus.SEGMENTING;
     this.failReason = null;
     this.failHint = null;
-    // ★ OCR 进度一起归零：重新解析会产生新的一轮页数口径，旧进度留着就是错的
-    //   （与 startEmbedding 归零 processedSegments 同一条理由）
-    this.ocrTotalPages = 0;
-    this.ocrDonePages = 0;
-    this.ocrPageCount = 0;
+    this.updatedBy = by;
   }
 
   /**

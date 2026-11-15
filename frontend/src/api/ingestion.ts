@@ -368,6 +368,21 @@ export const listDeletedDocuments = (kbId: string, query: { page?: number; size?
 /** 从回收站恢复（`POST /documents/:id/restore`，`#259`）。保留期外服务端会 400。 */
 export const restoreDocument = (id: string) => request<DocumentItem>({ method: 'POST', url: `/documents/${id}/restore` })
 
+/**
+ * 重新切分（`POST /knowledge-bases/:kbId/documents/:id/resegment`，0.9.0）。
+ *
+ * ★ 与「重新解析」不是一回事：本版不保留上传的字节，所以正文改不了 ——
+ *   它只是拿**已解析的正文**按当前切分规则重跑一遍分块（切分规则升级后用它与旧文档对齐）。
+ *
+ * ★ 它会**清掉现有分段与向量**（后端先删后写）⇒ 调用方必须先让用户确认。
+ */
+export const reSegmentDocument = (kbId: string, documentId: string) =>
+  request<DocumentItem>({
+    method: 'POST',
+    url: '/knowledge-bases/:kbId/documents/:id/resegment',
+    path: { kbId, id: documentId }
+  })
+
 export const purgeDocument = (id: string) =>
   request<void>({ method: 'DELETE', url: '/documents/:id/purge', path: { id } })
 
