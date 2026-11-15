@@ -6491,3 +6491,66 @@ doc_top1 97.4%。⇒ 离 80% 差 8.7 点 / 56 条。
 `.build/matrix.json`（耗时矩阵 12 组）· `.build/matrix-hybrid.json`（HYBRID 补测）· `.build/matrix-quality.json`（质量矩阵 5 组）· `.build/full-fulltext-qc0.json`（全量 195 条）。
 
 ★ 采样说明：矩阵首轮跑到 FULLTEXT qc=3 时后端进程被杀（`WinError 10061` 连接被拒），HYBRID 四组是重启后补测的。两组读数分两次采样，但同一批问题、同一配置，可比。
+
+### 11.46 0.9.0 结构化表格族：xlsx / xls / csv / tsv 走一条链路（2026-11-15）
+
+**目标（唯一一条）**：一份台账存成 xlsx 还是 csv，切出来的段**逐字相同**。
+
+#### 11.46.1 为什么是"四个扩展名一条链路"，不是"给 xlsx 单开一条"
+
+表格的**下游**早就有了：`MarkdownChunker` 把 GFM 表格当**独占块**（不与相邻正文合并），
+`RuleBasedTableStatementRewriter` 还会把它改写成按行的陈述句（合并单元格填充 → `列头：值；列头：值` → 字形归一）。
+缺的只是**上游一步**：把表格文件变成 GFM 表格。
+
+```
+xlsx / xls   ──(POI)──┐
+                      ├─→ GFM 表格 ─→ RuleBasedTableStatementRewriter ─→ MarkdownChunker
+csv  / tsv   ──(解析)─┘
+```
+
+⇒ 本批**只做格式转换**，不做切分、不做改写、不做向量化 —— 那三件事已在链路上，重做一遍就是两套口径。
+
+#### 11.46.2 交付面
+
+| 层 | 落点 |
+|---|---|
+| 解析 | 新增 `backend/src/main/java/cn/lincoln/aiplatform/knowledge/infrastructure/SpreadsheetMarkdownParser.java` |
+| 分发 | `TikaMarkdownParser` 在进 Tika **之前**按扩展名分走表格族（Tika 对 xlsx/csv 产出的是制表符分隔纯文本，不是 GFM） |
+| 白名单 | `TikaMarkdownParser.TIKA_EXTENSIONS`（6 个）+ 表格族（4 个），并集由 `supportedExtensions()` 给出 |
+| 上传策略 | `DocumentService.uploadPolicy` 改成从 `supportedExtensions()` 派生 |
+| 前端 | 无需改逻辑：`UploadDialog` 本来就从 `policy.acceptedExtensions` 派生 accept 与提示；只补齐了 policy 取不到时的兜底值 |
+
+#### 11.46.3 四条设计决定
+
+| 决定 | 理由 |
+|---|---|
+| **合并单元格按左上角值铺平** | GFM 没有合并语法。不铺平的后果不是"少一个词"，是**语义错位**：`\| 一线城市 \| \| 500 \|` 读起来像"这一列没值"，其实是"同上" |
+| **多 sheet 加 `## 表名`，单 sheet 不加** | sheet 名是作者给的分组；而默认名 `Sheet1` 没有信息量，加标题就是凭空多一段 |
+| **CSV 编码要探测**（BOM → UTF-8 → 严格解码失败回落 GB18030） | 国内导出的 CSV 常是 GB18030。直接按 UTF-8 读会整篇变替换字符、而解析**成功** —— 典型 `silent-failure`（入库后检索全乱，日志一条不报） |
+| **表头行只当表头** | 第一行进 GFM 表头，不再作为数据行重复 —— 否则每份台账都多一条"部门：部门" |
+
+#### 11.46.4 读数与反证
+
+- `SpreadsheetMarkdownParserTest` **11/11**：xlsx→GFM · 合并单元格铺平 · 多 sheet 标题 · 单 sheet 无标题 · `|` 转义 · CSV→GFM · 引号内逗号与换行 · GB18030 解码 · TSV · 空表失败 · 未知扩展名失败。
+- 受构造器改动影响的四个既有类全绿：`DocumentParseTest` 10 · `OcrPageInventoryTest` 4 · `ParseMetricsTest` 2 · `PdfPlaceholderNoiseTest` 4。
+- 架构闸门：`-Dtest=cn.lincoln.aiplatform.*Test` **38/38**（1 skipped）· `caliber.*Test` **34/34**。
+- 前端：`typecheck` exit 0 · `build` 26.33s exit 0。
+- ★ **反证**：把 `toGfmTable` 的数据行起始从 `r = 1` 改成 `r = 0` ⇒ `xlsxBecomesGfmTable:44` 与 `csvBecomesGfmTable` 两条精确红；改回并 touch 后 11/11 绿。
+- ★ **踩坑**：给 `TikaMarkdownParser` 加第二个构造器后，Spring 报的是 `Failed to instantiate …: No default constructor found` —— 看起来像"没有构造器"，其实是"有多个、没标 `@Autowired`"。两个构造器时必须显式标注，错误文案不会告诉你这一点。
+
+#### 11.46.5 顺带修掉的一处真实不一致
+
+| 位置 | 改前 |
+|---|---|
+| 解析器 `ALLOWED_EXTENSIONS` | `docx / doc / pdf / txt / md / markdown`（6 个） |
+| `DocumentService` 上传策略 | `.pdf / .docx / .doc / .md / .txt`（5 个） |
+
+差的那个是 `.markdown`：**解析器认、上传页拒**，用户看到的提示是"不支持这个文件类型"，看起来像格式本身坏了。
+现在上传策略从 `supportedExtensions()` 派生 ⇒ 解析能力是唯一真源。
+
+#### 11.46.6 仍不做
+
+- **`.xls` 的合并单元格保证**：POI 的 HSSF 对老格式合并区域语义更糟，能读但不承诺 100% 铺平；失败时给可读原因。
+- **超大表**：单 sheet 最多读 5000 行（防止一张 50 万行的流水账把内存撑爆）；超出部分静默截断，**未记账 —— 这是本批的遗留，应开 issue**。
+- **CSV 分隔符自动探测**：按扩展名定（csv = 逗号、tsv = 制表符），不做"分号 / 竖线"猜测 —— 猜错就是把整表切成一列。
+

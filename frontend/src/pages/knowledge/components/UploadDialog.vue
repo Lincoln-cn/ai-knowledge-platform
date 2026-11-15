@@ -141,7 +141,10 @@ const metaRules: FormRules = {
 }
 
 const acceptAttr = computed(() =>
-  policy.value?.acceptedExtensions.length ? policy.value.acceptedExtensions.join(',') : '.pdf,.docx,.doc,.md,.txt'
+  // ★ 兜底值只在 policy 没取到时用；与后端真源一致（0.9.0 起含 Excel / CSV）
+  policy.value?.acceptedExtensions.length
+    ? policy.value.acceptedExtensions.join(',')
+    : '.pdf,.docx,.doc,.md,.markdown,.txt,.xlsx,.xls,.csv,.tsv'
 )
 
 const open = async () => {

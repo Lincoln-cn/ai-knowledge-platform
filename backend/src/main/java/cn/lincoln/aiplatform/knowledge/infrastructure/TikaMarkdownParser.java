@@ -51,14 +51,52 @@ public class TikaMarkdownParser {
 
   private static final Logger log = LoggerFactory.getLogger(TikaMarkdownParser.class);
 
-  /** 扩展名白名单（{@code 09 §10.2 #2}：改扩展名绕过 ⇒ MIME 嗅探不匹配即拒）。 与批 1 解析范围对齐：DOCX / PDF / TXT / MD。 */
-  private static final Set<String> ALLOWED_EXTENSIONS =
+  /**
+   * Tika 自己负责的扩展名（{@code 09 §10.2 #2}：改扩展名绕过 ⇒ MIME 嗅探不匹配即拒）。
+   *
+   * <p>★ 表格族不在这里 —— 它们走 {@link SpreadsheetMarkdownParser}（Tika 对 xlsx/csv 的产出是制表符分隔的纯文本， 不是 GFM
+   * 表格，下游的表格块与行级陈述都用不上）。两段并起来才是"上传能收什么"的完整答案，见 {@link #supportedExtensions()}。
+   */
+  private static final Set<String> TIKA_EXTENSIONS =
       Set.of("docx", "doc", "pdf", "txt", "md", "markdown");
 
   private final OcrEngine ocr;
 
-  public TikaMarkdownParser(OcrEngine ocr) {
+  private final SpreadsheetMarkdownParser spreadsheet;
+
+  /**
+   * 生产构造点。
+   *
+   * <p>★ 必须标 {@code @Autowired}：类里有两个构造器时，Spring 不会替我们猜"用哪个" —— 实测报的是 {@code Failed to instantiate
+   * …: No default constructor found}，看起来像"没有构造器"，其实是"有多个、没标记"。
+   */
+  @org.springframework.beans.factory.annotation.Autowired
+  public TikaMarkdownParser(OcrEngine ocr, SpreadsheetMarkdownParser spreadsheet) {
     this.ocr = ocr;
+    this.spreadsheet = spreadsheet;
+  }
+
+  /**
+   * 兼容既有构造点（表格解析器无状态，自带一份即可）。
+   *
+   * <p>★ 保留它不是为了"方便"，而是那四个测试类（{@code DocumentParseTest}、{@code OcrPageInventoryTest}、 {@code
+   * ParseMetricsTest}、{@code PdfPlaceholderNoiseTest}）测的是 <strong>PDF/DOCX 那半边</strong>，为它们补一个与
+   * 本批无关的参数只会让那些测试离它测的东西更远。
+   */
+  public TikaMarkdownParser(OcrEngine ocr) {
+    this(ocr, new SpreadsheetMarkdownParser());
+  }
+
+  /**
+   * 「这份系统能解析哪些扩展名」的<strong>唯一真源</strong>（0.9.0 收口）。
+   *
+   * <p>★ 以前有两处：本类的白名单（6 个）与 {@code DocumentService} 的上传策略（5 个），差的那个是 {@code .markdown} ——
+   * 解析器认、上传页拒，用户看到的提示是"不支持这个文件类型"，看起来像格式本身坏了。现在上传策略从这里取。
+   */
+  public Set<String> supportedExtensions() {
+    Set<String> all = new java.util.TreeSet<>(TIKA_EXTENSIONS);
+    all.addAll(SpreadsheetMarkdownParser.extensions());
+    return java.util.Collections.unmodifiableSet(all);
   }
 
   /**
@@ -159,9 +197,15 @@ public class TikaMarkdownParser {
 
     // ★ 格式白名单先挡一层：非文档扩展名不必进 Tika（09 §10.2 #2）
     String ext = extensionOf(filename);
-    if (!ALLOWED_EXTENSIONS.contains(ext)) {
+    // ★★ 表格族先分发（0.9.0）：Tika 对 xlsx/csv 产出的是制表符分隔的纯文本，不是 GFM 表格 ——
+    //    下游的表格独占块与行级陈述都认 GFM，所以这一步必须在进 Tika 之前分走。
+    if (SpreadsheetMarkdownParser.supports(ext)) {
+      return spreadsheet.parse(content, filename);
+    }
+    if (!TIKA_EXTENSIONS.contains(ext)) {
       return ParseResult.failed(
-          "不支持的文件类型（.%s）。当前支持 DOCX / PDF / TXT / Markdown。".formatted(ext.isEmpty() ? "?" : ext),
+          "不支持的文件类型（.%s）。当前支持 DOCX / PDF / TXT / Markdown / Excel（xlsx、xls）/ CSV。"
+              .formatted(ext.isEmpty() ? "?" : ext),
           "");
     }
 

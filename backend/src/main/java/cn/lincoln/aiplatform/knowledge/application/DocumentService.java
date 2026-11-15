@@ -337,7 +337,18 @@ public class DocumentService {
   @Transactional(readOnly = true)
   public UploadPolicyView uploadPolicy(UUID kbId) {
     knowledgeBases.get(kbId);
-    return new UploadPolicyView(100, 20, List.of(".pdf", ".docx", ".doc", ".md", ".txt"));
+    return new UploadPolicyView(100, 20, uploadExtensions());
+  }
+
+  /**
+   * 上传页能收的扩展名（带点），<strong>从解析器派生</strong>（0.9.0 收口）。
+   *
+   * <p>★ 以前这里是手写的 {@code List.of(".pdf", ".docx", ".doc", ".md", ".txt")}，而解析器认六个（多一个 {@code
+   * .markdown}）⇒ 用户传 `.markdown` 被上传页挡回去，提示"不支持这个文件类型"，看起来像格式坏了。两处写两份， 迟早出这种差 ——
+   * 解析能力只有解析器知道，策略就该问它。
+   */
+  private List<String> uploadExtensions() {
+    return parser.supportedExtensions().stream().map(ext -> "." + ext).toList();
   }
 
   @Transactional(readOnly = true)
