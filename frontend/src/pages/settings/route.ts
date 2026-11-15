@@ -43,5 +43,18 @@ export default [
     name: 'settings-retrieval',
     component: () => import('./retrieval/Index.vue'),
     meta: { title: '检索引擎', permission: PERM.knowledgeView }
+  },
+  {
+    /**
+     * 长期记忆（0.9.0）。
+     *
+     * ★ 读权限同样给 `conversation:view` 一族里最宽的那个：记忆里存的是"用户自己说过的话"，
+     * 他能看到自己的记忆本来就是应有之义；真正的写权限（`conversation:settings`）由页面内的
+     * 按钮与 API 各自把住 —— 与「检索引擎」一页的取舍一致。
+     */
+    path: 'settings/memory',
+    name: 'settings-memory',
+    component: () => import('./memory/Index.vue'),
+    meta: { title: '长期记忆', permission: PERM.conversationView }
   }
 ] satisfies RouteRecordRaw[]

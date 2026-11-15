@@ -245,6 +245,23 @@ public class ChatService {
    */
   private SuggestionService suggestions;
 
+  /**
+   * 长期记忆的召回（0.9.0）。
+   *
+   * <p>★ 与 {@link #suggestions} 同样用 <strong>setter 注入且 {@code required = false}</strong>：本类的单元测试都是
+   * {@code new ChatService(...)} 脱离容器构造，没有这一步调用 ⇒ 字段保持 {@code null}，记忆那一支天然关闭， 既有测试的行为逐字不变。
+   *
+   * <p>★★ 但"没接"与"接上但没召回"必须可区分：{@link #memoryBlockOf} 在字段为 {@code null} 时不打日志（那是装配态）， 而在 {@code
+   * recall} 里 skip 时会带 {@code skipReason}（那是运行态）。
+   */
+  private MemoryRetriever memoryRetriever;
+
+  /** 对话结束后异步抽取记忆（0.9.0）。未装配时整条旁路不启动。 */
+  private MemoryExtractor memoryExtractor;
+
+  /** 记忆的写入口（0.9.0）。抽取器只产草稿，落库的校验与去重在这一层。 */
+  private MemoryService memoryService;
+
   /** 并行开关本身（`app.chat.suggestions.parallel`，默认 false）。 */
   @Value("${app.chat.suggestions.parallel:false}")
   private boolean parallelSuggestions;
@@ -311,6 +328,23 @@ public class ChatService {
   @Autowired(required = false)
   public void setSuggestions(SuggestionService suggestions) {
     this.suggestions = suggestions;
+  }
+
+  /**
+   * 注入长期记忆（0.9.0）：召回 + 抽取。
+   *
+   * <p>★ 两者一起注入：它们是同一个能力的读半边与写半边，只接一半的系统更难解释（"能记住但不记得用" / "用了但从没记下"）。
+   *
+   * <p>★ {@code required = false}，理由见字段 javadoc。
+   */
+  @Autowired(required = false)
+  public void setMemories(
+      MemoryRetriever memoryRetriever,
+      MemoryExtractor memoryExtractor,
+      MemoryService memoryService) {
+    this.memoryRetriever = memoryRetriever;
+    this.memoryExtractor = memoryExtractor;
+    this.memoryService = memoryService;
   }
 
   /**
@@ -685,6 +719,11 @@ public class ChatService {
         model = startModelThread(turn, question, refs, neighborContextOf(refs), run);
       }
       awaitTerminal(turn, run);
+      // ★ 长期记忆（0.9.0）：终态已落库之后再抽取 —— 用"用户问的"与"模型答的"这一对原文，
+      //   而不是用流式过程中的半成品。放在这里而不是 `persistTerminal` 里，因为抽取要的
+      //   `question` 只在调用方线程上可见。
+      //   ★ 它不抛、不阻塞收尾：抽取失败只影响"这次有没有记下来"，不影响用户已经看到的回答。
+      maybeExtractMemories(turn, question, run.assembler.text());
     } catch (UncheckedIOException gone) {
       // 写不出去 = 客户端已经走了：按 DISCONNECT 收尾，文案仍是「连接中断」（不冒充上游失败）
       run.disconnected = true;
@@ -781,6 +820,10 @@ public class ChatService {
     //   ★ 读不到配置时退回常量默认值（与改造前逐字一致）。
     final int historyLimit =
         policyResolver == null ? MAX_HISTORY_MESSAGES : policyResolver.historyMaxMessages();
+    // ★ 记忆段在本方法（调用方线程）里取好：与下面读历史同理，模型线程上没有访问范围。
+    //   ★ 只取一次，两条分支（多轮 / 单轮）共用同一段 —— 否则"第 1 轮没记忆、第 2 轮有"这种
+    //     只在多轮时出现的差异没人查得出来。
+    final String memoryBlock = memoryBlockOf(turn);
     if (turn.multiTurn()) {
       List<cn.lincoln.aiplatform.platform.model.ChatMessage> previous =
           turns.historyBefore(turn.conversationId(), turn.userMessageId(), historyLimit);
@@ -792,7 +835,7 @@ public class ChatService {
         withCurrent.add(
             new cn.lincoln.aiplatform.platform.model.ChatMessage(
                 cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER,
-                promptOf(question, refs, systemPromptOrNull(turn), neighborTexts)));
+                promptOf(question, refs, systemPromptOrNull(turn), neighborTexts, memoryBlock)));
         history = List.copyOf(withCurrent);
       }
     }
@@ -816,7 +859,8 @@ public class ChatService {
                 if (messages.isEmpty()) {
                   chatStream.stream(
                       turn.modelId(),
-                      promptOf(question, refs, systemPromptOrNull(turn), neighborTexts),
+                      promptOf(
+                          question, refs, systemPromptOrNull(turn), neighborTexts, memoryBlock),
                       turn.thinkingEnabled(),
                       Duration.ofMillis(properties.idleTimeoutMs()),
                       run);
@@ -1922,8 +1966,78 @@ public class ChatService {
     }
   }
 
+  /**
+   * 从这一轮问答里抽取记忆（0.9.0）。
+   *
+   * <p>★ 放在<b>终态落库之后</b>：用户已经看到回答，抽取多花的那点时间不该体现在首字延迟上。
+   *
+   * <p>★★ 它不抛：抽取是旁路。一次模型抖动或解析失败，正确结局是"这次没记下来"，不是"这一轮问答失败" —— 后者会把增强项变成故障源。
+   *
+   * <p>★ 三种情况整条跳过：没有装配抽取器（脱离容器的测试）、这一轮没有归属人（调试）、回答为空 （拒答或上游一个字都没吐 —— 没有回答就没有可提炼的东西）。
+   */
+  private void maybeExtractMemories(
+      ChatTurnWriter.PreparedTurn turn, String question, String answer) {
+    if (memoryExtractor == null || turn.userId() == null) {
+      return;
+    }
+    if (answer == null || answer.isBlank()) {
+      return;
+    }
+    try {
+      List<MemoryService.MemoryDraft> drafts =
+          memoryExtractor.extract(
+              turn.userId(), turn.conversationId(), turn.userMessageId(), question, answer);
+      if (drafts.isEmpty()) {
+        return;
+      }
+      int saved = 0;
+      for (MemoryService.MemoryDraft draft : drafts) {
+        if (memoryServiceWrite(draft)) {
+          saved++;
+        }
+      }
+      log.info("本轮抽取记忆 {} 条，写入 {} 条（会话 {}）", drafts.size(), saved, turn.conversationId());
+    } catch (RuntimeException failure) {
+      log.warn("记忆抽取失败，本轮不记记忆：{}", failure.getMessage());
+    }
+  }
+
+  /** 写一条抽取结果；失败只影响这一条（不中断同一轮的其它条目）。 */
+  private boolean memoryServiceWrite(MemoryService.MemoryDraft draft) {
+    if (memoryService == null) {
+      return false;
+    }
+    try {
+      return memoryService.write(draft).isPresent();
+    } catch (RuntimeException failure) {
+      log.warn("写记忆失败（{}）：{}", draft.kind(), failure.getMessage());
+      return false;
+    }
+  }
+
+  /**
+   * 取本轮要注入的记忆段（0.9.0）。
+   *
+   * <p>★ 空串有三种来源，调用方<b>不需要</b>区分：没有装配记忆、这一轮没有归属人（调试）、或者记忆库这次跳过 —— 三种情况下 prompt 都只是"少了一段"，而不是"拼不出来"。
+   *
+   * <p>★★ 它<b>不抛</b>：记忆是增强项。一次记忆库抖动让用户的问题答不出来，是把"少一点上下文"升级成了"服务不可用" —— 这正是 {@code ROADMAP §11.51}
+   * 里"记忆缺失不许报错"那条硬约束。
+   */
+  private String memoryBlockOf(ChatTurnWriter.PreparedTurn turn) {
+    if (memoryRetriever == null || turn.userId() == null) {
+      return "";
+    }
+    try {
+      return memoryRetriever.recall(turn.userId(), turn.conversationId()).block();
+    } catch (RuntimeException failure) {
+      // ★ recall 内部已经吞过一次并 WARN；这里再兜一层，保证"prompt 的构造"这条路径上没有记忆的异常出口。
+      log.warn("记忆召回失败，本轮不带记忆：{}", failure.getMessage());
+      return "";
+    }
+  }
+
   private static String promptOf(String question, List<SourceRef> refs, String systemPrompt) {
-    return promptOf(question, refs, systemPrompt, java.util.Map.of());
+    return promptOf(question, refs, systemPrompt, java.util.Map.of(), "");
   }
 
   /**
@@ -1989,12 +2103,26 @@ public class ChatService {
       String question,
       List<SourceRef> refs,
       String systemPrompt,
-      java.util.Map<UUID, List<String>> neighbors) {
+      java.util.Map<UUID, List<String>> neighbors,
+      String memoryBlock) {
     // ★ 初始提示词拼在**问题之前**，而不是作为一条 system 消息：
     //   `ChatMessage.Role` 只有 USER/ASSISTANT（它的 javadoc 明确写「system 由提示词承担」），
     //   所以"系统口径"在这个工程里本来就住在 prompt 文本里。
-    String prefix =
-        (systemPrompt == null || systemPrompt.isBlank()) ? "" : systemPrompt.strip() + "\n\n";
+    //
+    // ★★ 长期记忆（0.9.0）也拼在这一段里，顺序是「系统口径 → 记忆 → 问题」：
+    //   记忆是"关于这个人的背景"，必须读在问题之前；否则模型先看到问题、再看到背景，
+    //   会把它当成补充材料而不是前提。
+    //   ★ 它**不**前移到 messages 列表的最前面：历史是逐条 message，没有共享的 prefix 位置；
+    //     硬插一条 USER 消息会让模型以为"用户之前说过这些"，语义是错的。代价是记忆排在本轮问题
+    //     之前、但排在历史消息之后 —— 这一点在设计册 §6 与本注释里都写明，不假装它更靠前。
+    StringBuilder head = new StringBuilder();
+    if (systemPrompt != null && !systemPrompt.isBlank()) {
+      head.append(systemPrompt.strip()).append("\n\n");
+    }
+    if (memoryBlock != null && !memoryBlock.isBlank()) {
+      head.append(memoryBlock.strip()).append("\n\n");
+    }
+    String prefix = head.toString();
     if (refs.isEmpty()) {
       return prefix + question;
     }

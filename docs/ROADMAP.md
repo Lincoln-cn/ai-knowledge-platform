@@ -6834,3 +6834,79 @@ csv  / tsv   ──(解析)─┘
 - **不做 `--fix`**：自动补文档会写出一批"键对了但说明是废话"的行。
 - **不验"新机器"**：需要第二台机器或干净的容器宿主，属交付验收动作。
 
+## 11.51 0.9.0 长期记忆（2026-11-16）
+
+设计全文见 `15-长期记忆设计.md`；本节只记**交付面、读数与和设计册的偏差**。
+
+### 11.51.1 交付面
+
+| 层 | 文件 |
+|---|---|
+| 迁移 | `conversation/V101__conversation_memory.sql`（`cv_memory` / `cv_user_profile` / `cv_memory_setting`） |
+| 领域 | `MemoryLevel` / `MemoryKind` / `Memory` / `UserProfile` / `MemoryRepository` |
+| 存取 | `JpaMemoryRepository` / `MemoryRepositoryAdapter` / `JpaUserProfileRepository` / `MemorySettingsStore` |
+| 应用 | `MemoryService` / `MemoryRetriever` / `MemoryExtractor` / `MemoryDreamJob` / `MemorySettingsView` |
+| 接口 | `MemoryController`（`/api/v1/memories` 七个端点） |
+| 接入 | `ChatService.setMemories`（setter + `required = false`）、`ChatTurnWriter.PreparedTurn.userId` |
+| 界面 | `pages/settings/memory/Index.vue` + `api/memories.ts` + 两个菜单项 |
+
+### 11.51.2 四层与"谁能看到"
+
+| 层 | 谁写的 | 什么时候被召回 | 为什么这样分 |
+|---|---|---|---|
+| `USER` | 抽取器 | 每次对话 | 跨会话稳定、与单次对话无关 |
+| `CONVERSATION` | 抽取器 | **只在这个会话里** | 带 `scope_id`；泄漏它 = 把别的对话内容混进这次回答 |
+| `PERSONA` | 做梦重算 | 每次对话（画像整段注入） | 结构化字段，不是"按相似度挑几条" |
+| `CROSS_SESSION` | 抽取器（`GOAL`） | 每次对话 | 长期目标，与具体会话无关 |
+
+★ **会话层的隔离放在仓储层**（`MemoryRepositoryAdapter.requireScopeMatches`）：`findRecalls` 有两个
+调用方，做梦任务很容易忘了传 `scopeId` —— 而"忘了传"的表现是把别人的会话细节混进回答，**不会报错**。
+
+### 11.51.3 做梦：五动作真做三个
+
+| 动作 | 本版 | 判据 |
+|---|---|---|
+| 去重合并 | ✅ | 同 owner+level+kind 且**内容完全相同** ⇒ 留重要度高的，其余 `superseded_by` |
+| 遗忘 | ✅ | 重要度 ≤2 **且零命中** 且超 `forget_after_days` ⇒ 软删 |
+| 重算画像 | ✅ | 只取 `PERSONA` 层 |
+| 冲突消解 | ❌ 本轮跳过 | 需要模型判断"哪条对"，判据不确定 |
+| 提炼 | ❌ 本轮跳过 | 同上；且"提炼后哪条旧记录该退场"没有可靠答案 |
+
+★ 如实写进 `last_dream_note`，不假装做了。★ `@Scheduled` 的 cron 在注册时求值，
+库里的 `dream_cron` 今天只是展示与将来换运行期可调调度器的占位。
+
+### 11.51.4 读数
+
+| 项 | 读数 | 怎么得出的 |
+|---|---|---|
+| V101 应用 | `Successfully applied … now at version v101` | 真栈启动日志 |
+| 七个端点 | GET/POST/PUT/DELETE 全部 200 | `.build/mem-api-check.mjs`（真实 JWT） |
+| 越界校验 | `PUT /settings` 传 99 ⇒ 400「召回条数要在 1～20 之间，现在写的是 99」 | 同上 |
+| 会话层隔离 | 断言**从未**以 `null` scope 查会话层 | `MemoryRulesTest.recallScopesConversationLayerToTheCurrentConversation` |
+| 降级 | 记忆库抛错 ⇒ 回答照出，`skipReason` 带异常类型 | 反证：把 catch 改成 `throw e` ⇒ 该条精确红 |
+| 架构闸门 | 顶层 38/38 · 口径 34/34 | 逐条命令见 `§11.50.4` 的跑法 |
+
+### 11.51.5 和设计册的偏差（必须记）
+
+1. **记忆段拼在 prompt 里，没有前移到 messages 列表最前**。设计册写的是"记忆先于消息窗口"；
+   实现时发现历史是**逐条 message**、没有共享 prefix，硬插一条 `USER` 消息会让模型以为
+   "用户说过这些"。代价记在这里：记忆与消息的相对位置只在 prompt 内成立。
+2. **抽取是同步调用（回答已落库之后），不是独立异步队列**。理由：本版没有消息队列中间件，
+   起一个线程池只能解决"不阻塞"，解决不了"进程退出时丢任务"。三种情况下整条跳过（没装配 /
+   没有归属人 / 回答为空），且任何异常都只 WARN。
+3. **`cv_memory.embedding` 本版不写值**：向量化要先定"记忆用什么模型、什么时候算"，
+   那是 0.9.x 之后的事；列在、索引在，写入路径留空。
+
+### 11.51.6 顺带修掉的一处
+
+`frontend/src/router/routes.ts` 之前**只有 `pages/settings/retrieval/` 的页面、没有菜单项** ——
+页面存在但点不到。本批补了「检索引擎」与「长期记忆」两条，并在 `§11.50` 提到的
+`check:data-mode` 之外另记一条判据：**新增设置页必须同时出现在 `route.ts` 与 `routes.ts`**。
+
+### 11.51.7 仍不做
+
+- **不实现"记忆冲突时问用户"**：对话框里再弹一个问句会把一次问答变成两轮。
+- **不把记忆做成知识库**：记忆不是可检索的语料，它按人隔离、按层召回，混进 KB 会污染密级 pre-filter。
+- **不给"记忆条数"设硬上限**：遗忘是按重要度与命中率算的，不是按条数截断。
+
+

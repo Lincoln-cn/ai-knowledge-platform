@@ -81,6 +81,10 @@ export const navGroups: NavGroup[] = [
       { path: '/basedata', label: '基础数据', icon: 'Tickets' },
       { path: '/settings/chat', label: '对话设置', icon: 'Timer' },
       { path: '/settings/providers', label: '服务商配置', icon: 'Connection' },
+      // ★ 检索引擎与长期记忆都是"改了立刻影响下一轮对话"的旋钮，所以并排放在设置区
+      //   （此前 `settings/retrieval` 只注册了路由、**没有菜单入口** —— 页面存在但点不到）
+      { path: '/settings/retrieval', label: '检索引擎', icon: 'TrendCharts' },
+      { path: '/settings/memory', label: '长期记忆', icon: 'Collection' },
       // ★ 组织机构独立成一个菜单项（用户口径）：它是**数据权限的载体**（共享给部门、按部门筛文档），
       //   与"账号/角色/权限点"不是一件事，也不该再往系统管理里堆 tab
       { path: '/org', label: '组织机构', icon: 'OfficeBuilding' },

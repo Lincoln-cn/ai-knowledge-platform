@@ -58,7 +58,8 @@ class EffectiveRetrievalListwiseTest {
         null, // rolePrompt
         List.of(), // promptTexts
         retrieval, // 应用级检索参数
-        rerankListwise); // ★ 被测的那一格
+        rerankListwise, // ★ 被测的那一格
+        null); // userId（本类只测检索参数的合成，不涉及记忆）
   }
 
   private static RetrievalParams appParams() {

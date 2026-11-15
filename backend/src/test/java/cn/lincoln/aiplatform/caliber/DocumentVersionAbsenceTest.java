@@ -86,7 +86,7 @@ class DocumentVersionAbsenceTest {
         .containsExactlyInAnyOrderElementsOf(Caliber.DOCUMENT_COLUMNS);
 
     // ③ 否认读法：迁移目录里不许出现"真版本链"的痕迹（revision / supersedes 两词已因 #86 留缝而合法）
-    String migrations = CaliberShape.migrationText();
+    String migrations = knowledgeSideMigrations();
     for (String marker : Caliber.DOCUMENT_REVISION_MARKERS) {
       assertThat(migrations)
           .as(
@@ -99,6 +99,26 @@ class DocumentVersionAbsenceTest {
               marker)
           .doesNotContain(marker);
     }
+  }
+
+  /**
+   * 只看<strong>知识库侧</strong>的迁移语句：按分号切句，只留下含 {@code kb_} 的那些。
+   *
+   * <p>★ 上一版直接对整份 {@code migrationText()} 做 {@code doesNotContain}，与本类 javadoc 写的"只扫 {@code kb_}
+   * 前缀的表"<strong>不一致</strong> —— 于是 {@code cv_memory.superseded_by} （长期记忆的"被谁取代"，{@code
+   * V101}）被误判成文档版本链。这类"断言比它自称的范围宽" 只有在新表第一次用到同名概念时才会暴露，而那时最省事的处置是"把列改个名字" —— 那是让 断言去改产品，方向反了。
+   *
+   * <p>★ 判据：一条语句只要提到 {@code kb_} 就算知识库侧；{@code as_} / {@code cv_} / {@code pf_} 的语句天然不含 {@code
+   * kb_}，因此不会进来（与 {@code 06} 的工作流版本、{@code cv_memory} 的 记忆取代关系都无关）。
+   */
+  private static String knowledgeSideMigrations() {
+    StringBuilder scoped = new StringBuilder();
+    for (String statement : CaliberShape.migrationText().split(";")) {
+      if (statement.contains("kb_")) {
+        scoped.append(statement).append(';');
+      }
+    }
+    return scoped.toString();
   }
 
   /**

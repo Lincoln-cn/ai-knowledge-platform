@@ -122,7 +122,11 @@ public class ChatTurnWriter implements ChatTurnStore {
       // ★ 请求级的列表重排（LLM listwise）开关：null = 跟随应用 / 全局（三档语义，见
       //   RerankProperties）。它必须走 PreparedTurn 而不是在 ChatService 里再查一次请求体 ——
       //   重新生成那一路的请求体与首轮不是同一个，两处各查一次就会出现"上一轮的开、这一轮的关"。
-      Boolean rerankListwise) {
+      Boolean rerankListwise,
+      // ★ 长期记忆（0.9.0）：这一轮属于谁。记忆按 owner 隔离，而 `ChatService` 里"这一轮是谁的"
+      //   只能由这里给出 —— 会话 owner 与请求里的 userId 在正常路径上相同，但前者是权威（后者可被伪造）。
+      //   ★ 调试与重新生成两条路都会传：调试为 null（不落库、不记记忆），重新生成传目标消息的 owner。
+      UUID userId) {
 
     /**
      * 不带请求级开关的构造器（{@code rerankListwise} 缺省 = 跟随应用 / 全局）。
@@ -158,6 +162,7 @@ public class ChatTurnWriter implements ChatTurnStore {
           rolePrompt,
           promptTexts,
           retrieval,
+          null,
           null);
     }
   }
@@ -246,7 +251,8 @@ public class ChatTurnWriter implements ChatTurnStore {
         app == null ? List.of() : app.promptTexts(),
         // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）
         app == null ? null : app.retrieval(),
-        rerankListwise);
+        rerankListwise,
+        userId);
   }
 
   /**
@@ -281,6 +287,8 @@ public class ChatTurnWriter implements ChatTurnStore {
         // ★ `#215`：调试要看到和应用会话**同一段** prompt —— 否则"调试通过、线上不一致"（`BR-02-08`）
         app.promptTexts(),
         app.retrieval(),
+        null,
+        // ★ 调试不落库、不归属任何人 ⇒ 记忆那一支整条不生效（`ChatService` 见到 null 就跳过召回）
         null);
   }
 
@@ -524,7 +532,9 @@ public class ChatTurnWriter implements ChatTurnStore {
         app == null ? List.of() : app.promptTexts(),
         // ★ `#185`：应用级检索参数；通用问答为 null（ChatService 回落到平台设置）
         app == null ? null : app.retrieval(),
-        null);
+        null,
+        // ★ 重新生成仍是同一个人的同一轮 ⇒ 记忆照常参与（它决定"这次回答带不带记忆"）
+        userId);
   }
 
   /**
