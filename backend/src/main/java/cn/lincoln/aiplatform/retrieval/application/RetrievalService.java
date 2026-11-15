@@ -9,6 +9,8 @@ import cn.lincoln.aiplatform.platform.retrieval.RelationRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalEngineSettings;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalEngineSettingsStore;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.Rrf;
@@ -147,6 +149,16 @@ public class RetrievalService {
   /** 重排配置（{@code app.retrieval.rerank.*}）：{@code enabled} 在调用点判 —— 关掉就一次都不调。 */
   private final RerankProperties rerankProperties;
 
+  /**
+   * 可改的运行参数（配置页写的那几格，{@code platform/V100}）。
+   *
+   * <p>★ 为 {@code null} 表示"这次调用来自那些直接 {@code new RetrievalService(...)} 的旧测试" —— 它们的断言建立在 yml
+   * 默认值上，不该被一个数据库连接拖进来。生产路径（{@code @Autowired} 的构造器）一定非 null。
+   *
+   * <p>★ 只在真正要用的那一刻读（{@link #effective()}），不在构造期缓存：配置页改完要立刻生效， 缓存一份就意味着"改完还要重启"—— 那正是这批改动要消灭的东西。
+   */
+  private final RetrievalEngineSettingsStore engineSettings;
+
   /** LLM listwise 重排端口（{@code #151}）：接在 cross-encoder 之后，默认关（见 {@link RerankProperties}）。 */
   private final ListwiseRerankPort listwiseRerankPort;
 
@@ -195,7 +207,9 @@ public class RetrievalService {
         // ★ 7 参这条路只服务既有测试（它们不关心实体扩召回）。
         (kbId, question) -> java.util.List.of(),
         // ★ 同理，关系扩召回也走空实现。
-        (kbId, question) -> java.util.List.of());
+        (kbId, question) -> java.util.List.of(),
+        // ★ 也不接配置表：旧测试的断言建立在 yml 默认值上，不该被数据库连接拖进来。
+        null);
   }
 
   /**
@@ -225,7 +239,8 @@ public class RetrievalService {
       RerankProperties rerankProperties,
       ListwiseRerankPort listwiseRerankPort,
       EntityRecallPort entityRecallPort,
-      RelationRecallPort relationRecallPort) {
+      RelationRecallPort relationRecallPort,
+      RetrievalEngineSettingsStore engineSettings) {
     this.segmentSearch = segmentSearch;
     this.embeddingPort = embeddingPort;
     this.queryUnderstanding = queryUnderstanding;
@@ -236,6 +251,29 @@ public class RetrievalService {
     this.listwiseRerankPort = listwiseRerankPort;
     this.entityRecallPort = entityRecallPort;
     this.relationRecallPort = relationRecallPort;
+    this.engineSettings = engineSettings;
+  }
+
+  /**
+   * 当前生效的运行参数。
+   *
+   * <p>★ 只有在"这一次检索要用"时才读，读到的是内存快照（零查询）。配置页保存后快照立刻替换 ⇒ 下一次请求就按新值跑。
+   *
+   * <p>★ {@code engineSettings == null} 时回落到 {@link RerankProperties}：那条路只有旧测试在用， 它们断言的是 yml 默认值。
+   */
+  private RetrievalEngineSettings effective() {
+    if (engineSettings != null) {
+      return engineSettings.current();
+    }
+    return new RetrievalEngineSettings(
+        true,
+        true,
+        rerankProperties.enabled(),
+        rerankProperties.topK(),
+        rerankProperties.forwardBatch(),
+        rerankProperties.listwiseEnabled(),
+        rerankProperties.listwiseTopK(),
+        null);
   }
 
   @Transactional(readOnly = true)
@@ -511,9 +549,11 @@ public class RetrievalService {
       rerankTexts.put(
           entry.getKey(), docName == null || docName.isBlank() ? body : docName + "\n" + body);
     }
-    if (rerankProperties.enabled() && finalIds.size() > 1) {
-      finalIds =
-          rerankPort.rerank(request.question(), finalIds, rerankTexts, rerankProperties.topK());
+    // ★ 一次请求只读一次快照：三处判断必须看到同一份值，否则配置页正好在这中间保存，
+    //   就会出现"按新窗口重排、按旧 listwise 收尾"这种缝里的状态。
+    RetrievalEngineSettings engine = effective();
+    if (engine.rerankEnabled() && finalIds.size() > 1) {
+      finalIds = rerankPort.rerank(request.question(), finalIds, rerankTexts, engine.rerankTopK());
     }
 
     // ⑥c ★★ LLM listwise（用户 2026-11-08：不默认开、做成配置）。接在 cross-encoder 之后：
@@ -522,12 +562,11 @@ public class RetrievalService {
     //     ★ 优先级：请求参数（HitTestQuery.rerankListwise）> 全局（listwiseEnabled）。
     //       null 表示"这次请求没指定"，交给全局。
     Boolean listwiseWanted = request.rerankListwise();
-    boolean listwiseOn =
-        listwiseWanted != null ? listwiseWanted : rerankProperties.listwiseEnabled();
+    boolean listwiseOn = listwiseWanted != null ? listwiseWanted : engine.listwiseEnabled();
     if (listwiseOn && finalIds.size() > 1) {
       finalIds =
           listwiseRerankPort.rerank(
-              request.question(), finalIds, rerankTexts, rerankProperties.listwiseTopK());
+              request.question(), finalIds, rerankTexts, engine.listwiseTopK());
     }
 
     List<HitTestView.Item> items = new ArrayList<>(finalIds.size());

@@ -132,7 +132,9 @@ class RerankWiringTest {
         //   不让它悄悄接上一个会改候选集的替身（那会让顺序断言失去意义）。
         (kbId, question) -> java.util.List.of(),
         // ★ 关系扩召回同理：空实现。
-        (kbId, question) -> java.util.List.of());
+        (kbId, question) -> java.util.List.of(),
+        // ★ 配置表也不接：这条测试断言的是 yml 里的窗口值。
+        null);
   }
 
   /**
@@ -184,7 +186,9 @@ class RerankWiringTest {
         new RerankProperties(false, 3, "x", "y", false, 5, 5),
         ListwiseRerankPort.noop(),
         (kbId, question) -> java.util.List.of(),
-        relationRecall);
+        relationRecall,
+        // ★ 配置表也不接（yml 值）。
+        null);
   }
 
   /** 带实体扩召回的构造（0.6.2 的判据用）。 */
@@ -201,7 +205,9 @@ class RerankWiringTest {
         ListwiseRerankPort.noop(),
         recall,
         // ★ 这个构造只关心实体扩召回，关系那一路给空实现。
-        (kbId, question) -> java.util.List.of());
+        (kbId, question) -> java.util.List.of(),
+        // ★ 配置表也不接（yml 值）。
+        null);
   }
 
   /**

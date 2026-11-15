@@ -134,3 +134,30 @@ export const updateRetrievalParams = (kbId: string, body: Partial<RetrievalParam
     path: { kbId },
     body
   })
+
+/**
+ * 检索引擎**全局**运行参数（`/settings/retrieval`）。
+ *
+ * ★ 与上面两个「按库」的函数是两件不同的东西：{@link RetrievalParams} 描述**一个库**怎么检索
+ * （多跳、模式、阈值），这里描述**这台机器**怎么算（查询理解开不开、重排窗口多大、每条一次前向算几段）。
+ * 后者没有库的维度 —— 重排模型与批大小是整机共享的，挂到库上就没法回答"谁拖慢了机器"。
+ */
+export interface RetrievalEngineSettings {
+  queryUnderstandingEnabled: boolean
+  queryUnderstandingRetry: boolean
+  rerankEnabled: boolean
+  rerankTopK: number
+  /** 0 = 整个窗口一次前向 */
+  rerankForwardBatch: number
+  listwiseEnabled: boolean
+  listwiseTopK: number
+  updatedAt?: string | null
+}
+
+export type RetrievalEngineSettingsUpdate = Omit<RetrievalEngineSettings, 'updatedAt'>
+
+export const getEngineSettings = () =>
+  request<RetrievalEngineSettings>({ method: 'GET', url: '/retrieval/settings' })
+
+export const updateEngineSettings = (body: RetrievalEngineSettingsUpdate) =>
+  request<RetrievalEngineSettings>({ method: 'PUT', url: '/retrieval/settings', body })

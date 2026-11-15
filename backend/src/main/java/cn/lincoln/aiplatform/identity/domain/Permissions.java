@@ -114,6 +114,14 @@ public final class Permissions {
    */
   public static final String PLATFORM_COMPLIANCE_MANAGE = "platform:compliance:manage";
 
+  /**
+   * 检索引擎运行参数（查询理解开关 / 重排窗口 / 前向批大小 / listwise）。
+   *
+   * <p>★ 不借用 {@code system:manage}：这几格改一次会让<strong>所有人</strong>的检索变慢或换口径 （关重试省 1.4s、掉 1.1 点 B3；关重排省
+   * 4.74s、掉 5 点），它属于"检索质量调参"而不是账号管理。 复用会让"调参的人"必须能改角色。
+   */
+  public static final String RETRIEVAL_ENGINE_MANAGE = "platform:retrieval:manage";
+
   /** 全量清单。★ 这是"权限点一共几个"的唯一定义 —— 测试会断言它恰好 ALL.size() 个（不再写死数字）。 */
   public static final List<String> ALL =
       List.of(
@@ -139,7 +147,8 @@ public final class Permissions {
           IDENTITY_ORG_MANAGE,
           PLATFORM_DICT_MANAGE,
           COMPLAINT_HANDLE,
-          PLATFORM_COMPLIANCE_MANAGE);
+          PLATFORM_COMPLIANCE_MANAGE,
+          RETRIEVAL_ENGINE_MANAGE);
 
   private static final List<String> KB_OPERATOR =
       List.of(

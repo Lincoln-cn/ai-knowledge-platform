@@ -31,5 +31,17 @@ export default [
     name: 'settings-providers',
     component: () => import('./providers/Index.vue'),
     meta: { title: '服务商配置', permission: PERM.modelManage }
+  },
+  {
+    /**
+     * 检索引擎运行参数（0.8.x 的配置页）。
+     *
+     * ★ 读权限给 `knowledge:view` 而不是 `retrievalManage`：这几个值决定"一次问答要等多久"，
+     * 排障时任何人都该看得到；写权限（`platform:retrieval:manage`）由页面内的按钮与 API 各自把住。
+     */
+    path: 'settings/retrieval',
+    name: 'settings-retrieval',
+    component: () => import('./retrieval/Index.vue'),
+    meta: { title: '检索引擎', permission: PERM.knowledgeView }
   }
 ] satisfies RouteRecordRaw[]

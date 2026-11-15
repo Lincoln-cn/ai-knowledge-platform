@@ -75,6 +75,7 @@ final class CaliberShape {
           "platform/V83__platform_compliance_baseline.sql",
           "platform/V84__platform_agreement_consent.sql",
           "platform/V85__platform_algorithm_filing_slots.sql",
+          "platform/V100__platform_retrieval_engine_settings.sql",
           "identity/V3__identity_auth.sql",
           "identity/V4__identity_seed_demo_accounts.sql",
           "identity/V5__identity_login_lockout.sql",

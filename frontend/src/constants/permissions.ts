@@ -47,7 +47,14 @@ export const PERM = {
   /** 办理投诉举报工单（#83 第十五条）。★ 与 `feedbackHandle` 分开：投诉举报是留痕举证工单，不是内容质量反馈。 */
   complaintHandle: 'complaint:handle',
   /** 合规登记（#83）：算法备案号/安全评估结论登记位 + 投诉举报反馈时限。★ 与 `systemManage` 分开。 */
-  complianceManage: 'platform:compliance:manage'
+  complianceManage: 'platform:compliance:manage',
+  /**
+   * 检索引擎运行参数（查询理解开关 / 重排窗口 / 前向批大小 / listwise）。
+   *
+   * ★ 与 `systemManage` 分开：改一次影响**所有人**的检索延迟与 B1/B3 口径（关重试省 1.4s、掉 1.1 点），
+   * 与账号管理不是一类。
+   */
+  retrievalManage: 'platform:retrieval:manage'
 } as const
 
 export type PermissionCode = (typeof PERM)[keyof typeof PERM]

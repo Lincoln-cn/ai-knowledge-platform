@@ -1,5 +1,13 @@
 import { ApiError, ErrorCode } from '@/api/types'
-import type { HitItem, HitTestRequest, HitTestResult, HitTestTrace, RetrievalMode, RetrievalParams } from '@/api/retrieval'
+import type {
+  HitItem,
+  HitTestRequest,
+  HitTestResult,
+  HitTestTrace,
+  RetrievalEngineSettingsUpdate,
+  RetrievalMode,
+  RetrievalParams
+} from '@/api/retrieval'
 import type { MockRoute } from '../dispatch'
 import { hitCorpus, knowledgeBases, retrievalParams } from '../fixtures/knowledge'
 import { PERM } from '@/constants/permissions'
@@ -37,6 +45,29 @@ const MAX_HOPS_CAP = 3
 
 /** 多跳的触发条件之一：命中数 < 3（与后端 `RetrievalService.HOP_MIN_HITS` 逐字一致） */
 const HOP_MIN_HITS = 3
+
+/**
+ * 检索引擎的**全局**运行参数（`/settings/retrieval`）。
+ *
+ * ★ 与按库的 {@link retrievalParams} 分开放：那几条描述"一个库怎么检索"，这个描述"这台机器怎么算"。
+ * ★ 初值与后端 `application.yml` 的默认值逐字一致 —— mock 里写别的值，界面会显示一套不生效的数字。
+ */
+const engineSettings = {
+  queryUnderstandingEnabled: true,
+  queryUnderstandingRetry: true,
+  rerankEnabled: true,
+  rerankTopK: 10,
+  rerankForwardBatch: 5,
+  listwiseEnabled: false,
+  listwiseTopK: 5,
+  updatedAt: null as string | null
+}
+
+/** 全局权限门（与 `dictionaries.ts` 的 `requireManage` 同一形状：全局配置没有"哪一条"可判）。 */
+function requirePerm(token: string, action: string, label: string): void {
+  if (currentSubjects(token).permissions.has(action)) return
+  throw new ApiError(ErrorCode.FORBIDDEN, `需要「${label}」权限`)
+}
 
 const findParams = (kbId: string): RetrievalParams => {
   const p = retrievalParams[kbId]
@@ -213,5 +244,48 @@ export const retrievalRoutes: MockRoute[] = [
       retrievalParams[path.kbId] = next
       return next
     }
-  ]
+  ],
+
+  // ── 检索引擎的**全局**运行参数（`/settings/retrieval`）──────────────────────────────
+  // ★ 与上面按库的三条是两件不同的事：那几条描述"一个库怎么检索"，这两条描述"这台机器怎么算"。
+  //   mock 里也照这个分法放，避免"按库一份、全局一份"在夹具层就混成一个接口。
+  ['GET', '/retrieval/settings', ({ token }) => {
+    requirePerm(token, PERM.knowledgeView, '查看知识库')
+    return engineSettings
+  }],
+
+  ['PUT', '/retrieval/settings', ({ body, token }) => {
+    requirePerm(token, PERM.retrievalManage, '检索引擎调参')
+    const input = body as Partial<RetrievalEngineSettingsUpdate>
+    const next: RetrievalEngineSettingsUpdate = {
+      queryUnderstandingEnabled: input.queryUnderstandingEnabled ?? engineSettings.queryUnderstandingEnabled,
+      queryUnderstandingRetry: input.queryUnderstandingRetry ?? engineSettings.queryUnderstandingRetry,
+      rerankEnabled: input.rerankEnabled ?? engineSettings.rerankEnabled,
+      rerankTopK: input.rerankTopK ?? engineSettings.rerankTopK,
+      rerankForwardBatch: input.rerankForwardBatch ?? engineSettings.rerankForwardBatch,
+      listwiseEnabled: input.listwiseEnabled ?? engineSettings.listwiseEnabled,
+      listwiseTopK: input.listwiseTopK ?? engineSettings.listwiseTopK
+    }
+    // 三个上限与后端 `RetrievalEngineSettings.checked()` 逐字一致
+    if (next.rerankTopK < 1 || next.rerankTopK > 50) {
+      throw new ApiError(ErrorCode.BAD_REQUEST, '重排窗口要在 1～50 之间，现在写的是 ' + next.rerankTopK)
+    }
+    if (next.rerankForwardBatch < 0 || next.rerankForwardBatch > 100) {
+      throw new ApiError(
+        ErrorCode.BAD_REQUEST,
+        '前向批大小要在 0～100 之间（0 = 整个窗口一次前向），现在写的是 ' + next.rerankForwardBatch
+      )
+    }
+    if (next.listwiseTopK < 1 || next.listwiseTopK > 20) {
+      throw new ApiError(ErrorCode.BAD_REQUEST, 'listwise 条数要在 1～20 之间，现在写的是 ' + next.listwiseTopK)
+    }
+    if (!next.queryUnderstandingEnabled && next.queryUnderstandingRetry) {
+      throw new ApiError(
+        ErrorCode.BAD_REQUEST,
+        '关闭查询理解时「解析失败重试」无意义 —— 请一并关掉（后端同样会拒绝这个组合）'
+      )
+    }
+    Object.assign(engineSettings, next, { updatedAt: new Date().toISOString() })
+    return engineSettings
+  }]
 ]

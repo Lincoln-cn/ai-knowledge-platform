@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.retrieval.application;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalEngineSettingsStore;
 import cn.lincoln.aiplatform.retrieval.domain.QueryUnderstanding;
 import cn.lincoln.aiplatform.retrieval.domain.QueryUnderstandingParser;
 import java.time.Duration;
@@ -11,6 +12,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -55,6 +57,26 @@ public class QueryUnderstandingService {
    * 预算在第 0 路就耗尽。
    */
   private final RetrievalBudgetProperties budget;
+
+  /**
+   * 运行参数（配置页可改）。可为 {@code null}：直接 {@code new QueryUnderstandingService(chat, budget)} 的测试不接库，走 yml
+   * 值。
+   *
+   * <p>★ setter 注入的理由同 {@code OnnxRerankerAdapter}：这里只需要一个布尔旋钮，为它改构造器 签名会把无关的测试一起拖进来。
+   */
+  private RetrievalEngineSettingsStore engineSettings;
+
+  @Autowired(required = false)
+  void setEngineSettings(RetrievalEngineSettingsStore engineSettings) {
+    this.engineSettings = engineSettings;
+  }
+
+  /** 解析失败时要不要再问一次模型（配置页的「解析失败重试」）。 */
+  private boolean retryOnParseFailure() {
+    return engineSettings == null
+        ? budget.queryUnderstandingRetryOnParseFailure()
+        : engineSettings.current().queryUnderstandingRetry();
+  }
 
   public QueryUnderstandingService(ChatPort chat, RetrievalBudgetProperties budget) {
     this.chat = chat;
@@ -156,7 +178,9 @@ public class QueryUnderstandingService {
             raw, question, queryCount, maxSubQuestions, decomposeEnabled);
     // ★★ 重试开关（低配建议关掉）：CPU 上第二次调用再花 4–5s，只救「模型多说了句话」这一类问题。
     //    关掉时**如实**置 parseFailed 并说明「已按配置关闭重试」，不假装尝试过。
-    if (!parsed.usable() && !budget.queryUnderstandingRetryOnParseFailure()) {
+    //    ★ 0.8.x：这一格已搬到配置页（`platform/V100`）—— 实测关掉省 1.4s、代价是 B3 −1.1 点，
+    //      所以它必须能被运维在页面上权衡，而不是改环境变量重启。
+    if (!parsed.usable() && !retryOnParseFailure()) {
       log.warn("查询理解解析失败，且已按配置关闭重试：{}｜模型原始输出：{}", parsed.failure(), sample(raw));
       return fallback(question, startedAt, "解析模型输出失败（已按配置关闭重试）：" + parsed.failure(), true);
     }

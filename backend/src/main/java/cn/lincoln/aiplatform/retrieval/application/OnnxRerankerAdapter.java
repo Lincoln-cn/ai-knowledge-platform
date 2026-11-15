@@ -8,6 +8,7 @@ import ai.onnxruntime.OrtSession;
 import cn.lincoln.aiplatform.platform.retrieval.NoopRerankerAdapter;
 import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalEngineSettingsStore;
 import jakarta.annotation.PreDestroy;
 import java.io.FileNotFoundException;
 import java.nio.file.Files;
@@ -23,6 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -65,8 +67,23 @@ public class OnnxRerankerAdapter implements RerankPort {
    * 批越大，算力摊得越薄（好），但按批内<b>最长</b>那条补齐的浪费也越多（坏）。哪个占上风只能实测， 所以它必须是配置项，不能是写死的直觉值。
    */
   private int batchSize(int window) {
-    int configured = properties.forwardBatch();
+    int configured =
+        engineSettings == null
+            ? properties.forwardBatch()
+            : engineSettings.current().rerankForwardBatch();
     return configured <= 0 ? window : Math.min(configured, window);
+  }
+
+  /**
+   * 运行参数（配置页可改）。可为 {@code null} —— 那些直接 {@code new OnnxRerankerAdapter(props)} 的测试不接库，走 yml 值。
+   *
+   * <p>★ 用 setter 注入而不是构造器第 2 参：这个类的构造器被 2 个测试类直接调用，且它只服务一个 "每批多少条"的旋钮 —— 为它改构造器签名会把无关的测试一起拖进来。
+   */
+  private RetrievalEngineSettingsStore engineSettings;
+
+  @Autowired(required = false)
+  void setEngineSettings(RetrievalEngineSettingsStore engineSettings) {
+    this.engineSettings = engineSettings;
   }
 
   /** 模型的最大输入长度（超过截断）：{@code bge-reranker-base} 是 512。 */
