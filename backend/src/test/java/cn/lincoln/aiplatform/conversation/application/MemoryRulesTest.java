@@ -168,6 +168,65 @@ class MemoryRulesTest {
     verify(memories, never()).findByDedupKey(any(), any(), any(), any());
   }
 
+  /** 判据 2：`recall_limit` 是"注入几条"的上限，不是"每层各几条"。 */
+  @Test
+  void recallLimitCapsTheInjectedBlock() {
+    when(settings.load()).thenReturn(view(true, 2));
+    UUID owner = UUID.randomUUID();
+    UUID conversation = UUID.randomUUID();
+    when(memories.findRecallsAcrossLevels(any(), any(), anyInt(), anyInt()))
+        .thenReturn(
+            List.of(
+                memory(owner, MemoryLevel.USER, MemoryKind.FACT, "用户在一家制造企业。"),
+                memory(owner, MemoryLevel.USER, MemoryKind.FACT, "用户在法务部。"),
+                memory(owner, MemoryLevel.USER, MemoryKind.FACT, "用户在核合同。")));
+
+    MemoryRetriever.Recall recall =
+        new MemoryRetriever(memories, service(), settings).recall(owner, conversation);
+
+    assertThat(recall.usedMemoryIds()).hasSize(2);
+  }
+
+  /** 层权重：会话细节要能挤掉恒定背景（设计册 §6.2「恒定背景占了配额，会话细节就进不来」）。 */
+  @Test
+  void conversationMemoriesOutrankConstantBackground() {
+    when(settings.load()).thenReturn(view(true, 2));
+    UUID owner = UUID.randomUUID();
+    UUID conversation = UUID.randomUUID();
+    Memory personaHigh =
+        Memory.create(
+            owner,
+            MemoryLevel.PERSONA,
+            null,
+            MemoryKind.PREFERENCE,
+            "偏好先结论后依据。",
+            new UUID[0],
+            3,
+            0.7f,
+            null,
+            Instant.now());
+    Memory conversationWin =
+        Memory.create(
+            owner,
+            MemoryLevel.CONVERSATION,
+            conversation,
+            MemoryKind.CONVENTION,
+            "这次对话按含税口径算。",
+            new UUID[0],
+            4,
+            0.7f,
+            null,
+            Instant.now());
+    when(memories.findRecallsAcrossLevels(any(), any(), anyInt(), anyInt()))
+        .thenReturn(List.of(personaHigh, conversationWin));
+
+    MemoryRetriever.Recall recall =
+        new MemoryRetriever(memories, service(), settings).recall(owner, conversation);
+
+    /* 两条都在配额内，所以断言的是"顺序"：会话那条排在前面。 */
+    assertThat(recall.block().indexOf("含税")).isLessThan(recall.block().indexOf("先结论"));
+  }
+
   /** 设定越界要带当前值 —— 只看"报错了"分不清是 99 还是 -1。 */
   @Test
   void settingsBoundsCarryTheCurrentValue() {

@@ -127,14 +127,21 @@ public class MemoryRetriever {
       List<Memory> cross,
       List<Memory> conversation,
       UserProfile profile) {
-    List<Memory> picked = new ArrayList<>();
-    picked.addAll(persona);
-    picked.addAll(user);
-    picked.addAll(cross);
-    picked.addAll(conversation);
-    if (picked.size() > current.recallLimit()) {
-      picked = picked.subList(0, current.recallLimit());
-    }
+    List<Memory> candidates = new ArrayList<>();
+    candidates.addAll(persona);
+    candidates.addAll(user);
+    candidates.addAll(cross);
+    candidates.addAll(conversation);
+    /* ★ 按「层权重 × 重要度」排序后再截到 recallLimit（设计册 §6.2 的合计上限规则）。
+     *
+     * 上一版是"先按层拼接、再截前 N 条" —— 人格化那 3 条排在前面，于是 recallLimit=5 时
+     * 会话细节几乎永远进不来。而这个错误看起来完全正常：注入的记忆段确实有条数，只是
+     * 全是"这个人是谁"这种恒定背景，从来不是"这次用得上"的那几条。 */
+    List<Memory> picked =
+        candidates.stream()
+            .sorted(java.util.Comparator.comparingDouble(MemoryRetriever::score).reversed())
+            .limit(current.recallLimit())
+            .toList();
     /* ★ 命中计数在召回之后写：它衡量的是"这条记忆被用上了"，而不是"被查出来了"。 */
     List<UUID> used = picked.stream().map(Memory::id).toList();
 
@@ -155,6 +162,27 @@ public class MemoryRetriever {
       truncated = true;
     }
     return new Recall(block, used, truncated, null);
+  }
+
+  /**
+   * 一条记忆的排序分。
+   *
+   * <p>★ 层权重不是"哪层更重要"，而是"哪层这次更用得上"：用户与人格化是<strong>恒定背景</strong>
+   * （每次都在，价值随重复下降），会话与跨会话是<strong>这次用得上</strong>（错过就没有）。 设计册 §6.2 的原话是"恒定背景占了配额，会话细节就进不来"。
+   *
+   * <p>★ 重要度直接相乘而不归一化：1–5 已经是同一把尺子，用它当分值最直观； 而"新的优先"已经在 SQL 的 {@code order by updatedAt desc}
+   * 里作为同分时的次序。
+   *
+   * @param memory 记忆
+   * @return 分值（越大越先注入）
+   */
+  private static double score(Memory memory) {
+    double weight =
+        switch (memory.level()) {
+          case CONVERSATION, CROSS_SESSION -> 1.5;
+          default -> 1.0;
+        };
+    return weight * memory.importance();
   }
 
   /**
