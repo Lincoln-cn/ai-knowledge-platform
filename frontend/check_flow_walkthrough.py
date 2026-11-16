@@ -147,6 +147,30 @@ def wait_doc_status(token: str, kb_id: str, doc_id: str, expected: set[str], sec
     return status
 
 
+def pick_embedding_model(token: str) -> tuple[str, str]:
+    """挑一个现成的向量模型复用，返回 (id, 说明)；库里一个都没有时返回 ("", 原因)。
+
+    ★ 为什么不再"每次跑都新建一个"（本脚本原来那样）：
+      1. `#305` 起同一个 baseModel 的维度必须唯一，而库里 bge-m3 的历史登记**同时有
+         768 和 1024**（唯一性规则是后加的，老数据没清，后端校验取到哪一条不确定）
+         ⇒ 硬编码一个维度必然时对时错。本脚本就在 768 与 1024 之间错过两次。
+      2. 每跑一次还留一个「走查向量-<时间戳>」的登记，库里已经攒了 30 多个。
+      判据：夹具与**库现状**一致，不与自己记忆里的数字一致。
+    """
+    status, body = api("GET", "/models?size=200", token)
+    items = (body.get("data") or {}).get("list") or []
+    embeddings = [m for m in items if m.get("kind") == "EMBEDDING" and m.get("id")]
+    if not embeddings:
+        return "", f"库里没有可用的向量模型（status={status}）"
+    # 优先 bge-m3：历史走查一直用它，本地 ONNX 能加载；其次任意 EMBEDDING
+    for base in ("bge-m3", None):
+        for m in embeddings:
+            if base is None or m.get("baseModel") == base:
+                note = f"{m.get('name')}（{m.get('baseModel')} dim={m.get('dimension')}）"
+                return m["id"], note
+    return "", "没有可复用的向量模型"
+
+
 def seed_hit_test_fixture(token: str) -> tuple[str, str] | None:
     """造一份"能被检索到"的最小夹具，返回 (kb_id, question)。
 
@@ -162,25 +186,28 @@ def seed_hit_test_fixture(token: str) -> tuple[str, str] | None:
         fail(f"夹具文件（{DOCX.name}）不存在", -1, {})
         return None
     stamp = str(int(time.time()))
-    status, created = api(
-        "POST",
-        "/models",
-        token,
-        {
-            "name": f"走查向量-{stamp}",
-            "kind": "EMBEDDING",
-            "supplier": "LOCAL_INFERENCE",
-            "baseModel": "bge-m3",
-            # ★ 1024 而不是 768：`#305` 缺口 B 起，同一个 baseModel 的维度必须唯一
-            #   （库里 bge-m3 已登记 1024）。写成 768 会被后端 400 拒掉：
-            #   「同一个基础模型 bge-m3 已有登记维度 1024，不能再登记成 768」。
-            "dimension": 1024,
-        },
-    )
-    model_id = (created.get("data") or {}).get("id")
-    if status != 200 or not model_id:
-        fail("建向量模型", status, created)
-        return None
+    model_id, model_note = pick_embedding_model(token)
+    if model_id:
+        print(f"  · 复用向量模型：{model_note}")
+    else:
+        # 空库才走到这里（没有任何历史登记，维度不会被拒）
+        print(f"  · 库里没有向量模型（{model_note}），先建一个")
+        status, created = api(
+            "POST",
+            "/models",
+            token,
+            {
+                "name": f"走查向量-{stamp}",
+                "kind": "EMBEDDING",
+                "supplier": "LOCAL_INFERENCE",
+                "baseModel": "bge-m3",
+                "dimension": 1024,
+            },
+        )
+        model_id = (created.get("data") or {}).get("id")
+        if status != 200 or not model_id:
+            fail("建向量模型", status, created)
+            return None
 
     status, kb = api(
         "POST",
@@ -498,7 +525,16 @@ def main() -> int:
                             "input[placeholder*='测试问题'], input[placeholder*='问题']", question
                         )
                         page.click(f"button:has-text('{action}')")
-                        page.wait_for_timeout(4000)
+                        # ★ 为什么不再固定 sleep 4 秒：`POST /retrieval/test` 在真实库上
+                        #   实测 **14.86 秒**（返回 200、items=5）。固定 sleep 等于拿"我这台机器
+                        #   上的一个数字"去判所有环境 —— 它在慢机器上必然红，而红的原因与
+                        #   第 10 周那条判据（"这个接口真的返回了 2xx"）毫无关系。
+                        #   改成等**目标接口真的回来**：期间只要出现失败调用就提前收工。
+                        deadline = time.time() + 30
+                        while time.time() < deadline:
+                            if any(api_fragment in c for c in ok_calls) or failed_calls:
+                                break
+                            page.wait_for_timeout(300)
                     except Exception as exc:  # noqa: BLE001
                         check(False, f"{name}（{route}）点「{action}」这一步做不下去：{str(exc)[:60]}")
                         continue
