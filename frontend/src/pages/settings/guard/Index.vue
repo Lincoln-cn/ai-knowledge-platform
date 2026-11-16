@@ -171,29 +171,42 @@
         </div>
       </section>
 
-      <!-- ── ③ 最近拦截 ───────────────────────────────────────────────── -->
+      <!-- ── ③ 拦截记录 ───────────────────────────────────────────────── -->
       <section class="panel">
         <div class="panel-head">
           <div>
-            <div class="card-title">最近 7 天拦截</div>
+            <div class="card-title">拦截记录</div>
             <div class="micro muted">
               每一条都记着谁、什么时候、在哪个会话 —— 点「看会话」能回到那次提问。原话只存在会话里，
               不复制进审计（它会长期留存，复制一份就删不掉了）
             </div>
           </div>
           <div class="panel-tools">
-            <span class="micro muted">共 {{ hitPage.total }} 次</span>
             <span v-if="hitPage.byCategory.length" class="hit-brief micro">
               <span v-for="h in hitPage.byCategory" :key="h.categoryCode" class="hit-brief-item">
                 {{ categoryNameOf(h.categoryCode) }} {{ h.hits }}
               </span>
             </span>
+            <el-select
+              v-model="hitDays"
+              size="small"
+              class="filter-select"
+              @change="reloadHits"
+            >
+              <el-option :value="7" label="最近 7 天" />
+              <el-option :value="30" label="最近 30 天" />
+              <el-option :value="90" label="最近 90 天" />
+              <el-option :value="0" label="全部" />
+            </el-select>
+            <span class="micro muted">共 {{ hitPage.total }} 次</span>
           </div>
         </div>
         <div class="panel-body">
-          <div v-if="hitPage.recent.length === 0" class="micro muted">最近 7 天没有拦截记录。</div>
+          <div v-if="hitPage.recent.length === 0" class="micro muted">
+            {{ hitDays === 0 ? '还没有任何拦截记录。' : '这段时间里没有拦截记录。' }}
+          </div>
           <template v-else>
-            <el-table :data="hitPage.recent" size="small" row-key="ruleId">
+            <el-table :data="hitPage.recent" size="small" row-key="at">
               <el-table-column label="时间" width="170">
                 <template #default="{ row }">{{ formatAt(row.at) }}</template>
               </el-table-column>
@@ -227,9 +240,16 @@
                 </template>
               </el-table-column>
             </el-table>
-            <div v-if="hitPage.truncated" class="micro muted hit-more">
-              只列最近 {{ hitPage.recent.length }} 条，更早的请到审计记录按「围栏拦截问答」筛选
-            </div>
+            <el-pagination
+              v-if="hitPage.total > hitPage.size"
+              class="hit-pager"
+              layout="prev, pager, next, total"
+              :current-page="hitPage.page"
+              :page-size="hitPage.size"
+              :total="hitPage.total"
+              background
+              @current-change="changeHitPage"
+            />
           </template>
         </div>
       </section>
@@ -429,12 +449,15 @@ const loadError = ref<{ reason: string; hint?: string | null } | null>(null)
 
 const categories = ref<GuardCategory[]>([])
 const rules = ref<GuardRule[]>([])
+/** 拦截记录的时间窗口：0 = 全部（后端把 0 解释成"不限时间"）。 */
+const hitDays = ref(7)
 const hitPage = ref<GuardHitPage>({
   days: 7,
   total: 0,
   byCategory: [],
   recent: [],
-  truncated: false
+  page: 1,
+  size: 20
 })
 const rulesDrawer = ref(false)
 const drawerCategory = ref<GuardCategory | null>(null)
@@ -527,13 +550,29 @@ async function loadRules() {
   }
 }
 
-async function loadHits() {
+async function loadHits(page = hitPage.value.page) {
   try {
-    hitPage.value = await listGuardHits(7)
+    hitPage.value = await listGuardHits(hitDays.value, page)
   } catch {
     // 读数读不到不影响配置：不弹错，保持空表（页面那行"没有拦截记录"会照常显示）
-    hitPage.value = { days: 7, total: 0, byCategory: [], recent: [], truncated: false }
+    hitPage.value = {
+      days: hitDays.value,
+      total: 0,
+      byCategory: [],
+      recent: [],
+      page: 1,
+      size: 20
+    }
   }
+}
+
+/** 换时间范围：页码必须回到 1，否则会落在"这个范围里没有第 5 页"的空表上。 */
+function reloadHits() {
+  void loadHits(1)
+}
+
+function changeHitPage(page: number) {
+  void loadHits(page)
 }
 
 /** 拦截时间：本地时刻，精确到分（审计里是 long 值的毫秒级，页面上给到秒反而噪声）。 */
@@ -863,5 +902,31 @@ onMounted(load)
 .hit-value {
   font-size: 20px;
   font-variant-numeric: tabular-nums;
+}
+
+/* 头部的分类分布：一行小字，读作"色情 2 · 暴力 1" */
+.hit-brief {
+  display: inline-flex;
+  gap: var(--space-sm);
+}
+
+.hit-brief-item::after {
+  content: '·';
+  margin-left: var(--space-sm);
+  color: var(--color-border);
+}
+
+.hit-brief-item:last-child::after {
+  content: none;
+}
+
+.hit-link {
+  color: var(--color-primary);
+}
+
+/* 分页靠右，与表格留一点间距 */
+.hit-pager {
+  margin-top: var(--space-md);
+  justify-content: flex-end;
 }
 </style>

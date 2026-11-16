@@ -369,16 +369,23 @@ public class GuardStore {
   }
 
   /**
-   * 最近若干天内被拦的次数，按分类聚合。
+   * 窗口内被拦的次数，按分类聚合。
    *
    * <p>★ 真源是审计表（{@code pf_audit_log}），**不另建一张计数表**：两张表迟早不一致， 而"今天拦了几次"这个问题只有一个可核对的答案 —— 审计里那几行。★
    * 只回计数，不回落库的词面。
    *
-   * @param days 窗口天数
+   * @param days 窗口天数；{@code 0} 表示不限时间
    * @return 按次数降序
    */
   public List<GuardHitCount> hitCounts(int days) {
-    int window = Math.max(1, Math.min(days, 90));
+    if (days <= 0) {
+      return jdbc.query(
+          "select coalesce(detail ->> 'category', 'UNKNOWN') as category, count(*) as hits from"
+              + " pf_audit_log where action = ? group by 1 order by 2 desc",
+          (rs, rowNum) -> new GuardHitCount(rs.getString("category"), rs.getLong("hits")),
+          cn.lincoln.aiplatform.platform.domain.AuditAction.GUARD_BLOCK.code());
+    }
+    int window = Math.min(days, 90);
     return jdbc.query(
         "select coalesce(detail ->> 'category', 'UNKNOWN') as category, count(*) as hits from"
             + " pf_audit_log where action = ? and created_at >= now() - make_interval(days => ?)"
@@ -389,36 +396,72 @@ public class GuardStore {
   }
 
   /**
-   * 最近 {@code days} 天的拦截图（新的在前）。
+   * 窗口内的拦截总次数（分页要用它算页数，不能靠"本页有几条"推）。
+   *
+   * @param days 窗口天数；{@code 0} 表示不限时间
+   */
+  public long hitTotal(int days) {
+    if (days <= 0) {
+      Long total =
+          jdbc.queryForObject(
+              "select count(*) from pf_audit_log where action = ?",
+              Long.class,
+              cn.lincoln.aiplatform.platform.domain.AuditAction.GUARD_BLOCK.code());
+      return total == null ? 0L : total;
+    }
+    Long total =
+        jdbc.queryForObject(
+            "select count(*) from pf_audit_log where action = ? and created_at >= now() -"
+                + " make_interval(days => ?)",
+            Long.class,
+            cn.lincoln.aiplatform.platform.domain.AuditAction.GUARD_BLOCK.code(),
+            Math.min(days, 90));
+    return total == null ? 0L : total;
+  }
+
+  /**
+   * 窗口内的拦截图（新的在前）。
    *
    * <p>★ 真源是审计表，不另建计数表：同一件事两处记账，早晚会不一致。
    *
-   * @param days 窗口天数（夹在 1–90）
-   * @param limit 最多取多少行
+   * @param days 窗口天数；{@code 0} 表示不限时间
+   * @param limit 最多取多少行（夹在 1–500）
+   * @param offset 跳过多少行（分页用）
    */
-  public List<GuardHitDetail> hitDetails(int days, int limit) {
-    int window = Math.max(1, Math.min(days, 90));
+  public List<GuardHitDetail> hitDetails(int days, int limit, int offset) {
     int rows = Math.max(1, Math.min(limit, 500));
-    return jdbc.query(
+    int skip = Math.max(0, offset);
+    String base =
         "select created_at, detail ->> 'category' as category, detail ->> 'kind' as kind,"
             + " detail ->> 'hash' as hash, detail ->> 'conversation' as conversation,"
             + " resource_id, actor_id, actor_name"
-            + " from pf_audit_log where action = ?"
+            + " from pf_audit_log where action = ?";
+    var mapper =
+        (org.springframework.jdbc.core.RowMapper<GuardHitDetail>)
+            (rs, rowNum) ->
+                new GuardHitDetail(
+                    rs.getObject("created_at", java.time.OffsetDateTime.class).toInstant(),
+                    rs.getString("category"),
+                    rs.getString("kind"),
+                    rs.getString("resource_id"),
+                    rs.getString("hash"),
+                    rs.getObject("actor_id", UUID.class),
+                    rs.getString("actor_name"),
+                    rs.getString("conversation"));
+    String action = cn.lincoln.aiplatform.platform.domain.AuditAction.GUARD_BLOCK.code();
+    if (days <= 0) {
+      return jdbc.query(
+          base + " order by created_at desc limit ? offset ?", mapper, action, rows, skip);
+    }
+    return jdbc.query(
+        base
             + " and created_at >= now() - make_interval(days => ?)"
-            + " order by created_at desc limit ?",
-        (rs, rowNum) ->
-            new GuardHitDetail(
-                rs.getObject("created_at", java.time.OffsetDateTime.class).toInstant(),
-                rs.getString("category"),
-                rs.getString("kind"),
-                rs.getString("resource_id"),
-                rs.getString("hash"),
-                rs.getObject("actor_id", UUID.class),
-                rs.getString("actor_name"),
-                rs.getString("conversation")),
-        cn.lincoln.aiplatform.platform.domain.AuditAction.GUARD_BLOCK.code(),
-        window,
-        rows);
+            + " order by created_at desc limit ? offset ?",
+        mapper,
+        action,
+        Math.min(days, 90),
+        rows,
+        skip);
   }
 
   private GuardSnapshot load() {

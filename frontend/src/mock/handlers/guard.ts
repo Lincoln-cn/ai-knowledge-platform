@@ -219,17 +219,20 @@ export const guardRoutes: MockRoute[] = [
     return true
   }],
 
-  // ── 拦截读数（汇总 + 明细；原话不在审计里，明细给的是会话 id）─────────
+  // ── 拦截读数（汇总 + 分页明细；原话不在审计里，明细给的是会话 id）────────
   ['GET', '/guard/hits', ({ token, query }) => {
     requirePerm(token, '安全围栏')
-    const days = Number(query?.days ?? 7) || 7
-    const recent = hitDetails.slice(0, 100)
+    const days = Number(query?.days ?? 7)
+    const size = Math.min(Math.max(Number(query?.size ?? 20), 1), 100)
+    const page = Math.max(Number(query?.page ?? 1), 1)
+    const start = (page - 1) * size
     return {
       days,
       total: hitDetails.length,
       byCategory: hits,
-      recent,
-      truncated: hitDetails.length > recent.length
+      recent: hitDetails.slice(start, start + size),
+      page,
+      size
     }
   }]
 ]

@@ -79,13 +79,15 @@ export interface GuardHitDetail {
   conversationId: string | null
 }
 
-/** 「最近 N 天拦截」一屏的读数：汇总回答"严重不严重"，明细回答"是哪一次"。 */
+/** 「拦截记录」一屏的读数：汇总回答"严重不严重"，明细回答"是哪一次"。 */
 export interface GuardHitPage {
+  /** 窗口天数；0 表示不限时间（"全部"） */
   days: number
   total: number
   byCategory: GuardHitCount[]
   recent: GuardHitDetail[]
-  truncated: boolean
+  page: number
+  size: number
 }
 
 export interface GuardCategoryInput {
@@ -149,5 +151,12 @@ export const deleteGuardRule = (id: string) =>
  *
  * @param days 窗口 1–90，默认 7
  */
-export const listGuardHits = (days = 7) =>
-  request<GuardHitPage>({ method: 'GET', url: '/guard/hits', query: { days } })
+/**
+ * 拦截记录（汇总 + 分页明细）。
+ *
+ * @param days 窗口天数；0 = 全部（不限时间）
+ * @param page 页码，从 1 开始
+ * @param size 每页条数（后端上限 100）
+ */
+export const listGuardHits = (days = 7, page = 1, size = 20) =>
+  request<GuardHitPage>({ method: 'GET', url: '/guard/hits', query: { days, page, size } })

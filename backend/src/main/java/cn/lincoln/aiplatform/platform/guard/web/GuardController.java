@@ -182,15 +182,21 @@ public class GuardController {
   }
 
   /**
-   * 最近若干天各分类被拦的次数（★ 只有计数，没有原文也没有词面）。
+   * 拦截记录：按分类的汇总 + 分页明细。
    *
-   * @param days 窗口，1–90，默认 7
+   * <p>★ 明细里没有原话，只有"谁、什么时候、在哪个会话、命中哪条规则"。原话只存在会话消息里一份 —— 复制进长期留存的审计等于多造一份删不掉的副本。
+   *
+   * @param days 窗口天数，0 = 不限时间（"全部"），其余 1–90，默认 7
+   * @param page 页码，从 1 开始，默认 1
+   * @param size 每页条数，1–{@value cn.lincoln.aiplatform.platform.guard.GuardHitPage#MAX_SIZE}，默认 20
    */
   @GetMapping("/hits")
   @PreAuthorize("hasAuthority('platform:guard:manage')")
   public ApiResponse<GuardHitPage> hits(
-      @RequestParam(value = "days", required = false, defaultValue = "7") int days) {
-    return ApiResponse.ok(guard.hits(days));
+      @RequestParam(value = "days", required = false, defaultValue = "7") int days,
+      @RequestParam(value = "page", required = false, defaultValue = "1") int page,
+      @RequestParam(value = "size", required = false, defaultValue = "20") int size) {
+    return ApiResponse.ok(guard.hits(days, page, size));
   }
 
   private static UUID operator(Jwt jwt) {

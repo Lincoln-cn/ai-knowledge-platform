@@ -323,13 +323,21 @@ public class GuardService {
     return snapshot.refusalFor(hits);
   }
 
-  /** 最近 {@code days} 天的拦截读数：汇总 + 明细（页面「最近 N 天拦截」一屏要的两样）。 */
-  public GuardHitPage hits(int days) {
-    int window = Math.max(1, Math.min(days, 90));
+  /**
+   * 拦截读数：汇总 + 当前页明细。
+   *
+   * @param days 窗口天数；{@code 0} 表示不限时间（"全部"）。其余夹在 1–90
+   * @param page 页码，从 1 开始
+   * @param size 每页条数，夹在 1–{@value GuardHitPage#MAX_SIZE}
+   */
+  public GuardHitPage hits(int days, int page, int size) {
+    int window = days <= 0 ? 0 : Math.max(1, Math.min(days, 90));
+    int pageSize = size <= 0 ? GuardHitPage.DEFAULT_SIZE : Math.min(size, GuardHitPage.MAX_SIZE);
+    int currentPage = Math.max(1, page);
     List<GuardHitCount> byCategory = store.hitCounts(window);
-    List<GuardHitDetail> recent = store.hitDetails(window, GuardHitPage.MAX_RECENT);
-    long total = byCategory.stream().mapToLong(GuardHitCount::hits).sum();
-    return new GuardHitPage(window, total, byCategory, recent, total > recent.size());
+    long total = store.hitTotal(window);
+    List<GuardHitDetail> recent = store.hitDetails(window, pageSize, (currentPage - 1) * pageSize);
+    return new GuardHitPage(window, total, byCategory, recent, currentPage, pageSize);
   }
 
   private String requireCode(String code) {
