@@ -20,9 +20,11 @@ import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import jakarta.annotation.PreDestroy;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -674,22 +676,32 @@ public class ModelService {
     if (dimension == null) {
       return;
     }
+    // ★ 先收集**全部**兄弟维度再判，而不是"撞见第一个不一样的兄弟就抛"。
+    //   后者在一处脏数据下会给出自相矛盾的答案：实测库里 bge-m3 同时登记着 768 和 1024，
+    //   于是"建 1024"被拒（提示已有 768）、"建 768"也被拒（提示已有 1024），取决于遍历顺序,
+    //   读起来像随机失败。判定应当是**集合语义**：
+    //     · 请求维度已经在集合里 => 它沿用同一张 vec_embedding_<dim>，不新增分裂点，放行；
+    //     · 不在集合里 => 会新增一个分裂点，拒绝，并把已有维度**全部**报出来。
+    //   干净库上行为与旧实现完全一致（集合只有一个元素），脏库上则给出确定且可解释的答案。
+    Set<Integer> siblings = new LinkedHashSet<>();
     for (Model sibling : models.embeddingModelsOf(baseModel)) {
       if (selfId != null && selfId.equals(sibling.id())) {
         continue;
       }
-      Integer other = sibling.dimension();
-      if (other != null && !other.equals(dimension)) {
-        throw new BusinessException(
-            ErrorCode.BAD_REQUEST,
-            "同一个基础模型 " + baseModel.trim() + " 已有登记维度 " + other + "，不能再登记成 " + dimension,
-            "维度决定向量写哪张表（vec_embedding_"
-                + dimension
-                + "）；两个维度会让两批向量互相检索不到。请沿用 "
-                + other
-                + "，或先处理掉那条旧登记");
+      if (sibling.dimension() != null) {
+        siblings.add(sibling.dimension());
       }
     }
+    if (siblings.isEmpty() || siblings.contains(dimension)) {
+      return;
+    }
+    String known = String.join(" / ", siblings.stream().map(String::valueOf).toList());
+    String advice =
+        siblings.size() > 1 ? "这个基础模型的登记维度**已经不一致**（" + known + "），请先统一成一种，" : "请沿用 " + known + "，";
+    throw new BusinessException(
+        ErrorCode.BAD_REQUEST,
+        "同一个基础模型 " + baseModel.trim() + " 已有登记维度 " + known + "，不能再登记成 " + dimension,
+        "维度决定向量写哪张表（vec_embedding_" + dimension + "）；两个维度会让两批向量互相检索不到。" + advice + "或先处理掉那些旧登记");
   }
 
   private ModelProvider requireProvider(UUID providerId) {

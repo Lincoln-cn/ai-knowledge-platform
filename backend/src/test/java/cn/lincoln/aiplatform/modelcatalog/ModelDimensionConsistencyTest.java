@@ -130,4 +130,41 @@ class ModelDimensionConsistencyTest {
 
     assertThat(serviceWith(models).create(embedding("", 768), OPERATOR)).isNotNull();
   }
+
+  @Test
+  @DisplayName("★ 库里本来就不一致时（bge-m3 同时有 768 和 1024），沿用其中之一必须放行")
+  void anAlreadyRegisteredDimensionIsStillAcceptedWhenSiblingsDisagree() {
+    // 这条是走查实测撞出来的：库里 bge-m3 真同时存着 768 和 1024（#305 是后加的规则，
+    // 老数据没清）。旧实现"撞见第一个不同维度就抛"，于是两个维度都建不出来，
+    // 而请求的维度其实早就在集合里 —— 它沿用同一张 vec 表，不新增任何分裂点。
+    ModelRepository models = mock(ModelRepository.class);
+    // ★ 先把兄弟造好再 stubbing：`sibling()` 内部也在调 `when(...)`，
+    //   写进 `thenReturn(...)` 的参数里会嵌套 stubbing ⇒ Mockito 报 UnfinishedStubbing。
+    Model first = sibling(BASE, 768);
+    Model second = sibling(BASE, 1024);
+    when(models.embeddingModelsOf(BASE)).thenReturn(List.of(first, second));
+    when(models.findById(any())).thenReturn(java.util.Optional.empty());
+    when(models.save(any())).thenReturn(second);
+
+    assertThat(serviceWith(models).create(embedding(BASE, 1024), OPERATOR)).isNotNull();
+  }
+
+  @Test
+  @DisplayName("★ 第三种维度必须被拒，且把已登记的两个都报出来（否则读起来像随机失败）")
+  void aThirdDimensionReportsEveryRegisteredOne() {
+    ModelRepository models = mock(ModelRepository.class);
+    Model first = sibling(BASE, 768);
+    Model second = sibling(BASE, 1024);
+    when(models.embeddingModelsOf(BASE)).thenReturn(List.of(first, second));
+
+    assertThatThrownBy(() -> serviceWith(models).create(embedding(BASE, 512), OPERATOR))
+        .isInstanceOf(BusinessException.class)
+        .satisfies(
+            e -> {
+              // 两个都要在消息里：只报一个等于让下一个人再来撞一次同一堵墙。
+              assertThat(e.getMessage()).contains("768 / 1024").contains("不能再登记成 512");
+              // hint 必须承认"库里已经不一致"这个事实，而不是假装它只有一种维度。
+              assertThat(((BusinessException) e).hint()).contains("已经不一致");
+            });
+  }
 }
