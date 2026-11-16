@@ -1,4 +1,4 @@
-﻿<template>
+<template>
     <el-form-item label="默认值" :required="formValue.required" prop="default_value" :rules="[default_value_rule]">
         <JsonInput ref="jsonInputRef" v-model="formValue.default_value"> </JsonInput>
     </el-form-item>

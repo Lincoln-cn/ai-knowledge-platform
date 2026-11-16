@@ -1,4 +1,4 @@
-﻿// ★ 相对路径 + .ts 后缀：node:test（--experimental-strip-types）不解析 `@/` 别名
+// ★ 相对路径 + .ts 后缀：node:test（--experimental-strip-types）不解析 `@/` 别名
 //   也不做无扩展名补全；vite / vue-tsc 两者都吃（tsconfig 已开 allowImportingTsExtensions）。
 import { ApiError } from '../api/types.ts'
 import type { HttpMethod, RequestOptions } from '@/lib/http'

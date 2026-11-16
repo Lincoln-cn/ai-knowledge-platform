@@ -1,4 +1,4 @@
-﻿<template>
+<template>
     <el-dialog :title="title" v-model="dialogVisible" :close-on-click-modal="false" :close-on-press-escape="false"
         :destroy-on-close="true" :before-close="close" append-to-body>
         <DynamicsFormConstructor v-model="dynamicsFormData" label-position="top" require-asterisk-position="right"
