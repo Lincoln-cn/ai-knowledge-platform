@@ -301,24 +301,34 @@ public class GuardService {
     }
     GuardHit first = hits.get(0);
     // ★ 谁问的 / 在哪个会话里问的：拦截点（Spring AI 的 advisor 链）手上只有 Prompt，
-    //   这两样由上游 ChatService 放进 GuardCallContext。拿不到就是 null ——
-    //   它只影响审计里多两个字段，不参与判定。
+    //   这两样由上游 ChatService 放进 GuardCallContext。
     GuardCallContext.Carrier carrier = GuardCallContext.current();
-    Map<String, Object> detail = new java.util.LinkedHashMap<>();
-    detail.put("category", first.categoryCode());
-    detail.put("kind", first.kind().name());
-    detail.put("hash", first.contentHashPrefix());
-    if (carrier != null && carrier.conversationId() != null) {
-      // ★ 记会话 id 而不是记原话：原话已经在消息表里（有访问控制、有留存期），
-      //   复制进审计等于多一份删不掉的副本 —— 而审计是长期留存的。
-      detail.put("conversation", carrier.conversationId().toString());
+    // ★★ 没有随行上下文 ⇒ 这次拦截发生在链路的**内部步骤**上（今天就是检索前的
+    //   「查询理解」：它把用户原话再送给一次模型改写，所以用户说了敏感词它也会命中）。
+    //   那种调用不记审计，理由有两条：
+    //   ① 同一次提问会因此记两条（一次内部改写 + 一次真正的回答），而「这个月拦了多少次」
+    //      这个数只有一个正确答案 —— 实测过：3 次提问在列表里成了 4 行；
+    //   ② 它回答不了"谁问的"（内部调用本来就没有登录人），留着只是一行无主记录。
+    //   ★ 判定仍然生效（拒答照旧），只是不留痕 —— 留痕归"真正回答用户的那一次"。
+    //   ★ 推论：任何新增的**用户入口**都必须在入口处 set 上下文，否则它会被当成内部步骤。
+    boolean auditable = carrier != null;
+    if (auditable) {
+      Map<String, Object> detail = new java.util.LinkedHashMap<>();
+      detail.put("category", first.categoryCode());
+      detail.put("kind", first.kind().name());
+      detail.put("hash", first.contentHashPrefix());
+      if (carrier.conversationId() != null) {
+        // ★ 记会话 id 而不是记原话：原话已经在消息表里（有访问控制、有留存期），
+        //   复制进审计等于多一份删不掉的副本 —— 而审计是长期留存的。
+        detail.put("conversation", carrier.conversationId().toString());
+      }
+      auditLog.record(
+          AuditAction.GUARD_BLOCK,
+          "GUARD_RULE",
+          first.ruleId().toString(),
+          carrier.actorId(),
+          detail);
     }
-    auditLog.record(
-        AuditAction.GUARD_BLOCK,
-        "GUARD_RULE",
-        first.ruleId().toString(),
-        carrier == null ? null : carrier.actorId(),
-        detail);
     // ★ 不把命中数交给调用方：命中几条本身也是信息（"这句话踩了 3 条"比"踩了 1 条"更能试探词表形状）
     return snapshot.refusalFor(hits);
   }

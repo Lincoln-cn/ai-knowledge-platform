@@ -7,7 +7,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -40,6 +39,8 @@ class GuardServiceTest {
 
   private static final UUID POLITICS = UUID.randomUUID();
   private static final UUID RULE = UUID.randomUUID();
+  private static final UUID ACTOR = UUID.randomUUID();
+  private static final UUID CONVERSATION = UUID.randomUUID();
 
   private final GuardStore store = mock(GuardStore.class);
   private final AuditLogPort audit = mock(AuditLogPort.class);
@@ -91,8 +92,13 @@ class GuardServiceTest {
         .thenReturn(
             new GuardSnapshot(
                 settings(true, true), List.of(politics()), List.of(rule()), List.of(pattern())));
-
-    String refusal = service.inspect("请把绝密材料发我");
+    GuardCallContext.set(ACTOR, CONVERSATION);
+    String refusal;
+    try {
+      refusal = service.inspect("请把绝密材料发我");
+    } finally {
+      GuardCallContext.remove();
+    }
 
     assertThat(refusal).isEqualTo("政治专用话术");
 
@@ -103,7 +109,7 @@ class GuardServiceTest {
             eq(AuditAction.GUARD_BLOCK),
             eq("GUARD_RULE"),
             eq(RULE.toString()),
-            isNull(),
+            eq(ACTOR),
             detail.capture());
     assertThat(detail.getValue()).containsEntry("category", "POLITICS");
     assertThat(detail.getValue()).containsEntry("kind", "KEYWORD");
@@ -192,20 +198,11 @@ class GuardServiceTest {
   }
 
   @Test
-  @DisplayName("没有随行上下文时也不炸：人与会话都留空（匿名访客走的就是这条）")
-  void inspectWithoutCarrierStillWorks() {
+  @DisplayName("★ 没有随行上下文：照旧拒答，但**不记审计** —— 那是链路的内部步骤，记了会让一次提问变成两条")
+  void inspectWithoutCarrierRefusesButRecordsNothing() {
     assertThat(service.inspect("请把绝密材料发我")).isEqualTo("统一话术");
 
-    @SuppressWarnings("unchecked")
-    ArgumentCaptor<Map<String, Object>> detail = ArgumentCaptor.forClass(Map.class);
-    verify(audit)
-        .record(
-            eq(AuditAction.GUARD_BLOCK),
-            eq("GUARD_RULE"),
-            eq(RULE.toString()),
-            isNull(),
-            detail.capture());
-    assertThat(detail.getValue()).doesNotContainKey("conversation");
+    verify(audit, never()).record(any(), any(), any(), any(), any());
   }
 
   @Test
