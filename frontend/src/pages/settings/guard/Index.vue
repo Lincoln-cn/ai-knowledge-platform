@@ -131,11 +131,6 @@
           <el-table :data="categories" size="small" row-key="id" :show-overflow-tooltip="false">
             <el-table-column prop="name" label="名称" min-width="220" />
             <el-table-column prop="code" label="编码" width="150" />
-            <el-table-column label="规则数" width="90">
-              <template #default="{ row }">
-                <span class="micro">{{ ruleCountOf(row.id) }}</span>
-              </template>
-            </el-table-column>
             <el-table-column prop="sortOrder" label="排序" width="80" />
             <el-table-column label="来源" width="90">
               <template #default="{ row }">
@@ -149,10 +144,10 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="210">
+            <el-table-column label="操作" width="240">
               <template #default="{ row }">
-                <el-button link size="small" @click="filterByCategory(row.id)">
-                  看规则
+                <el-button link size="small" @click="openRulesDrawer(row)">
+                  规则（{{ ruleCountOf(row.id) }}）
                 </el-button>
                 <el-button
                   link
@@ -176,77 +171,7 @@
         </div>
       </section>
 
-      <!-- ── ③ 规则 ───────────────────────────────────────────────────── -->
-      <section ref="ruleSection" class="panel">
-        <div class="panel-head">
-          <div>
-            <div class="card-title">
-              规则
-              <span class="tag-state tag-live">即时生效</span>
-            </div>
-            <div class="micro muted">
-              关键词按"包含"匹配；敏感问题集会先去掉标点与空白再比，所以换个标点也照样命中
-            </div>
-          </div>
-          <div class="panel-tools">
-            <el-select
-              v-model="filterCategoryId"
-              size="small"
-              clearable
-              placeholder="全部分类"
-              class="filter-select"
-            >
-              <el-option
-                v-for="c in categories"
-                :key="c.id"
-                :label="c.name"
-                :value="c.id"
-                :disabled="!c.enabled"
-              />
-            </el-select>
-            <el-button size="small" :disabled="!canEdit" @click="openRuleDialog(null)">
-              新建规则
-            </el-button>
-          </div>
-        </div>
-        <div class="panel-body">
-          <el-table :data="filteredRules" size="small" row-key="id">
-            <el-table-column prop="content" label="内容" min-width="240" show-overflow-tooltip />
-            <el-table-column label="类型" width="110">
-              <template #default="{ row }">
-                {{ row.kind === 'QUESTION' ? '敏感问题' : '关键词' }}
-              </template>
-            </el-table-column>
-            <el-table-column prop="categoryName" label="分类" width="110" />
-            <el-table-column prop="note" label="备注" min-width="140" show-overflow-tooltip />
-            <el-table-column label="状态" width="90">
-              <template #default="{ row }">
-                <el-tag :type="row.enabled ? 'success' : 'info'" size="small">
-                  {{ row.enabled ? '启用' : '已停用' }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="130">
-              <template #default="{ row }">
-                <el-button link size="small" :disabled="!canEdit" @click="openRuleDialog(row)">
-                  编辑
-                </el-button>
-                <el-button link size="small" :disabled="!canEdit" @click="removeRule(row)">
-                  删除
-                </el-button>
-              </template>
-            </el-table-column>
-            <template #empty>
-              <div class="micro muted">
-                这个分类下还没有规则。空规则表等于<b>不拦任何输入</b> —— 界面上不放"示例词"，
-                因为"该拦什么"是运营口径，不是产品默认值。
-              </div>
-            </template>
-          </el-table>
-        </div>
-      </section>
-
-      <!-- ── ④ 最近拦截 ───────────────────────────────────────────────── -->
+      <!-- ── ③ 最近拦截 ───────────────────────────────────────────────── -->
       <section class="panel">
         <div class="panel-head">
           <div>
@@ -268,6 +193,51 @@
       </section>
 
     </template>
+
+    <!-- 某个分类下的规则：点分类行的「规则（N）」打开 -->
+    <el-drawer
+      v-model="rulesDrawer"
+      :title="drawerCategory ? `${drawerCategory.name} · 规则` : '规则'"
+      size="760px"
+    >
+      <div class="drawer-head">
+        <div class="micro muted">
+          关键词按"包含"匹配；敏感问题集会先去掉标点与空白再比，所以换个标点也照样命中。 空规则表等于<b>不拦任何输入</b> —— 界面上不放"示例词"，因为"该拦什么"是运营口径，不是产品默认值。
+        </div>
+        <el-button type="primary" :disabled="!canEdit" @click="openRuleDialog(null)">
+          新建规则
+        </el-button>
+      </div>
+      <el-table :data="drawerRules" size="small" row-key="id">
+        <el-table-column prop="content" label="内容" min-width="220" show-overflow-tooltip />
+        <el-table-column label="类型" width="104">
+          <template #default="{ row }">
+            {{ row.kind === 'QUESTION' ? '敏感问题' : '关键词' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="note" label="备注" min-width="110" show-overflow-tooltip />
+        <el-table-column label="状态" width="86">
+          <template #default="{ row }">
+            <el-tag :type="row.enabled ? 'success' : 'info'" size="small">
+              {{ row.enabled ? '启用' : '已停用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="120">
+          <template #default="{ row }">
+            <el-button link size="small" :disabled="!canEdit" @click="openRuleDialog(row)">
+              编辑
+            </el-button>
+            <el-button link size="small" :disabled="!canEdit" @click="removeRule(row)">
+              删除
+            </el-button>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <div class="micro muted">这一类下还没有规则。</div>
+        </template>
+      </el-table>
+    </el-drawer>
 
     <!-- 新建 / 编辑分类 -->
     <el-dialog v-model="categoryDialog" :title="categoryForm.id ? '编辑分类' : '新建分类'" width="440px">
@@ -363,7 +333,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import {
@@ -418,8 +388,8 @@ const loadError = ref<{ reason: string; hint?: string | null } | null>(null)
 const categories = ref<GuardCategory[]>([])
 const rules = ref<GuardRule[]>([])
 const hits = ref<GuardHitCount[]>([])
-const filterCategoryId = ref<string | null>(null)
-const ruleSection = ref<HTMLElement | null>(null)
+const rulesDrawer = ref(false)
+const drawerCategory = ref<GuardCategory | null>(null)
 
 /** 每个分类配了几条规则 —— 「哪一类还没配」比「分类名」更值得一眼看到。 */
 function ruleCountOf(categoryId: string) {
@@ -446,10 +416,10 @@ const dirtyCount = computed(() => {
 const updatedAtText = computed(() =>
   updatedAt.value ? new Date(updatedAt.value).toLocaleString() : ''
 )
-const filteredRules = computed(() =>
-  filterCategoryId.value
-    ? rules.value.filter((r) => r.categoryId === filterCategoryId.value)
-    : rules.value
+const drawerRules = computed(() =>
+  drawerCategory.value
+    ? rules.value.filter((r) => r.categoryId === drawerCategory.value?.id)
+    : []
 )
 
 function reasonOf(e: unknown): string {
@@ -617,10 +587,14 @@ async function disableCategory(row: GuardCategory) {
   }
 }
 
-function filterByCategory(id: string) {
-  filterCategoryId.value = id
-  // 只筛不滚的话，规则区在视口外时点「看规则」看起来像没反应 —— 把人带到结果那里。
-  nextTick(() => ruleSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+/**
+ * 规则挂在分类下面：点分类行打开抽屉，一次只看这一类的规则。
+ * ★ 不再用"页内第二张表 + 分类筛选器"：上下两张表靠一个下拉联动，
+ *   读起来要先弄清"下面那张表现在显示的是哪一类"，这是本页最费解的地方。
+ */
+function openRulesDrawer(row: GuardCategory) {
+  drawerCategory.value = row
+  rulesDrawer.value = true
 }
 
 /* ── 规则 ─────────────────────────────────────────────────────────── */
@@ -645,7 +619,7 @@ const ruleForm = reactive<{
 
 function openRuleDialog(row: GuardRule | null) {
   ruleForm.id = row?.id ?? null
-  ruleForm.categoryId = row?.categoryId ?? (filterCategoryId.value || categories.value[0]?.id || '')
+  ruleForm.categoryId = row?.categoryId ?? (drawerCategory.value?.id || categories.value[0]?.id || '')
   ruleForm.kind = row?.kind ?? 'KEYWORD'
   ruleForm.content = row?.content ?? ''
   ruleForm.enabled = row?.enabled ?? true
@@ -721,6 +695,19 @@ onMounted(load)
  */
 .filter-select {
   width: 150px;
+}
+
+/* 抽屉顶部：口径说明在左、「新建规则」在右 */
+.drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.drawer-head .micro {
+  line-height: 1.7;
 }
 
 /* 开关与它右边的状态短语：短语必须在同一行，否则读者要自己把两行连起来 */
