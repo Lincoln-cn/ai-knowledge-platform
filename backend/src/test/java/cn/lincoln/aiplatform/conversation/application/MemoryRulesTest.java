@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 
 /**
  * 长期记忆的四条硬约束（0.9.0）。
@@ -34,9 +35,10 @@ class MemoryRulesTest {
   private final MemoryRepositoryAdapter embeddings = mock(MemoryRepositoryAdapter.class);
   private final JpaUserProfileRepository profiles = mock(JpaUserProfileRepository.class);
   private final MemorySettingsStore settings = mock(MemorySettingsStore.class);
+  private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
 
   private MemoryService service() {
-    return new MemoryService(memories, embeddings, profiles, settings);
+    return new MemoryService(memories, embeddings, profiles, settings, events);
   }
 
   private static MemorySettingsView view(boolean enabled, int recallLimit) {
@@ -234,6 +236,17 @@ class MemoryRulesTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("1～20")
         .hasMessageContaining("99");
+  }
+
+  /** 改设定要把"已经生效"这条事件发出去 —— 做梦时间的运行期重排靠它（#6）。 */
+  @Test
+  void updateSettingsPublishesTheChange() {
+    MemorySettingsView saved = view(true, 5);
+    when(settings.save(any(), any())).thenReturn(saved);
+
+    service().updateSettings(saved, UUID.randomUUID());
+
+    verify(events).publishEvent(any(MemorySettingsChanged.class));
   }
 
   /** 相似度只作加分：没有向量的那条不能被算成负分而被挤掉。 */

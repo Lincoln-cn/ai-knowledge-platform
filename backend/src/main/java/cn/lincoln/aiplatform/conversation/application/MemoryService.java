@@ -18,6 +18,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,17 +46,20 @@ public class MemoryService {
   private final MemoryRepositoryAdapter embeddings;
   private final JpaUserProfileRepository profiles;
   private final MemorySettingsStore settings;
+  private final ApplicationEventPublisher events;
   private MemoryEmbeddingWriter embeddingWriter;
 
   public MemoryService(
       MemoryRepository memories,
       MemoryRepositoryAdapter embeddings,
       JpaUserProfileRepository profiles,
-      MemorySettingsStore settings) {
+      MemorySettingsStore settings,
+      ApplicationEventPublisher events) {
     this.memories = memories;
     this.embeddings = embeddings;
     this.profiles = profiles;
     this.settings = settings;
+    this.events = events;
   }
 
   /**
@@ -248,13 +252,19 @@ public class MemoryService {
   /**
    * 改设定。
    *
+   * <p>★ 落库之后发 {@link MemorySettingsChanged}：做梦时间是运行期调度的唯一权威 （{@link
+   * MemoryDreamScheduler}），不发这条事件，用户改了 cron 要等下一次重启才生效 ——
+   * 那正是本版要修掉的行为。监听方在事务<strong>提交之后</strong>才重排。
+   *
    * @param view 新设定
    * @param operator 操作人
    * @return 落库后的设定
    */
   @Transactional
   public MemorySettingsView updateSettings(MemorySettingsView view, UUID operator) {
-    return settings.save(view, operator);
+    MemorySettingsView saved = settings.save(view, operator);
+    events.publishEvent(new MemorySettingsChanged(saved));
+    return saved;
   }
 
   /**

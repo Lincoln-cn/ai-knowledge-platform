@@ -14,7 +14,6 @@ import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
@@ -38,10 +37,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>★ 三个"真做的"都有一个共同点：<strong>判据是确定的</strong>（内容相同 / 零命中 / 有条数）， 不需要模型判断对错。这正好是"能自动跑的部分先自动跑"的边界。
  *
- * <h3>★ 调度时刻跟着 {@code app.memory.dream-cron}，不跟库里的设定</h3>
+ * <h3>★ 调度时刻跟着库里的 {@code dream_cron}，由 {@link MemoryDreamScheduler} 驱动</h3>
  *
- * <p>Spring 的 {@code @Scheduled(cron = ...)} 在<strong>注册时</strong>求值，运行期改库不会改调度。 库里的 {@code
- * dream_cron} 现在是"展示 + 将来换成运行期可调调度器"的占位 —— 这一点在页面上如实写明。
+ * <p>这个类<strong>不自己挂 {@code @Scheduled}</strong>：{@code @Scheduled(cron = …)} 在注册 bean 时求值，
+ * 运行期改库不会改调度（见 {@link MemoryDreamScheduler} 的类注释）。注册与重排都在调度器里，本类只回答 "跑一轮做什么" ——
+ * 这样"什么时候跑"和"跑什么"可以各自被验证。
  */
 @Component
 public class MemoryDreamJob {
@@ -68,8 +68,7 @@ public class MemoryDreamJob {
     this.settings = settings;
   }
 
-  /** 每天凌晨按 {@code app.memory.dream-cron} 跑一次。 */
-  @Scheduled(cron = "${app.memory.dream-cron:0 40 3 * * *}")
+  /** 跑一轮（由 {@link MemoryDreamScheduler} 在库里的 {@code dream_cron} 时刻调用）。 */
   public void dream() {
     runOnce(Instant.now());
   }

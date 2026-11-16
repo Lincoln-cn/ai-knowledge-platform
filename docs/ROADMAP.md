@@ -6878,8 +6878,9 @@ csv  / tsv   ──(解析)─┘
 | 冲突消解 | ❌ 本轮跳过 | 需要模型判断"哪条对"，判据不确定 |
 | 提炼 | ❌ 本轮跳过 | 同上；且"提炼后哪条旧记录该退场"没有可靠答案 |
 
-★ 如实写进 `last_dream_note`，不假装做了。★ `@Scheduled` 的 cron 在注册时求值，
-库里的 `dream_cron` 今天只是展示与将来换运行期可调调度器的占位。
+★ 如实写进 `last_dream_note`，不假装做了。★ **调度时刻以库里为准**：`MemoryDreamScheduler` 按
+`cv_memory_setting.dream_cron` 在运行期注册（保存即重排，`MemoryDreamJob` 上的 `@Scheduled` 已摘掉）。
+部署配置 `app.memory.dream-cron` 不再是权威，只剩"迁移 V101 那一行的初值"这一个用途。
 
 ### 11.51.4 读数
 
@@ -6889,6 +6890,7 @@ csv  / tsv   ──(解析)─┘
 | 七个端点 | GET/POST/PUT/DELETE 全部 200 | `.build/mem-api-check.mjs`（真实 JWT） |
 | 越界校验 | `PUT /settings` 传 99 ⇒ 400「召回条数要在 1～20 之间，现在写的是 99」 | 同上 |
 | 会话层隔离 | 断言**从未**以 `null` scope 查会话层 | `MemoryRulesTest.recallScopesConversationLayerToTheCurrentConversation` |
+| 运行期重排 | 改 cron ⇒ 注册的 cron 立刻变、按新表达式算下一次；总开关关 ⇒ 不注册 | `MemoryDreamSchedulerTest`（含"库里的 cron 真的驱动了一次执行"） |
 | 降级 | 记忆库抛错 ⇒ 回答照出，`skipReason` 带异常类型 | 反证：把 catch 改成 `throw e` ⇒ 该条精确红 |
 | 架构闸门 | 顶层 38/38 · 口径 34/34 | 逐条命令见 `§11.50.4` 的跑法 |
 

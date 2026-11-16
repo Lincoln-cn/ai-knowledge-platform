@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.conversation.application;
 
 import java.time.Instant;
 import java.util.UUID;
+import org.springframework.scheduling.support.CronExpression;
 
 /**
  * 记忆设定（{@code #296}，表 {@code cv_memory_setting}，单行 · 迁移 {@code V101}）。
@@ -63,6 +64,18 @@ public record MemorySettingsView(
     }
     if (dreamCron == null || dreamCron.isBlank()) {
       throw new IllegalArgumentException("做梦时间不能为空（留空请改成关闭做梦，而不是清空 cron）");
+    }
+    /*
+     * ★ cron 必须在这里解析，而不是留给调度器：这一格现在是运行期调度的唯一权威
+     *   （见 MemoryDreamScheduler），一个看不懂的表达式存进库里等于把"做梦"静默关掉 ——
+     *   调度器只会在日志里 WARN，没人会去看。前端 lib/cron.ts 有同规则的检查，但那只是
+     *   "早一点告诉用户"，不能替后端做决定。
+     */
+    try {
+      CronExpression.parse(dreamCron.trim());
+    } catch (IllegalArgumentException error) {
+      throw new IllegalArgumentException(
+          "做梦时间看不懂：" + error.getMessage() + "（要 6 段：秒 分 时 日 月 周，例如 0 40 3 * * *）", error);
     }
     return this;
   }

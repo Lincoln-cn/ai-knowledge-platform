@@ -3,7 +3,7 @@
  *
  * ★ 为什么是这套规则：后端两处 cron 最终都交给同一个解析器 ——
  *   `org.springframework.scheduling.support.CronExpression`：
- *   - 记忆做梦（`app.memory.dream-cron`，默认 `0 40 3 * * *`）用的是**六段式**（秒 分 时 日 月 周）；
+ *   - 记忆做梦（`cv_memory_setting.dream_cron`，默认 `0 40 3 * * *`，运行期可改）用的是**六段式**（秒 分 时 日 月 周）；
  *   - 应用定时触发（`backend/.../assistant/application/TriggerCron.java`）**对外收 5 段**，
  *     内部拼上 `"0 "` 前缀再交给同一个类。
  *   所以这里实现的是 Spring 六段式；传 `fields: 5` 时按「省略秒位」处理，与 TriggerCron 一致。

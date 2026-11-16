@@ -129,7 +129,8 @@ async function load() {
 
 async function save() {
   if (!draft.value) return;
-  // ★ 后端 checked() 只查非空、不解析 cron，所以这里必须拦住 —— 否则一个看不懂的表达式会静默存进库
+  // ★ 后端 checked() 也解析 cron；这里先拦一次只是为了让错误在输入框旁边就出现。
+  //   两边都用 Spring 六段式，文案能对上（见 lib/cron.ts 顶部注释）。
   const bad = validateCron(draft.value.dreamCron ?? '', 6);
   if (bad) {
     advancedCron.value = true;
@@ -148,7 +149,7 @@ async function save() {
     });
     settings.value = next;
     draft.value = { ...next };
-    ElMessage.success('已保存，下一次对话就按新设定走');
+    ElMessage.success('已保存：做梦时间已按新时刻重排，其余设定下一次对话起生效');
   } catch (error) {
     ElMessage.error(errorText(error) || '保存失败，请稍后重试');
   } finally {
@@ -281,8 +282,8 @@ onMounted(load);
             />
             <div class="field-note micro muted">
               每天几点跑夜间维护（去重合并 · 重算画像 · 软删低价值记忆）。默认 <b>03:40</b>。
-              <span class="warn-text">
-                这一格现在只记设定：实际执行时刻仍取部署配置 app.memory.dream-cron，改这里不会立刻改调度。
+              <span>
+                保存后立刻按新时刻重排：这一格就是调度的唯一权威，重启后仍以库里这一行为准。
               </span>
               <template v-if="advancedCron">
                 现在填的是六段 cron（秒 分 时 日 月 周）。
