@@ -36,6 +36,12 @@ export interface GuardCategory {
   sortOrder: number
   enabled: boolean
   builtin: boolean
+  /**
+   * 这一类的专属拒答话术，null = 用统一话术。
+   * ★ 必须带出来：编辑分类时它要能回填 —— 后端保存是**整行覆盖**，前端拿不到原值，
+   * 改个名字就会把专属话术静默清掉。
+   */
+  refusalText: string | null
 }
 
 /** 一条围栏规则。★ `content` 是原始写法（界面要显示，否则管理员不知道自己加过什么） */

@@ -262,12 +262,9 @@ onMounted(load)
 </script>
 
 <style scoped>
-.page-foot {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-md) 0;
-}
+/* ★ 表单栅格（`.form-grid` / `.field-label` / `.field-note`）、`.card-title`、
+   `.meta-line`、`.page-foot` 都在 `src/styles/index.css` —— 本页不再自带副本。
+   曾经把这些类写进 chat 页的 scoped 里，结果本页拿到的是空类：字段挤成一列。 */
 .warn-text {
   color: var(--color-warn);
 }

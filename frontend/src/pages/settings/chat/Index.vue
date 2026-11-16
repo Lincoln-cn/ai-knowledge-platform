@@ -518,11 +518,14 @@ onMounted(() => {
  *   （用户报：「为什么整体偏左？」）。随后又试过「限宽 + 居中」——
  *   那是把 Web 文档的阅读宽度套到后台表单页上，与本页的 Workbench 形态不符，已撤。
  *
- * ★ 表单字段不会因此被拉成长条：`.form-grid` 用 `minmax(260px, 1fr)`，宽屏自动分多列。
+ * ★ 表单字段不会因此被拉成长条：`.form-grid` 用 `minmax(300px, 1fr)`，宽屏自动分多列。
+ *
+ * ★ `.settings-page` / `.meta-line` / `.card-title` / `.form-grid` / `.field-label` /
+ *   `.field-note` / `.save-bar` 这一组已**收归** `src/styles/index.css`：
+ *   本页曾经是它们的唯一定义处，而 `/settings/retrieval` 与 `/settings/guard`
+ *   也在各自模板里引用 —— scoped 不外泄，那两页一直拿到的是空类（字段挤成一列）。
+ *   页面里不要再复制这些类。
  */
-.settings-page {
-  width: 100%;
-}
 
 /* 状态方点：与全局 .notice 的口径一致（语气靠文字，不靠大色块） */
 .dot {
@@ -544,32 +547,6 @@ onMounted(() => {
   background: var(--color-warn);
 }
 
-.meta-line {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  align-items: baseline;
-}
-
-.meta-line b {
-  font-weight: 600;
-  color: var(--color-ink);
-}
-
-.meta-line .muted {
-  color: var(--color-muted);
-}
-
-/* ── 卡片标题 ─────────────────────────────────────────────────────── */
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2xs);
-  font-size: var(--text-md);
-  font-weight: 600;
-  color: var(--color-ink);
-}
-
 .badge {
   padding: 0 var(--space-2xs);
   border-radius: var(--radius-sm);
@@ -586,37 +563,6 @@ onMounted(() => {
 .badge-off {
   color: var(--color-muted);
   background: var(--color-sunken);
-}
-
-/* ── 表单栅格 ─────────────────────────────────────────────────────── */
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: var(--space-md);
-}
-
-.field-wide {
-  grid-column: 1 / -1;
-}
-
-.field-label {
-  display: block;
-  margin-bottom: var(--space-2xs);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  color: var(--color-ink);
-}
-
-.field-control {
-  width: 100%;
-}
-
-.field-control.narrow {
-  width: 160px;
-}
-
-.field-note {
-  margin-top: var(--space-2xs);
 }
 
 .range-row {
@@ -642,34 +588,5 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
-}
-
-/* 未启用召回时把下面的控件压暗（保持可读，避免「消失了」的错觉） */
-.inert {
-  opacity: 0.55;
-}
-
-/* ── 保存栏 ───────────────────────────────────────────────────────── */
-.save-bar {
-  position: sticky;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-md);
-  padding: var(--space-sm) var(--space-md);
-  background: var(--color-surface-2);
-  z-index: var(--z-sticky);
-}
-
-.save-state {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2xs);
-}
-
-.save-actions {
-  display: flex;
-  gap: var(--space-2xs);
 }
 </style>

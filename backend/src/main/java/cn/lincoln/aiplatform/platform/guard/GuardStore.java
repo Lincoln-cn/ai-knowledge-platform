@@ -413,9 +413,11 @@ public class GuardStore {
                     rs.getString("name"),
                     rs.getInt("sort_order"),
                     rs.getBoolean("enabled"),
-                    rs.getBoolean("builtin")));
+                    rs.getBoolean("builtin"),
+                    rs.getString("refusal_text")));
 
-    // ★ 分类话术不在 GuardCategory 里装：它是"匹配时才用"的字段，界面用 GuardCategory 那份就够。
+    // ★ 分类话术同时装进 GuardCategory：界面编辑分类时要回填（`saveCategory` 整列覆盖，
+    //   前端拿不到原值就会把专属话术静默清掉）。下面这份 map 是匹配路径用的，两者同源不同用途。
     //   这里单独查一份映射，避免为了一个可空字段把分类记录撑胖。
     java.util.Map<UUID, String> categoryRefusal = new java.util.HashMap<>();
     jdbc.query(

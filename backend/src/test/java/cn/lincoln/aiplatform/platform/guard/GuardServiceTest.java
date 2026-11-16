@@ -49,7 +49,7 @@ class GuardServiceTest {
   }
 
   private static GuardCategory politics() {
-    return new GuardCategory(POLITICS, "POLITICS", "政治", 10, true, true);
+    return new GuardCategory(POLITICS, "POLITICS", "政治", 10, true, true, null);
   }
 
   private static GuardRule rule() {

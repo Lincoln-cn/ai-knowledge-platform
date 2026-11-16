@@ -31,10 +31,10 @@ const settings: GuardSettings = {
 }
 
 const categories: GuardCategory[] = [
-  { id: '11111111-1111-4111-8111-111111111111', code: 'POLITICS', name: '政治', sortOrder: 10, enabled: true, builtin: true },
-  { id: '22222222-2222-4222-8222-222222222222', code: 'PORN', name: '色情', sortOrder: 20, enabled: true, builtin: true },
-  { id: '33333333-3333-4333-8333-333333333333', code: 'VIOLENCE', name: '暴力', sortOrder: 30, enabled: true, builtin: true },
-  { id: '00000000-0000-4000-8000-000000000000', code: 'UNCLASSIFIED', name: '未分类', sortOrder: 999, enabled: true, builtin: true }
+  { id: '11111111-1111-4111-8111-111111111111', code: 'POLITICS', name: '政治', sortOrder: 10, enabled: true, builtin: true, refusalText: null },
+  { id: '22222222-2222-4222-8222-222222222222', code: 'PORN', name: '色情', sortOrder: 20, enabled: true, builtin: true, refusalText: null },
+  { id: '33333333-3333-4333-8333-333333333333', code: 'VIOLENCE', name: '暴力', sortOrder: 30, enabled: true, builtin: true, refusalText: null },
+  { id: '00000000-0000-4000-8000-000000000000', code: 'UNCLASSIFIED', name: '未分类', sortOrder: 999, enabled: true, builtin: true, refusalText: null }
 ]
 
 const rules: GuardRule[] = []
@@ -122,7 +122,8 @@ export const guardRoutes: MockRoute[] = [
       name: (input.name ?? '').trim(),
       sortOrder: input.sortOrder ?? 100,
       enabled: input.enabled ?? true,
-      builtin: false
+      builtin: false,
+      refusalText: (input.refusalText ?? '').trim() || null
     }
     if (!created.name) throw new ApiError(ErrorCode.BAD_REQUEST, '名称不能为空')
     categories.push(created)
@@ -136,6 +137,8 @@ export const guardRoutes: MockRoute[] = [
     if (input.name !== undefined) current.name = input.name.trim()
     if (input.sortOrder !== undefined) current.sortOrder = input.sortOrder
     if (input.enabled !== undefined) current.enabled = input.enabled
+    // ★ 只有真的带了这个字段才改：否则「只改名字」会把专属话术清成 null
+    if (input.refusalText !== undefined) current.refusalText = (input.refusalText ?? '').trim() || null
     return current
   }],
 

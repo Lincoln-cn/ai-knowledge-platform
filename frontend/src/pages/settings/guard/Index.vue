@@ -29,14 +29,36 @@
       <section class="panel">
         <div class="panel-head">
           <div>
-            <div class="card-title">输入检查</div>
+            <div class="card-title">
+              输入检查
+              <span class="tag-state tag-save">需保存</span>
+            </div>
             <div class="micro muted">命中即拒答，不再送给模型 —— 拒答话术由这里决定</div>
+          </div>
+          <!-- 保存动作放在它管的那一块头上：四格都在这一块里，改完就地能存，
+               不必先滚到页底再回头看改了什么。 -->
+          <div class="panel-tools">
+            <span v-if="!canEdit" class="micro muted">只读</span>
+            <span v-else-if="dirty" class="unsaved"><b>{{ dirtyCount }}</b> 项未保存</span>
+            <span v-else class="micro muted">没有未保存的改动</span>
+            <el-button :disabled="!canEdit || !dirty || saving" @click="reset">撤销</el-button>
+            <el-button
+              type="primary"
+              :loading="saving"
+              :disabled="!canEdit || !dirty"
+              @click="save"
+            >
+              保存
+            </el-button>
           </div>
         </div>
         <div class="panel-body form-grid">
           <div class="field">
             <label class="field-label">启用输入检查</label>
-            <el-switch v-model="form.inputEnabled" :disabled="!canEdit" />
+            <div class="switch-row">
+              <el-switch v-model="form.inputEnabled" :disabled="!canEdit" />
+              <span class="micro muted">{{ form.inputEnabled ? '命中即拒答' : '不检查，直接问模型' }}</span>
+            </div>
             <div class="field-note micro muted">
               关掉之后全平台所有链路的问答都在<b>无检查状态</b>下运行（通用问答、挂应用的问答、公开问答）。
               这一格会被单独记一条审计，因为它是"最该被追查"的一次改动。
@@ -44,6 +66,20 @@
           </div>
 
           <div class="field">
+            <label class="field-label">接入对话链路</label>
+            <div class="switch-row">
+              <el-switch v-model="form.advisorsEnabled" :disabled="!canEdit" />
+              <span class="micro" :class="form.advisorsEnabled ? 'muted' : 'warn-text'">
+                {{ form.advisorsEnabled ? '围栏已挂上' : '未挂上 —— 上面开着也不检查' }}
+              </span>
+            </div>
+            <div class="field-note micro muted">
+              这是<b>总闸</b>：它决定对话链路里要不要挂上这个围栏。关掉之后上面那一格开得再对，
+              也不会有任何检查 —— 两格是「有没有装」与「装了什么」的关系，不是重复。
+            </div>
+          </div>
+
+          <div class="field field-wide">
             <label class="field-label">统一拒答话术</label>
             <el-input
               v-model="form.defaultRefusalText"
@@ -58,10 +94,15 @@
 
           <div class="field">
             <label class="field-label">按分类给不同话术</label>
-            <el-switch
-              v-model="form.categoryRefusalEnabled"
-              :disabled="!canEdit || !form.advisorsEnabled"
-            />
+            <div class="switch-row">
+              <el-switch
+                v-model="form.categoryRefusalEnabled"
+                :disabled="!canEdit || !form.advisorsEnabled"
+              />
+              <span class="micro muted">
+                {{ form.categoryRefusalEnabled ? '按分类分别回话' : '统一回同一句' }}
+              </span>
+            </div>
             <div class="field-note micro muted">
               默认关。打开后不同分类回不同的话，"这句属于哪一类"就变成可探测的信息；
               对外服务的部署建议保持关闭。
@@ -74,7 +115,10 @@
       <section class="panel">
         <div class="panel-head">
           <div>
-            <div class="card-title">分类</div>
+            <div class="card-title">
+              分类
+              <span class="tag-state tag-live">即时生效</span>
+            </div>
             <div class="micro muted">内置四类（政治 / 色情 / 暴力 / 未分类）可停用，也可以加自己的分类</div>
           </div>
           <div class="panel-tools">
@@ -85,8 +129,13 @@
         </div>
         <div class="panel-body">
           <el-table :data="categories" size="small" row-key="id" :show-overflow-tooltip="false">
-            <el-table-column prop="name" label="名称" width="150" />
+            <el-table-column prop="name" label="名称" min-width="220" />
             <el-table-column prop="code" label="编码" width="150" />
+            <el-table-column label="规则数" width="90">
+              <template #default="{ row }">
+                <span class="micro">{{ ruleCountOf(row.id) }}</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="sortOrder" label="排序" width="80" />
             <el-table-column label="来源" width="90">
               <template #default="{ row }">
@@ -100,10 +149,18 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="170">
+            <el-table-column label="操作" width="210">
               <template #default="{ row }">
                 <el-button link size="small" @click="filterByCategory(row.id)">
                   看规则
+                </el-button>
+                <el-button
+                  link
+                  size="small"
+                  :disabled="!canEdit"
+                  @click="openCategoryDialog(row)"
+                >
+                  编辑
                 </el-button>
                 <el-button
                   link
@@ -120,10 +177,13 @@
       </section>
 
       <!-- ── ③ 规则 ───────────────────────────────────────────────────── -->
-      <section class="panel">
+      <section ref="ruleSection" class="panel">
         <div class="panel-head">
           <div>
-            <div class="card-title">规则</div>
+            <div class="card-title">
+              规则
+              <span class="tag-state tag-live">即时生效</span>
+            </div>
             <div class="micro muted">
               关键词按"包含"匹配；敏感问题集会先去掉标点与空白再比，所以换个标点也照样命中
             </div>
@@ -207,16 +267,6 @@
         </div>
       </section>
 
-      <div class="page-foot">
-        <el-button type="primary" :loading="saving" :disabled="!canEdit || !dirty" @click="save">
-          保存输入检查
-        </el-button>
-        <el-button :disabled="!dirty || saving" @click="reset">撤销</el-button>
-        <span v-if="!canEdit" class="micro muted">
-          只读：需要「安全围栏」权限（platform:guard:manage）
-        </span>
-        <span v-else-if="dirty" class="micro muted">有未保存的改动</span>
-      </div>
     </template>
 
     <!-- 新建 / 编辑分类 -->
@@ -235,6 +285,14 @@
         </el-form-item>
         <el-form-item label="排序">
           <el-input-number v-model="categoryForm.sortOrder" :min="0" :max="9999" controls-position="right" />
+        </el-form-item>
+        <el-form-item label="状态">
+          <div class="switch-row">
+            <el-switch v-model="categoryForm.enabled" />
+            <span class="micro muted">
+              {{ categoryForm.enabled ? '参与检查' : '停用：这一类下的规则还在，但不参与匹配' }}
+            </span>
+          </div>
         </el-form-item>
         <el-form-item label="专属话术">
           <el-input
@@ -287,6 +345,14 @@
         <el-form-item label="备注">
           <el-input v-model="ruleForm.note" maxlength="200" placeholder="为什么加这条（可选）" />
         </el-form-item>
+        <el-form-item label="状态">
+          <div class="switch-row">
+            <el-switch v-model="ruleForm.enabled" />
+            <span class="micro muted">
+              {{ ruleForm.enabled ? '参与检查' : '停用：留在表里，但不再拦' }}
+            </span>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="ruleDialog = false">取消</el-button>
@@ -297,7 +363,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import {
@@ -309,6 +375,7 @@ import {
   listGuardCategories,
   listGuardHits,
   listGuardRules,
+  updateGuardCategory,
   updateGuardSettings,
   updateGuardRule,
   type GuardCategory,
@@ -352,8 +419,30 @@ const categories = ref<GuardCategory[]>([])
 const rules = ref<GuardRule[]>([])
 const hits = ref<GuardHitCount[]>([])
 const filterCategoryId = ref<string | null>(null)
+const ruleSection = ref<HTMLElement | null>(null)
+
+/** 每个分类配了几条规则 —— 「哪一类还没配」比「分类名」更值得一眼看到。 */
+function ruleCountOf(categoryId: string) {
+  return rules.value.filter((r) => r.categoryId === categoryId).length
+}
 
 const dirty = computed(() => JSON.stringify(form) !== baseline.value)
+
+/**
+ * 未保存的**项数**（不是"有没有改"）。
+ * ★ 保存栏写「几项未保存」而不是「有改动」：四格里只动了一个开关时，
+ *   「有改动」没法让人确认自己是不是还漏了一格。
+ */
+const dirtyCount = computed(() => {
+  const base = JSON.parse(baseline.value) as GuardSettingsUpdate
+  const now = toPayload()
+  let count = 0
+  if (now.inputEnabled !== base.inputEnabled) count += 1
+  if (now.advisorsEnabled !== base.advisorsEnabled) count += 1
+  if (now.defaultRefusalText !== base.defaultRefusalText) count += 1
+  if (now.categoryRefusalEnabled !== base.categoryRefusalEnabled) count += 1
+  return count
+})
 const updatedAtText = computed(() =>
   updatedAt.value ? new Date(updatedAt.value).toLocaleString() : ''
 )
@@ -474,7 +563,8 @@ function openCategoryDialog(row: GuardCategory | null) {
   categoryForm.name = row?.name ?? ''
   categoryForm.sortOrder = row?.sortOrder ?? 100
   categoryForm.enabled = row?.enabled ?? true
-  categoryForm.refusalText = ''
+  // ★ 回填：保存是整行覆盖，不回填就等于「改个名字顺便把专属话术清掉」
+  categoryForm.refusalText = row?.refusalText ?? ''
   categoryDialog.value = true
 }
 
@@ -483,20 +573,26 @@ async function submitCategory() {
     ElMessage.warning('编码与名称都要填')
     return
   }
+  const body = {
+    code: categoryForm.code.trim(),
+    name: categoryForm.name.trim(),
+    sortOrder: categoryForm.sortOrder,
+    enabled: categoryForm.enabled,
+    refusalText: categoryForm.refusalText.trim() || null
+  }
+  const editing = Boolean(categoryForm.id)
   savingCategory.value = true
   try {
-    await createGuardCategory({
-      code: categoryForm.code.trim(),
-      name: categoryForm.name.trim(),
-      sortOrder: categoryForm.sortOrder,
-      enabled: categoryForm.enabled,
-      refusalText: categoryForm.refusalText.trim() || null
-    })
+    if (categoryForm.id) {
+      await updateGuardCategory(categoryForm.id, body)
+    } else {
+      await createGuardCategory(body)
+    }
     categoryDialog.value = false
-    ElMessage.success('已新建分类')
+    ElMessage.success(editing ? '已更新分类' : '已新建分类')
     await loadCategories()
   } catch (e) {
-    ElMessage.error(reasonOf(e) || '新建分类失败')
+    ElMessage.error(reasonOf(e) || (editing ? '更新分类失败' : '新建分类失败'))
   } finally {
     savingCategory.value = false
   }
@@ -523,6 +619,8 @@ async function disableCategory(row: GuardCategory) {
 
 function filterByCategory(id: string) {
   filterCategoryId.value = id
+  // 只筛不滚的话，规则区在视口外时点「看规则」看起来像没反应 —— 把人带到结果那里。
+  nextTick(() => ruleSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
 }
 
 /* ── 规则 ─────────────────────────────────────────────────────────── */
@@ -611,34 +709,75 @@ onMounted(load)
 </script>
 
 <style scoped>
-.page-foot {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-md) 0;
-}
-.panel-tools {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
+/*
+ * ★ 本页**不**定义表单栅格与保存栏。
+ *
+ * `.form-grid` / `.field-label` / `.field-note` / `.card-title` / `.meta-line` /
+ * `.save-bar` / `.save-state` / `.save-actions` 全部在 `src/styles/index.css`。
+ * 它们曾经只写在 `pages/settings/chat/Index.vue` 的 scoped 里 —— scoped 不外泄，
+ * 于是本页拿到的是**空类**：三个字段垂直堆成一列、标签和控件贴在一起、
+ * 说明文字紧贴下一个字段的标签（用户原话：「太拥挤，都看不清」）。
+ * ⇒ 页面里不要再复制这些类。
+ */
 .filter-select {
   width: 150px;
 }
+
+/* 开关与它右边的状态短语：短语必须在同一行，否则读者要自己把两行连起来 */
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.warn-text {
+  color: var(--color-warn);
+}
+
+/* 区块语义徽标：这一块改完要不要点保存 */
+.tag-state {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-2xs);
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.tag-save {
+  color: var(--color-warn);
+  background: color-mix(in srgb, var(--color-warn) 12%, transparent);
+}
+
+.tag-live {
+  color: var(--color-muted);
+  background: var(--color-sunken);
+}
+
+.unsaved {
+  color: var(--color-warn);
+}
+
+.unsaved b {
+  font-weight: 600;
+}
+
 .hit-row {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-md);
 }
+
 .hit-cell {
   min-width: 96px;
   padding: var(--space-sm) var(--space-md);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
 }
+
 .hit-label {
   margin-bottom: 2px;
 }
+
 .hit-value {
   font-size: 20px;
   font-variant-numeric: tabular-nums;

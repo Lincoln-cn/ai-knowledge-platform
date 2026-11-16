@@ -472,3 +472,120 @@ kbd,
     transform: none;
   }
 }
+
+/* ── 设置页的公共骨架 ────────────────────────────────────────────────
+   这一组类原来**只**定义在 `pages/settings/chat/Index.vue` 的 <style scoped> 里，
+   而 `/settings/retrieval` 与 `/settings/guard` 在各自模板里也引用它们。
+   scoped 的作用域不跨组件 ⇒ 后两页拿到的是「没有样式的空类」：
+   字段垂直堆成一列、标签与控件贴在一起、说明紧贴下一个字段的标签。
+
+   ★ 同一个形状已经栽过一次（见上面 `.ellipsis-1` 的注释）：类名借自别人的作用域，
+     在别人的样式没加载时就是失效的。那次是懒加载，这次是 scoped —— 但病根一样：
+     **借来的类名不是契约**。⇒ 收归宿主，只在这里定义一份，页面里不要再复制。 */
+.settings-page {
+  width: 100%;
+}
+
+.meta-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: baseline;
+}
+
+.meta-line b {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.meta-line .muted {
+  color: var(--color-muted);
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.panel-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* 表单栅格：宽屏自动分列。`minmax(300px, …)` 是因为一格里要放
+   「标签 + 控件 + 一到两行说明」，260px 时说明会折成四五行，读起来像挤在一起。
+   行间距（gap 的第一项）比列间距大 —— 说明文字属于上一格，压得太近会被读成下一格的标题。 */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--space-lg) var(--space-md);
+}
+
+.field-wide {
+  grid-column: 1 / -1;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: var(--space-xs);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.field-control {
+  width: 100%;
+}
+
+.field-control.narrow {
+  width: 160px;
+}
+
+/* 说明行高放到 1.7：中文在两行以上时，1.5 会显得糊在一起 */
+.field-note {
+  margin-top: var(--space-xs);
+  line-height: 1.7;
+}
+
+/* 保存栏：**吸底**。参数区改完要找得到保存入口 ——
+   放在内容末尾时，它会被下面的表格推到两三屏之外。 */
+.save-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface-2);
+  z-index: var(--z-sticky);
+}
+
+.save-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.save-actions {
+  display: flex;
+  gap: var(--space-2xs);
+}
+
+/* 页脚操作行：给「没有保存语义」的页面用（纯跳转/触发按钮） */
+.page-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) 0;
+}
+
+/* 某一项暂时不生效时压暗它的控件（保持可读，避免「消失了」的错觉） */
+.inert {
+  opacity: 0.55;
+}
