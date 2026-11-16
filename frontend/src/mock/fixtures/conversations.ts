@@ -1,4 +1,4 @@
-﻿import type { ChatMessage, Conversation, PublicContext } from '@/api/conversations'
+import type { ChatMessage, Conversation, PublicContext } from '@/api/conversations'
 import type { SourceRef } from '@/api/stream-types'
 import type { ClassificationLevel } from '@/api/types'
 

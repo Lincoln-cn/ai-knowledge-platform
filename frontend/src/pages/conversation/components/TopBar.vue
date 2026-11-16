@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <header class="topbar" :class="{ 'with-panel': alignPanel }">
     <div class="lead">
       <button type="button" class="back" @click="emit('back')">

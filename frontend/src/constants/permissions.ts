@@ -54,7 +54,16 @@ export const PERM = {
    * ★ 与 `systemManage` 分开：改一次影响**所有人**的检索延迟与 B1/B3 口径（关重试省 1.4s、掉 1.1 点），
    * 与账号管理不是一类。
    */
-  retrievalManage: 'platform:retrieval:manage'
+  retrievalManage: 'platform:retrieval:manage',
+  /**
+   * 安全围栏（分类型的敏感词与敏感问题集）。
+   *
+   * ★ 与 `chatSettings` 分开：通用问答那条链路**可以整条关掉**，围栏必须常在 ——
+   * 两者的爆炸半径不同（前者只影响一条链路，后者对所有链路的下一次请求生效），
+   * 合用一个权限点会让「给了通用问答配置权」顺带得到「放宽安全策略」。
+   * ★ 读也守它：规则表本身就是一份"可绕过的清单"，能读就等于知道该怎么说才不被拦。
+   */
+  guardManage: 'platform:guard:manage'
 } as const
 
 export type PermissionCode = (typeof PERM)[keyof typeof PERM]

@@ -69,7 +69,7 @@ public class PermissionCatalog {
    */
   public static final List<Item> ITEMS =
       List.of(
-          new Item(Permissions.CONVERSATION_SETTINGS, "配置对话设置", "对话"),
+          new Item(Permissions.CONVERSATION_SETTINGS, "配置通用问答", "对话"),
           new Item(Permissions.KNOWLEDGE_VIEW, "查看知识库", "知识"),
           new Item(Permissions.KNOWLEDGE_CREATE, "创建知识库", "知识"),
           new Item(Permissions.KNOWLEDGE_MANAGE, "编辑/删除知识库", "知识"),
@@ -93,7 +93,9 @@ public class PermissionCatalog {
           // ★ 合规族（#83）—— 与 feedback 族分开登记：投诉举报是留痕举证工单，不是内容质量反馈。
           new Item(Permissions.COMPLAINT_HANDLE, "办理投诉举报", "合规"),
           new Item(Permissions.PLATFORM_COMPLIANCE_MANAGE, "合规登记", "合规"),
-          new Item(Permissions.RETRIEVAL_ENGINE_MANAGE, "检索引擎调参", "检索"));
+          new Item(Permissions.RETRIEVAL_ENGINE_MANAGE, "检索引擎调参", "检索"),
+          // ★ 安全围栏（ROADMAP §11.53）—— 与「通用问答」分开：前者对所有链路生效，后者只管一条链路。
+          new Item(Permissions.PLATFORM_GUARD_MANAGE, "安全围栏", "合规"));
 
   private final JdbcTemplate jdbc;
   private final RoleRepository roles;

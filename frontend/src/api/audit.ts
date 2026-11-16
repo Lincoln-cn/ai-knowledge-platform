@@ -24,6 +24,12 @@ export type AuditActionCode =
   //   会话删掉会连带删它的消息、分段、向量；附件删掉会动磁盘文件。三条都必须能筛出来。
   | 'conversation.purge'
   | 'attachment.purge'
+  // ★ 安全围栏三条（`ROADMAP §11.53`）：规则变更、开关变更、命中拦截。
+  //   开关单独一条的理由与后端一致 —— 关掉围栏让全平台问答在无检查状态运行，
+  //   它必须能从"一堆规则变更"里被单独筛出来。
+  | 'guard.rule.change'
+  | 'guard.settings.change'
+  | 'guard.block'
 
 /**
  * 一条审计记录。

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page">
     <PageHeader
       title="模型服务商"

@@ -2,8 +2,11 @@ package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
+import cn.lincoln.aiplatform.platform.guard.GuardService;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.URI;
@@ -71,7 +74,7 @@ class SafetyGateK1CanaryTest {
   void k1InjectionInputMustBeHardBlocked() throws Exception {
     int requestsBefore = stubRequestCount();
 
-    SafeGuardChatAdvisor guard = new SafeGuardChatAdvisor(INJ001_PATTERN);
+    SafeGuardChatAdvisor guard = guardWith(INJ001_PATTERN);
     String response = callThroughGuard(guard);
 
     assertThat(response)
@@ -88,7 +91,7 @@ class SafetyGateK1CanaryTest {
    */
   @Test
   void k1RemovingInjectionRuleLeaksSystemPrompt() throws Exception {
-    SafeGuardChatAdvisor guardEmpty = new SafeGuardChatAdvisor(""); // 空词表 = 删掉 INJ-001
+    SafeGuardChatAdvisor guardEmpty = guardWith(""); // 空词表 = 删掉 INJ-001
     String response = callThroughGuard(guardEmpty);
 
     assertThat(response)
@@ -143,6 +146,26 @@ class SafetyGateK1CanaryTest {
   }
 
   // ────────────────────────── 被测链路 ──────────────────────────
+
+  /**
+   * 造一个"词表里只有给定模式"的围栏。
+   *
+   * <p>★ 词表已改由 {@code pf_guard_rule} 提供（{@code ROADMAP §11.53}），所以这里 mock 的是判定结果本身 ——
+   * 本类要钉的是"规则在的时候拦得住、规则删掉的时候漏得出来"，那是金丝雀的两侧；判定怎么来的 在 {@code GuardTextTest} / {@code
+   * GuardSnapshotTest} / {@code GuardServiceTest} 里测。
+   */
+  private static SafeGuardChatAdvisor guardWith(String pattern) {
+    GuardService service = mock(GuardService.class);
+    when(service.inspect(org.mockito.ArgumentMatchers.anyString()))
+        .thenAnswer(
+            call -> {
+              String text = call.getArgument(0);
+              boolean hit =
+                  pattern != null && !pattern.isEmpty() && text != null && text.contains(pattern);
+              return hit ? SafeGuardChatAdvisor.REFUSAL : null;
+            });
+    return new SafeGuardChatAdvisor(service);
+  }
 
   /**
    * 经 SafeGuardChatAdvisor + ChatClient + NativeSpringAiChatModel 的完整链路调桩。

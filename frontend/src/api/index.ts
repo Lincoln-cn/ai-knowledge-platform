@@ -22,6 +22,7 @@ export * as workflowApi from './workflow'
 export * as auditApi from './audit'
 export * as dictionariesApi from './dictionaries'
 export * as orgsApi from './orgs'
+export * as guardApi from './guard'
 
 export type { ApiResult, PageQuery, PageResult } from './types'
 export { ApiError, ErrorCode } from './types'

@@ -93,11 +93,10 @@ export const navGroups: NavGroup[] = [
       { path: '/settings/chat', label: '通用问答', icon: 'ChatLineRound' },
       // 检索引擎是"怎么算"，通用问答是"要不要查"：开关归链路、旋钮归引擎（§11.52.3）
       { path: '/settings/retrieval', label: '检索引擎', icon: 'Search' },
-      { path: '/settings/memory', label: '长期记忆', icon: 'Notebook' }
-      // 安全围栏（/settings/guard）随 §11.53 落地时插在本组末尾，用 Lock 图标。
-      // ★ 这里特意不写成一条像样的菜单字面量 —— `verify_permissions.py` 的断言 ⑧
-      //   会正则扫 `navGroups` 里的 `{ path: ..., label: ... }`，注释里的样例会被它
-      //   当成真菜单项（`#265` 的同一课：注释不算数，但**扫描器分不出注释和代码**）。
+      { path: '/settings/memory', label: '长期记忆', icon: 'Notebook' },
+      // 安全围栏与检索引擎同级：两者的改动都对全平台所有链路的下一次请求生效，
+      // 而「通用问答」那条链路可以整条关掉 —— 爆炸半径是组内排序的依据（§11.53.2）。
+      { path: '/settings/guard', label: '安全围栏', icon: 'Lock' }
     ]
   },
   {

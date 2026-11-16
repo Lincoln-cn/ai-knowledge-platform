@@ -1,4 +1,4 @@
-﻿package cn.lincoln.aiplatform.modelcatalog.application;
+package cn.lincoln.aiplatform.modelcatalog.application;
 
 import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;

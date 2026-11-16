@@ -75,7 +75,31 @@ public enum AuditAction {
    * <p>明细里带 {@code version} 与 {@code nodeCount}：前者是"哪一版"，后者是"这次改了多少" （只记版本号时，两个相邻版本差 1 个节点与差 20
    * 个节点在审计里读起来一样）。图原文不进明细 —— 它已经完整存在 {@code as_workflow_version.graph}，抄进审计表只会让审计表膨胀且两处可能不一致。
    */
-  WORKFLOW_PUBLISH("workflow.publish");
+  WORKFLOW_PUBLISH("workflow.publish"),
+
+  /**
+   * 安全围栏的规则与分类变更（`#43` / `ROADMAP §11.53`）。
+   *
+   * <p>★ 明细里**记分类与规则序列，不记词面**：词表本身就是敏感内容，把它抄进审计表等于让"能读审计的人" 拿到一份可绕过清单的副本（同 {@link
+   * #CONVERSATION_SHARE} 的令牌理由）。排障要的内容是"哪一类、哪一条、变了几条"。
+   */
+  GUARD_RULE_CHANGE("guard.rule.change"),
+
+  /**
+   * 安全围栏的**运行开关**变更（`inputEnabled` / `advisorsEnabled` / 默认话术）。
+   *
+   * <p>★ 为什么不与 {@link #GUARD_RULE_CHANGE} 合用一条：关掉围栏是本项目最危险的一次改动（它让全平台问答在无检查状态下运行），
+   * 必须能被独立捞出来。两条动作合一条时，"最近有没有人关过围栏"这个问题就没法用一条查询回答。
+   */
+  GUARD_SETTINGS_CHANGE("guard.settings.change"),
+
+  /**
+   * 一次问答被安全围栏拦下（`13 §12` 的输入审计那一块）。
+   *
+   * <p>★ 明细里只有"分类 / 类型 / 规则 id / 归一化内容哈希前 8 位"，**没有用户原话也没有命中的词**： 前者是用户内容，后者是词表。留哈希前 8
+   * 位只为把"同一条规则在一段时间内拦了多少次"聚起来。
+   */
+  GUARD_BLOCK("guard.block");
 
   private final String code;
 

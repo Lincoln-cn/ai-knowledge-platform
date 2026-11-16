@@ -1,4 +1,4 @@
-﻿package cn.lincoln.aiplatform.identity.domain;
+package cn.lincoln.aiplatform.identity.domain;
 
 import java.util.List;
 import java.util.Map;
@@ -122,6 +122,21 @@ public final class Permissions {
    */
   public static final String RETRIEVAL_ENGINE_MANAGE = "platform:retrieval:manage";
 
+  /**
+   * 安全围栏（回答前的输入检查：分类型的敏感词与敏感问题集，{@code ROADMAP §11.53}）。
+   *
+   * <p>★ 不借用 {@code system:manage}：围栏改的是"哪些话不能问"与拒答话术，它属<strong>运营口径</strong> （{@code
+   * SafeGuardChatAdvisor} 的类注释自己写着这一句），与账号管理不是一类。复用会让"调围栏的人"必须能改角色。
+   *
+   * <p>★ 也不借用 {@code conversation:settings}：通用问答那条链路**可以整条关掉**，围栏必须常在 ——
+   * 两者的爆炸半径不同（前者只影响一条链路，后者对所有链路的下一次请求生效），合用一个权限点会让 "给了通用问答配置权"顺带得到"放宽安全策略"。
+   *
+   * <p>★ 读也守它：规则表本身是"可绕过的清单"，能读就等于知道该怎么说才不被拦。
+   *
+   * <p>★ 默认只有 ADMIN 拥有；其它角色在角色管理里显式勾选。
+   */
+  public static final String PLATFORM_GUARD_MANAGE = "platform:guard:manage";
+
   /** 全量清单。★ 这是"权限点一共几个"的唯一定义 —— 测试会断言它恰好 ALL.size() 个（不再写死数字）。 */
   public static final List<String> ALL =
       List.of(
@@ -148,7 +163,8 @@ public final class Permissions {
           PLATFORM_DICT_MANAGE,
           COMPLAINT_HANDLE,
           PLATFORM_COMPLIANCE_MANAGE,
-          RETRIEVAL_ENGINE_MANAGE);
+          RETRIEVAL_ENGINE_MANAGE,
+          PLATFORM_GUARD_MANAGE);
 
   private static final List<String> KB_OPERATOR =
       List.of(

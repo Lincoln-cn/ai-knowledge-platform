@@ -1,4 +1,4 @@
-﻿import { PERM } from '@/constants/permissions'
+import { PERM } from '@/constants/permissions'
 import type { PermissionItem, Role, User } from '@/api/identity'
 import type { ClassificationLevel } from '@/api/types'
 
@@ -36,7 +36,12 @@ export const permissions: PermissionItem[] = [
   { code: PERM.orgManage, label: '组织机构', module: '系统' },
   { code: PERM.dictManage, label: '基础数据', module: '系统' },
   { code: PERM.complaintHandle, label: '办理投诉举报', module: '合规' },
-  { code: PERM.complianceManage, label: '合规登记', module: '合规' }
+  { code: PERM.complianceManage, label: '合规登记', module: '合规' },
+  // ★ 检索引擎参数与安全围栏各一颗点，不复用 `system:manage` 或 `conversation:settings`：
+  //   前者改一次影响所有人的检索延迟与 B1/B3 读数；后者对所有链路的下一次请求生效，
+  //   而通用问答那条链路可以整条关掉 —— 爆炸半径不同，合成一颗会连带放宽安全策略。
+  { code: PERM.retrievalManage, label: '检索引擎调参', module: '检索' },
+  { code: PERM.guardManage, label: '安全围栏', module: '合规' }
 ]
 
 const all = permissions.map((p) => p.code)

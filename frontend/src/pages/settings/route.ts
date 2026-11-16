@@ -1,4 +1,4 @@
-﻿import type { RouteRecordRaw } from 'vue-router'
+import type { RouteRecordRaw } from 'vue-router'
 import { PERM } from '@/constants/permissions'
 
 /**
@@ -60,5 +60,17 @@ export default [
     name: 'settings-memory',
     component: () => import('./memory/Index.vue'),
     meta: { title: '长期记忆', permission: PERM.chatSettings }
+  },
+  {
+    /**
+     * 安全围栏（ROADMAP §11.53）。
+     *
+     * ★ 读权限也守 `platform:guard:manage`：规则表本身就是一份"可绕过的清单" ——
+     *   能读到词表，就等于知道该怎么说才不被拦。它不是一个可以公开的读数页。
+     */
+    path: 'settings/guard',
+    name: 'settings-guard',
+    component: () => import('./guard/Index.vue'),
+    meta: { title: '安全围栏', permission: PERM.guardManage }
   }
 ] satisfies RouteRecordRaw[]

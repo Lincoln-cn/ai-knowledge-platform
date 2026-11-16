@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <el-dialog v-model="visible" title="关于本平台" width="560px" :close-on-click-modal="true">
     <div class="about">
       <h3 class="about-app">{{ APP_TITLE }}</h3>

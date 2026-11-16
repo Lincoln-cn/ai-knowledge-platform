@@ -58,7 +58,13 @@ class AuditActionSurfaceTest {
           // ★ 2026-10-31（#198 发布端点）：`workflow.publish` —— 把画布上正在改的图变成"线上正在跑的那一版"，
           //   是一次面向使用者的行为切换。它此前只加在枚举里、没登记到 13，于是这条断言在 CI 上红了 ——
           //   ★ 这正是该测试存在的理由：动作面每加一个码，§7.3 的表就要跟着改，两侧不许各写一份。
-          "workflow.publish");
+          "workflow.publish",
+          // ★ 2026-11-16（ROADMAP §11.53 安全围栏）：三条一起加。settings 单独一条的理由是
+          //   **关掉围栏**让全平台问答在无检查状态运行，必须能被一条查询单独捞出来；
+          //   把它并进 rule.change 就等于"最危险的那次改动只能从一堆规则变更里翻出来"。
+          "guard.rule.change",
+          "guard.settings.change",
+          "guard.block");
 
   /** 读侧实现类：它们一旦依赖 `AuditLogPort`，就说明读侧审计已经接了，而 §7.4 说的是没接。 */
   private static final List<String> READ_SIDE_CLASSES =

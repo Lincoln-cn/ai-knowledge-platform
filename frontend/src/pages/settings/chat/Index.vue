@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page settings-page">
     <PageHeader
       title="通用问答"

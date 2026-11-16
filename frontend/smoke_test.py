@@ -216,7 +216,10 @@ with sync_playwright() as p:
         page.goto(BASE + "#/models", wait_until="networkidle")
         page.wait_for_timeout(1400)
         body = page.inner_text("body")
-        check("模型管理" in body, "模型页渲染", page.url)
+        # ★ 断言标题要精确到元素文本：菜单改名后（「模型管理」→「模型」`ROADMAP §11.52`）
+        #   用 `in body` 判"模型"二字等于恒真 —— 页面上到处是"模型"，它永远不会红。
+        title = page.locator(".hd-title").first.inner_text().strip()
+        check(title == "模型", "模型页渲染", title)
         cards = page.locator(".model-card").count()
         check(cards == 6, "列出 6 个模型", f"实际 {cards}")
         statuses = page.locator(".model-card .status").all_inner_texts()

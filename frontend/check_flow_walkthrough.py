@@ -1,4 +1,4 @@
-﻿"""全站页面走查（真栈）—— 回答「哪些页面在浏览器里走不通」。
+"""全站页面走查（真栈）—— 回答「哪些页面在浏览器里走不通」。
 
 为什么需要它：既有的闸门各管一段（`check_knowledge_*` 管知识库、`check_models_form` 管模型、
 `verify_permissions` 管路由门禁、`smoke_test` 只跑 mock 构建产物），

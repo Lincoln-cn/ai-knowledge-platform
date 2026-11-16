@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page">
     <PageHeader title="合规备案" desc="算法备案号与安全评估结论等对外登记项，同步到公示内容。" />
 

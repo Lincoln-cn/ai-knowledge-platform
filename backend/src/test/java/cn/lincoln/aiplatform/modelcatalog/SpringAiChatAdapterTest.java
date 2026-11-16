@@ -21,6 +21,7 @@ import cn.lincoln.aiplatform.modelcatalog.infrastructure.SafeGuardChatAdvisor;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.SpringAiChatAdapter;
 import cn.lincoln.aiplatform.modelcatalog.infrastructure.UpstreamGateway;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.guard.GuardService;
 import cn.lincoln.aiplatform.platform.model.ChatMessage;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import com.sun.net.httpserver.HttpExchange;
@@ -231,7 +232,7 @@ class SpringAiChatAdapterTest {
         .isTrue();
     assertThat(SpringAiChatAdapter.class.isAnnotationPresent(Component.class)).isTrue();
     assertThat(new AdvisorChainTrace().getOrder()).isEqualTo(150);
-    assertThat(new SafeGuardChatAdvisor("绝密").getOrder()).isEqualTo(100);
+    assertThat(guard("绝密").getOrder()).isEqualTo(100);
   }
 
   @Test
@@ -596,7 +597,19 @@ class SpringAiChatAdapterTest {
   }
 
   private static SafeGuardChatAdvisor guard(String words) {
-    return new SafeGuardChatAdvisor(words);
+    // ★ 词表已改由 `pf_guard_rule` 提供（ROADMAP §11.53），所以这里 mock 的是判定结果本身。
+    //   本类要钉的是"判定为拦截时，链上拦得住且上游一次都不被调用" —— 判定怎么来的在
+    //   GuardTextTest / GuardSnapshotTest / GuardServiceTest 里测，不在这里重复。
+    GuardService service = mock(GuardService.class);
+    when(service.inspect(org.mockito.ArgumentMatchers.anyString()))
+        .thenAnswer(
+            call -> {
+              String text = call.getArgument(0);
+              boolean hit =
+                  words != null && !words.isEmpty() && text != null && text.contains(words);
+              return hit ? SafeGuardChatAdvisor.REFUSAL : null;
+            });
+    return new SafeGuardChatAdvisor(service);
   }
 
   private static Model chatModel() {

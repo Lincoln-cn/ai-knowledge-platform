@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="body">
     <!-- 左：表单 -->
     <el-form ref="formRef" :model="form" :rules="rules" label-width="88px" class="form">

@@ -38,8 +38,10 @@ ENUM = ROOT.parent / "backend/src/main/java/cn/lincoln/aiplatform/platform/domai
 CONTRACT = ROOT / "src/api/audit.ts"
 PAGE = ROOT / "src/pages/audit/Index.vue"
 
-CODE_RE = re.compile(r'"([a-z][a-z0-9]*\.[a-z][a-z0-9-]*)"')
-
+# ★ 动作码允许**多段点**：`guard.rule.change` 这种"域.对象.动作"的三段码今天已经存在。
+#   只匹配一个点的旧正则会把它整条看漏 —— 而"看漏"的表现是这道闸门**静默变绿**（`#40` 的形状，
+#   漂移本身还在，只是没人看得见）。改这段正则前先跑 `--self-check`，那里有反证用例。
+CODE_RE = re.compile(r'"([a-z][a-z0-9]*(?:\.[a-z][a-z0-9-]*)+)"')
 # ★ 资源类型：`audit.record(AuditAction.X, "DOCUMENT", …)` 的第二个参数（可能跨行写）。
 #   它是魔法字符串，散在十来个调用点上 —— 最容易漂、又最不会响的那类知识。
 RESOURCE_USE_RE = re.compile(r'record\(\s*[A-Za-z_.]+\s*,\s*"([A-Z_]+)"', re.S)
@@ -56,7 +58,7 @@ def contract_codes(text: str) -> list[str]:
     match = re.search(r"export type AuditActionCode\s*=(.*?)\n\n", text, re.S)
     if not match:
         return []
-    return re.findall(r"'([a-z][a-z0-9]*\.[a-z][a-z0-9-]*)'", match.group(1))
+    return re.findall(r"'([a-z][a-z0-9]*(?:\.[a-z][a-z0-9-]*)+)'", match.group(1))
 
 
 def page_codes(text: str) -> list[str]:
@@ -64,7 +66,7 @@ def page_codes(text: str) -> list[str]:
     match = re.search(r"const ACTIONS = \[(.*?)\n\]", text, re.S)
     if not match:
         return []
-    return re.findall(r"value:\s*'([a-z][a-z0-9]*\.[a-z][a-z0-9-]*)'", match.group(1))
+    return re.findall(r"value:\s*'([a-z][a-z0-9]*(?:\.[a-z][a-z0-9-]*)+)'", match.group(1))
 
 
 def used_resources(source_root):

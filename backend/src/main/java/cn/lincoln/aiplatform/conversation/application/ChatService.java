@@ -1,4 +1,4 @@
-﻿package cn.lincoln.aiplatform.conversation.application;
+package cn.lincoln.aiplatform.conversation.application;
 
 import cn.lincoln.aiplatform.conversation.domain.SourceRef;
 import cn.lincoln.aiplatform.conversation.domain.TokenUsage;

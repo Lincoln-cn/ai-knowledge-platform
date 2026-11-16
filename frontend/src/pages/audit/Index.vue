@@ -185,6 +185,9 @@ const ACTIONS = [
   { value: 'workflow.publish', label: '发布编排版本' },
   { value: 'conversation.purge', label: '彻底删除会话' },
   { value: 'attachment.purge', label: '彻底删除附件' },
+  { value: 'guard.rule.change', label: '改围栏规则' },
+  { value: 'guard.settings.change', label: '改围栏开关' },
+  { value: 'guard.block', label: '围栏拦截问答' },
 ]
 
 const RESOURCES = [
@@ -194,6 +197,11 @@ const RESOURCES = [
   { value: 'CONVERSATION', label: '会话' },
   { value: 'ATTACHMENT', label: '附件' },
   { value: 'AUDIT_LOG', label: '审计记录' },
+  // ★ 围栏三类分开（`ROADMAP §11.53`）：按"改规则"筛和按"被拦"筛是两个完全不同的场景 ——
+  //   前者查"谁动了口径"，后者查"最近挡了哪些问法"。合成一个 GUARD 会让两种查询都得先全捞。
+  { value: 'GUARD_CATEGORY', label: '围栏分类' },
+  { value: 'GUARD_RULE', label: '围栏规则' },
+  { value: 'GUARD_SETTINGS', label: '围栏开关' },
 ]
 
 const session = useSessionStore()
