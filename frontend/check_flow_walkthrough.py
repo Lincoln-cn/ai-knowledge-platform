@@ -359,9 +359,20 @@ def main() -> int:
             page.wait_for_timeout(2500)
             token = page.evaluate("() => localStorage.getItem('access_token') || ''")
             print("== 环境 ==")
-            if not check(bool(token) and not token.startswith("mock_"), "连的是真后端（token 非 mock_）"):
+            # ★ 退出码只有一个含义：0 = 全过 / 1 = 检查不通过 / 3 = 环境不满足（闸门自身失效）。
+            #   「前端跑在 mock 模式」以前报成 [NG] + 1，读起来像产品坏了 —— 而它恰恰是
+            #   `#340` 记过的那次翻车（把夹具的响应当成前后端打通的证据，`ROADMAP §11.42.3`）。
+            if not token:
+                print("  [NG] 登录没拿到 token —— admin/admin 是否可用？后端登录接口是否通？")
                 browser.close()
-                return 1
+                return 3
+            if token.startswith("mock_"):
+                print("  [NG] 前端跑在 mock 模式（VITE_USE_MOCK=true，见 frontend/.env.development）——")
+                print("       这里量到的是 src/mock/** 的响应，不是本平台后端。")
+                print("       用 VITE_USE_MOCK=false 重启前端再跑（.env.development 默认就是 true，这是有意的）。")
+                browser.close()
+                return 3
+            check(True, "连的是真后端（token 非 mock_）")
             print(f"  · base = {BASE}")
 
             # ── 逐页走查（★ 每页独立容错：一页坏了不挡其余，否则"走查"本身会变成单点）──
