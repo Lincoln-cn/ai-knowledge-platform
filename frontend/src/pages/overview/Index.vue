@@ -35,6 +35,29 @@
       <router-link to="/models" class="link">去模型页登记</router-link>
     </div>
 
+    <!--
+      消费者的第一屏是「能用什么、从哪开始」，不是「平台跑得怎么样」（`ROADMAP §11.52.9` 第 4 条）。
+      原先这里上来就是四张指标卡 —— 对一个只用别人做好的应用的人，
+      「我的提问 12 次」不告诉他下一步该点哪；而他能做的事只有一件：挑个应用提问。
+      ★ 数据从会话侧派生，不新增接口：会话本来就是按最近更新倒序的。
+    -->
+    <section v-if="consumer" class="panel">
+      <div class="panel-head">
+        <h2 class="h2">最近在用</h2>
+        <router-link to="/market" class="link">去应用市场</router-link>
+      </div>
+      <ul v-if="recentApps.length" class="apps">
+        <li v-for="a in recentApps" :key="a.appId" class="app-row">
+          <router-link :to="`/conversation?appId=${a.appId}`" class="app-name">{{ a.appName }}</router-link>
+          <span class="app-metric micro muted">{{ a.lastAt }}</span>
+        </li>
+      </ul>
+      <div v-else class="empty">
+        <div class="empty-title">还没用过应用</div>
+        <span>去<router-link to="/market" class="link">应用市场</router-link>挑一个开始提问</span>
+      </div>
+    </section>
+
     <!-- 指标条：消费者看「我的」口径，建设者/运营看平台口径（07 §五） -->
     <div v-if="consumer" class="stats panel">
       <div class="stat">
@@ -260,6 +283,24 @@ const apps = ref<AssistantRankItem[]>([])
 const mySummary = ref<MeSummary | null>(null)
 const myConversations = ref<Conversation[]>([])
 const myFeedbacks = ref<FeedbackItem[]>([])
+
+/**
+ * 消费者最近用过的三个应用（`ROADMAP §11.52.9` 第 4 条）。
+ *
+ * ★ 从 `myConversations` 派生，**不**用 `apps`：后者是平台侧的「常用应用排行」，
+ * 口径是"全平台谁被问得多"，而这里问的是"**你**上次在跟谁说话"（07 §五 两种口径不可互换）。
+ * ★ 会话列表已按最近更新倒序，所以第一个出现的就是最近一次；按 `appId` 去重取前三个。
+ * 没有 `appId` 的会话（通用问答）不进这张表 —— 那不是"某个应用"。
+ */
+const recentApps = computed(() => {
+  const seen = new Map<string, { appId: string; appName: string; lastAt: string }>()
+  for (const c of myConversations.value) {
+    if (!c.appId || seen.has(c.appId)) continue
+    seen.set(c.appId, { appId: c.appId, appName: c.appName || '未命名应用', lastAt: c.updatedAt })
+    if (seen.size >= 3) break
+  }
+  return [...seen.values()]
+})
 
 /**
  * 模型可用性。**单独加载、单独失败**（`null` = 不知道）。
