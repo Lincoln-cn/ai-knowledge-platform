@@ -160,10 +160,10 @@
                 <el-button
                   link
                   size="small"
-                  :disabled="!canEdit || !row.enabled"
-                  @click="disableCategory(row)"
+                  :disabled="!canEdit"
+                  @click="toggleCategory(row)"
                 >
-                  停用
+                  {{ row.enabled ? '停用' : '启用' }}
                 </el-button>
               </template>
             </el-table-column>
@@ -585,6 +585,36 @@ async function disableCategory(row: GuardCategory) {
   } catch (e) {
     ElMessage.error(reasonOf(e) || '停用失败')
   }
+}
+
+/**
+ * 启用走整行 PUT（服务端按整行覆盖），所以要把原有字段一起带回去。
+ *
+ * ★ 这一格原来只有「停用」一个按钮、停用后按钮变灰 —— 从界面上看不出怎么再开启，
+ *   只能进「编辑」对话框里找那个状态开关。启用本身就是个动作，就给它一个按钮。
+ */
+async function enableCategory(row: GuardCategory) {
+  try {
+    await updateGuardCategory(row.id, {
+      code: row.code,
+      name: row.name,
+      sortOrder: row.sortOrder,
+      enabled: true,
+      refusalText: row.refusalText
+    })
+    ElMessage.success(`已启用「${row.name}」`)
+    await loadCategories()
+  } catch (e) {
+    ElMessage.error(reasonOf(e) || '启用失败')
+  }
+}
+
+async function toggleCategory(row: GuardCategory) {
+  if (row.enabled) {
+    await disableCategory(row)
+    return
+  }
+  await enableCategory(row)
 }
 
 /**

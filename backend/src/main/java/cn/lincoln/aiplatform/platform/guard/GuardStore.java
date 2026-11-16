@@ -250,8 +250,15 @@ public class GuardStore {
             .filter(category -> category.id().equals(id))
             .findFirst()
             .orElseThrow(() -> new IllegalArgumentException("分类不存在：" + id));
+    // ★ 带着原话术一起写回：停用是"这一类不参与匹配"，不是"把配置清空"。
+    //   传 null 的话，重新启用之后专属话术已经没了 —— 而它洽洽是最难回忆的那一格。
     return saveCategory(
-        existing.id(), existing.code(), existing.name(), existing.sortOrder(), false, null);
+        existing.id(),
+        existing.code(),
+        existing.name(),
+        existing.sortOrder(),
+        false,
+        existing.refusalText());
   }
 
   /**
