@@ -552,6 +552,55 @@ kbd,
   line-height: 1.7;
 }
 
+/*
+ * 开关型配置项：**整行一条**，左边是「标签 + 开关 + 状态词」，右边是说明。
+ *
+ * ★ 为什么不塞进 .form-grid 的两栏：开关本身只有 40px 宽，而它的说明通常是
+ *   一到两句（60–90 字）。放进 300px 的格子里，说明会折成四五行，开关孤零零浮在第一行，
+ *   读起来像两段不相干的东西。整行布局下说明有 1000px 上下的宽度，一条一行读完。
+ *
+ * `minmax(220px, 300px)` 而不是固定 300px：标签长短不一（「按分类给不同话术」最长），
+ * 给一个弹性区间能让左列宽度跟着内容走、又不会无限拉宽。
+ */
+.switch-item {
+  display: grid;
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-md) var(--space-lg);
+  padding: var(--space-md) 0;
+  border-top: 1px solid var(--color-border);
+}
+
+/* 第一条不画分隔线：它紧贴 panel-head，多一条线会读成"这里空了一段" */
+.switch-item:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.switch-key {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+/* 左列里标签与开关之间的间距比 .field-label 默认值小一点 —— 它们是一件事的两半 */
+.switch-key .field-label {
+  margin-bottom: 0;
+}
+
+.switch-note {
+  max-width: 80ch;
+  line-height: 1.7;
+}
+
+/* 窄窗退回上下两段；左列宽度不再有意义的压缩空间 */
+@media (max-width: 900px) {
+  .switch-item {
+    grid-template-columns: 1fr;
+    gap: var(--space-xs);
+  }
+}
+
 /* 保存栏：**吸底**。参数区改完要找得到保存入口 ——
    放在内容末尾时，它会被下面的表格推到两三屏之外。 */
 .save-bar {
@@ -577,15 +626,41 @@ kbd,
   gap: var(--space-2xs);
 }
 
-/* 页脚操作行：给「没有保存语义」的页面用（纯跳转/触发按钮） */
+/*
+ * 页脚操作行：给「没有保存语义」的页面用（纯跳转/触发按钮）。
+ *
+ * ★ 也是配置页保存动作的唯一位置（2026-11-16 统一）：
+ *   一页（或一个可独立保存的区块）末尾一条，左边状态、右边动作（撤销在左、保存在右）。
+ *   不做 `position: sticky` —— 吸底条会遮住页面最后一块，而且它管的往往是页顶那块，
+ *   滚动时"这条在对谁生效"就说不清了。
+ */
 .page-foot {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: var(--space-md) 0;
+  padding: var(--space-md) 0 0;
+}
+
+.page-foot .foot-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
 }
 
 /* 某一项暂时不生效时压暗它的控件（保持可读，避免「消失了」的错觉） */
 .inert {
   opacity: 0.55;
 }
+
+/*
+ * 标题栏/筛选条里的窄下拉。
+ *
+ * ★ 曾经只在 `pages/settings/guard/Index.vue` 的 scoped 里写了一份 —— scoped 不外泄，
+ *   于是「拦截记录」页的那个 el-select 没有宽度，塌成一个空框（2026-11-16 实测）。
+ *   凡是"多个页面共用的排版类"，都必须住在全局，本页只留真正的本页样式。
+ */
+.filter-select {
+  width: 150px;
+}
+

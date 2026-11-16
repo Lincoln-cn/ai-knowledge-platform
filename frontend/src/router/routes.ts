@@ -79,7 +79,10 @@ export const navGroups: NavGroup[] = [
       // 应用模板紧挨应用管理：模板是「应用的配置快照」，两者是同一件东西的两个状态
       { path: '/templates', label: '应用模板', icon: 'Files' },
       // 提示词跟着「应用管理」办（父路径就在 /assistants 下），别再拆到别的组
-      { path: '/assistants/prompts', label: '提示词', icon: 'EditPen' }
+      { path: '/assistants/prompts', label: '提示词', icon: 'EditPen' },
+      // 记忆管理是「对话产生的数据」（逐条记忆、画像、分层计数）；
+      // 它的**规则**在「模型与检索 → 长期记忆」—— 配置与数据各一页，不再塞进同一个页面
+      { path: '/memories', label: '记忆管理', icon: 'Memo' }
     ]
   },
   {
@@ -120,6 +123,9 @@ export const navGroups: NavGroup[] = [
       { path: '/analytics', label: '运营看板', icon: 'TrendCharts' },
       { path: '/feedback', label: '反馈处理', icon: 'ChatLineSquare' },
       { path: '/complaints', label: '投诉举报', icon: 'Warning' },
+      // 「拦截记录」与「审计记录」是两张不同的表，别合成一个：审计回答"谁动了配置"，
+      // 拦截回答"谁的问题被挡住了"。前者关心权限，后者关心内容安全，合规汇报里也是两栏。
+      { path: '/guard-hits', label: '拦截记录', icon: 'Filter' },
       // 审计记录是一张**只读的事实表**，与"改配置"不是同一类动作，所以不塞进任何 tab
       { path: '/audit', label: '审计记录', icon: 'Document' },
       { path: '/compliance', label: '合规备案', icon: 'Stamp' }

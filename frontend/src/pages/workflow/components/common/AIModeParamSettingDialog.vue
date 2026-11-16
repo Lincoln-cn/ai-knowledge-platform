@@ -1,5 +1,5 @@
 <template>
-    <el-dialog align-center title="参数设置" class="aiMode-param-dialog" v-model="dialogVisible" style="width: 550px"
+    <el-dialog align-center title="参数设置" class="aiMode-param-dialog" v-model="dialogVisible" width="560px"
         append-to-body :close-on-click-modal="false" :close-on-press-escape="false">
         <DynamicsForm v-model="form_data" :fields="model_form_field" ref="dynamicsFormRef">
         </DynamicsForm>
@@ -48,25 +48,17 @@ defineExpose({ open, reset_default })
 </script>
 
 <style lang="scss" scoped>
+/* 弹窗的头/正文/底三段留白与分割线走全局口径（src/styles/element-plus.css），
+   这里只保留内容区高度与滑块排版。 */
 .aiMode-param-dialog {
-    padding: 8px 8px 24px 8px;
+  .dialog-max-height {
+    height: 550px;
+  }
 
-    .el-dialog__header {
-        padding: 16px 16px 0 16px;
+  .custom-slider {
+    .el-input-number.is-without-controls .el-input__wrapper {
+      padding: 0 !important;
     }
-
-    .el-dialog__body {
-        padding: 16px !important;
-    }
-
-    .dialog-max-height {
-        height: 550px;
-    }
-
-    .custom-slider {
-        .el-input-number.is-without-controls .el-input__wrapper {
-            padding: 0 !important;
-        }
-    }
+  }
 }
 </style>

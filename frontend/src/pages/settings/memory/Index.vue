@@ -1,69 +1,38 @@
 <script setup lang="ts">
 /**
- * 长期记忆（0.9.0）。
+ * 长期记忆（0.9.0）—— 这一页只管**规则**：记不记、召回多少、什么时候忘。
  *
- * <p>三块：分层概览（记忆长在哪一层 + 当前画像）、记忆清单（可增删改）、设定（什么时候记、记多少、什么时候忘）。
+ * <p>★ 版式对齐「检索引擎」页（2026-11-16 定为配置页标准）：
+ * 顶部 meta-line 报当前生效值 → 按功能区各一张 panel（标题 + 一句"这一段在干什么" +
+ * form-grid 里的 field：标签 / 控件 / 说明）→ 末尾一条 .page-foot 放保存动作。
+ *
+ * <p>★ 2026-11-16 拆过一次：原来这一页还有「分层概览」与「记忆清单」两块，
+ * 而那是**已经记下来的数据**。配置页里放数据表，读者会分不清自己在改配置还是在看数据；
+ * 数据侧搬到「对话与知识 → 记忆管理」，两页在各自的说明里互相指路。
  *
  * <p>★ "设定"的保存权限与对话设置同源（`conversation:settings`）：它改的是全机行为 ——
  * 召回条数与做梦时间一改，所有人下一轮对话的上下文都变了。
  */
-import { computed, onMounted, ref } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { computed, onMounted, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 import PageHeader from '@/components/PageHeader.vue';
 import { useSessionStore } from '@/stores/session';
 import { PERM } from '@/constants/permissions';
 import { ApiError } from '@/api/types';
+import { validateCron } from '@/lib/cron';
 import {
-  createMemory,
-  deleteMemory,
-  getMemoryProfile,
   getMemorySettings,
-  listMemories,
-  memoryCounts,
-  updateMemory,
   updateMemorySettings,
-  type MemoryItem,
-  type MemoryKind,
-  type MemoryLevel,
-  type MemoryLevelCount,
-  type MemoryProfile,
   type MemorySettings,
 } from '@/api/memories';
 
 const session = useSessionStore();
 const canEdit = computed(() => session.can(PERM.chatSettings));
 
-const LEVELS: { value: MemoryLevel; label: string; hint: string }[] = [
-  { value: 'user', label: '用户', hint: '关于你本人的长期事实（在做的事、所在单位、角色）' },
-  { value: 'conversation', label: '本次对话', hint: '只在本会话内有效，换会话就不带' },
-  { value: 'persona', label: '人格画像', hint: '从偏好里提炼出的沟通口径，注入时作为背景' },
-  { value: 'cross_session', label: '跨会话', hint: '你在不同会话里反复提到的目标与约束' },
-];
-
-const KINDS: { value: MemoryKind; label: string }[] = [
-  { value: 'fact', label: '事实' },
-  { value: 'preference', label: '偏好' },
-  { value: 'constraint', label: '约束' },
-  { value: 'goal', label: '目标' },
-  { value: 'event', label: '事件' },
-  { value: 'summary', label: '摘要' },
-];
-
-const items = ref<MemoryItem[]>([]);
-const counts = ref<MemoryLevelCount[]>([]);
-const profile = ref<MemoryProfile>({});
 const settings = ref<MemorySettings | null>(null);
 const draft = ref<MemorySettings | null>(null);
-const loading = ref(false);
 const saving = ref(false);
-
-const creating = ref(false);
-const form = ref<{ level: MemoryLevel; kind: MemoryKind; content: string; importance: number }>({
-  level: 'user',
-  kind: 'fact',
-  content: '',
-  importance: 3,
-});
+const loadError = ref<{ reason: string; hint: string } | null>(null);
 
 const dirty = computed(() => {
   if (!settings.value || !draft.value) return false;
@@ -78,101 +47,95 @@ const dirty = computed(() => {
   return keys.some((key) => settings.value?.[key] !== draft.value?.[key]);
 });
 
-const summaryLine = computed(() => {
-  const current = settings.value;
-  if (!current) return '加载中…';
-  return `${current.enabled ? '记忆开' : '记忆关'} · 召回 ${current.recallLimit} 条 · ${current.dreamCron}`;
+const updatedAtText = computed(() => {
+  const iso = settings.value?.updatedAt;
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('zh-CN', { hour12: false });
 });
 
-const levelLabel = (level: MemoryLevel) => LEVELS.find((x) => x.value === level)?.label ?? level;
-const kindLabel = (kind: MemoryKind) => KINDS.find((x) => x.value === kind)?.label ?? kind;
-const countOf = (level: MemoryLevel) => counts.value.find((x) => x.level === level)?.count ?? 0;
+/**
+ * 「每天固定时刻」这一种 cron 的形状：`0 分 时 * * *`。
+ *
+ * <p>★ 为什么默认给时间选择器而不是直接摊一个六段输入框：做梦是"每天几点跑"，绝大多数部署只会填这一种。
+ * 摊一个 `0 40 3 * * *` 让人填，等于要求他先学会 cron 才知道该写什么 —— 而写错了要到保存时才被后端拒绝。
+ * 需要别的周期（每 6 小时、只工作日）时再展开手填，那条路保留着。
+ */
+const DAILY_CRON = /^0\s+(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+\*$/;
+
+const dreamAtDaily = computed(() => DAILY_CRON.test((draft.value?.dreamCron ?? '').trim()));
+
+/** 手动填 cron 的模式；当前值不是「每天固定时刻」时自动进来 */
+const advancedCron = ref(false);
+
+/**
+ * 六段 cron 的格式检查：合法为 null，否则是给人看的中文（规则见 lib/cron.ts 头条注释）。
+ *
+ * <p>★ 只在展开手填时算：用时间选择器时那句话必然是 `0 m h * * *`，不用再校验一遍；
+ * 而手填时它是**唯一防线** —— 后端 `MemorySettingsView.checked()` 只查非空，不解析 cron。
+ */
+const cronError = computed(() => (advancedCron.value ? validateCron(draft.value?.dreamCron ?? '', 6) : null));
+
+const dreamTime = computed<string | null>({
+  get() {
+    const matched = (draft.value?.dreamCron ?? '').trim().match(DAILY_CRON);
+    if (!matched) return null;
+    const hour = String(Number(matched[2])).padStart(2, '0');
+    const minute = String(Number(matched[1])).padStart(2, '0');
+    return `${hour}:${minute}`;
+  },
+  set(value) {
+    if (!draft.value || !value) return;
+    const [hour, minute] = value.split(':');
+    draft.value.dreamCron = `0 ${Number(minute)} ${Number(hour)} * * *`;
+    advancedCron.value = false;
+  },
+});
+
+/** 从 cron 切回时间选择：当前值不是那种形状时，先落成默认的 03:40，避免选择器空着 */
+function useTimePicker() {
+  if (!draft.value) return;
+  if (!dreamAtDaily.value) draft.value.dreamCron = '0 40 3 * * *';
+  advancedCron.value = false;
+}
+
+watch(
+  () => draft.value?.dreamCron,
+  (cron) => {
+    if (cron && !DAILY_CRON.test(cron.trim())) advancedCron.value = true;
+  },
+  { immediate: true }
+);
 
 function errorText(error: unknown): string {
   if (error instanceof ApiError) return error.hint ? `${error.message}：${error.hint}` : error.message;
   return error instanceof Error ? error.message : '';
 }
 
+function reasonOf(error: unknown): { reason: string; hint: string } {
+  if (error instanceof ApiError) return { reason: error.message, hint: error.hint ?? '' };
+  return { reason: error instanceof Error ? error.message : '读取记忆设定失败', hint: '' };
+}
+
 async function load() {
-  loading.value = true;
+  loadError.value = null;
   try {
-    const [list, levelCounts, currentProfile, currentSettings] = await Promise.all([
-      listMemories(),
-      memoryCounts(),
-      getMemoryProfile(),
-      getMemorySettings(),
-    ]);
-    items.value = list;
-    counts.value = levelCounts;
-    profile.value = currentProfile;
-    settings.value = currentSettings;
-    draft.value = { ...currentSettings };
+    const current = await getMemorySettings();
+    settings.value = current;
+    draft.value = { ...current };
   } catch (error) {
-    ElMessage.error(errorText(error) || '加载记忆失败，请稍后重试');
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function submitCreate() {
-  if (!form.value.content.trim()) {
-    ElMessage.warning('写点内容再保存');
-    return;
-  }
-  try {
-    await createMemory({
-      level: form.value.level,
-      kind: form.value.kind,
-      content: form.value.content.trim(),
-      importance: form.value.importance,
-    });
-    creating.value = false;
-    form.value = { level: 'user', kind: 'fact', content: '', importance: 3 };
-    ElMessage.success('已记下');
-    await load();
-  } catch (error) {
-    ElMessage.error(errorText(error) || '保存失败，请稍后重试');
-  }
-}
-
-async function submitEdit(item: MemoryItem) {
-  try {
-    const { value } = await ElMessageBox.prompt('改完直接生效（下一轮对话就按新的内容注入）', '修改记忆', {
-      inputValue: item.content,
-      inputType: 'textarea',
-      confirmButtonText: '保存',
-      cancelButtonText: '取消',
-    });
-    if (value === null || !value.trim()) return;
-    await updateMemory(item.id, { content: value.trim(), importance: item.importance });
-    ElMessage.success('已更新');
-    await load();
-  } catch {
-    // 取消不提示
-  }
-}
-
-async function remove(item: MemoryItem) {
-  try {
-    await ElMessageBox.confirm(`删掉这条之后它不会再被带进对话：\n\n${item.content}`, '删除记忆', {
-      type: 'warning',
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-    });
-  } catch {
-    return;
-  }
-  try {
-    await deleteMemory(item.id);
-    ElMessage.success('已删除');
-    await load();
-  } catch (error) {
-    ElMessage.error(errorText(error) || '删除失败，请稍后重试');
+    loadError.value = reasonOf(error);
   }
 }
 
 async function save() {
   if (!draft.value) return;
+  // ★ 后端 checked() 只查非空、不解析 cron，所以这里必须拦住 —— 否则一个看不懂的表达式会静默存进库
+  const bad = validateCron(draft.value.dreamCron ?? '', 6);
+  if (bad) {
+    advancedCron.value = true;
+    ElMessage.error(`做梦时间：${bad}`);
+    return;
+  }
   saving.value = true;
   try {
     const next = await updateMemorySettings({
@@ -201,276 +164,179 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="memory-page">
-    <PageHeader title="长期记忆" desc="它记住的东西与记忆规则；你可以逐条查看、改掉或清除">
+  <div class="page settings-page">
+    <PageHeader title="长期记忆" desc="记忆规则：记不记、召回多少、什么时候忘，逐条内容另在记忆管理页">
       <template #actions>
-        <span class="meta-line micro">{{ summaryLine }}</span>
+        <span class="meta-line micro">
+          <span>记忆 <b>{{ draft?.enabled ? '开' : '关' }}</b></span>
+          <span>召回 <b>{{ draft?.recallLimit ?? '—' }} 条</b></span>
+          <span>做梦 <b>{{ draft?.dreamCron ?? '—' }}</b></span>
+          <span>遗忘 <b>{{ draft?.forgetAfterDays ?? '—' }} 天</b></span>
+          <span v-if="updatedAtText" class="muted">上次修改 {{ updatedAtText }}</span>
+        </span>
       </template>
     </PageHeader>
 
-    <section class="panel">
-      <h3 class="panel-title">分层</h3>
-      <p class="panel-hint">
-        记忆分四层：越靠上越"关于你这个人"，越靠下越"关于这次对话"。召回时四层一起看，
-        但会话层只取当前会话 —— 别的会话里发生的事不会混进来。
-      </p>
-      <div class="level-grid">
-        <div v-for="level in LEVELS" :key="level.value" class="level-cell">
-          <div class="level-head">
-            <span class="level-name">{{ level.label }}</span>
-            <span class="level-count">{{ countOf(level.value) }} 条</span>
+    <div v-if="loadError" class="notice err">
+      <div><b>读取失败：</b>{{ loadError.reason }}</div>
+      <div v-if="loadError.hint" class="micro">{{ loadError.hint }}</div>
+      <el-button size="small" class="mt8" @click="load">重试</el-button>
+    </div>
+
+    <template v-else-if="draft">
+      <!-- ── ① 开关与召回 ────────────────────────────────────────────── -->
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="card-title">开关与召回</div>
+            <div class="micro muted">记不记、带多少进对话 —— 已经记下的内容在「记忆管理」页</div>
           </div>
-          <p class="level-hint">{{ level.hint }}</p>
         </div>
-      </div>
-      <div class="profile-row">
-        <span class="profile-label">当前画像</span>
-        <span v-if="profile.summary" class="profile-text">{{ profile.summary }}</span>
-        <span v-else class="profile-text muted">还没有形成画像（攒够偏好之后由夜间任务重算）</span>
-      </div>
-      <div v-if="settings?.lastDreamAt" class="profile-row">
-        <span class="profile-label">上次做梦</span>
-        <span class="profile-text muted">
-          {{ new Date(settings.lastDreamAt).toLocaleString() }}
-          <template v-if="settings.lastDreamNote">· {{ settings.lastDreamNote }}</template>
+        <div class="panel-body form-grid">
+          <div class="field">
+            <label class="field-label">启用长期记忆</label>
+            <el-switch v-model="draft.enabled" :disabled="!canEdit" />
+            <div class="field-note micro muted">
+              关掉之后<b>不再写也不再召回</b>，已有记忆保留不删 —— 想清掉具体某条去「记忆管理」。
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">召回下限</label>
+            <el-input-number
+              v-model="draft.minImportance"
+              :min="1"
+              :max="5"
+              :disabled="!canEdit"
+              controls-position="right"
+              class="field-control"
+            />
+            <div class="field-note micro muted">
+              重要度低于这个值的记忆不带进对话（1–5，默认 3）。调高 = 只带最有把握的那几条。
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">召回条数</label>
+            <el-input-number
+              v-model="draft.recallLimit"
+              :min="1"
+              :max="20"
+              :disabled="!canEdit"
+              controls-position="right"
+              class="field-control"
+            />
+            <div class="field-note micro muted">
+              四层合计的上限（1–20，默认 5）。条数越多，每轮对话的上下文越长、越慢。
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">注入画像</label>
+            <el-switch v-model="draft.injectProfile" :disabled="!canEdit" />
+            <div class="field-note micro muted">
+              把人格画像<b>整段</b>作为背景，而不是按相似度挑几条 —— 稳但会占掉召回条数的一部分。
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── ② 做梦与遗忘 ────────────────────────────────────────────── -->
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="card-title">做梦与遗忘</div>
+            <div class="micro muted">夜间维护：去重合并 · 重算画像 · 把久未命中的低价值记忆软删</div>
+          </div>
+        </div>
+        <div class="panel-body form-grid">
+          <div class="field">
+            <div class="label-row">
+              <label class="field-label">做梦时间</label>
+              <el-button
+                link
+                size="small"
+                :disabled="!canEdit"
+                @click="advancedCron ? useTimePicker() : (advancedCron = true)"
+              >
+                {{ advancedCron ? '改用时间选择' : '改用 cron 表达式' }}
+              </el-button>
+            </div>
+            <el-time-picker
+              v-if="!advancedCron"
+              v-model="dreamTime"
+              format="HH:mm"
+              value-format="HH:mm"
+              :clearable="false"
+              :disabled="!canEdit"
+              placeholder="每天几点跑"
+              class="field-control"
+            />
+            <el-input
+              v-else
+              v-model="draft.dreamCron"
+              :disabled="!canEdit"
+              class="field-control"
+              placeholder="0 40 3 * * *"
+            />
+            <div class="field-note micro muted">
+              每天几点跑夜间维护（去重合并 · 重算画像 · 软删低价值记忆）。默认 <b>03:40</b>。
+              <span class="warn-text">
+                这一格现在只记设定：实际执行时刻仍取部署配置 app.memory.dream-cron，改这里不会立刻改调度。
+              </span>
+              <template v-if="advancedCron">
+                现在填的是六段 cron（秒 分 时 日 月 周）。
+                <span v-if="cronError" class="warn-text">{{ cronError }}</span>
+              </template>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">遗忘天数</label>
+            <el-input-number
+              v-model="draft.forgetAfterDays"
+              :min="7"
+              :max="3650"
+              :disabled="!canEdit"
+              controls-position="right"
+              class="field-control"
+            />
+            <div class="field-note micro muted">
+              重要度 ≤2 且<b>从未命中</b>的记忆，超过这么多天就软删（7–3650，默认 90）。
+              命中过的不会被这条规则挑中。
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="page-foot">
+        <span v-if="!canEdit" class="micro muted">
+          只读：需要「配置通用问答」权限（conversation:settings）
         </span>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-head">
-        <h3 class="panel-title">记忆清单</h3>
-        <el-button v-if="canEdit" size="small" @click="creating = !creating">
-          {{ creating ? '取消' : '新增一条' }}
-        </el-button>
-      </div>
-
-      <div v-if="creating" class="create-box">
-        <div class="create-row">
-          <el-select v-model="form.level" size="small" style="width: 130px">
-            <el-option v-for="level in LEVELS" :key="level.value" :label="level.label" :value="level.value" />
-          </el-select>
-          <el-select v-model="form.kind" size="small" style="width: 120px">
-            <el-option v-for="kind in KINDS" :key="kind.value" :label="kind.label" :value="kind.value" />
-          </el-select>
-          <el-input-number v-model="form.importance" :min="1" :max="5" size="small" />
-          <span class="create-hint">重要度 1–5，低于设定里的下限不会被召回</span>
-        </div>
-        <el-input v-model="form.content" type="textarea" :rows="3" placeholder="例如：我在做合同风险评估，回复时先给结论再给依据。" />
-        <div class="create-actions">
-          <el-button type="primary" size="small" @click="submitCreate">保存</el-button>
+        <span v-else-if="dirty" class="micro muted">有未保存的改动</span>
+        <span v-else class="micro muted">已保存</span>
+        <div class="foot-actions">
+          <el-button :disabled="!dirty || saving" @click="reset">撤销</el-button>
+          <el-button
+            type="primary"
+            :loading="saving"
+            :disabled="!canEdit || !dirty"
+            @click="save"
+          >
+            保存
+          </el-button>
         </div>
       </div>
-
-      <el-table v-loading="loading" :data="items" size="small" empty-text="还没有记忆">
-        <el-table-column label="层级" width="96">
-          <template #default="{ row }">{{ levelLabel(row.level) }}</template>
-        </el-table-column>
-        <el-table-column label="种类" width="82">
-          <template #default="{ row }">{{ kindLabel(row.kind) }}</template>
-        </el-table-column>
-        <el-table-column label="内容" min-width="320">
-          <template #default="{ row }">{{ row.content }}</template>
-        </el-table-column>
-        <el-table-column label="重要度" width="80">
-          <template #default="{ row }">{{ row.importance }}</template>
-        </el-table-column>
-        <el-table-column label="命中" width="72">
-          <template #default="{ row }">{{ row.hitCount }}</template>
-        </el-table-column>
-        <el-table-column v-if="canEdit" label="操作" width="118">
-          <template #default="{ row }">
-            <el-button link size="small" @click="submitEdit(row)">改</el-button>
-            <el-button link size="small" type="danger" @click="remove(row)">删</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </section>
-
-    <section v-if="canEdit && draft" class="panel">
-      <h3 class="panel-title">设定</h3>
-      <p class="panel-hint">这一节改的是全机行为：召回条数与做梦时间一改，所有人下一轮对话都受影响。</p>
-
-      <div class="setting-row">
-        <span class="setting-label">启用长期记忆</span>
-        <el-switch v-model="draft.enabled" />
-        <span class="setting-hint">关掉之后不再写也不再召回，已有记忆保留</span>
-      </div>
-      <div class="setting-row">
-        <span class="setting-label">召回下限</span>
-        <el-input-number v-model="draft.minImportance" :min="1" :max="5" size="small" />
-        <span class="setting-hint">重要度低于这个值的记忆不带进对话</span>
-      </div>
-      <div class="setting-row">
-        <span class="setting-label">召回条数</span>
-        <el-input-number v-model="draft.recallLimit" :min="1" :max="20" size="small" />
-        <span class="setting-hint">四层合计的上限（1–20）；越多越慢</span>
-      </div>
-      <div class="setting-row">
-        <span class="setting-label">注入画像</span>
-        <el-switch v-model="draft.injectProfile" />
-        <span class="setting-hint">把人格画像整段作为背景，而不是按相似度挑几条</span>
-      </div>
-      <div class="setting-row">
-        <span class="setting-label">做梦时间</span>
-        <el-input v-model="draft.dreamCron" size="small" style="width: 180px" placeholder="0 40 3 * * *" />
-        <span class="setting-hint">6 段 cron；做梦 = 去重合并 · 遗忘 · 重算画像</span>
-      </div>
-      <div class="setting-row">
-        <span class="setting-label">遗忘天数</span>
-        <el-input-number v-model="draft.forgetAfterDays" :min="7" :max="3650" size="small" />
-        <span class="setting-hint">重要度 ≤2 且从未命中的记忆，超过这么多天就软删</span>
-      </div>
-
-      <div class="setting-actions">
-        <el-button type="primary" size="small" :loading="saving" :disabled="!dirty" @click="save">保存</el-button>
-        <el-button size="small" :disabled="!dirty" @click="reset">撤销</el-button>
-      </div>
-    </section>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.memory-page {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
-  padding: var(--space-lg);
-}
-
-.panel {
-  border: 1px solid var(--color-rule);
-  border-radius: var(--radius);
-  background: var(--color-surface);
-  padding: var(--space-lg);
-}
-
-.panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-sm);
-}
-
-.panel-title {
-  margin: 0 0 var(--space-sm);
-  font-size: var(--text-md);
-  color: var(--color-ink);
-}
-
-.panel-head .panel-title {
-  margin: 0;
-}
-
-.panel-hint {
-  margin: 0 0 var(--space-md);
-  font-size: var(--text-sm);
-  line-height: 1.6;
-  color: var(--color-muted);
-}
-
-.level-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: var(--space-md);
-}
-
-.level-cell {
-  border: 1px solid var(--color-rule);
-  border-radius: var(--radius);
-  padding: var(--space-md);
-  background: var(--color-sunken);
-}
-
-.level-head {
+/* 版式全部来自全局骨架（styles/index.css 的 .settings-page / .form-grid / .field / .page-foot），
+   这里只多一行「标签 + 右侧小按钮」的排布。 */
+.label-row {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-}
-
-.level-name {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--color-ink);
-}
-
-.level-count {
-  font-size: var(--text-xs);
-  color: var(--color-muted);
-}
-
-.level-hint {
-  margin: var(--space-2xs) 0 0;
-  font-size: var(--text-xs);
-  line-height: 1.6;
-  color: var(--color-muted);
-}
-
-.profile-row {
-  display: flex;
   gap: var(--space-sm);
-  margin-top: var(--space-md);
-  font-size: var(--text-sm);
-}
-
-.profile-label {
-  flex: none;
-  color: var(--color-ink-2);
-}
-
-.profile-text {
-  color: var(--color-ink);
-  line-height: 1.6;
-}
-
-.profile-text.muted {
-  color: var(--color-muted);
-}
-
-.create-box {
-  border: 1px dashed var(--color-rule);
-  border-radius: var(--radius);
-  padding: var(--space-md);
-  margin-bottom: var(--space-md);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-}
-
-.create-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.create-hint,
-.setting-hint {
-  font-size: var(--text-xs);
-  color: var(--color-muted);
-  line-height: 1.6;
-}
-
-.create-actions,
-.setting-actions {
-  display: flex;
-  gap: var(--space-sm);
-}
-
-.setting-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  padding: var(--space-xs) 0;
-  font-size: var(--text-sm);
-}
-
-.setting-label {
-  flex: none;
-  width: 84px;
-  color: var(--color-ink-2);
-}
-
-.setting-actions {
-  margin-top: var(--space-md);
 }
 </style>

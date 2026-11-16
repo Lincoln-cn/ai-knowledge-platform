@@ -249,11 +249,38 @@
   font-weight: 500;
 }
 
-/* ── 弹窗 ── */
+/* ── 弹窗 ──
+ *
+ * 统一的三段结构：头部（标题 + 下分割线）· 正文 · 底部（上分割线 + 取消/确定）。
+ *
+ * ★ 正文自己**没有**内边距（Element Plus 把 padding 放在 .el-dialog 上），
+ *   所以第一项会紧贴头部的下分割线、最后一项紧贴底部的上分割线。
+ *   2026-11-16 用户报「编码和分割线贴太近」就是这一条 —— 在正文上下各补 8px。
+ *   用 :first-child / :last-child 而不是给 .el-dialog__body 加 padding：
+ *   后者会让 dialog 自带的 16px 叠加成 32px，反而过松。
+ */
 .el-dialog {
   --el-dialog-border-radius: var(--radius-lg);
   border: 1px solid var(--color-rule);
   box-shadow: var(--shadow-float);
+}
+
+.el-dialog__body {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.el-dialog__body > *:first-child {
+  margin-top: var(--space-md);
+}
+
+.el-dialog__body > *:last-child {
+  margin-bottom: var(--space-md);
+}
+
+/* 表单最后一项不再留下 18px 的尾巴：它下面紧跟着的是分割线，不是下一项 */
+.el-dialog .el-form .el-form-item:last-child {
+  margin-bottom: 0;
 }
 
 .el-dialog__header {
@@ -272,6 +299,29 @@
 .el-dialog__footer {
   padding-top: var(--space-sm);
   border-top: 1px solid var(--color-rule-2);
+}
+
+/* 底部按钮：取消在左、确定在右，间距一致（Element Plus 默认靠右，这里只统一间隔） */
+.el-dialog__footer .el-button + .el-button {
+  margin-left: var(--space-sm);
+}
+
+/*
+ * 弹窗内表单的方向：`label-position="top"`（标签在控件上方，两者同宽）。
+ *
+ * ★ 为什么不在弹窗里用「标签在左、固定 label-width」：弹窗宽度只有 440–560px，
+ *   而表单标签往往只有两个字（编码 / 名称 / 排序 / 状态）。固定 88px 时，
+ *   标签贴左、控件从 105px 开始 —— 标签与控件之间留下一段死白，整体看起来偏右，
+ *   用户 2026-11-16 反馈的「编码、名称为什么贴左边，然后右侧离得很远」就是它。
+ *   top 布局下标签与控件都从正文左边界起算，左右完全对称，也省掉给每张表单
+ *   单独估 label-width 的事。
+ *
+ * 这是**新写弹窗的口径**；历史用 `label-width="88px"` 的弹窗不改也能看
+ * （标签较长的表单不受影响），改动它们属于独立的版式批次。
+ */
+.el-dialog .el-form-item--label-top .el-form-item__label {
+  padding-bottom: var(--space-2xs);
+  line-height: 1.5;
 }
 
 /* ── 抽屉 ── */

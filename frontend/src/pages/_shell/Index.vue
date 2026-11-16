@@ -331,14 +331,16 @@ const onCommand = async (command: string) => {
 }
 
 /* 带框顶栏（Cobalt 签名 5）：通栏 + 单条底部发丝线。
-   全工程唯一允许 backdrop-filter 的位置。 */
+   全工程唯一允许 backdrop-filter 的位置。
+   ★ 左右内边距与 `.page` 相同（--space-lg）：顶栏的通栏底边会让两侧留白显得更宽，
+     若这里用 --space-md，菜单文字会比页面标题往里缩 8px，读起来像两块不相干的东西。 */
 .topbar {
   height: 48px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: 0 var(--space-md);
+  padding: 0 var(--space-lg);
   background: color-mix(in oklch, var(--color-surface) 72%, transparent);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--color-rule-2);

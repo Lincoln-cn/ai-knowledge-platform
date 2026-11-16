@@ -56,9 +56,16 @@ export interface GuardRule {
   note?: string | null
 }
 
-/** 一段时间内某一分类被拦的次数。★ 接口只回计数，不回落库的词面 */
+/**
+ * 一段时间内某一分类被拦的次数。★ 接口只回计数，不回落库的词面。
+ *
+ * ★ `categoryName` 由后端现场从分类表取 —— 界面**不要**自己写一张码→名的表：
+ *   分类可改名、可自建，本地映射在改名后显示旧名、自建分类只剩机器码。
+ *   分类被删掉时这里是 `null`，显示时按 `categoryCode` 回落。
+ */
 export interface GuardHitCount {
   categoryCode: string
+  categoryName: string | null
   hits: number
 }
 
@@ -71,6 +78,8 @@ export interface GuardHitCount {
 export interface GuardHitDetail {
   at: string
   categoryCode: string
+  /** 分类展示名（后端现场取）；分类已删时为 null，按 categoryCode 回落 */
+  categoryName: string | null
   kind: GuardRuleKind
   ruleId: string
   contentHashPrefix: string
@@ -90,8 +99,7 @@ export interface GuardHitPage {
   size: number
 }
 
-export interface GuardCategoryInput {
-  code: string
+export interface GuardCategoryInput {  code: string
   name: string
   sortOrder?: number
   enabled?: boolean
@@ -105,6 +113,27 @@ export interface GuardRuleInput {
   content: string
   enabled?: boolean
   note?: string | null
+}
+
+/** 某一天的拦截次数。日期是 `yyyy-MM-dd` 字符串，只有有拦截的日期才出现 */
+export interface GuardTrendPoint {
+  day: string
+  hits: number
+}
+
+/**
+ * 聚合读数：总量 + 按天 + 按分类。
+ *
+ * ★ 与 `GuardHitPage` 分开：看板要的是趋势与占比，不需要逐条明细。
+ *   合成一个接口，看板一打开就要拉一页明细回来，而那些明细一个字都不显示。
+ */
+export interface GuardStats {
+  /** 窗口天数；0 表示不限时间 */
+  days: number
+  total: number
+  /** 按日期升序；没有拦截的日期不在里面，画图前要补零 */
+  byDay: GuardTrendPoint[]
+  byCategory: GuardHitCount[]
 }
 
 /* ────────────────────────── 接口 ────────────────────────── */
@@ -145,12 +174,13 @@ export const deleteGuardRule = (id: string) =>
   request<boolean>({ method: 'DELETE', url: '/guard/rules/:id', path: { id } })
 
 /**
- * 最近若干天各分类被拦的次数。
+ * 聚合读数：运营看板的「安全围栏」一块用它。
  *
- * ★ 只有计数：这个接口的用途是"哪一类在涨"，不是取一份词表副本。
- *
- * @param days 窗口 1–90，默认 7
+ * @param days 窗口天数；0 = 全部（不限时间）
  */
+export const getGuardStats = (days = 30) =>
+  request<GuardStats>({ method: 'GET', url: '/guard/stats', query: { days } })
+
 /**
  * 拦截记录（汇总 + 分页明细）。
  *

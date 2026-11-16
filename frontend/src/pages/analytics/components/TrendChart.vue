@@ -130,8 +130,15 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/*
+ * 高度跟父容器走（并排布局里卡片高度由内容多的一方决定，图要吃掉剩下的空间，
+ * 否则图下方会留一条空白）。`min-height` 是给"父容器没给高度"的情况兜底 ——
+ * 那时 height: 100% 会塌成 0，echarts 初始化一个 0 高的画布什么都画不出来。
+ */
 .trend-chart {
   width: 100%;
-  height: 280px;
+  height: 100%;
+  min-height: 280px;
 }
+
 </style>

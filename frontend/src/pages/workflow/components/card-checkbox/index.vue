@@ -89,12 +89,34 @@ function checkboxChange() {
 }
 
 .card-checkbox {
+    /* 卡片内边距从默认 20px 收到 10px 12px：这类"两列并排"的弹窗里宽度本来就紧，
+       20px 一圈内边距吃掉 40px，长名字只能挤掉右侧的勾选框。 */
+    --el-card-padding: 10px 12px;
+
+    min-width: 0;
+
     &.active {
         border: 1px solid var(--el-color-primary);
     }
 
-    /* 勾选框只做指示：点击一律由外层卡片处理，避免同一次点击被两处各算一次 */
+    /* ★ 左侧（图标 + 名称）必须能收缩：flex 子项默认 `min-width: auto`，
+       名字一长就顶出去，右侧的勾选框被挤出卡片边界（截图里"勾选贴在右边缘"就是这个）。
+       `min-width: 0` + 名称自身的 `.ellipsis` 才能让它省略号收尾。 */
+    .flex-between {
+        gap: var(--space-sm);
+        min-width: 0;
+    }
+
+    .flex-between > .flex {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+    }
+
+    /* 勾选框：既不许被压缩，也只做指示 —— 点击一律由外层卡片处理，
+       避免同一次点击被两处各算一次。 */
     &__mark {
+        flex: 0 0 auto;
         pointer-events: none;
     }
 

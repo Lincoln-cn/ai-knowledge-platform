@@ -374,25 +374,63 @@ public class GuardStore {
    * <p>★ 真源是审计表（{@code pf_audit_log}），**不另建一张计数表**：两张表迟早不一致， 而"今天拦了几次"这个问题只有一个可核对的答案 —— 审计里那几行。★
    * 只回计数，不回落库的词面。
    *
+   * <p>★ 分类名从 {@code pf_guard_category} 现场取（{@code left join}），不在前端另存一份映射：分类是运营配置项， 管理员可以新建、可以改名 ——
+   * 前端写死一张表的话，改名之后看板上还显示旧名，自建分类则只显示码。 分类被删掉时 {@code category_name} 为 null，读的人按 {@code
+   * category_code} 回落。
+   *
    * @param days 窗口天数；{@code 0} 表示不限时间
    * @return 按次数降序
    */
   public List<GuardHitCount> hitCounts(int days) {
+    String withName =
+        "select coalesce(a.detail ->> 'category', 'UNKNOWN') as category, c.name as category_name,"
+            + " count(*) as hits from pf_audit_log a left join pf_guard_category c"
+            + " on c.code = coalesce(a.detail ->> 'category', 'UNKNOWN')";
     if (days <= 0) {
       return jdbc.query(
-          "select coalesce(detail ->> 'category', 'UNKNOWN') as category, count(*) as hits from"
-              + " pf_audit_log where action = ? group by 1 order by 2 desc",
-          (rs, rowNum) -> new GuardHitCount(rs.getString("category"), rs.getLong("hits")),
+          withName + " where a.action = ? group by 1, 2 order by 3 desc",
+          (rs, rowNum) ->
+              new GuardHitCount(
+                  rs.getString("category"), rs.getString("category_name"), rs.getLong("hits")),
           cn.lincoln.aiplatform.platform.domain.AuditAction.GUARD_BLOCK.code());
     }
     int window = Math.min(days, 90);
     return jdbc.query(
-        "select coalesce(detail ->> 'category', 'UNKNOWN') as category, count(*) as hits from"
-            + " pf_audit_log where action = ? and created_at >= now() - make_interval(days => ?)"
-            + " group by 1 order by 2 desc",
-        (rs, rowNum) -> new GuardHitCount(rs.getString("category"), rs.getLong("hits")),
+        withName
+            + " where a.action = ? and a.created_at >= now() - make_interval(days => ?)"
+            + " group by 1, 2 order by 3 desc",
+        (rs, rowNum) ->
+            new GuardHitCount(
+                rs.getString("category"), rs.getString("category_name"), rs.getLong("hits")),
         cn.lincoln.aiplatform.platform.domain.AuditAction.GUARD_BLOCK.code(),
         window);
+  }
+
+  /**
+   * 窗口内被拦的次数，按本地日期聚合（看板的趋势线用）。
+   *
+   * <p>★ 时区固定成 {@code Asia/Shanghai}，不跟随会话/容器时区：容器里通常是 UTC， 而"昨天拦了几次"是给人看的报表，按 UTC 切日会让每天的数字在早上 8
+   * 点错位。★ 只回有拦截的日期，前端要补零 —— 把补零放在前端是因为"窗口里有几天"只有前端知道。
+   *
+   * @param days 窗口天数；{@code 0} 表示不限时间
+   * @return 按日期升序
+   */
+  public List<GuardTrendPoint> statsByDay(int days) {
+    var mapper =
+        (org.springframework.jdbc.core.RowMapper<GuardTrendPoint>)
+            (rs, rowNum) -> new GuardTrendPoint(rs.getString("day"), rs.getLong("hits"));
+    String action = cn.lincoln.aiplatform.platform.domain.AuditAction.GUARD_BLOCK.code();
+    String select =
+        "select to_char(created_at at time zone 'Asia/Shanghai', 'YYYY-MM-DD') as day,"
+            + " count(*) as hits from pf_audit_log where action = ?";
+    if (days <= 0) {
+      return jdbc.query(select + " group by 1 order by 1", mapper, action);
+    }
+    return jdbc.query(
+        select + " and created_at >= now() - make_interval(days => ?) group by 1 order by 1",
+        mapper,
+        action,
+        Math.min(days, 90));
   }
 
   /**
@@ -424,6 +462,8 @@ public class GuardStore {
    *
    * <p>★ 真源是审计表，不另建计数表：同一件事两处记账，早晚会不一致。
    *
+   * <p>★ 分类名现场从 {@code pf_guard_category} 取（{@code left join}）—— 分类可改名、可自建， 前端另存一份码→名的映射会在改名后显示旧名。
+   *
    * @param days 窗口天数；{@code 0} 表示不限时间
    * @param limit 最多取多少行（夹在 1–500）
    * @param offset 跳过多少行（分页用）
@@ -432,16 +472,19 @@ public class GuardStore {
     int rows = Math.max(1, Math.min(limit, 500));
     int skip = Math.max(0, offset);
     String base =
-        "select created_at, detail ->> 'category' as category, detail ->> 'kind' as kind,"
-            + " detail ->> 'hash' as hash, detail ->> 'conversation' as conversation,"
-            + " resource_id, actor_id, actor_name"
-            + " from pf_audit_log where action = ?";
+        "select a.created_at, a.detail ->> 'category' as category, c.name as category_name,"
+            + " a.detail ->> 'kind' as kind, a.detail ->> 'hash' as hash,"
+            + " a.detail ->> 'conversation' as conversation,"
+            + " a.resource_id, a.actor_id, a.actor_name"
+            + " from pf_audit_log a left join pf_guard_category c"
+            + " on c.code = a.detail ->> 'category' where a.action = ?";
     var mapper =
         (org.springframework.jdbc.core.RowMapper<GuardHitDetail>)
             (rs, rowNum) ->
                 new GuardHitDetail(
                     rs.getObject("created_at", java.time.OffsetDateTime.class).toInstant(),
                     rs.getString("category"),
+                    rs.getString("category_name"),
                     rs.getString("kind"),
                     rs.getString("resource_id"),
                     rs.getString("hash"),
@@ -451,12 +494,12 @@ public class GuardStore {
     String action = cn.lincoln.aiplatform.platform.domain.AuditAction.GUARD_BLOCK.code();
     if (days <= 0) {
       return jdbc.query(
-          base + " order by created_at desc limit ? offset ?", mapper, action, rows, skip);
+          base + " order by a.created_at desc limit ? offset ?", mapper, action, rows, skip);
     }
     return jdbc.query(
         base
-            + " and created_at >= now() - make_interval(days => ?)"
-            + " order by created_at desc limit ? offset ?",
+            + " and a.created_at >= now() - make_interval(days => ?)"
+            + " order by a.created_at desc limit ? offset ?",
         mapper,
         action,
         Math.min(days, 90),

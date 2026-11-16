@@ -6,6 +6,7 @@ import cn.lincoln.aiplatform.platform.guard.GuardRule;
 import cn.lincoln.aiplatform.platform.guard.GuardRuleKind;
 import cn.lincoln.aiplatform.platform.guard.GuardService;
 import cn.lincoln.aiplatform.platform.guard.GuardSettings;
+import cn.lincoln.aiplatform.platform.guard.GuardStats;
 import cn.lincoln.aiplatform.platform.guard.GuardStore;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
 import java.util.List;
@@ -197,6 +198,20 @@ public class GuardController {
       @RequestParam(value = "page", required = false, defaultValue = "1") int page,
       @RequestParam(value = "size", required = false, defaultValue = "20") int size) {
     return ApiResponse.ok(guard.hits(days, page, size));
+  }
+
+  /**
+   * 聚合读数：总量、按天趋势、按分类分布。运营看板的「安全围栏」一块用它。
+   *
+   * <p>★ 与 {@code /hits} 分开：看板只要曲线与占比，不需要逐条明细。
+   *
+   * @param days 窗口天数；{@code 0} 表示不限时间（"全部"）
+   */
+  @GetMapping("/stats")
+  @PreAuthorize("hasAuthority('platform:guard:manage')")
+  public ApiResponse<GuardStats> stats(
+      @RequestParam(value = "days", required = false, defaultValue = "30") int days) {
+    return ApiResponse.ok(guard.stats(days));
   }
 
   private static UUID operator(Jwt jwt) {

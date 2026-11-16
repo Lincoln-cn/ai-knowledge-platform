@@ -25,6 +25,7 @@
     </div>
 
     <template v-else>
+
       <!-- ── ① 输入检查 ───────────────────────────────────────────────── -->
       <section class="panel">
         <div class="panel-head">
@@ -35,77 +36,73 @@
             </div>
             <div class="micro muted">命中即拒答，不再送给模型 —— 拒答话术由这里决定</div>
           </div>
-          <!-- 保存动作放在它管的那一块头上：四格都在这一块里，改完就地能存，
-               不必先滚到页底再回头看改了什么。 -->
-          <div class="panel-tools">
-            <span v-if="!canEdit" class="micro muted">只读</span>
-            <span v-else-if="dirty" class="unsaved"><b>{{ dirtyCount }}</b> 项未保存</span>
-            <span v-else class="micro muted">没有未保存的改动</span>
-            <el-button :disabled="!canEdit || !dirty || saving" @click="reset">撤销</el-button>
-            <el-button
-              type="primary"
-              :loading="saving"
-              :disabled="!canEdit || !dirty"
-              @click="save"
-            >
-              保存
-            </el-button>
-          </div>
         </div>
-        <div class="panel-body form-grid">
-          <div class="field">
-            <label class="field-label">启用输入检查</label>
-            <div class="switch-row">
-              <el-switch v-model="form.inputEnabled" :disabled="!canEdit" />
-              <span class="micro muted">{{ form.inputEnabled ? '命中即拒答' : '不检查，直接问模型' }}</span>
+        <div class="panel-body">
+          <div class="switch-item">
+            <div class="switch-key">
+              <label class="field-label">启用输入检查</label>
+              <div class="switch-row">
+                <el-switch v-model="form.inputEnabled" :disabled="!canEdit" />
+                <span class="micro muted">
+                  {{ form.inputEnabled ? '命中即拒答' : '不检查，直接问模型' }}
+                </span>
+              </div>
             </div>
-            <div class="field-note micro muted">
+            <div class="switch-note micro muted">
               关掉之后全平台所有链路的问答都在<b>无检查状态</b>下运行（通用问答、挂应用的问答、公开问答）。
               这一格会被单独记一条审计，因为它是"最该被追查"的一次改动。
             </div>
           </div>
 
-          <div class="field">
-            <label class="field-label">接入对话链路</label>
-            <div class="switch-row">
-              <el-switch v-model="form.advisorsEnabled" :disabled="!canEdit" />
-              <span class="micro" :class="form.advisorsEnabled ? 'muted' : 'warn-text'">
-                {{ form.advisorsEnabled ? '围栏已挂上' : '未挂上 —— 上面开着也不检查' }}
-              </span>
+          <div class="switch-item">
+            <div class="switch-key">
+              <label class="field-label">接入对话链路</label>
+              <div class="switch-row">
+                <el-switch v-model="form.advisorsEnabled" :disabled="!canEdit" />
+                <span class="micro" :class="form.advisorsEnabled ? 'muted' : 'warn-text'">
+                  {{ form.advisorsEnabled ? '围栏已挂上' : '未挂上 —— 上面开着也不检查' }}
+                </span>
+              </div>
             </div>
-            <div class="field-note micro muted">
+            <div class="switch-note micro muted">
               这是<b>总闸</b>：它决定对话链路里要不要挂上这个围栏。关掉之后上面那一格开得再对，
               也不会有任何检查 —— 两格是「有没有装」与「装了什么」的关系，不是重复。
             </div>
           </div>
 
-          <div class="field field-wide">
-            <label class="field-label">统一拒答话术</label>
-            <el-input
-              v-model="form.defaultRefusalText"
-              :maxlength="200"
-              show-word-limit
-              :disabled="!canEdit"
-            />
-            <div class="field-note micro muted">
-              只写"不能回答"，<b>不要复述命中的词</b> —— 复述等于把词表变成可以逐条试出来的探测器。
+          <div class="switch-item">
+            <div class="switch-key">
+              <label class="field-label">按分类给不同话术</label>
+              <div class="switch-row">
+                <el-switch
+                  v-model="form.categoryRefusalEnabled"
+                  :disabled="!canEdit || !form.advisorsEnabled"
+                />
+                <span class="micro muted">
+                  {{ form.categoryRefusalEnabled ? '按分类分别回话' : '统一回同一句' }}
+                </span>
+              </div>
+            </div>
+            <div class="switch-note micro muted">
+              默认关。打开后不同分类回不同的话，"这句属于哪一类"就变成可探测的信息；
+              对外服务的部署建议保持关闭。
             </div>
           </div>
 
-          <div class="field">
-            <label class="field-label">按分类给不同话术</label>
-            <div class="switch-row">
-              <el-switch
-                v-model="form.categoryRefusalEnabled"
-                :disabled="!canEdit || !form.advisorsEnabled"
-              />
-              <span class="micro muted">
-                {{ form.categoryRefusalEnabled ? '按分类分别回话' : '统一回同一句' }}
-              </span>
+          <div class="switch-item">
+            <div class="switch-key">
+              <label class="field-label">统一拒答话术</label>
             </div>
-            <div class="field-note micro muted">
-              默认关。打开后不同分类回不同的话，"这句属于哪一类"就变成可探测的信息；
-              对外服务的部署建议保持关闭。
+            <div class="switch-note">
+              <el-input
+                v-model="form.defaultRefusalText"
+                :maxlength="200"
+                show-word-limit
+                :disabled="!canEdit"
+              />
+              <div class="micro muted">
+                只写"不能回答"，<b>不要复述命中的词</b> —— 复述等于把词表变成可以逐条试出来的探测器。
+              </div>
             </div>
           </div>
         </div>
@@ -171,89 +168,19 @@
         </div>
       </section>
 
-      <!-- ── ③ 拦截记录 ───────────────────────────────────────────────── -->
-      <section class="panel">
-        <div class="panel-head">
-          <div>
-            <div class="card-title">拦截记录</div>
-            <div class="micro muted">
-              每一条都记着谁、什么时候、在哪个会话 —— 点「看会话」能回到那次提问。原话只存在会话里，
-              不复制进审计（它会长期留存，复制一份就删不掉了）
-            </div>
-          </div>
-          <div class="panel-tools">
-            <span v-if="hitPage.byCategory.length" class="hit-brief micro">
-              <span v-for="h in hitPage.byCategory" :key="h.categoryCode" class="hit-brief-item">
-                {{ categoryNameOf(h.categoryCode) }} {{ h.hits }}
-              </span>
-            </span>
-            <el-select
-              v-model="hitDays"
-              size="small"
-              class="filter-select"
-              @change="reloadHits"
-            >
-              <el-option :value="7" label="最近 7 天" />
-              <el-option :value="30" label="最近 30 天" />
-              <el-option :value="90" label="最近 90 天" />
-              <el-option :value="0" label="全部" />
-            </el-select>
-            <span class="micro muted">共 {{ hitPage.total }} 次</span>
-          </div>
+      <!-- 保存动作放在页尾（与检索页同一位置）：这页只有「输入检查」一块需要保存，
+           但保存行摆在页尾才不会切断 ①② 两块之间的视觉连续。 -->
+      <div class="page-foot">
+        <span v-if="!canEdit" class="micro muted">只读：需要「安全围栏」权限</span>
+        <span v-else-if="dirty" class="unsaved"><b>{{ dirtyCount }}</b> 项未保存</span>
+        <span v-else class="micro muted">已保存</span>
+        <div class="foot-actions">
+          <el-button :disabled="!canEdit || !dirty || saving" @click="reset">撤销</el-button>
+          <el-button type="primary" :loading="saving" :disabled="!canEdit || !dirty" @click="save">
+            保存
+          </el-button>
         </div>
-        <div class="panel-body">
-          <div v-if="hitPage.recent.length === 0" class="micro muted">
-            {{ hitDays === 0 ? '还没有任何拦截记录。' : '这段时间里没有拦截记录。' }}
-          </div>
-          <template v-else>
-            <el-table :data="hitPage.recent" size="small" row-key="at">
-              <el-table-column label="时间" width="170">
-                <template #default="{ row }">{{ formatAt(row.at) }}</template>
-              </el-table-column>
-              <el-table-column label="分类" width="100">
-                <template #default="{ row }">{{ categoryNameOf(row.categoryCode) }}</template>
-              </el-table-column>
-              <el-table-column label="类型" width="90">
-                <template #default="{ row }">
-                  {{ row.kind === 'QUESTION' ? '敏感问题' : '关键词' }}
-                </template>
-              </el-table-column>
-              <el-table-column label="命中的规则" min-width="240">
-                <template #default="{ row }">
-                  <span class="hit-rule">{{ ruleContentOf(row.ruleId) }}</span>
-                  <span class="micro muted"> · {{ row.contentHashPrefix }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="谁问的" width="150">
-                <template #default="{ row }">{{ row.actorName || '（匿名/未知）' }}</template>
-              </el-table-column>
-              <el-table-column label="会话" width="120">
-                <template #default="{ row }">
-                  <router-link
-                    v-if="row.conversationId"
-                    :to="{ path: '/conversation', query: { conversationId: row.conversationId } }"
-                    class="hit-link"
-                  >
-                    看会话
-                  </router-link>
-                  <span v-else class="micro muted">—</span>
-                </template>
-              </el-table-column>
-            </el-table>
-            <el-pagination
-              v-if="hitPage.total > hitPage.size"
-              class="hit-pager"
-              layout="prev, pager, next, total"
-              :current-page="hitPage.page"
-              :page-size="hitPage.size"
-              :total="hitPage.total"
-              background
-              @current-change="changeHitPage"
-            />
-          </template>
-        </div>
-      </section>
-
+      </div>
     </template>
 
     <!-- 某个分类下的规则：点分类行的「规则（N）」打开 -->
@@ -303,7 +230,7 @@
 
     <!-- 新建 / 编辑分类 -->
     <el-dialog v-model="categoryDialog" :title="categoryForm.id ? '编辑分类' : '新建分类'" width="440px">
-      <el-form label-width="76px">
+      <el-form label-position="top" label-width="auto">
         <el-form-item label="编码">
           <el-input
             v-model="categoryForm.code"
@@ -336,13 +263,13 @@
       </el-form>
       <template #footer>
         <el-button @click="categoryDialog = false">取消</el-button>
-        <el-button type="primary" :loading="savingCategory" @click="submitCategory">确定</el-button>
+        <el-button type="primary" :loading="savingCategory" @click="submitCategory">保存</el-button>
       </template>
     </el-dialog>
 
     <!-- 新建 / 编辑规则 -->
     <el-dialog v-model="ruleDialog" :title="ruleForm.id ? '编辑规则' : '新建规则'" width="520px">
-      <el-form label-width="76px">
+      <el-form label-position="top" label-width="auto">
         <el-form-item label="分类">
           <el-select v-model="ruleForm.categoryId" placeholder="选择分类" class="filter-select">
             <el-option
@@ -388,7 +315,7 @@
       </el-form>
       <template #footer>
         <el-button @click="ruleDialog = false">取消</el-button>
-        <el-button type="primary" :loading="savingRule" @click="submitRule">确定</el-button>
+        <el-button type="primary" :loading="savingRule" @click="submitRule">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -405,13 +332,11 @@ import {
   disableGuardCategory,
   getGuardSettings,
   listGuardCategories,
-  listGuardHits,
   listGuardRules,
   updateGuardCategory,
   updateGuardSettings,
   updateGuardRule,
   type GuardCategory,
-  type GuardHitPage,
   type GuardRule,
   type GuardRuleInput,
   type GuardRuleKind,
@@ -424,11 +349,14 @@ import { useSessionStore } from '@/stores/session'
 /**
  * 安全围栏（`/settings/guard`，ROADMAP §11.53）。
  *
- * ★ 这一页的四块对应四件事：**要不要查**（输入检查）、**查哪几类**（分类）、
- *   **查什么**（规则）、**查到了多少**（拦截计数）。四块必须同页 ——
+ * ★ 这一页的三块对应三件事：**它现在在拦什么**（拦截记录）、**要不要查**（输入检查，
+ *   连同话术）、**查哪几类 / 查什么**（分类，规则挂在分类下的抽屉里）。三块必须同页 ——
  *   把它们拆到两个菜单里，"把某一类关掉"与"它最近挡了多少"就再也对不上账。
  *
- * ★ 分类与规则**不是**表单的一部分，它们有各自的增删改接口。整行提交的只有最上面那四格，
+ * ★ 顺序是用户定的：**读数在最上面**。进这一页的人第一个问题是"它到底生效了吗"，
+ *   而不是"我该改哪个开关"；记录多时靠表格限高（360px 内滚动），不把配置推到几屏之外。
+ *
+ * ★ 分类与规则**不是**表单的一部分，它们有各自的增删改接口。整行提交的只有「输入检查」那四格，
  *   因为那四格互相牵连（关检查之后分类话术就无意义）。
  */
 const session = useSessionStore()
@@ -449,16 +377,6 @@ const loadError = ref<{ reason: string; hint?: string | null } | null>(null)
 
 const categories = ref<GuardCategory[]>([])
 const rules = ref<GuardRule[]>([])
-/** 拦截记录的时间窗口：0 = 全部（后端把 0 解释成"不限时间"）。 */
-const hitDays = ref(7)
-const hitPage = ref<GuardHitPage>({
-  days: 7,
-  total: 0,
-  byCategory: [],
-  recent: [],
-  page: 1,
-  size: 20
-})
 const rulesDrawer = ref(false)
 const drawerCategory = ref<GuardCategory | null>(null)
 
@@ -498,10 +416,6 @@ function reasonOf(e: unknown): string {
   return e instanceof Error ? e.message : ''
 }
 
-function categoryNameOf(code: string): string {
-  return categories.value.find((c) => c.code === code)?.name ?? code
-}
-
 function adopt(data: GuardSettingsUpdate & { updatedAt?: string | null }) {
   form.inputEnabled = data.inputEnabled
   form.defaultRefusalText = data.defaultRefusalText
@@ -531,7 +445,7 @@ async function load() {
     }
     return
   }
-  await Promise.all([loadCategories(), loadRules(), loadHits()])
+  await Promise.all([loadCategories(), loadRules()])
 }
 
 async function loadCategories() {
@@ -548,48 +462,6 @@ async function loadRules() {
   } catch (e) {
     ElMessage.error(reasonOf(e) || '读取规则失败')
   }
-}
-
-async function loadHits(page = hitPage.value.page) {
-  try {
-    hitPage.value = await listGuardHits(hitDays.value, page)
-  } catch {
-    // 读数读不到不影响配置：不弹错，保持空表（页面那行"没有拦截记录"会照常显示）
-    hitPage.value = {
-      days: hitDays.value,
-      total: 0,
-      byCategory: [],
-      recent: [],
-      page: 1,
-      size: 20
-    }
-  }
-}
-
-/** 换时间范围：页码必须回到 1，否则会落在"这个范围里没有第 5 页"的空表上。 */
-function reloadHits() {
-  void loadHits(1)
-}
-
-function changeHitPage(page: number) {
-  void loadHits(page)
-}
-
-/** 拦截时间：本地时刻，精确到分（审计里是 long 值的毫秒级，页面上给到秒反而噪声）。 */
-function formatAt(iso: string) {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-/**
- * 命中规则的内容：规则是管理员自己维护的（同一页就能看到），所以这里可以直接显示。
- * ★ 找不到（规则已被删）就说清楚 —— 不显示 hash 之外的猜测。
- */
-function ruleContentOf(ruleId: string) {
-  const found = rules.value.find((r) => r.id === ruleId)
-  return found ? found.content : '（这条规则已被删除）'
 }
 
 function reset() {
@@ -827,9 +699,6 @@ onMounted(load)
  * 说明文字紧贴下一个字段的标签（用户原话：「太拥挤，都看不清」）。
  * ⇒ 页面里不要再复制这些类。
  */
-.filter-select {
-  width: 150px;
-}
 
 /* 抽屉顶部：口径说明在左、「新建规则」在右 */
 .drawer-head {
@@ -903,30 +772,5 @@ onMounted(load)
   font-size: 20px;
   font-variant-numeric: tabular-nums;
 }
-
-/* 头部的分类分布：一行小字，读作"色情 2 · 暴力 1" */
-.hit-brief {
-  display: inline-flex;
-  gap: var(--space-sm);
-}
-
-.hit-brief-item::after {
-  content: '·';
-  margin-left: var(--space-sm);
-  color: var(--color-border);
-}
-
-.hit-brief-item:last-child::after {
-  content: none;
-}
-
-.hit-link {
-  color: var(--color-primary);
-}
-
-/* 分页靠右，与表格留一点间距 */
-.hit-pager {
-  margin-top: var(--space-md);
-  justify-content: flex-end;
-}
 </style>
+

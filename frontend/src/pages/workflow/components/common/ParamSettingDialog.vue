@@ -1,5 +1,5 @@
 <template>
-    <el-dialog align-center title="参数设置" class="param-dialog" v-model="dialogVisible" style="width: 550px" append-to-body
+    <el-dialog align-center title="参数设置" class="param-dialog" v-model="dialogVisible" width="560px" append-to-body
         :close-on-click-modal="false" :close-on-press-escape="false">
         <div class="dialog-max-height">
             <el-scrollbar>
@@ -236,26 +236,18 @@ function changeHandle(val: string) {
 
 defineExpose({ open })
 </script>
-<style lang="scss" scope>
+<style lang="scss" scoped>
+/* 弹窗的头/正文/底三段留白、分割线与按钮顺序一律走全局口径
+   （src/styles/element-plus.css）。这里只保留内容区自己的高度与滑块的排版。 */
 .param-dialog {
-    padding: 8px 8px 24px 8px;
+  .dialog-max-height {
+    height: 560px;
+  }
 
-    .el-dialog__header {
-        padding: 16px 16px 0 16px;
+  .custom-slider {
+    .el-input-number.is-without-controls .el-input__wrapper {
+      padding: 0 !important;
     }
-
-    .el-dialog__body {
-        padding: 0 !important;
-    }
-
-    .dialog-max-height {
-        height: 560px;
-    }
-
-    .custom-slider {
-        .el-input-number.is-without-controls .el-input__wrapper {
-            padding: 0 !important;
-        }
-    }
+  }
 }
 </style>

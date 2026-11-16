@@ -1,24 +1,15 @@
 <template>
-    <el-dialog title="添加关联知识库" v-model="dialogVisible" width="600" append-to-body class="addDataset-dialog" align-center
+    <el-dialog title="添加关联知识库" v-model="dialogVisible" width="560px" append-to-body class="addDataset-dialog" align-center
         :close-on-click-modal="false" :close-on-press-escape="false">
         <template #header="{ titleId, titleClass }">
-            <div class="flex-between mb-8">
-                <h4 :id="titleId" :class="titleClass"> 添加关联知识库 </h4>
-                <!-- <div class="flex align-center mr-8">
-                    <el-button link class="ml-16" @click="refresh">
-                        <el-icon class="mr-4">
-                            <Refresh />
-                        </el-icon>刷新
-                    </el-button>
-                    <el-divider direction="vertical" />
-                </div> -->
-            </div>
-            <div class="flex-between">
-                <el-text type="info" class="color-secondary">
-                    所选知识库必须使用相同的 Embedding 模型
-                </el-text>
-                <el-input v-model="searchValue" placeholder="搜索" prefix-icon="Search" class="w-240" clearable />
-            </div>
+            <!--
+              ★ 说明与搜索框原来挤在同一行：560px 宽的弹窗里搜索框固定 240px，
+              说明文字只剩 260px ⇒ 折成两行、还顶着搜索框。现在拆成两行：
+              说明一行、搜索一行通栏。
+            -->
+            <h4 :id="titleId" :class="titleClass" class="mb-8"> 添加关联知识库 </h4>
+            <p class="dlg-hint">所选知识库必须使用相同的 Embedding 模型</p>
+            <el-input v-model="searchValue" placeholder="按名称搜索" prefix-icon="Search" class="dlg-search" clearable />
         </template>
         <el-scrollbar>
             <div class="max-height">
@@ -155,29 +146,27 @@ const submitHandle = () => {
 
 defineExpose({ open })
 </script>
-<style lang="scss" scope>
+<style lang="scss" scoped>
+/* 弹窗的头/正文/底三段留白与分割线走全局口径（src/styles/element-plus.css），
+   这里只保留本弹窗自己的两件事：搜索区排版、列表区滚动高度。 */
 .addDataset-dialog {
-    padding: 0;
+  .dlg-hint {
+    margin: 0 0 var(--space-sm);
+    font-size: var(--text-sm);
+    color: var(--color-ink-muted);
+  }
 
-    .el-dialog__header {
-        padding: 24px 24px 8px 24px;
-    }
+  .dlg-search {
+    width: 100%;
+    margin-bottom: var(--space-md);
+  }
 
-    .el-dialog__body {
-        padding: 8px !important;
-    }
-
-    .el-dialog__footer {
-        padding: 8px 24px 24px 24px;
-    }
-
-    .el-dialog__headerbtn {
-        top: 13px;
-    }
-
-    .max-height {
-        height: calc(100vh - 560px);
-        padding: 0 16px;
-    }
+  /* ★ 原来写的是 `height: calc(100vh - 560px)`：窗口矮时算出来的值可能比可用空间大，
+     弹窗把内容裁掉（卡片第三行被切一半、还不出滚动条）；窗口高时又留一大片空白。
+     改成 `max-height` —— 内容少就矮、内容多才滚。 */
+  .max-height {
+    max-height: min(52vh, 480px);
+    padding: 0 4px;
+  }
 }
 </style>

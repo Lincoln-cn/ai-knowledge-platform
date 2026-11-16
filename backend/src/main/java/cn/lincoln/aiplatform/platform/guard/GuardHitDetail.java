@@ -18,6 +18,8 @@ import java.util.UUID;
  *
  * @param at 什么时候
  * @param categoryCode 哪一类（{@code POLITICS} / {@code PORN} / …）
+ * @param categoryName 分类展示名（现场取自 {@code pf_guard_category}）；分类已删时为 {@code null}， 读的人按 {@code
+ *     categoryCode} 回落。★ 前端不许自己存一份码→名的表：分类可改名、可自建。
  * @param kind 关键词还是敏感问题
  * @param ruleId 命中的那条规则（管理员据此知道"我写的哪条在拦"）
  * @param contentHashPrefix 归一化内容的哈希前 8 位（跨环境核对用；不还原成词）
@@ -28,6 +30,7 @@ import java.util.UUID;
 public record GuardHitDetail(
     Instant at,
     String categoryCode,
+    String categoryName,
     String kind,
     String ruleId,
     String contentHashPrefix,

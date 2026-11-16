@@ -141,12 +141,17 @@
       </section>
 
       <div class="page-foot">
-        <el-button type="primary" :loading="saving" :disabled="!canEdit || !dirty" @click="save">
-          保存
-        </el-button>
-        <el-button :disabled="!dirty || saving" @click="reset">撤销</el-button>
-        <span v-if="!canEdit" class="micro muted">只读：需要「检索引擎调参」权限（platform:retrieval:manage）</span>
+        <span v-if="!canEdit" class="micro muted">
+          只读：需要「检索引擎调参」权限（platform:retrieval:manage）
+        </span>
         <span v-else-if="dirty" class="micro muted">有未保存的改动</span>
+        <span v-else class="micro muted">已保存</span>
+        <div class="foot-actions">
+          <el-button :disabled="!dirty || saving" @click="reset">撤销</el-button>
+          <el-button type="primary" :loading="saving" :disabled="!canEdit || !dirty" @click="save">
+            保存
+          </el-button>
+        </div>
       </div>
     </template>
   </div>

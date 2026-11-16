@@ -220,8 +220,7 @@ export const guardRoutes: MockRoute[] = [
   }],
 
   // ── 拦截读数（汇总 + 分页明细；原话不在审计里，明细给的是会话 id）────────
-  ['GET', '/guard/hits', ({ token, query }) => {
-    requirePerm(token, '安全围栏')
+  ['GET', '/guard/hits', ({ token, query }) => {    requirePerm(token, '安全围栏')
     const days = Number(query?.days ?? 7)
     const size = Math.min(Math.max(Number(query?.size ?? 20), 1), 100)
     const page = Math.max(Number(query?.page ?? 1), 1)
@@ -233,6 +232,28 @@ export const guardRoutes: MockRoute[] = [
       recent: hitDetails.slice(start, start + size),
       page,
       size
+    }
+  }],
+
+  // ── 聚合读数（看板用：总量 + 按天 + 按分类）────────────────────────────
+  // ★ 按天也只从 hitDetails 里数，不另外造一份「趋势」夹具 ——
+  //   两处各记一份的话，演示时"总量 3、趋势全 0"这种自相矛盾没人能一眼看出来。
+  ['GET', '/guard/stats', ({ token, query }) => {
+    requirePerm(token, '安全围栏')
+    const days = Number(query?.days ?? 30)
+    const byDay = new Map<string, number>()
+    for (const detail of hitDetails) {
+      const day = String(detail.at).slice(0, 10)
+      byDay.set(day, (byDay.get(day) ?? 0) + 1)
+    }
+    return {
+      days,
+      total: hitDetails.length,
+      byDay: [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, hits]) => ({
+        day,
+        hits
+      })),
+      byCategory: hits
     }
   }]
 ]

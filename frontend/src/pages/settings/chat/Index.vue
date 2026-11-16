@@ -311,14 +311,14 @@
         </div>
       </section>
 
-      <!-- ── 保存栏 ───────────────────────────────────────────────── -->
-      <div class="save-bar panel">
+      <!-- 保存动作：一页一条，左边状态、右边「撤销 → 保存」（规范见 styles/index.css 的 .page-foot） -->
+      <div class="page-foot">
         <div class="save-state">
           <span class="dot" :class="dirty ? 'warn' : 'ok'" />
           <span class="micro">{{ dirty ? '有未保存的更改' : '已保存' }}</span>
         </div>
-        <div class="save-actions">
-          <el-button :disabled="!dirty || saving" @click="load">放弃更改</el-button>
+        <div class="foot-actions">
+          <el-button :disabled="!dirty || saving" @click="load">撤销</el-button>
           <el-button
             type="primary"
             :loading="saving"

@@ -350,6 +350,20 @@ public class GuardService {
     return new GuardHitPage(window, total, byCategory, recent, currentPage, pageSize);
   }
 
+  /**
+   * 看板要的聚合读数：总量 + 按天趋势 + 按分类分布。
+   *
+   * <p>★ 与 {@link #hits(int, int, int)} 分开是有意的：一个是"趋势"，一个是"逐条"。
+   * 合成一个接口，看板一打开就要拉一页明细回来，而那些明细看板一个字都不显示。
+   *
+   * @param days 窗口天数；{@code 0} 表示不限时间
+   */
+  public GuardStats stats(int days) {
+    int window = days <= 0 ? 0 : Math.max(1, Math.min(days, 90));
+    return new GuardStats(
+        window, store.hitTotal(window), store.statsByDay(window), store.hitCounts(window));
+  }
+
   private String requireCode(String code) {
     String trimmed = code == null ? "" : code.trim();
     if (!CODE.matcher(trimmed).matches()) {
