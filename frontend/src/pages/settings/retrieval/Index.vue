@@ -2,7 +2,7 @@
   <div class="page settings-page">
     <PageHeader
       title="检索引擎"
-      desc="这台机器怎么算检索：查询理解、重排窗口与批大小"
+      desc="这台机器上怎么算检索：查询理解、重排窗口与批大小"
     >
       <template #actions>
         <span class="meta-line micro">

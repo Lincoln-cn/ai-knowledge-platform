@@ -1,6 +1,6 @@
 <template>
   <div class="page settings-page">
-    <PageHeader title="安全围栏" desc="回答前的输入检查：分类型的敏感词与敏感问题集。">
+    <PageHeader title="安全围栏" desc="回答前的输入检查：按分类维护的敏感词与敏感问题集。">
       <template #actions>
         <span class="meta-line micro">
           <span>检查 <b>{{ form.inputEnabled ? '开' : '关' }}</b></span>

@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <PageHeader
-      title="模型服务商"
+      title="服务商"
       desc="一条记录是一套连接、凭据与出网边界；出网边界决定密级上限"
     >
       <template #actions>

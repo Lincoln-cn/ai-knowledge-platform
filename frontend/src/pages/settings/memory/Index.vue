@@ -202,7 +202,7 @@ onMounted(load);
 
 <template>
   <div class="memory-page">
-    <PageHeader title="长期记忆" desc="它记住的东西与记忆规则；可逐条查看、改掉或清除">
+    <PageHeader title="长期记忆" desc="它记住的东西与记忆规则；你可以逐条查看、改掉或清除">
       <template #actions>
         <span class="meta-line micro">{{ summaryLine }}</span>
       </template>

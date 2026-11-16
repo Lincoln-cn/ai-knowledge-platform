@@ -7106,12 +7106,15 @@ csv  / tsv   ──(解析)─┘
 | 同文件 `MATRIX`（`:52-74`） | ★ **已欠四行**：`/settings/retrieval`、`/settings/memory`、`/complaints`、`/compliance`（NAV 里有菜名、MATRIX 里没有对应路由 ⇒ 这四页的访问权限**从未被量过**）；再加新页 `/settings/guard` |
 | `frontend/check_flow_walkthrough.py` `MUST_WORK`（`:212-247`） | 元组第二项是**菜单/页面名文字**，`:215` 的 `("系统管理")`、`:218` 的 `("基础数据")` 等要跟着新 label 改 |
 | 全库 grep 指引串 | 例：`pages/assistants/prompts/Index.vue` 的「由管理员在「系统管理 → 提示词类型」维护」在新分组下失效（**菜单是别人写文档时的地址**） |
+| ★ `frontend/check_nav_titles.py`（**本批新增**） | 菜单名 ↔ 页面 `PageHeader title`、label 2–4 字、desc 24–36 字、同组图标不重复。这四条都是**两个独立字符串字面量之间**的一致 —— `typecheck` 与 `build` 都抓不到，因为编译对「菜单写三个字、页面写四个字」完全无感 |
 
 ★ **`shape_problems()`（`verify_permissions.py:176-206`）现在只校验"角色名在 MATRIX 里出现过"，不校验
 "NAV 的菜名有对应路由"** —— 上面那两项、四行的漏检就是这个缺口放过去的。本批加两条：
 ⑧ `NAV` 与 `navGroups` 必须**双向**一一对应（菜名 ↔ `label`，一个不多一个不少）；
 ⑨ 每个菜单项的 `meta.permission` 必须出现在 `NAV` 的四份清单的**裁剪结果**里（即"这条断言本身要能被复算出来"，
 而不是靠人眼对齐）。
+
+★ **新闸门的第一次读数（当场抓出 7 处，全部已修）**：`/knowledge` 的 `desc` 是三元表达式（消费者/建设者两句话），正则只认静态属性时读不到；`/market` 22 字、`/admin` 22/23 字、`/settings/retrieval` 与 `/settings/memory` 各 23 字、`/settings/guard` 23 字（N4 要求 24–36）；**`/settings/providers` 的「模型服务商」是 5 字**（N1 要求 2–4）⇒ 最终定名「**服务商**」，并同步 `pages/settings/route.ts` 的 `meta.title`、`ModelService.java` 三处与 `ModelCreateForm.vue` 两处指路文案。★ 改名后 `verify_permissions.py` 的断言 ⑧ 当场报出三处（`NAV` 里还是旧名、新名不在任何角色清单里）—— 这正是这条断言存在的意义。
 
 ### 11.52.9 同批纳入的五处权限/内容修正（每处都能单独核对）
 

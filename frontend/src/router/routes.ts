@@ -88,7 +88,7 @@ export const navGroups: NavGroup[] = [
     // 数据从哪出去 → 用哪个模型 → 默认链路怎么跑 → 怎么检索 → 记住什么 → 什么不许问。
     title: '模型与检索',
     items: [
-      { path: '/settings/providers', label: '模型服务商', icon: 'Connection' },
+      { path: '/settings/providers', label: '服务商', icon: 'Connection' },
       { path: '/models', label: '模型', icon: 'Cpu' },
       { path: '/settings/chat', label: '通用问答', icon: 'ChatLineRound' },
       // 检索引擎是"怎么算"，通用问答是"要不要查"：开关归链路、旋钮归引擎（§11.52.3）

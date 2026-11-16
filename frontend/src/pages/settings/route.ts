@@ -30,7 +30,7 @@ export default [
     path: 'settings/providers',
     name: 'settings-providers',
     component: () => import('./providers/Index.vue'),
-    meta: { title: '模型服务商', permission: PERM.modelManage }
+    meta: { title: '服务商', permission: PERM.modelManage }
   },
   {
     /**
