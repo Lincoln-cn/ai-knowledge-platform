@@ -24,6 +24,11 @@
   2. MUST_WORK 的断言实际在看**控制台错误**，报的却是**失败接口**的数字 ⇒ 断言与消息不是一件事
   3. 路由清单不全（漏了 `/knowledge/hittest`、`/change-password`）⇒ 漏页永远不被看见
 
+★ 前置条件（不满足时返回 3 = 闸门自身失效，不是「检查不通过」）：
+  后端必须**关掉图形验证码**（`CAPTCHA_ENABLED=false` 或 `--app.security.captcha.enabled=false`）。
+  登录接口带验证码时，脚本读不出那四个字符；而「读不出」既不是系统坏了、也不是脚本该猜的东西 ——
+  所以这里明确报环境不满足，而不是让后面 12 页全红（那样报的是假故障）。
+
 用法：
     python check_flow_walkthrough.py                  # 默认 http://localhost:5280
     python check_flow_walkthrough.py http://127.0.0.1:5280
@@ -49,6 +54,16 @@ API = BASE + "/api/v1"
 #   ★ 为什么不复用别的闸门留下的库：它们跑完会清理夹具（`已清理夹具库（200）`），
 #     而"库里恰好没数据"会让断言变成随环境漂的东西 —— 那正是这一档最初要防的。
 DOCX = Path(__file__).resolve().parent.parent / "backend/src/test/resources/fixtures/structured.docx"
+
+
+def captcha_required() -> bool:
+    """后端是否强制图形验证码。拉不到就当作「不知道」，交给后面的登录失败去报。"""
+    try:
+        with urllib.request.urlopen(API + "/auth/captcha", timeout=10) as r:
+            body = json.loads(r.read().decode("utf-8"))
+        return bool((body.get("data") or {}).get("required"))
+    except Exception:
+        return False
 
 
 def api(method: str, path: str, token: str, body: dict | None = None) -> tuple[int, dict]:
@@ -327,6 +342,14 @@ def main() -> int:
         page.on("response", on_response)
 
         try:
+            # ── 环境：验证码开着就直接退出（见文件头「前置条件」）──
+            if captcha_required():
+                print("== 环境 ==")
+                print("  [NG] 后端开着图形验证码 —— 自动化脚本读不出那四个字符。")
+                print("       用 CAPTCHA_ENABLED=false 重启后端再跑；这不是「系统坏了」。")
+                browser.close()
+                return 3
+
             # ── 登录（真栈：token 不是 mock_ 前缀）──
             page.goto(f"{BASE}/#/login", wait_until="networkidle")
             page.wait_for_timeout(800)
