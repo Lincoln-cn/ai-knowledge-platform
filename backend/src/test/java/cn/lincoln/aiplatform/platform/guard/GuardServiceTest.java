@@ -1,8 +1,10 @@
 package cn.lincoln.aiplatform.platform.guard;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -162,5 +164,26 @@ class GuardServiceTest {
     assertThatThrownBy(() -> service.saveCategory(null, "politics", "政治2", 10, true, null, null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("分类机器码");
+  }
+
+  @Test
+  @DisplayName("同分类下重复内容：在落库前就拒绝（撞唯一约束抛的是 500，界面只会说「服务内部错误」）")
+  void duplicateRuleContentIsRejectedBeforeHittingTheUniqueIndex() {
+    // 既有规则是「绝密」，这里换全角与空格写法 —— 归一化之后是同一条
+    assertThatThrownBy(
+            () ->
+                service.saveRule(null, POLITICS, GuardRuleKind.KEYWORD, " 绝 密 ", true, null, null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("已经有同一条规则");
+  }
+
+  @Test
+  @DisplayName("改自己那条规则不算重复（同一 id 要能保存）")
+  void updatingTheSameRuleIsNotTreatedAsDuplicate() {
+    when(store.saveRule(any(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn(rule());
+
+    assertThatCode(
+            () -> service.saveRule(RULE, POLITICS, GuardRuleKind.KEYWORD, "绝密", true, "改备注", null))
+        .doesNotThrowAnyException();
   }
 }

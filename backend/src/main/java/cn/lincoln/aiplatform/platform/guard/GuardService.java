@@ -210,6 +210,23 @@ public class GuardService {
     }
     String finalizedContent = requireContent(content);
     boolean finalizedEnabled = enabled == null ? (existing == null || existing.enabled()) : enabled;
+    // ★ 同分类 + 同类型 + 归一化后内容相同 = 同一条规则：库上有唯一约束兜着，但撞约束抛的是
+    //   DataIntegrityViolationException ⇒ 界面读到「服务内部错误」，用户不知道是自己重复了。
+    //   在落库之前先判一次，把话说清楚。★ 不能拿 GuardSnapshot.patterns() 判：那一列在
+    //   「输入检查关掉」时是空的，会让这条校验在关围栏的部署上失效。
+    String normalized = GuardText.normalize(finalizedContent, finalizedKind);
+    boolean duplicated =
+        store.current().rules().stream()
+            .anyMatch(
+                rule ->
+                    rule.categoryId().equals(finalizedCategory)
+                        && rule.kind() == finalizedKind
+                        && GuardText.normalize(rule.content(), rule.kind()).equals(normalized)
+                        && (id == null || !rule.id().equals(id)));
+    if (duplicated) {
+      throw new IllegalArgumentException(
+          "这个分类下已经有同一条规则了（" + finalizedKind.label() + "归一化后内容相同，换个分类或改写内容）");
+    }
     GuardRule saved =
         store.saveRule(
             id,
