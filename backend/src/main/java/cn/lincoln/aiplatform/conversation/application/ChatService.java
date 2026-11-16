@@ -10,6 +10,7 @@ import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
+import cn.lincoln.aiplatform.platform.guard.GuardCallContext;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
@@ -855,6 +856,11 @@ public class ChatService {
         Math.max(0, messages.size() - 1),
         historyLimit,
         turn.conversationId());
+    // ★ 围栏的"谁问的 / 哪个会话"必须在这里放进去：模型调用跑在下面那个新线程上（真流式要在
+    //   调用方线程之外逐帧回调），而拦截点在 advisor 链上——它手上只有 Prompt。
+    //   GuardCallContext 用 InheritableThreadLocal，new Thread() 那一刻把值复制给子线程。
+    //   ★ set 必须在 new Thread() 之前，remove 在 start() 之后（父线程不再需要）。
+    GuardCallContext.set(currentActorId(), turn.conversationId());
     Thread thread =
         new Thread(
             () -> {
@@ -893,12 +899,40 @@ public class ChatService {
                 log.warn("模型线程异常（按上游失败收尾）", unexpected);
               } finally {
                 run.modelDone.set(true);
+                // ★ 子线程自己也要清：线程结束不保证 ThreadLocal 被回收的时机，
+                //   而这里没有线程池复用问题，清掉只是让"读到的值"不会晚于这一轮。
+                GuardCallContext.remove();
               }
             },
             "chat-model-" + turn.assistantMessageId());
     thread.setDaemon(true);
     thread.start();
+    GuardCallContext.remove();
     return thread;
+  }
+
+  /**
+   * 当前登录主体（拿不到就 {@code null}）：只给围栏的审计用，不参与任何判定。
+   *
+   * <p>★ 匿名访客（公开问答的分享链接）在这里本来就是 null —— 那种链路没有 JWT。
+   */
+  private static UUID currentActorId() {
+    try {
+      org.springframework.security.core.Authentication auth =
+          org.springframework.security.core.context.SecurityContextHolder.getContext()
+              .getAuthentication();
+      if (auth == null || !auth.isAuthenticated()) {
+        return null;
+      }
+      Object principal = auth.getPrincipal();
+      if (principal instanceof org.springframework.security.oauth2.jwt.Jwt jwt) {
+        return UUID.fromString(jwt.getSubject());
+      }
+      return null;
+    } catch (RuntimeException ignore) {
+      // ★ 这里刻意吞：拿不到身份不该让一次正常问答失败（它只影响审计里多一个字段）
+      return null;
+    }
   }
 
   /**

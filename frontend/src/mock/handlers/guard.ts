@@ -3,6 +3,7 @@ import type {
   GuardCategory,
   GuardCategoryInput,
   GuardHitCount,
+  GuardHitDetail,
   GuardRule,
   GuardRuleInput,
   GuardSettings,
@@ -40,6 +41,13 @@ const categories: GuardCategory[] = [
 const rules: GuardRule[] = []
 
 const hits: GuardHitCount[] = []
+
+/**
+ * 拦截明细的夹具。
+ * ★ 空着 —— 与规则表同口径：预置一条"谁在什么时候问了什么"会让页面看起来
+ *   像"已经有人踩过围栏"，而实际上这是这套系统最不该被假数据演示的一件事。
+ */
+const hitDetails: GuardHitDetail[] = []
 
 /** 全局权限门：围栏没有"哪一条"可判，读写都守同一颗点（与后端类级 `@PreAuthorize` 一致）。 */
 function requirePerm(token: string, label: string): void {
@@ -211,9 +219,17 @@ export const guardRoutes: MockRoute[] = [
     return true
   }],
 
-  // ── 拦截计数（只给次数，不列原话）──────────────────────────────────
-  ['GET', '/guard/hits', ({ token }) => {
+  // ── 拦截读数（汇总 + 明细；原话不在审计里，明细给的是会话 id）─────────
+  ['GET', '/guard/hits', ({ token, query }) => {
     requirePerm(token, '安全围栏')
-    return hits
+    const days = Number(query?.days ?? 7) || 7
+    const recent = hitDetails.slice(0, 100)
+    return {
+      days,
+      total: hitDetails.length,
+      byCategory: hits,
+      recent,
+      truncated: hitDetails.length > recent.length
+    }
   }]
 ]

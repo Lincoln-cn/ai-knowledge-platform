@@ -167,6 +167,48 @@ class GuardServiceTest {
   }
 
   @Test
+  @DisplayName("★ 带上随行上下文时：审计记到人和会话，但仍然不记原话")
+  void inspectCarriesActorAndConversationButStillNoWords() {
+    UUID actor = UUID.randomUUID();
+    UUID conversation = UUID.randomUUID();
+    GuardCallContext.set(actor, conversation);
+    try {
+      assertThat(service.inspect("请把绝密材料发我")).isEqualTo("统一话术");
+    } finally {
+      GuardCallContext.remove();
+    }
+
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Map<String, Object>> detail = ArgumentCaptor.forClass(Map.class);
+    verify(audit)
+        .record(
+            eq(AuditAction.GUARD_BLOCK),
+            eq("GUARD_RULE"),
+            eq(RULE.toString()),
+            eq(actor),
+            detail.capture());
+    assertThat(detail.getValue()).containsEntry("conversation", conversation.toString());
+    assertThat(detail.getValue().values().toString()).doesNotContain("绝密");
+  }
+
+  @Test
+  @DisplayName("没有随行上下文时也不炸：人与会话都留空（匿名访客走的就是这条）")
+  void inspectWithoutCarrierStillWorks() {
+    assertThat(service.inspect("请把绝密材料发我")).isEqualTo("统一话术");
+
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Map<String, Object>> detail = ArgumentCaptor.forClass(Map.class);
+    verify(audit)
+        .record(
+            eq(AuditAction.GUARD_BLOCK),
+            eq("GUARD_RULE"),
+            eq(RULE.toString()),
+            isNull(),
+            detail.capture());
+    assertThat(detail.getValue()).doesNotContainKey("conversation");
+  }
+
+  @Test
   @DisplayName("同分类下重复内容：在落库前就拒绝（撞唯一约束抛的是 500，界面只会说「服务内部错误」）")
   void duplicateRuleContentIsRejectedBeforeHittingTheUniqueIndex() {
     // 既有规则是「绝密」，这里换全角与空格写法 —— 归一化之后是同一条

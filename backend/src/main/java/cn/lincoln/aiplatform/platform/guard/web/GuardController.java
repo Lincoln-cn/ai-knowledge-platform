@@ -1,7 +1,7 @@
 package cn.lincoln.aiplatform.platform.guard.web;
 
 import cn.lincoln.aiplatform.platform.guard.GuardCategory;
-import cn.lincoln.aiplatform.platform.guard.GuardHitCount;
+import cn.lincoln.aiplatform.platform.guard.GuardHitPage;
 import cn.lincoln.aiplatform.platform.guard.GuardRule;
 import cn.lincoln.aiplatform.platform.guard.GuardRuleKind;
 import cn.lincoln.aiplatform.platform.guard.GuardService;
@@ -188,9 +188,9 @@ public class GuardController {
    */
   @GetMapping("/hits")
   @PreAuthorize("hasAuthority('platform:guard:manage')")
-  public ApiResponse<List<GuardHitCount>> hits(
+  public ApiResponse<GuardHitPage> hits(
       @RequestParam(value = "days", required = false, defaultValue = "7") int days) {
-    return ApiResponse.ok(store.hitCounts(days));
+    return ApiResponse.ok(guard.hits(days));
   }
 
   private static UUID operator(Jwt jwt) {

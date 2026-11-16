@@ -177,18 +177,60 @@
           <div>
             <div class="card-title">最近 7 天拦截</div>
             <div class="micro muted">
-              按分类计数。这里只给次数，不列原话 —— 需要看是谁问了什么时走审计记录
+              每一条都记着谁、什么时候、在哪个会话 —— 点「看会话」能回到那次提问。原话只存在会话里，
+              不复制进审计（它会长期留存，复制一份就删不掉了）
             </div>
+          </div>
+          <div class="panel-tools">
+            <span class="micro muted">共 {{ hitPage.total }} 次</span>
+            <span v-if="hitPage.byCategory.length" class="hit-brief micro">
+              <span v-for="h in hitPage.byCategory" :key="h.categoryCode" class="hit-brief-item">
+                {{ categoryNameOf(h.categoryCode) }} {{ h.hits }}
+              </span>
+            </span>
           </div>
         </div>
         <div class="panel-body">
-          <div v-if="hits.length === 0" class="micro muted">最近 7 天没有拦截记录。</div>
-          <div v-else class="hit-row">
-            <div v-for="h in hits" :key="h.categoryCode" class="hit-cell">
-              <div class="hit-label micro muted">{{ categoryNameOf(h.categoryCode) }}</div>
-              <div class="hit-value">{{ h.hits }}</div>
+          <div v-if="hitPage.recent.length === 0" class="micro muted">最近 7 天没有拦截记录。</div>
+          <template v-else>
+            <el-table :data="hitPage.recent" size="small" row-key="ruleId">
+              <el-table-column label="时间" width="170">
+                <template #default="{ row }">{{ formatAt(row.at) }}</template>
+              </el-table-column>
+              <el-table-column label="分类" width="100">
+                <template #default="{ row }">{{ categoryNameOf(row.categoryCode) }}</template>
+              </el-table-column>
+              <el-table-column label="类型" width="90">
+                <template #default="{ row }">
+                  {{ row.kind === 'QUESTION' ? '敏感问题' : '关键词' }}
+                </template>
+              </el-table-column>
+              <el-table-column label="命中的规则" min-width="240">
+                <template #default="{ row }">
+                  <span class="hit-rule">{{ ruleContentOf(row.ruleId) }}</span>
+                  <span class="micro muted"> · {{ row.contentHashPrefix }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="谁问的" width="150">
+                <template #default="{ row }">{{ row.actorName || '（匿名/未知）' }}</template>
+              </el-table-column>
+              <el-table-column label="会话" width="120">
+                <template #default="{ row }">
+                  <router-link
+                    v-if="row.conversationId"
+                    :to="{ path: '/conversation', query: { conversationId: row.conversationId } }"
+                    class="hit-link"
+                  >
+                    看会话
+                  </router-link>
+                  <span v-else class="micro muted">—</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-if="hitPage.truncated" class="micro muted hit-more">
+              只列最近 {{ hitPage.recent.length }} 条，更早的请到审计记录按「围栏拦截问答」筛选
             </div>
-          </div>
+          </template>
         </div>
       </section>
 
@@ -349,7 +391,7 @@ import {
   updateGuardSettings,
   updateGuardRule,
   type GuardCategory,
-  type GuardHitCount,
+  type GuardHitPage,
   type GuardRule,
   type GuardRuleInput,
   type GuardRuleKind,
@@ -387,7 +429,13 @@ const loadError = ref<{ reason: string; hint?: string | null } | null>(null)
 
 const categories = ref<GuardCategory[]>([])
 const rules = ref<GuardRule[]>([])
-const hits = ref<GuardHitCount[]>([])
+const hitPage = ref<GuardHitPage>({
+  days: 7,
+  total: 0,
+  byCategory: [],
+  recent: [],
+  truncated: false
+})
 const rulesDrawer = ref(false)
 const drawerCategory = ref<GuardCategory | null>(null)
 
@@ -481,11 +529,28 @@ async function loadRules() {
 
 async function loadHits() {
   try {
-    hits.value = await listGuardHits(7)
+    hitPage.value = await listGuardHits(7)
   } catch {
-    // 计数读不到不影响配置：不弹错，保持空列表（页面上那行"没有拦截记录"会照常显示）
-    hits.value = []
+    // 读数读不到不影响配置：不弹错，保持空表（页面那行"没有拦截记录"会照常显示）
+    hitPage.value = { days: 7, total: 0, byCategory: [], recent: [], truncated: false }
   }
+}
+
+/** 拦截时间：本地时刻，精确到分（审计里是 long 值的毫秒级，页面上给到秒反而噪声）。 */
+function formatAt(iso: string) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/**
+ * 命中规则的内容：规则是管理员自己维护的（同一页就能看到），所以这里可以直接显示。
+ * ★ 找不到（规则已被删）就说清楚 —— 不显示 hash 之外的猜测。
+ */
+function ruleContentOf(ruleId: string) {
+  const found = rules.value.find((r) => r.id === ruleId)
+  return found ? found.content : '（这条规则已被删除）'
 }
 
 function reset() {

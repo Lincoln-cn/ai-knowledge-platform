@@ -62,6 +62,32 @@ export interface GuardHitCount {
   hits: number
 }
 
+/**
+ * 一条拦截图：谁、什么时候、在哪个会话、命中哪条规则。
+ *
+ * ★ `conversationId` 是「点回那次提问」的唯一入口 —— 原话只存在会话消息里一份，
+ *   不复制进审计（审计长期留存，复制一份就删不掉了）。
+ */
+export interface GuardHitDetail {
+  at: string
+  categoryCode: string
+  kind: GuardRuleKind
+  ruleId: string
+  contentHashPrefix: string
+  actorId: string | null
+  actorName: string | null
+  conversationId: string | null
+}
+
+/** 「最近 N 天拦截」一屏的读数：汇总回答"严重不严重"，明细回答"是哪一次"。 */
+export interface GuardHitPage {
+  days: number
+  total: number
+  byCategory: GuardHitCount[]
+  recent: GuardHitDetail[]
+  truncated: boolean
+}
+
 export interface GuardCategoryInput {
   code: string
   name: string
@@ -124,4 +150,4 @@ export const deleteGuardRule = (id: string) =>
  * @param days 窗口 1–90，默认 7
  */
 export const listGuardHits = (days = 7) =>
-  request<GuardHitCount[]>({ method: 'GET', url: '/guard/hits', query: { days } })
+  request<GuardHitPage>({ method: 'GET', url: '/guard/hits', query: { days } })

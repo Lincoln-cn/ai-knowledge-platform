@@ -300,19 +300,36 @@ public class GuardService {
       return null;
     }
     GuardHit first = hits.get(0);
-    // ★ 操作人传 null：advisor 层拿不到登录主体（ChatClientRequest 里没有它）。
-    //   "谁问的"由会话侧的消息表承担，这里只回答"围栏拦了什么"。
+    // ★ 谁问的 / 在哪个会话里问的：拦截点（Spring AI 的 advisor 链）手上只有 Prompt，
+    //   这两样由上游 ChatService 放进 GuardCallContext。拿不到就是 null ——
+    //   它只影响审计里多两个字段，不参与判定。
+    GuardCallContext.Carrier carrier = GuardCallContext.current();
+    Map<String, Object> detail = new java.util.LinkedHashMap<>();
+    detail.put("category", first.categoryCode());
+    detail.put("kind", first.kind().name());
+    detail.put("hash", first.contentHashPrefix());
+    if (carrier != null && carrier.conversationId() != null) {
+      // ★ 记会话 id 而不是记原话：原话已经在消息表里（有访问控制、有留存期），
+      //   复制进审计等于多一份删不掉的副本 —— 而审计是长期留存的。
+      detail.put("conversation", carrier.conversationId().toString());
+    }
     auditLog.record(
         AuditAction.GUARD_BLOCK,
         "GUARD_RULE",
         first.ruleId().toString(),
-        null,
-        Map.of(
-            "category", first.categoryCode(),
-            "kind", first.kind().name(),
-            "hash", first.contentHashPrefix()));
+        carrier == null ? null : carrier.actorId(),
+        detail);
     // ★ 不把命中数交给调用方：命中几条本身也是信息（"这句话踩了 3 条"比"踩了 1 条"更能试探词表形状）
     return snapshot.refusalFor(hits);
+  }
+
+  /** 最近 {@code days} 天的拦截读数：汇总 + 明细（页面「最近 N 天拦截」一屏要的两样）。 */
+  public GuardHitPage hits(int days) {
+    int window = Math.max(1, Math.min(days, 90));
+    List<GuardHitCount> byCategory = store.hitCounts(window);
+    List<GuardHitDetail> recent = store.hitDetails(window, GuardHitPage.MAX_RECENT);
+    long total = byCategory.stream().mapToLong(GuardHitCount::hits).sum();
+    return new GuardHitPage(window, total, byCategory, recent, total > recent.size());
   }
 
   private String requireCode(String code) {

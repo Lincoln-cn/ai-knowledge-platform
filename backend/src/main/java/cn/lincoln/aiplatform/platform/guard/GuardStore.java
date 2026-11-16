@@ -388,6 +388,39 @@ public class GuardStore {
         window);
   }
 
+  /**
+   * 最近 {@code days} 天的拦截图（新的在前）。
+   *
+   * <p>★ 真源是审计表，不另建计数表：同一件事两处记账，早晚会不一致。
+   *
+   * @param days 窗口天数（夹在 1–90）
+   * @param limit 最多取多少行
+   */
+  public List<GuardHitDetail> hitDetails(int days, int limit) {
+    int window = Math.max(1, Math.min(days, 90));
+    int rows = Math.max(1, Math.min(limit, 500));
+    return jdbc.query(
+        "select created_at, detail ->> 'category' as category, detail ->> 'kind' as kind,"
+            + " detail ->> 'hash' as hash, detail ->> 'conversation' as conversation,"
+            + " resource_id, actor_id, actor_name"
+            + " from pf_audit_log where action = ?"
+            + " and created_at >= now() - make_interval(days => ?)"
+            + " order by created_at desc limit ?",
+        (rs, rowNum) ->
+            new GuardHitDetail(
+                rs.getObject("created_at", java.time.OffsetDateTime.class).toInstant(),
+                rs.getString("category"),
+                rs.getString("kind"),
+                rs.getString("resource_id"),
+                rs.getString("hash"),
+                rs.getObject("actor_id", UUID.class),
+                rs.getString("actor_name"),
+                rs.getString("conversation")),
+        cn.lincoln.aiplatform.platform.domain.AuditAction.GUARD_BLOCK.code(),
+        window,
+        rows);
+  }
+
   private GuardSnapshot load() {
     GuardSettings settings =
         jdbc
