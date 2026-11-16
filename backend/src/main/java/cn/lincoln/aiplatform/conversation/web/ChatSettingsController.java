@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 「对话设置」的 web 入口（平台级 · 契约 {@code frontend/src/api/chatSettings.ts}）。
+ * 「通用问答」的 web 入口（平台级 · 契约 {@code frontend/src/api/chatSettings.ts}）。
  *
  * <h3>为什么需要它（{@code #181} 之后的设计缺口）</h3>
  *

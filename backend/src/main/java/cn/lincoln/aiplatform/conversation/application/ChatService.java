@@ -1,4 +1,4 @@
-package cn.lincoln.aiplatform.conversation.application;
+﻿package cn.lincoln.aiplatform.conversation.application;
 
 import cn.lincoln.aiplatform.conversation.domain.SourceRef;
 import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
@@ -818,7 +818,7 @@ public class ChatService {
     //   理由与同文件检索那条注释逐字相同：访问范围是 ThreadLocal，新建的模型线程上它是空的。
     //   读历史本身只按 conversationId 取（归属在 prepare 阶段已经判过），不依赖范围。
     List<cn.lincoln.aiplatform.platform.model.ChatMessage> history = List.of();
-    // ★ 历史条数上限来自「对话设置」（此前是硬编码常量 MAX_HISTORY_MESSAGES = 20）。
+    // ★ 历史条数上限来自「通用问答」（此前是硬编码常量 MAX_HISTORY_MESSAGES = 20）。
     //   它决定上下文长度、推理成本与跨话题串味风险，应该能在页面上调。
     //   ★ 读不到配置时退回常量默认值（与改造前逐字一致）。
     final int historyLimit =

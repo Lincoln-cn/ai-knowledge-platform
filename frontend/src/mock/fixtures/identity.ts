@@ -1,4 +1,4 @@
-import { PERM } from '@/constants/permissions'
+﻿import { PERM } from '@/constants/permissions'
 import type { PermissionItem, Role, User } from '@/api/identity'
 import type { ClassificationLevel } from '@/api/types'
 
@@ -22,13 +22,13 @@ export const permissions: PermissionItem[] = [
   { code: PERM.conversationShare, label: '分享自己的对话', module: '对话' },
   // 现阶段无前端消费方：没有任何页面/接口用它做门禁，先定下点位便于后端对齐
   { code: PERM.conversationManage, label: '管理他人会话', module: '对话' },
-  { code: PERM.modelManage, label: '模型管理', module: '模型' },
+  { code: PERM.modelManage, label: '模型', module: '模型' },
   { code: PERM.dashboardView, label: '查看运营看板', module: '运营' },
   { code: PERM.feedbackHandle, label: '处理反馈', module: '运营' },
   // ★ 对话设置（默认模型 / 初始提示词 / 召回阈值 / 流式超时）单开一颗点，不复用 `system:manage`：
   //   「让人调召回阈值」比「整个系统管理」窄得多，复用只能二选一（全给或全不给）。
   //   默认只有 ADMIN（后端 `Permissions.java:74` 的注释与 `BY_ROLE_CODE` 一致）。
-  { code: PERM.chatSettings, label: '配置对话设置', module: '对话' },
+  { code: PERM.chatSettings, label: '配置通用问答', module: '对话' },
   { code: PERM.systemManage, label: '账号与权限', module: '系统' },
   // ★ 审计记录查看（#276）：只读的事，与「能不能改配置」分开 —— 审计员该能看全部留痕，
   //   但不该能改角色与字典。清理过期记录仍要 `system:manage`（删数据不可逆）。

@@ -1,4 +1,4 @@
-import type { RouteRecordRaw } from 'vue-router'
+﻿import type { RouteRecordRaw } from 'vue-router'
 import { PERM } from '@/constants/permissions'
 
 export default [
@@ -6,6 +6,6 @@ export default [
     path: 'admin',
     name: 'admin',
     component: () => import('./Index.vue'),
-    meta: { title: '账号与权限', permission: PERM.systemManage }
+    meta: { title: '用户角色', permission: PERM.systemManage }
   }
 ] satisfies RouteRecordRaw[]

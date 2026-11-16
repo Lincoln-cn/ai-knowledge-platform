@@ -1,4 +1,4 @@
-package cn.lincoln.aiplatform.conversation.application;
+﻿package cn.lincoln.aiplatform.conversation.application;
 
 import cn.lincoln.aiplatform.conversation.domain.Conversation;
 import cn.lincoln.aiplatform.conversation.domain.ConversationRepository;
@@ -655,7 +655,7 @@ public class ChatTurnWriter implements ChatTurnStore {
         .orElseThrow(
             () ->
                 new BusinessException(
-                    ErrorCode.BAD_REQUEST, "当前没有可用的对话模型", "请在「模型管理」里加载一个对话模型后重试"));
+                    ErrorCode.BAD_REQUEST, "当前没有可用的对话模型", "请在「模型」页里加载一个对话模型后重试"));
   }
 
   /** 取消息；★ 不存在 ⇒ {@code IllegalStateException}（这是链路内部的破洞，不是调用方的输入问题）。 */

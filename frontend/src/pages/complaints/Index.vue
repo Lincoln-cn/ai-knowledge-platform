@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHeader title="投诉举报" desc="对平台内容或服务有意见、发现违法违规信息，在这里提交，我们会按公示的流程处理并反馈。">
+    <PageHeader title="投诉举报" desc="对内容或服务有意见、发现违法信息，提交后按公示流程反馈。">
       <template #actions>
         <el-button type="primary" @click="openCreate">提交投诉 / 举报</el-button>
       </template>

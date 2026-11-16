@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="反馈处理"
-      desc="把用户赞踩与文字意见变成可办的工作队列：指派、处理说明、跳转对话、沉淀问答对。默认只看待处理。"
+      desc="把赞踩与文字意见变成待办队列：指派、处理、沉淀问答对"
     >
       <template #after-title>
         <el-tag size="small" type="warning" effect="plain">V0.2 设计预演</el-tag>

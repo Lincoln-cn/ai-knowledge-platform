@@ -1,4 +1,4 @@
-import type { RouteRecordRaw } from 'vue-router'
+﻿import type { RouteRecordRaw } from 'vue-router'
 import { PERM } from '@/constants/permissions'
 
 /**
@@ -24,37 +24,41 @@ export default [
     path: 'settings/chat',
     name: 'settings-chat',
     component: () => import('./chat/Index.vue'),
-    meta: { title: '对话设置', permission: PERM.chatSettings }
+    meta: { title: '通用问答', permission: PERM.chatSettings }
   },
   {
     path: 'settings/providers',
     name: 'settings-providers',
     component: () => import('./providers/Index.vue'),
-    meta: { title: '服务商配置', permission: PERM.modelManage }
+    meta: { title: '模型服务商', permission: PERM.modelManage }
   },
   {
     /**
-     * 检索引擎运行参数（0.8.x 的配置页）。
+     * 检索引擎运行参数。
      *
-     * ★ 读权限给 `knowledge:view` 而不是 `retrievalManage`：这几个值决定"一次问答要等多久"，
-     * 排障时任何人都该看得到；写权限（`platform:retrieval:manage`）由页面内的按钮与 API 各自把住。
+     * ★ 2026-11-16 读权限由 `knowledge:view` 收紧到 `platform:retrieval:manage`
+     *   （ROADMAP §11.52.9）：原来按"排障时任何人都该看得到一次问答要等多久"给了宽读权限，
+     *   但把页面挂进菜单之后，这个取舍的代价暴露了 —— 普通消费者顶栏里多出一个
+     *   **他不能改也不该关心**的旋钮。排障要看的是读数（运营看板 / 审计），不是旋钮。
      */
     path: 'settings/retrieval',
     name: 'settings-retrieval',
     component: () => import('./retrieval/Index.vue'),
-    meta: { title: '检索引擎', permission: PERM.knowledgeView }
+    meta: { title: '检索引擎', permission: PERM.retrievalManage }
   },
   {
     /**
-     * 长期记忆（0.9.0）。
+     * 长期记忆。
      *
-     * ★ 读权限同样给 `conversation:view` 一族里最宽的那个：记忆里存的是"用户自己说过的话"，
-     * 他能看到自己的记忆本来就是应有之义；真正的写权限（`conversation:settings`）由页面内的
-     * 按钮与 API 各自把住 —— 与「检索引擎」一页的取舍一致。
+     * ★ 2026-11-16 读权限由 `conversation:view` 收紧到 `conversation:settings`
+     *   （ROADMAP §11.52.9）。原来的理由是"记忆里存的是用户自己说过的话，他看自己的记忆理所当然"，
+     *   但那要求这页**长成"我的记忆"**；它今天长成的是**全平台四层记忆的管理页**
+     *   （USER / CONVERSATION / PERSONA / CROSS_SESSION），普通用户进来看到的是别人的记忆与平台级规则。
+     *   ⇒ 拆页才治本，"我的记忆"页另立；在那之前只有管理员进来。
      */
     path: 'settings/memory',
     name: 'settings-memory',
     component: () => import('./memory/Index.vue'),
-    meta: { title: '长期记忆', permission: PERM.conversationView }
+    meta: { title: '长期记忆', permission: PERM.chatSettings }
   }
 ] satisfies RouteRecordRaw[]

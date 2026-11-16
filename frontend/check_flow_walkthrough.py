@@ -1,4 +1,4 @@
-"""全站页面走查（真栈）—— 回答「哪些页面在浏览器里走不通」。
+﻿"""全站页面走查（真栈）—— 回答「哪些页面在浏览器里走不通」。
 
 为什么需要它：既有的闸门各管一段（`check_knowledge_*` 管知识库、`check_models_form` 管模型、
 `verify_permissions` 管路由门禁、`smoke_test` 只跑 mock 构建产物），
@@ -211,8 +211,8 @@ def seed_hit_test_fixture(token: str) -> tuple[str, str] | None:
 # ── 必须能用（今天的演示路径：后端已实现的那几块）──
 MUST_WORK: list[tuple[str, str, str]] = [
     ("/knowledge", "知识库列表", "知识库"),
-    ("/models", "模型管理", "模型"),
-    ("/admin", "系统管理", "用户"),
+    ("/models", "模型", "模型"),
+    ("/admin", "用户角色", "用户"),
     # ★ 基础数据（第 19 周新增）：字典项管理。★ 它之所以归「必须能用」而不是「已知未落地」：
     #   后端 `/dictionaries` 与页面同时落地，而且它是建档下拉的真源 —— 它坏了，建档就选不出文种。
     ("/basedata", "基础数据", "字典"),

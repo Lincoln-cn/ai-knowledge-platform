@@ -1,8 +1,8 @@
 <template>
   <div class="page">
     <PageHeader
-      title="模板中心"
-      desc="模板是「一个应用的配置快照」：存下来，下次从它建一个新应用，不用从头配。"
+      title="应用模板"
+      desc="模板是一次应用配置的快照；从它建新应用，不用从头配。"
     >
       <template #actions>
         <el-button size="small" :icon="Plus" :disabled="!canCreate" @click="openCreate">

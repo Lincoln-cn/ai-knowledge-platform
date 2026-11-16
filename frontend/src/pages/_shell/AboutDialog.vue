@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <el-dialog v-model="visible" title="关于本平台" width="560px" :close-on-click-modal="true">
     <div class="about">
       <h3 class="about-app">{{ APP_TITLE }}</h3>
@@ -33,7 +33,7 @@
           安全评估结论：{{ settings?.securityAssessmentConclusion || '未登记' }}
         </p>
         <p class="about-note">
-          以上由组织管理员在「管理 → 合规设置」登记（《生成式人工智能服务管理暂行办法》第十七条）。
+          以上由组织管理员在「运营与合规 → 合规备案」登记（《生成式人工智能服务管理暂行办法》第十七条）。
         </p>
       </section>
 

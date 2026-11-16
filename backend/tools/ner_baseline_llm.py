@@ -1,4 +1,4 @@
-"""用大模型给 30 段语料做一次机构名标注，落成测试集。
+﻿"""用大模型给 30 段语料做一次机构名标注，落成测试集。
 
 ## 为什么用大模型标
 
@@ -19,7 +19,7 @@
     python backend/tools/ner_baseline_llm.py --limit 30 --out backend/tools/ner_baseline.jsonl
 
 依赖后端在 18088 上跑着（标注走的是平台的对话接口，不是直连 DeepSeek ——
-密钥在服务商配置里，脚本读不到也不该读）。
+密钥在模型服务商里，脚本读不到也不该读）。
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 按目录声明渲染节点配置表单。
  *
  * ★ 这个组件存在的理由：面板以前是「每个节点手写一遍 el-form」，于是同一个键要写三遍
@@ -63,7 +63,7 @@
         size="small"
         filterable
         clearable
-        :placeholder="modelsOf(field).length ? '选择模型' : '没有这种种类的模型，先去模型管理里加'"
+        :placeholder="modelsOf(field).length ? '选择模型' : '没有这种种类的模型，先去模型页里加'"
         style="width: 100%"
         @change="(value: string | null) => write(field.key, value || null)"
       >

@@ -1,4 +1,4 @@
-package cn.lincoln.aiplatform.modelcatalog.application;
+﻿package cn.lincoln.aiplatform.modelcatalog.application;
 
 import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
@@ -261,7 +261,7 @@ public class ModelService {
                       new BusinessException(
                           ErrorCode.BAD_REQUEST, "服务商不存在", "它可能已被删除；请刷新服务商列表后重新选择"));
       if (!provider.enabled()) {
-        return BaseModelCatalog.empty("服务商「" + provider.name() + "」已停用：请先在「服务商配置」里启用它");
+        return BaseModelCatalog.empty("服务商「" + provider.name() + "」已停用：请先在「模型服务商」里启用它");
       }
       if (!provider.kind().supportsModelList()) {
         return BaseModelCatalog.empty("服务商「" + provider.name() + "」不支持模型目录：请在右侧手动填写基础模型");
@@ -451,7 +451,7 @@ public class ModelService {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST,
           "这个模型已绑定服务商，不能单独改 apiBase / apiKey",
-          "请到「服务商配置」里改该服务商的地址或密钥，所有引用它的模型会一起生效");
+          "请到「模型服务商」里改该服务商的地址或密钥，所有引用它的模型会一起生效");
     }
     model.updatedBy(operatorId);
     models.save(model);
@@ -705,7 +705,7 @@ public class ModelService {
                         ErrorCode.BAD_REQUEST, "服务商不存在", "它可能已被删除；请刷新服务商列表后重新选择"));
     if (!provider.enabled()) {
       throw new BusinessException(
-          ErrorCode.BAD_REQUEST, "服务商「" + provider.name() + "」已停用", "请先在「服务商配置」里启用它，或换一个服务商");
+          ErrorCode.BAD_REQUEST, "服务商「" + provider.name() + "」已停用", "请先在「模型服务商」里启用它，或换一个服务商");
     }
     return provider;
   }

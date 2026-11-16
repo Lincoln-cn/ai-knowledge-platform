@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="page">
     <div class="page-head">
       <div class="head-main">
@@ -32,7 +32,7 @@
     -->
     <div v-if="readinessNotice" :class="['notice', readinessNotice.tone]">
       {{ readinessNotice.text }} ——
-      <router-link to="/models" class="link">去模型管理</router-link>
+      <router-link to="/models" class="link">去模型页登记</router-link>
     </div>
 
     <!-- 指标条：消费者看「我的」口径，建设者/运营看平台口径（07 §五） -->

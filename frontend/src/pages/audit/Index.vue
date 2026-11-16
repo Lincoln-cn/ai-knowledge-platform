@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="审计记录"
-      desc="谁在什么时候改了什么。只读 —— 审计记录只能追加，不能改也不能删。"
+      desc="谁在什么时候改了什么；只读，只能追加，不能改也不能删"
     >
       <template #actions>
         <el-button

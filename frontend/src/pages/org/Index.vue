@@ -1,6 +1,6 @@
 <template>
   <div class="org-page">
-    <PageHeader title="组织机构" desc="部门树 —— 数据权限的载体（共享给部门、按部门筛文档）" />
+    <PageHeader title="组织机构" desc="部门树，也是数据权限的载体：共享给部门、按部门筛文档" />
 
     <div class="org-split">
       <!-- 左：树（默认全展开：部门层级通常不深，收起来反而多一次点击） -->

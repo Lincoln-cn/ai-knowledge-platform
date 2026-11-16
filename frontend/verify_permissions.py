@@ -19,6 +19,7 @@ from __future__ import annotations
 import functools
 import http.server
 import os
+import re
 import socketserver
 import sys
 import threading
@@ -32,6 +33,40 @@ ROOT = Path(__file__).resolve().parent
 #   默认值保持 4210（CI 依赖它），但允许用 AIP_GATE_PORT 覆盖，好让本机也能跑：
 #     set AIP_GATE_PORT=14205  &&  python smoke_test.py
 PORT = int(os.environ.get("AIP_GATE_PORT", "4210"))
+
+# ── 顶栏期望表的**源码对照物** ────────────────────────────────────────────────
+# 期望表是手写的，菜单是 `routes.ts` 里的 `navGroups`。两者不一致时，
+# 过去的做法是"人眼对齐"，结果漏了两次（`#346`）。现在读源码来比对。
+ROUTES_TS = ROOT / "src" / "router" / "routes.ts"
+# 顶栏第一项是首页（`overview`），它不在 `navGroups` 里 —— 比对时单独剔除。
+HOME_LABEL = "工作台"
+
+
+def nav_group_labels() -> list[str]:
+    """从 `routes.ts` 的 `navGroups` 读出全部菜单 label（保持声明顺序）。
+
+    ★ 只认 `path: '...', label: '...'` 这种同一行的写法 —— `navGroups` 里每一项都是
+    这么写的（见 `routes.ts` 的 `NavItem`）。找不到 `navGroups` 段时返回空表，
+    由调用方把"读不到"**报成红**（空表绝不能等价于"没问题"）。
+    """
+    try:
+        src = ROUTES_TS.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    # 数组字面量从 `export const navGroups` 开始，到行首的 `]` 结束（子数组的 `]` 有缩进）
+    m = re.search(r"export const navGroups[^\[]*\[(.*?)^\]", src, re.S | re.M)
+    if not m:
+        return []
+    # ★ 只匹配**行首是 `{`** 的真正条目：注释行（`//`）里写的样例字面量不算菜单项。
+    #   这条是踩出来的 —— 第一次实现时把 `routes.ts` 注释里的一句
+    #   "安全围栏 … { path: '/settings/guard', label: '安全围栏' }" 当成了真菜单项，
+    #   于是自检报"navGroups 有、NAV 没有"（`#265` 的同一课：注释不是代码）。
+    return [
+        label
+        for _, label in re.findall(
+            r"^\s*\{\s*path:\s*'([^']+)',\s*label:\s*'([^']+)'", m.group(1), re.M
+        )
+    ]
 
 # ── 接口层断言是否可跑 ──
 # dev server 才有 /src/*.ts（Vite 现场编译）；dist 是打包产物，按路径 import 必 404。
@@ -54,8 +89,9 @@ MATRIX = [
     ("/knowledge/hittest", ["admin", "zhangyun", "liwei"]),
     ("/market", ["admin", "zhangyun", "liwei", "chenjun"]),
     ("/assistants", ["admin", "zhangyun", "liwei", "chenjun"]),
-    # 模板中心借 `assistant:view`，四个角色都能进
-    ("/templates", ["admin", "zhangyun", "liwei", "chenjun"]),
+    # ★ 2026-11-16 由 `assistant:view` 收紧到 `assistant:edit`（ROADMAP §11.52.9）：
+    #   这页唯一的动作是"从模板建一个新应用"，那需要写权限；只读用户进来什么都做不了。
+    ("/templates", ["admin", "liwei"]),
     ("/assistants/prompts", ["admin", "liwei"]),
     ("/models", ["admin"]),
     ("/analytics", ["admin", "zhangyun", "liwei"]),
@@ -71,6 +107,15 @@ MATRIX = [
     ("/basedata", ["admin"]),
     ("/audit", ["admin"]),
     ("/settings/providers", ["admin"]),
+    # ★ 2026-11-16 补四行（`#346`）：这四条路由此前进了菜单、却**不在路由矩阵里**，
+    #   也就是说"普通人能不能直接敲 URL 进去"从来没有被量过。
+    #   `/complaints` 没有权限点 ⇒ 所有登录用户都能进（法规要求"便捷入口"）。
+    ("/complaints", ["admin", "zhangyun", "liwei", "chenjun"]),
+    ("/compliance", ["admin"]),
+    # 这两条今天都是 ADMIN 独有：检索引擎 `platform:retrieval:manage`、
+    # 长期记忆借 `conversation:settings`（拆出"我的记忆"页之前，普通用户不该进来）。
+    ("/settings/retrieval", ["admin"]),
+    ("/settings/memory", ["admin"]),
 ]
 
 # ── A7 写入口矩阵（按钮侧）──
@@ -118,47 +163,52 @@ WRITE_ENTRIES = [
 ]
 
 # ── 顶栏期望（同一矩阵的另一面：菜单不该出现进不去的项）──
-# ⚠️ 首项是产品首页的侧栏名。R45 把 `overview` 从「迁移总览」改成「工作台」后，
-#    这里不同步就会变成「断言一个不存在的菜单项」⇒ 恒假失败（或改成恒真）。
-# ⚠️ 07 §五 之后，顶栏多了一维「数据范围」：`USER`（范围 shared）看不到「知识库」
-#    （知识库只在 own / all 下有页面形态），也看不到「应用管理」（同理）。
-#    应用市场（/market）登录即可进，所有人可见；应用管理（/assistants）只在 own / all 有形态。
+# ⚠️ 首项是产品首页的菜单名（`工作台`，路由 `overview`）。
+# ⚠️ 07 §五 之后，顶栏多了一维「数据范围」：`USER`（范围 SHARED）看不到「知识库」
+#    （知识库只在 OWN / ALL 下有页面形态），也看不到「应用管理」（同理）。
+#    应用市场（/market）登录即可进，所有人可见。
+# ⚠️⚠️ 这张表是**手写的**，而顶栏断言是 `sorted(got) == sorted(want)` **严格相等**
+#    ⇒ 菜单加一项而这里没加，闸门就该红。但 2026-11-16 之前它红了没人管：
+#    「检索引擎」与「长期记忆」两项在 `routes.ts` 里登记了、`/settings/retrieval`
+#    的注释还写着"只注册了路由、没有菜单入口"，可**这里始终只有 17 项**（`#346`）。
+#    ⇒ 现在 `shape_problems()` 多了一条断言 ⑧：NAV[admin] 与 `routes.ts` 的
+#    `navGroups` 必须**双向一一对应**，不再靠人眼对齐（`#346` 判据 3）。
+#
+# ★ 2026-11-16 菜单重组（ROADMAP §11.52）：旧名 → 新名
+#   模板中心→应用模板 · 服务商配置→模型服务商 · 模型管理→模型 · 对话设置→通用问答 ·
+#   系统管理→用户角色 · 合规设置→合规备案
 NAV = {
     "admin": [
-        "工作台", "对话", "知识库", "应用市场", "应用管理",
-        "模板中心", "提示词",
-        "模型管理", "运营看板", "反馈处理",
-        # ★ 2026-11-07：`#83` 在「管理」组里加了「投诉举报」页（权限点 `complaint:handle`
-        #   只管"能不能办理"，菜单本身对所有登录用户可见 —— 因为法规要求"便捷入口"）。
-        #   这条期望矩阵必须同步，否则门禁会把"菜单按规则出现"报成红（与 `#258` 那次同族）。
-        "投诉举报",
-        # ★ 2026-10-19 服务商配置 / 基础数据 / 组织机构从「系统管理」拆成独立菜单，
-        #   这条期望矩阵必须同步；否则门禁会把"菜单按规则搬对了"报成红。
-        "基础数据",
-        # ★ 2026-10-28：「对话设置」这一项之前对**所有人**都不出现 —— 不是菜单写错，
-        #   而是 `conversation:settings` 这颗权限点在 mock 里没有任何角色持有
-        #   （目录漏登记，`check_permission_catalog.py` 现在钉着）。修完夹具后它按规则出现，
-        #   期望矩阵必须跟上，否则红的是"菜单按规则出现"这件对的事。
-        "对话设置",
-        "服务商配置", "组织机构", "系统管理",
-        # ★ 2026-11-01：`#258`（`5479733`）在「管理」组里加了「审计记录」页，但没同步这张期望矩阵
-        #   ⇒ 门禁把"菜单按规则出现了"报成红（86/87）。它是**只读**页，而
-        #   `src/pages/audit/route.ts` 今天借的是 `PERM.systemManage`（与"改配置"共用一颗点）——
-        #   ★ 借用本身是另一笔账：这颗点答的是"能不能改配置"，答不了"能不能看审计"，
-        #   按本项目口径「借用语义不相关的权限点 = 这个族还没有权限点」，记在 `#276`。
-        # ★ 2026-11-01 `#276` 已修：`audit:view` 单开，路由 meta 与后端 @PreAuthorize 都换了；
-        #   本矩阵不变 —— ADMIN 仍是唯一持有它的角色（`Permissions.ALL`）。
-        "审计记录",
-        # ★ 2026-11-07：`#83` 的「合规设置」页（`/compliance`，权限点
-        #   `platform:compliance:manage`）。它在 `routes.ts:89` 注册，排在「审计记录」之后。
-        "合规设置",
+        "工作台",
+        # ── 对话与知识（6）──
+        "对话", "知识库", "应用市场", "应用管理", "应用模板", "提示词",
+        # ── 模型与检索（5，安全围栏随 §11.53 落地后加第 6 项）──
+        "模型服务商", "模型", "通用问答", "检索引擎", "长期记忆",
+        # ── 组织与权限（3）──
+        "用户角色", "组织机构", "基础数据",
+        # ── 运营与合规（5）──
+        "运营看板", "反馈处理", "投诉举报", "审计记录", "合规备案",
     ],
-    # ★ 2026-11-07：`#83` 的「投诉举报」菜单对**所有登录用户**可见（法规要求"便捷入口"；
-    #   `complaint:handle` 只管"能不能办理"，答不了"有没有入口"）⇒ 四个账号的期望矩阵都要加。
-    #   与 admin 那条同一理由：不同步这张矩阵，门禁会把"菜单按规则出现"报成红。
-    "zhangyun": ["工作台", "对话", "知识库", "应用市场", "应用管理", "模板中心", "运营看板", "反馈处理", "投诉举报"],
-    "liwei": ["工作台", "对话", "知识库", "应用市场", "应用管理", "模板中心", "提示词", "运营看板", "投诉举报"],
-    "chenjun": ["工作台", "对话", "应用市场", "模板中心", "投诉举报"],
+    # ★ 「投诉举报」对**所有登录用户**可见（法规要求"便捷入口"；`complaint:handle`
+    #   只管"能不能办理"，答不了"有没有入口"）⇒ 四个账号的期望矩阵都含它。
+    #
+    # ★ 2026-11-16 三处权限收紧（ROADMAP §11.52.9）后的复算结果：
+    #   · 「应用模板」由 `assistant:view` 收紧到 `assistant:edit` ⇒ 知识运营看不到它了
+    #     （原来看得见、进去什么都做不了）
+    #   · 「检索引擎」由 `knowledge:view` 收紧到 `platform:retrieval:manage`
+    #   · 「长期记忆」由 `conversation:view` 收紧到 `conversation:settings`
+    #   这两条是 `#346` 的第二半：普通消费者不该在顶栏看到管理旋钮。
+    "zhangyun": [
+        "工作台", "对话", "知识库", "应用市场", "应用管理",
+        "运营看板", "反馈处理", "投诉举报",
+    ],
+    "liwei": [
+        "工作台", "对话", "知识库", "应用市场", "应用管理", "应用模板", "提示词",
+        "运营看板", "投诉举报",
+    ],
+    # ★ 普通用户只剩四项：他是"从应用中心选一个应用来用"的人，
+    #   顶栏对他应该只回答两件事 —— 去哪聊、去哪看（ROADMAP §11.52.10 判据 6）。
+    "chenjun": ["工作台", "对话", "应用市场", "投诉举报"],
 }
 
 results: list[tuple[bool, str, str]] = []
@@ -202,6 +252,33 @@ def shape_problems() -> list[str]:
     unknown = set(NAV) - {u for _, who in MATRIX for u in who}
     if unknown:
         problems.append(f"NAV 里有 MATRIX 中不存在的角色：{sorted(unknown)}")
+
+    # ── ⑧ NAV ↔ navGroups 双向一一对应（`#346`）──────────────────────────────
+    # ★ 为什么必须双向：
+    #   「navGroups 有、NAV 没有」= 加了菜单没改期望表 —— 今天这三处老账的形状；
+    #   「NAV 有、navGroups 没有」= 改名或删菜单没改期望表 —— 下一个人会被误导。
+    #   单向检查只能抓到一半，而**抓到一半的断言会让下一次改错看起来是好的**。
+    labels = nav_group_labels()
+    if not labels:
+        # 读不到就必须报红：否则这条断言变成恒真，比没有更糟。
+        problems.append("读不到 src/router/routes.ts 的 navGroups —— 断言 ⑧ 变成恒真，等于没写")
+    else:
+        admin_items = [x for x in NAV.get("admin", []) if x != HOME_LABEL]
+        missing = [x for x in labels if x not in admin_items]
+        extra = [x for x in admin_items if x not in labels]
+        if missing:
+            problems.append(f"navGroups 里有、NAV[admin] 里没有：{missing}（加菜单忘了改期望表）")
+        if extra:
+            problems.append(f"NAV[admin] 里有、navGroups 里没有：{extra}（改名或删菜单忘了改期望表）")
+        dup_label = sorted({x for x in labels if labels.count(x) > 1})
+        if dup_label:
+            problems.append(f"navGroups 里有重复的 label：{dup_label}")
+
+        # ── ⑨ 每个菜名至少有一个角色能看见 ──
+        # 写了但谁都看不见 = 这条期望永远不会被验证（与 `MATRIX` 的"没有角色能进"同族）。
+        for label in labels:
+            if not any(label in items for items in NAV.values()):
+                problems.append(f"菜名「{label}」不在任何角色的期望矩阵里 —— 谁登录都看不见")
 
     return problems
 

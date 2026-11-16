@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   AiChatNodeConfig,
   ConditionNodeConfig,
   NumberConditionNodeConfig,
@@ -90,7 +90,7 @@ export const ISSUE_TEXT: Record<string, { message: string; hint: string }> = {
   },
   'model-not-found': {
     message: '引用了不存在的模型',
-    hint: '在模型管理中创建/加载该模型，或改选一个已存在的模型'
+    hint: '在模型页中创建/加载该模型，或改选一个已存在的模型'
   },
   'kb-not-found': {
     message: '引用了不存在的知识库',
@@ -194,7 +194,7 @@ function checkReferences(nodes: WorkflowNode[], ctx: ValidateContext): WorkflowV
       issues.push(
         issue('model-not-found', 'ERROR', node.id, {
           message: `节点「${nodeLabel(node)}」引用的模型 ${modelId} 不存在`,
-          hint: '在模型管理中创建/加载该模型，或改选一个已存在的模型'
+          hint: '在模型页中创建/加载该模型，或改选一个已存在的模型'
         })
       )
     }

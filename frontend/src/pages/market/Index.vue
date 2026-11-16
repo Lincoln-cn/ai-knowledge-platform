@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="应用市场"
-      desc="挑一个应用开始对话。点卡片看详情，收藏后下次更快找到"
+      desc="挑一个已发布的应用开始对话；收藏过的排在前面"
     >
       <template #actions>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchList">刷新</el-button>

@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div class="page settings-page">
     <PageHeader
-      title="对话设置"
-      desc="通用问答（不挂应用的那条链路）的模型、提示词、召回与流式行为 —— 改完对新会话立即生效"
+      title="通用问答"
+      desc="不挂应用的那条问答链路：模型、提示词、召回与流式行为"
     >
       <template #actions>
         <!--
@@ -331,7 +331,7 @@
       </div>
 
       <div v-if="!canEdit" class="notice info">
-        <b>只读。</b>修改对话设置需要「配置对话设置」权限（<code>conversation:settings</code>）——
+        <b>只读。</b>修改通用问答需要「配置通用问答」权限（<code>conversation:settings</code>）——
         它在角色管理里是一个<b>独立可勾选项</b>，默认只有管理员拥有。
       </div>
     </template>
@@ -451,7 +451,7 @@ async function load() {
     const isForbidden = err.code === 403 || /无权限|forbidden|403/i.test(err.message || '')
     loadError.value = isForbidden
       ? {
-          reason: '当前登录态里没有「配置对话设置」权限',
+          reason: '当前登录态里没有「配置通用问答」权限',
           hint: '若你确认自己的角色已有该权限，请退出后重新登录（权限在登录时生效）；否则请管理员在「角色管理」里勾选它。'
         }
       : { reason: err.message || '未知错误', hint: err.hint }

@@ -1,4 +1,4 @@
-import { ApiError, ErrorCode } from '@/api/types'
+﻿import { ApiError, ErrorCode } from '@/api/types'
 import type {
   AccessCredential,
   ApiKeyItem,
@@ -95,7 +95,7 @@ const runPublishCheck = (app: Assistant): PublishCheckResult => {
       !model
         ? '未选择对话模型。请选择一个「已加载」的对话模型'
         : model.status !== 'LOADED'
-          ? `模型「${model.name}」当前状态为「${model.status}」，请先在模型管理中加载完成`
+          ? `模型「${model.name}」当前状态为「${model.status}」，请先在模型页中加载完成`
           : null
   })
 

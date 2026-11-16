@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="提示词"
-      desc="提示词配置：可复用的角色指令，被应用按引用选用；类型可在本页「类型管理」里维护"
+      desc="可复用的角色指令，被应用按引用选用；类型维护也在这页"
     >
       <template #actions>
         <el-button size="small" :icon="Setting" @click="openTypes">类型管理</el-button>

@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <header class="topbar" :class="{ 'with-panel': alignPanel }">
     <div class="lead">
       <button type="button" class="back" @click="emit('back')">
@@ -44,10 +44,10 @@
           v-if="showChatSettings"
           to="/settings/chat"
           class="tlink"
-          aria-label="对话设置"
-          title="对话设置"
+          aria-label="通用问答"
+          title="通用问答"
         >
-          <el-icon><Timer /></el-icon><span>对话设置</span>
+          <el-icon><Timer /></el-icon><span>通用问答</span>
         </router-link>
         <router-link
           v-if="showAppConfig"

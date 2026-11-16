@@ -1,6 +1,6 @@
-<template>
+﻿<template>
   <div class="page">
-    <PageHeader title="合规设置" desc="合规要件的平台登记项。改这里的值会同步到「投诉举报」页的公示内容。" />
+    <PageHeader title="合规备案" desc="算法备案号与安全评估结论等对外登记项，同步到公示内容。" />
 
     <!-- 面板 1（能力 1）：投诉举报反馈时限（第十五条「公布反馈时限」的数字来源） -->
     <div class="panel">
@@ -81,7 +81,7 @@ async function load() {
     form.algorithmFilingNo = settings.algorithmFilingNo ?? ''
     form.securityAssessmentConclusion = settings.securityAssessmentConclusion ?? ''
   } catch (e) {
-    ElMessage.error(e instanceof ApiError ? e.message : '读取合规设置失败')
+    ElMessage.error(e instanceof ApiError ? e.message : '读取合规备案失败')
   }
 }
 

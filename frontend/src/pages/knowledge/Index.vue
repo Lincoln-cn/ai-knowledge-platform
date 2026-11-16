@@ -7,8 +7,8 @@
       <PageHeader
         title="知识库"
         :desc="consumer
-          ? '这些知识库可以被对话直接引用；内容由知识运营维护，你不需要做任何维护动作'
-          : '知识库是文档、分段与检索的容器。向量模型创建时选定，有向量化内容后锁定'"
+          ? '这些知识库可以被对话直接引用；内容由知识运营维护，你不用管'
+          : '文档上传后切成可检索的段；向量模型创建时选定，有内容后锁定'"
       >
         <template #actions>
           <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchList">刷新</el-button>

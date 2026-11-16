@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="应用管理"
-      desc="应用把模型、知识库与提示词组装成可发布的对话服务。简单应用看模型 / 知识库数，编排应用看节点数 / 版本；另有发布态 / 用量 / 满意度'"
+      desc="把模型、知识库与提示词组装成应用，并决定它是否发布"
     >
       <template #actions>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchList">刷新</el-button>

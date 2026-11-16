@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="基础数据"
-      desc="密级 / 文种 / 提示词类型 / 库分类的唯一真源 —— 这里改一次，全平台的下拉与既有数据的展示都跟着变"
+      desc="密级、文种、提示词类型与库分类的唯一真源，改一次全平台生效"
     />
 
     <div class="notice info">

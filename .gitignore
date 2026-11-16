@@ -95,3 +95,9 @@ backend/data/
 #      已公开同一值）、唯一的绝对路径是 `proof_contract_test.py` 的 JDK 与两份 `reports/probe-*.json`。
 #      真正不公开的理由是"工具与调参方法属于交付侧能力"，不是"里面藏着现场数据"。
 sla/
+
+# ★ pnpm 的构建缓存与锁文件（2026-11-16）
+#   项目的包管理器是 npm（frontend/README.md 全部命令都是 npm run，仓库里有 package-lock.json）。
+#   这两项是本地用 pnpm 跑构建时产生的副产物，**不许进仓** —— 并存两份 lock 会让依赖树有两套真源。
+.pnpm-store/
+frontend/pnpm-lock.yaml

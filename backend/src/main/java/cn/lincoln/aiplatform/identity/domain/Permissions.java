@@ -1,4 +1,4 @@
-package cn.lincoln.aiplatform.identity.domain;
+﻿package cn.lincoln.aiplatform.identity.domain;
 
 import java.util.List;
 import java.util.Map;
@@ -64,7 +64,7 @@ public final class Permissions {
   public static final String CONVERSATION_MANAGE = "conversation:manage";
 
   /**
-   * 配置「对话设置」（默认模型 / 初始提示词 / 召回开关与阈值 / 流式超时）。
+   * 配置「通用问答」（默认模型 / 初始提示词 / 召回开关与阈值 / 流式超时）。
    *
    * <p>★ 单开一个权限点而不是复用 {@code system:manage}： 后者是「整个系统管理」的开关（组织、角色、字典、系统参数全在里面），
    * 而「允许某人调召回阈值」是一件**比系统管理窄得多**的事 —— 复用会把管理员权限切成两半（要么全给、要么不给），于是只能再找一个管理员。

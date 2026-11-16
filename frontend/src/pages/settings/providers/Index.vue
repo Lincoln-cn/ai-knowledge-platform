@@ -1,11 +1,11 @@
-<template>
+﻿<template>
   <div class="page">
     <PageHeader
-      title="服务商配置"
-      desc="模型从哪来在这里登记：默认上游、网关、或某个厂家的直连。密钥只写不回显"
+      title="模型服务商"
+      desc="一条记录是一套连接、凭据与出网边界；出网边界决定密级上限"
     >
       <template #actions>
-        <el-button size="small" @click="goModels">去模型管理绑定模型</el-button>
+        <el-button size="small" @click="goModels">去模型页绑定模型</el-button>
       </template>
     </PageHeader>
 

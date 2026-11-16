@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 「模型够不够用」的单一判据 —— 工作台引导条的入口条件（`ROADMAP §五` F2 的第一步）。
  *
  * <h3>为什么要有这一层</h3>
@@ -142,7 +142,7 @@ export function modelReadinessNotice(
   if (readiness.missing.length >= 2) {
     return {
       tone: 'warn',
-      text: '还没有可用模型 —— 对话模型与向量模型都要先在模型管理里登记，否则问答和知识库都用不了'
+      text: '还没有可用模型 —— 对话模型与向量模型都要先在模型页里登记，否则问答和知识库都用不了'
     }
   }
 

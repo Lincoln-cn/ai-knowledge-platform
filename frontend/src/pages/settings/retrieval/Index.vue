@@ -2,7 +2,7 @@
   <div class="page settings-page">
     <PageHeader
       title="检索引擎"
-      desc="一次检索要花在哪几段 —— 改完对下一次检索立即生效，不用重启"
+      desc="这台机器怎么算检索：查询理解、重排窗口与批大小"
     >
       <template #actions>
         <span class="meta-line micro">

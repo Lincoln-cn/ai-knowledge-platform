@@ -1,4 +1,4 @@
-import type { ChatMessage, Conversation, PublicContext } from '@/api/conversations'
+﻿import type { ChatMessage, Conversation, PublicContext } from '@/api/conversations'
 import type { SourceRef } from '@/api/stream-types'
 import type { ClassificationLevel } from '@/api/types'
 
@@ -401,7 +401,7 @@ export const messagesByConv: Record<string, ChatMessage[]> = {
       tokens: 0,
       durationMs: 800,
       failReason: '对话模型 qwen2:7b-instruct 未加载完成（当前状态：加载失败）',
-      failHint: '请到「模型管理」重新加载该模型，或在应用配置中更换为已加载的模型后再试',
+      failHint: '请到「模型」页重新加载该模型，或在应用配置中更换为已加载的模型后再试',
       createdAt: iso(day + 2.05 * hour)
     }
   ],

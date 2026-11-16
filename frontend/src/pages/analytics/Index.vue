@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="运营看板"
-      desc="用量、质量与反馈的一页总览。指标全部来自后端事实，无数据时显示「—」而不是 0"
+      desc="用量、质量与反馈的总览；没有读数时显示横线而不是 0"
     >
       <template #actions>
         <el-radio-group v-model="rangeKey" size="small" @change="fetchAll">
