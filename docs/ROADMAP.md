@@ -4448,6 +4448,12 @@ boolean serves(String baseModel) {
 1. **接口方法必须是 `default`**：`OutboundPiiPassthroughTest` / `ChatModelAdapterTest` / `SpringAiChatAdapterTest` 各有一个 `FakeModels`，写成抽象方法会让它们当场编译红。
 2. **只拦新增、不回填存量**：`kb_document` 没有 `embedding_model_id` 列、`vec_embedding_<dim>` 也没有模型归属 ⇒ **查不出**"哪些文档用了这个向量模型"，那 24 条错登记只能人工改。
 
+★ **存量已于 2026-11-17 清掉（`#347`）**：`tools/CleanBgeM3Duplicates.java`（一次性脚本，**不进迁移**）——保留
+`74b51c54…`（1024 维，被引用最多），36 个库的 `embedding_model_id` 改指它、11041 行 `vec_embedding_1024` 的
+`metadata.model_id` 改指它、删掉 29 条登记、清空 `vec_embedding_768`（203 行 = 88 行待删模型的向量 + 61 行 512 维
+模型错表 + 46 行孤儿模型 + 8 行 1024 维错表）。读数：bge-m3 **30 → 1 行**；指向保留条的库 **13 → 49**；脚本重跑
+一次 **0 改动**（幂等）。★ 判据 2/4（走查连跑两次 count 相同、`check_flow_walkthrough.py` 47/47）要真栈，见 `#347` 评论。
+
 ### 11.19.3 判据读数
 
 `ModelDimensionConsistencyTest` **4/4 绿**：`aSecondDimensionForTheSameBaseModelIsRejected`（message 含「已有登记维度 768」「不能再登记成 1024」，`hint()` 含 `vec_embedding_1024`）· `theSameDimensionIsAccepted` · `differentBaseModelsKeepTheirOwnDimensions` · `aBlankBaseModelIsNotGuardedHere`。
@@ -4456,7 +4462,7 @@ boolean serves(String baseModel) {
 
 ### 11.19.4 不在本条三项
 
-存量 24 条的修正 · 跨 `baseModel` 的维度冲突 · `dimension` 与实际输出维度的核对（属 `#305` 缺口 A 的邻域）。
+存量 24 条的修正（**✅ 已由 `#347` 清掉，见 11.19.2 末**） · 跨 `baseModel` 的维度冲突 · `dimension` 与实际输出维度的核对（属 `#305` 缺口 A 的邻域）。
 
 
 ## §11.18 `#177` 的读数与口径决定（2026-11-06）
