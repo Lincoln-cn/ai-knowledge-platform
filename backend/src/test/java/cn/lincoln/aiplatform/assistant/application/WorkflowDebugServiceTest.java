@@ -50,7 +50,7 @@ class WorkflowDebugServiceTest {
   void compileFailureWritesNoRecord() {
     WorkflowCompiler.Graph graph = new WorkflowCompiler.Graph(List.of(), List.of());
 
-    WorkflowDebugService.Result result = service.debug(APP, graph, "问题");
+    WorkflowDebugService.Result result = service.debug(APP, graph, "问题", null);
 
     assertThat(result.ok()).isFalse();
     assertThat(result.errors()).isNotEmpty();
@@ -65,7 +65,7 @@ class WorkflowDebugServiceTest {
     state.write("reply", "这是最终回答", KeyUpdate.REPLACE);
     when(executor.executeAndReturn(any(), any(), eq("问题"))).thenReturn(state);
 
-    WorkflowDebugService.Result result = service.debug(APP, fourNodeGraph(), "问题");
+    WorkflowDebugService.Result result = service.debug(APP, fourNodeGraph(), "问题", null);
 
     assertThat(result.ok()).isTrue();
     assertThat(result.finalOutput()).isEqualTo("这是最终回答");
@@ -89,7 +89,7 @@ class WorkflowDebugServiceTest {
     when(executor.executeAndReturn(any(), any(), any()))
         .thenThrow(new IllegalStateException("没有类型 AI_CHAT_NODE 的节点执行器"));
 
-    WorkflowDebugService.Result result = service.debug(APP, fourNodeGraph(), "问题");
+    WorkflowDebugService.Result result = service.debug(APP, fourNodeGraph(), "问题", null);
 
     // ★ 这里原来是 isTrue()，而且它“通过”了 —— 因为实现里写死了 true。
     //   一条照着实现抄的期望值只能证明“实现没变”，证明不了“实现对不对”。
@@ -112,7 +112,7 @@ class WorkflowDebugServiceTest {
     state.write("reply", "答", KeyUpdate.REPLACE);
     when(executor.executeAndReturn(any(), any(), any())).thenReturn(state);
 
-    WorkflowDebugService.Result result = service.debug(APP, fourNodeGraph(), "问题");
+    WorkflowDebugService.Result result = service.debug(APP, fourNodeGraph(), "问题", null);
 
     assertThat(result.nodeTrail())
         .extracting(WorkflowDebugService.TrailStep::type)

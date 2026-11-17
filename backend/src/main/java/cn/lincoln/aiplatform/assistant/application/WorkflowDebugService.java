@@ -34,8 +34,11 @@ public class WorkflowDebugService {
    * @param assistantId 编排应用
    * @param graph 画布当前的图（<strong>用请求里带的草稿，不用已发布的版本</strong>：试用的意义就是"发布之前先看看"）
    * @param inputs 按节点 id 提供的输入，缺省时用调用方给的那一段文本
+   * @param conversationId 试用界面自己生成的临时会话 id（`#355`）。<b>它只影响"这几轮在运行记录里归到一起"， 不影响执行本身</b> ——
+   *     这个端点仍是一次独立的图执行，不带上一轮的历史与上下文。 不传时为 {@code null}（等价于 0.9.2 之前的行为：试用不属于任何会话）。
    */
-  public Result debug(UUID assistantId, WorkflowCompiler.Graph graph, String inputs) {
+  public Result debug(
+      UUID assistantId, WorkflowCompiler.Graph graph, String inputs, UUID conversationId) {
     WorkflowCompiler.CompileResult compiled = new WorkflowCompiler(catalog).compile(graph);
     if (!compiled.ok()) {
       // ★ 编不过就不该产生运行记录：那不是"一次失败的运行"，是"这张图还不成立"。
@@ -43,7 +46,7 @@ public class WorkflowDebugService {
     }
 
     WorkflowRunRecorder.Outcome outcome =
-        recorder.run(assistantId, compiled.plan(), inputs, null, "MANUAL");
+        recorder.run(assistantId, compiled.plan(), inputs, conversationId, "MANUAL");
 
     // ★ ok 必须跟着结果走，不能写死 true：真栈验证时这里返回 ok=True 而记录是 FAILED，
     //   前端「试用」对话框会显示"成功"、记录表里却是失败 —— 正是项目一直在批的静默失败形状。

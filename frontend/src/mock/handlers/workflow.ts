@@ -125,7 +125,14 @@ function debugLinear(graph: WorkflowGraph): DebugWorkflowResult | { error: strin
       ? String((last.config as { content: string }).content || '').slice(0, 200) || '（回复内容为空）'
       : '（线性调试未走到指定回复节点，仅展示轨迹）'
 
-  return { finalOutput, nodeTrail: trail, elapsedMs: Date.now() - startedAt + trail.length * 120 }
+  return {
+    ok: true,
+    errors: null,
+    finalOutput,
+    nodeTrail: trail,
+    elapsedMs: Date.now() - startedAt + trail.length * 120,
+    executionId: `mock-run-${startedAt}`
+  }
 }
 
 /** 图来自请求体就用请求体（发布前可能尚未保存），否则取草稿 */

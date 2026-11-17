@@ -468,7 +468,6 @@ export type NodeConfigOf<T extends WorkflowNodeType> =
   : T extends 'TEXT_TO_SPEECH_NODE' ? TextToSpeechNodeConfig
   : T extends 'SPEECH_TO_TEXT_NODE' ? SpeechToTextNodeConfig
   : T extends 'IMAGE_GENERATE_NODE' ? ImageGenerateNodeConfig
-  : T extends 'FUNCTION_LIB_NODE' ? FunctionNodeConfig
   : T extends 'FUNCTION_NODE' ? FunctionNodeConfig
   : T extends 'FORM_NODE' ? FormNodeConfig
   : Record<string, never>
@@ -614,12 +613,31 @@ export interface DebugWorkflowBody {
   graph: WorkflowGraph
   /** 按节点顺序提供输入，缺省用节点默认值 */
   inputs: Record<string, string>
+  /**
+   * 试用抽屉自己生成的临时会话 id（`#355`）。
+   *
+   * ★ 它的作用**只有一个**：让同一批试用在「运行记录」里归到一起，能按会话翻。
+   *   它**不改变执行** —— 每次调用仍是一次独立的图执行，不带上一轮的历史。
+   *   界面文案必须说清这一点，否则用户会以为"多轮对话"真的把上下文带进去了。
+   */
+  conversationId?: string | null
 }
 
 export interface DebugWorkflowResult {
-  finalOutput: string
+  /**
+   * 图能不能跑。`false` = 编译没过或执行失败，此时 `errors` 非空。
+   *
+   * ★ 这个字段后端 0.7.x 就在返回了，而契约此前只声明了三个字段 ⇒ 真栈上后端返回 `ok: false`
+   *   而界面照样弹「试用结果」。多出来的字段被丢弃，比字段不存在更难发现。
+   */
+  ok: boolean
+  /** 编译错误或失败原因（给人看的句子，不是错误码）；成功时为 null */
+  errors: string[] | null
+  finalOutput: string | null
   nodeTrail: WorkflowRecord['nodeTrail']
   elapsedMs: number
+  /** 这次执行落下的记录 id；编译就没过时为 null（那种情况不产生运行记录） */
+  executionId: string | null
 }
 
 /* ────────────────────────── 接口 ────────────────────────── */

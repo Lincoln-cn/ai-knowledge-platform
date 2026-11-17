@@ -30,7 +30,7 @@
                     <el-icon class="mr-4"><DocumentChecked /></el-icon>
                     保存
                 </el-button>
-                <el-button text :loading="trialing" @click="runTrial">
+                <el-button text :class="{ 'is-on': trialOpen }" @click="trialOpen = !trialOpen">
                     <WorkFlowIcon icon="lucide:play" class="mr-4" />
                     试用
                 </el-button>
@@ -103,6 +103,9 @@
                 @refreshVersion="refreshVersion"
                 v-click-outside="clickoutsideHistory"
             />
+            <!-- 试用抽屉（`#355`）：同一层定位，与画布并存。它是「按对话过程试」的落点 ——
+                 旧形态是一条 el-message-box 弹窗，只显示最后一步的文本，关掉就没了。 -->
+            <TrialPanel v-if="trialOpen" :run="trialRun" @close="trialOpen = false" />
         </div>
         <!-- 下拉框是绝对定位的浮层，不参与高度计算 -->
         <el-collapse-transition>
@@ -177,6 +180,7 @@ import { MsgSuccess, MsgError } from '@/utils/message'
 import { pendingEndpointHint } from '@/lib/pendingEndpoint'
 import { issuesFromDetails } from '@/lib/publishIssues'
 import PublishHistory from '@/pages/workflow/components/common/PublishHistory.vue'
+import TrialPanel from '@/pages/workflow/components/common/TrialPanel.vue'
 import DropdownMenu from '@/pages/workflow/components/common/DropdownMenu.vue'
 import BackButton from '@/pages/workflow/components/back-button/index.vue'
 import AppAvatar from '@/pages/workflow/components/app-avatar/index.vue'
@@ -199,7 +203,8 @@ import {
     listWorkflowRecords,
     type WorkflowGraph,
     type WorkflowRecord,
-    type WorkflowValidationIssue
+    type WorkflowValidationIssue,
+    type DebugWorkflowResult
 } from '@/api/workflow'
 import { ErrorCode } from '@/api/types'
 
@@ -247,8 +252,13 @@ const triggerBusy = ref(false)
  * "它按点跑了什么、成没成功"的地方。所以这里必须把最新一条捞出来显示，否则「已定时」只是个绿灯。
  */
 const lastRecord = ref<WorkflowRecord | null>(null)
-/** 「试用」进行中：按钮转圈，防重复点击（每次试用都会在后端留下一条运行记录）。 */
-const trialing = ref(false)
+/**
+ * 试用抽屉是否展开（`#355`）。
+ *
+ * ★ 抽屉与画布并存而不是模态框：试用的意义是"边看边试"（改一个节点、再试一次），
+ *   而旧版的 `ElMessageBox` 一弹就把画布挡死。
+ */
+const trialOpen = ref(false)
 const router = useRouter()
 const route = useRoute()
 /* 路由参数名必须与 `pages/workflow/route.ts` 声明的 `:appId` 一致 ——
@@ -746,7 +756,7 @@ function saveApplication(bool?: boolean) {
 }
 
 /**
- * 「试用」：把当前图交给后端真执行引擎跑一次。
+ * 「试用」：把当前图交给后端真执行引擎跑一次（`#355` 把它从一条弹窗改成右侧抽屉）。
  *
  * ★ 这是 0.7.0 之前画布最容易被误判的一处：界面上一直有 `.workflow-debug-*` 的样式残留，
  *   而后端 `POST …/workflow/debug` 只登记在 `ContractDriftTest` 的未实现清单里 ——
@@ -755,38 +765,19 @@ function saveApplication(bool?: boolean) {
  * ★ 先保存再试：试用的意义是"发布之前先看看这张图"，用上一次保存的图等于看的不是正在编的东西。
  *   `saveApplication(false)` 不弹"保存成功"——试用的人关心的是结果不是保存。
  *
- * ★ 结果只给 `elapsedMs` / 轨迹 / `finalOutput`：画布页没有多余空间放完整调试面板，
- *   而这一版要证明的是"运行记录真的多了一行"（在应用详情的运行记录里看），不是给一个富交互调试器。
+ * ★ 0.9.3 的形态（`#355`）：旧版是一条 `ElMessageBox.alert` 弹「耗时 + 节点类型清单 + 最终输出」，
+ *   关掉就没了，且**后端返回的 `ok: false` 被丢掉**（契约只声明三个字段）⇒ 失败也照样弹"试用结果"。
+ *   现在由 `TrialPanel` 承载：一轮一条消息、失败把 `errors` 逐条列出来、轨迹可展开、可以连续跑几次。
+ *   保存与取图留在这里 —— 面板不该知道"图从哪个 ref 里来"。
  */
-async function runTrial() {
-    try {
-        await saveApplication(false)
-        const graph = fromLogicFlow(getGraphData())
-        const { value } = await ElMessageBox.prompt('输入这次试用的用户问题', '试用', {
-            confirmButtonText: '运行',
-            cancelButtonText: '取消',
-            inputPlaceholder: '例如：住宿标准是多少？'
-        })
-        trialing.value = true
-        const result = await debugWorkflow(id, { graph, inputs: { entry: value ?? '' } })
-        const trail = result.nodeTrail
-            .map((step, index) => `${index + 1}. ${step.type}`)
-            .join('\n')
-        await ElMessageBox.alert(
-            `耗时 ${result.elapsedMs}ms\n\n节点轨迹：\n${trail}\n\n最终输出：\n${result.finalOutput ?? '（无）'}\n\n这次试用的执行记录已写入运行记录（conversationId 为空）。`,
-            '试用结果',
-            { confirmButtonText: '知道了' }
-        )
-    } catch (error: unknown) {
-        // ElMessageBox 的"取消"也是 reject，不该当成失败提示。
-        if (error === 'cancel' || error === 'close') {
-            return
-        }
-        const pending = pendingEndpointHint(error, '试用编排', '#326')
-        MsgError(pending ?? '试用失败，请稍后重试')
-    } finally {
-        trialing.value = false
-    }
+async function trialRun(question: string, conversationId: string): Promise<DebugWorkflowResult> {
+    await saveApplication(false)
+    const graph = fromLogicFlow(getGraphData())
+    return debugWorkflow(id, {
+        graph,
+        inputs: { entry: question },
+        conversationId
+    })
 }
 </script>
 

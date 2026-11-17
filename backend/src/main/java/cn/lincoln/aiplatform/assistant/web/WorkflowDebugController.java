@@ -39,17 +39,41 @@ public class WorkflowDebugController {
   }
 
   /**
-   * 跑一次试用，并落一行运行记录（{@code conversationId} 为空 —— 试用不属于任何会话）。
+   * 跑一次试用，并落一行运行记录。
    *
    * <p>★ 权限用 {@code assistant:edit} 而不是 {@code assistant:view}：试用的目的是"发布之前先看看"，是编辑动作的一部分；
    * 给只读角色开这个口子等于让他能触发模型调用。
+   *
+   * <p>★ {@code conversationId} 是可选字段（`#355`）：试用抽屉会给同一批对话生成一个临时会话 id，
+   * 于是那几轮在「运行记录」里能归到一起。<b>它不改变执行</b> —— 每次调用仍是独立的一次图执行， 不带上一轮的历史。认不出的值按"不传"处理（与服务化一次试用相比，宁可少一个分组也不要
+   * 400）。
    */
   @PostMapping("/debug")
   @PreAuthorize("hasAuthority('assistant:edit')")
   public ApiResponse<WorkflowDebugService.Result> debug(
       @PathVariable UUID appId, @RequestBody JsonNode body) {
     return ApiResponse.ok(
-        debugs.debug(appId, compilerGraph(body.path("graph")), entryInput(body.path("inputs"))));
+        debugs.debug(
+            appId,
+            compilerGraph(body.path("graph")),
+            entryInput(body.path("inputs")),
+            optionalUuid(body.path("conversationId"))));
+  }
+
+  /** 可选 UUID：缺失、null、空串或格式不对一律 {@code null}。 */
+  private static UUID optionalUuid(JsonNode node) {
+    if (node == null || node.isNull() || node.isMissingNode()) {
+      return null;
+    }
+    String text = node.asString("").trim();
+    if (text.isEmpty()) {
+      return null;
+    }
+    try {
+      return UUID.fromString(text);
+    } catch (IllegalArgumentException ignored) {
+      return null;
+    }
   }
 
   /**
