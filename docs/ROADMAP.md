@@ -7202,13 +7202,13 @@ csv  / tsv   ──(解析)─┘
 
 ### 11.52.10 交付判据（七条，缺一不算完）
 
-1. `navGroups` 是 **4 组 22 项**（对话与知识 7 · 模型与检索 6 · 组织与权限 3 · 运营与合规 6），
-   四组各自能用一句不含「以及」的话概括（判据 A）
+1. `navGroups` 是 **6 组 26 项**（对话与知识 7 · 模型与检索 6 · 组织与权限 3 · 运营 4 ·
+   审计与风险 5 · 合规 1），每组各自能用一句不含「以及」的话概括（判据 A）
 2. 每个对象**只有一个菜单入口**（提示词归一处）。★ 记忆拆成两页不算破例 —— 见 `§11.52.13`：
    「记忆管理」（已经记下来的数据）与「长期记忆」（记不记 / 记多少 / 何时忘的规则）受众与
    爆炸半径都不同，判据 B 要求的是"同一个对象不摆两处"，不是"一个词只许有一个页面"
-3. 22 个 label **全部 2–4 字**、无「配置/设置」后缀、**每页 `title` 与 label 一字不差**
-4. 22 条 desc **全部 24–36 字**、无「——」、无括号、无「这里/本页/此处」
+3. 26 个 label **全部 2–4 字**、无「配置/设置」后缀、**每页 `title` 与 label 一字不差**
+4. 26 条 desc **全部 24–36 字**、无「——」、无括号、无「这里/本页/此处」
 5. **同组图标不重复**
 6. ★ **普通用户（chenjun）的顶栏不含「检索引擎」「长期记忆」「模板中心」**，只剩
    「工作台 · 对话 · 应用市场 · 投诉举报」（2 个组按钮）—— 这条是本节最重要的判据，
@@ -7219,9 +7219,13 @@ csv  / tsv   ──(解析)─┘
    与判据 7 的读数完全一样（都是 `exit 0`）时，唯一能区分"闸门真的在守"与"闸门被改成绿的"的，
    就是一次故意的破坏。不做这一步，判据 7 只是"脚本跑完了"。
 
-★ **项数口径（2026-11-17 订正）**：本条最初写的是 **20 项**（`§11.52.5` 那张表）。此后两批各加一项 ——
-`§11.52.12` 的「拦截记录」（第 21 项，运营与合规）、`§11.52.13` 的「记忆管理」（第 7 项，对话与知识）
-⇒ 现为 **22 项**。判据 1/3/4 的项数已同步；下次验按 22 项验，不要回到 20。
+★ **项数口径（2026-11-18 第二次订正）**：本条最初写的是 **20 项**（`§11.52.5` 那张表）；
+`§11.52.12` 的「拦截记录」与 `§11.52.13` 的「记忆管理」加到 **22 项**；
+`§11.60`（用户 8 条产品清单）又加 4 项 ——「运营指标」「登录日志」「错误日志」「风险提示」，
+并把「运营与合规」拆成三组（运营 4 / 审计与风险 5 / 合规 1）⇒ 现为 **6 组 26 项**。
+★ **6 组破了"每组 3–7 项"的旧约束吗**：「合规」只有 1 项，是用户 2026-11-18 明确的拍板
+（"运营 4 项 + 审计与风险 5 项 + 合规单开 1 项"）—— 单独成组的理由是**受众不同**（对外登记 vs 系统自查），
+不是"项数不够凑一组"。下次验按 **26 项**验，不要回到 22 或 20。
 
 ### 11.52.11 仍不做
 
@@ -7858,6 +7862,91 @@ Open objectives（截至本节）：0.9.3 已结项（版本抬到 0.9.3、`CHAN
 已把 `#350` 的机制读数、三条候选与四条判据并入 `#343` 的评论（`issuecomment-6954624146`），
 `#350` 关闭（`not planned`）。
 ★ 教训：**开单前的第一动作是 `gh issue list` 全量看一眼**，不是回忆"有没有开过"。
+
+---
+
+## §11.60 用户 8 条产品清单：六批实施（2026-11-18）
+
+起因：用户贴出 8 条产品缺口（勾选状态自标），并要求「归到 0.9.4 前置检查」。
+核查后 7 条成立（`§11.59.1` 有逐条证据），用户随后拍板六件事，按六批实施。
+
+### 11.60.1 用户的六项拍板
+
+| 问题 | 拍板 |
+|---|---|
+| 转公开的口径 | **A 严格** —— 7 条 + B2 口径全做完才动 `gh repo edit`（+8–10 天） |
+| 菜单怎么分 | 运营 4 项 / 审计与风险 5 项 / 合规单开 1 项 ⇒ **6 组 26 项**（明知会破"每组 3–7 项"） |
+| 投诉加哪些入口 | **两者都要**：投诉人侧「我的投诉」+ 处理人侧「投诉待办」 |
+| 试用改成什么形态 | 右侧可收起抽屉，与画布并存（给图分配临时 `conversationId`） |
+| 运营指标要哪些 | 质量（P50/P95/引用/无引用占比/失败/首字延迟）+ 用量（提问/回答/Token/活跃应用/活跃用户/满意度） |
+| 重排模型怎么露出 | 只读卡片（名称/是否安装/权重/窗口/是否启用） |
+
+### 11.60.2 六批各自落了什么
+
+| 批 | 单号 | 落地物 |
+|---|---|---|
+| A1 | `#353` | 审计页三处：资源→「作用对象」、追溯列有表头且按钮改成「查这个对象的全部记录」、操作人换成远程搜索选择器（`identityApi.listUsers`，失败只置空不弹错；`allow-create` 给没有用户管理权限的审计读者留手输兜底） |
+| A2 | `#352` | `GET /api/v1/models/rerank`（`RerankStatusService`，11 字段）+ 模型页一条只读卡（复用本地 ONNX 那条的版式，右侧写明「只读 · 由 `app.retrieval.rerank.*` 决定」）+ `RerankStatusServiceTest` 4 条 |
+| B | `#357` 前半 | `GET /api/v1/analytics/metrics`（`AnalyticsService.metrics`，16 字段，p50/p95 用 `percentile_cont`）+ 新页 `pages/ops-metrics/`（质量 6 卡 + 用量 6 卡 + 「评测读数（离线，非本区间）」块） |
+| C | `#354` | `V104__platform_login_log.sql` + `LoginLogStore`（五档结果、`REQUIRES_NEW` 独立事务）+ `AuthService` 六处落库 + `LoginLogController` + `RiskService` + `ErrorLogService` + `OpsZoneController` + 前端三页（登录日志 / 错误日志 / 风险提示） |
+| E | `#355` | `WorkflowDebugService.debug` 加 `conversationId` 透传 + 前端契约补 `ok/errors/executionId` + `TrialPanel.vue`（420px 抽屉、多轮归到同一临时会话、失败也 push 一条） |
+| F | `#356` | `V105__platform_complaint_event.sql`（事件表 + 附件表）+ `ComplaintEvent` + `ComplaintTimelineService` + `ComplaintService`（`create`/`patch` 落事件、`addNote`、`timeline`、`attach`、`list(..., mine)`）+ 四个端点 + `ComplaintThread.vue` + 「我的投诉」「投诉待办」两页 |
+
+### 11.60.3 菜单：4 组 22 项 → 6 组 26 项
+
+分组（`navGroups` 与 `verify_permissions.NAV` 同步改）：
+对话与知识 7 · 模型与检索 6 · 组织与权限 3 · **运营 4**（运营看板 / 运营指标 / 反馈处理 / 投诉举报）·
+**审计与风险 5**（审计记录 / 拦截记录 / 登录日志 / 错误日志 / 风险提示）· **合规 1**（合规备案）。
+
+★ 「我的投诉」「投诉待办」**不进顶栏**：它们是「投诉举报」页的开始/待办两个视角，
+入口放在那一页的 PageHeader 上（`投诉待办` 仅 `complaint:handle` 可见）——
+顶栏 26 项已经够长，把"同一件事的三种看法"塞成三项正是本轮要治的病。
+★ `MATRIX` 补 6 行（`/ops-metrics` `/login-logs` `/error-logs` `/risk` `/my-complaints` `/complaint-inbox`）⇒ 29 条路由。
+
+### 11.60.4 读数（2026-11-18 01:5x）
+
+| 项 | 读数 |
+|---|---|
+| `node --run typecheck` | exit 0 |
+| `node --run build` | exit 0（dist 重建） |
+| `ComplaintHttpTest` | **4/4**（新增 `timelineKeepsEveryStepAndAttachmentsAreDownloadable`：三拍都在 + 附件能原样取回 + 超 10 MB 400） |
+| `RerankStatusServiceTest` | **4/4** |
+| `WorkflowDebugServiceTest` | **5/5** |
+| `MigrationInventoryTest` | **1/1** |
+| `verify_permissions.py --self-check` | 5 行 ✓（读得到 / 期望表自洽 / 三条反证） |
+| `verify_permissions.py`（完整，`--base` 指向 **mock dev server**） | **162/162**（`.build/verify-perm-26b.log`；26 项菜单 × 4 账号 + 6 条新路由） |
+
+### 11.60.5 顺带记四个坑（都会再撞）
+
+1. ★ **增量编译会留下残缺的 class**：`mvn -DskipTests compile` 之后跑测试报
+   `NoClassDefFoundError: PublicRateLimitFilter$Bucket`（内部类没被重编），四个用例全红且原因看起来像"代码坏了"。
+   判据：**改了 Java 之后跑测试报 ApplicationContext 起不来，先 `clean`**。
+2. ★ **`-DspotlessFiles` 不能带路径**：`.*platform/compliance.*` 会"报成功但一个字节没改"，
+   要写成 `.*Complaint.*`（类名前缀）。
+3. ★ **`typecheck` 不检查组件路径是否存在**：三个新页写成 `@/components/common/PageHeader.vue`
+   （真实路径是 `@/components/PageHeader.vue`），typecheck 全绿、`node --run build` 才报 `ENOENT`。
+   判据：**新页面的读数是 `build`，不是 `typecheck`**。
+4. ★ **`nav_group_labels()` 只认行首 `{ path:`**：最后一项写成 `items: [{ path: '/compliance', … }]`
+   ⇒ 闸门读不到它，`--self-check` 直接红「NAV[admin] 里有、navGroups 里没有：['合规备案']」。
+   这不是闸门 bug —— 它按行首匹配，目的就是不去匹配注释里的样例。写菜单项要一条一行。
+5. ★ **完整权限闸门要对着 mock dev server 跑，不是对着真栈**：CI（`ci-frontend-gates.yml:109`）
+   的跑法是 `python verify_permissions.py --base http://localhost:5280/`，而那个 dev server 来自
+   `npm run dev`（`.env.development` 里 `VITE_USE_MOCK=true`）。本机对着**真栈** dist 跑时四个账号全部
+   「登录后壳未挂上」，现场 `captcha_inputs: 1` —— 真后端默认 `CAPTCHA_ENABLED=true`
+   （`application.yml:225`），而闸门只填用户名密码。
+   判据：**"四个账号同时登不上"先看验证码开关，不要先怀疑菜单**；复现办法是另起一个 `npx vite --port 5301`
+   （默认吃 `.env.development` = mock）再 `--base http://localhost:5301/`。
+6. ★ **路由矩阵的红是真红**：第一次跑完整闸门是 **161/162**，唯一一条是「知识运营 ▸ `/complaint-inbox` 未落 403」——
+   查 `mock/fixtures/identity.ts` 的 r2 发现「知识运营」本来就有 `complaint:handle`，是我把 `MATRIX` 写窄了。
+   ★ 这一类"我以为只有 superadmin 有"的假设，只有逐账号跑矩阵才会露出来。
+
+### 11.60.6 还没做的
+
+- `#357` 的后半（把「看板」与「运营指标」在信息层级上分工写进页面文案）与 `#355` 的"给图分配 `conversationId`"只做了一半：
+  抽屉已按 `crypto.randomUUID()` 生成临时会话并把 `conversationId` 透传到 `WorkflowRunRecorder`，
+  但图执行本身仍不带上一轮历史（`WorkflowDebugService` 的 javadoc 已写明这条限制）。
+- 「投诉待办」的分页只取前 50 条（`SUBMITTED` + `PROCESSING` 各 50）：单量上千后要改后端支持多状态一次查。
+
 
 
 

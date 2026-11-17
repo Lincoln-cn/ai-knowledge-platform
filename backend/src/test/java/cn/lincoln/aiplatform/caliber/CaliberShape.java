@@ -79,6 +79,8 @@ final class CaliberShape {
           // ★ V103 不是 V102：V102 已被 conversation/V102__conversation_memory_convention.sql 用掉。
           //   迁移版本号是全局命名空间、不按目录（`ROADMAP §11.10.70`：曾出现过两个 V54）。
           "platform/V103__platform_guard_settings.sql",
+          "platform/V104__platform_login_log.sql",
+          "platform/V105__platform_complaint_event.sql",
           "identity/V3__identity_auth.sql",
           "identity/V4__identity_seed_demo_accounts.sql",
           "identity/V5__identity_login_lockout.sql",

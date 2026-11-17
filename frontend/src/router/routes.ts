@@ -116,18 +116,42 @@ export const navGroups: NavGroup[] = [
     ]
   },
   {
-    // 主语：已经发生过的事，以及对外要登记的事。按时间序排：
-    // 正在发生 → 用户说了什么 → 用户投诉了 → 留下了什么 → 对外要登记什么。
-    title: '运营与合规',
+    // 主语：**业务在跑得怎么样**（`#357`）。按"先看总量、再看质量、再看用户说了什么"排。
+    // 一句概括：这一组里的页面都在回答"最近发生了什么、量多少"。
+    title: '运营',
     items: [
       { path: '/analytics', label: '运营看板', icon: 'TrendCharts' },
+      // 看板是"业务长什么样"，运营指标是"质量与用量"（P50/P95、无引用占比、活跃应用）——
+      // 前者面向负责人做判断，后者面向值班的人排查，受众不同所以两页
+      { path: '/ops-metrics', label: '运营指标', icon: 'Histogram' },
       { path: '/feedback', label: '反馈处理', icon: 'ChatLineSquare' },
-      { path: '/complaints', label: '投诉举报', icon: 'Warning' },
-      // 「拦截记录」与「审计记录」是两张不同的表，别合成一个：审计回答"谁动了配置"，
-      // 拦截回答"谁的问题被挡住了"。前者关心权限，后者关心内容安全，合规汇报里也是两栏。
-      { path: '/guard-hits', label: '拦截记录', icon: 'Filter' },
-      // 审计记录是一张**只读的事实表**，与"改配置"不是同一类动作，所以不塞进任何 tab
+      { path: '/complaints', label: '投诉举报', icon: 'Warning' }
+    ]
+  },
+  {
+    // 主语：**系统自己留下的痕迹**（`#354`）。按"谁干了什么 → 谁进的门 → 哪里出过事"排。
+    // 一句概括：想查"为什么变成这样"时进这一组。
+    title: '审计与风险',
+    items: [
+      // 审计回答"谁动了配置"，拦截回答"谁的问题被挡住了"：前者关心权限，后者关心内容安全，
+      // 合规汇报里也是两栏，所以始终是两张表
       { path: '/audit', label: '审计记录', icon: 'Document' },
+      { path: '/guard-hits', label: '拦截记录', icon: 'Filter' },
+      // 登录日志是"怎么进的门"，与审计表分开：受众（安全排查）、保留期都不同（V104 注释）
+      { path: '/login-logs', label: '登录日志', icon: 'Key' },
+      // 错误日志读的是已有的失败事实（回答失败 + 文档解析失败），不新建写入路径
+      { path: '/error-logs', label: '错误日志', icon: 'WarningFilled' },
+      // 风险提示是"现在有没有毛病"（磁盘/堆/慢回答/失败率）：只读快照，不是告警系统
+      { path: '/risk', label: '风险提示', icon: 'Odometer' }
+    ]
+  },
+  {
+    // 主语：对外要登记 / 要备查的事。它单独成组而不是并进「审计与风险」：
+    // 那些是"系统自己的痕迹"，这一组是"给监管看的东西"，受众完全不同。
+    title: '合规',
+    items: [
+      // ★ 必须满足行首 `{ path: …` 的形状：`verify_permissions.py` 的 nav_group_labels()
+      //   按行首匹配抓 label，写成 `items: [{ path: … }]` 会被漏读（本批真踩过）
       { path: '/compliance', label: '合规备案', icon: 'Stamp' }
     ]
   }

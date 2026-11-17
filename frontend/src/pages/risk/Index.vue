@@ -37,7 +37,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
-import PageHeader from '@/components/common/PageHeader.vue'
+import PageHeader from '@/components/PageHeader.vue'
 import { opsZoneApi } from '@/api'
 import type { RiskSnapshot } from '@/api/ops-zone'
 

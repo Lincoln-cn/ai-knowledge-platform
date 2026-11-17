@@ -9,6 +9,8 @@
 import { ApiError, ErrorCode } from '@/api/types'
 import type {
   AgreementConsent,
+  ComplaintAttachment,
+  ComplaintEvent,
   ComplaintPatchBody,
   ComplaintStatus,
   ComplianceSettings
@@ -37,6 +39,33 @@ function displayNameOf(userId: string): string {
 /** 能不能办理工单（有 complaint:handle 看全部，否则只看自己提交的）。 */
 function canHandleAll(token: string): boolean {
   return currentSubjects(token).permissions.has(PERM.complaintHandle)
+}
+
+/**
+ * 事件流（`#356`）：按工单 id 存在内存里。
+ *
+ * ★ mock 里也做成"追加写"，因为要证明的正是**追加写本身**：如果 mock 每次覆盖，
+ *   本地试出来的就是"这单只有最后一句话"，而真后端已经不是那样了 —— 那种假绿最难发现。
+ */
+const complaintEvents = new Map<string, ComplaintEvent[]>()
+
+function seedEvents(ticketId: string, subject: string, requesterId: string, createdAt: string, status: ComplaintStatus) {
+  if (complaintEvents.has(ticketId)) return
+  complaintEvents.set(ticketId, [
+    {
+      id: `evt-${ticketId}-created`,
+      ticketId,
+      at: createdAt,
+      actorId: requesterId,
+      actorName: displayNameOf(requesterId),
+      side: 'REQUESTER',
+      kind: 'CREATED',
+      fromStatus: null,
+      toStatus: status,
+      note: subject,
+      attachments: []
+    }
+  ])
 }
 
 function requireComplianceManage(token: string): void {
@@ -83,7 +112,10 @@ export const complianceRoutes: MockRoute[] = [
   ['GET', '/complaints', ({ query, token }) => {
     const me = requireLogin(token)
     const all = canHandleAll(token)
-    let list = complaints.filter((t) => all || t.requesterId === me)
+    // ★ mine=true 时只给"我提的"，哪怕有办理权限（与后端 ComplaintService.list 同口径，#356）
+    const mine = String(query.mine ?? '') === 'true'
+    let list = mine ? complaints.filter((t) => t.requesterId === me)
+      : complaints.filter((t) => all || t.requesterId === me)
     const status = query.status as ComplaintStatus | undefined
     if (status) list = list.filter((t) => t.status === status)
     const kind = query.kind as string | undefined
@@ -123,7 +155,93 @@ export const complianceRoutes: MockRoute[] = [
       updatedAt: now.toISOString()
     }
     complaints.unshift(ticket as (typeof complaints)[number])
+    seedEvents(ticket.id, subject, me, ticket.createdAt, 'SUBMITTED')
     return ticket
+  }],
+  // ★ `#356`：事件流、补充说明、附件。三条都先做归属校验（越权 404，与后端同口径）。
+  ['GET', '/complaints/:id/events', ({ path, token }) => {
+    const me = requireLogin(token)
+    const ticket = complaints.find((t) => t.id === path.id)
+    if (!ticket || (!canHandleAll(token) && ticket.requesterId !== me)) {
+      throw new ApiError(ErrorCode.NOT_FOUND, '工单不存在')
+    }
+    seedEvents(ticket.id, ticket.subject, ticket.requesterId, ticket.createdAt, ticket.status)
+    return [...(complaintEvents.get(ticket.id) ?? [])].sort((a, b) => a.at.localeCompare(b.at))
+  }],
+  ['POST', '/complaints/:id/notes', ({ path, body, token }) => {
+    const me = requireLogin(token)
+    const ticket = complaints.find((t) => t.id === path.id)
+    const handler = canHandleAll(token)
+    if (!ticket || (!handler && ticket.requesterId !== me)) {
+      throw new ApiError(ErrorCode.NOT_FOUND, '工单不存在')
+    }
+    const note = String((body as { note?: string }).note ?? '').trim()
+    if (!note) {
+      throw new ApiError(ErrorCode.BAD_REQUEST, '补充说明不能为空')
+    }
+    seedEvents(ticket.id, ticket.subject, ticket.requesterId, ticket.createdAt, ticket.status)
+    const list = complaintEvents.get(ticket.id) ?? []
+    list.push({
+      id: `evt-${ticket.id}-${list.length + 1}`,
+      ticketId: ticket.id,
+      at: new Date().toISOString(),
+      actorId: me,
+      actorName: displayNameOf(me),
+      side: handler ? 'HANDLER' : 'REQUESTER',
+      kind: 'NOTE',
+      fromStatus: null,
+      toStatus: null,
+      note,
+      attachments: []
+    })
+    ticket.updatedAt = new Date().toISOString()
+    return ticket
+  }],
+  ['POST', '/complaints/:id/attachments', ({ path, body, token }) => {
+    const me = requireLogin(token)
+    const ticket = complaints.find((t) => t.id === path.id)
+    const handler = canHandleAll(token)
+    if (!ticket || (!handler && ticket.requesterId !== me)) {
+      throw new ApiError(ErrorCode.NOT_FOUND, '工单不存在')
+    }
+    const form = body as FormData | undefined
+    const file = form && typeof form.get === 'function' ? form.get('file') : null
+    if (!file || typeof file === 'string') {
+      throw new ApiError(ErrorCode.BAD_REQUEST, '没有收到文件')
+    }
+    seedEvents(ticket.id, ticket.subject, ticket.requesterId, ticket.createdAt, ticket.status)
+    const list = complaintEvents.get(ticket.id) ?? []
+    const attachment: ComplaintAttachment = {
+      id: `att-${ticket.id}-${Date.now()}`,
+      eventId: null,
+      fileName: file.name,
+      contentType: file.type || 'application/octet-stream',
+      sizeBytes: file.size,
+      uploadedAt: new Date().toISOString(),
+      uploadedBy: me,
+      uploadedName: displayNameOf(me),
+      side: handler ? 'HANDLER' : 'REQUESTER'
+    }
+    // 附件挂在最后一条事件上：时间线上"谁在哪一步传了什么"才有出处
+    const last = list[list.length - 1]
+    if (last) {
+      last.attachments.push({ ...attachment, eventId: last.id })
+    } else {
+      list.push({
+        id: `evt-${ticket.id}-att`,
+        ticketId: ticket.id,
+        at: attachment.uploadedAt,
+        actorId: me,
+        actorName: displayNameOf(me),
+        side: attachment.side,
+        kind: 'ATTACHMENT',
+        fromStatus: null,
+        toStatus: null,
+        note: null,
+        attachments: [attachment]
+      })
+    }
+    return attachment
   }],
   ['GET', '/complaints/:id', ({ path, token }) => {
     const me = requireLogin(token)
@@ -152,10 +270,28 @@ export const complianceRoutes: MockRoute[] = [
     if (TERMINAL.includes(target) && !note) {
       throw new ApiError(ErrorCode.BAD_REQUEST, '办结或不予受理时必须填写处理说明')
     }
+    // 流转前先记下原状态，事件流里要写「from → to」
+    const previous = ticket.status
     ticket.status = target
     ticket.handlerName = displayNameOf(me)
     ticket.handlerNote = note
     ticket.updatedAt = new Date().toISOString()
+    // ★ 事件流追加而不是覆盖：`handlerNote` 是"当前结论"，过程留在时间线里（`#356`）
+    seedEvents(ticket.id, ticket.subject, ticket.requesterId, ticket.createdAt, 'SUBMITTED')
+    const trail = complaintEvents.get(ticket.id) ?? []
+    trail.push({
+      id: `evt-${ticket.id}-${trail.length + 1}`,
+      ticketId: ticket.id,
+      at: ticket.updatedAt,
+      actorId: me,
+      actorName: displayNameOf(me),
+      side: 'HANDLER',
+      kind: 'STATUS_CHANGED',
+      fromStatus: previous,
+      toStatus: target,
+      note,
+      attachments: []
+    })
     return ticket
   }],
 

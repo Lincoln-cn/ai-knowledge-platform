@@ -180,6 +180,76 @@ class ComplaintHttpTest {
     assertThat(tooBig.statusCode()).as("100 天必须 400，实际：%s", tooBig.body()).isEqualTo(400);
   }
 
+  @Test
+  void timelineKeepsEveryStepAndAttachmentsAreDownloadable() throws Exception {
+    String admin = login("admin", "admin");
+
+    HttpResponse<String> created =
+        send(
+            admin,
+            "POST",
+            "/api/v1/complaints",
+            "{\"kind\":\"COMPLAINT\",\"subject\":\"时间线投诉\",\"content\":\"过程要看得见\",\"contact\":\"a@b.c\"}");
+    assertThat(created.statusCode()).as("提交应 200，实际：%s", created.body()).isEqualTo(200);
+    String id = stringField(created.body(), "id");
+
+    // ★ 第一步：提交本身就落成一条事件 —— 否则时间线从"有人补充过"才开始，等于把开头抹掉
+    HttpResponse<String> afterCreate =
+        send(admin, "GET", "/api/v1/complaints/" + id + "/events", null);
+    assertThat(afterCreate.statusCode()).as("读时间线应 200，实际：%s", afterCreate.body()).isEqualTo(200);
+    assertThat(afterCreate.body()).contains("\"kind\":\"CREATED\"");
+
+    HttpResponse<String> noted =
+        send(admin, "POST", "/api/v1/complaints/" + id + "/notes", "{\"note\":\"再补一点线索\"}");
+    assertThat(noted.statusCode()).as("补充说明应 200，实际：%s", noted.body()).isEqualTo(200);
+    // ★ 补充说明不改状态 —— 它只是把话说清楚，不动流程
+    assertThat(noted.body()).contains("\"status\":\"SUBMITTED\"");
+
+    HttpResponse<String> moved =
+        send(
+            admin,
+            "PATCH",
+            "/api/v1/complaints/" + id,
+            "{\"status\":\"PROCESSING\",\"handlerNote\":\"已受理\"}");
+    assertThat(moved.statusCode()).as("受理应 200，实际：%s", moved.body()).isEqualTo(200);
+
+    HttpResponse<String> timeline =
+        send(admin, "GET", "/api/v1/complaints/" + id + "/events", null);
+    String json = timeline.body();
+    // ★ 三拍都要在，而且是追加：任何一步覆盖前一步，这里就少一条
+    assertThat(json).contains("\"kind\":\"CREATED\"").contains("\"kind\":\"NOTE\"");
+    assertThat(json).contains("\"kind\":\"STATUS_CHANGED\"").contains("已受理");
+    assertThat(json.indexOf("CREATED"))
+        .as("最早的一条应是 CREATED：%s", json)
+        .isLessThan(json.indexOf("NOTE"));
+
+    HttpResponse<String> uploaded =
+        upload(
+            admin, "/api/v1/complaints/" + id + "/attachments", "现场.png", new byte[] {1, 2, 3, 4});
+    assertThat(uploaded.statusCode()).as("传附件应 200，实际：%s", uploaded.body()).isEqualTo(200);
+    assertThat(uploaded.body()).contains("\"fileName\":\"现场.png\"").contains("\"sizeBytes\":4");
+    String attachmentId = stringField(uploaded.body(), "id");
+
+    // ★ 附件必须能从原样取回 —— 只存元数据不存字节的表现是"列表里有、点开 500"
+    HttpResponse<byte[]> downloaded =
+        getBytes(admin, "/api/v1/complaints/attachments/" + attachmentId);
+    assertThat(downloaded.statusCode()).as("下载附件应 200").isEqualTo(200);
+    assertThat(downloaded.body()).as("取回的字节应与上传的一致").containsExactly(1, 2, 3, 4);
+
+    // ★ 时间线里也要看得见这个附件（挂在它那一步上）
+    HttpResponse<String> withAttachment =
+        send(admin, "GET", "/api/v1/complaints/" + id + "/events", null);
+    assertThat(withAttachment.body()).contains("现场.png");
+
+    HttpResponse<String> tooBig =
+        upload(
+            admin,
+            "/api/v1/complaints/" + id + "/attachments",
+            "太大.log",
+            new byte[10 * 1024 * 1024 + 1]);
+    assertThat(tooBig.statusCode()).as("超过 10 MB 必须 400，实际：%s", tooBig.body()).isEqualTo(400);
+  }
+
   private HttpResponse<String> send(String token, String method, String path, String body)
       throws Exception {
     HttpRequest.Builder builder =
@@ -195,6 +265,42 @@ class ComplaintHttpTest {
       builder.method(method, HttpRequest.BodyPublishers.noBody());
     }
     return http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+  }
+
+  /**
+   * 传一个附件（multipart/form-data）。
+   *
+   * <p>★ 手写 multipart 而不是引测试依赖：这个端点唯一的坑就是边界与 CRLF，手写一遍能顺带把边界写错时的症状 （400「读取上传内容失败」或 500）暴露出来。
+   */
+  private HttpResponse<String> upload(String token, String path, String fileName, byte[] content)
+      throws Exception {
+    String boundary = "----commonTest" + System.nanoTime();
+    java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+    buffer.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+    buffer.write(
+        ("Content-Disposition: form-data; name=\"file\"; filename=\"" + fileName + "\"\r\n")
+            .getBytes(StandardCharsets.UTF_8));
+    buffer.write("Content-Type: application/octet-stream\r\n\r\n".getBytes(StandardCharsets.UTF_8));
+    buffer.write(content);
+    buffer.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+    HttpRequest request =
+        HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+            .timeout(Duration.ofSeconds(60))
+            .header("Authorization", "Bearer " + token)
+            .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+            .POST(HttpRequest.BodyPublishers.ofByteArray(buffer.toByteArray()))
+            .build();
+    return http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+  }
+
+  private HttpResponse<byte[]> getBytes(String token, String path) throws Exception {
+    HttpRequest request =
+        HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+            .timeout(Duration.ofSeconds(30))
+            .header("Authorization", "Bearer " + token)
+            .GET()
+            .build();
+    return http.send(request, HttpResponse.BodyHandlers.ofByteArray());
   }
 
   private String login(String username, String password) throws Exception {

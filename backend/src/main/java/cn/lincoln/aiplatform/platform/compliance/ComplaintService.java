@@ -17,6 +17,7 @@ import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 投诉举报工单服务（{@code #83} 第十五条）。
@@ -52,17 +53,26 @@ public class ComplaintService {
 
   private final NamedParameterJdbcTemplate jdbc;
   private final ComplianceSettingsService settings;
+  private final ComplaintTimelineService events;
 
-  public ComplaintService(NamedParameterJdbcTemplate jdbc, ComplianceSettingsService settings) {
+  public ComplaintService(
+      NamedParameterJdbcTemplate jdbc,
+      ComplianceSettingsService settings,
+      ComplaintTimelineService events) {
     this.jdbc = jdbc;
     this.settings = settings;
+    this.events = events;
   }
 
   /**
    * 提交一张投诉举报工单（便捷入口的落点）。
    *
    * <p>提交即受理承诺的起点：{@code dueAt} = 提交时刻 + 合规设置的反馈时限（天）。
+   *
+   * <p>★ 同一个事务里记一条 {@code CREATED} 事件（`#356`）：只落工单行的话，时间线的第一行就没有出处， 当事人打开详情看到的是"从
+   * 已提交开始"，而不是"我在什么时候提交了什么"。
    */
+  @Transactional
   public ComplaintTicket create(
       ComplaintKind kind,
       String subject,
@@ -122,13 +132,90 @@ public class ComplaintService {
         }
       }
     }
+    // ★ 提交本身就是时间线的第一拍（#356）：少了这一条，过程从"有人补充过"才开始，等于把开头抹掉
+    events.record(
+        id,
+        ComplaintEvent.Side.REQUESTER,
+        ComplaintEvent.Kind.CREATED,
+        null,
+        ComplaintStatus.SUBMITTED,
+        subject,
+        now,
+        requesterId,
+        requesterName == null ? "" : requesterName);
     return get(id, requesterId, true);
+  }
+
+  /**
+   * 在工单上补一条说明（`#356`：投诉人补充材料 / 处理人中途回复）。
+   *
+   * <p>★ 它**不改状态**，所以在 {@code SUBMITTED} 之前和终态之后都允许： 补一句"我还附了一张截图"不该要求先把状态推一格。状态流转仍然只走 {@link
+   * #patch}。
+   *
+   * @param canHandleAll true = 处理人（不看归属），false = 只能在自己提交的单上说话
+   */
+  @Transactional
+  public ComplaintTicket addNote(
+      UUID id, String note, UUID actorId, String actorName, boolean canHandleAll) {
+    if (note == null || note.isBlank()) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "补充说明不能为空");
+    }
+    ComplaintTicket current = get(id, actorId, canHandleAll);
+    events.record(
+        id,
+        canHandleAll ? ComplaintEvent.Side.HANDLER : ComplaintEvent.Side.REQUESTER,
+        ComplaintEvent.Kind.NOTE,
+        null,
+        null,
+        note.trim(),
+        Instant.now(),
+        actorId,
+        actorName);
+    return current;
+  }
+
+  /** 整条时间线（先做归属校验，越权读仍然是 404）。 */
+  public List<ComplaintEvent> timeline(UUID id, UUID requesterId, boolean canHandleAll) {
+    get(id, requesterId, canHandleAll);
+    return events.timeline(id);
+  }
+
+  /**
+   * 给工单挂一个附件（`#356`）。
+   *
+   * <p>归属校验必须由调用方先做（{@link #get}）：这里是"存文件"，不是"判权限"。
+   */
+  @Transactional
+  public ComplaintEvent.Attachment attach(
+      UUID ticketId,
+      UUID eventId,
+      String fileName,
+      String contentType,
+      byte[] content,
+      UUID actorId,
+      String actorName,
+      ComplaintEvent.Side side) {
+    return events.attach(
+        ticketId, eventId, fileName, contentType, content, Instant.now(), actorId, actorName, side);
+  }
+
+  /** 取附件元数据（下载前用它做归属校验）。 */
+  public ComplaintTimelineService.Stored attachment(UUID attachmentId) {
+    return events.open(attachmentId);
+  }
+
+  /** 读附件字节。 */
+  public byte[] attachmentBytes(ComplaintTimelineService.Stored stored) {
+    return events.bytes(stored);
   }
 
   /**
    * 工单列表（分页，待处理优先、新提交在前）。
    *
    * @param canHandleAll 有 {@code complaint:handle} 权限 = 看全部；否则只能看自己提交的
+   * @param mine true = **只**看自己提交的，哪怕有办理权限。
+   *     <p>★ 为什么需要这一档（{@code #356}）：「我的投诉」与「投诉待办」是同一个接口的两种视角， 而"有办理权限"不等于"他提交的单混在全部里就够用" ——
+   *     处理人自己提的那张单在全量分页里可能翻三页才看得到， 那不是"能看到"，是"能不能碰上"。前端的二次过滤不可行：分页在后端做，过滤会把当页剔空却 total 不变。
    */
   public PageResult<ComplaintTicket> list(
       ComplaintStatus status,
@@ -136,11 +223,12 @@ public class ComplaintService {
       String keyword,
       UUID requesterId,
       boolean canHandleAll,
+      boolean mine,
       int page,
       int size) {
     StringBuilder where = new StringBuilder(" where 1 = 1");
     Map<String, Object> params = new LinkedHashMap<>();
-    if (!canHandleAll) {
+    if (mine || !canHandleAll) {
       where.append(" and requester_id = :requesterId");
       params.put("requesterId", requesterId);
     }
@@ -192,7 +280,11 @@ public class ComplaintService {
    *
    * <p>规则（{@link ComplaintStatus} 的 javadoc 三条）：只往前流转；{@code RESOLVED} / {@code REJECTED}
    * 必须写处理说明；正文不可改。
+   *
+   * <p>★ 每次流转在同一事务里追加一条 {@code STATUS_CHANGED} 事件（`#356`）。工单行上的 {@code handler_note} 仍然覆盖写 ——
+   * 它是"当前结论"，事件流才是"办过几次、每次说了什么"。两份都要，少一份就有一种问题查不出来： 只有终态 ⇒ 过程看不见；只有事件 ⇒ 列表页要聚合才能显示当前结论。
    */
+  @Transactional
   public ComplaintTicket patch(
       UUID id, ComplaintStatus target, String handlerNote, UUID handlerId, String handlerName) {
     ComplaintTicket current = get(id, handlerId, true);
@@ -230,6 +322,16 @@ public class ComplaintService {
             Timestamp.from(now),
             "now",
             Timestamp.from(now)));
+    events.record(
+        id,
+        ComplaintEvent.Side.HANDLER,
+        ComplaintEvent.Kind.STATUS_CHANGED,
+        current.status(),
+        target,
+        handlerNote,
+        now,
+        handlerId,
+        handlerName);
     return get(id, handlerId, true);
   }
 

@@ -2,6 +2,13 @@
   <div class="page">
     <PageHeader title="投诉举报" desc="对内容或服务有意见、发现违法信息，提交后按公示流程反馈。">
       <template #actions>
+        <!-- ★ `#356`：当事人看自己那几张单、办理人看待办 —— 两个视角各一页，入口就在主入口旁边 -->
+        <router-link to="/my-complaints">
+          <el-button>我的投诉</el-button>
+        </router-link>
+        <router-link v-if="canHandle" to="/complaint-inbox">
+          <el-button>投诉待办</el-button>
+        </router-link>
         <el-button type="primary" @click="openCreate">提交投诉 / 举报</el-button>
       </template>
     </PageHeader>
@@ -150,6 +157,8 @@
           <span class="k">处理说明</span>
           <span class="v pre">{{ detail.handlerNote }}<span class="muted micro">（{{ detail.handlerName }} · {{ fmtTime(detail.handledAt ?? detail.updatedAt) }}）</span></span>
         </div>
+        <!-- ★ `#356`：上面那行只是"当前结论"（每次办理覆盖写），过程在下面这条时间线里 -->
+        <ComplaintThread v-if="detailVisible" :ticket-id="detail.id" @changed="refreshAfterChange" />
       </div>
       <template #footer>
         <el-button size="small" type="primary" @click="detailVisible = false">关闭</el-button>
@@ -198,6 +207,7 @@ import {
 } from '@/constants/labels'
 import { useSessionStore } from '@/stores/session'
 import PageHeader from '@/components/PageHeader.vue'
+import ComplaintThread from './components/ComplaintThread.vue'
 
 const session = useSessionStore()
 const canHandle = computed(() => session.can(PERM.complaintHandle))
@@ -280,6 +290,23 @@ async function loadList() {
 function onFilterChange() {
   page.value = 1
   loadList()
+}
+
+/**
+ * 时间线里发了一条说明 / 传了一个附件之后刷新。
+ *
+ * ★ 只刷列表与当前详情：状态本身没变（补充说明不改状态），但 `updatedAt` 与列表里的行会变，
+ *   而当事人看到的"最近动过"应该跟着动。
+ */
+async function refreshAfterChange() {
+  await loadList()
+  if (detail.value) {
+    try {
+      detail.value = await complianceApi.getComplaint(detail.value.id)
+    } catch {
+      // 详情读不回来时保留旧值：时间线刚刷过，页面还有内容可看
+    }
+  }
 }
 
 function openCreate() {

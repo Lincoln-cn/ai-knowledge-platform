@@ -93,7 +93,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
-import PageHeader from '@/components/common/PageHeader.vue'
+import PageHeader from '@/components/PageHeader.vue'
 import { opsZoneApi } from '@/api'
 import type { ErrorLogEntry, ErrorSource } from '@/api/ops-zone'
 
