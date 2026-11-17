@@ -2,6 +2,7 @@
 // 只保留两轮指向同一段、且答案句逐字可在该段找到的条目。
 //
 // 用法：node tools/label_real_corpus.mjs --per-doc 4 --out corpus/real/qa-labeled.jsonl
+//       --in 可以指向另一份导出（例如只导新抓的几篇，避免把已标注过的批次重算一遍）
 import { execFileSync } from 'node:child_process'
 import { createDecipheriv } from 'node:crypto'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
@@ -13,7 +14,7 @@ function arg(name, dflt) {
 }
 const PER_DOC = Number(arg('per-doc', '4'))
 const OUT = arg('out', 'D:/IdeaProjects/ai-plantform/corpus/real/qa-labeled.jsonl')
-const SEG_FILE = 'D:/IdeaProjects/ai-plantform/.build/real-corpus/segments.jsonl'
+const SEG_FILE = arg('in', 'D:/IdeaProjects/ai-plantform/.build/real-corpus/segments.jsonl')
 const SECRET = 'ZGV2LW9ubHktYXBpLWtleS1zZWNyZXQtMzJieXRlcyE='
 
 function deepseekKey() {
