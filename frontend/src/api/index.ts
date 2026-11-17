@@ -23,6 +23,7 @@ export * as auditApi from './audit'
 export * as dictionariesApi from './dictionaries'
 export * as orgsApi from './orgs'
 export * as guardApi from './guard'
+export * as opsZoneApi from './ops-zone'
 
 export type { ApiResult, PageQuery, PageResult } from './types'
 export { ApiError, ErrorCode } from './types'

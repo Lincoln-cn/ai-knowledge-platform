@@ -13,6 +13,7 @@ import cn.lincoln.aiplatform.identity.infrastructure.CaptchaProperties;
 import cn.lincoln.aiplatform.identity.infrastructure.CaptchaService;
 import cn.lincoln.aiplatform.identity.infrastructure.JwtTokenService;
 import cn.lincoln.aiplatform.identity.infrastructure.LoginFailureProperties;
+import cn.lincoln.aiplatform.identity.infrastructure.LoginLogStore;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.CryptoPort;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -69,6 +70,9 @@ public class AuthService {
   /** ★ 摘要走端口（{@code #74}）：换国密时改实现，不改这里。 */
   private final CryptoPort cryptoPort;
 
+  /** 登录日志（`#354`）：成功与被拒都记。写入走独立事务，见 {@code LoginLogStore} 的类注释。 */
+  private final LoginLogStore loginLogs;
+
   public AuthService(
       UserRepository users,
       RoleRepository roles,
@@ -80,7 +84,8 @@ public class AuthService {
       CaptchaProperties captchaProperties,
       LoginFailureProperties loginFailure,
       AuthSecurityRecorder securityRecorder,
-      CryptoPort cryptoPort) {
+      CryptoPort cryptoPort,
+      LoginLogStore loginLogs) {
     this.users = users;
     this.roles = roles;
     this.rolePermissions = rolePermissions;
@@ -92,6 +97,7 @@ public class AuthService {
     this.loginFailure = loginFailure;
     this.securityRecorder = securityRecorder;
     this.cryptoPort = cryptoPort;
+    this.loginLogs = loginLogs;
   }
 
   /** 发一张新验证码。 */
@@ -116,16 +122,25 @@ public class AuthService {
 
     // ── 第一道：验证码（等保要求）──
     if (captchaProperties.enabled() && !captchaService.verify(captchaId, captchaCode)) {
+      loginLogs.record(now, username, null, LoginLogStore.Result.CAPTCHA);
       throw new BusinessException(ErrorCode.CAPTCHA_INVALID, "验证码不正确或已过期", "点一下图片可以换一张");
     }
 
     User user =
         users
             .findByUsername(username)
-            .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, BAD_CREDENTIALS));
+            .orElseThrow(
+                () -> {
+                  // ★ 账号不存在也记一条：否则"有人在枚举用户名"这件事永远查不出来。
+                  //   对外仍然只有一句「账号或密码不正确」（不透露账号是否存在），
+                  //   但日志里 user_id 为 null 与"密码错"是可以区分的。
+                  loginLogs.record(now, username, null, LoginLogStore.Result.BAD_CREDENTIALS);
+                  return new BusinessException(ErrorCode.UNAUTHORIZED, BAD_CREDENTIALS);
+                });
 
     // ── 第二道：锁定（★ 在密码校验之前）──
     if (user.isLocked(now)) {
+      loginLogs.record(now, user.username(), user.id(), LoginLogStore.Result.LOCKED);
       throw new BusinessException(
           ErrorCode.ACCOUNT_LOCKED,
           "账号已被锁定，请 " + minutesOf(user.remainingLockout(now)) + " 分钟后再试",
@@ -139,6 +154,7 @@ public class AuthService {
       User afterFailure =
           securityRecorder.recordLoginFailure(
               user.id(), now, loginFailure.maxAttempts(), loginFailure.lockDuration());
+      loginLogs.record(now, user.username(), user.id(), LoginLogStore.Result.BAD_CREDENTIALS);
 
       if (afterFailure.isLocked(now)) {
         log.warn(
@@ -160,6 +176,7 @@ public class AuthService {
 
     // ── 第四道：账号状态 ──
     if (!user.canLogin()) {
+      loginLogs.record(now, user.username(), user.id(), LoginLogStore.Result.DISABLED);
       throw new BusinessException(
           ErrorCode.FORBIDDEN, statusMessage(user.status()), "请联系管理员处理账号状态");
     }
@@ -168,6 +185,8 @@ public class AuthService {
 
     user.recordSuccessfulLogin(now);
     users.save(user);
+
+    loginLogs.record(now, user.username(), user.id(), LoginLogStore.Result.SUCCESS);
 
     IssuedRefresh refresh = issueRefreshToken(user.id());
     refreshTokens.save(refresh.entity());
