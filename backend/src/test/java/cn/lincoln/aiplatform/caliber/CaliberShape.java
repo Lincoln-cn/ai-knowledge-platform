@@ -390,7 +390,7 @@ final class CaliberShape {
   private static String read(String relative) {
     Path file = migrationSourceRoot().resolve(relative);
     if (!Files.isRegularFile(file)) {
-      throw new IllegalStateException(
+      throw new GateBrokenException(
           "找不到迁移源码文件：" + file.toAbsolutePath() + " —— 本断言读的是源码树，不读 classpath（#267 判据 3）");
     }
     try {
@@ -416,8 +416,40 @@ final class CaliberShape {
     if (Files.isDirectory(nested)) {
       return nested;
     }
-    throw new IllegalStateException(
+    throw new GateBrokenException(
         "找不到迁移源码目录（当前工作目录 = " + Path.of("").toAbsolutePath() + "）—— 本断言拒绝把「读不到」当成「空集」");
+  }
+
+  /**
+   * 「闸门自身失效」——**读不到被检查的对象**，与「读到的内容不合规」是两档（`#332` 判据 2）。
+   *
+   * <p>★ 为什么要有这个类型：{@code verify_permissions.py} 与 {@code check_pending_endpoints.py}
+   * 能用退出码分档（{@code 3} = 闸门自身失效 / {@code 1} = 检查不通过），而 Java 测试没有退出码 ——
+   * 唯一能被一眼分辨的东西就是<strong>异常类型与消息前缀</strong>。所以这里继承 {@link IllegalStateException}（既有 {@code catch}
+   * 行为不变），但类型名与消息前缀都写明是哪一档。
+   *
+   * <p>★ 判据：看到 {@code GateBrokenException} 去修<strong>读法</strong>（路径、锚点、工作目录），看到
+   * 断言失败去修<strong>产品</strong>。两者混在一起的代价在 `#346` 付过一次：{@code NAV} 期望表少两项， 报出来像是权限配错了。
+   */
+  static final class GateBrokenException extends IllegalStateException {
+    GateBrokenException(String message) {
+      super("闸门自身失效：" + message);
+    }
+  }
+
+  /**
+   * 自检（`#332` 判据 1/3 在 Java 侧的等价物）：故意读一个不存在的文件，必须抛 {@link GateBrokenException}。
+   *
+   * <p>★ 为什么必须造一次：「读不到」是异常路径，平时永远不执行 —— 没有这条，{@code GateBrokenException}
+   * 就只是一段没人验过的代码，而它恰恰是「闸门坏了」的唯一出口。
+   */
+  static void selfCheckUnreadableAnchorFailsAsGateBroken() {
+    try {
+      read("__no_such_migration__.sql");
+    } catch (GateBrokenException expected) {
+      return;
+    }
+    throw new AssertionError("读一个不存在的迁移文件没有抛 GateBrokenException —— 「读不到」又被当成「空集」了（#332 判据 2）");
   }
 
   /** 供断言消息拼接：把一个集合渲染成稳定的多行文本（diff 在消息里就能看）。 */

@@ -491,7 +491,8 @@ public class ChatController {
    * Jackson 配置 —— 收成显式字段就不会因为"前端多发了一个"变成 400。 ★ 这是<strong>形状兼容</strong>，不是"功能已经支持"。
    *
    * @param appId 应用 id（可空 = 通用问答）
-   * @param conversationId 会话 id（可空 = 新建一个会话）
+   * @param conversationId 会话 id（可空 = <strong>续写"最近一条同归属人、同应用"的会话，没有才新建</strong> —— 不是"每次新建一条"；判定在
+   *     {@code ChatTurnWriter#resolveOrCreate}，那里写了为什么必须是续写）
    * @param question 提问（必填）
    * @param attachmentIds 契约里的附件 id 列表（★ 本批不消费）
    * @param thinking 契约里的"是否允许思考"（★ 本批不消费）

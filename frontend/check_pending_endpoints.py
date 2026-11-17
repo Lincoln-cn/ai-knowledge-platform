@@ -245,12 +245,16 @@ def shape_check() -> int:
             fake = Path(tmp) / "ContractDriftTest.java"
             fake.write_text(broken, encoding="utf-8")
             DRIFT = fake
-            try:
-                read_backend_ledger()
-            except LookupError:
-                print("✓ 形状自检：锚点被改名后 read_backend_ledger 如期抛 LookupError（check 会返回 3）")
+            # ★ 断言的是 check() 的**退出码**，不是"read_backend_ledger 抛没抛"：
+            #   判据 2 写的是"形状变化时退出码是 3"，而 check() 里那行 `return 3`
+            #   如果没有这条，就永远没人执行过它。
+            #   （上一版这里只验证"抛了 LookupError"，然后在文案里写「check 会返回 3」——
+            #     那是推断，不是读数。）
+            code = check()
+            if code == 3:
+                print("✓ 形状自检：锚点被改名后 check() 返回 3（闸门自身失效，而非检查不通过）")
                 return 0
-            print("✗ 形状自检失败：锚点被改名了，read_backend_ledger 却没抛错 —— 这道闸门察觉不到形状变化")
+            print(f"✗ 形状自检失败：锚点被改名后 check() 返回 {code}，应当是 3 —— 这道闸门察觉不到形状变化")
             return 1
     finally:
         DRIFT = original

@@ -7484,5 +7484,61 @@ csv  / tsv   ──(解析)─┘
 Open objectives（截至本节）：`#337` 补评论并按判据关单；`D` 小账（`ChatStreamBody` javadoc 与实现不一致、
 `#332` 三闸门误报）；0.9.3 语料要用户拍板。
 
+---
+
+## 11.55 D 两条小账（2026-11-18）
+
+两条都不是新功能，是**"文档说的和代码做的不一样"**与**"闸门坏了报成了产品坏"**。
+
+### 11.55.1 `ChatStreamBody` 的 javadoc 把行为写反了
+
+| | 原文 | 实际 |
+|---|---|---|
+| `chat` 的 `conversationId` | 「可空 = 新建一个会话」 | **续写"最近一条同归属人、同应用"的会话，没有才新建** |
+
+- 实现是 `ChatTurnWriter#resolveOrCreate`：传了 id ⇒ `findById` + 归属校验（不是本人 ⇒ 与"不存在"同一个 404 出口）；
+  没传 id ⇒ `findLatestByUserAndAssistant(userId, appId)`。**理由就写在那个方法的 javadoc 里**：公开面拿不出真实
+  UUID（手上的 `conversationId` 是合成串 `public:<token>`），每轮新建会让"刷新后读不回历史"（`ROADMAP §二` A2 缺的那一半）。
+- 全库**只有一处**这么写：`ChatController.java:494`。改后的措辞把"续写"标成 strong，并指向 `ChatTurnWriter#resolveOrCreate`。
+- 载体本来就存在：`PublicStopEndpointTest:398` 的断言写着「改成每轮新建一条这一条立刻红：计数会是 2，而症状是刷新后读不回历史」
+  ⇒ **是文档没跟上，不是行为没被测**。这一类账的处置永远是改文档，不是加测试。
+
+### 11.55.2 `#332`：三道读源码的闸门，把"我读不懂了"与"被检查对象有问题"分档
+
+`#332` 的判据三条：① 三道闸门都有自检且自检能红；② 形状变化时退出码是 **3**（不是 1），文案写明「闸门自身失效」；
+③ 一条测试/脚本证明"锚点被改掉 ⇒ 退出码 3"。逐道现状：
+
+| 闸门 | 原有 | 本次补的 |
+|---|---|---|
+| `frontend/check_pending_endpoints.py` | 已有 `return 3` 与 `--self-check`（`b0f58470`） | 自检原来只验"`read_backend_ledger` 抛了 LookupError"，文案却写「check 会返回 3」—— 那是**推断**。改成**真的调 `check()` 并断言返回 3** |
+| `frontend/verify_permissions.py` | 只有 `shape_problems()`（内容合规） | 新增 `shape_lookup_problems()`（**读得懂吗**）+ `startup_lookup()`（**退出码 3 的那一行**）+ 自检里的反证三 |
+| `CaliberShape`（Java，无退出码） | 读不到时 `throw new IllegalStateException` | 新增 `GateBrokenException`（前缀「闸门自身失效：」）+ `selfCheckUnreadableAnchorFailsAsGateBroken()` + `CaliberShapeGateTest` 两条 |
+
+★ **Java 侧没有退出码 3**，等价物只能是**异常类型 + 消息前缀** —— 见到 `GateBrokenException` 去修读法（路径、锚点、
+工作目录），见到断言失败去修产品。继承 `IllegalStateException` 是为了让既有 `catch` 行为不变。
+
+★ 本次最值钱的一条读数（`verify_permissions.py`）：加固前正则写的是 `export const navGroups[^\[]*\[`（**前缀匹配**），
+把 `routes.ts` 里的标识符改名成 `navGroupsRenamed` 之后它**仍然命中**，于是闸门 `exit 0`、`134/134 全绿` ——
+把手改坏了读出来的是通过。锚点补成 `export const navGroups\s*(?::[^=;\n]+)?=\s*\[` 之后，同一个实验变成 `exit 3`。
+⇒ **判据：反证必须连"闸门自己真的没读到"一起证明**。只证明"我改了文件"不够 —— 改的可能是字符串后缀，而锚点是前缀匹配。
+
+### 11.55.3 读数
+
+| 项 | 读数 |
+|---|---|
+| `python frontend/verify_permissions.py --self-check` | 5 行 ✓、exit 0（含新增的反证三：读不到 ⇒ **退出码 3**） |
+| `python frontend/verify_permissions.py` | 权限门禁断言 **134/134 通过**、exit 0 |
+| 反证：`navGroups` 改名（加固前 / 加固后） | **exit 0（假绿）** / **exit 3** + 「闸门自身失效」 |
+| `python frontend/check_pending_endpoints.py --self-check` | 自测 6/6 + 形状自检「锚点被改名后 `check()` 返回 3」、exit 0 |
+| `python frontend/check_pending_endpoints.py` | `后端台账 0 条 · 前端声明 210 条 · 账 0 条`、exit 0 |
+| `mvn -o -Dtest=CaliberShapeGateTest test` | **2/2**；反证（把 `throw GateBrokenException` 改成 `return ""`）⇒ **1 红**，消息「读一个不存在的迁移文件没有抛 GateBrokenException —— 「读不到」又被当成「空集」了」 |
+| `mvn -o -Dtest=MigrationInventoryTest test` | 1/1（`CaliberShape.read` 抛的异常换了类型，既有 `catch` 行为不变） |
+
+★ `CaliberShapeGateTest` 里那条「闸门真的读得到锚点」不是重复劳动：上一条断言"读不到 ⇒ 抛 GateBroken"，
+但如果目录**永远**读不到，它也会通过 —— 那正是最糟的假绿。所以必须同时证明"正常跑法下读得到"。
+
+Open objectives（截至本节）：`#332` 补评论并按判据关单；0.9.3 语料要用户拍板。
+
+
 
 

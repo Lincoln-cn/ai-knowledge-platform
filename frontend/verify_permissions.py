@@ -16,8 +16,10 @@
 """
 from __future__ import annotations
 
+import contextlib
 import functools
 import http.server
+import io
 import os
 import re
 import socketserver
@@ -53,8 +55,13 @@ def nav_group_labels() -> list[str]:
         src = ROUTES_TS.read_text(encoding="utf-8")
     except OSError:
         return []
-    # 数组字面量从 `export const navGroups` 开始，到行首的 `]` 结束（子数组的 `]` 有缩进）
-    m = re.search(r"export const navGroups[^\[]*\[(.*?)^\]", src, re.S | re.M)
+    # 数组字面量从 `export const navGroups` 开始，到行首的 `]` 结束（子数组的 `]` 有缩进）。
+    # ★ 锚点必须包含 `=`：第一次写的是 `navGroups[^\[]*\[`（前缀匹配），于是把文件里
+    #   `export const navGroups` **改名成别的**（如 `navGroupsRenamed`）它仍然命中 ——
+    #   实测读数就是这样：改名后闸门 exit 0、134/134 全绿，看起来"改坏了也没人管"。
+    #   加上 `(?::[^=;\n]+)?=` 之后，`navGroups` 后面必须真的是类型标注（可选）+ 赋值 `=`，
+    #   改名 ⇒ 读不到 ⇒ 退出码 3（`#332` 判据 2 那一档），而不是"读到一堆垃圾再报产品红"。
+    m = re.search(r"export const navGroups\s*(?::[^=;\n]+)?=\s*\[(.*?)^\]", src, re.S | re.M)
     if not m:
         return []
     # ★ 只匹配**行首是 `{`** 的真正条目：注释行（`//`）里写的样例字面量不算菜单项。
@@ -234,6 +241,45 @@ class Silent(http.server.SimpleHTTPRequestHandler):
         pass
 
 
+def shape_lookup_problems() -> list[str]:
+    """闸门**能不能读到被检查的东西**（`#332` 判据 2：这一档的退出码是 3，不是 1）。
+
+    ★ 与 `shape_problems()` 的分工，就是 `#332` 那句话：
+      **「闸门坏了」与「产品坏了」不能报同一种红。**
+      - 这里回答"我读得懂 `routes.ts` 吗" —— 读不懂 ⇒ 闸门自身失效 ⇒ 退出码 **3**
+      - `shape_problems()` 回答"读到的东西自洽吗" —— 不自洽 ⇒ 检查不通过 ⇒ 退出码 **1**
+
+    ★ 为什么必须单独成函数而不是在 `shape_problems()` 里 append 一条：
+      两者混在一起时，维护者看到的是同一种红（`check()` 失败），
+      而 `NAV` 期望表那次（`#346`）的教训正是"长得像产品问题，其实是闸门没守到"。
+      分开之后，CI 日志本身就是分流指南：`3` 去修脚本，`1` 去修菜单或权限。
+    """
+    problems: list[str] = []
+    if not ROUTES_TS.exists():
+        problems.append(f"找不到 {ROUTES_TS} —— 树里没有它，断言 ⑧ 无从谈起")
+        return problems
+    if not nav_group_labels():
+        problems.append(f"读不到 {ROUTES_TS} 的 navGroups（正则对不上或被改名）—— 断言 ⑧ 会变成恒真")
+    return problems
+
+
+def startup_lookup() -> int:
+    """开跑前的第一档：读不懂被检查的对象就 `return 3`，否则 `return 0`（`#332` 判据 2）。
+
+    ★ 单独成函数，是为了让"退出码 3"这条路径**能被自检断言**。
+      上一版把这段直接写在 `main()` 里，自检只能证明 `shape_lookup_problems()` 非空，
+      证明不了"非空 ⇒ 真的退出 3" —— 中间那一行 `return 3` 谁都没验过。
+      判据 2 写的正是"形状变化时退出码是 3"，所以被断言的必须是**退出码**本身。
+    """
+    lookup = shape_lookup_problems()
+    if not lookup:
+        return 0
+    for p in lookup:
+        print(f"✗ 闸门自身失效：{p}")
+    print("  这不是「检查不通过」，是「我读不懂被检查的对象了」。先修本脚本的锚点或正则，再看权限。")
+    return 3
+
+
 def shape_problems() -> list[str]:
     """不启浏览器，只看期望表本身是否还自洽（`#332` 判据 2）。
 
@@ -242,6 +288,9 @@ def shape_problems() -> list[str]:
     或表与实际菜单的对应关系已经没人维护。
     下面三条都是真出过的：`NAV` 里写了菜名但 `MATRIX` 里没有那条路由（反之亦然）、
     同一角色同一菜名写两遍（复制粘贴留下的）、某条路由没有任何角色能进（写了等于没写）。
+
+    ★ **读不到 `navGroups` 不在这里报** —— 那是闸门自身失效，归 `shape_lookup_problems()`
+      （退出码 3）。这里只判"读到了内容，内容合规吗"。
     """
     problems: list[str] = []
 
@@ -270,10 +319,7 @@ def shape_problems() -> list[str]:
     #   「NAV 有、navGroups 没有」= 改名或删菜单没改期望表 —— 下一个人会被误导。
     #   单向检查只能抓到一半，而**抓到一半的断言会让下一次改错看起来是好的**。
     labels = nav_group_labels()
-    if not labels:
-        # 读不到就必须报红：否则这条断言变成恒真，比没有更糟。
-        problems.append("读不到 src/router/routes.ts 的 navGroups —— 断言 ⑧ 变成恒真，等于没写")
-    else:
+    if labels:
         admin_items = [x for x in NAV.get("admin", []) if x != HOME_LABEL]
         missing = [x for x in labels if x not in admin_items]
         extra = [x for x in admin_items if x not in labels]
@@ -295,7 +341,15 @@ def shape_problems() -> list[str]:
 
 
 def self_check() -> int:
-    """`--self-check`：不启浏览器，只验期望表自洽 + 一条「形状坏了会被抓到」的反证。"""
+    """`--self-check`：不启浏览器，只验期望表自洽 + 反证「形状坏了会被抓到」。"""
+    lookup = shape_lookup_problems()
+    if lookup:
+        for p in lookup:
+            print(f"✗ 闸门自身失效：{p}")
+        print("  这不是「检查不通过」，是「我读不懂被检查的对象了」（退出码 3）")
+        return 3
+    print(f"✓ 闸门读得到被检查的对象：{ROUTES_TS.name} 的 navGroups、MATRIX {len(MATRIX)} 条路由、NAV {len(NAV)} 个角色")
+
     problems = shape_problems()
     if problems:
         for p in problems:
@@ -333,6 +387,28 @@ def self_check() -> int:
             print(f"✗ 反证失败：从 NAV[admin] 删掉菜名「{dropped}」后，断言 ⑧ 没报（它会变成恒真）")
             return 1
         print(f"✓ 反证：删掉「{dropped}」后如期报出「{hit}」")
+
+    # ★ 反证三（`#332` 判据 2/3）：把「读 navGroups」弄成读不到 ⇒ `startup_lookup()` 必须返回 **3**。
+    #   ★ 断言的是**退出码**而不是"有没有报错"：判据 2 写的是"形状变化时退出码是 3"，
+    #     而 `main()` 里那行 `return 3` 平时永远不执行 —— 不造一次就没人验过它。
+    #     （上一版这里只断 `shape_lookup_problems()` 非空，等于只验了"能发现"、没验"会退出 3"。）
+    global nav_group_labels
+    real_labels = nav_group_labels
+    nav_group_labels = lambda: []
+    buffer = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buffer):
+            code = startup_lookup()
+    finally:
+        nav_group_labels = real_labels
+    spoken = buffer.getvalue()
+    if code != 3:
+        print(f"✗ 反证失败：navGroups 读不到时 startup_lookup() 返回 {code}，应当是 3（闸门自身失效）")
+        return 1
+    if "闸门自身失效" not in spoken:
+        print(f"✗ 反证失败：退出码是 3，但提示里没有「闸门自身失效」，维护者分不清是哪一档：{spoken!r}")
+        return 1
+    print("✓ 反证：navGroups 读不到时退出码 = 3，且提示「闸门自身失效」")
     return 0
 
 
@@ -342,6 +418,12 @@ def main() -> int:
 
     base = f"http://127.0.0.1:{PORT}/"
     srv = None
+
+    # ★ `#332` 判据 2：闸门自身失效 ⇒ 退出码 3（不是 1）。判定在 `startup_lookup()` 里，
+    #   放在起服务与浏览器之前：读不懂期望表还跑 133 条路由断言，只会产出更难定位的红。
+    rc = startup_lookup()
+    if rc:
+        return rc
 
     if "--base" in sys.argv:
         base = sys.argv[sys.argv.index("--base") + 1]
