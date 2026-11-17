@@ -5,6 +5,7 @@ import cn.lincoln.aiplatform.modelcatalog.application.ModelCapability;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelReference;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelService;
 import cn.lincoln.aiplatform.modelcatalog.application.ModelView;
+import cn.lincoln.aiplatform.modelcatalog.application.RerankStatusService;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
 import cn.lincoln.aiplatform.modelcatalog.domain.Supplier;
@@ -46,9 +47,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class ModelController {
 
   private final ModelService modelService;
+  private final RerankStatusService rerankStatusService;
 
-  public ModelController(ModelService modelService) {
+  public ModelController(ModelService modelService, RerankStatusService rerankStatusService) {
     this.modelService = modelService;
+    this.rerankStatusService = rerankStatusService;
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -112,6 +115,20 @@ public class ModelController {
   @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<ModelService.LocalOnnxStatus> warmUpLocalOnnx() {
     return ApiResponse.ok(modelService.warmUpLocalOnnx());
+  }
+
+  /**
+   * 重排（cross-encoder）模型的只读状态（`#352`）。
+   *
+   * <p>★ 它不是注册模型：`ai_model` 里没有这一行、`ModelKind` 里也没有 `RERANK`。端点放在 `/models` 下，
+   * 是因为"模型页要显示它"这件事本身就是这一条的全部内容 —— 用户原话是"reank 本地模型不在模型管理里看得到"。
+   *
+   * <p>★ 没有对应的写端点：换重排模型 = 换 onnx 文件 + 重启 + 重取 B3 读数，不是改一个字符串。
+   */
+  @GetMapping("/rerank")
+  @PreAuthorize("hasAuthority('model:manage')")
+  public ApiResponse<RerankStatusService.RerankStatus> rerankStatus() {
+    return ApiResponse.ok(rerankStatusService.status());
   }
 
   // ────────────────────────── 注册 CRUD ──────────────────────────

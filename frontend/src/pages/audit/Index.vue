@@ -40,34 +40,51 @@
           :value="a.value"
         />
       </el-select>
+      <!-- ★ 措辞按「作用对象」：被改的那个东西（文档 / 应用 / 角色 …）。
+           "资源"这个词对非技术使用者是空话 —— 用户 2026-11-18 的原话是"这个资源是什么意思"（#353）。 -->
       <el-select
         v-model="query.resourceType"
         size="small"
-        placeholder="全部资源"
-        style="width: 150px"
+        placeholder="全部作用对象"
+        style="width: 160px"
         @change="onFilterChange"
       >
-        <el-option label="全部资源" value="" />
+        <el-option label="全部作用对象" value="" />
         <el-option v-for="r in RESOURCES" :key="r.value" :label="r.label" :value="r.value" />
       </el-select>
       <el-input
         v-model="query.resourceId"
         size="small"
-        placeholder="资源 id（可选）"
+        placeholder="对象 id（高级，可留空）"
         style="width: 240px"
         clearable
         @keyup.enter="onFilterChange"
         @clear="onFilterChange"
       />
-      <el-input
+      <!-- ★ 操作人从"手输 uuid"改成选择器（#353）：审计要按人查时，没人记得住 uuid。
+           `allow-create` 保留手输兜底 —— 没有用户管理权限的审计读者拉不到用户列表，仍能贴 id 查。 -->
+      <el-select
         v-model="query.actorId"
         size="small"
-        placeholder="操作人 id（可选）"
+        placeholder="操作人（选或直接贴 id）"
         style="width: 240px"
+        filterable
+        remote
+        allow-create
+        default-first-option
         clearable
-        @keyup.enter="onFilterChange"
+        :remote-method="searchActors"
+        :loading="actorLoading"
+        @change="onFilterChange"
         @clear="onFilterChange"
-      />
+      >
+        <el-option
+          v-for="a in actorOptions"
+          :key="a.id"
+          :label="`${a.displayName}（${a.username}）`"
+          :value="a.id"
+        />
+      </el-select>
       <span class="micro muted">共 {{ total }} 条</span>
       <span class="grow" />
     </div>
@@ -91,10 +108,13 @@
       <el-table-column label="动作" width="170">
         <template #default="{ row }">{{ actionLabel(row.action) }}</template>
       </el-table-column>
-      <el-table-column label="资源" min-width="220">
+      <el-table-column label="作用对象" min-width="240">
         <template #default="{ row }">
           <span class="micro muted">{{ resourceLabel(row.resourceType) }}</span>
-          {{ row.resourceId }}
+          <!-- ★ 默认只显示 id 前 8 位：一整串 uuid 占满一行且没人能记住。完整值在悬停里（#353）。 -->
+          <el-tooltip :content="row.resourceId" placement="top">
+            <span class="mono-id">{{ shortId(row.resourceId) }}</span>
+          </el-tooltip>
         </template>
       </el-table-column>
       <el-table-column label="明细" min-width="260">
@@ -102,9 +122,9 @@
           <span class="detail">{{ detailText(row.detail) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="" width="120" fixed="right">
+      <el-table-column label="追溯" width="190" fixed="right">
         <template #default="{ row }">
-          <el-button link size="small" @click="openTrace(row)">这个资源</el-button>
+          <el-button size="small" @click="openTrace(row)">查这个对象的全部记录</el-button>
         </template>
       </el-table-column>
       <template #empty>
@@ -119,9 +139,9 @@
       </template>
     </el-table>
 
-    <!-- ★ 追溯：某个资源的**全部**记录（"这份文档到底被谁改过"）。
+    <!-- ★ 追溯：某个作用对象的**全部**记录（"这份文档到底被谁改过"）。
          它消费的是 `GET /audit-logs/by-resource` —— 否则那条端点就只是契约里的一行字。 -->
-    <el-dialog v-model="traceOpen" title="这个资源的全部记录" width="720px">
+    <el-dialog v-model="traceOpen" title="这个对象的全部记录" width="720px">
       <p class="micro muted">
         {{ traceType }} / {{ traceId }}
       </p>
@@ -138,7 +158,7 @@
         </el-table-column>
         <template #empty>
           <div class="empty">
-            <div class="empty-title">这个资源还没有审计记录</div>
+            <div class="empty-title">这个对象还没有审计记录</div>
             <div class="micro muted">
               可能是它从没被改过，也可能是改动走的是还没接审计的动作（检索 / 查看 / 引用）。
             </div>
@@ -168,8 +188,9 @@ import { PERM } from '@/constants/permissions'
 import { useSessionStore } from '@/stores/session'
 import { Refresh } from '@element-plus/icons-vue'
 import PageHeader from '@/components/PageHeader.vue'
-import { auditApi } from '@/api'
+import { auditApi, identityApi } from '@/api'
 import type { AuditRecord } from '@/api/audit'
+import type { User } from '@/api/identity'
 
 /** 只列**已经接线**的动作（与后端 AuditAction 逐个对应）。没接的不列 —— 列了会被读成"能查到"。 */
 const ACTIONS = [
@@ -215,12 +236,34 @@ const query = reactive({
   action: '',
   resourceType: '',
   resourceId: '',
-  // ★ 按人查：拿的是 iam_user.id（不是用户名）—— 名字会改，id 不会；与表里「操作人」那一列
-  //   显示的快照名字是两件事，所以输入框的占位写的是「操作人 id」
+  // ★ 按人查：存的是 iam_user.id（不是用户名）—— 名字会改，id 不会；与表里「操作人」那一列
+  //   显示的快照名字是两件事，所以选择器提交的是 id（#353 之前这里是手输框）。
   actorId: '',
   page: 1,
   size: 20,
 })
+
+/* ── 操作人选择器（#353）：远程搜用户，失败不阻断手输 ── */
+const actorOptions = ref<Pick<User, 'id' | 'username' | 'displayName'>[]>([])
+const actorLoading = ref(false)
+
+/** 拉候选用户。★ 失败只记一条 warn：没有用户管理权限的审计读者应当仍能贴 id 查。 */
+async function searchActors(keyword: string) {
+  actorLoading.value = true
+  try {
+    const page = await identityApi.listUsers({ keyword: keyword.trim() || undefined, size: 20 })
+    actorOptions.value = page.list.map((u) => ({
+      id: u.id,
+      username: u.username,
+      displayName: u.displayName,
+    }))
+  } catch {
+    // 刻意不弹错：选择器只是"更省事"，不是查询的必要条件（allow-create 仍可手输）
+    actorOptions.value = []
+  } finally {
+    actorLoading.value = false
+  }
+}
 
 const actionLabel = (code: string) => ACTIONS.find((a) => a.value === code)?.label ?? code
 
@@ -234,6 +277,18 @@ const actionLabel = (code: string) => ACTIONS.find((a) => a.value === code)?.lab
  */
 const actorText = (name: string | null | undefined) => name?.trim() || '（系统）'
 const resourceLabel = (type: string) => RESOURCES.find((r) => r.value === type)?.label ?? type
+
+/**
+ * 作用对象 id 的短显示形式：前 8 位 + 省略号。
+ *
+ * ★ 完整 uuid 在表格里占满一行、且没人能记住 —— 但它又是追溯的唯一键
+ *   （「查这个对象的全部记录」按 `(resourceType, resourceId)` 查），所以不能只显示名字。
+ *   做法：默认短、悬停给全（#353）。
+ */
+const shortId = (id: string | null | undefined) => {
+  if (!id) return '—'
+  return id.length > 8 ? `${id.slice(0, 8)}…` : id
+}
 
 const formatTime = (iso: string) => {
   if (!iso) return '—'
@@ -354,7 +409,11 @@ function refresh() {
   void load()
 }
 
-onMounted(load)
+onMounted(async () => {
+  // 先拉一次候选（空关键字 = 前 20 个），否则点开选择器要等一次网络往返才看到任何名字
+  void searchActors('')
+  await load()
+})
 </script>
 
 <style scoped>
@@ -372,6 +431,13 @@ onMounted(load)
   font-family: var(--font-mono, monospace);
   font-size: 12px;
   word-break: break-all;
+}
+/* 作用对象 id 的短显示：等宽 + 次一级颜色，让"类型"与"id"一眼分开（#353） */
+.mono-id {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  cursor: help;
 }
 .empty {
   padding: 18px 0;

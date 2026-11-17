@@ -189,6 +189,132 @@ public class AnalyticsService {
     return new Quality(avgRefs == null ? 0.0 : avgRefs, null, null, up, down, 0);
   }
 
+  /**
+   * 运营指标（`#357` 前半）：**质量**与**用量**两块，全平台口径。
+   *
+   * <h3>为什么它和 {@link #overview} 分开</h3>
+   *
+   * <p>总览回答"今天用了多少"，指标回答"答得好不好"。后者要的是**分母**——比如"无引用回答占比"的分母
+   * 必须是成功回答数、不是全部回答数（失败的回答本来就没有引用，算进去会把产品问题说成检索问题）。 两件事的分母不同，硬塞进一个 record 会让调用方开始自己算比例。
+   *
+   * <h3>★ 哪些是真读数，哪些仍是"—"</h3>
+   *
+   * <p>能真算：提问数、回答数、成功/失败数、token、总耗时 p50/p95、平均引用数、无引用占比、活跃应用/用户、赞踩。
+   *
+   * <p>仍是 null：**首字延迟**（{@code cv_message} 只有 {@code duration_ms}，没有首 token 时间戳）、
+   * **B1/B2/B3**（那是离线评测读数，不是运行期数据，见 {@code docs/检索基线读数.md}）。 这两类在这条接口上永远返回 null，界面显示"—"并写明出处 ——
+   * 不让运行期接口冒充评测读数。
+   *
+   * @param from 起始日期（含）
+   * @param to 结束日期（含）
+   * @return 质量 + 用量读数
+   */
+  @Transactional(readOnly = true)
+  public Metrics metrics(LocalDate from, LocalDate to) {
+    Range range = range(from, to);
+    String assistantScope =
+        " from cv_message m join cv_conversation c on c.id = m.conversation_id"
+            + " where c.deleted_at is null and m.role = 'ASSISTANT'"
+            + " and m.created_at >= ? and m.created_at < ?";
+    long questions =
+        number(
+            "select count(*) from cv_message m join cv_conversation c on c.id = m.conversation_id"
+                + " where c.deleted_at is null and m.role = 'USER'"
+                + " and m.created_at >= ? and m.created_at < ?",
+            range);
+    long answers = number("select count(*)" + assistantScope, range);
+    long generated =
+        number("select count(*)" + assistantScope + " and m.status = 'GENERATED'", range);
+    long tokens =
+        number(
+            "select coalesce(sum(coalesce(m.prompt_tokens, 0) + coalesce(m.completion_tokens, 0)),"
+                + " 0)"
+                + assistantScope,
+            range);
+    Double avgDurationMs =
+        nullableDecimal(
+            "select avg(m.duration_ms)" + assistantScope + " and m.duration_ms is not null", range);
+    Double p50 =
+        nullableDecimal(
+            "select cast(percentile_cont(0.5) within group (order by m.duration_ms) as numeric)"
+                + assistantScope
+                + " and m.duration_ms is not null",
+            range);
+    Double p95 =
+        nullableDecimal(
+            "select cast(percentile_cont(0.95) within group (order by m.duration_ms) as numeric)"
+                + assistantScope
+                + " and m.duration_ms is not null",
+            range);
+    Double avgRefs =
+        nullableDecimal(
+            "select avg(jsonb_array_length(m.reference_snapshot))"
+                + assistantScope
+                + " and m.reference_snapshot is not null and jsonb_typeof(m.reference_snapshot) ="
+                + " 'array'",
+            range);
+    long withoutRefs =
+        number(
+            "select count(*)"
+                + assistantScope
+                + " and m.status = 'GENERATED'"
+                + " and (m.reference_snapshot is null"
+                + " or jsonb_typeof(m.reference_snapshot) is distinct from 'array'"
+                + " or jsonb_array_length(m.reference_snapshot) = 0)",
+            range);
+    long activeAssistants =
+        number(
+            "select count(distinct c.assistant_id) from cv_conversation c"
+                + " where c.deleted_at is null and c.assistant_id is not null"
+                + " and exists (select 1 from cv_message m where m.conversation_id = c.id"
+                + " and m.created_at >= ? and m.created_at < ?)",
+            range);
+    long activeUsers =
+        number(
+            "select count(distinct c.user_id) from cv_conversation c"
+                + " where c.deleted_at is null"
+                + " and exists (select 1 from cv_message m where m.conversation_id = c.id"
+                + " and m.created_at >= ? and m.created_at < ?)",
+            range);
+    long up =
+        number(
+            "select count(*) from cv_message m join cv_conversation c on c.id = m.conversation_id"
+                + " where c.deleted_at is null and m.feedback = 'UP'"
+                + " and m.created_at >= ? and m.created_at < ?",
+            range);
+    long down =
+        number(
+            "select count(*) from cv_message m join cv_conversation c on c.id = m.conversation_id"
+                + " where c.deleted_at is null and m.feedback = 'DOWN'"
+                + " and m.created_at >= ? and m.created_at < ?",
+            range);
+    return new Metrics(
+        questions,
+        answers,
+        generated,
+        answers - generated,
+        tokens,
+        avgDurationMs,
+        p50,
+        p95,
+        avgRefs == null ? 0.0 : avgRefs,
+        withoutRefs,
+        percent(withoutRefs, generated),
+        activeAssistants,
+        activeUsers,
+        up,
+        down,
+        percent(up, up + down));
+  }
+
+  /** 百分比（保留 1 位）；分母为 0 时返回 null —— 「0/0」不是 0%，是没有样本。 */
+  private static Double percent(long part, long whole) {
+    if (whole <= 0) {
+      return null;
+    }
+    return BigDecimal.valueOf(part * 100.0 / whole).setScale(1, RoundingMode.HALF_UP).doubleValue();
+  }
+
   /** 消费者自己的口径；与全平台口径刻意不共用查询。 */
   @Transactional(readOnly = true)
   public MeSummary me(UUID userId, LocalDate from, LocalDate to) {
@@ -302,6 +428,44 @@ public class AnalyticsService {
       long upCount,
       long downCount,
       long pendingFeedbackCount) {}
+
+  /**
+   * 运营指标（质量 + 用量）。
+   *
+   * @param questionCount 提问数（USER 消息）
+   * @param answerCount 回答数（ASSISTANT 消息，含失败）
+   * @param generatedAnswerCount 成功回答数（status = GENERATED）
+   * @param failedAnswerCount 失败回答数
+   * @param tokenCount prompt + completion
+   * @param avgDurationMs 平均总耗时（不是首字延迟）
+   * @param durationP50Ms 总耗时 p50
+   * @param durationP95Ms 总耗时 p95
+   * @param avgRefCount 平均引用条数
+   * @param answersWithoutRefs 无引用回答数（只数成功回答）
+   * @param noRefRate 无引用占比（%），分母 = 成功回答数
+   * @param activeAssistantCount 有消息往来的应用数
+   * @param activeUserCount 有消息往来的用户数
+   * @param upCount 赞
+   * @param downCount 踩
+   * @param satisfactionRate 满意度（%）= 赞 / (赞 + 踩)
+   */
+  public record Metrics(
+      long questionCount,
+      long answerCount,
+      long generatedAnswerCount,
+      long failedAnswerCount,
+      long tokenCount,
+      Double avgDurationMs,
+      Double durationP50Ms,
+      Double durationP95Ms,
+      double avgRefCount,
+      long answersWithoutRefs,
+      Double noRefRate,
+      long activeAssistantCount,
+      long activeUserCount,
+      long upCount,
+      long downCount,
+      Double satisfactionRate) {}
 
   public record MeSummary(
       long myQuestionCount,

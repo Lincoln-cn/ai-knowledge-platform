@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.analytics.web;
 import cn.lincoln.aiplatform.analytics.application.AnalyticsService;
 import cn.lincoln.aiplatform.analytics.application.AnalyticsService.AssistantRankItem;
 import cn.lincoln.aiplatform.analytics.application.AnalyticsService.MeSummary;
+import cn.lincoln.aiplatform.analytics.application.AnalyticsService.Metrics;
 import cn.lincoln.aiplatform.analytics.application.AnalyticsService.Overview;
 import cn.lincoln.aiplatform.analytics.application.AnalyticsService.Quality;
 import cn.lincoln.aiplatform.analytics.application.AnalyticsService.TrendPoint;
@@ -66,6 +67,20 @@ public class AnalyticsController {
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
     return ApiResponse.ok(analytics.quality(from, to));
+  }
+
+  /**
+   * 运营指标（`#357` 前半）：质量 + 用量。
+   *
+   * <p>与 {@code /quality} 的区别：`/quality` 是"质量"那一块的旧口径（首字延迟永远是 null）， 这条给的是**能真算**的那一组（总耗时
+   * p50/p95、无引用占比、活跃应用/用户）。
+   */
+  @GetMapping("/metrics")
+  @PreAuthorize("hasAuthority('dashboard:view')")
+  public ApiResponse<Metrics> metrics(
+      @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+      @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+    return ApiResponse.ok(analytics.metrics(from, to));
   }
 
   @GetMapping("/me/summary")

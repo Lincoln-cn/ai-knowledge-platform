@@ -69,6 +69,24 @@ const localOnnxStatus = () => ({
   reason: localOnnxReady ? null : '尚未使用过（懒加载未触发）'
 })
 
+/**
+ * 重排模型状态（#352）：它不是 `ai_model` 里的一行，只是 `app.retrieval.rerank.*` + 两个文件的投影。
+ * mock 侧给"已启用 + 文件在 + fp32 + 窗口 10"，与真栈默认值一致，免得页面在 mock 下显红。
+ */
+const rerankStatus = () => ({
+  enabled: true,
+  model: 'bge-reranker-base',
+  modelPath: 'models/bge-reranker-base/model.onnx',
+  tokenizerPath: 'models/bge-reranker-base/tokenizer.json',
+  topK: 10,
+  weights: 'fp32',
+  filesPresent: true,
+  reason: null,
+  listwiseEnabled: false,
+  listwiseTopK: 5,
+  forwardBatch: 5
+})
+
 export const modelRoutes: MockRoute[] = [
   [
     'GET',
@@ -88,6 +106,8 @@ export const modelRoutes: MockRoute[] = [
   ],
 
   ['GET', '/models/local-onnx', () => localOnnxStatus()],
+
+  ['GET', '/models/rerank', () => rerankStatus()],
 
   [
     'POST',

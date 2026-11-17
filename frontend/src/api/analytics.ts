@@ -64,6 +64,45 @@ export interface MeSummary {
   myDown: number
 }
 
+/**
+ * 运营指标（`#357` 前半）：**质量**与**用量**两块，全平台口径。
+ *
+ * <h3>为什么不复用 {@link QualityMetrics}</h3>
+ * <p>`/quality` 那一条是"质量"的旧口径：首字延迟与结构化输出失败率**永远是 null**（没有数据源）。
+ * 这条给的是能真算的那一组 —— 总耗时 p50/p95、无引用回答占比、活跃应用/用户数。
+ *
+ * <h3>★ 两个分母</h3>
+ * <p>`noRefRate` 的分母是**成功回答数**（`generatedAnswerCount`），不是全部回答数：
+ * 失败的回答本来就没有引用，算进去会把产品问题说成检索问题。
+ * 分母为 0 时它是 `null`（"0/0"不是 0%，是没有样本），界面显示「—」。
+ *
+ * <p>★ B1/B2/B3 不在这里：那是离线评测读数（`docs/检索基线读数.md`），运行期接口不冒充它。
+ */
+export interface OpsMetrics {
+  /** 提问数（USER 消息） */
+  questionCount: number
+  /** 回答数（含失败） */
+  answerCount: number
+  /** 成功回答数（status = GENERATED） */
+  generatedAnswerCount: number
+  failedAnswerCount: number
+  tokenCount: number
+  /** 平均总耗时；★ 这不是首字延迟 */
+  avgDurationMs: number | null
+  durationP50Ms: number | null
+  durationP95Ms: number | null
+  avgRefCount: number
+  /** 无引用回答数（只数成功回答） */
+  answersWithoutRefs: number
+  /** 无引用占比（%）；分母为 0 时为 null */
+  noRefRate: number | null
+  activeAssistantCount: number
+  activeUserCount: number
+  upCount: number
+  downCount: number
+  satisfactionRate: number | null
+}
+
 /* ────────────────────────── 接口 ────────────────────────── */
 
 /**
@@ -121,6 +160,15 @@ export const getQualityMetrics = (range: AnalyticsRange) =>
     },
     'GET /analytics/quality'
   )
+
+/**
+ * 运营指标（`#357` 前半）。
+ *
+ * ★ 不用 `degradeOnMissingEndpoint` 包一层：这条端点是本批新写的、后端已实现。
+ * 它若 404，那是我们自己的 bug（契约与实现没对上），应当红而不是静默降级成 0。
+ */
+export const getOpsMetrics = (range: AnalyticsRange) =>
+  request<OpsMetrics>({ method: 'GET', url: '/analytics/metrics', query: { ...range } })
 
 /** 我的口径聚合（消费者工作台用）。与 `getOverview` 是两套口径，不可互换 */
 export const getMySummary = (range: AnalyticsRange) =>

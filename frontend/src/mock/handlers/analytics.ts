@@ -60,6 +60,45 @@ export const analyticsRoutes: MockRoute[] = [
     }
   ],
 
+  /**
+   * 运营指标（#357 前半）。
+   *
+   * ★ mock 里的数按"7 天、有提问、失败少、引用基本都有"造，量级与真栈同数量级；
+   * 关键是**分母要对得上**：`answersWithoutRefs` / `generatedAnswerCount` 必须能算出
+   * `noRefRate`，否则页面上那行"分母是成功回答"的说明就成了谎话。
+   */
+  [
+    'GET',
+    '/analytics/metrics',
+    ({ query }) => {
+      const { from, to } = readRange(query)
+      const days = Math.max(1, dayjs(to).diff(dayjs(from), 'day') + 1)
+      const questions = 40 * days
+      const generated = questions - 3
+      const withoutRefs = Math.round(generated * 0.04)
+      const up = Math.round(questions * 0.18)
+      const down = Math.round(questions * 0.03)
+      return {
+        questionCount: questions,
+        answerCount: questions,
+        generatedAnswerCount: generated,
+        failedAnswerCount: 3,
+        tokenCount: questions * 860,
+        avgDurationMs: 7420,
+        durationP50Ms: 6180,
+        durationP95Ms: 12400,
+        avgRefCount: 3.2,
+        answersWithoutRefs: withoutRefs,
+        noRefRate: Math.round((withoutRefs / generated) * 1000) / 10,
+        activeAssistantCount: 4,
+        activeUserCount: 7,
+        upCount: up,
+        downCount: down,
+        satisfactionRate: Math.round((up / (up + down)) * 1000) / 10
+      }
+    }
+  ],
+
   [
     'GET',
     '/analytics/me/summary',

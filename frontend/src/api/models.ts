@@ -108,6 +108,31 @@ export interface LocalOnnxStatus {
   reason: string | null
 }
 
+/**
+ * 重排（cross-encoder）模型的状态（#352）。
+ *
+ * ★ 它不是注册模型：`ai_model` 里没有这一行，`ModelKind` 里也没有 `RERANK`。
+ * 它由 `app.retrieval.rerank.*` 七个键 + 两个本地文件决定，所以界面上只能"看见"，不能"改"
+ * —— 换重排模型 = 换 onnx 文件 + 重启 + 重取 B3 读数。
+ */
+export interface RerankStatus {
+  enabled: boolean
+  /** 目录名，如 bge-reranker-base */
+  model: string
+  modelPath: string
+  tokenizerPath: string
+  /** 重排窗口；★ 窗口才是那个旋钮，不是模型（见 RerankProperties 类注释的四组对照） */
+  topK: number
+  /** 从文件名推断：fp32 / int8。★ int8 在窗口 10 上掉 6.67 点 B3 */
+  weights: string
+  filesPresent: boolean
+  /** 可用时为 null；否则是「未启用 / 文件缺失」 */
+  reason: string | null
+  listwiseEnabled: boolean
+  listwiseTopK: number
+  forwardBatch: number
+}
+
 /** 能力来源（2.4 补录）：探测 / 手工声明 */
 export type ModelCapabilitySource = 'PROBED' | 'MANUAL'
 
@@ -180,6 +205,10 @@ export const getLocalOnnxStatus = () =>
 /** 预热本地 ONNX（初始化 ONNX session，不是问上游） */
 export const warmUpLocalOnnx = () =>
   request<LocalOnnxStatus>({ method: 'POST', url: '/models/local-onnx/warmup' })
+
+/** 重排模型状态（#352）：只读，没有对应的写接口 */
+export const getRerankStatus = () =>
+  request<RerankStatus>({ method: 'GET', url: '/models/rerank' })
 
 /**
  * 基础模型目录。★ 契约由 GET 改成 POST（密钥不能进查询串）；返回形状不变（BaseModelOption[]）。

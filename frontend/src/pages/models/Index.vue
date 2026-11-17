@@ -111,6 +111,71 @@
       </div>
     </section>
 
+    <!--
+      重排（cross-encoder）模型（#352）。
+      ★ 和上面那条同样的理由：它不是 `ai_model` 里的一行，`ModelKind` 里也没有 RERANK。
+        区别是它**只读** —— 换重排模型 = 换 onnx 文件 + 重启 + 重取 B3 读数，不是改一个字段，
+        所以这里只给状态，不给任何按钮（给了按钮就是在暗示"改一下就行"）。
+    -->
+    <section class="onnx-runtime panel rerank-runtime">
+      <div class="onnx-main">
+        <div class="onnx-head">
+          <span class="onnx-title ellipsis" :title="rerank?.model || 'bge-reranker-base'">
+            {{ rerank?.model || 'bge-reranker-base' }}
+          </span>
+          <el-tag size="small" effect="plain" type="warning">cross-encoder 重排</el-tag>
+          <span class="status" :class="rerankStateClass">
+            <i class="dot" :class="rerankDot" />
+            {{ rerankStateLabel }}
+          </span>
+        </div>
+
+        <p class="onnx-desc micro muted">
+          检索的第二条腿：先混合召回，再用这个 cross-encoder 对前 {{ rerank?.topK ?? 10 }} 条重新打分。
+          <b>窗口才是那个旋钮，不是模型</b> —— 窗口 5 只改第 1 条指向哪份文档，窗口 10 才把命中率与引用准确率一起拉起来。
+          它不参与下方模型列表的「加载 / 卸载」生命周期。
+        </p>
+
+        <div class="onnx-facts micro">
+          <span><span class="onnx-key">类型</span>重排 · 检索后处理</span>
+          <span>
+            <span class="onnx-key">权重</span>
+            <el-tooltip
+              content="从文件名推断。int8 在窗口 10 上掉 6.67 点引用准确率，别换"
+              placement="top"
+            >{{ rerank?.weights ?? '未知' }}</el-tooltip>
+          </span>
+          <span><span class="onnx-key">窗口</span>{{ rerank?.topK ?? '—' }} 条</span>
+          <span>
+            <span class="onnx-key">文件</span>
+            {{ rerank ? (rerank.filesPresent ? '已就位' : '缺失') : '未知' }}
+          </span>
+          <span class="onnx-path" :title="rerank?.modelPath">
+            <span class="onnx-key">模型</span>
+            <code>{{ rerank?.modelPath || '读取中…' }}</code>
+          </span>
+          <span v-if="rerank" class="micro muted">
+            <span class="onnx-key">LLM listwise</span>
+            {{
+              rerank.listwiseEnabled
+                ? `已开（前 ${rerank.listwiseTopK} 条）`
+                : '未开（默认关：收益 +5 点但破 B4 延迟门槛）'
+            }}
+          </span>
+        </div>
+
+        <div v-if="rerank?.reason" class="onnx-note micro">{{ rerank.reason }}</div>
+        <div v-if="rerankError" class="onnx-note err micro">
+          <b>状态读取失败：</b>{{ rerankError }}
+          <el-button link size="small" @click="fetchRerank">重试</el-button>
+        </div>
+      </div>
+
+      <div class="onnx-actions">
+        <span class="micro muted">只读 · 由 app.retrieval.rerank.* 决定</span>
+      </div>
+    </section>
+
     <div ref="gridEl" v-loading="loading" class="grid">
       <el-card v-for="m in list" :key="m.id" shadow="never" class="model-card" :class="{ failed: m.status === 'LOAD_FAILED' }">
         <div class="mc-head">
@@ -338,7 +403,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, Loading, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { modelsApi, providersApi } from '@/api'
-import type { LocalOnnxStatus, ModelInfo, ModelKind, ModelReference, ModelStatus } from '@/api/models'
+import type { LocalOnnxStatus, ModelInfo, ModelKind, ModelReference, ModelStatus, RerankStatus } from '@/api/models'
 import { ApiError } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import ModelFormDialog from './components/ModelFormDialog.vue'
@@ -442,6 +507,9 @@ const onGridResize = () => {
 const localOnnx = ref<LocalOnnxStatus | null>(null)
 const localOnnxError = ref<string | null>(null)
 const warmingUp = ref(false)
+/** 重排模型状态（#352）：只读，不参与列表与加载生命周期 */
+const rerank = ref<RerankStatus | null>(null)
+const rerankError = ref<string | null>(null)
 
 /** 筛选/分页入 URL —— 刷新与直链不丢状态（一.2） */
 const query = reactive({
@@ -523,6 +591,45 @@ const fetchLocalOnnx = async () => {
 
 const isLocalOnnx = (m: ModelInfo) =>
   Boolean(localOnnx.value?.enabled && m.baseModel === localOnnx.value.model)
+
+/**
+ * 重排模型状态：后端 `/models/rerank`（#352）。
+ *
+ * ★ 与上面同样的口径：读失败时**保留整块**并把原因写进 `rerankError` ——
+ * 整块消失会让"接口不可达"看起来像"这台机器没有重排"。
+ */
+const fetchRerank = async () => {
+  try {
+    rerank.value = await modelsApi.getRerankStatus()
+    rerankError.value = null
+  } catch (e) {
+    rerank.value = null
+    rerankError.value =
+      e instanceof ApiError ? e.message : '读取重排模型状态失败（接口不可达）'
+  }
+}
+
+const rerankStateLabel = computed(() => {
+  const s = rerank.value
+  if (!s) return rerankError.value ? '状态未知（读取失败）' : '读取中…'
+  if (!s.enabled) return '未启用'
+  if (!s.filesPresent) return '模型文件缺失'
+  return '可用'
+})
+
+const rerankStateClass = computed(() => {
+  const s = rerank.value
+  if (!s) return rerankError.value ? 'st-err' : 'st-idle'
+  if (!s.enabled) return 'st-idle'
+  return s.filesPresent ? 'st-ok' : 'st-err'
+})
+
+const rerankDot = computed(() => {
+  const s = rerank.value
+  if (!s) return rerankError.value ? 'err' : ''
+  if (!s.enabled) return ''
+  return s.filesPresent ? 'ok' : 'err'
+})
 
 const localOnnxStateLabel = computed(() => {
   const s = localOnnx.value
@@ -632,7 +739,7 @@ const schedule = () => {
   const interval = nextInterval()
   pollCount += 1
   timer = setTimeout(async () => {
-    await Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()])
+    await Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx(), fetchRerank()])
     schedule()
   }, interval)
 }
@@ -643,7 +750,7 @@ const onVisibility = () => {
     return
   }
   // 回到前台立即补一次，不等下一个周期
-  Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()]).then(schedule)
+  Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx(), fetchRerank()]).then(schedule)
 }
 
 /** 服务商下拉的候选（`#289` 打磨：从服务商页点「N 个模型」跳过来时，得能看出筛的是哪个） */
@@ -663,7 +770,7 @@ onMounted(() => {
     gridObserver = new ResizeObserver(onGridResize)
     gridObserver.observe(gridEl.value)
   }
-  Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx()]).then(schedule)
+  Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx(), fetchRerank()]).then(schedule)
   fetchProviders()
 })
 
