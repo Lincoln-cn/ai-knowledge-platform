@@ -12,10 +12,11 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * 节点目录（`#198` 第二块）：18 个节点、18 个已实现、类型名不重复。
+ * 节点目录（`#198` 第二块）：类型名唯一、目录与主代码两侧的"能跑"清单一致。
  *
- * <p>★ 为什么断言"18 个已实现"：画布注册了这 18 个（`check_workflow_node_types.py` 守的是同一件事，它从这份 json 的 `executable`
- * 取集合）。目录里把某个标成可执行而画布没注册，用户点它会掉进"找不到节点模型"的空画布 —— 那正是 `#20` 那次事故的形状。这条断言把两边的数字钉在一起。
+ * <p>★ 这里<strong>不写任何数量</strong>（`#337` 第四步）：原来有一条 "恰好 17 个" 与一条 `isEqualTo(17)`，每加一个节点都要回来 改数字 ——
+ * 而"数量"本身没有判据价值。误删一条时，`executableTypesMatchTheExecutor`（目录的 {@code executable} 集合 == 主代码里真实存在的执行器）与
+ * {@code check_workflow_node_types.py}（注册名集合 == 可执行集合）都会红， 不需要再手写一遍。判据：**加一个节点时这份文件不需要改**。
  */
 class WorkflowNodeTypeTest {
 
@@ -29,15 +30,23 @@ class WorkflowNodeTypeTest {
   }
 
   @Test
-  void catalogCoversAllEighteenTypes() throws Exception {
-    assertThat(load()).as("18 个节点：16 已实现 + 2 规划中").hasSize(18);
-  }
-
-  @Test
-  void exactlyEighteenAreInCatalog() throws Exception {
-    long enabled =
-        load().stream().filter(m -> Boolean.TRUE.equals(m.get("catalogEnabled"))).count();
-    assertThat(enabled).as("★ 画布可用的必须恰好 18 个 —— 与画布注册的类型数一致（#20 的教训）").isEqualTo(18);
+  void catalogEnabledMatchesExecutable() throws Exception {
+    // ★ 原来这条是 `enabled 恰好 17 个`。数字换成"两个集合相等"：
+    //   今天没有"能拖进画布但还不能跑"的节点（拖进去也发布不了，等于骗人）；
+    //   将来真要允许规划中节点上画布，改这一条是**有意的产品改变**，而不是每次加节点来改数字。
+    Set<String> onCanvas =
+        load().stream()
+            .filter(m -> Boolean.TRUE.equals(m.get("catalogEnabled")))
+            .map(m -> String.valueOf(m.get("type")))
+            .collect(Collectors.toSet());
+    Set<String> runnable =
+        load().stream()
+            .filter(m -> Boolean.TRUE.equals(m.get("executable")))
+            .map(m -> String.valueOf(m.get("type")))
+            .collect(Collectors.toSet());
+    assertThat(onCanvas)
+        .as("画布可拖的与可运行的必须是同一批：多一个 ⇒ 拖得进却发布不了，少一个 ⇒ 能跑却拖不进画布（#20）")
+        .isEqualTo(runnable);
   }
 
   @Test
@@ -97,9 +106,5 @@ class WorkflowNodeTypeTest {
       assertThat(row.get("description")).as("description 不能空：" + row.get("type")).isNotNull();
       assertThat(row.get("category")).as("category 不能空（节点菜单靠它分组）：" + row.get("type")).isNotNull();
     }
-    Map<String, Long> byType =
-        rows.stream()
-            .collect(Collectors.groupingBy(r -> r.get("type").toString(), Collectors.counting()));
-    assertThat(byType).hasSize(18);
   }
 }

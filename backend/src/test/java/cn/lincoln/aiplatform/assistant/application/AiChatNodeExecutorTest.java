@@ -9,26 +9,15 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.lincoln.aiplatform.platform.assistant.ApplicationInvokePort;
-import cn.lincoln.aiplatform.platform.assistant.FunctionInvokePort;
-import cn.lincoln.aiplatform.platform.assistant.ImageGeneratePort;
-import cn.lincoln.aiplatform.platform.assistant.ImageUnderstandPort;
-import cn.lincoln.aiplatform.platform.assistant.SpeechToTextPort;
-import cn.lincoln.aiplatform.platform.assistant.TextToSpeechPort;
-import cn.lincoln.aiplatform.platform.assistant.WorkflowRerankPort;
-import cn.lincoln.aiplatform.platform.assistant.WorkflowSearchPort;
-import cn.lincoln.aiplatform.platform.domain.FileStorePort;
-import cn.lincoln.aiplatform.platform.knowledge.DocumentExtractPort;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import java.io.IOException;
 import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
 
 /**
  * {@link AiChatNodeExecutor} 的判据。
@@ -181,73 +170,23 @@ class AiChatNodeExecutorTest {
   }
 
   @Test
-  @DisplayName("目录声明能跑的每个类型都真有执行器 —— 这才是「发布放行、运行时不炸」的判据")
+  @DisplayName("目录声明能跑的每个类型都真有执行器 —— 由两条硬断言守着，这里不再手写清单")
   void everySupportedTypeHasAnExecutor() throws IOException {
-    // 0.7.0 的洞：目录写着 AI_CHAT_NODE 能跑，而实现只有三个 ——
-    // 发布校验放行，点试用时 registry.get 拿不到执行器。
-    // 这里把全部实现都摆出来断「集合相等」：以后加一个执行器却忘了加进任何一个测试，
-    // 或者加进这里却忘了写源码，两边的差集都会被这条抓住（#337 之后比对的是主代码扫描，不再是手写常量）。
-    Map<String, NodeExecutor> byType = new java.util.LinkedHashMap<>();
-    for (NodeExecutor executor :
-        List.of(
-            new StartNodeExecutor(),
-            new BaseNodeExecutor(),
-            new SearchDatasetNodeExecutor(providerOf(mock(WorkflowSearchPort.class))),
-            new ConditionNodeExecutor(mock(ChatPort.class)),
-            new NumberConditionNodeExecutor(),
-            new AiChatNodeExecutor(mock(ChatPort.class)),
-            new ReplyNodeExecutor(),
-            new FormNodeExecutor(),
-            new DocumentExtractNodeExecutor(providerOf(mock(DocumentExtractPort.class))),
-            new RerankerNodeExecutor(providerOf(mock(WorkflowRerankPort.class))),
-            new ApplicationNodeExecutor(providerOf(mock(ApplicationInvokePort.class))),
-            new ImageUnderstandNodeExecutor(
-                providerOf(mock(ImageUnderstandPort.class)), providerOf(mock(FileStorePort.class))),
-            new ImageGenerateNodeExecutor(
-                providerOf(mock(ImageGeneratePort.class)), providerOf(mock(FileStorePort.class))),
-            new TextToSpeechNodeExecutor(
-                providerOf(mock(TextToSpeechPort.class)), providerOf(mock(FileStorePort.class))),
-            new SpeechToTextNodeExecutor(
-                providerOf(mock(SpeechToTextPort.class)), providerOf(mock(FileStorePort.class))),
-            new FunctionLibNodeExecutor(providerOf(mock(FunctionInvokePort.class))),
-            new FunctionNodeExecutor(providerOf(mock(FunctionInvokePort.class))),
-            new QuestionNodeExecutor())) {
-      byType.put(executor.type(), executor);
-    }
-
-    assertThat(byType.keySet()).isEqualTo(NodeExecutorSources.implementedTypes());
-  }
-
-  /**
-   * 造一个只吐一个实例的 {@code ObjectProvider}：{@code SearchDatasetNodeExecutor} / {@code
-   * DocumentExtractNodeExecutor} 要的是它而不是裸端口。
-   */
-  private static <T> ObjectProvider<T> providerOf(T port) {
-    return new ObjectProvider<>() {
-      @Override
-      public T getObject(Object... args) {
-        return port;
-      }
-
-      @Override
-      public T getIfAvailable() {
-        return port;
-      }
-
-      @Override
-      public T getIfUnique() {
-        return port;
-      }
-
-      @Override
-      public T getObject() {
-        return port;
-      }
-
-      @Override
-      public java.util.Iterator<T> iterator() {
-        return List.of(port).iterator();
-      }
-    };
+    // 0.7.0 的洞：目录写着 AI_CHAT_NODE 能跑，而实现只有三个 —— 发布校验放行、点试用时 registry.get 拿不到执行器。
+    //
+    // ★ 这里原来手写了一份「全部执行器」的构造清单，再与源码扫描断集合相等（#337 第五步删掉）。
+    //   两个理由：
+    //   ① 它是**同一件事的第二份清单** —— 加一个执行器就要回来加一行，于是「新增节点不必改测试」
+    //      （#337 判据 4）永远不成立；而 issue 自己写着「一条测试专门钉两处手写必须一样，
+    //      本身就是该合并的信号」。
+    //   ② 它证明不了更多：清单是手写的，与源码扫描比对等于「手写 == 源码」，中间没有任何运行时证据。
+    //
+    //   现在同一件事由两条**不需要随节点数量改动**的断言覆盖：
+    //   · WorkflowNodeTypeTest.executableTypesMatchTheExecutor：目录 executable == 主代码里真的存在的执行器
+    //   · NodeExecutorRegistryTest.knownUnimplementedMatchesActualGap：目录 executable − 主代码实现 == 空清单
+    //   两条合起来就是这条测试原本要的结论，且新增执行器时都要改的只有主代码。
+    Set<String> declared = NodeExecutorSources.implementedTypes();
+    assertThat(declared).as("扫描必须读得动：读空说明正则与源码形状已经对不上").isNotEmpty();
+    assertThat(declared).as("AI_CHAT_NODE 是这条测试的由来（#326），它必须在").contains("AI_CHAT_NODE");
   }
 }

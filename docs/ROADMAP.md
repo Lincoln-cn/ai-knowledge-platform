@@ -7414,5 +7414,75 @@ csv  / tsv   ──(解析)─┘
 - **不做应用级 / 知识库级差异化配置**：用户已拍板"先做全平台一套"；数据库层不留 `app_id` 列（留了就等于
   承诺了语义），`kind` 的值域留缝已经够将来扩展。
 
+## 11.54 `#337` 收口：测试里的两份手写清单已删（2026-11-18）
+
+`#337` 的主体（字段清单进目录、执行器清单去掉、面板由目录渲染、变量目录由目录生成）在 `c009da95` /
+`254d1beb` / `141ae3ac` / `6cf44457` 四步里已经落地。本轮收的是**最后两处"加一个节点就要回来改一行"的地方**，
+它们都在测试里 —— 所以它们不会让功能坏掉，只会让"判据 4（加节点不用改测试）"永远不成立。
+
+### 11.54.1 删掉的是什么
+
+| 文件 | 删掉 | 为什么它必须删 |
+| --- | --- | --- |
+| `backend/src/test/java/cn/lincoln/aiplatform/assistant/WorkflowNodeTypeTest.java` | `catalogCoversAllSeventeenTypes()`、`exactlySeventeenAreInCatalog()`，以及 `everyEntryHasLabelDescriptionAndCategory()` 末尾那段 `byType` 分组 + `hasSize(17)` | 三项都是**数量断言**。数量是"目录里有几条"的派生物，而目录本身就是真源 —— 断言它等于 17，等价于把真源抄一份到测试里。加一个节点 ⇒ 红 ⇒ 就必须回来改测试 |
+| `backend/src/test/java/cn/lincoln/aiplatform/assistant/application/AiChatNodeExecutorTest.java` | `everySupportedTypeHasAnExecutor()` 里手写的 17 个 `new XxxNodeExecutor(...)` | 它是 `NodeExecutorSources.implementedTypes()`（源码扫描）的**第二份清单**：手写清单与源码扫描比对，证明的是"我抄得对"，不是"主代码与目录一致"。issue 自己写着「一条测试专门钉两处手写必须一样，本身就是该合并的信号」 |
+
+**替代物**（同一件事由谁守）：新增 `WorkflowNodeTypeTest.catalogEnabledMatchesExecutable()` —— 断
+`catalogEnabled=true` 的集合与 `executable=true` 的集合**相等**（多一个 ⇒ 拖得进画布却发布不了；少一个 ⇒
+能跑却拖不进画布，`#20`）。主代码侧仍由既有的 `WorkflowNodeTypeTest.executableTypesMatchTheExecutor`（目录
+`executable` == 主代码真实执行器）与 `NodeExecutorRegistryTest.knownUnimplementedMatchesActualGap`（差值 ==
+空清单 `KNOWN_UNIMPLEMENTED`）覆盖 —— 这三条一起，覆盖了原来那 17 行清单的全部意图，且**都不含数量**。
+
+### 11.54.2 五条判据的读数（2026-11-17/18）
+
+| issue 判据 | 载体 | 读数 |
+| --- | --- | --- |
+| ① 生成物不漂 | `node --run check:node-types` | `[node-types] 一致。` exit 0 |
+| ② 源码里不出现词表外的键字面量 | `WorkflowNodeKeysTest.noLiteralKeyOutsideTheVocabulary` | **5/5** 绿 |
+| ③ 目录 `configFields.key` ⊆ `WorkflowNodeKeys` 契约词表 | `WorkflowNodeKeysTest.catalogFieldsComeFromTheContractVocabulary` | 同上 5/5（另两条 outputs / 重复声明 / executable 必有输出也一并绿） |
+| ④ 加一个节点 = json 一条 + 一个执行器类，且**不改任何测试文件** | 见下 §11.54.3 的实验 | 四条结构测试全绿、前端闸门如期红 |
+| ⑤ 前端契约形状能直接喂执行器 | `WorkflowContractShapeTest` | **8/8** 绿 |
+
+### 11.54.3 判据 ④ 的实验（这是这条判据唯一能被证明的方式）
+
+造了一个 `FAKE_EXTENSION_NODE` 探针，改动**只有两处**：`node-types.json` 末尾加一条（`category: "扩展"`、
+`catalogEnabled/executable: true`、`configFields: []`、`outputs: [{key:"query"}]`），加一个
+`FakeExtensionNodeExecutor`（`@Component`，`execute()` 用已有的 `WorkflowNodeKeys.Output.QUERY` 写值 ——
+刻意不引入新键，让实验只测"加节点"这一件事）。
+
+- 后端：`WorkflowNodeTypeTest` 6/6 · `NodeExecutorRegistryTest` 4/4 · `WorkflowNodeKeysTest` 5/5 ·
+  `AiChatNodeExecutorTest` 10/10 —— **全绿，且实验期间没有改过任何测试文件**。
+- 前端：`python frontend/check_workflow_node_types.py` ⇒ **通过 3/5、exit 1**，逐字报
+  「契约的 18 种已实现类型全部有模块（缺：`['FAKE_EXTENSION_NODE']`）」⇒ 这正好量出了 issue 口径订正里说的
+  **第三处手写**（`nodes/<name>/index.vue` 那个画布模块）确实少不了，而且**闸门会说话**（不是静默缺图标）。
+- 清理后：`WorkflowNodeTypeTest` 6/6、`NodeExecutorRegistryTest` 4/4、前端闸门 **5/5**。
+
+### 11.54.4 反证（两条，都带"我确实改到了"的自检）
+
+- **A（生成物漂移）**：把 `frontend/src/api/nodeTypes.generated.ts` 里的 `"START_NODE"` 改成 `"START_NODEX"`
+  ⇒ `node --run check:node-types` **exit 1**，逐字报「生成物与真源不一致。跑 `node --run gen:node-types` 后提交。」
+  还原后 exit 0。
+  ★ **这条第一次没做成**：脚本里用单引号 `'START_NODE'` 去替换，而生成物里写的是**双引号**（`  "START_NODE",`）
+  ⇒ 一个字符都没改到，`check` 当然仍然 exit 0。**"闸门没红"与"我没改到"这两种情况读数完全一样**，所以反证脚本
+  必须先自检"替换命中了几处"（本次改成按双引号替换，打印出"已改 3 处"才继续）。
+- **B（词表外的键）**：在 `ReplyNodeExecutor.execute()` 里加一行 `text(config.get("zzzNotInVocabulary"))` ⇒
+  `WorkflowNodeKeysTest` **5 条里 1 条红**，逐字报
+  `ReplyNodeExecutor.java:43 的键「zzzNotInVocabulary」不在 WorkflowNodeKeys 里` —— 文件名 + 行号 + 键名齐全，
+  正是 `#335`（前端发 `kbIds`、执行器读 `dataset_id_list`）那种错要的读数。还原 + 刷新 mtime + 删 `.class` 后 5/5。
+
+### 11.54.5 两处**没有**随本次改的东西（不要读成漏了）
+
+1. **`§11.44.7` 判据 1 的措辞已过期**：那一节的判据写着「`WorkflowNodeTypeTest` 里的
+   `exactlySeventeenAreInCatalog` / `catalogCoversAllSeventeenTypes` 通过」，而这两个方法**在本轮被删掉了**。
+   没有就地改，是因为 `§11.44.7` 属于另一批**尚未提交**的工作区改动（`FUNCTION_LIB_NODE` 并进
+   `FUNCTION_NODE`），两批混在一个提交里会让审查看不出哪一行是谁的。合并那批时把该句改成"以 §11.54 为准"即可。
+   ★ 这类"文档引用了被删的方法名"是最容易在下一轮被当成真的坑：**改判据载体时必须 grep 全库的引用**。
+2. **`node-types.json` 与 `nodeTypes.generated.ts` 的工作区改动也是那一批的**（删 `FUNCTION_LIB_NODE` 条目），
+   本提交**没有**包含它们 —— 判据 ④ 的实验为了恢复原状改过 `node-types.json`，已确认恢复后 `git diff` 里
+   只剩那 40 行删除（与我无关）。
+
+Open objectives（截至本节）：`#337` 补评论并按判据关单；`D` 小账（`ChatStreamBody` javadoc 与实现不一致、
+`#332` 三闸门误报）；0.9.3 语料要用户拍板。
+
 
 
