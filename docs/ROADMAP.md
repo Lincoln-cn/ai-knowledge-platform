@@ -7349,6 +7349,20 @@ csv  / tsv   ──(解析)─┘
 2. **问题集归一化**：标点、空格、全角差异的同一句话仍命中（这条证明归一化真的在跑，不是只比字面）
 3. **分类可关**：关掉分类 A ⇒ 同一句话**放行**（这条证明"分类型"不是分组显示，而是真能独立生效）
 
+**判据读数（2026-11-17）**：三条逐条核过 —— 前两条早有载体，**第三条原本没有**，是这一轮补的。
+
+| 判据 | 载体 | 读数 |
+|---|---|---|
+| 1 分类命中 + 审计不含词面 | `GuardServiceTest` 的 `inspectRecordsCategoryAndHashButNotTheWord()`（纯 Mockito） | 绿 —— 断拒答话术、`record(GUARD_BLOCK, "GUARD_RULE", 规则 id, 操作人, detail)`、detail 里 `category=POLITICS` / `kind=KEYWORD` / 有 `hash`，且 `values()` 里没有任何一格含原词 |
+| 2 归一化后仍命中 | `GuardSnapshotTest` 的「换了标点、空格与全角之后仍然命中」+ `GuardTextTest` 六条 | 绿 |
+| 3 关掉分类 ⇒ 放行 | **本轮新建** `GuardCategoryToggleTest`（`@SpringBootTest` + Testcontainers 真库，假词 `ZZ-TEST-BLOCK-A`） | **2/2 绿** |
+
+★ **判据 3 为什么不能只靠纯单测**：过滤写在那条 SQL 里（`GuardStore.java` 第 577 行 `where r.enabled = true and c.enabled = true`），而 `GuardServiceTest` 的快照是它自己 `new` 出来的 —— "停用的分类会不会进 `patterns`"在纯 Mockito 里**问不出来**。测试是三拍：命中 → 停用分类后放行（同时断规则行还在，排除"规则被删了"）→ 重新启用又拦住。另有一条用例单独停用**规则**（分类还开着）⇒ 也放行，证明两个 `enabled` 各管一段。
+
+★ **反证**（2026-11-17 实做）：把 `GuardStore.java` 第 577 行的 `and c.enabled = true` 摘掉 ⇒ `disablingTheCategoryLetsTheSameQuestionThrough` 立刻红（`expected: null`，停用后仍被拦住），还原后 2/2 又绿。这与 `§11.52.10` 判据 8 同族：**"绿"本身证明不了闸门在守，只有一次故意的破坏能证明。**
+
+★ **顺带记一个坑**：还原 `GuardStore.java` 时用 `Copy-Item` 从备份覆盖，**文件 mtime 跟着回退**，Maven 增量编译判定"源文件没变"就跳过了编译 —— 于是"还原后仍红"，看起来像测试自己不稳，实际跑的还是反证时那份 class。判据：**改完源码要重跑，先确认 `target/classes` 里那一份真的换了**（直接删掉那个 `.class` 最省事）。
+
 ### 11.53.8 仍不做（`13 §12` 的四分之三）
 
 - **输出侧栅栏 / 输入审计 / 输出审计**：`#43` / `T309`，本版只做输入侧检查。
