@@ -316,6 +316,23 @@ def self_check() -> int:
         print("✗ 反证失败：故意塞了重复菜名，shape_problems 却没报")
         return 1
     print(f"✓ 反证：塞重复菜名后如期报出「{caught[0]}」")
+
+    # ★ 反证二（`#346` 判据 3）：从 `NAV[admin]` 里删掉一个真实菜名，断言 ⑧ 必须报出来。
+    #   只反证"重复项"那一条不够 —— ⑧/⑨ 是后加的两条，它们自己有没有牙得单独打一次。
+    #   （这一条正好对应 `#346` 的病因：`NAV` 少了两项而闸门是绿的。）
+    admin_items = NAV["admin"]
+    drop_at = next((i for i, x in enumerate(admin_items) if x != HOME_LABEL), None)
+    if drop_at is not None:
+        dropped = admin_items.pop(drop_at)
+        try:
+            caught = shape_problems()
+        finally:
+            admin_items.insert(drop_at, dropped)
+        hit = next((c for c in caught if "navGroups 里有" in c), "")
+        if not hit:
+            print(f"✗ 反证失败：从 NAV[admin] 删掉菜名「{dropped}」后，断言 ⑧ 没报（它会变成恒真）")
+            return 1
+        print(f"✓ 反证：删掉「{dropped}」后如期报出「{hit}」")
     return 0
 
 
@@ -350,6 +367,19 @@ def main() -> int:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
 
     print(f"目标：{base}\n")
+
+    # ★ 期望表自洽必须在**主流程**里跑（`#346` 判据 1/3）：
+    #   断言 ⑧/⑨ 只写在 `shape_problems()` 里，而它原先只在 `--self-check` 下被调用
+    #   ⇒ CI 跑的这一支（下面这段起浏览器跑路由）等于**没有**这两条断言。
+    #   「门禁声称在守、实际没守到最新一批菜单」正是 `#346` 的病根，接线这一步不能省。
+    #   ★ 计成一条断言而不是直接 return：形状坏了也把路由读数跑完，
+    #     否则"期望表不自洽"会让 133 条路由断言一条都不出现，读数反而更难定位。
+    table_problems = shape_problems()
+    check(not table_problems, "期望表自洽（形状 + NAV↔navGroups 双向对齐）", "；".join(table_problems))
+    for one in table_problems:
+        print(f"  ✗ {one}")
+    if table_problems:
+        print()
 
     try:
         with sync_playwright() as p:
