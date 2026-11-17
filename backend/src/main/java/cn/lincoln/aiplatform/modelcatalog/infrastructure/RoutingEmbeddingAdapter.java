@@ -1,5 +1,7 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
+import cn.lincoln.aiplatform.platform.domain.BusinessException;
+import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import java.util.List;
 import java.util.UUID;
@@ -42,6 +44,15 @@ public class RoutingEmbeddingAdapter implements EmbeddingPort {
   private final java.util.Set<String> warnedModelFiles =
       java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+  /**
+   * 已经提醒过「这个模型没登记维度」的模型 id —— 同一个模型只打一次（`#348`）。
+   *
+   * <p>★ 同一份文档是逐段调用的（70 段 = 70 次），每段都打一行「本轮跳过维度比对」等于把这行变成噪音；
+   * 而去重之后它只在"这个模型第一次入库"时出现一次，正好是有人会去看日志的时刻。
+   */
+  private final java.util.Set<UUID> warnedMissingDimension =
+      java.util.concurrent.ConcurrentHashMap.newKeySet();
+
   public RoutingEmbeddingAdapter(
       LocalOnnxEmbedding local, UpstreamEmbeddingAdapter upstream, ModelIdentityPort identities) {
     this.local = local;
@@ -77,15 +88,72 @@ public class RoutingEmbeddingAdapter implements EmbeddingPort {
   @Override
   public List<float[]> embed(UUID modelId, List<String> texts) {
     String baseModel = identities.baseModelOf(modelId);
+    List<float[]> vectors;
     if (!local.serves(baseModel)) {
       warnIfItsFilesAreRightHere(baseModel);
-      return upstream.embed(modelId, texts);
+      vectors = upstream.embed(modelId, texts);
+    } else {
+      // ★ 只在这一条分支里用本地实现；失败会抛 BusinessException（调用方据此把入库停在"可读原因"上）
+      if (!local.ready()) {
+        log.info("本地向量模型尚未初始化，本次调用触发加载（model={}）", local.modelPath());
+      }
+      vectors = local.embed(texts);
     }
-    // ★ 只在这一条分支里用本地实现；失败会抛 BusinessException（调用方据此把入库停在"可读原因"上）
-    if (!local.ready()) {
-      log.info("本地向量模型尚未初始化，本次调用触发加载（model={}）", local.modelPath());
+    requireDeclaredDimension(modelId, baseModel, vectors);
+    return vectors;
+  }
+
+  /**
+   * 这一批向量的维度必须与模型**登记的**维度一致（`#348`）。
+   *
+   * <h3>★ 为什么必须在这里拦，而不是在写入端</h3>
+   *
+   * <p>写入端（{@code JdbcVectorIndex#upsert}）拿不到登记维度 —— 它只看得见"一条向量有多长"，而表名正是按这个长度拼的 （{@code
+   * vec_embedding_<维度>}）。于是"登记 1024、实际返回 768"会**静默落进 768 表**：功能是自洽的（写与查同口径）， 走查照样全过、检索照样有结果，
+   * 但两批向量分居两张表、永远互相看不见 —— 换真模型重算后才以"检索结果少一半"的形态暴露。 这正是本类 javadoc 里那句"最贵的失败形态"，只不过换了一条分支。
+   *
+   * <p>★ <strong>整批一起失败</strong>：调用方是"逐条 upsert"的，所以在返回之前抛，一条都不会写进去。半批写进去比全不写更糟 —— 那会留下两份向量空间并存的状态。
+   *
+   * @param modelId 模型 id
+   * @param baseModel 基础模型名（报错时点名用）
+   * @param vectors 这一批的向量
+   * @throws BusinessException 维度与登记不符（可读 400，写清登记值与实际值）
+   */
+  private void requireDeclaredDimension(UUID modelId, String baseModel, List<float[]> vectors) {
+    if (vectors == null || vectors.isEmpty()) {
+      return;
     }
-    return local.embed(texts);
+    Integer declared = identities.dimensionOf(modelId);
+    int actual = vectors.get(0).length;
+    if (declared == null) {
+      // ★「不知道」不能悄悄变成「通过」：登记维度是空的，就明说这一轮没校验（同一模型只说一次）
+      if (warnedMissingDimension.add(modelId)) {
+        log.warn(
+            "模型「{}」（{}）没有登记维度，本轮跳过维度比对 —— 这次返回 {} 维。请补上 ai_model.dimension，"
+                + "否则上游换了维度也不会被发现（#348）",
+            baseModel,
+            modelId,
+            actual);
+      }
+      return;
+    }
+    for (float[] vector : vectors) {
+      if (vector.length != declared) {
+        throw new BusinessException(
+            ErrorCode.BAD_REQUEST,
+            "向量维度与模型登记不符：模型「"
+                + baseModel
+                + "」（"
+                + modelId
+                + "）登记 "
+                + declared
+                + " 维，这一批返回的是 "
+                + vector.length
+                + " 维",
+            "向量按维度分表存放（vec_embedding_<维度>），写进另一张表之后这批向量与已有向量永远互相查不到。"
+                + "请把该模型的 dimension 改成上游实际返回的维度（并在「模型」页重建向量），或让上游按登记维度返回");
+      }
+    }
   }
 
   /** 只在"取模型名"这一件事上需要模型目录 —— 用一个极小的端口，避免把整个 {@code ModelService} 拖进 infrastructure（那会绕开模块边界）。 */
@@ -98,5 +166,16 @@ public class RoutingEmbeddingAdapter implements EmbeddingPort {
      * @return 基础模型名；模型不存在时抛可读的 404
      */
     String baseModelOf(UUID modelId);
+
+    /**
+     * 取模型**登记的向量维度**（{@code ai_model.dimension}）。
+     *
+     * <p>★ 取不到返回 {@code null}，与 {@code contextWindow} 同口径：**未知不等于错**（一列没填不该让整个入库停下来）。 但未知时调用方会打一行
+     * WARN 说明"这一轮没校验" —— 让"没填"与"填对了"在日志里区分得开（`#348`）。
+     *
+     * @param modelId 模型 id
+     * @return 登记维度；未知时 {@code null}
+     */
+    Integer dimensionOf(UUID modelId);
   }
 }

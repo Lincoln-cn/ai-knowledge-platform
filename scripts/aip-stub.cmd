@@ -24,4 +24,8 @@ if not exist "%BE%\tools\openai_stub.py" (
 title aip-stub (openai stub, 11434)
 cd /d "%BE%"
 echo [aip-stub] fake model on 11434. Close this window to stop.
-python tools\openai_stub.py
+rem  --dim 1024: bge-m3 returns 1024 dims on a real Ollama, and the only bge-m3 row in
+rem  ai_model is registered as 1024. The stub default (768) disagreed with it, so every
+rem  ingest wrote 768-dim vectors of a 1024-dim model into vec_embedding_768 (#348).
+rem  Keep this in sync with the model rows you actually use.
+python tools\openai_stub.py --dim 1024

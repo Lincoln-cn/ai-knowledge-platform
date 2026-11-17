@@ -66,4 +66,28 @@ public class JdbcModelIdentityAdapter implements RoutingEmbeddingAdapter.ModelId
       throw unavailable;
     }
   }
+
+  /**
+   * 登记维度（{@code ai_model.dimension}），取不到返回 {@code null}。
+   *
+   * <p>★ 与 {@link #baseModelOf} 的容错口径**刻意不同**：那一列取不到是"路由不知道用哪个模型"，必须停；这一列取不到只是"这一轮没得比"，
+   * 停下来反而会把"没填维度"变成"入库不可用"。所以这里取不到就给 {@code null}，由调用方打一行 WARN 说明没校验（`#348`）。
+   *
+   * @param modelId 模型 id
+   * @return 登记维度；未知或读失败时 {@code null}
+   */
+  @Override
+  public Integer dimensionOf(UUID modelId) {
+    try {
+      return jdbc.queryForObject(
+          "select dimension from ai_model where id = ?", Integer.class, modelId);
+    } catch (EmptyResultDataAccessException notFound) {
+      // 模型不存在这件事 baseModelOf 已经用可读的 404 说过了，这里不重复报
+      return null;
+    } catch (DataAccessException unavailable) {
+      // ★ 不吞成"没有维度"：那条日志必须能区分"没填"与"没查到" —— 否则连接池打满会被读成"模型没配维度"
+      log.warn("读取模型登记维度失败（{}）：{} —— 本轮跳过维度比对", modelId, unavailable.getMessage());
+      return null;
+    }
+  }
 }

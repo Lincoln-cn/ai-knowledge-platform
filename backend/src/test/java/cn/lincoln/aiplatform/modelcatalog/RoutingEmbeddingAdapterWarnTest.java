@@ -68,8 +68,15 @@ class RoutingEmbeddingAdapterWarnTest {
     return upstream;
   }
 
-  private static RoutingEmbeddingAdapter.ModelIdentityPort naming(String baseModel) {
-    return modelId -> baseModel;
+  private static RoutingEmbeddingAdapter.ModelIdentityPort naming(String baseModel, int dims) {
+    // ★ 登记维度按各用例的实际返回维度给：本类测的是「走错路要不要留痕」，维度校验那条
+    //   （登记与返回不一致会抛）在 RoutingEmbeddingAdapterDimensionTest 里（`#348`）——
+    //   若这里给 null，每个用例都会多一行「没有登记维度」的 WARN，把断言的行数搅乱
+    RoutingEmbeddingAdapter.ModelIdentityPort identities =
+        mock(RoutingEmbeddingAdapter.ModelIdentityPort.class);
+    when(identities.baseModelOf(any())).thenReturn(baseModel);
+    when(identities.dimensionOf(any())).thenReturn(dims);
+    return identities;
   }
 
   private List<String> warnings() {
@@ -85,7 +92,8 @@ class RoutingEmbeddingAdapterWarnTest {
     LocalOnnxEmbedding local = localServing("multilingual-e5-small");
     when(local.hasModelFilesFor("bge-small-zh-v1.5")).thenReturn(true);
     RoutingEmbeddingAdapter adapter =
-        new RoutingEmbeddingAdapter(local, upstreamReturning(768), naming("bge-small-zh-v1.5"));
+        new RoutingEmbeddingAdapter(
+            local, upstreamReturning(768), naming("bge-small-zh-v1.5", 768));
 
     adapter.embed(MODEL_ID, List.of("一段中文"));
 
@@ -103,7 +111,7 @@ class RoutingEmbeddingAdapterWarnTest {
     when(local.hasModelFilesFor("bge-small-zh-v1.5")).thenReturn(true);
     UpstreamEmbeddingAdapter upstream = upstreamReturning(768);
     RoutingEmbeddingAdapter adapter =
-        new RoutingEmbeddingAdapter(local, upstream, naming("bge-small-zh-v1.5"));
+        new RoutingEmbeddingAdapter(local, upstream, naming("bge-small-zh-v1.5", 768));
 
     adapter.embed(MODEL_ID, List.of("甲"));
     adapter.embed(MODEL_ID, List.of("乙"));
@@ -119,7 +127,7 @@ class RoutingEmbeddingAdapterWarnTest {
     LocalOnnxEmbedding local = localServing("multilingual-e5-small");
     when(local.hasModelFilesFor(anyString())).thenReturn(false);
     RoutingEmbeddingAdapter adapter =
-        new RoutingEmbeddingAdapter(local, upstreamReturning(1024), naming("bge-m3"));
+        new RoutingEmbeddingAdapter(local, upstreamReturning(1024), naming("bge-m3", 1024));
 
     adapter.embed(MODEL_ID, List.of("一段中文"));
 
@@ -132,7 +140,8 @@ class RoutingEmbeddingAdapterWarnTest {
     LocalOnnxEmbedding local = localServing("multilingual-e5-small");
     when(local.embed(any())).thenReturn(List.of(new float[384]));
     RoutingEmbeddingAdapter adapter =
-        new RoutingEmbeddingAdapter(local, upstreamReturning(768), naming("multilingual-e5-small"));
+        new RoutingEmbeddingAdapter(
+            local, upstreamReturning(768), naming("multilingual-e5-small", 384));
 
     List<float[]> vectors = adapter.embed(MODEL_ID, List.of("一段中文"));
 

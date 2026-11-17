@@ -4465,6 +4465,50 @@ boolean serves(String baseModel) {
 
 存量 24 条的修正（**✅ 已由 `#347` 清掉，见 11.19.2 末**） · 跨 `baseModel` 的维度冲突 · **`dimension` 与实际输出维度的核对**（属 `#305` 缺口 A 的邻域；**写入侧这一半已单独立账 `#348`** —— 实测登记 1024 的模型被写进 `vec_embedding_768` 且无报错）。
 
+### 11.19.5 `#348` 写入侧：上游返回的维度必须与登记一致（2026-11-17）
+
+`#348` 是本节另一半。上一条（`#305` 缺口 B）拦的是「同一个 `base_model` 被登记成两个维度」；这一条拦的是「一条**已经登记好**的模型，上游返回的维度与它登记的不一致」。
+
+**根因**：`vectorindex/internal/JdbcVectorIndex.java:111-116` 用 `entry.vector().length` 拼表名（`vec_embedding_<维度>`），而 `ai_model.dimension` 在写入路径上**从不参与比较**。于是「登记 1024、上游返回 768」是**自洽**的：写与查同口径、走查 47/47、检索有结果 —— 只是这批向量与已有向量分居两张表、永远互相看不见。实测 `#347` 清理后 `vec_embedding_768` 从 0 涨到 4、再涨到 8（每一轮走查多 4 行），日志里一个字都没有。
+
+**改法（三处，全在 `modelcatalog`）**：
+
+| 文件 | 改动 |
+|---|---|
+| `modelcatalog/infrastructure/RoutingEmbeddingAdapter.java` | `embed` 两分支先算 `vectors`，返回前统一走 `requireDeclaredDimension(modelId, baseModel, vectors)` |
+| 同上（内嵌接口） | `ModelIdentityPort` 加**抽象**方法 `Integer dimensionOf(UUID modelId)` |
+| `modelcatalog/infrastructure/JdbcModelIdentityAdapter.java` | 实现它：`select dimension from ai_model where id = ?`；查不到 / 读失败均返回 `null`（口径与"没填"一致，由调用方 WARN） |
+
+★ **为什么拦在 `RoutingEmbeddingAdapter` 而不是写入端**：`VectorIndexPort.Entry` 里没有"登记维度"这个字段，`JdbcVectorIndex` 只看得见"一条向量有多长" —— 而在那里按长度拼表名**正是错的来源**。`RoutingEmbeddingAdapter` 同时握有 `modelId`、`baseModel` 与返回的向量，是唯一能比对的地方；它的 javadoc 本来也写着「混用向量空间是本仓最贵的失败形态」。
+
+★ **三道刻意的取舍**：
+
+1. **整批失败，不过滤坏的那几条**：调用方是逐条 upsert 的，抛在返回之前才能保证一条都没写进去。半批写进去会留下两份向量空间并存的状态 —— 那比全不写更难查。
+2. **`dimensionOf` 是抽象方法不是 `default`**：写成 `default` 的话"忘了实现"会静默通过，正是本条要治的病。（代价 = `RoutingEmbeddingAdapterWarnTest` 的 `naming()` 从 lambda 改成 mock。）
+3. **登记维度为空只 WARN 不拦，且同一模型只 WARN 一次**：「没填」不等于「填错了」，拦下来会把"没配维度"变成"入库不可用"；而逐段调用（70 段 = 70 次）会把那行 WARN 刷成噪音。
+
+**判据读数**：
+
+| 判据 | 载体 | 读数 |
+|---|---|---|
+| ① 登记 1024 + 上游返回 768 ⇒ 向量化失败并说明维度 | `RoutingEmbeddingAdapterDimensionTest#aShorterUpstreamVectorThanDeclaredFailsLoudly` | ✅ 4/4 绿：抛 `BusinessException`，message 含「bge-m3」「1024」「768」，`hint()` 含 `vec_embedding_` |
+| ② 修后从 768=0 起重跑走查，该表行数不再增长 | 真栈（18088 + 5280） | 见 §11.19.6 |
+| ③ 384/512 的模型行为不变、走查仍 47/47 | `check_flow_walkthrough.py` | 见 §11.19.6 |
+
+**反证**：把 `embed` 里那行 `requireDeclaredDimension(...)` 注释掉 ⇒ `Tests run: 4, Failures: 2`，红的正是两条「该失败」的用例（上游 768 / 本地 512），另外两条「该通过」的仍绿 —— 说明断言钉的是这条核对，不是别的。还原后 4/4 又绿。
+
+### 11.19.6 `#348` 的真栈读数：桩的 768 与登记的 1024（2026-11-17）
+
+**前提两件**：① `scripts/aip-stub.cmd` 改为 `--dim 1024`（真 Ollama 的 `bge-m3` 就是 1024 维；桩默认 768 正是这条 bug 的触发源。`openai_stub.py` 的默认值**没动** —— CI 里 `python tools/openai_stub.py --port 11999` 那些测试自己建的模型按 768 登记，两边一致）；② `vec_embedding_768` 先清空（8 行，全部 `metadata.model_id = 74b51c54…`，即"登记 1024 的模型被写成 768 维"那一批，与 `vec_embedding_1024` 里同一批文档无重叠）。
+
+| 判据 | 读数 |
+|---|---|
+| ① 登记 1024 + 上游返回 768 ⇒ 向量化失败并说明维度 | ✅ **反向做的**（桩已是 1024）：临时把保留模型的 `dimension` 改成 **768** ⇒ 走查 `通过 37/38`，`kb_document.structured.docx` 落到 `EMBEDDING_FAILED`，`fail_reason` 逐字为「向量维度与模型登记不符：模型「bge-m3」（74b51c54-0ebf-487e-bb85-a11e89f3beeb）登记 768 维，这一批返回的是 1024 维」，`fail_hint` 为「向量按维度分表存放（vec_embedding_<维度>），写进另一张表之后这批向量与已有向量永远互相查不到…」。恢复 1024 后走查回到 `47/47`。★ 失败是**用户看得见**的（文档详情里的失败原因），不是只进日志 |
+| ② 修后从 768=0 起重跑走查，该表行数不再增长 | ✅ 清空后连跑两次走查（`.build/walkthrough-348-2.log`、`-3.log`，两次都 `47/47`），`vec_embedding_768` **0 → 0**；修复前同样两次是 **0 → 4 → 8** |
+| ③ 384/512 的模型行为不变、走查仍 47/47 | ✅ `ai_model` 里 `bge-small-zh-v1.5` 仍 16 条全 512、`multilingual-e5-small` 仍 6 条全 384（本地 ONNX 分支不比上游，照旧）；四次走查里三次成功都是 `47/47` |
+
+★ **顺带记一个坑**：后端重启后的**第一次**走查会报「登录没拿到 token —— admin/admin 是否可用？」，第二次就过。原因不是账号，而是脚本在点「登录」之后只等 `2500ms`（`frontend/check_flow_walkthrough.py:386`），而冷启动后的第一次登录（JWT 密钥初始化 + 连接池建立）超过这个时间。判据：**"首跑红、再跑绿"要先怀疑脚本里的定长等待**，别先怀疑后端 —— 这类读数如果当成产品缺陷报出去，就是自己造的一个假账。
+
 
 ## §11.18 `#177` 的读数与口径决定（2026-11-06）
 
