@@ -7998,7 +7998,192 @@ Open objectives（截至本节）：0.9.3 已结项（版本抬到 0.9.3、`CHAN
   但图执行本身仍不带上一轮历史（`WorkflowDebugService` 的 javadoc 已写明这条限制）。
 - 「投诉待办」的分页只取前 50 条（`SUBMITTED` + `PROCESSING` 各 50）：单量上千后要改后端支持多状态一次查。
 
+---
 
+## §11.61 用户第二轮 8 条（2026-11-18 晚）：界面语言、附件链路、上下文预算
 
+### 11.61.1 先分清：这批的 `1.1–1.8` 与 §11.59 不是同一批
 
+用户在同一个晚上发了两轮「1.1–1.8」：
 
+| 批次 | 内容 | 落点 |
+|---|---|---|
+| 第一轮（`§11.59`） | 重排模型、管理菜单分割、审计资源列、操作人选择器、审计专区、编排试用、投诉事件表、运营菜单 | `#352`–`#357`，8–10 天 |
+| **第二轮（本节）** | 工作台回执位置、应用市场「最近使用」、通用问答附件、重排显示、提示词对接、AI 对话节点的死选择器、网关模型健康、unslop 界面 | 本节，当晚完成 |
+
+★ 两批编号相同、内容完全不同。以后有人只写「1.3」时必须问清是哪一批 —— 第一轮的 1.3 是审计资源列，第二轮的 1.3 是通用问答附件。
+这条与 `§11.59.6` 的「开单前先 `gh issue list`」是同一类坑：**编号不是唯一标识，内容才是**。
+
+### 11.61.2 八条逐条落地
+
+| # | 用户说的 | 真因（实测） | 改在哪 |
+|---|---|---|---|
+| 1.1 | 工作台把「近 7 天运行回执」放顶部，重新布局 | 回执原先在 `div.cols` **之后**、四张 stats 卡在中间；四卡与回执信息重复 | `frontend/src/pages/overview/Index.vue`：回执置顶 →（待办条）→ 两栏；**删掉两套 `div.stats.panel`**（消费者「我的提问/对话/赞/踩」、建设者「对话次数/活跃用户/满意度/待处理反馈」），信息并入回执 6 行与待办条；「最近在用」搬进消费者左栏首格 |
+| 1.2 | 应用市场「最近使用」全是「继续对话」 | 「继续对话」是 chip 上**写死的副标题**；且后端 `/conversations?mine=true` 的 `appName` **恒为空串**（没 join 应用名） | 改显示相对时间（`14 天前`）；应用名先按 `appId` 去重、再逐条 `assistantsApi.getAssistant(appId)` 取真名，取不到就 `filter` 掉（否则会拿会话标题冒充应用名，5 条 chip 读起来像 5 个不同应用） |
+| 1.3 | 通用问答附件不参与问答 | **两层**：① `retrieval_enabled` 默认 `false`（`V41`）⇒ 早退零引用；② 会话域只走全文一路，score 是 `ts_rank`（实测 0.0x），被 `0.300` 的**向量**阈值整批滤掉 | `ChatService.retrieve`：有附件时豁免开关；**会话域命中不受准确度阈值约束**（`card.kbId() == null` 为判据）；并新增 `hasAttachments` 只读取值走 `ConversationAttachmentPort` |
+| 1.4 | 重排功能没正确显示 | 链路全通，是**呈现**问题：三态 `el-select` 宽 108px、「重排·跟随」被截断，且「跟随」时**实际生效值看不见** | `Composer.vue` 改 `el-radio-group`（跟随/开/关）+ 右侧灰字「跟随全局 · 开/关」；对话页 `loadGlobalListwise()` 读 `GET /api/v1/retrieval/settings` 的 `listwiseEnabled` |
+| 1.5 | 提示词没对接提示词管理 | 气泡里写死「提示词库接口尚未接入，此处为本地示例」+ 文件内常量 `LOCAL_PROMPTS` —— 而 `promptsApi.listPromptConfigs` **早就存在** | `Composer.vue`：`@show="ensurePrompts"` 懒加载、按 `typeName` 分组、搜索、四态（加载/失败可重试/空库/列表），插入 `callWord` |
+| 1.6 | 编排 AI 对话节点「历史聊天记录」下的选择器选不动 | 它是 `dialogue_type`（NODE/WORKFLOW），**后端 `AiChatNodeExecutor` 一字不读**，契约里也没这个字段；且被塞进 `el-form-item` 的 `#label` 插槽、`type="small"` 是非法 prop | `ai-chat-node/index.vue`：**删掉**该选择器连同默认键与回填（留着一个点了没效果的控件，比留一个死键更糟） |
+| 1.7 | 绑网关后要按模型健康状态决定能否配置 | `probe()` 只调 `GET /v1/models` 判可达与模型数，**没有任何模型级健康** | `ModelService`：新增 `ModelHealth`（`HEALTHY/UNHEALTHY/UNKNOWN`）+ `withHealth(...)`（6 线程并发、8 秒超时、12 秒总预算、只缓存健康 60 秒）；`baseModels` 对 CHAT/EMBEDDING 做**真实轻量探测**（`chatCompletion("ping")` / `probeEmbeddingDimension`）；`create(...)` 对不健康的基础模型直接拒绝并给出去哪查的提示 |
+| 1.8 | unslop 优化界面 | 轻量级：语言与层级问题为主，配色/发丝线/令牌已成系统 | 十个主路径页面逐页过：删掉「设计口径」式文案、实验读数进 `title`、路径只显示文件名、修标题被开关挤成半行等 |
+
+### 11.61.3 unslop 的口径：轻度 slop，改的是语言与层级，不是配色
+
+审计结论：底色/发丝线/圆角/令牌已成系统（`tokens.css` 全 `var(--…)`），**不属于重做级 slop**。真病三类：
+
+1. **内部口径当界面文案**（最重）。实例：模型页顶部整条 `notice info` 讲「思考模式三态而非开关…」；
+   `只读 · 由 app.retrieval.rerank.* 决定`；`LLM listwise 未开（默认关：收益 +5 点但破 B4 延迟门槛）`；
+   知识库建库向导里的 `（13 §6）`；检索页 `实测 +13.9 点 B3（裸检索 57.4% → 生产口径 71.3%）`。
+   ⇒ 处置：**结论留给人看，读数进 `title`**。这不是"删信息"，是"把信息放到它该在的层"。
+2. **密度与层级**：工作台回执 7 行 × 51px 但四张卡重复了同样的数；知识库卡片标题被启停开关挤成半行
+   （根因是 `.kc-head` 里 `<span class="grow" />` 与 `.kc-main` 各 `flex:1` 平分宽度 —— 不是标题太长）。
+3. **装饰面**：对话空态的羽化插画 `frontend/src/components/EmptyArt.vue` **保留** —— `design.md` 明确许可「空态」表面，
+   且有羽化/不透明度实测注释。★ **"看起来像 AI 生成"不等于"该删"**：要按它承担的功能判，不按出身判。
+
+### 11.61.4 顺带查出并修掉的三处静默失败
+
+| 位置 | 症状 | 判据 |
+|---|---|---|
+| `ChatService.retrieve` 开关早退 | 附件已登记成会话域文档，却永远不进问答；界面无任何提示 | 有附件 ⇒ 豁免开关（`1.3` 的第一层） |
+| 阈值过滤 | 会话域给的是 `ts_rank`（0.0x），与向量余弦阈值**不是同一量纲** ⇒ 命中被整批丢弃 | 会话域不受阈值约束；`card.kbId() == null` 为判据，**不许兜底** |
+| `refs` 帧 | 零命中时界面只有"没有引用"，说不出为什么（开关关/取不到身份/取不到密级/阈值滤光/密级闸门/真的没有） | `refs` 帧新增可选 `notice`（见 11.61.5） |
+
+### 11.61.5 两处契约变更（都是**加可选字段**，旧帧形状不变）
+
+1. **`refs` 帧加 `notice?: string`** —— 只在有话要说时出现（`null`/空串时不打这个键，既有帧字节形状不变）。
+   口径钉在构造器：`StreamEvent.References` 的 compact 构造器里 `notice = (notice == null || notice.isBlank()) ? null : notice;`。
+   ★ 这条口径被**改过一次**：最初是「有引用就丢 notice」（"有引用却说为什么没有引用"自相矛盾）；
+   上下文预算闸门落地后，「有引用但省略了 N 条」成了正常形状 ⇒ 改成「空串才丢」。
+2. **`meta` 帧加 `conversationId?: string`** —— 起因：`ChatTurnWriter.resolveOrCreate` 在**没传 `conversationId`** 时
+   续写「最近一条同 (归属人, 应用) 的会话」（`13 §5.2.1`，公开面唯一形状）。集成方要维护会话状态，
+   只能去列表里猜"最新一条" —— 并发下必然猜错。现在这一轮落在哪条会话，由 `meta` 帧直接告诉你。
+
+### 11.61.6 两个新配置项
+
+| 键 | 默认 | 含义与取值口径 |
+|---|---|---|
+| `app.chat.retrieval.reference-budget-chars` | `8000` | 引用正文合计字数上限。超了从**尾部丢整条**（不是每条切一半），至少留一条，省略条数进 `notice`。口径：窗口 token × 0.6 —— 8k 建议 3000、32k 建议 8000、128k 建议 20000；`0`/负数 = 不限制 |
+| `app.segmentation.conversation-attachment-segment-length` | `300` | 会话附件的**目标**段长（它不走向量化，没有向量窗口要照顾）。★ 与 `max-chars` 是两件事，见 11.61.7 |
+
+不用模型 `contextWindow` 自动算的理由写在 `ChatService` 的字段 javadoc 里：那一列对向量模型恒 `null`，
+自动算的失败形态是**悄悄按 0 裁**。
+
+### 11.61.7 那一课：`max-chars` 是**硬上限**，不是目标长度
+
+第一次实现 1.3 的「会话附件段更短」时，我把 `conversation-attachment-max-chars`（1200→500）压的是 `max-chars`。
+真栈立刻炸：切块器按标点切出的段正好 **501 字** > 500 ⇒ `SegmentService` 抛
+「该内容 501 字，超出当前向量模型上限 500 字」⇒ 整篇 `SEGMENT_FAILED`、分段 0 ⇒ 附件**一条都检索不到**。
+
+★ 两个词的差别是全案的关键：
+- `max-chars`（1200）= **单段硬上限**，超了就是失败；
+- `segment-length`（500）= **目标长度**，切块器朝它努力但会按标点边界浮动。
+
+⇒ 想"段更短"要压**目标长度**，压硬上限等于把内容判死刑。
+★ 判据：**凡是"长度/条数/容量"这类可调项，动手前先分清它是"目标"还是"约束"** —— 两者的失败形态完全不同
+（目标配小了只是效果差，约束配小了是整篇失败）。
+
+### 11.61.8 `#358`：附件失败态的误归因（用户点名"很关键"）
+
+症状：上传 1250 字附件后问两次不同问法，都只得到「检索跑完了，但知识库里没有与这个问题相关的内容。」
+而库里那条文档的真实状态是 `SEGMENT_FAILED`、`fail_reason` = 「该内容 501 字，超出当前向量模型上限 500 字。」
+
+这是一句**听起来完全合理、却把用户指向错误方向的真话** —— 他会去改问法、去翻知识库，谁也想不到要重传文件。
+这就是本项目头号病 `silent-failure` 的标准形状。
+
+改法（SPI 最小扩展 + 一处判据集中）：
+
+1. `DocumentStatus.isFailed()`：`SEGMENT_FAILED || EMBEDDING_FAILED`。
+   ★ 为什么要有方法而不是让调用方各写一遍：这个判断的用途是"这份内容现在还能不能被检索到"，
+   两段各有失败态 —— 散着写迟早漏一个（本次就两个都没看）。
+2. `ConversationAttachmentPort.describeAttachmentFailure(conversationId)`：只报两种 ——
+   ① 已进失败态（带 `fail_reason`）；② 还在解析中（`PENDING_PARSE` / `SEGMENTING`）。
+   ★ **`PENDING_EMBEDDING` 刻意不报**：会话域只走全文一路，没向量化的分段照样能被全文命中
+   （实测：状态 `PENDING_EMBEDDING`、6 段、命中 2 条）。把它报成"附件不可用"是另一种假话。
+3. `ChatService.noHitNotice(...)`：零命中时若有附件就优先问附件原因，否则沿用原文案。
+
+判据（写进测试）：**零引用且本会话附件检索不到时，`notice` 必须是附件那句话，且不许出现「知识库里没有」**；
+同时另有一条反证：**附件正常时文案必须还是原来那句**（否则等于把所有零命中都怪到附件上）。
+
+### 11.61.9 读数与反证（本批全部通过）
+
+| 项 | 读数 |
+|---|---|
+| `AppRetrievalParamsTest` | **19/19**（含会话域豁免阈值、附件豁免止于会话域、预算裁剪、误归因两条） |
+| `StreamAssemblerSequenceTest` | **12/12**（含 notice 空串丢弃、meta 带 conversationId） |
+| `ChatTurnWriterDefaultModelTest` | **2/2**（默认模型真的被用；不可用时回退而不是整轮失败） |
+| `ModelHealthProbeTest` | **5/5**（每个模型都真调；不健康的拒绝登记；多模态不探） |
+| `MaxCharsResolverTest` / `DocumentStatusClassificationTest` | **6/6** / **2/2** |
+| `frontend` | `vue-tsc --noEmit` 0 错 · `npm test` **80/80** · `npm run build` 通过 |
+| 真栈实测 | 附件 refs `2` 条、`kbId = null`、`kbName = 会话附件`、正文 281 字；`tokens.prompt` 从 **32 → 223** ⇒ 那两段正文真的进了上下文 |
+
+反证（每条都验证过"坏掉时会红"）：去掉 `ChatService` 两处例外 ⇒ 2 条红；`pendingNotice` 写死 `null` ⇒ 1 条红；
+`onRefs` 第二实参删掉 ⇒ 1 条红；`ModelHealth.UNHEALTHY` 判断改 `if (false)` ⇒ 1 条红；
+预算闸门开头 `return RetrievalOutcome.of(refs)` ⇒ 1 条红；`noHitNotice` 退回 `fallback` ⇒ 1 条红。
+
+### 11.61.10 还没做的
+
+- **模型管理的编辑（`update`）路径没有健康拦截**：只拦了 `create`。若拦，存量里已经配进去、现在调不通的模型
+  会连改备注都不许改 —— 需先定"编辑时是拦还是只提示"。
+- **网关管理凭据 + 持续健康面板**：`1.7` 落地的是"绑定时真实探测"；JAiRouter 的
+  `GET /api/config/instance/{serviceType}`（带 `healthStatus` / `adapterResolved` / `adapterWarning`）需要新增存储列，
+  单独记账。
+- **会话列表 `appName` 恒空**：前端已兜底，根因在后端 `listConversations` 没 join 应用名，该开 Issue。
+- **重排「开了也不生效」**：未配 cross-encoder 时请求成功但重排静默不发生，属同一族静默失败。
+- unslop 尚未过的页面：运营看板 / 运营指标 / 审计记录 / 登录日志 / 错误日志 / 风险提示 / 反馈处理 / 投诉举报 /
+  拦截记录 / 组织机构 / 用户角色 / 基础数据 / 应用模板 / 提示词管理 / 记忆管理 / 安全围栏 / 长期记忆 / 合规备案。
+
+### 11.61.11 把"空库"补成"能用"：提示词 14 条 + 应用模板 8 个
+
+用户原话（`2026-11-19`）：**「清理一下测试的应用配置 然后补充上有价值的」**。
+
+**先清理。** `as_assistant` 原本 26 条，其中 25 条是闸门与评测产物（`S3 重新生成闸门-…`、`A3 失败闸门-*`、
+`B7稳定性-…`、`多跳B4-*`、`__B2判分器v3__`（1562 条消息）、`__DS判分验证__`、`__e2e *`，还有一个名字是
+`??????-200906` 的编码事故产物）。只留 `法务专家`（published，有真实会话）。连带软删：
+这些应用下的 21 个会话 + 18 个"`assistant_id` 指向更早已软删应用"的孤儿会话。
+读数：live 应用 **26 → 1**、live 会话 **45 → 1**、live `USER` 消息 **85 → 1** ⇒ 运营看板"提问数 556"
+是这批测试数据，不是业务量（见 11.61.12）。
+
+- ★ 坑：`docker exec aip-postgres psql … <<'SQL'` **必须带 `-i`**，否则 heredoc 不进容器，命令静默成功却不生效。
+
+**再补种子。** 两条迁移，全部幂等（`not exists` 子查询），因为用户重启后端时 Flyway 会再跑一遍：
+
+| 迁移 | 内容 | 幂等键 |
+|---|---|---|
+| `V100__assistant_prompt_config_seed.sql` | **14 条**提示词：合同法务 4（条款审查清单 / 违约责任对等 / 争议解决评估 / 要点摘要）· 制度咨询 4（条款溯源 / 多制度冲突 / 适用情形 / 流程拆解）· 写作辅助 3（公文润色 / 会议纪要 / 邮件回复）· 通用 3（要点提取 / 术语解释 / 多文档对比） | `role_name` |
+| `V101__assistant_template_seed_more.sql` | **8 个**内置模板：财务报销 / 客服话术 / 研发知识库 / 行政公文 / 销售支持 / 培训考核 / 合规风控 / 指标口径 | `name`（`uq_as_template_name_live` 只对未删行唯一） |
+
+- **不新增提示词类型**：类型权威源在「基础数据 → 提示词类型」（`platform_dict_item`），再建一套就是第二份分类法
+  —— 这也正是 `V47` 当时刻意不写 seed 的理由（库里一份、页面再建一份 = 双真源）。本次只往已有 4 个类型里填正文。
+- **模板不带环境相关引用**：`modelId = null`、`kbIds = []`、`source_app_id = null`，`payload` 用
+  `assistant-bundle@1`（与"从应用导出"同一条反序列化路径）。
+- 每个 `call_word` 都写进"资料里没有就说没有、不许编数字"这一句：提示词的中心不是让它答得更长，是让它**不编**。
+
+### 11.61.12 运营看板：把"人问的"与"脚本跑的"分开 + 顺手修掉 `GET /templates` 的 500
+
+用户原话：**「看板把'人问的'和'脚本批量跑的'混成一个数… 我建议 A + B 一起做（都很小）」**。
+
+**A 来源维度**（`AnalyticsService` + `AnalyticsController` + 前端三态）：新增
+`enum SourceScope { ALL, GENERAL, APPLICATION }`，判据只有 `cv_conversation.assistant_id` ——
+`is null` 是通用问答、`is not null` 是应用。**不靠应用名猜"谁是评测应用"**（名字脆弱，加 `purpose` 列要迁移）。
+`sourceClause` 拼进 4 条 SQL（`overview` 的 questions/activeUsers/tokens/satisfaction）+
+`trend` 1 条 + `quality` 3 条；**`newUserCount` 不跟着切**（账号维度事实，跟着切等于编数据）。
+旧两参方法保留并委托 `ALL`，保护工作台与既有测试。
+
+- ★ 默认档定为 **`ALL`**，不默认 `GENERAL`：默认值一改，同一张看板的读数含义就跟着变了，而看板上没有任何一处
+  写着"这个数只算通用问答"。要切必须由人主动切。
+- 排行**不接** `source`：它本来就按应用分组，切到"仅通用问答"后只剩一行「未绑定」。
+
+**B' 排行两列**（原方案 B 是"标出评测应用"，改成加两列）：`count(distinct c.id)` 给「会话数」，
+再用 `Math.round(calls * 10.0 / conversations) / 10.0` 算「轮/会话」。**277 次 / 1 个会话是脚本，
+277 次 / 120 个会话才是人在用** —— 这一列自己会说话，不需要平台去判定谁是评测应用。
+`轮/会话 ≥ 50` 标 `--color-warn`（不是 danger：它本身不是错误）。
+
+**顺带修掉的既有 500**：`GET /api/v1/templates` 一直是 500 —— `Template.deepCopy` 末尾用
+`Map.copyOf(copy)`，而 **`Map.copyOf` 拒收 null 值**，V90 的 3 个内置模板 `payload` 都带 `"modelId": null`
+⇒ 模板中心**从来就一个模板都看不到**（与本次改动无关）。改成 `Collections.unmodifiableMap(copy)`，
+新增 `TemplateTest.payloadMayContainNullValues`（反证：改回 `Map.copyOf` 恰红 1 条）。
+
+**读数**：`TemplateTest` 5/5 · `AppRetrievalParamsTest` 19/19 · `DocumentStatusClassificationTest` 2/2 ·
+`vue-tsc` 0 错 · `npm test` 80/80 · `npm run build` 通过。真栈复核：`#/analytics` 出现
+`全部来源 | 通用问答 | 应用` 三态与排行五列；`#/assistants/prompts` 显示 **14 条**。
+「会话数 / 轮/会话」两列在旧后端上显示 `—`（字段还没下发），重启后为真值。
