@@ -19,6 +19,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -76,6 +77,14 @@ public class ChatTurnWriter implements ChatTurnStore {
   private final AppBindingPort appBindings;
   private final ChatPort chatModels;
 
+  /**
+   * 通用问答的设置（只为读「默认对话模型」那一格）。
+   *
+   * <p>★ 走 {@code @Autowired(required = false)} 而不是构造器参数：本类的构造器被多个脱离容器的测试直接 new，
+   * 再加一格就要改一串测试；而这一格是<strong>纯增强</strong>（{@code null} 时退回"自动挑一个"，即改造前的行为）。
+   */
+  private ChatPolicyResolver policyResolver;
+
   public ChatTurnWriter(
       ConversationRepository conversations,
       MessageRepository messages,
@@ -85,6 +94,11 @@ public class ChatTurnWriter implements ChatTurnStore {
     this.messages = messages;
     this.appBindings = appBindings;
     this.chatModels = chatModels;
+  }
+
+  @Autowired(required = false)
+  public void setPolicyResolver(ChatPolicyResolver policyResolver) {
+    this.policyResolver = policyResolver;
   }
 
   /**
@@ -649,6 +663,19 @@ public class ChatTurnWriter implements ChatTurnStore {
   private UUID pickModelId(AppBindingPort.AppBinding app) {
     if (app != null && app.modelId() != null) {
       return app.modelId();
+    }
+    // ★★ 通用问答的「默认对话模型」（设置页那一格）。
+    //    这一格此前是个**死配置**：设置页能选、能存、能回显，而全链路没有一处读它 ——
+    //    实测把默认模型改成某个桩模型后，流里的 `model` 帧仍是 deepseek-flash，
+    //    因为这里只认"应用绑定的模型"，通用问答没有应用，于是永远落到 pickChatModel()。
+    //    ★ 先问一句可用性再用：模型可能被卸载/停用，而"配错一次就全线失败"的代价
+    //    远大于"配了没用上"（后者至少还能聊，且日志里说得清为什么没用）。
+    UUID configured = policyResolver == null ? null : policyResolver.defaultModelId();
+    if (configured != null) {
+      if (chatModels.isChatModelUsable(configured)) {
+        return configured;
+      }
+      log.info("通用问答设置的默认对话模型 {} 当前不可用（未加载 / 已停用 / 服务商不可用）⇒ 本轮改挑一个可用的对话模型", configured);
     }
     return chatModels
         .pickChatModel()

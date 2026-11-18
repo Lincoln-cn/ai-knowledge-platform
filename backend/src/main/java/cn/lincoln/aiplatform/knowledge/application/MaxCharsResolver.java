@@ -21,6 +21,9 @@ import org.springframework.transaction.annotation.Transactional;
  *       口径：把模型窗口数当字数上限，近似
  *   <li>否则回落配置 {@code app.segmentation.max-chars}，默认 1200 —— 与前端 mock 的 {@code MODEL_LIMIT} 一致
  * </ol>
+ *
+ * <p>★ 会话附件（{@code kbId == null}）走的是 {@code catch} 那条回落 —— 它没有知识库、也就没有向量模型 ⇒ 上限就是配置的 1200。想让附件段更短，调
+ * <b>段目标长度</b>（{@code app.segmentation.conversation-attachment-segment-length}）， 不是调这里。
  */
 @Component
 public class MaxCharsResolver {
@@ -34,6 +37,18 @@ public class MaxCharsResolver {
    * 字** —— 正是"本地 ONNX 强制 400 字"的出处。 见 `models/README.md` §二 与设计册 `03` 的「单分段字符上限」。
    *
    * <p>⚠️ 这是**保守**估计，不是精确值：精确值取决于分词器对具体文本的切分。 保守的代价是"段稍短"，激进的代价是"尾部不进向量且不报错" —— 后者贵得多。
+   */
+  /**
+   * ★★ 为什么会话附件的"段更短"**不在这里**实现（一次真实回归换来的）：
+   *
+   * <p>{@code maxChars} 在本方法里的语义是「<b>单段硬上限</b>」—— {@code Segmenter.plan} 用它兜住每段长度， {@code
+   * SegmentService} 还用它校验「段长 > 上限 ⇒ 400」。把它压到 500（= 段目标长度）之后， 切块器按标点/重叠切出的那一段常常是 <b>501
+   * 字</b>，于是整篇文档直接落成 {@code SEGMENT_FAILED}「该内容 501 字，超出当前向量模型上限 500 字」，检索侧一条都命中不到 —— 实测于
+   * 2026-11-18（1251 字的附件，分段数 0）。
+   *
+   * <p>⇒ 「会话附件用更短的段」是<b>段目标长度</b>（{@code segmentLength}）的事，落在 {@code
+   * DocumentService#segmentAndPersist} 里按 {@code document.kbId() == null} 选值；
+   * 本类只回答"单段最多能有多长"，不该被当成调参旋钮。
    */
   private static final double CONTEXT_WINDOW_TO_CHARS_RATIO = 0.78;
 

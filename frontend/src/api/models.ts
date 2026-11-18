@@ -87,7 +87,27 @@ export interface BaseModelOption {
   supplier: Supplier
   contextWindow: number | null
   dimension: number | null
+  /**
+   * 后端真调一次得出的健康状态（`#1.7`）。
+   *
+   * ★ 网关的模型清单里**没有**健康字段（JAiRouter 的 `/v1/models` 只有 id/object/created/owned_by/
+   * service_type/adapter），而它最常见的故障恰恰是「清单有、调用全挂」（adapterResolved=false）
+   * —— 只看清单会得到一个绿灯的坏模型。
+   */
+  health: ModelHealth
+  /** 不健康时是上游的原话（别改写成「失败」两个字）；健康或未探测时为 null */
+  healthDetail: string | null
 }
+
+/**
+ * 基础模型的调用健康状态。
+ *
+ * ★ 与 `ModelInfo.status` 是两回事：后者是已注册模型在本平台的**上游加载生命周期**（LOADING/LOADED/
+ * LOAD_FAILED），这里是「这个基础模型调不调得通」。
+ * ★ `UNKNOWN` = 探不了（没有上游地址 / 探测超时 / 多模态不做调用探测）—— **"不知道"不等于"不健康"**，
+ * 不许据此拦住用户。
+ */
+export type ModelHealth = 'HEALTHY' | 'UNHEALTHY' | 'UNKNOWN'
 
 /**
  * 本地 ONNX（进程内向量化）状态。

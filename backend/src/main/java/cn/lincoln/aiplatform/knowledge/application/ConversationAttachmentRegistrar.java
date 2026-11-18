@@ -131,6 +131,24 @@ public class ConversationAttachmentRegistrar implements ConversationAttachmentPo
   }
 
   /**
+   * 这个会话有没有登记过临时附件（{@code ConversationAttachmentPort#hasAttachments}）。
+   *
+   * <p>★ 这里用的是 {@link DocumentRepository#findConversationAttachments} 这条<strong>既有</strong>读法与
+   * {@link #purgeConversationAttachments} 完全同一个来源 —— 不新开一条"数一下有没有"的查询：两份 SQL 判"什么算会话附件"（{@code
+   * scope_kind='CONVERSATION'} + {@code scope_id=会话}）时， 迟早会分叉，而分叉之后没有任何读数能发现
+   * （清理删得掉、检索判不出来，两件事各自都"看起来正常"）。
+   *
+   * <p>★ 只读、无副作用；{@code conversationId == null} 直接 {@code false}（调试轮没有会话）。
+   */
+  @Override
+  public boolean hasAttachments(UUID conversationId) {
+    if (conversationId == null) {
+      return false;
+    }
+    return !repository.findConversationAttachments(conversationId).isEmpty();
+  }
+
+  /**
    * 会话彻底删除的库内侧（{@code #299}）：删该会话全部会话域文档行 + 分段 + 向量，报告"孤儿"上传文件。
    *
    * <p>★ 顺序与 {@code DocumentService.purge} 同源（先分段向量后文档行）—— 反序会留孤儿分段，而孤儿分段在检索里照样命中。

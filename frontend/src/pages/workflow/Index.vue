@@ -558,7 +558,7 @@ function handlePublishFailure(error: unknown) {
         const hint = (error as { hint?: unknown } | null)?.hint
         publishIssueSummary.value = [
             '服务端返回了无法解析的校验明细（这次没有发布）—— 请把下面这段原文反馈给管理员。',
-            errorText(error) ?? '后端复核这张图还不能发布',
+            errorText(error) ?? '这张图还有问题，暂时不能发布',
             typeof hint === 'string' && hint.trim().length > 0 ? hint : ''
         ]
             .filter((line) => line.trim().length > 0)
@@ -636,7 +636,7 @@ async function publicHandle() {
         if (!issues.length) {
             // 后端说没过却说不出是哪条：这本身要可见，不能静默停在"点了没反应"
             publishIssueSummary.value =
-                '后端判定这张图还不能发布，但没有返回具体问题 —— 请再点一次「发布」；仍然如此请联系管理员'
+                '这张图还不能发布，但没拿到具体原因 —— 请再点一次「发布」；仍然如此请联系管理员'
         }
         return
     }

@@ -11,6 +11,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -172,5 +173,67 @@ class StreamAssemblerSequenceTest {
     assertThatThrownBy(() -> assembler.events().add(new StreamEvent.Heartbeat("x")))
         .as("events() 必须给不可变快照 —— 否则调用方能悄悄改写'已经发出去了什么'这份账")
         .isInstanceOf(UnsupportedOperationException.class);
+  }
+
+  /**
+   * 零命中时，{@code refs} 帧<strong>必须带上"为什么没有引用"那句话</strong>。
+   *
+   * <p>★ 反证（它能红的唯一证据）：把 {@code references(List, String)} 里的 {@code this.pendingNotice = ...}
+   * 去掉，本用例变红 —— 而那正是改造前的行为（用户只看到"没有引用"， 与"知识库里确实没有"分不开）。
+   */
+  @Test
+  void emptyRefsCarryTheReasonWhyThereAreNone() {
+    StreamAssembler assembler = assembler();
+    assembler.begin();
+    assembler.references(List.of(), "通用问答没有开启知识库召回");
+    assembler.finish(StreamTerminationPath.COMPLETE, DURATION_MS);
+
+    assertThat(refsEvent(assembler).notice())
+        .as("零命中必须带原因：不然界面只能说'没有引用'，而那句后面有六种成因")
+        .isEqualTo("通用问答没有开启知识库召回");
+  }
+
+  /** 有引用时 notice 一律丢弃 —— "有引用却说为什么没有引用"是一帧自相矛盾的数据。 */
+  @Test
+  void noticeTravelsEvenWhenThereAreRefs() {
+    StreamAssembler assembler = assembler();
+    assembler.begin();
+    assembler.references(refs(), "因长度省略了 2 条");
+    assembler.finish(StreamTerminationPath.COMPLETE, DURATION_MS);
+
+    assertThat(refsEvent(assembler).notice())
+        .as("有引用时也可能有话要说（上下文预算省略了几条），这条说明必须能到前端 —— 静默丢正文，用户只会以为「没检到」")
+        .isEqualTo("因长度省略了 2 条");
+  }
+
+  @Test
+  void blankNoticeIsNotEmitted() {
+    StreamAssembler assembler = assembler();
+    assembler.begin();
+    assembler.references(refs(), "   ");
+    assembler.finish(StreamTerminationPath.COMPLETE, DURATION_MS);
+
+    assertThat(refsEvent(assembler).notice())
+        .as("空串/空白不是「说明」，不能因为空白就下发一个空 notice，让前端渲染一行空字")
+        .isNull();
+  }
+
+  @Test
+  void metaCarriesTheConversationThisTurnLandedOn() {
+    String messageId = UUID.randomUUID().toString();
+    StreamEvent.StreamMetaEvent event =
+        new StreamMeta(messageId, "trace-1", "model-1", "conv-1").toEvent(messageId);
+
+    assertThat(event.conversationId())
+        .as("不带 conversationId 的请求会续写最近一条会话 ⇒ 调用方只能靠 meta 里的这个字段知道自己落到了哪条，" + "去列表里猜最新一条在并发下必然猜错")
+        .isEqualTo("conv-1");
+  }
+
+  private static StreamEvent.References refsEvent(StreamAssembler assembler) {
+    return assembler.events().stream()
+        .filter(StreamEvent.References.class::isInstance)
+        .map(StreamEvent.References.class::cast)
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("没有 refs 帧 —— 零命中也必须发 refs（空列表）"));
   }
 }

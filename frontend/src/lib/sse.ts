@@ -86,8 +86,16 @@ function emit(
       //   刷新后能显示，是因为那时走的是「从库里读 reference_snapshot」另一条路。
       //
       //   ★ 两种形状都接受：裸数组（mock / 早期实现）与包络（当前后端）。
-      const raw = payload as unknown as { refs?: SourceRef[] } | SourceRef[]
-      options.onRefs?.(Array.isArray(raw) ? raw : (raw?.refs ?? []))
+      const raw = payload as unknown as
+        | { refs?: SourceRef[]; notice?: string | null }
+        | SourceRef[]
+      // ★★ `notice` 是可选字段，只在后端零命中且有话可说时出现（"为什么一条引用都没有"）。
+      //   没有它，界面上"没开召回"与"知识库里确实没有"是完全一样的 —— 这正是本项目头号病
+      //   （silent-failure）的形状，收口点在检索侧，这里只负责把它带到界面。
+      options.onRefs?.(
+        Array.isArray(raw) ? raw : (raw?.refs ?? []),
+        Array.isArray(raw) ? null : (raw?.notice ?? null),
+      )
       break
     }
     case 'delta':

@@ -38,6 +38,23 @@ public interface ChatPort {
   Optional<UUID> pickChatModel();
 
   /**
+   * 这个对话模型现在能不能用（{@code kind=CHAT}、已加载、服务商可用）。
+   *
+   * <p>★ 为什么要问一句，而不是"配了就信"：通用问答设置里那一格「默认对话模型」是**人手动填的**， 而模型可以被卸载、被停用、服务商可以下线 ——
+   * 到那时如果照配置硬调，通用问答会为**一次配置失误**全线失败， 报错还是"模型不存在"（与"管理员没点加载"差得很远）。所以调用方先问一句，不能用就退回 {@link
+   * #pickChatModel()}。
+   *
+   * <p>★ 默认实现返回 {@code true}：这是给**测试替身**留的（它们不关心目录状态）。★ 生产实现必须覆盖 —— 否则 {@code
+   * ChatPortConfiguredModelTest} 那条"生产适配器真的会拒绝不可用模型"的断言会红。
+   *
+   * @param modelId 模型 id（{@code null} ⇒ false）
+   * @return 能不能直接调
+   */
+  default boolean isChatModelUsable(UUID modelId) {
+    return true;
+  }
+
+  /**
    * 带**角色边界**的多轮对话（`#168`）：messages 里每条各自成条，不拼接。
    *
    * <p>★ 默认实现把消息拼成一段文本后交给 {@link #complete} —— 这是**兼容兜底**， 只为让既有实现（含测试替身）不必立刻改。★ 但**它丢掉 role 边界**，

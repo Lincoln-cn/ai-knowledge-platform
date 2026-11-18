@@ -10,8 +10,15 @@
     </PageHeader>
 
     <!--
-      最近使用：从会话侧推（listConversations 已有 mine）。
-      只列名字与跳转 —— 会话契约里有 appId / appName，不需要为一条窄带再造一个接口。
+      最近使用：从会话侧推（listConversations 已有 mine），appId 去重后再按 id 补应用名。
+
+      ★ 为什么不能只靠会话列表：那个接口的 `appName` 实测恒为空（见 fetchRecent 的注释），
+      而这一条窄带的主角是"哪个应用"，不是"上次问了什么" —— 所以宁可多打几次
+      `getAssistant`（最多 5 次，并发），也要把真名字拿到。
+
+      ★ 副标题原先是写死的「继续对话」，于是每一条 chip 的文字都一模一样 ——
+      它没有传达任何信息（"点了会继续对话"是 chip 这个形状本身已经说明的事）。
+      现在改成"上次用是什么时候"，这一行才有区分度。
     -->
     <section v-if="recent.length" class="recent">
       <div class="recent-label label">最近使用</div>
@@ -21,10 +28,11 @@
           :key="r.appId"
           type="button"
           class="recent-chip"
+          :title="r.lastTitle ? `上次在聊：${r.lastTitle}` : '继续上次的对话'"
           @click="startChat(r.appId)"
         >
           <span class="recent-name">{{ r.appName }}</span>
-          <span class="recent-go micro">继续对话</span>
+          <span class="recent-go micro">{{ sinceText(r.updatedAt) }}</span>
         </button>
       </div>
     </section>
@@ -181,21 +189,68 @@ const current = ref<Assistant | null>(null)
 const tags = ref<string[]>([])
 
 /* ── 最近使用：从会话侧推（listConversations 已有 mine） ── */
-const recent = ref<Array<{ appId: string; appName: string }>>([])
+interface RecentApp {
+  appId: string
+  appName: string
+  /** 最近一次会话的标题与时间 —— 用来给每条 chip 一个有区分度的副标题 */
+  lastTitle: string
+  updatedAt: string
+}
+const recent = ref<RecentApp[]>([])
+
+/**
+ * 粗粒度相对时间。
+ *
+ * 市场页的副标题只需要回答「多近」，不需要精确到秒 —— 所以只到
+ * 刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前 / 更早这几档。
+ * 时间不可解析时返回「最近用过」而不是「Invalid Date」。
+ */
+const sinceText = (iso: string) => {
+  const t = new Date(iso || '').getTime()
+  if (!Number.isFinite(t)) return '最近用过'
+  const diff = Date.now() - t
+  if (diff < 60_000) return '刚刚'
+  const min = Math.floor(diff / 60_000)
+  if (min < 60) return `${min} 分钟前`
+  const hour = Math.floor(min / 60)
+  if (hour < 24) return `${hour} 小时前`
+  const day = Math.floor(hour / 24)
+  if (day === 1) return '昨天'
+  if (day < 30) return `${day} 天前`
+  return '更早'
+}
 
 const fetchRecent = async () => {
   try {
+    // 会话列表按 updatedAt 倒序 ⇒ 同一个应用的第一条就是它最近的那次会话
     const result = await conversationsApi.listConversations({ mine: true, size: 20 })
-    const seen = new Set<string>()
-    const items: Array<{ appId: string; appName: string }> = []
+    const latest = new Map<string, { lastTitle: string; updatedAt: string }>()
     for (const c of result.list as Conversation[]) {
-      if (c.appId && !seen.has(c.appId)) {
-        seen.add(c.appId)
-        items.push({ appId: c.appId, appName: c.appName })
-      }
-      if (items.length >= 5) break
+      if (!c.appId || latest.has(c.appId)) continue
+      latest.set(c.appId, { lastTitle: c.title || '', updatedAt: c.updatedAt })
+      if (latest.size >= 5) break
     }
-    recent.value = items
+    /*
+     * ★★ 主文本必须是**应用名**，不能用会话标题兜底。
+     *
+     * 实测（2026-11-18）：`GET /conversations?mine=true` 的 `appName` 恒为空串，
+     * 于是先前用 `c.title` 兜底 ⇒ 5 条 chip 分别读作「你是评分员。只输出一个 JSON…」
+     * 「这部法律是什么时候通过、后来又经…」—— 同一批 chip 里其实只有一两个应用，
+     * 却看起来像五个不同的东西；用户点下去进的是哪个应用，完全看不出来。
+     * 会话标题的正确位置是 `title` 属性（"上次在聊什么"），不是主文本。
+     */
+    const items = await Promise.all(
+      [...latest.entries()].map(async ([appId, meta]) => {
+        try {
+          const app = await assistantsApi.getAssistant(appId)
+          return { appId, appName: app.name || '未命名应用', ...meta }
+        } catch {
+          // 应用已删除、或对我已不可见 ⇒ 这条点进去只会 404，不列它
+          return null
+        }
+      }),
+    )
+    recent.value = items.filter((x): x is RecentApp => x !== null)
   } catch {
     // 最近使用是增强信息，失败不影响主列表
     recent.value = []
@@ -446,6 +501,10 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
+  /* ★ 兜底值可能是整段会话标题（会话列表的 appName 恒空时用 title 兜底），
+     不限宽会把这个 chip 拉成一行占满整条 —— 时间就被挤到看不见的位置了。 */
+  max-width: 320px;
+  min-width: 0;
   padding: var(--space-2xs) var(--space-sm);
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-sm);
@@ -473,10 +532,15 @@ onMounted(async () => {
 .recent-name {
   font-weight: 500;
   color: var(--color-ink);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .recent-go {
   color: var(--color-accent);
+  flex: none;
 }
 
 /* ── 卡片网格 ── */

@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.modelcatalog.application;
 
 import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
+import cn.lincoln.aiplatform.modelcatalog.domain.ModelHealth;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelProvider;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelProviderRepository;
@@ -73,6 +74,34 @@ public class ModelService {
             return t;
           });
 
+  /**
+   * 基础模型健康探测的线程池（`#1.7`）。
+   *
+   * <p>★ 为什么不复用 {@link #loadExecutor}：加载是"2 个线程足够"的串行任务，而目录探测是**一次要问 N 个模型**的扇出 —— 塞进 2
+   * 个线程里排队，结果就是"打开新建模型弹窗要转十几秒"，比不探测还糟。
+   */
+  private final ExecutorService healthExecutor =
+      Executors.newFixedThreadPool(
+          6,
+          r -> {
+            Thread t = new Thread(r, "model-health");
+            t.setDaemon(true);
+            return t;
+          });
+
+  /** 单次探测的上游超时。★ 别调大：它决定"打开弹窗"的最坏等待。 */
+  private static final java.time.Duration PROBE_TIMEOUT = java.time.Duration.ofSeconds(8);
+
+  /** 整轮探测的兜底上限：超时的那些标"未探测"，不拖住整个弹窗。 */
+  private static final long PROBE_BUDGET_SECONDS = 12L;
+
+  /** 健康结果的缓存时效。★ 只缓存"健康"：不健康的必须立刻能重试，否则用户刚修好还要等 60 秒。 */
+  private static final long HEALTHY_TTL_MS = 60_000L;
+
+  /** 探测缓存：key = apiBase + "|" + 模型名。 */
+  private final Map<String, CachedHealth> healthCache =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
   private final ModelRepository models;
   private final ModelProviderRepository providers;
   private final ModelUpstreamResolver upstream;
@@ -107,13 +136,18 @@ public class ModelService {
   @PreDestroy
   void shutdown() {
     loadExecutor.shutdown();
+    healthExecutor.shutdown();
     try {
       if (!loadExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
         loadExecutor.shutdownNow();
       }
+      if (!healthExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+        healthExecutor.shutdownNow();
+      }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       loadExecutor.shutdownNow();
+      healthExecutor.shutdownNow();
     }
   }
 
@@ -295,7 +329,8 @@ public class ModelService {
             .filter(o -> kind == null || o.kind() == kind)
             .filter(o -> resolvedSupplier == null || o.supplier() == resolvedSupplier)
             .toList();
-    return new BaseModelCatalog(options, null);
+    // ★ 探测放在过滤之后：只探"这次真会显示在弹窗里的那几个"，不给被筛掉的模型白打请求。
+    return new BaseModelCatalog(withHealth(options, effectiveBase, effectiveKey, authStyle), null);
   }
 
   // ────────────────────────── 注册 CRUD ──────────────────────────
@@ -327,6 +362,9 @@ public class ModelService {
           "使用服务商时不要再传 apiBase / apiKey",
           "地址与密钥只保留在服务商上；模型只引用 providerId，避免同一个连接出现两份真相");
     }
+    // ★ 先确认真调得通，再往下走（`#1.7`）：不健康的模型不许进入模型管理。
+    //   放在所有写操作之前 —— 拒绝时不该留下半条记录。
+    assertBaseModelHealthy(command, provider);
     Supplier supplier =
         provider != null
             ? ModelUpstreamResolver.supplierOf(provider.egress())
@@ -839,8 +877,207 @@ public class ModelService {
         kind,
         resolved,
         kind == ModelKind.CHAT ? m.contextWindow() : null,
-        kind == ModelKind.EMBEDDING ? m.dimension() : null);
+        kind == ModelKind.EMBEDDING ? m.dimension() : null,
+        // ★ 上游清单里没有健康字段（JAiRouter 的 /v1/models 只有 id/object/created/owned_by/service_type/adapter）
+        //   ⇒ 先标"未探测"，由 withHealth 用真调结果替换。绝不在这里猜一个 HEALTHY 出来。
+        ModelHealth.UNKNOWN,
+        null);
   }
+
+  // ────────────────────────── 模型健康探测（#1.7） ──────────────────────────
+
+  /**
+   * 给候选列表逐个填健康状态。
+   *
+   * <p>★ 三条边界，缺一条都会让这个功能变成负担：
+   *
+   * <ol>
+   *   <li><b>没有上游地址 ⇒ 全部 UNKNOWN</b>（"未探测"），而不是 UNHEALTHY —— 本地推理没有 apiBase 是合法配置，
+   *       把"探不了"当成"坏了"会拦住所有本地模型；
+   *   <li><b>只探对话与向量</b>（见 {@link ModelHealth} 的 javadoc）；
+   *   <li><b>有总时限</b>：整轮最多等 {@value #PROBE_BUDGET_SECONDS} 秒，超时的标 UNKNOWN，不拖住弹窗。
+   * </ol>
+   */
+  private List<BaseModelOption> withHealth(
+      List<BaseModelOption> options, String apiBase, String apiKey, AuthStyle authStyle) {
+    if (options.isEmpty()) {
+      return options;
+    }
+    if (apiBase == null || apiBase.isBlank()) {
+      return options.stream()
+          .map(o -> withHealthOf(o, ModelHealth.UNKNOWN, "没有上游地址：无法调用探测"))
+          .toList();
+    }
+
+    List<java.util.concurrent.Callable<BaseModelOption>> tasks =
+        options.stream()
+            .map(
+                option ->
+                    (java.util.concurrent.Callable<BaseModelOption>)
+                        () -> {
+                          ProbeResult probed =
+                              probeHealth(
+                                  option.baseModel(), option.kind(), apiBase, apiKey, authStyle);
+                          BaseModelOption updated =
+                              withHealthOf(option, probed.health(), probed.detail());
+                          // ★ 向量模型实测出来的维度比清单里的更可信 —— 清单经常不给 dimension
+                          if (probed.health() == ModelHealth.HEALTHY
+                              && probed.measuredDimension() != null
+                              && option.dimension() == null) {
+                            updated =
+                                new BaseModelOption(
+                                    updated.baseModel(),
+                                    updated.kind(),
+                                    updated.supplier(),
+                                    updated.contextWindow(),
+                                    probed.measuredDimension(),
+                                    updated.health(),
+                                    updated.healthDetail());
+                          }
+                          return updated;
+                        })
+            .toList();
+
+    List<java.util.concurrent.Future<BaseModelOption>> futures;
+    try {
+      futures = healthExecutor.invokeAll(tasks, PROBE_BUDGET_SECONDS, TimeUnit.SECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      log.warn("模型健康探测被中断，本轮全部标为未探测");
+      return options.stream().map(o -> withHealthOf(o, ModelHealth.UNKNOWN, "探测被中断")).toList();
+    }
+
+    List<BaseModelOption> probed = new java.util.ArrayList<>(options.size());
+    for (int i = 0; i < options.size(); i++) {
+      BaseModelOption option = options.get(i);
+      java.util.concurrent.Future<BaseModelOption> future = futures.get(i);
+      if (future.isCancelled()) {
+        probed.add(
+            withHealthOf(
+                option, ModelHealth.UNKNOWN, "探测超时：上游在 " + PROBE_BUDGET_SECONDS + " 秒内没回"));
+        continue;
+      }
+      try {
+        probed.add(future.get());
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        probed.add(withHealthOf(option, ModelHealth.UNKNOWN, "探测被中断"));
+      } catch (java.util.concurrent.ExecutionException e) {
+        probed.add(
+            withHealthOf(option, ModelHealth.UNKNOWN, "探测失败：" + readableProbeError(e.getCause())));
+      }
+    }
+    return probed;
+  }
+
+  private static BaseModelOption withHealthOf(
+      BaseModelOption option, ModelHealth health, String detail) {
+    return new BaseModelOption(
+        option.baseModel(),
+        option.kind(),
+        option.supplier(),
+        option.contextWindow(),
+        option.dimension(),
+        health,
+        detail);
+  }
+
+  /**
+   * 真发一次请求，看这个模型回不回。
+   *
+   * <p>★ 为什么不用 {@link UpstreamGateway#isModelAvailable}：它只是"listModels 里有这个名字"，
+   * 与"调得通"是两件事；网关里最常见的故障恰恰是"清单有、调用全挂"（JAiRouter 的 {@code adapterResolved=false}）。
+   */
+  private ProbeResult probeHealth(
+      String model, ModelKind kind, String apiBase, String apiKey, AuthStyle authStyle) {
+    if (kind != ModelKind.CHAT && kind != ModelKind.EMBEDDING) {
+      return new ProbeResult(ModelHealth.UNKNOWN, "多模态模型不做调用探测", null);
+    }
+    String cacheKey = apiBase + "|" + model;
+    CachedHealth cached = healthCache.get(cacheKey);
+    if (cached != null
+        && cached.result().health() == ModelHealth.HEALTHY
+        && System.currentTimeMillis() - cached.at() < HEALTHY_TTL_MS) {
+      return cached.result();
+    }
+    try {
+      ProbeResult result;
+      if (kind == ModelKind.EMBEDDING) {
+        // ★ 这里的返回值是 int（不是 Integer）：测不出来时它抛 UpstreamUnreachableException，
+        //   所以不存在"返回 null 表示测不出"这一支 —— 别写一个永远不会走的 null 分支。
+        int dimension = gateway.probeEmbeddingDimension(model, apiBase, apiKey, authStyle);
+        result = new ProbeResult(ModelHealth.HEALTHY, null, dimension);
+      } else {
+        // ★ 用最短的提示词只问一次：这里要的是"通不通"，不是"答得好不好"
+        gateway.chatCompletion(model, apiBase, apiKey, "ping", PROBE_TIMEOUT, authStyle);
+        result = new ProbeResult(ModelHealth.HEALTHY, null, null);
+      }
+      if (result.health() == ModelHealth.HEALTHY) {
+        healthCache.put(cacheKey, new CachedHealth(result, System.currentTimeMillis()));
+      } else {
+        healthCache.remove(cacheKey);
+      }
+      return result;
+    } catch (RuntimeException e) {
+      healthCache.remove(cacheKey);
+      log.info("模型 {} 探测未通过：{}", model, readableProbeError(e));
+      return new ProbeResult(ModelHealth.UNHEALTHY, readableProbeError(e), null);
+    }
+  }
+
+  /** 上游错误只取一段可读文本：太长会把界面撑破，太短（比如只留"400"）又没法排查。 */
+  private static String readableProbeError(Throwable error) {
+    Throwable root = error == null ? null : error;
+    while (root != null && root.getCause() != null && root.getCause() != root) {
+      root = root.getCause();
+    }
+    String message = root == null ? null : root.getMessage();
+    if (message == null || message.isBlank()) {
+      return root == null ? "上游没有给出原因" : root.getClass().getSimpleName();
+    }
+    String trimmed = message.replaceAll("\\s+", " ").trim();
+    return trimmed.length() <= 200 ? trimmed : trimmed.substring(0, 200) + "…";
+  }
+
+  /**
+   * 注册模型前确认它在上游调得通（`#1.7` 的"不健康则不允许配置"）。
+   *
+   * <p>★ 只在 {@link ModelHealth#UNHEALTHY} 时拒绝。探不了（UNKNOWN：没有地址 / 超时 / 多模态）一律放行 ——
+   * 把"不知道"当"不健康"，会让本地模型和离线环境完全无法注册。
+   */
+  private void assertBaseModelHealthy(UpsertCommand command, ModelProvider provider) {
+    if (command.kind() != ModelKind.CHAT && command.kind() != ModelKind.EMBEDDING) {
+      return;
+    }
+    String apiBase;
+    String apiKey;
+    AuthStyle authStyle = AuthStyle.BEARER;
+    if (provider != null) {
+      ResolvedUpstream target = upstream.resolve(provider);
+      apiBase = target.apiBase();
+      apiKey = target.apiKey();
+      authStyle = target.authStyle();
+    } else {
+      apiBase = command.apiBase();
+      apiKey = command.apiKey();
+    }
+    if (apiBase == null || apiBase.isBlank()) {
+      // 本地推理 / 默认上游：探测无从谈起，别拦住
+      return;
+    }
+    ProbeResult result =
+        probeHealth(command.baseModel().trim(), command.kind(), apiBase, apiKey, authStyle);
+    if (result.health() == ModelHealth.UNHEALTHY) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "基础模型「" + command.baseModel().trim() + "」当前不健康：" + result.detail(),
+          "先在网关（或供应商侧）确认这个模型调得通，或换一个健康的模型再配置 —— " + "把一个调不通的模型配进模型管理，只会在用户提问时才失败，而且没人看得出是模型的问题");
+    }
+  }
+
+  private record ProbeResult(ModelHealth health, String detail, Integer measuredDimension) {}
+
+  private record CachedHealth(ProbeResult result, long at) {}
 
   /**
    * 从上游元数据推断模型种类。

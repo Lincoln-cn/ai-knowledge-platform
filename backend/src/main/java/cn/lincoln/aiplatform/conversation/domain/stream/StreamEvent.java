@@ -42,8 +42,15 @@ public sealed interface StreamEvent {
    * @param messageId 本条助手消息 id
    * @param traceId 链路追踪 id
    * @param model 本次使用的模型标识
+   * @param conversationId 这一轮落到哪条会话（{@code null} = 这一档没有会话）
    */
-  record StreamMetaEvent(String messageId, String traceId, String model) implements StreamEvent {
+  record StreamMetaEvent(String messageId, String traceId, String model, String conversationId)
+      implements StreamEvent {
+
+    /** 不带会话 id 的旧形状（既有调用点与"调试卷"这一档）。 */
+    public StreamMetaEvent(String messageId, String traceId, String model) {
+      this(messageId, traceId, model, null);
+    }
 
     public StreamMetaEvent {
       requireText(messageId, "messageId");
@@ -100,11 +107,23 @@ public sealed interface StreamEvent {
    * 那与"检索根本没跑"是两件不同的事（前者可以解释成"知识库里没有"，后者是链路坏了）。 若把空 {@code refs} 吞掉，前端就再也分不出这两者。
    *
    * @param refs 引用列表（可以为空）
+   * @param notice 零命中时给用户看的一句话原因；有引用或没有可说的时为 {@code null}
    */
-  record References(List<SourceRef> refs) implements StreamEvent {
+  record References(List<SourceRef> refs, String notice) implements StreamEvent {
+
+    /** 没有可说的原因时的简写（绝大多数帧走这条：有引用，或原因不在检索侧）。 */
+    public References(List<SourceRef> refs) {
+      this(refs, null);
+    }
 
     public References {
       refs = List.copyOf(refs);
+      // ★ 契约口径：notice 是「关于这批引用的说明」，不是「为什么没有引用」——
+      //   零命中时说成因，有引用时也可以说"因为长度省略了几条"。
+      //   ★ 改动来历：这条原先写成 `refs.isEmpty() ? notice : null`（有引用一律丢弃），
+      //   当时的理由是"有引用却说为什么没有引用"自相矛盾。上下文预算闸门落地后，
+      //   "有引用但有话要说"成了正常形状（省略了 N 条），所以口径扩成"说了就得能到"。
+      notice = (notice == null || notice.isBlank()) ? null : notice;
     }
 
     @Override

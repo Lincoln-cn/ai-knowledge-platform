@@ -55,7 +55,7 @@
           <el-select v-model="baseForm.maxClassification" style="width: 100%" placeholder="选择密级上限">
             <el-option v-for="c in classifications" :key="c.code" :label="c.label" :value="c.code" />
           </el-select>
-          <div class="hint micro">这个库允许装入的最高密级（13 §6）—— 文档密级超过它会被拒绝入库</div>
+          <div class="hint micro">这个库允许装入的最高密级 —— 文档的密级比它高就会被拒绝入库</div>
         </el-form-item>
         <el-form-item label="向量模型" prop="embeddingModelId">
           <el-select v-model="baseForm.embeddingModelId" style="width: 100%" placeholder="选择向量模型">

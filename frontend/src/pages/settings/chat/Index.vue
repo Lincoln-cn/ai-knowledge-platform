@@ -18,10 +18,12 @@
         -->
         <span class="meta-line micro">
           <span>召回 <b>{{ form.retrievalEnabled ? '启用' : '未启用' }}</b></span>
-          <span>空闲 <b>{{ idleSec }}s</b></span>
-          <span>心跳 <b>{{ heartbeatSec }}s</b></span>
-          <span>输出 <b>{{ form.streamEnabled ? '逐字' : '一次性' }}</b></span>
           <span v-if="currentModelName">模型 <b>{{ currentModelName }}</b></span>
+          <span>回答 <b>{{ form.streamEnabled ? '边生成边显示' : '生成完再显示' }}</b></span>
+          <!-- 「心跳 20s」是链路保活参数，运维不关心；这里只说用户会感觉到的那半句 -->
+          <span class="muted" :title="`每 ${heartbeatSec} 秒发一次保活信号`">
+            空闲 {{ idleSec }} 秒后断开
+          </span>
           <span v-if="updatedAtText" class="muted">上次修改 {{ updatedAtText }}</span>
         </span>
       </template>
@@ -60,7 +62,7 @@
               />
             </el-select>
             <div class="field-note micro muted">
-              留空时沿用旧行为（<code>pickChatModel()</code> 挑第一个可用的）。想固定用哪个就在这里选。
+              留空 = 自动用第一个可用的对话模型。想固定用哪一个，就在这里选。
             </div>
           </div>
 
@@ -76,8 +78,8 @@
               placeholder="例如：你是企业知识助理。回答简洁、先给结论；不确定时说明不确定，不要编造。"
             />
             <div class="field-note micro muted">
-              拼在每轮问题之前（<code>ChatMessage.Role</code> 只有 user/assistant，系统口径在工程里由提示词承担）。
-              <b>只对通用问答生效</b> —— 应用有自己的 <code>role_prompt</code>，两者不叠加。
+              每一轮提问都会先垫上这段话，相当于给助手一个固定身份。
+              <b>只对通用问答生效</b> —— 应用有自己的一套设定，两者不叠加。
             </div>
           </div>
         </div>
@@ -99,9 +101,10 @@
         </div>
         <div class="panel-body">
           <div v-if="!form.retrievalEnabled" class="notice warn">
-            之前通用问答在<b>静默做全库检索</b> —— 问「java hello world」时把 Vue 文档、电子书等以
-            <b>0.25 分</b>塞进上下文，模型就照着复述成「创建一个 Vue 单文件组件…」。
-            <b>那是答非所问的直接原因。</b>保持不启用是最安全的默认。
+            召回关着时，通用问答只答复模型自己知道的内容，不去翻知识库。
+            <b>保持关闭是最安全的默认</b> —— 打开之前请先确认库里有相关内容：
+            这个开关一旦默认打开，像「java hello world」这种与库里无关的问题也会被拽进一堆不相干的文档，
+            回答就跟着跑偏了。
           </div>
 
           <div class="form-grid" :class="{ inert: !form.retrievalEnabled }">
@@ -119,7 +122,7 @@
                 <span class="range-value">{{ form.retrievalThreshold.toFixed(2) }}</span>
               </div>
               <div class="field-note micro muted">
-                低于它的命中直接丢弃。★ 实测 0.25 分就是噪声，建议 <b>0.35 ~ 0.5</b>。
+                低于它的命中直接丢掉。太低会把不相关的内容塞给模型，太高会命中不到。建议 <b>0.35 ~ 0.5</b>。
               </div>
             </div>
 

@@ -6,7 +6,7 @@
     >
       <template #actions>
         <span class="meta-line micro">
-          <span>改写 <b>{{ form.queryUnderstandingEnabled ? '开' : '关' }}</b></span>
+          <span>查询理解 <b>{{ form.queryUnderstandingEnabled ? '开' : '关' }}</b></span>
           <span>重排 <b>{{ form.rerankEnabled ? `${form.rerankTopK} 条` : '关' }}</b></span>
           <span>listwise <b>{{ form.listwiseEnabled ? `${form.listwiseTopK} 条` : '关' }}</b></span>
           <span v-if="updatedAtText" class="muted">上次修改 {{ updatedAtText }}</span>
@@ -34,8 +34,11 @@
             <label class="field-label">启用查询理解</label>
             <el-switch v-model="form.queryUnderstandingEnabled" :disabled="!canEdit" />
             <div class="field-note micro muted">
-              关掉之后检索只用原问题这一路。实测它和重排一起贡献了 <b>+13.9 点</b> B3
-              （裸检索 57.4% → 生产口径 71.3%），所以关掉是"省时间换质量"的取舍。
+              先把口语化的问题拆成几条可检索的查询，再分别去库里找。
+              它会多花一次模型调用，换来更准的召回 —— 低配机器上可以关。
+              <span class="muted" title="实测：与重排合计提升引用准确率 13.9 个百分点（裸检索 57.4% → 生产口径 71.3%）">
+                关掉就是「省时间换质量」。
+              </span>
             </div>
           </div>
 
@@ -46,9 +49,12 @@
               :disabled="!canEdit || !form.queryUnderstandingEnabled"
             />
             <div class="field-note micro muted">
-              实测：关掉每条省 <b>1.4s</b>，代价是 B3 <b>−1.1 点</b>、B1 −2.0 点。只在低配机器上关。
+              万一没拆开，就再试一次。
+              <span class="muted" title="实测：关掉每条省 1.4 秒，引用准确率降 1.1 个点、命中率降 2.0 个点">
+                只在低配机器上关。
+              </span>
               <span v-if="!form.queryUnderstandingEnabled" class="warn-text">
-                查询理解关掉时这一项无意义（后端会拒绝这种组合）。
+                查询理解关掉时这一项不起作用
               </span>
             </div>
           </div>
@@ -68,7 +74,10 @@
             <label class="field-label">启用重排</label>
             <el-switch v-model="form.rerankEnabled" :disabled="!canEdit" />
             <div class="field-note micro muted">
-              实测单条约 <b>4.74s</b>（窗口 10）；关掉省这 4.74s，B3 掉约 5 点。
+              把召回的候选段按相关性重新排一遍，最相关的那几段才会进上下文。
+              <span class="muted" title="实测：单条约 4.74 秒（窗口 10）；关掉省下这些时间，引用准确率降约 5 个点">
+                会明显变慢，但引用更准。
+              </span>
             </div>
           </div>
 
@@ -83,8 +92,9 @@
               class="field-control"
             />
             <div class="field-note micro muted">
-              参与重排的候选条数（1–50）。★ 实测窗口 10→20 只把 B1 拉高 5 点、<b>B3 一动不动</b>，
-              但重排耗时从 4.74s 涨到约 9.5s —— 它是"召回那条线"的旋钮，不是"排第一对不对"的旋钮。
+              有多少候选段参与重排（1–50）。调大能提高"找到"的概率，但耗时几乎线性上涨
+              —— <span class="muted" title="实测：窗口 10→20，命中率 +5 个点、引用准确率不变，单条耗时 4.74 秒 → 约 9.5 秒">10 条约 4.7 秒，20 条约 9.5 秒</span>。
+              它决定"能不能捞到"，不决定"排第一的是不是对的"。
             </div>
           </div>
 
@@ -99,8 +109,8 @@
               class="field-control"
             />
             <div class="field-note micro muted">
-              <b>0 = 整个窗口一次算完</b>。默认 5（与历史上"窗口 10 分两批"一致）。批内按最长那条补齐，
-              所以快慢取决于长度分布 —— 写死任何值都是猜，实测四种组合的差在噪声内。
+              <b>0 = 整个窗口一次算完</b>，默认 5。一次送进去的段越多越快，但显存占用也越高；
+              这一项与上面的「窗口」是两件事：窗口决定看多少条，这里决定一次算几条。
             </div>
           </div>
         </div>
@@ -119,7 +129,8 @@
             <label class="field-label">启用 listwise</label>
             <el-switch v-model="form.listwiseEnabled" :disabled="!canEdit" />
             <div class="field-note micro muted">
-              实测 +5.00 点 B3，但<b>单条 3.12s</b>。它是"质量换延迟"里最贵的一档。
+              让模型再读一遍候选段，挑出最能回答的那几条。
+              <span class="muted" title="实测：引用准确率 +5 个点，但单条多 3.12 秒">是「质量换延迟」里最贵的一档</span>。
             </div>
           </div>
 

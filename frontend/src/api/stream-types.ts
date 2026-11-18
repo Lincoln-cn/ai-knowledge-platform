@@ -135,6 +135,16 @@ export interface StreamMeta {
   messageId: string
   traceId: string
   model: string
+  /**
+   * 这一轮落到哪条会话。
+   *
+   * ★ 请求不带 `conversationId` 时，后端**续写"最近一条同 (归属人, 应用) 的会话"**
+   * （那样子，公开面/免登录调用才不会因为每轮新建而"刷新后读不回历史"）。
+   * 所以调用方维护自己的会话状态只能靠这个字段 —— 去列表里猜最新一条，并发下必然猜错。
+   *
+   * 可选：应用调试卷等"没有终端用户会话"的档位不下发。
+   */
+  conversationId?: string
 }
 
 export interface SourceRef {
@@ -211,7 +221,15 @@ export interface ChatStreamOptions {
   rerankListwise?: boolean | null
 
   onMeta?: (meta: StreamMeta) => void
-  onRefs?: (refs: SourceRef[]) => void
+  /**
+   * 引用到达（**零命中也会回调**，`refs` 为空数组）。
+   *
+   * @param refs 引用列表，可能为空
+   * @param notice **零命中时**给用户看的一句话原因（`null` = 后端没有可说的）。
+   *   ★ 有引用时后端一律不发它；没有它，界面分不出"没开召回 / 取不到身份 / 阈值滤光 /
+   *     密级拦下 / 库里确实没有"—— 五件完全不同的事，界面长得一模一样。
+   */
+  onRefs?: (refs: SourceRef[], notice?: string | null) => void
   onDelta?: (chunk: string) => void
   onArtifact?: (artifact: Artifact) => void
   onDone?: (result: StreamDone) => void

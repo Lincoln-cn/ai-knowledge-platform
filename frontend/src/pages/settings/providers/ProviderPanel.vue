@@ -94,9 +94,11 @@
               <dt>密钥</dt>
               <dd>{{ p.hasApiKey ? '已配置（不回显）' : '未配置' }}</dd>
             </div>
-            <div v-if="p.remark">
+            <!-- ★ 备注能写到 100 字，塞在半列里只能看见开头十几个字；
+                 它是给运维看的说明（"这台是本机 Docker"「出站不出网」都在里面），整行给它。 -->
+            <div v-if="p.remark" class="wide">
               <dt>备注</dt>
-              <dd class="ellipsis">{{ p.remark }}</dd>
+              <dd class="ellipsis" :title="p.remark">{{ p.remark }}</dd>
             </div>
           </dl>
 
@@ -710,6 +712,11 @@ onMounted(fetchList)
   display: flex;
   gap: var(--space-xs);
   min-width: 0;
+}
+
+/* 备注这类长文本跨满整行：两列只适合「地址 / 认证 / 密钥」这种短值 */
+.pc-facts div.wide {
+  grid-column: 1 / -1;
 }
 
 .pc-facts dt {

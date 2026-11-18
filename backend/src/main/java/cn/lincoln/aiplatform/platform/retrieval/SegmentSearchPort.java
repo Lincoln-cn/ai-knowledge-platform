@@ -70,6 +70,27 @@ public interface SegmentSearchPort {
   }
 
   /**
+   * 同上，但可以关掉「不传库 = 全部可见」那条兜底（{@code includeAllVisible = false}）。
+   *
+   * <p>★★ 需要它的场景只有一个：通用问答的召回开关关着、而本轮**有会话附件**。 那一刻的正确范围是「显式绑定的库 + 这个会话的会话域」—— **不含**隐式的全部可见库。
+   * 否则"开关关着"就变成了「只要传了附件，就顺带把全库重新打开」：用户关掉召回的理由（噪声污染） 一条都没解决，只是变得更隐蔽（引用列表看起来还挺相关）。
+   *
+   * <p>默认实现委托三参版本 —— 既有实现与测试替身因此完全不受影响。
+   *
+   * @param requested 调用方想检索的库；空 + {@code includeAllVisible=true} = 全部可见的
+   * @param conversationId 本次会话 id；命中测试 / 管理面传 {@code null}
+   * @param includePersonal 是否把个人库计入本次检索域
+   * @param includeAllVisible 空清单是否展开成"全部可见库"
+   */
+  default RetrievalScope retrievalScope(
+      Collection<UUID> requested,
+      UUID conversationId,
+      boolean includePersonal,
+      boolean includeAllVisible) {
+    return retrievalScope(requested, conversationId, includePersonal);
+  }
+
+  /**
    * 每个库用的向量模型 id（库 id → 模型 id）。
    *
    * <p>★ 用途有两件：把问题向量化、以及**决定查哪张维度表**。★ 按库给而不是给一个集合， 是因为「不传 kbIds =

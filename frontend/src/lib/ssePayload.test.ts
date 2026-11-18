@@ -62,3 +62,29 @@ test('chat 请求体仍带三格老字段（回归保护，不是本条的主判
     assert.match(block, new RegExp(`\\b${key}:`), `请求体丢了 ${key}`)
   }
 })
+
+/** 取出 `case 'refs':` 那一段（到下一个 `break`） */
+function refsCaseBlock(): string {
+  const at = source.indexOf("case 'refs':")
+  assert.ok(at >= 0, '没找到 refs 分支 —— 契约的 refs 帧可能被改名了')
+  const end = source.indexOf('break', at)
+  assert.ok(end > at, 'refs 分支没有 break')
+  return source.slice(at, end)
+}
+
+/**
+ * ★ 零命中的原因（`notice`）必须在**传输层**就被带下去。
+ *
+ * 红在哪：把 `options.onRefs?.(...)` 的第二个实参删掉 ⇒ 界面永远拿不到原因，
+ * 于是「没开召回 / 阈值滤光 / 密级拦下 / 库里确实没有」四种情况又长回同一个样子。
+ * 这条与后端 `StreamAssemblerSequenceTest#emptyRefsCarryTheReasonWhyThereAreNone` 是同一判据的两端。
+ */
+test('refs 帧把 notice 交给 onRefs：零命中的原因不许在传输层丢掉', () => {
+  const block = refsCaseBlock()
+  assert.match(block, /raw\?\.notice/, 'refs 分支没读 notice ⇒ 后端给了原因也到不了界面')
+  assert.match(
+    block,
+    /options\.onRefs\?\.\([\s\S]*?Array\.isArray\(raw\)\s*\?\s*null\s*:\s*\(raw\?\.notice/,
+    'onRefs 的第二个实参必须是「裸数组形状 ⇒ null；包络形状 ⇒ notice」'
+  )
+})

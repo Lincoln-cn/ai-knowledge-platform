@@ -168,7 +168,7 @@
           <el-select v-model="form.tools" style="width: 260px">
             <el-option v-for="opt in TOOLS_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
-          <div class="hint micro">MVP 只声明不接口，V1.0 起才成为工具场景的准入依据</div>
+          <div class="hint micro">现在还只是登记，不改变回答方式；以后才作为「这个模型能不能用工具」的依据</div>
         </el-form-item>
       </template>
 
@@ -210,8 +210,10 @@
       <div v-loading="loadingBase" class="catalog-list">
         <button
           v-for="item in filteredBase" :key="item.baseModel"
-          class="catalog-item" :class="{ on: form.baseModel === item.baseModel }"
-          :disabled="isEdit"
+          class="catalog-item"
+          :class="{ on: form.baseModel === item.baseModel, bad: item.health === 'UNHEALTHY' }"
+          :disabled="isEdit || item.health === 'UNHEALTHY'"
+          :title="item.health === 'UNHEALTHY' ? `不健康：${item.healthDetail || '上游拒绝了这个模型'}` : undefined"
           @click="pickBase(item)"
         >
           <div class="ci-main">
@@ -221,7 +223,11 @@
               {{ item.kind === 'EMBEDDING' ? `${item.dimension} 维` : `${item.contextWindow?.toLocaleString()} tokens` }}
             </div>
           </div>
-          <el-tag size="small" effect="plain" :type="item.kind === 'EMBEDDING' ? 'warning' : 'info'">
+          <!-- ★ 不健康就没有"选它"这一步（`#1.7`）：配置一个调不通的模型，只会在用户提问时才失败 -->
+          <el-tag v-if="item.health === 'UNHEALTHY'" size="small" effect="plain" type="danger">
+            不健康
+          </el-tag>
+          <el-tag v-else size="small" effect="plain" :type="item.kind === 'EMBEDDING' ? 'warning' : 'info'">
             {{ item.kind === 'EMBEDDING' ? '向量' : '对话' }}
           </el-tag>
         </button>
@@ -496,6 +502,15 @@ watch(
 )
 
 const pickBase = (item: BaseModelOption) => {
+  // ★ 不健康的模型不许配置（`#1.7`）：按钮已经 disabled，这里再拦一次 —— 否则以后有人
+  //   把 disabled 去掉（或从快捷键走到这条路径），界面就又允许配置一个调不通的模型了。
+  if (item.health === 'UNHEALTHY') {
+    ElMessage.warning({
+      message: `「${item.baseModel}」当前不健康：${item.healthDetail || '上游拒绝了这个模型'}`,
+      duration: 5000
+    })
+    return
+  }
   // 从目录点选 ⇒ 来源是目录；先退出手填模式，避免两套输入打架
   baseManualMode.value = false
   manualBaseName.value = ''
@@ -906,6 +921,23 @@ defineExpose({ load, submit, reset })
 .catalog-item:disabled {
   cursor: not-allowed;
   opacity: 0.65;
+}
+
+/*
+ * ★ 不健康（#1.7）不是「暂时不能选」（那是编辑态），而是「这个模型坏着」——
+ *   两者都用 :disabled，但必须能一眼分辨，否则用户会以为是权限/编辑态的问题。
+ *   ⇒ 用虚线框 + 正常不透明度，把"灰掉"留给编辑态。
+ */
+.catalog-item.bad:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+  border-style: dashed;
+  border-color: color-mix(in oklch, var(--color-danger) 30%, var(--color-rule));
+  background: var(--color-surface);
+}
+
+.catalog-item.bad .ci-name {
+  color: var(--color-muted);
 }
 
 .ci-main {

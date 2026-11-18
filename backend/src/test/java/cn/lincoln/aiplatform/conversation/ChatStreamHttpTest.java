@@ -342,7 +342,13 @@ class ChatStreamHttpTest {
 
     // ★ 帧里的字段名逐字照契约（多一个 / 少一个都不会让前端报错，所以必须在这里钉住）
     String metaData = response.dataOf("meta");
-    assertThat(metaData).contains("\"messageId\"").contains("\"traceId\"").contains("\"model\"");
+    assertThat(metaData)
+        .contains("\"messageId\"")
+        .contains("\"traceId\"")
+        .contains("\"model\"")
+        // ★ 这一轮落到哪条会话要下发给调用方：请求不带 conversationId 时后端会续写最近一条，
+        //   调用方只能靠它维护自己的会话状态（否则只能去列表里猜最新一条）。
+        .contains("\"conversationId\"");
     String refsData = response.dataOf("refs");
     assertThat(refsData)
         .as(

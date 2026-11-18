@@ -103,8 +103,20 @@ public final class ChatStreamWriter {
         payload.put("messageId", meta.messageId());
         payload.put("traceId", meta.traceId());
         payload.put("model", meta.model());
+        // ★ 只在有会话时加这个字段：调试卷等"没有终端用户会话"的档位不多发一个 null，
+        //   既有帧的字节形状因此不变。
+        if (meta.conversationId() != null) {
+          payload.put("conversationId", meta.conversationId());
+        }
       }
-      case StreamEvent.References references -> payload.put("refs", refsOf(references.refs()));
+      case StreamEvent.References references -> {
+        payload.put("refs", refsOf(references.refs()));
+        // ★ 只在零命中且有原因时才加这个字段：既有帧的字节形状因此一个字都没变，
+        //   而"为什么一条引用都没有"从此有处可说（否则它与"知识库里确实没有"不可分）。
+        if (references.notice() != null && !references.notice().isBlank()) {
+          payload.put("notice", references.notice());
+        }
+      }
       case StreamEvent.Delta delta -> payload.put("text", delta.text());
       case StreamEvent.StreamDoneEvent done -> {
         payload.put("status", done.status().name());

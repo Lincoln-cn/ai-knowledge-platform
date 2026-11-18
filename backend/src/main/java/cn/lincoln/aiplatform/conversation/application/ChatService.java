@@ -11,6 +11,7 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.guard.GuardCallContext;
+import cn.lincoln.aiplatform.platform.knowledge.ConversationAttachmentPort;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
@@ -266,6 +267,18 @@ public class ChatService {
    */
   private MemoryExtractionRunner memoryExtraction;
 
+  /**
+   * 会话临时附件的读半边（{@code #187} 判据 4 的补口）—— 只用来问一句"这一轮有没有附件"。
+   *
+   * <p>★ 与 {@link #suggestions} / {@link #memoryRetriever} 同一个形状：<strong>setter 注入且 {@code required
+   * = false}</b>，因为本类的两个构造器被大量"脱离容器"的测试直接调用，再往构造器里加一格就要改七八个文件；而这里 {@code null} 的语义是明确的 ——
+   * "没有附件判定能力" ⇒ 一律按"没有附件"处理，行为与改造前逐字一致。
+   *
+   * <p>★★ 为什么不能从 {@link RetrievalScope} 推：问答链路里 {@code conversationId} <strong>每一轮</strong>都有值， 所以
+   * {@code hasConversationScope()} 恒真，它证明不了"用户传了附件"（见 {@link RetrievalScope} 的类注释）。
+   */
+  private ConversationAttachmentPort conversationAttachments;
+
   /** 并行开关本身（`app.chat.suggestions.parallel`，默认 false）。 */
   @Value("${app.chat.suggestions.parallel:false}")
   private boolean parallelSuggestions;
@@ -283,6 +296,34 @@ public class ChatService {
 
   @Value("${app.chat.retrieval.neighbor-context.after:1}")
   private int neighborAfter;
+
+  /**
+   * 拼进「参考资料」的正文总字数上限（{@code #1.8} 的上下文预算闸门）。
+   *
+   * <p>★★ 为什么必须有这一格：引用正文原先**没有任何上限** —— `topN` 条 × 每条段长（会话附件最多 1200 字）再叠加邻座段落，
+   * 在窗口小的模型上会顶到上下文上限。顶了之后的表现取决于上游（400 或静默截断），界面上只看到「回答失败 / 答一半」， 而**真正的原因（太长）一个字都不显示**。
+   *
+   * <p>★ 取值口径：**按你用的模型窗口调**。粗算法 = 窗口 token × 0.6（给输出、历史、系统提示词留余量）； 8k 窗口建议 3000、32k 建议
+   * 8000（默认）、128k 建议 20000。设 0 或负数 = 不限制（回到改造前行为）。
+   *
+   * <p>★ 为什么不用模型的 `contextWindow` 自动算：那一列对**向量模型恒为 null**，对话模型也常见缺值； 自动算的失败形态是"悄悄按 0
+   * 裁"（比不裁更糟）。配置是显式的，读不到就不限制 —— 与 `MaxCharsResolver` 的 「配置是上限，模型能力是更硬的上限」同一思路，只是这里没有可信的模型值。
+   */
+  @Value("${app.chat.retrieval.reference-budget-chars:8000}")
+  private int referenceBudgetChars = 8000;
+
+  /** 预算不够时，最后一条正文至少留这么多字才有意义（再少就整条丢掉）。 */
+  private static final int MIN_REFERENCE_CLIP_CHARS = 200;
+
+  /**
+   * 给测试用的预算注入口（包可见，与 {@link #setPolicyResolver} 同一形状）。
+   *
+   * <p>★ 生产路径走 {@code @Value}；测试里 {@code @Value} 不生效（脱离容器 new 出来的对象字段是初始化值），
+   * 所以要有一个显式入口，否则"预算裁剪"这条只能用真配置去测。
+   */
+  void setReferenceBudgetChars(int referenceBudgetChars) {
+    this.referenceBudgetChars = referenceBudgetChars;
+  }
 
   /** 猜你想问的异步执行器：它的失败不能影响主回答，所以必须是独立线程（不能用调用方的线程）。 */
   private java.util.concurrent.Executor suggestionExecutor =
@@ -332,6 +373,17 @@ public class ChatService {
   @Autowired(required = false)
   public void setSuggestions(SuggestionService suggestions) {
     this.suggestions = suggestions;
+  }
+
+  /**
+   * 注入会话附件的读半边（只回答"这一轮有没有附件"）。
+   *
+   * <p>★ {@code required = false} 的理由同 {@link #setSuggestions}：脱离容器构造的测试拿不到它， 而"拿不到 ⇒
+   * 当作没有附件"正是改造前的行为，既有断言逐字不变。
+   */
+  @Autowired(required = false)
+  public void setConversationAttachments(ConversationAttachmentPort conversationAttachments) {
+    this.conversationAttachments = conversationAttachments;
   }
 
   /**
@@ -522,7 +574,11 @@ public class ChatService {
     ChatTurnWriter.PreparedTurn turn = turns.prepareDebug(appId, trimmed);
     RetrievalParams retrieval = effectiveRetrieval(turn);
     // ★ 调试链路不写库、没有会话历史 ⇒ 对话上文传 null（#297 的指代消解只在正式链路生效）
-    List<SourceRef> refs = retrieve(trimmed, turn.kbIds(), null, turn.modelId(), retrieval, null);
+    // ★ 应用调试轮不消费 notice：它返回的是结构化结果（refs + 拒答判定），
+    //   没有一条给终端用户看的"原因"通道。留在这里会让调用方以为该显示它。
+    RetrievalOutcome outcome =
+        retrieve(trimmed, turn.kbIds(), null, turn.modelId(), retrieval, null);
+    List<SourceRef> refs = outcome.refs();
 
     if (refuses(refs, retrieval)) {
       log.info("应用 {} 的调试命中零引用且策略为 REFUSE ⇒ 直接回拒答文案", appId);
@@ -640,7 +696,12 @@ public class ChatService {
         new StreamAssembler(
             turn.assistantMessageId().toString(),
             new StreamMeta(
-                turn.assistantMessageId().toString(), turn.traceId(), turn.modelLabel()));
+                turn.assistantMessageId().toString(),
+                turn.traceId(),
+                turn.modelLabel(),
+                // ★ 这一轮落到哪条会话必须告诉调用方（`#1.8`）：不带 conversationId 的请求会
+                //   续写"最近一条同 (人, 应用) 的会话"，集成方只能靠这个字段维护自己的会话状态。
+                turn.conversationId() == null ? null : turn.conversationId().toString()));
     Run run = new Run(assembler, turn.assistantMessageId(), startedAtNanos, sink);
     // ★ 收尾入口在这里交出去（它只指向同一个 Run 的收尾方法，不含任何判据）
     terminalGate.onSecondTerminal(() -> finishTurn(turn, run, run.pathOf(), upstreamFailed(run)));
@@ -685,7 +746,7 @@ public class ChatService {
       RetrievalParams retrieval = effectiveRetrieval(turn);
       // ★ 指代消解的对话上文（#297 判据 3）：最近 2 轮的「问 + 答前 200 字」，
       //   只给查询理解那段提示词用（不进模型 prompt、不额外加 LLM 调用）。
-      List<SourceRef> refs =
+      RetrievalOutcome outcome =
           retrieve(
               question,
               turn.kbIds(),
@@ -693,7 +754,11 @@ public class ChatService {
               turn.modelId(),
               retrieval,
               recentContextOf(turn));
-      run.assembler.references(refs);
+      List<SourceRef> refs = outcome.refs();
+      // ★ notice 只在这一轮零引用时非空 ⇒ 随 refs 帧一起发出去，界面才说得出"为什么没有引用"。
+      //   这是本项目的头号病（silent-failure）在检索链路上的收口点：没有它，用户与管理员
+      //   面对的都是同一句"没有引用"，而这句后面有六种完全不同的成因。
+      run.assembler.references(refs, outcome.notice());
       run.bindRefs(refs);
       run.pump();
       maybeGuessSuggestions(turn, question, refs);
@@ -1215,7 +1280,27 @@ public class ChatService {
    * <p>★ 跳过一条时<strong>不递增</strong> {@code index}：{@code [N]} 必须从 1 连续递增，跳过的空位若占了号，
    * 正文里就会出现一个指向不存在引用的 {@code [N]}。
    */
-  private List<SourceRef> retrieve(
+  /**
+   * 一次检索的结果：命中的引用 + **零命中时给界面看的那句话**。
+   *
+   * <p>★ 为什么需要 {@code notice}：{@code refs} 为空在界面上只有一种样子（"没有引用"）， 而它至少有六种成因 ——
+   * 召回开关关着、取不到身份、取不到出站密级、阈值把命中滤光、 密级闸门全拦下、知识库里确实没有。前五种都是**链路提前结束**，却与"确实没有"长得一模一样，
+   * 这正是本项目头号病（silent-failure）的形状。服务端每条都有 {@code log}，但用户看不到日志。
+   *
+   * <p>★ 只在 {@code refs} 为空时非空：有引用时再说"为什么没有"是噪音。
+   */
+  private record RetrievalOutcome(List<SourceRef> refs, String notice) {
+
+    static RetrievalOutcome empty(String notice) {
+      return new RetrievalOutcome(List.of(), notice);
+    }
+
+    static RetrievalOutcome of(List<SourceRef> refs) {
+      return new RetrievalOutcome(refs, null);
+    }
+  }
+
+  private RetrievalOutcome retrieve(
       String question,
       Collection<UUID> requestedKbIds,
       UUID conversationId,
@@ -1231,12 +1316,31 @@ public class ChatService {
     //
     //   ★ 只在"调用方没指定库"（通用问答 / 应用未绑库）时看这个开关：
     //     应用显式绑了库，那是用户自己配的范围，不该被通用问答的开关关掉。
+    //
+    //   ★★ 但**会话附件**是这条早退的第二个例外（`#187` 判据 4 收口）：开关管的是"要不要隐式搜全部可见库"，
+    //     不该顺带把用户刚传上来的那一份关掉。用户传了附件、问了"附件里写了什么"，界面却一条引用都没有，
+    //     看起来与"附件里确实没写"一模一样 —— silent-failure 的形状。所以：
+    //       有附件 ⇒ 即使 retrieval_enabled=false 也继续（此时范围里只剩会话域与显式绑定的库）。
+    boolean hasAttachments =
+        conversationAttachments != null && conversationAttachments.hasAttachments(conversationId);
     if ((requestedKbIds == null || requestedKbIds.isEmpty())
+        && !hasAttachments
         && policyResolver != null
         && !policyResolver.retrievalEnabled()) {
-      log.info("通用问答未启用召回（app.retrieval 的 retrieval_enabled=false）⇒ 本轮零引用");
-      return List.of();
+      log.info("通用问答未启用召回（app.retrieval 的 retrieval_enabled=false）且本轮没有会话附件 ⇒ 本轮零引用");
+      return RetrievalOutcome.empty(
+          "通用问答没有开启知识库召回，本轮不会检索知识库，也不会带引用。（管理员可在「设置 → 通用问答」里打开；" + "本轮没有附件，所以也没有会话内容可检索。）");
     }
+    // ★★ 附件豁免**只放开会话域**，不放开"全部可见库"。
+    //   实测（2026-11-18 真栈，桩网关）：召回开关关着、只传了一个附件，引用列表里却混进了
+    //   企业会计准则 / Vue 文档 / 信息化建设工作报告 —— 它们来自隐式的全库检索，
+    //   正是用户当初关掉这个开关要避免的东西。而"引用看起来还挺相关"比"明显跑题"更难发现。
+    //   ⇒ 这一刻的检索范围按定义 = 显式绑定的库 + 这个会话的会话域（`includeAllVisible = false`）。
+    boolean attachmentsOnly =
+        hasAttachments
+            && (requestedKbIds == null || requestedKbIds.isEmpty())
+            && policyResolver != null
+            && !policyResolver.retrievalEnabled();
     // ★ 配置了范围且调用方没指定 ⇒ 用配置的范围（否则仍是"全部可见库"）
     Collection<UUID> effectiveKbIds = requestedKbIds;
     if ((effectiveKbIds == null || effectiveKbIds.isEmpty())
@@ -1263,7 +1367,10 @@ public class ChatService {
       //   （旧的 `new TextQuery(问题, kbIds, limit)` 走的是 RetrievalScope.shared ⇒ 会话域那一支恒假）。
       // ★ 为什么用 retrievalScope 而不是 visibleKbIds：三支的绑定值来自三个不同的地方，其中 ownerId
       //   只能从当前范围取 —— 让装配点自己拼等于把"用谁的身份检索会话附件"变成一个可以填错的入参。
-      RetrievalScope scope = segmentSearch.retrievalScope(effectiveKbIds, conversationId, false);
+      RetrievalScope scope =
+          attachmentsOnly
+              ? segmentSearch.retrievalScope(effectiveKbIds, conversationId, false, false)
+              : segmentSearch.retrievalScope(effectiveKbIds, conversationId, false);
       if (scope.isEmpty()) {
         // ★★ 这一条早退的留痕是补上的（第 17 周）：它此前**一条日志都没有** ⇒ 与"库里确实没有相关内容"
         //   在读数上完全一样。而它的成因有两个形状，处置相同、含义完全不同：
@@ -1283,13 +1390,19 @@ public class ChatService {
               me,
               requestedKbIds == null ? 0 : requestedKbIds.size());
         }
-        return List.of();
+        // ★ 两种形状给界面的说法必须不同：一个是"你没有库"（可自助解决：去建库/申请授权），
+        //   另一个是"认不出你是谁"（自助解决不了，要找人）。合成一句就等于把人往错的方向指。
+        return me == null
+            ? RetrievalOutcome.empty("取不到你的身份信息，无法判定能看哪些知识库，本轮按零引用处理。" + "请刷新页面重试；如果一直如此，请联系管理员。")
+            : RetrievalOutcome.empty(
+                "你没有任何可见的知识库范围，本轮没有可检索的内容。" + "可以先去「知识库」建一个，或在「应用」里把应用绑定到指定的库。");
       }
       ClassificationLevel ceiling = accessScope.currentScope().maxClassification();
       if (ceiling == null) {
         // 取不到身份（fail-closed）：一条都不给，而不是"给全部"。★ 必须留痕 —— 它与"零命中"在返回值上不可分
         log.warn("取不到身份（密级上限为 null），本轮按 fail-closed 处置：一条引用都不给");
-        return List.of();
+        return RetrievalOutcome.empty(
+            "取不到你的密级上限，无法判定哪些内容能给你看，本轮按零引用处理（这是保护性的，不是检索没做）。" + "请刷新页面重试；如果一直如此，请联系管理员。");
       }
       // ★★ 出站闸门（#72）：**读得到**不等于**发得出**。
       //   上面那条是"我能读多密"（身份侧的 ceiling）；这一条是"这个模型允许处理多密"（出口侧）。
@@ -1302,7 +1415,8 @@ public class ChatService {
             "取不到模型 {} 的出站密级上限（#72），本轮按 fail-closed 处置：一条引用都不给。"
                 + "★ 这是异常形状（模型不存在/供应商取值不合法），不是『没有限制』",
             modelId);
-        return List.of();
+        return RetrievalOutcome.empty(
+            "取不到当前模型允许处理的密级上限，无法判定哪些内容能发出去，本轮按零引用处理（这是保护性的）。" + "请管理员检查模型的供应商配置是否完整。");
       }
       List<SegmentSearchPort.Scored> hits;
       int fetchLimit = retrievalLimit * RETRIEVAL_OVERFETCH;
@@ -1365,38 +1479,97 @@ public class ChatService {
       //   判定失败 / 没有下一查询 / 下一轮零命中，全部用已有结果继续（`§3.4.6`）。
       hits = withMultiHop(question, scope, fetchLimit, retrieval, hits);
       if (hits.isEmpty()) {
-        return List.of();
+        // ★ 检索确实跑了、也确实一条都没命中 —— 与"没检索"必须能分开，否则用户没法判断
+        //   该去补知识库，还是该去查开关/权限。
+        return RetrievalOutcome.empty("检索跑完了，但知识库里没有与这个问题相关的内容。");
+      }
+      // ★★ 阈值过滤的**顺序**在 `#187` 收口时改过，两步各有理由：
+      //   ① 先收候选（去重 + 超采样上限），**不**在这一步做阈值；
+      //   ② 先 load 卡片，再按"这条属于哪个域"决定阈值要不要对它生效。
+      //   ★ 顺序原来是"边收边按阈值丢、丢完再 load"，那样在过滤那一刻**不知道**这条是不是会话域
+      //     （`Scored` 只有 `segmentId` 与 `score`，不带域标记），于是只能对所有命中一律用向量阈值 ——
+      //     代价见下面那段。
+      List<UUID> candidates = new ArrayList<>(Math.min(hits.size(), fetchLimit));
+      Map<UUID, Double> scoreOfCandidate = new LinkedHashMap<>();
+      for (SegmentSearchPort.Scored hit : hits) {
+        if (candidates.size() >= fetchLimit) {
+          break;
+        }
+        // ★ 去重（同一分段可能被多个词元命中）
+        if (scoreOfCandidate.containsKey(hit.segmentId())) {
+          continue;
+        }
+        candidates.add(hit.segmentId());
+        scoreOfCandidate.put(hit.segmentId(), hit.score());
+      }
+      if (candidates.isEmpty()) {
+        // 走到这里只有一种可能：hits 里有分段 id 但全部重复（去重后为空）。仍按"没有相关内容"处置。
+        return RetrievalOutcome.empty("检索跑完了，但知识库里没有与这个问题相关的内容。");
+      }
+      cards = new LinkedHashMap<>();
+      for (SegmentSearchPort.Card card : segmentSearch.load(candidates)) {
+        cards.put(card.segmentId(), card);
       }
       ordered = new ArrayList<>(retrievalLimit);
       scoreById = new LinkedHashMap<>();
-      for (SegmentSearchPort.Scored hit : hits) {
+      int droppedByThreshold = 0;
+      int conversationScopedKept = 0;
+      for (UUID candidateId : candidates) {
         if (ordered.size() >= retrievalLimit) {
           break;
         }
+        SegmentSearchPort.Card candidateCard = cards.get(candidateId);
+        // ★★ 会话域的判据就是 `kbId == null`（会话域没有库行）—— 与下面组装那段**同一个判据**，
+        //   而且**不许兜底**：兜一个假 kbId 就把"知识库引用 vs 会话域引用"这条结构性判据抹掉了。
+        boolean conversationScoped = candidateCard != null && candidateCard.kbId() == null;
+        double score = scoreOfCandidate.getOrDefault(candidateId, 0.0);
         // ★★ 准确度阈值：低于下限的命中直接丢弃。
         //
         //   实测那个答非所问的案例里，5 条命中**全是 0.25 分** —— 那是"沾一点边就算命中"的分数，
         //   而模型会把它们当事实复述。阈值是这里唯一的拦截点：它必须在**进 prompt 之前**生效，
         //   否则"低分引用"仍会污染上下文（界面上的引用列表反而不是主要危害）。
-        if (hit.score() < threshold) {
+        //
+        //   ★★ 例外：**会话域不吃这个阈值**。会话域只走全文一路
+        //   （`RetrievalScope#CONVERSATION_SCOPE_IN_VECTOR_PATH = false`），它给的是 `ts_rank`
+        //   （实测 0.0x），与向量余弦的阈值**不是同一个量纲**。拿通用问答那个 0.300 去卡它 ⇒
+        //   用户传的附件"分段确实在库里、界面却一条引用都没有"，而且没有任何读数说明原因
+        //   （`ConversationAttachmentRetrievalHttpTest` 的夹具注释就写着：那个测试必须把阈值显式调到 0 才跑得通）。
+        if (!conversationScoped && score < threshold) {
+          droppedByThreshold++;
           continue;
         }
-        // ★ 去重（同一分段可能被多个词元命中）
-        if (!scoreById.containsKey(hit.segmentId())) {
-          ordered.add(hit.segmentId());
-          scoreById.put(hit.segmentId(), hit.score());
+        if (conversationScoped) {
+          conversationScopedKept++;
         }
+        ordered.add(candidateId);
+        scoreById.put(candidateId, score);
+      }
+      if (conversationScopedKept > 0) {
+        // ★ 留痕（不许静默）：会话域留了几条、阈值另外丢了几条 —— "附件到底参与了没有"要能从日志读出来
+        log.info(
+            "本轮会话域命中 {} 条（不受准确度阈值 {} 约束），阈值另外丢弃共用库域命中 {} 条",
+            conversationScopedKept,
+            threshold,
+            droppedByThreshold);
       }
       if (ordered.isEmpty()) {
-        return List.of();
-      }
-      cards = new LinkedHashMap<>();
-      for (SegmentSearchPort.Card card : segmentSearch.load(ordered)) {
-        cards.put(card.segmentId(), card);
+        // ★★ 这里最容易被误读成"库里没有"：其实命中了 N 条，只是分数不够被判掉。
+        //   把阈值与丢弃条数说出来，用户才知道该补文档（去找更相关的内容）还是该调阈值（管理员）。
+        return RetrievalOutcome.empty(
+            droppedByThreshold > 0
+                ? "命中的分段都低于准确度阈值（"
+                    + threshold
+                    + "），已全部丢弃 —— 本轮命中 "
+                    + hits.size()
+                    + " 条，丢弃 "
+                    + droppedByThreshold
+                    + " 条。知识库里可能只有沾边的内容，也可能阈值定得偏高（管理员可在「设置 → 通用问答」里调）。"
+                : "命中的分段都没能进入本轮引用（可能刚被删除），可以重试一次。");
       }
     } catch (RuntimeException failure) {
       log.warn("检索失败，本轮以'零引用'继续：{}", failure.getMessage());
-      return List.of();
+      return RetrievalOutcome.empty(
+          "这一轮的检索过程出错了，按零引用继续（不影响回答本身）。服务端日志里有具体原因，" + "若反复出现请把时间点告诉管理员。");
     }
 
     // ── 第二类失败的作用域：逐条组装（★ 单条装不成 ⇒ 跳过这一条 + 计数，其余照常返回）──
@@ -1478,7 +1651,104 @@ public class ChatService {
           refs.size());
     }
     log.info("本轮检索到 {} 条引用（上限 {}）", refs.size(), retrievalLimit);
-    return refs;
+    if (refs.isEmpty()) {
+      // ★★ 走到这里 = "检索到了、阈值也过了，但一条都没装成"。两种成因在界面上同样是一片空白，
+      //   但处置方向相反：密级被拦是**闸门在正常工作**（要么换本地模型、要么别问这一份），
+      //   装不成是**数据坏了**（要修）。所以分开说，且都要说清"不是知识库里没有"。
+      if (egressBlocked > 0 && skipped > 0) {
+        return RetrievalOutcome.empty(
+            "命中的 "
+                + egressBlocked
+                + " 条内容密级高于当前模型允许处理的上限、另有 "
+                + skipped
+                + " 条取不到可展示的信息，本轮没有可用引用。"
+                + "可以换一个允许处理更高密级的模型再问一次。");
+      }
+      if (egressBlocked > 0) {
+        return RetrievalOutcome.empty(
+            "命中的内容密级高于当前模型允许处理的上限，已全部拦下（这是密级闸门在正常工作，不是知识库里没有）。" + "可以换一个允许处理更高密级的模型再问一次。");
+      }
+      return RetrievalOutcome.empty("命中的分段都取不到可展示的信息（可能刚被删除或还在解析中），本轮没有可用引用；可以稍后重试。");
+    }
+    return applyReferenceBudget(refs);
+  }
+
+  /**
+   * 按字数预算裁剪引用正文，超出的部分**说出来**而不是静默丢掉。
+   *
+   * <p>★ 三条判据：
+   *
+   * <ol>
+   *   <li><b>至少留一条</b>：一条都留不下时退回"原样返回"，让上游自己去处理长度 —— 「预算配得太小」是配置问题， 不该表现为「检索不到东西」；
+   *   <li><b>从尾部丢整条，而不是把每条都切一半</b>：前半条正文往往还是完整的语义单元，切成两半的两条比一条完整的更难读；
+   *   <li><b>被省略的条数必须进 notice</b>：用户看到界面只有 2 条引用、却不知道自己问的那份文档被省掉了， 会以为是"没检到" —— 这正是本项目最忌讳的静默劣化。
+   * </ol>
+   */
+  private RetrievalOutcome applyReferenceBudget(List<SourceRef> refs) {
+    if (referenceBudgetChars <= 0 || refs.isEmpty()) {
+      return RetrievalOutcome.of(refs);
+    }
+    int total = 0;
+    for (SourceRef ref : refs) {
+      total += ref.full() == null ? 0 : ref.full().length();
+    }
+    if (total <= referenceBudgetChars) {
+      return RetrievalOutcome.of(refs);
+    }
+
+    List<SourceRef> kept = new ArrayList<>();
+    int used = 0;
+    for (SourceRef ref : refs) {
+      String full = ref.full() == null ? "" : ref.full();
+      int left = referenceBudgetChars - used;
+      if (full.length() <= left) {
+        kept.add(ref);
+        used += full.length();
+        continue;
+      }
+      // 塞不下了：还有 200 字以上的空间就留下一条截断版，否则整条不取
+      if (left >= MIN_REFERENCE_CLIP_CHARS) {
+        kept.add(withFull(ref, full.substring(0, left) + "…（正文过长，此处已截断）"));
+      }
+      break;
+    }
+    if (kept.isEmpty()) {
+      // 预算比第一条还小 ⇒ 不做裁剪，交回原样：这是配置错误，不是检索结果的问题
+      return RetrievalOutcome.of(refs);
+    }
+
+    int dropped = refs.size() - kept.size();
+    log.info(
+        "引用正文超出预算（{} 字上限，实际 {} 字）⇒ 保留 {} 条、省略 {} 条",
+        referenceBudgetChars,
+        total,
+        kept.size(),
+        dropped);
+    return new RetrievalOutcome(
+        kept,
+        "本轮检索到 "
+            + refs.size()
+            + " 条，但正文合计超过上下文预算（"
+            + referenceBudgetChars
+            + " 字），已省略 "
+            + dropped
+            + " 条。提问更具体一些，或调大「通用问答 → 引用正文预算」。");
+  }
+
+  /** 复制一条引用、只换正文（其余字段原样）—— 编号与相似度都还属于原来那一条。 */
+  private SourceRef withFull(SourceRef ref, String full) {
+    return new SourceRef(
+        ref.index(),
+        ref.title(),
+        ref.docName(),
+        ref.kbName(),
+        ref.score(),
+        ref.rank(),
+        full,
+        ref.segmentId(),
+        ref.documentId(),
+        ref.kbId(),
+        ref.classification());
   }
 
   /**

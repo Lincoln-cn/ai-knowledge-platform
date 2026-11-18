@@ -36,24 +36,41 @@
             @change="onPickFiles"
           />
         </label>
-        <el-popover placement="top-start" :width="320" trigger="click">
+        <el-popover placement="top-start" :width="340" trigger="click" @show="ensurePrompts">
           <template #reference>
             <button type="button" class="tool" :disabled="disabled">
               <el-icon><MagicStick /></el-icon><span>提示词</span>
             </button>
           </template>
           <div class="prompts">
-            <div class="micro muted">点击插入到输入框（提示词库接口尚未接入，此处为本地示例）</div>
-            <button
-              v-for="p in LOCAL_PROMPTS"
-              :key="p.title"
-              type="button"
-              class="prompt-item"
-              @click="insertPrompt(p.body)"
-            >
-              <div class="prompt-title">{{ p.title }}</div>
-              <div class="prompt-body micro muted">{{ p.body }}</div>
-            </button>
+            <el-input
+              v-model="promptKeyword"
+              size="small"
+              placeholder="搜索角色名称或提示词"
+              clearable
+            />
+            <div v-if="promptLoading" class="micro muted prompt-state">正在读取提示词库…</div>
+            <div v-else-if="promptError" class="micro muted prompt-state">
+              {{ promptError }}
+              <button type="button" class="prompt-retry" @click="loadPrompts">重试</button>
+            </div>
+            <div v-else-if="!promptGroups.length" class="micro muted prompt-state">
+              {{ promptKeyword.trim() ? '没有匹配的提示词' : '提示词库里还没有可用的提示词' }}
+            </div>
+            <div v-for="group in promptGroups" :key="group.typeName" class="prompt-group">
+              <div class="prompt-group-name micro">{{ group.typeName }}</div>
+              <button
+                v-for="p in group.items"
+                :key="p.id"
+                type="button"
+                class="prompt-item"
+                :title="p.callWord"
+                @click="insertPrompt(p.callWord)"
+              >
+                <div class="prompt-title">{{ p.icon }} {{ p.roleName }}</div>
+                <div class="prompt-body micro muted">{{ p.callWord }}</div>
+              </button>
+            </div>
           </div>
         </el-popover>
         <label v-if="showThinking" class="tool check">
@@ -61,21 +78,22 @@
           <span>思考模式</span>
         </label>
         <!--
-          ★ 请求级重排开关（三态）。用 select 而不是 checkbox：`跟随 / 开 / 关` 是三个决定，
+          ★ 请求级重排开关（三态）。用三态而不是 checkbox：`跟随 / 开 / 关` 是三个决定，
           而 checkbox 只有两个 —— 把"跟随"塞进 unchecked 会让用户没法表达"这次强制关"。
+
+          ★ 原先是一个 108px 宽的 `el-select`，三个选项文字被截断，选中了也看不出"到底生效了没有"
+          （「跟随」时实际生效值来自应用 / 全局配置，界面上完全不可见）。改成三态分段按钮 +
+          右侧一行「当前生效」读数：选「跟随」时必须把跟随到的那个值写出来。
         -->
-        <el-select
-          v-model="rerankListwise"
-          class="tool rerank"
-          size="small"
-          :disabled="disabled"
-          style="width: 108px"
-          title="列表重排（LLM listwise）：走交叉编码器把候选段重排一遍，质量更准但每题慢 2～8 秒"
-        >
-          <el-option :value="null" label="重排·跟随" />
-          <el-option :value="true" label="重排·开" />
-          <el-option :value="false" label="重排·关" />
-        </el-select>
+        <div class="tool rerank">
+          <span class="rerank-name">重排</span>
+          <el-radio-group v-model="rerankChoice" size="small" :disabled="disabled">
+            <el-radio-button value="auto">跟随</el-radio-button>
+            <el-radio-button value="on">开</el-radio-button>
+            <el-radio-button value="off">关</el-radio-button>
+          </el-radio-group>
+          <span class="micro muted rerank-state" :title="rerankHint">{{ rerankStateText }}</span>
+        </div>
       </div>
 
       <div class="right">
@@ -103,7 +121,8 @@
 import { computed, ref, watch } from 'vue'
 import { MagicStick, Paperclip } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { conversationsApi } from '@/api'
+import { conversationsApi, promptsApi } from '@/api'
+import type { PromptConfig } from '@/api/prompts'
 import {
   errText,
   formatBytes,
@@ -118,6 +137,8 @@ const props = defineProps<{
   thinking?: boolean
   /** 请求级重排开关三态：null = 跟随应用 / 全局 */
   rerankListwise?: boolean | null
+  /** 平台全局的重排（LLM listwise）生效值；null = 读不到（不编一个值出来） */
+  globalListwise?: boolean | null
 }>()
 
 const emit = defineEmits<{
@@ -142,6 +163,37 @@ watch(
   }
 )
 
+/**
+ * 三态在界面上的表示。
+ *
+ * `el-radio-button` 用 `null` 当选中值会和"未选中"混在一起，所以内部用
+ * `'auto' | 'on' | 'off'` 三个字符串，出门再翻译回 `boolean | null`。
+ */
+const rerankChoice = computed<'auto' | 'on' | 'off'>({
+  get: () => (rerankListwise.value === true ? 'on' : rerankListwise.value === false ? 'off' : 'auto'),
+  set: (v) => {
+    rerankListwise.value = v === 'on' ? true : v === 'off' ? false : null
+  }
+})
+
+/**
+ * 「跟随」时到底跟随到了什么 —— 这是 1.4 的核心：三态开关本身没问题，
+ * 问题是用户选了「跟随」之后界面上没有任何东西说清"现在到底开没开"。
+ */
+const rerankStateText = computed(() => {
+  if (rerankListwise.value === true) return '本次开启'
+  if (rerankListwise.value === false) return '本次关闭'
+  if (props.globalListwise === true) return '跟随全局 · 开'
+  if (props.globalListwise === false) return '跟随全局 · 关'
+  return '跟随全局'
+})
+
+const rerankHint = computed(() =>
+  props.globalListwise === null || props.globalListwise === undefined
+    ? '列表重排（LLM listwise）：走交叉编码器把候选段重排一遍，质量更准但每题慢 2～8 秒。当前「跟随」的目标值读不到（全局设置接口不可用）'
+    : `列表重排（LLM listwise）：走交叉编码器把候选段重排一遍，质量更准但每题慢 2～8 秒。全局当前${props.globalListwise ? '开' : '关'}`
+)
+
 /** 上传中或已失败的附件不允许发出去 —— 发送时只带真实 id */
 const hasBlockingAtt = computed(() =>
   attachments.value.some((a) => a.status === 'uploading' || a.status === 'failed')
@@ -155,21 +207,63 @@ watch(
   }
 )
 
-/** 本地示例提示词。契约里暂无提示词库列表接口，见报告「契约缺口」 */
-const LOCAL_PROMPTS = [
-  {
-    title: '风险清单',
-    body: '请逐条列出风险点，标注依据编号，并给出可执行的修改建议。'
-  },
-  {
-    title: '对比摘要',
-    body: '请对比两段内容的差异，并用表格总结。'
-  },
-  {
-    title: '通俗解释',
-    body: '请用非技术人员能听懂的语言解释以下概念，并举一个工作中的例子。'
+/**
+ * 提示词库列表（真实数据）。
+ *
+ * ★ 这里原先是一份写死的 `LOCAL_PROMPTS` 三条常量，气泡上也明目张胆写着
+ * 「提示词库接口尚未接入，此处为本地示例」—— 那句话是把接口缺口暴露给用户，
+ * 而不是藏起来。契约其实早就有（`promptsApi.listPromptConfigs`，见 `api/prompts.ts:71`），
+ * 所以这里只差一次接线。
+ *
+ * 拉取时机：点开气泡时才拉（`@show`）。输入框挂载就发一次请求，属于给每个
+ * 用户多付一次没人用的往返。
+ */
+const promptList = ref<PromptConfig[]>([])
+const promptLoading = ref(false)
+const promptError = ref('')
+const promptLoaded = ref(false)
+const promptKeyword = ref('')
+
+/** 按提示词类型分组；分组顺序沿用接口返回顺序，不另排序（运营的排列就是权威） */
+const promptGroups = computed(() => {
+  const kw = promptKeyword.value.trim().toLowerCase()
+  const rows = kw
+    ? promptList.value.filter((p) =>
+        `${p.roleName} ${p.callWord} ${p.typeName}`.toLowerCase().includes(kw)
+      )
+    : promptList.value
+  const groups: { typeName: string; items: PromptConfig[] }[] = []
+  for (const row of rows) {
+    const name = row.typeName || '未分类'
+    let group = groups.find((g) => g.typeName === name)
+    if (!group) {
+      group = { typeName: name, items: [] }
+      groups.push(group)
+    }
+    group.items.push(row)
   }
-]
+  return groups
+})
+
+async function loadPrompts() {
+  promptLoading.value = true
+  promptError.value = ''
+  try {
+    const result = await promptsApi.listPromptConfigs({ page: 1, size: 100 })
+    promptList.value = result.list
+    promptLoaded.value = true
+  } catch (e) {
+    // ★ 不静默：气泡里显示失败原因 + 重试，否则用户会以为"提示词库是空的"
+    promptError.value = errText(e, '提示词库读取失败').reason
+  } finally {
+    promptLoading.value = false
+  }
+}
+
+/** 只在第一次打开时拉；失败后再次打开会重试 */
+function ensurePrompts() {
+  if (!promptLoaded.value && !promptLoading.value) void loadPrompts()
+}
 
 function insertPrompt(body: string) {
   text.value = text.value ? `${text.value}\n${body}` : body
@@ -394,6 +488,26 @@ defineExpose({ sendText, reset, focus: () => inputEl.value?.focus() })
   cursor: pointer;
 }
 
+/* 重排三态：外层只是排布容器，hover 高亮交给里面的分段按钮 */
+.tool.rerank {
+  gap: var(--space-2xs);
+  padding-left: var(--space-3xs);
+}
+
+.tool.rerank:hover {
+  background: transparent;
+  color: var(--color-muted);
+}
+
+.rerank-name {
+  color: var(--color-muted);
+}
+
+/* 固定宽度：切换三态时不让右侧「发送」按钮左右跳 */
+.rerank-state {
+  min-width: 6.5em;
+}
+
 .hidden-file {
   position: absolute;
   inset: 0;
@@ -409,6 +523,33 @@ defineExpose({ sendText, reset, focus: () => inputEl.value?.focus() })
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.prompt-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.prompt-group-name {
+  color: var(--color-muted);
+  padding-top: var(--space-2xs);
+}
+
+.prompt-state {
+  padding: var(--space-xs) 0;
+}
+
+.prompt-retry {
+  border: none;
+  background: transparent;
+  color: var(--color-accent);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  padding: 0 var(--space-3xs);
 }
 
 .prompt-item {
@@ -435,5 +576,9 @@ defineExpose({ sendText, reset, focus: () => inputEl.value?.focus() })
 .prompt-body {
   margin-top: var(--space-3xs);
   line-height: var(--leading-tight);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 </style>

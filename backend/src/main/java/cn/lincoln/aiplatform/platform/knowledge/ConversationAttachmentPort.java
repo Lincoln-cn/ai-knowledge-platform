@@ -56,6 +56,31 @@ public interface ConversationAttachmentPort {
       ClassificationLevel classification);
 
   /**
+   * 这个会话有没有登记过临时附件（★ 只回答"有没有"，不返回明细、不读字节）。
+   *
+   * <h3>★ 为什么必须由调用方问一次，而不是从检索范围里推</h3>
+   *
+   * <p>问答链路里 {@code conversationId} 对<strong>每一轮</strong>都有值（即便这一轮没有附件），所以 {@code
+   * RetrievalScope#hasConversationScope()} 与 {@code scope.isEmpty()} 在这里<strong>都</strong>不能读成"有附件"
+   * —— {@code RetrievalScope} 的类注释已经把这条写死了。
+   *
+   * <p>而"这一轮有没有附件"决定两件事，缺一件就会让附件看起来"传了但没用"：
+   *
+   * <ol>
+   *   <li>通用问答<strong>没开全局召回</strong>时，会话附件仍必须参与（召回开关管的是"要不要隐式搜全部可见库"， 不该顺带把用户刚传上来的那一份关掉）；
+   *   <li>会话域的命中来自全文那一路（{@code ts_rank}，实测 {@code 0.0x}），与向量余弦的准确度阈值 <strong>不是同一个量纲</strong> ⇒
+   *       它不能吃那个阈值。
+   * </ol>
+   *
+   * <p>★ 只判"有没有"，不判"解析完了没有"：端口 {@link #register} 是同步解析的，登记返回即已落分段；
+   * 若将来改成异步解析，这个方法要跟着改语义（届时"有行但没有分段"会成为第三种状态）。
+   *
+   * @param conversationId 会话 id（{@code null} ⇒ {@code false}，不抛）
+   * @return 有没有至少一条会话域附件文档
+   */
+  boolean hasAttachments(UUID conversationId);
+
+  /**
    * 彻底删除一个会话下的<strong>全部</strong>会话域文档行（{@code kb_document} + {@code kb_segment} +
    * 向量），并报告哪些上传文件因此不再被引用（{@code #299}）。
    *

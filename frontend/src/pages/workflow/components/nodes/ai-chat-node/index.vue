@@ -77,17 +77,14 @@
                         @submitDialog="submitDialog" />
                 </el-form-item>
                 <el-form-item label="历史聊天记录">
-                    <template #label>
-                        <div class="flex-between">
-                            <div>历史聊天记录</div>
-                            <el-select v-model="chat_data.dialogue_type" type="small" style="width: 100px">
-                                <el-option label="节点" value="NODE" />
-                                <el-option label="工作流" value="WORKFLOW" />
-                            </el-select>
-                        </div>
-                    </template>
                     <el-input-number v-model="chat_data.dialogueNumber" :min="0" :value-on-clear="0"
                         controls-position="right" class="w-full" :step="1" :step-strictly="true" />
+                    <!--
+                      0 = 不带历史，每轮独立；大于 0 = 带最近这么多轮。
+                      ★ 这里原先还有一个「节点 / 工作流」选择器（`dialogue_type`），已删除：
+                      后端 `AiChatNodeExecutor` 一字不读它，契约里也没有这个字段，
+                      「节点级 vs 工作流级历史」在新后端没有实现 —— 留着就是一个点了没效果的控件。
+                    -->
                 </el-form-item>
                 <el-form-item label="返回内容" @click.prevent>
                     <template #label>
@@ -169,9 +166,12 @@ const defaultPrompt = `已知信息：
  * 旧画布用的是 `model_id` / `system` / `dialogue_number` / `is_result` / `model_params_setting`；
  * `#337` 第二步 B3 起画布内部也只认契约名，转换层（`graph-format.ts`）只在读存量草稿时回退旧名。
  *
- * `dialogueType` / `temperature` / `maxTokens` 仍是画布私有键：后端 `AiChatNodeExecutor` 一字不读，
+ * `temperature` / `maxTokens` 仍是画布私有键：后端 `AiChatNodeExecutor` 一字不读，
  * 而且契约里没有对应字段。留在这里而不是塞进 `modelParams`，是因为它们由本面板独占，
  * 塞进去会让 `modelParams` 同时承载两种来源（弹窗设置 + 面板固定项）。
+ *
+ * ★ 原先还有 `dialogue_type`（历史记录范围：节点 / 工作流），已删除 —— 同样是后端不读的键，
+ * 但它在面板上渲染成了一个可点却无效的选择器，比留着默认值更糟。
  */
 const form = {
     modelId: '',
@@ -180,8 +180,7 @@ const form = {
     dialogueNumber: 1,
     asResult: false,
     temperature: null,
-    max_tokens: null,
-    dialogue_type: 'WORKFLOW'
+    max_tokens: null
 }
 
 const chat_data = computed({
@@ -237,9 +236,6 @@ onMounted(() => {
         }
     }
     set(props.nodeModel, 'validate', validate)
-    if (!chat_data.value.dialogue_type) {
-        chat_data.value.dialogue_type = 'WORKFLOW'
-    }
 })
 </script>
 <style lang="scss" scoped>

@@ -334,7 +334,16 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
   @Override
   public RetrievalScope retrievalScope(
       Collection<UUID> requested, UUID conversationId, boolean includePersonal) {
-    List<UUID> sharedKbIds = visibleKbIds(requested);
+    return retrievalScope(requested, conversationId, includePersonal, true);
+  }
+
+  @Override
+  public RetrievalScope retrievalScope(
+      Collection<UUID> requested,
+      UUID conversationId,
+      boolean includePersonal,
+      boolean includeAllVisible) {
+    List<UUID> sharedKbIds = visibleKbIds(requested, includeAllVisible);
     UUID me = accessScope.currentScope().me();
     UUID personalKbId = includePersonal ? personalKbId(me) : null;
     return new RetrievalScope(sharedKbIds, personalKbId, conversationId, me);
@@ -342,8 +351,17 @@ public class JdbcSegmentSearchQuery implements SegmentSearchPort {
 
   @Override
   public List<UUID> visibleKbIds(Collection<UUID> requested) {
+    return visibleKbIds(requested, true);
+  }
+
+  private List<UUID> visibleKbIds(Collection<UUID> requested, boolean includeAllVisible) {
     List<KnowledgeBase> candidates;
     if (requested == null || requested.isEmpty()) {
+      if (!includeAllVisible) {
+        // ★ 调用方明确不要"隐式全部可见"（通用问答召回开关关着、只有会话附件的情形）。
+        //   连库清单都不查：这一刻的范围按定义只有一个会话域。
+        return List.of();
+      }
       // ★ 不传 ⇒ 全部可见：走仓储的**范围查询**（08 §4.4.3 纪律 1：范围拼进查询），
       //   而不是"查全表再筛" —— 后者会随着库变多而先慢后错。
       ScopeFilter scope = accessScope.currentScope();

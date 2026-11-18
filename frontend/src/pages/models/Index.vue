@@ -1,17 +1,12 @@
 <template>
   <div class="page">
-    <PageHeader title="模型" desc="对话与向量化用到的模型清单；能力三态决定界面上的开关。">
+    <PageHeader title="模型" desc="对话、向量化与重排用的模型，都在这里登记、加载与探测。">
       <template #actions>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchList">刷新</el-button>
         <el-button size="small" :icon="Connection" @click="openProviders">服务商</el-button>
         <el-button size="small" type="primary" @click="openCreate">添加模型</el-button>
       </template>
     </PageHeader>
-
-    <div class="notice info">
-      模型的<b>思考模式</b>与<b>工具调用</b>是三态而非开关：<code>无</code> 时整项不渲染、<code>可开关</code>
-      时默认关闭并给说明、<code>强制开启</code> 时置开且禁用并标注原因。这直接决定应用配置页能配出什么。
-    </div>
 
     <div class="filters panel">
       <el-input
@@ -67,8 +62,8 @@
         </div>
 
         <p class="onnx-desc micro muted">
-          进程内向量化，不依赖 Ollama / 11434。第一次使用时懒加载 ONNX session；
-          「未预热」表示文件在、还没用过。它不参与下方模型列表的「加载 / 卸载」生命周期。
+          在本进程里直接做向量化，不用另起服务。第一次用到时才加载；
+          「未预热」表示文件在、还没用过。它不参与下方列表的「加载 / 卸载」。
         </p>
 
         <div class="onnx-facts micro">
@@ -79,11 +74,11 @@
           </span>
           <span class="onnx-path" :title="localOnnx?.modelPath">
             <span class="onnx-key">模型</span>
-            <code>{{ localOnnx?.modelPath || '读取中…' }}</code>
+            <code>{{ fileOf(localOnnx?.modelPath) }}</code>
           </span>
           <span v-if="localOnnx" class="onnx-path" :title="localOnnx.tokenizerPath">
-            <span class="onnx-key">tokenizer</span>
-            <code>{{ localOnnx.tokenizerPath }}</code>
+            <span class="onnx-key">分词器</span>
+            <code>{{ fileOf(localOnnx.tokenizerPath) }}</code>
           </span>
         </div>
 
@@ -106,7 +101,7 @@
         >预热本地模型</el-button>
         <span v-else-if="localOnnx?.ready" class="micro muted">已就绪</span>
         <span v-else class="micro muted">
-          {{ localOnnx ? '未启用（走上游）' : '等待状态接口' }}
+          {{ localOnnx ? '未启用（走上游）' : '状态读取中' }}
         </span>
       </div>
     </section>
@@ -131,9 +126,10 @@
         </div>
 
         <p class="onnx-desc micro muted">
-          检索的第二条腿：先混合召回，再用这个 cross-encoder 对前 {{ rerank?.topK ?? 10 }} 条重新打分。
-          <b>窗口才是那个旋钮，不是模型</b> —— 窗口 5 只改第 1 条指向哪份文档，窗口 10 才把命中率与引用准确率一起拉起来。
-          它不参与下方模型列表的「加载 / 卸载」生命周期。
+          检索的第二道工序：先粗召回一批，再用这个重排模型按相关性重新排序前
+          {{ rerank?.topK ?? 10 }} 条。<b>调「窗口」比换模型有用</b> ——
+          窗口小只影响第一名，窗口够大才同时改善命中与引用准确率。
+          它不参与下方列表的「加载 / 卸载」。
         </p>
 
         <div class="onnx-facts micro">
@@ -141,7 +137,7 @@
           <span>
             <span class="onnx-key">权重</span>
             <el-tooltip
-              content="从文件名推断。int8 在窗口 10 上掉 6.67 点引用准确率，别换"
+              content="从文件名推断。量化版在窗口 10 上会掉引用准确率，不建议换"
               placement="top"
             >{{ rerank?.weights ?? '未知' }}</el-tooltip>
           </span>
@@ -152,14 +148,14 @@
           </span>
           <span class="onnx-path" :title="rerank?.modelPath">
             <span class="onnx-key">模型</span>
-            <code>{{ rerank?.modelPath || '读取中…' }}</code>
+            <code>{{ fileOf(rerank?.modelPath) }}</code>
           </span>
           <span v-if="rerank" class="micro muted">
-            <span class="onnx-key">LLM listwise</span>
+            <span class="onnx-key">二次精排</span>
             {{
               rerank.listwiseEnabled
                 ? `已开（前 ${rerank.listwiseTopK} 条）`
-                : '未开（默认关：收益 +5 点但破 B4 延迟门槛）'
+                : '关闭'
             }}
           </span>
         </div>
@@ -172,7 +168,7 @@
       </div>
 
       <div class="onnx-actions">
-        <span class="micro muted">只读 · 由 app.retrieval.rerank.* 决定</span>
+        <span class="micro muted">只读 · 在「检索引擎」里改</span>
       </div>
     </section>
 
@@ -212,7 +208,7 @@
                 <el-tag v-else-if="m.egress" size="small" effect="plain" type="warning">出网</el-tag>
               </template>
               <template v-else>
-                <span class="micro muted">旧式直连（未绑定服务商）</span>
+                <span class="micro muted">直连（未走服务商）</span>
               </template>
             </dd>
           </div>
@@ -221,7 +217,7 @@
             <dd>
               <template v-if="m.kind === 'EMBEDDING'">
                 <span class="num">{{ m.dimension }}</span> 维
-                <span class="micro muted">（与向量表绑定）</span>
+                <span class="micro muted">（建库时定下，改要重建）</span>
               </template>
               <template v-else>
                 <template v-if="m.contextWindow">
@@ -591,6 +587,18 @@ const fetchLocalOnnx = async () => {
 
 const isLocalOnnx = (m: ModelInfo) =>
   Boolean(localOnnx.value?.enabled && m.baseModel === localOnnx.value.model)
+
+/**
+ * 只取文件名，不把整条绝对路径摊在界面上。
+ *
+ * ★ 盘符与目录结构是运维要看的东西，不是所有人每天必读的；完整路径仍留在
+ * `title` 里（鼠标停一下就出来），而界面上只回答"是不是它"这一个问题。
+ */
+const fileOf = (path?: string | null) => {
+  if (!path) return '读取中…'
+  const parts = path.split(/[\\/]/)
+  return parts[parts.length - 1] || path
+}
 
 /**
  * 重排模型状态：后端 `/models/rerank`（#352）。

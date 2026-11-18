@@ -81,6 +81,20 @@ public class DocumentService {
   private final SegmentationProperties segmentationProperties;
   private final EmbeddingRunner runner;
 
+  /**
+   * 会话附件（临时上传的文档）的**段目标长度**。
+   *
+   * <p>★★ 为什么附件要切得更短：它<strong>不走向量化</strong> （{@code
+   * RetrievalScope#CONVERSATION_SCOPE_IN_VECTOR_PATH = false}，只走全文一路），
+   * 所以没有"向量窗口"要照顾；而全文命中之后整段正文会被拼进「参考资料」—— <b>段越大，一次命中带回来的无关内容越多</b>，5 条引用很快吃掉上下文预算。
+   *
+   * <p>★ 为什么是"目标长度"而不是 `max-chars`：后者是**单段硬上限**。把它压到 500 与目标长度相等时， 切块器按标点切出的段常常是 501 字 ⇒ 整篇 {@code
+   * SEGMENT_FAILED}（实测 2026-11-18，附件分段数 0）。 目标长度小一点，切出来的段就小一点，而硬上限仍留足余量。
+   */
+  @org.springframework.beans.factory.annotation.Value(
+      "${app.segmentation.conversation-attachment-segment-length:300}")
+  private int conversationAttachmentSegmentLength = 300;
+
   /** 责任部门的存在性校验 + 前缀里那段材料的取数（{@code 07 §11.2}）。 */
   private final OrgDirectoryPort orgDirectory;
 
@@ -1216,12 +1230,19 @@ public class DocumentService {
   private void segmentAndPersist(Document document, UUID currentUserId) {
     try {
       int maxChars = maxCharsResolver.resolve(document.kbId(), segmentationProperties.maxChars());
+      // ★ 会话附件切得更短（见 conversationAttachmentSegmentLength 的 javadoc）：
+      //   判据与检索侧一致 —— 会话域就是 `kbId == null` 的那一批分段。
+      int segmentLength =
+          document.kbId() == null
+              ? Math.min(
+                  segmentationProperties.segmentLength(), conversationAttachmentSegmentLength)
+              : segmentationProperties.segmentLength();
       // ★ 按来源选分块规则集（12 §11.5）：判据是文档级的 OCR 事实，不是"环境里开着 OCR"
       // ★ 责任部门取**稳定 code**（07 §11.2）：放 name 会让一次改名把该部门下所有向量判废
       SegmentPlan planned =
           segmenter.plan(
               document.parsedContent(),
-              segmentationProperties.segmentLength(),
+              segmentLength,
               segmentationProperties.overlap(),
               maxChars,
               document.docType(),

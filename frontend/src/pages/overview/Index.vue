@@ -9,8 +9,8 @@
             选一个应用开始提问，或继续上次的对话。
           </template>
           <template v-else>
-            近 {{ rangeDays }} 天（{{ range.from }} ~ {{ range.to }}）的使用情况与常用入口。
-            数据来自运营统计接口，接上后端后随 <code>VITE_USE_MOCK</code> 一起切换。
+            近 {{ rangeDays }} 天（{{ range.from }} ~ {{ range.to }}）这台机器在被怎么用。
+            空着的读数表示这段时间没有采样，不是 0。
           </template>
         </p>
       </div>
@@ -36,70 +36,68 @@
     </div>
 
     <!--
+      机器回执 —— 本页的焦点元素，也是本页唯一那一次深色石墨带
+      （Cobalt 签名 4 + 8，见 design.md § 仪器面板）。
+
+      ★ 位置：原在页面最下方，读者要滚到尽头才看见它；而它是「这台机器/我最近在做什么」
+      的**总纲**，下面的面板都是它的展开。置于首屏顶部，读的人先拿到结论再看细节。
+      消费者口径换成「我的」读数而不是删掉（07 §五）。状态胶囊由真实读数推导，不是装饰。
+      ★ 每视口只许一个 —— 它一多，"焦点"就没有了。
+    -->
+    <InstrumentCard
+      v-if="instrumentRows.length"
+      :title="consumer ? '我的使用回执' : '近 7 天运行回执'"
+      :status="instrumentStatus"
+      :rows="instrumentRows"
+    />
+
+    <!--
+      待办条紧跟在回执后面：回执说「现在什么状态」，这一条说「需要你动手的只有这一件」。
+      它是**入口**，所以要按权限过滤（与「从这里开始」同一套判据）。
+      此前只判 `pendingFeedbackCount > 0`，于是**普通用户（无 feedback:handle）
+      会看到一条通往 403 的「去处理」链接**。用户看到通向 403 的入口，比"没有入口"更坏。
+    -->
+    <div
+      v-if="!consumer && (quality?.pendingFeedbackCount ?? 0) > 0 && canReach(router, '/feedback')"
+      class="notice info"
+    >
+      有 <b>{{ quality?.pendingFeedbackCount }}</b> 条反馈待处理 ——
+      <router-link to="/feedback" class="link">去处理</router-link>
+    </div>
+
+    <!--
       消费者的第一屏是「能用什么、从哪开始」，不是「平台跑得怎么样」（`ROADMAP §11.52.9` 第 4 条）。
-      原先这里上来就是四张指标卡 —— 对一个只用别人做好的应用的人，
+      ★ 原先这里上来就是四张指标卡 —— 对一个只用别人做好的应用的人，
       「我的提问 12 次」不告诉他下一步该点哪；而他能做的事只有一件：挑个应用提问。
+      现在四张卡已删除：它们那四个读数在下面的「我的使用回执」里逐条都在（提问 / 对话 / 赞踩 / 最近活跃），
+      同一屏用两套形状说同一件事，只会让"该看哪里"变得含糊。
       ★ 数据从会话侧派生，不新增接口：会话本来就是按最近更新倒序的。
     -->
-    <section v-if="consumer" class="panel">
-      <div class="panel-head">
-        <h2 class="h2">最近在用</h2>
-        <router-link to="/market" class="link">去应用市场</router-link>
-      </div>
-      <ul v-if="recentApps.length" class="apps">
-        <li v-for="a in recentApps" :key="a.appId" class="app-row">
-          <router-link :to="`/conversation?appId=${a.appId}`" class="app-name">{{ a.appName }}</router-link>
-          <span class="app-metric micro muted">{{ a.lastAt }}</span>
-        </li>
-      </ul>
-      <div v-else class="empty">
-        <div class="empty-title">还没用过应用</div>
-        <span>去<router-link to="/market" class="link">应用市场</router-link>挑一个开始提问</span>
-      </div>
-    </section>
-
-    <!-- 指标条：消费者看「我的」口径，建设者/运营看平台口径（07 §五） -->
-    <div v-if="consumer" class="stats panel">
-      <div class="stat">
-        <span class="stat-k label">我的提问</span>
-        <span class="stat-v num">{{ fmtCount(mySummary?.myQuestionCount) }}</span>
-      </div>
-      <div class="stat">
-        <span class="stat-k label">我的对话</span>
-        <span class="stat-v num">{{ fmtCount(mySummary?.myConversationCount) }}</span>
-      </div>
-      <div class="stat">
-        <span class="stat-k label">我的赞</span>
-        <span class="stat-v num">{{ fmtCount(mySummary?.myUp) }}</span>
-      </div>
-      <div class="stat">
-        <span class="stat-k label">我的踩</span>
-        <span class="stat-v num">{{ fmtCount(mySummary?.myDown) }}</span>
-      </div>
-    </div>
-    <div v-else class="stats panel">
-      <div class="stat">
-        <span class="stat-k label">对话次数</span>
-        <span class="stat-v num">{{ fmtCount(overview?.questionCount) }}</span>
-      </div>
-      <div class="stat">
-        <span class="stat-k label">活跃用户</span>
-        <span class="stat-v num">{{ fmtCount(overview?.activeUserCount) }}</span>
-      </div>
-      <div class="stat">
-        <span class="stat-k label">满意度</span>
-        <span class="stat-v num">{{ fmtPct(overview?.satisfaction) }}</span>
-      </div>
-      <div class="stat">
-        <span class="stat-k label">待处理反馈</span>
-        <span class="stat-v num">{{ fmtCount(quality?.pendingFeedbackCount) }}</span>
-      </div>
-    </div>
-
     <div class="cols">
-      <!-- 消费者左栏：我的对话 + 我提的反馈；建设者/运营：常用应用 -->
+      <!-- 消费者左栏：最近在用 + 我的对话 + 我提的反馈；建设者/运营：常用应用 -->
       <template v-if="consumer">
         <div class="consumer-main">
+          <!--
+            「最近在用」从原先的独立整宽段搬进左栏首格：它是消费者最可能直接点的东西，
+            应与「我的对话」同属一列（同一件事的两个入口），而不是横在页面中间另起一层。
+          -->
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="h2">最近在用</h2>
+              <router-link to="/market" class="link">去应用市场</router-link>
+            </div>
+            <ul v-if="recentApps.length" class="apps">
+              <li v-for="a in recentApps" :key="a.appId" class="app-row">
+                <router-link :to="`/conversation?appId=${a.appId}`" class="app-name">{{ a.appName }}</router-link>
+                <span class="app-metric micro muted">{{ a.lastAt }}</span>
+              </li>
+            </ul>
+            <div v-else class="empty">
+              <div class="empty-title">还没用过应用</div>
+              <span>去<router-link to="/market" class="link">应用市场</router-link>挑一个开始提问</span>
+            </div>
+          </section>
+
           <section class="panel">
             <div class="panel-head">
               <h2 class="h2">我的对话</h2>
@@ -210,33 +208,6 @@
           </router-link>
         </div>
       </section>
-    </div>
-
-    <!--
-      机器回执 —— 本页的焦点元素，也是本页唯一那一次深色石墨带
-      （Cobalt 签名 4 + 8，见 design.md § 仪器面板）。
-      消费者口径换成「我的」读数而不是删掉（07 §五）。
-      状态胶囊由真实读数推导，不是装饰。
-      ★ 每视口只许一个 —— 它一多，"焦点"就没有了。
-    -->
-    <InstrumentCard
-      v-if="instrumentRows.length"
-      :title="consumer ? '我的使用回执' : '近 7 天运行回执'"
-      :status="instrumentStatus"
-      :rows="instrumentRows"
-    />
-
-    <!--
-      待办条是**入口**，所以要按权限过滤 —— 与上面「从这里开始」同一套判据。
-      此前只判 `pendingFeedbackCount > 0`，于是**普通用户（无 feedback:handle）
-      会看到一条通往 403 的「去处理」链接**。用户看到通向 403 的入口，比"没有入口"更坏。
-    -->
-    <div
-      v-if="!consumer && (quality?.pendingFeedbackCount ?? 0) > 0 && canReach(router, '/feedback')"
-      class="notice info"
-    >
-      有 <b>{{ quality?.pendingFeedbackCount }}</b> 条反馈待处理 ——
-      <router-link to="/feedback" class="link">去处理</router-link>
     </div>
   </div>
 </template>
@@ -519,7 +490,7 @@ const instrumentRows = computed<InstrumentRow[]>(() => {
     return [
       { label: '我的提问', value: s.myQuestionCount.toLocaleString(), hint: '近 7 天' },
       { label: '我的对话', value: s.myConversationCount.toLocaleString(), hint: '近 7 天' },
-      { label: '我的赞 / 踩', value: `${s.myUp} / ${s.myDown}`, hint: '赞踩互斥且可撤销' },
+      { label: '我的赞 / 踩', value: `${s.myUp} / ${s.myDown}`, hint: '一次回答只能赞或踩，可撤销' },
       { label: '最近活跃', value: s.lastActiveAt ?? '—' }
     ]
   }
@@ -528,19 +499,25 @@ const instrumentRows = computed<InstrumentRow[]>(() => {
   if (!q || !o) return []
   return [
     {
-      label: '首字延迟 P50',
-      value: `${q.firstTokenLatencyP50} ms`,
-      hint: '验收口径 B4 ≤ 10000 ms'
+      // ★ 读数名说人话：「P50」是分位数术语，运维以外的人读到只会跳过这一行。
+      //   口径仍是真的 P50（`quality.firstTokenLatencyP50`），只是标题不拿它当名字。
+      label: '首字延迟（中位）',
+      value: fmtMs(q.firstTokenLatencyP50),
+      hint: '从提问到第一个字，≤ 10 秒算达标'
     },
-    { label: '平均引用数', value: q.avgRefCount.toFixed(1), hint: '每条回答带回的分段数' },
+    // ★ 原先的「对话次数 / 活跃用户」两张指标卡并入这一行：它们都是规模读数，
+    // 分两行读起来像两件事，实际是一件事的两个侧面（量 / 人）。
     {
-      label: '结构化输出失败率',
-      value: q.artifactFailureRate == null ? '—' : `${(q.artifactFailureRate * 100).toFixed(1)}%`,
-      hint: 'MVP 只埋点，V1.1 起考核'
+      label: '对话 / 活跃用户',
+      value: `${o.questionCount.toLocaleString()} / ${o.activeUserCount.toLocaleString()}`,
+      hint: '近 7 天'
     },
+    // ★ 原先「满意度」指标卡并入这里；「赞 / 踩」那张卡不再单列 ——
+    // 满意度就是赞踩的投影，同一组数字给两次会让人以为它们是两个口径。
+    { label: '满意度', value: fmtPct(o.satisfaction), hint: `赞 ${q.upCount} / 踩 ${q.downCount}` },
+    { label: '平均引用数', value: q.avgRefCount.toFixed(1), hint: '每条回答平均引用几段资料' },
     { label: 'Token 用量', value: o.tokenCount.toLocaleString() },
-    { label: '新增用户', value: o.newUserCount },
-    { label: '赞 / 踩', value: `${q.upCount} / ${q.downCount}` }
+    { label: '新增用户', value: o.newUserCount.toLocaleString() }
   ]
 })
 
@@ -570,6 +547,8 @@ const feedbackStatusClass = (status: FeedbackStatus) => {
 const fmtCount = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString())
 const fmtPct = (n: number | null | undefined) =>
   n == null ? '—' : `${Number.isInteger(n) ? n : n.toFixed(1)}%`
+/* ★ 延迟也一样：没有采样时不许拼出「null ms」—— 那行字会被读成"延迟是零，很快" */
+const fmtMs = (n: number | null | undefined) => (n == null ? '—' : `${n.toLocaleString()} ms`)
 </script>
 
 <style scoped>
@@ -581,34 +560,6 @@ const fmtPct = (n: number | null | undefined) =>
   margin: 0;
   line-height: var(--leading-body);
   max-width: 880px;
-}
-
-/* 指标条：一条 panel，内部等分。等分是为了铺满 —— 自然宽度只占 27%，
-   右侧会留出近千像素空白，看着像没做完。 */
-.stats {
-  display: flex;
-  align-items: stretch;
-  overflow: hidden;
-}
-
-.stat {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2xs);
-  padding: var(--space-sm) var(--space-md);
-  border-right: 1px solid var(--color-rule-2);
-}
-
-.stat:last-child {
-  border-right: none;
-}
-
-.stat-v {
-  font-size: var(--text-lg);
-  font-weight: 600;
-  color: var(--color-ink);
-  line-height: 1.2;
 }
 
 /* 两栏不等宽：常用应用/我的对话是主体，入门入口是窄栏 —— 不搞等宽双栏那种模板感 */

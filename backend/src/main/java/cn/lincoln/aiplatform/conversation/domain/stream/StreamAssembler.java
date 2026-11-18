@@ -96,6 +96,9 @@ public final class StreamAssembler {
   /** 引用缓冲 —— ★ 本类的核心状态：非 {@code null} 表示"检索结果已到、但还没发出去"。 */
   private List<SourceRef> pendingRefs;
 
+  /** 关于这批引用的说明（与 {@link #pendingRefs} 同生命周期）；没有话要说时为 null。 */
+  private String pendingNotice;
+
   /** {@code references} 是否已经被调用过（用于区分"没检索完"与"检索完了是空的"）。 */
   private boolean refsKnown;
 
@@ -153,6 +156,22 @@ public final class StreamAssembler {
    * @param refs 检索结果（可以为空列表 = 零命中；见 {@link StreamEvent.References}）
    */
   public synchronized void references(List<SourceRef> refs) {
+    references(refs, null);
+  }
+
+  /**
+   * 检索完成 + 零命中时的那句原因。
+   *
+   * <p>★ 为什么要多加一格 {@code notice}：{@code refs} 为空在界面上只有一种样子，而它至少有六种成因 （召回开关关着 / 取不到身份 / 取不到出站密级 /
+   * 阈值把命中滤光 / 密级闸门全拦下 / 知识库里确实没有）。 前五种都是链路提前结束，却与"确实没有"不可分 —— 这是 silent-failure 的形状，收口点在检索侧，
+   * 界面只是把它显示出来。
+   *
+   * <p>★ 只在零命中时非空（有引用时再说"为什么没有"是噪音），且不影响 {@code refs} 帧的既有形状： 序列化时 {@code notice} 为 null 就整个字段不出现。
+   *
+   * @param refs 检索结果
+   * @param notice 给终端用户看的一句话原因；{@code null} = 没有可说的
+   */
+  public synchronized void references(List<SourceRef> refs, String notice) {
     requireNotSettled("references");
     if (refsEmitted) {
       return;
@@ -161,6 +180,9 @@ public final class StreamAssembler {
       throw new IllegalStateException("引用只能给一次 —— 契约里 refs 是一次性到达的（多跳全部发生在生成前，10 §8.3）");
     }
     this.pendingRefs = List.copyOf(Objects.requireNonNull(refs, "refs"));
+    // ★ notice 是「关于这批引用的说明」：零命中时是成因，有引用时也可能是"因长度省略了 N 条"。
+    //   两者都要能到前端 —— 静默丢一条引用正文，用户只会以为"没检到"。
+    this.pendingNotice = notice;
     this.refsKnown = true;
   }
 
@@ -403,8 +425,9 @@ public final class StreamAssembler {
       return;
     }
     refsEmitted = true;
-    emit(new StreamEvent.References(pendingRefs));
+    emit(new StreamEvent.References(pendingRefs, pendingNotice));
     pendingRefs = null;
+    pendingNotice = null;
   }
 
   /**

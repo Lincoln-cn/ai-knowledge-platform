@@ -108,7 +108,7 @@
         </el-form-item>
         <el-form-item label="拆分多意图">
           <el-switch v-model="retrieval.decomposeEnabled" :disabled="!canManage" />
-          <div class="hint micro">关掉是"按配置少做一件事"，不算降级（10 §6.3）</div>
+          <div class="hint micro">关掉只是少做一步，不是能力降级</div>
         </el-form-item>
         <el-form-item label="子问题上限">
           <el-input-number

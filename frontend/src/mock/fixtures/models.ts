@@ -104,8 +104,15 @@ export const models: ModelInfo[] = [
   }
 ]
 
-/** 可从供应商拉取的基础模型目录（原型里等同于 Ollama 的模型库） */
-export const baseModels: BaseModelOption[] = [
+/**
+ * 可从供应商拉取的基础模型目录（原型里等同于 Ollama 的模型库）。
+ *
+ * ★ 健康状态是「后端真调一次」的结果，不是清单自带的（`#1.7`）。这里刻意留了一条
+ * `UNHEALTHY`（`glm4:9b`）—— 否则「不健康的模型不许配置」这条判断在 mock 模式下永远走不到，
+ * 等同于没有实现。`glm4:9b` 同时是「能力探测失败、需手工声明」那一条，两件事不冲突：
+ * 探测的是能力（thinking/tools），健康探测的是"能不能调通"。
+ */
+const baseCatalog: Array<Omit<BaseModelOption, 'health' | 'healthDetail'>> = [
   { baseModel: 'Qwen3-4B-Instruct', kind: 'CHAT', supplier: 'LOCAL_INFERENCE', contextWindow: 32768, dimension: null },
   { baseModel: 'Qwen3-8B', kind: 'CHAT', supplier: 'LOCAL_INFERENCE', contextWindow: 32768, dimension: null },
   { baseModel: 'Qwen3-14B', kind: 'CHAT', supplier: 'LOCAL_INFERENCE', contextWindow: 32768, dimension: null },
@@ -120,16 +127,26 @@ export const baseModels: BaseModelOption[] = [
   { baseModel: 'text-embedding-3-small', kind: 'EMBEDDING', supplier: 'EXTERNAL_API', contextWindow: null, dimension: 1536 }
 ]
 
+export const baseModels: BaseModelOption[] = baseCatalog.map((b) =>
+  b.baseModel === 'glm4:9b'
+    ? {
+        ...b,
+        health: 'UNHEALTHY' as const,
+        healthDetail: '上游返回 503：{"error":{"message":"adapter for glm4:9b is not resolved"}}'
+      }
+    : { ...b, health: 'HEALTHY' as const, healthDetail: null }
+)
+
 /**
  * 指定 `apiBase` 时拉到的目录（外部 API 上游那套）。
  * ★ 与 `baseModels` 刻意**不重叠** —— mock 模式下要能看出「目录跟着上游走」，
  * 两套一样就分不清 apiBase 到底有没有被用上。
  */
 export const externalBaseModels: BaseModelOption[] = [
-  { baseModel: 'gpt-4o', kind: 'CHAT', supplier: 'EXTERNAL_API', contextWindow: 128000, dimension: null },
-  { baseModel: 'gpt-4o-mini', kind: 'CHAT', supplier: 'EXTERNAL_API', contextWindow: 128000, dimension: null },
-  { baseModel: 'claude-sonnet-4', kind: 'CHAT', supplier: 'EXTERNAL_API', contextWindow: 200000, dimension: null },
-  { baseModel: 'text-embedding-3-large', kind: 'EMBEDDING', supplier: 'EXTERNAL_API', contextWindow: null, dimension: 3072 }
+  { baseModel: 'gpt-4o', kind: 'CHAT', supplier: 'EXTERNAL_API', contextWindow: 128000, dimension: null, health: 'HEALTHY', healthDetail: null },
+  { baseModel: 'gpt-4o-mini', kind: 'CHAT', supplier: 'EXTERNAL_API', contextWindow: 128000, dimension: null, health: 'HEALTHY', healthDetail: null },
+  { baseModel: 'claude-sonnet-4', kind: 'CHAT', supplier: 'EXTERNAL_API', contextWindow: 200000, dimension: null, health: 'HEALTHY', healthDetail: null },
+  { baseModel: 'text-embedding-3-large', kind: 'EMBEDDING', supplier: 'EXTERNAL_API', contextWindow: null, dimension: 3072, health: 'HEALTHY', healthDetail: null }
 ]
 
 /**

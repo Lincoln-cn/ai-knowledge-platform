@@ -56,7 +56,7 @@
               @click="setCategory('')"
             >全部</button>
             <button
-              v-for="c in categories"
+              v-for="c in visibleCategories"
               :key="c.id"
               type="button"
               class="cat"
@@ -89,10 +89,16 @@
               />
               <span v-else class="kc-icon">{{ kb.icon }}</span>
               <div class="kc-main">
-                <div class="kc-name ellipsis">{{ kb.name }}</div>
-                <div class="kc-desc micro muted ellipsis">{{ kb.description || '暂无描述' }}</div>
+                <div class="kc-name">{{ kb.name }}</div>
+                <!-- ★ 没有描述就不占那一行：「暂无描述」在一屏 12 张卡里会重复十几次，
+                     每一条都在说"这里没东西"，把真正有描述的那张卡淹掉了。 -->
+                <div v-if="kb.description" class="kc-desc micro muted ellipsis">
+                  {{ kb.description }}
+                </div>
               </div>
-              <span class="grow" />
+              <!-- ★ 这里原先有个 `<span class="grow" />` 把开关推到右边。
+                   开关改成绝对定位后它没有意义了，反而和 `.kc-main`（flex:1）平分宽度
+                   ⇒ 标题只剩半条卡片宽。 -->
               <el-switch
                 v-if="!consumer && canManage"
                 data-testid="kb-toggle-enabled"
@@ -331,6 +337,14 @@ type TabKey = (typeof TABS)[number]['key']
 
 const list = ref<KnowledgeBase[]>([])
 const categories = ref<KnowledgeCategory[]>([])
+/**
+ * 计数为 0 的分类不显示 —— 一个点进去什么都没有的分类项只是噪声
+ * （实测分类条里出现过「行业标准 0」；它占着位置，却永远给不出结果）。
+ * ★ 但**当前正选中的那条必须留着**，否则选中态会跟着计数一起消失。
+ */
+const visibleCategories = computed(() =>
+  categories.value.filter((c) => c.baseCount > 0 || c.name === query.category),
+)
 const total = ref(0)
 const loading = ref(false)
 /** P1/#13 错误态：与空态严格区分。有它就不渲染"还没有知识库" */
@@ -977,8 +991,20 @@ onBeforeUnmount(() => {
 
 .kc-head {
   display: flex;
-  align-items: baseline;
+  /* baseline 是为单行标题定的；标题可占两行后，开关会浮到第一行文字的基线下方 */
+  align-items: flex-start;
   gap: var(--space-xs);
+  /* ★ 启停开关改绝对定位：它原先是标题同一行的第三个 flex 项，吃掉约 44px，
+     使一行只能放下 7 个汉字 —— 「合成语料-去重版本-312」于是被切成两行、第二行只剩三个字。
+     让标题独占整行宽度后，多数名字一行就够，超长的才用第二行。 */
+  position: relative;
+  padding-right: 46px;
+}
+
+.kc-head :deep(.el-switch) {
+  position: absolute;
+  top: 2px;
+  right: 0;
 }
 
 /* emoji 是排版元素，不是装饰品 —— 与正文同量级，不套色块 */
@@ -1007,6 +1033,13 @@ onBeforeUnmount(() => {
   font-weight: 500;
   line-height: var(--leading-tight);
   color: var(--color-ink);
+  /* ★ 最多两行。单行截断会把「合成语料-去重与合成…」这类长名的尾部截掉，
+     而尾部的编号/日期恰恰是区分同名库的唯一部位 —— 实测一屏 12 张卡里 6 张读不全。 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .kc-desc {

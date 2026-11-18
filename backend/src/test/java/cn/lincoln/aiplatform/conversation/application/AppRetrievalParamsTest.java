@@ -1,6 +1,8 @@
 package cn.lincoln.aiplatform.conversation.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import cn.lincoln.aiplatform.conversation.domain.SourceRef;
 import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
@@ -13,6 +15,7 @@ import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
 import cn.lincoln.aiplatform.platform.access.DataScope;
 import cn.lincoln.aiplatform.platform.access.OwnedResource;
 import cn.lincoln.aiplatform.platform.access.ScopeFilter;
+import cn.lincoln.aiplatform.platform.knowledge.ConversationAttachmentPort;
 import cn.lincoln.aiplatform.platform.model.ChatStreamPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
@@ -53,6 +56,8 @@ class AppRetrievalParamsTest {
   private static final UUID SEGMENT_1 = UUID.fromString("0a000000-0000-4000-8000-0000000000b1");
   private static final UUID SEGMENT_2 = UUID.fromString("0a000000-0000-4000-8000-0000000000b2");
   private static final UUID SEGMENT_3 = UUID.fromString("0a000000-0000-4000-8000-0000000000b3");
+  private static final UUID CONVERSATION_ID =
+      UUID.fromString("0a000000-0000-4000-8000-0000000000e1");
   private static final String QUESTION = "差旅住宿标准";
 
   private static final ModelEgressPort UNRESTRICTED_EGRESS =
@@ -256,7 +261,130 @@ class AppRetrievalParamsTest {
     assertThat(run.embeddingCalls.get()).isZero();
   }
 
+  // ──────────────── 会话附件必须真的参与检索（`#187` 收口） ────────────────
+
+  /**
+   * ★★ 会话域命中不吃"准确度阈值"。
+   *
+   * <p>红在哪：把 `retrieve` 里 `conversationScoped` 那个例外删掉 ⇒ 0.06 分那条被当成共用库命中丢掉，引用从 1 条变 0
+   * 条。这正是"附件传上去了、库里也有分段、界面却一条引用都没有"的成因之一。
+   */
+  @Test
+  void conversationScopeHitsIgnoreTheVectorThreshold() {
+    RetrievalParams strict =
+        new RetrievalParams(RetrievalMode.FULLTEXT, 0.30, 5, NoRefStrategy.FREE_ANSWER);
+    FixedSearchPort search =
+        new FixedSearchPort(List.of(hit(SEGMENT_1, 0.06), hit(SEGMENT_2, 0.05)), List.of());
+    // SEGMENT_1 = 会话附件（没有库行）；SEGMENT_2 仍是共用库里的分段
+    search.conversationSegments = Set.of(SEGMENT_1);
+
+    Run run = run(strict, search, List.of(), false);
+
+    assertThat(run.refs())
+        .as("★ 0.30 的向量阈值不该卡住会话域那条 0.06 分的 ts_rank 命中（跨量纲），共用库那条 0.05 分必须被丢掉")
+        .hasSize(1);
+    assertThat(run.refs().getFirst().segmentId()).isEqualTo(SEGMENT_1.toString());
+    assertThat(run.refs().getFirst().kbId())
+        .as("★ 会话域引用的 kbId 必须为空 —— 那是前端区分「知识库引用 / 附件引用」的判据，不许兜底")
+        .isNull();
+  }
+
+  /**
+   * ★★ 通用问答没开全局召回时，会话附件仍然必须参与。
+   *
+   * <p>红在哪：把 `retrieve` 开关早退里的 `!hasAttachments` 删掉（回到"没开召回就零引用"）⇒ 全文那一路一次都不跑， 断言从 1 条变 0
+   * 条。这条同时钉住"`retrieval_enabled=false` 管的是隐式搜全部可见库，不是把用户刚传的附件也关掉"。
+   */
+  @Test
+  void attachmentKeepsRetrievalAliveWhenTheGeneralQaSwitchIsOff() {
+    FixedSearchPort search = new FixedSearchPort(List.of(hit(SEGMENT_1, 0.06)), List.of());
+    search.conversationSegments = Set.of(SEGMENT_1);
+
+    Run run = run(switchedOffPolicy(), search, true);
+
+    assertThat(search.fullTextCalls.get()).as("★ 有附件 ⇒ 召回开关不能把检索拦在门外").isEqualTo(1);
+    assertThat(run.refs()).as("★ 附件的分段必须进引用").hasSize(1);
+  }
+
+  /**
+   * 反证（上一条的另一侧）：**没有附件**时，召回开关仍然要真的关掉检索。
+   *
+   * <p>红在哪：若把 `!hasAttachments` 写成恒真（或干脆删掉开关判断），这条会从"全文零调用"变成"跑了一次"。 ★ 没有这条，上一条的"绿"无法排除"那个开关整个失效了"。
+   */
+  @Test
+  void withoutAttachmentsTheSwitchStillStopsRetrieval() {
+    FixedSearchPort search = new FixedSearchPort(List.of(hit(SEGMENT_1, 0.06)), List.of());
+
+    Run run = run(switchedOffPolicy(), search, false);
+
+    assertThat(search.fullTextCalls.get()).as("没有附件 + 没开召回 ⇒ 一次全文检索都不该发生").isZero();
+    assertThat(run.refs()).isEmpty();
+    assertThat(run.sink.notice()).as("★ 零引用必须带上原因 —— 否则界面上「没开召回」与「知识库里确实没有」长得一模一样").contains("召回");
+  }
+
+  /**
+   * ★★ 附件豁免必须**停在会话域**：不许顺带把「全部可见库」重新打开。
+   *
+   * <p>红在哪：真栈实测（2026-11-18，桩网关）—— 召回开关关着、只传了一个附件，引用列表里却出现了 企业会计准则 / Vue 文档 / 信息化建设工作报告。它们来自"不传库 =
+   * 全部可见"这条兜底， 而用户关掉召回的理由（噪声污染）一条都没解决；更糟的是引用看起来还挺相关，比明显跑题更难发现。
+   *
+   * <p>⇒ 判据：这一刻构造检索范围时 {@code includeAllVisible} 必须是 {@code false}。 把 ChatService
+   * 里那个四参调用改回三参，这条立刻红。
+   */
+  @Test
+  void attachmentExemptionStopsAtTheConversationScope() {
+    FixedSearchPort search = new FixedSearchPort(List.of(hit(SEGMENT_1, 0.06)), List.of());
+    search.conversationSegments = Set.of(SEGMENT_1);
+
+    Run run = run(switchedOffPolicy(), search, true);
+
+    assertThat(run.refs()).as("有附件时检索仍然要跑（上一条的判据，防止这条被误写成「干脆关掉豁免」）").hasSize(1);
+    assertThat(search.lastIncludeAllVisible)
+        .as("★ 开关关着 + 有附件 ⇒ 范围只能是「显式绑定的库 + 本会话」，不许展开成全部可见库")
+        .isFalse();
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
+
+  @Test
+  void referenceBudgetDropsTheTailAndSaysHowMany() {
+    FixedSearchPort search =
+        new FixedSearchPort(
+            List.of(
+                new SegmentSearchPort.Scored(SEGMENT_1, 0.9),
+                new SegmentSearchPort.Scored(SEGMENT_2, 0.8)),
+            List.of());
+    search.contentRepeat = 3; // 每段 42 字
+    RetrievalParams params =
+        new RetrievalParams(RetrievalMode.FULLTEXT, 0.0, 5, NoRefStrategy.FREE_ANSWER);
+
+    Run run = run(params, search, List.<Float>of(), false, null, null, 50);
+
+    assertThat(run.refs())
+        .as("预算 50 字只装得下第 1 条（42 字），第 2 条要丢掉 —— 而 UI 上的引用数必须与真正进了上下文的条数一致")
+        .hasSize(1);
+    assertThat(run.sink.notice())
+        .as("★ 丢掉的条数必须说出来：用户看到只有 1 条引用，却不知道自己问的那份文档被省掉了，会以为是「没检到」")
+        .contains("省略 1 条");
+  }
+
+  @Test
+  void aBudgetSmallerThanOneReferenceDoesNotBecomeZeroReferences() {
+    FixedSearchPort search =
+        new FixedSearchPort(
+            List.of(
+                new SegmentSearchPort.Scored(SEGMENT_1, 0.9),
+                new SegmentSearchPort.Scored(SEGMENT_2, 0.8)),
+            List.of());
+    search.contentRepeat = 3;
+    RetrievalParams params =
+        new RetrievalParams(RetrievalMode.FULLTEXT, 0.0, 5, NoRefStrategy.FREE_ANSWER);
+
+    Run run = run(params, search, List.<Float>of(), false, null, null, 10);
+
+    assertThat(run.refs()).as("预算比第一条正文还小 = 配置写错了，不该表现为「检索不到东西」").hasSize(2);
+    assertThat(run.sink.notice()).as("这种情况没有「省略」，也就不该编一句出来").isNull();
+  }
 
   private record Run(
       List<SourceRef> refs,
@@ -264,6 +392,20 @@ class AppRetrievalParamsTest {
       AtomicInteger modelCalls,
       AtomicInteger embeddingCalls,
       FixedSearchPort search) {}
+
+  /**
+   * 一轮的「会话 / 策略 / 附件」三件套。
+   *
+   * @param conversationId 会话 id（非空 ⇒ 检索范围带会话域；★ 它本身**不**能说明"这一轮有附件"）
+   * @param policy 通用问答策略替身（{@code null} = 不装配 ⇒ 等价于改造前行为）
+   * @param hasAttachments 这个会话有没有登记过附件
+   * @param preparedKbIds 这一轮绑定的知识库（空 = 通用问答未绑库）
+   */
+  private record Scenario(
+      UUID conversationId,
+      ChatPolicyResolver policy,
+      boolean hasAttachments,
+      List<UUID> preparedKbIds) {}
 
   private static Run run(RetrievalParams params, List<SegmentSearchPort.Scored> hits) {
     return run(params, new FixedSearchPort(hits, List.of()), List.of(), true);
@@ -287,8 +429,36 @@ class AppRetrievalParamsTest {
       List<Float> vector,
       boolean wireEmbeddingPort,
       UUID failingEmbeddingModel) {
+    return run(params, search, vector, wireEmbeddingPort, failingEmbeddingModel, null);
+  }
+
+  /**
+   * 带"会话 / 策略 / 附件"三件套的一轮。
+   *
+   * @param scenario {@code null} = 本类其他测试的老形状（无会话、无策略、无附件）
+   */
+  private static Run run(
+      RetrievalParams params,
+      FixedSearchPort search,
+      List<Float> vector,
+      boolean wireEmbeddingPort,
+      UUID failingEmbeddingModel,
+      Scenario scenario) {
+    return run(params, search, vector, wireEmbeddingPort, failingEmbeddingModel, scenario, null);
+  }
+
+  /** 带引用正文预算的一轮（`#1.8` 的上下文预算闸门）。{@code null} = 用类里的默认值。 */
+  private static Run run(
+      RetrievalParams params,
+      FixedSearchPort search,
+      List<Float> vector,
+      boolean wireEmbeddingPort,
+      UUID failingEmbeddingModel,
+      Scenario scenario,
+      Integer referenceBudgetChars) {
     List<SourceRef> captured = new ArrayList<>();
-    RecordingStore store = new RecordingStore(params);
+    RecordingStore store =
+        new RecordingStore(params, scenario == null ? List.of(KB_ID) : scenario.preparedKbIds());
     AtomicInteger modelCalls = new AtomicInteger();
     ChatStreamPort model =
         (modelId, prompt, timeout, callback) -> {
@@ -325,10 +495,50 @@ class AppRetrievalParamsTest {
             }
           });
     }
+    UUID conversationId = null;
+    if (scenario != null) {
+      conversationId = scenario.conversationId();
+      if (scenario.policy() != null) {
+        service.setPolicyResolver(scenario.policy());
+      }
+      service.setConversationAttachments(
+          new FixedAttachments(scenario.conversationId(), scenario.hasAttachments()));
+    }
+    if (referenceBudgetChars != null) {
+      service.setReferenceBudgetChars(referenceBudgetChars);
+    }
     RecordingSink sink = new RecordingSink();
-    service.streamTurn(store.prepare(null, APP_ID, QUESTION, UUID.randomUUID()), QUESTION, sink);
+    service.streamTurn(
+        store.prepare(conversationId, APP_ID, QUESTION, UUID.randomUUID()), QUESTION, sink);
     captured.addAll(sink.refs());
     return new Run(captured, sink, modelCalls, embeddingCalls, search);
+  }
+
+  /**
+   * 一个"通用问答没开召回"的策略替身。
+   *
+   * <p>★ 只 stub 决定开关的那一格：本轮参数由 {@code PreparedTurn} 直接带上（见下面的便捷 {@code run}），所以 {@code
+   * retrievalThreshold} / {@code retrievalTopN} 这一次**不会被消费**。若哪天它被消费了，说明"参数从哪来"这条口径变了 ——
+   * 本类的其他断言会先红。
+   */
+  private static ChatPolicyResolver switchedOffPolicy() {
+    ChatPolicyResolver policy = mock(ChatPolicyResolver.class);
+    when(policy.retrievalEnabled()).thenReturn(false);
+    return policy;
+  }
+
+  /** 便捷形状：会话已存在、策略固定、只关心"有没有附件"。 */
+  private static Run run(
+      ChatPolicyResolver policy, FixedSearchPort search, boolean hasAttachments) {
+    return run(
+        // ★ 必须显式 FULLTEXT：`effectiveRetrieval` 优先用 PreparedTurn 带的参数（平台默认是 VECTOR），
+        //   换成 platformDefaults() 会让全文那一路根本不跑 —— 那一红与开关无关，是夹具选错了路。
+        new RetrievalParams(RetrievalMode.FULLTEXT, 0.30, 5, NoRefStrategy.FREE_ANSWER),
+        search,
+        List.of(),
+        false,
+        null,
+        new Scenario(CONVERSATION_ID, policy, hasAttachments, List.of()));
   }
 
   private static SegmentSearchPort.Scored hit(UUID id, double score) {
@@ -351,6 +561,20 @@ class AppRetrievalParamsTest {
     private final Map<UUID, List<Scored>> vectorHitsByKb;
     private RetrievalScope lastVectorScope;
     private UUID lastVectorModelId;
+
+    /**
+     * 哪些分段属于会话附件（{@code load} 对它们返回 {@code kbId = null}）。
+     *
+     * <p>★ 可变字段是故意的：它是"这一轮有没有会话域命中"的唯一开关，各测试按需打开。
+     */
+    private Set<UUID> conversationSegments = Set.of();
+
+    /** ★ 每条分段正文重复几次 —— 用来把"引用正文超预算"这条造出来（默认 1 = 短的正常正文）。 */
+    private int contentRepeat = 1;
+
+    /** ★ 最近一次构造范围时传的 `includeAllVisible`；`null` = 这一轮没走到范围构造（早退）。 */
+    private Boolean lastIncludeAllVisible;
+
     final AtomicInteger fullTextCalls = new AtomicInteger();
     final AtomicInteger vectorSearchCalls = new AtomicInteger();
 
@@ -394,12 +618,35 @@ class AppRetrievalParamsTest {
             UUID.fromString("0a000000-0000-4000-8000-0000000000d1"),
             UUID.fromString("0a000000-0000-4000-8000-0000000000d2"));
       }
-      return RetrievalScope.shared(kbIds);
+      // ★ 真实实现里 `conversationId` 非空 ⇒ 范围带上会话域（即便一个库都没绑）。
+      //   替身必须一样：否则"通用问答 + 只有附件、没绑库"这个形状在夹具里构造不出来
+      //   （scope 会是空 ⇒ 在范围那一步就早退零引用，测不到召回开关这一条）。
+      //   ★ ownerId 必须一起给：`RetrievalScope` 的不变量是"会话域非空 ⇒ ownerId 非空"，
+      //   缺了它构造就抛 ⇒ 被 retrieve 的 catch 吞成"零引用"（9 个测试一起红，原因却与它们无关）。
+      return conversationId == null
+          ? RetrievalScope.shared(kbIds)
+          : new RetrievalScope(kbIds, null, conversationId, KnownScope.ME);
     }
 
     @Override
     public List<UUID> visibleKbIds(Collection<UUID> requested) {
       return kbIds;
+    }
+
+    /**
+     * 四参版本：只记录调用方要不要「全部可见库」，范围本身照旧。
+     *
+     * <p>★ 真实实现的判据（`JdbcSegmentSearchQuery#visibleKbIds`）是"传 false 且清单为空 ⇒ 连库都不查"，
+     * 而替身这里必须能**看到**这个开关，否则 `attachmentExemptionStopsAtTheConversationScope` 无从断言。
+     */
+    @Override
+    public RetrievalScope retrievalScope(
+        Collection<UUID> requested,
+        UUID conversationId,
+        boolean includePersonal,
+        boolean includeAllVisible) {
+      lastIncludeAllVisible = includeAllVisible;
+      return retrievalScope(requested, conversationId, includePersonal);
     }
 
     @Override
@@ -416,11 +663,12 @@ class AppRetrievalParamsTest {
                   new Card(
                       id,
                       "分段 " + id,
-                      "差旅住宿标准为每人每天500元",
+                      "差旅住宿标准为每人每天500元".repeat(contentRepeat),
                       "差旅制度",
                       "制度库",
                       UUID.randomUUID(),
-                      KB_ID,
+                      // ★ 会话附件没有库行（`kb_segment.kb_id` 是 NULL）—— 这个 null 就是"会话域"的判据本身
+                      conversationSegments.contains(id) ? null : KB_ID,
                       ClassificationLevel.INTERNAL))
           .toList();
     }
@@ -457,13 +705,61 @@ class AppRetrievalParamsTest {
     }
   }
 
+  /**
+   * 附件端口的替身：只回答"这个会话有没有附件"。
+   *
+   * <p>★ 另外三个方法直接抛 —— 本类只测检索链路读不读"有没有附件"，任何写入/清理动作跑到这里都是测试本身写错了。
+   */
+  private static final class FixedAttachments implements ConversationAttachmentPort {
+
+    private final UUID conversationId;
+    private final boolean has;
+
+    private FixedAttachments(UUID conversationId, boolean has) {
+      this.conversationId = conversationId;
+      this.has = has;
+    }
+
+    @Override
+    public boolean hasAttachments(UUID id) {
+      return has && conversationId != null && conversationId.equals(id);
+    }
+
+    @Override
+    public UUID register(
+        UUID conversationId,
+        UUID ownerId,
+        UUID attachmentId,
+        String displayName,
+        byte[] content,
+        ClassificationLevel classification) {
+      throw new UnsupportedOperationException("本类不测附件登记");
+    }
+
+    @Override
+    public PurgeResult purgeConversationAttachments(UUID conversationId) {
+      throw new UnsupportedOperationException("本类不测附件清理");
+    }
+
+    @Override
+    public PurgeResult previewConversationAttachments(List<UUID> conversationIds) {
+      throw new UnsupportedOperationException("本类不测附件清理");
+    }
+  }
+
   /** 落库侧替身：只提供 prepare（本类不测落库）。 */
   private static final class RecordingStore implements ChatTurnStore {
 
     private final RetrievalParams params;
+    private final List<UUID> kbIds;
 
     private RecordingStore(RetrievalParams params) {
+      this(params, List.of(KB_ID));
+    }
+
+    private RecordingStore(RetrievalParams params, List<UUID> kbIds) {
       this.params = params;
+      this.kbIds = kbIds;
     }
 
     @Override
@@ -471,13 +767,15 @@ class AppRetrievalParamsTest {
         UUID conversationId, UUID appId, String question, UUID userId) {
       UUID assistantMessageId = UUID.randomUUID();
       return new ChatTurnWriter.PreparedTurn(
-          UUID.randomUUID(),
+          // ★ 入参非空就用入参：本类要断言"这一轮是不是同一个会话"（附件查询按会话 id 走），
+          //   恒随机的话，附件替身永远认不出这一轮属于哪个会话 ⇒ 测不到附件那条路。
+          conversationId != null ? conversationId : UUID.randomUUID(),
           assistantMessageId,
           UUID.randomUUID(),
           "trace_" + assistantMessageId,
           MODEL_ID.toString(),
           MODEL_ID,
-          List.of(KB_ID),
+          kbIds,
           false,
           false,
           APP_ID,
@@ -537,6 +835,22 @@ class AppRetrievalParamsTest {
           .findFirst()
           .map(StreamEvent.References::refs)
           .orElseThrow(() -> new AssertionError("出口上没有收到 refs 帧"));
+    }
+
+    /**
+     * 零命中时那句给用户看的原因（有引用时恒为 {@code null}）。
+     *
+     * <p>★ 单独取一次 refs 帧再读 {@code notice()}，而不是用 {@code map(...).findFirst()}： 后者遇到 null 元素会抛
+     * NPE，而"没有原因"恰恰是这里最常见的合法值。
+     */
+    private String notice() {
+      StreamEvent.References refsFrame =
+          events.stream()
+              .filter(event -> event.kind() == EventKind.REFS)
+              .map(StreamEvent.References.class::cast)
+              .findFirst()
+              .orElseThrow(() -> new AssertionError("出口上没有收到 refs 帧"));
+      return refsFrame.notice();
     }
 
     private List<String> deltas() {

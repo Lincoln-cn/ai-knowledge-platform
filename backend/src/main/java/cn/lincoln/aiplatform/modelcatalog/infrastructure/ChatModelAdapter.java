@@ -78,6 +78,21 @@ public class ChatModelAdapter implements ChatPort {
   }
 
   @Override
+  public boolean isChatModelUsable(UUID modelId) {
+    if (modelId == null) {
+      return false;
+    }
+    // ★ 与 pickChatModel 同三条判据，一处一处对齐：类型是 CHAT、已加载、服务商可用。
+    //   两处若放宽不一致，"配的那个模型"和"自动挑的那个模型"就会按两套标准判断可用性。
+    return models
+        .findById(modelId)
+        .filter(model -> model.kind() == ModelKind.CHAT)
+        .filter(model -> model.status() == ModelStatus.LOADED)
+        .filter(model -> upstream.egressOf(model).isPresent())
+        .isPresent();
+  }
+
+  @Override
   public String complete(UUID modelId, String prompt, Duration timeout) {
     Model model = requireChatModel(modelId);
     if (springAi.enabled()) {

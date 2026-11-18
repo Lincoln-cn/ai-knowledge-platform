@@ -30,7 +30,18 @@ export interface AppBrief {
 export type ConversationEx = Conversation & { app?: AppBrief }
 
 /** 契约 ChatMessage.attachments 落盘前后的兼容读写（字段可选） */
-export type ChatMessageEx = ChatMessage & { attachments?: ChatAttachment[] }
+export type ChatMessageEx = ChatMessage & {
+  attachments?: ChatAttachment[]
+  /**
+   * 后端关于这一轮引用的说明（见 `stream-types.ts` 的 `onRefs`）。
+   *
+   * ★ 只活在**本轮流式过程**里，不落库、也不从历史接口回读：它解释的是"这一轮"，
+   *   刷新之后那句话已经没有意义（引用区读的是 `reference_snapshot`）。
+   *
+   * ★ 两种形态都要显示：零命中时是"为什么没有引用"，有引用时是"因为太长省略了几条"。
+   */
+  refsNotice?: string | null
+}
 
 /** 契约 SourceRef 已带 segmentId/documentId/kbId —— 这里保留别名，兼容既有引用 */
 export type SourceRefEx = SourceRef
@@ -540,13 +551,17 @@ export function useChatSession(options: ChatSessionOptions = {}) {
       onMeta: (meta) => {
         assistant.id = meta.messageId || assistant.id
       },
-      onRefs: (refs) => {
+      onRefs: (refs, notice) => {
         // ★★ `#164`：服务端在失败/异常路径上可能发 `refs: null` 或干脆不带这个字段
         //   ⇒ 裸调 `refs.map(...)` 会抛 `refs.map is not a function`，而那个异常随后被当成
         //   **"失败原因"** 显示给用户（实测界面逐字：`生成失败：refs.map is not a function`）。
         //   ★ 面向用户的原因只能来自后端的 `failReason` / `failHint`（它们是可读的中文），
         //     前端**不许**把自己的类型错误拼进去。
         assistant.refs = Array.isArray(refs) ? refs.map(toRefEx) : []
+        // ★ 后端这句话现在有两种用法：零命中时说"为什么没有引用"，有引用时也可能说
+        //   "因为太长省略了几条"（上下文预算闸门）。两种都必须显示 —— 静默少给几条引用，
+        //   用户只会以为"没检到"，而这两种情况的处置完全不同。
+        assistant.refsNotice = notice ?? null
       },
       onDelta: (chunk) => {
         assistant.content += chunk

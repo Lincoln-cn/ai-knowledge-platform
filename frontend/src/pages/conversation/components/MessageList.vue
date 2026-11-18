@@ -116,7 +116,9 @@
             v-if="msg.role !== 'USER' && msg.kind !== 'PROLOGUE' && msg.refs?.length"
             class="ref-block"
           >
-            <div class="label">SOURCES</div>
+            <!-- ★ 原来是英文 `SOURCES`。这个产品里其他地方都用中文（「引用」「知识库」），
+                 一个英文栏目名会让人以为它是品牌/产品名，而不是"这里是出处的意思"。 -->
+            <div class="label">引用资料 <span class="num">{{ msg.refs.length }}</span> 条</div>
             <div class="ref-chips">
               <button
                 v-for="ref in msg.refs"
@@ -124,6 +126,7 @@
                 type="button"
                 class="ref-chip"
                 :class="{ active: activeRefIndex === ref.index }"
+                :title="`${ref.title || ref.docName} · ${ref.kbName} · 相似度 ${ref.score.toFixed(2)}（0–1，越高越接近问题）`"
                 @click="emit('cite', msg, ref.index)"
               >
                 <span class="num">[{{ ref.index }}]</span>
@@ -131,6 +134,27 @@
                 <span class="num score">{{ ref.score.toFixed(2) }}</span>
               </button>
             </div>
+          </div>
+
+          <!--
+            零引用说明（`notice` 契约字段）：后端只在"这一轮零引用"时给一句原因。
+            ★ 三个条件缺一不可：`refs` 是**空数组**（明确零命中，不是 `null` = "引用从没到过"）、
+              且后端真的给了话。缺任何一个都不显示 —— 宁可什么都不说，也不许前端自己编一句
+              "可能是因为没开召回"（面向用户的原因只能来自后端）。
+          -->
+          <!--
+            引用说明：零命中时说"为什么没有引用"，有引用时也可能说"因为太长省略了几条"。
+            ★ 两种情况都必须显示 —— 后者若被吞掉，用户看到 2 条引用却不知道自己问的那份
+              文档被省下去了，只会以为"没检到"。
+          -->
+          <div
+            v-if="msg.role !== 'USER' && msg.kind !== 'PROLOGUE' && msg.refs && noticeOf(msg)"
+            class="ref-notice"
+          >
+            <span class="ref-notice-label">
+              {{ msg.refs.length === 0 ? '本轮无引用' : '引用有省略' }}
+            </span>
+            <span class="ref-notice-text">{{ noticeOf(msg) }}</span>
           </div>
 
           <!--
@@ -253,6 +277,14 @@ const scroller = ref<HTMLElement>()
 /** 契约 ChatMessage.attachments 为可选；缺省空数组 */
 const attsOf = (msg: ChatMessage): ChatAttachment[] =>
   ((msg as ChatMessage & { attachments?: ChatAttachment[] }).attachments ?? [])
+
+/**
+ * 零命中原因（`refsNotice`）—— 与 `attachments` 同一处境：**契约里没有它**，
+ * 是对话页在流式过程里挂在消息对象上的本地扩展字段（见 `useChatSession` 的 `ChatMessageEx`）。
+ * 所以按同一种写法取，不往 `@/api/conversations` 的契约里加后端不返回的字段。
+ */
+const noticeOf = (msg: ChatMessage): string | null =>
+  (msg as ChatMessage & { refsNotice?: string | null }).refsNotice ?? null
 
 const isLast = (msg: ChatMessage) => msg.id === props.messages[props.messages.length - 1]?.id
 
@@ -564,6 +596,34 @@ defineExpose({ scrollToBottom, scrollToMessage, scrollToCite })
   display: flex;
   flex-direction: column;
   gap: var(--space-2xs);
+}
+
+/* 引用说明：一句话，克制到与正文同一层的信息量级 —— 它不是警告，只是把
+   "为什么没引用"或"省略了几条"从沉默变成可读的。不许用红/黄这类告警色：多数情况下它只是
+   "知识库里确实没有"，那是正常结果；省略几条也只是长度取舍，不是错误。 */
+.ref-notice {
+  max-width: 860px;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  padding-left: var(--space-3xs);
+  border-left: 2px solid var(--color-rule);
+  padding-block: var(--space-3xs);
+}
+
+.ref-notice-label {
+  flex: none;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--color-ink-2);
+}
+
+.ref-notice-text {
+  /* 正文 ≥14px（令牌纪律）：这句话是给人读的，不是元信息 —— 别跟 .label 一样压成 12px。 */
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+  color: var(--color-muted);
 }
 
 .ref-chips {
