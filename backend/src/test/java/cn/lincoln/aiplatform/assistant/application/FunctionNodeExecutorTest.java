@@ -15,8 +15,8 @@ import org.junit.jupiter.api.Test;
 /**
  * 函数节点。
  *
- * <p>它和 {@link FunctionLibNodeExecutor} 执行同一段核心（{@link FunctionInvocation}）， 所以这里不重抄参数解析的每一条 ——
- * 那会成为"同一件事两处各写一份"。 这里只钉三件<strong>这两者确实不同</strong>的事：类型标识、报错文案里的节点名、以及"两个类型都在"。
+ * <p>它把参数解析与端口调用都委托给 {@link FunctionInvocation}，所以这里不重抄参数解析的每一条 —— 那会成为"同一件事两处各写一份"。
+ * 这里只钉三件<strong>这两者确实不同</strong>的事：类型标识、报错文案里的节点名、以及"两个类型都在"。
  */
 class FunctionNodeExecutorTest {
 
@@ -43,8 +43,6 @@ class FunctionNodeExecutorTest {
   void hasItsOwnType() {
     assertThat(new FunctionNodeExecutor(providerOf(new FixedPort())).type())
         .isEqualTo("FUNCTION_NODE");
-    assertThat(new FunctionLibNodeExecutor(providerOf(new FixedPort())).type())
-        .isEqualTo("FUNCTION_LIB_NODE");
   }
 
   @Test

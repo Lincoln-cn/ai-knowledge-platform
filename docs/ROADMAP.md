@@ -5961,6 +5961,10 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 
 ## 11.44 函数库 / 函数两个节点的能力口径（`#333` 遗留，2026-11-14 拍板）
 
+> ★ **2026-11-17 订正**：这两个节点已**合并成一个**（`FUNCTION_LIB_NODE` 删除，只留 `FUNCTION_NODE`），
+> 本节 §11.44.1 的"保持现状（两个类型）"因此失效，合并的理由与判据见 **§11.44.7**。
+> 其余小节（尤其是 §11.44.4 关于沙箱是第三个类型）仍然有效。
+
 0.7.4 把 `FUNCTION_LIB_NODE` / `FUNCTION_NODE` 做成可执行时，它们调的是**平台内置的 11 个字符串函数**
 （`upper` / `lower` / `trim` / `length` / `concat` / `substring` / `replace` / `split` / `join` / `default` / `jsonpath`），
 **不执行用户写的东西**。`#333` 收尾时留了一问：这算"做完了"还是"做了个假东西"？本节把它定成口径。
@@ -6002,8 +6006,9 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 
 ### 11.44.5 判据
 
-1. 三个类型（`FUNCTION_LIB_NODE` / `FUNCTION_NODE` / 将来那个脚本节点）在目录里的说明互不含糊：
-   能核对的做法是 `node --run check:node-types` 通过之外，人工读 `node-types.json` 里这三条 `description`。
+1. 类型说明互不含糊：能核对的做法是 `node --run check:node-types` 通过之外，人工读 `node-types.json`
+   里 `FUNCTION_NODE` 与将来 `SCRIPT_NODE` 两条 `description`。（★ 2026-11-17 订正：`FUNCTION_LIB_NODE`
+   已并进 `FUNCTION_NODE`，见 §11.44.7 —— 本条原先写的是"三个类型"。）
 2. `BuiltinFunctionsTest.unknownFunctionAndArity` 常绿 —— 它断的是"清单外的名字跑不了"。
 3. **反证（已实测）**：把 `BuiltinFunctions` 的 `NAMES` 里删掉 `"trim"`，`BuiltinFunctionsTest` **2 条红**
    —— `advertisesItsFunctions:27`（清单对不上）与 `caseAndTrim:53`（`IllegalArgument 没有这个内置函数：trim`）；
@@ -6013,6 +6018,52 @@ ERROR: null value in column "final_output_preview" of relation "as_workflow_reco
 
 - 不做"在配置里写表达式"（`upper(trim(var.x))` 这种）—— 那已经是半个脚本语言，且没有沙箱兜底。
 - 不做函数市场 / 用户注册函数 —— 与 `0.9.0` 的"函数库沙箱"同族，属 1.0 之后。
+
+### 11.44.7 ★ 2026-11-17 订正：`FUNCTION_LIB_NODE` 并进 `FUNCTION_NODE`（目录 18 → 17）
+
+上一节与 §11.44.1 的"保持现状（两个类型）"**已被本节推翻**。起因是用户在画布上发现
+"函数"与"函数库"两个组件长得一模一样，问是不是重复。
+
+**三处铁证（都可核对）**：
+
+| 维度 | 证据 |
+|---|---|
+| 面板 | `frontend/src/pages/workflow/components/nodes/function-lib-node/index.ts` 只有一行 `import FunctionNodeVue from '../function-node/index.vue'`，其注释自陈「与函数节点共用同一个面板：两者执行同一段核心、配置三格完全一样，差别只在类型名」 |
+| 配置与输出 | `node-types.json` 里两条的 `configFields`（`functionName` / `args` / `outputKey`）与 `outputs`（`function_result`）逐字相同 |
+| 执行 | 两个 Executor 最后调的都是一行 `FunctionInvocation.run(context, NODE_NAME, port)` |
+
+`FunctionNodeExecutor` 的旧 javadoc 说差别是"面板怎么挑函数（从列表选 vs 直接写名字）"——
+这条理由今天不成立：面板是一个 `el-select`，`filterable` + `allow-create` 同时支持两种填法。
+
+**为什么不能"只把 `catalogEnabled` 改 false"**：`WorkflowNodeTypeTest` 两条闸门要求
+① `executable: true` 蕴含 `catalogEnabled: true`；② 目录里恰好 N 个。只隐藏会让 ① 红，
+所以只能真合并。
+
+**合并方向**：留「函数」，删「函数库」。理由不是名字谁好听，而是**"函数库"这个词要腾出来**——
+§11.44.4 已经定了"沙箱上线后是第三个节点类型（例如 `SCRIPT_NODE`）"，而"函数库"在设计册里
+本义就是执行用户脚本的那个东西（0.9.0 判据："沙箱能起、超时能杀"）。留着它指代内置纯函数，
+等沙箱落地时反而要先改名，那是一次不必要的破坏。
+
+**存量数据**：合并不进迁移（一次性数据，不是结构变更）。实测本地库 `as_workflow_draft` 与
+`as_workflow_version` 里 `FUNCTION_LIB_NODE` **都是 0 行**（`graph::text like '%FUNCTION_LIB_NODE%'`），
+所以没有草稿或已发布版本需要改写 —— 若是别的部署有，用一条 `update ... set graph = replace(graph::text, ...)`
+一次性处理即可。
+
+**顺带修了一条存量红**：`WorkflowAdmissionServiceTest.aPlannedTypeBlocksBothPublishingAndExecution`
+原先拿 `FUNCTION_LIB_NODE` 当"规划中的类型"（`known=true` 且 `executable=false`），但那条目在
+目录里 `executable` **一直是 true**，所以它进不了 `PLANNED_TYPE` 分支、断言 `isFalse` 恒失败 ——
+即这条用例在合并之前就已经红着（`#113` 把 `isTrue` 改成 `isFalse` 时没换成真的规划中类型）。
+现在改成用 Mockito 造一个 `NodeTypeCatalog`：默认全可执行、只把 `FUNCTION_NODE` 按下去
+（★ 不先铺"默认 true"的话，mock 的 boolean 默认值是 false，`START_NODE`/`REPLY_NODE` 会一起
+被判成规划中类型，`PLANNED_TYPE` 就不止一条）。
+
+**判据（做了才算数）**：
+
+1. `node-types.json` 17 条；`WorkflowNodeTypeTest` 里的 `exactlySeventeenAreInCatalog` /
+   `catalogCoversAllSeventeenTypes` 通过。
+2. `node --run check:node-types` 一致；`python check_workflow_node_types.py` 5/5。
+3. 生成物 `nodeTypes.generated.ts` 里 `FUNCTION_LIB_NODE` 零命中（它由脚本生成，手改无效）。
+4. 沙箱落地时加 `SCRIPT_NODE` 回到 18 条，两条闸门的数字一起改 —— 这一步写进 `0.9.0` 的交接说明。
 
 ## 11.45 0.8 详细开发计划（2026-11-14 规划）
 

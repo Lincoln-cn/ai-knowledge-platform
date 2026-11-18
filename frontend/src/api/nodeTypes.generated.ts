@@ -19,7 +19,6 @@ export const IMPLEMENTED_NODE_TYPES = [
   "CONDITION_NODE",
   "NUMBER_CONDITION_NODE",
   "REPLY_NODE",
-  "FUNCTION_LIB_NODE",
   "FUNCTION_NODE",
   "RERANKER_NODE",
   "APPLICATION_NODE",
@@ -49,7 +48,6 @@ export const NODE_TYPE_ORDER = [
   "CONDITION_NODE",
   "NUMBER_CONDITION_NODE",
   "REPLY_NODE",
-  "FUNCTION_LIB_NODE",
   "FUNCTION_NODE",
   "RERANKER_NODE",
   "APPLICATION_NODE",
@@ -71,7 +69,6 @@ export const NODE_TYPE_LABELS: Record<WorkflowNodeTypeName, string> = {
   CONDITION_NODE: "条件判断",
   NUMBER_CONDITION_NODE: "数值条件",
   REPLY_NODE: "回复",
-  FUNCTION_LIB_NODE: "函数库",
   FUNCTION_NODE: "函数",
   RERANKER_NODE: "重排",
   APPLICATION_NODE: "应用调用",
@@ -93,7 +90,6 @@ export const NODE_TYPE_DESCRIPTIONS: Record<WorkflowNodeTypeName, string> = {
   CONDITION_NODE: "按条件把流程分成两支",
   NUMBER_CONDITION_NODE: "按数值比较把流程分成多支",
   REPLY_NODE: "直接输出一段固定文案",
-  FUNCTION_LIB_NODE: "调用平台内置的公共函数（不是执行自定义脚本 —— 沙箱在 0.9.0），结果写进流程变量",
   FUNCTION_NODE: "直接指定内置函数名调一次（不执行自定义脚本 —— 沙箱在 0.9.0），结果写进流程变量",
   RERANKER_NODE: "把上游检索到的候选按与问题的相关性重新排序",
   APPLICATION_NODE: "把一个已发布的编排应用当成这一步的函数：用上游输入跑它，拿它的最终输出",
@@ -173,11 +169,6 @@ export const NODE_CONFIG_FIELDS: Record<WorkflowNodeTypeName, readonly NodeConfi
     { key: "replyType", label: "回复形态", type: "string", required: false, panelOnly: false, options: ["content"], hint: "当前只有「自定义内容」一种。缺省即它，不必手选", defaultValue: "content" },
     { key: "asResult", label: "返回内容", type: "boolean", required: false, panelOnly: true, hint: "打开后这条回复作为流程结果呈现给用户", defaultValue: true },
   ],
-  FUNCTION_LIB_NODE: [
-    { key: "functionName", label: "函数", type: "string", required: true, panelOnly: false, hint: "内置函数：upper / lower / trim / length / concat / substring / replace / split / join / default / jsonpath" },
-    { key: "args", label: "参数", type: "object-list", required: false, panelOnly: true, hint: "每条参数选「字面量」或「流程变量」；省略来源时按字面量" },
-    { key: "outputKey", label: "输出到变量", type: "string", required: false, panelOnly: true, defaultValue: "function_result" },
-  ],
   FUNCTION_NODE: [
     { key: "functionName", label: "函数", type: "string", required: true, panelOnly: false, hint: "内置函数：upper / lower / trim / length / concat / substring / replace / split / join / default / jsonpath" },
     { key: "args", label: "参数", type: "object-list", required: false, panelOnly: true, hint: "每条参数选「字面量」或「流程变量」；省略来源时按字面量" },
@@ -239,7 +230,6 @@ export const NODE_OUTPUT_FIELDS: Record<WorkflowNodeTypeName, readonly NodeVaria
   CONDITION_NODE: [{ label: "命中的分支", value: "active_branch" }],
   NUMBER_CONDITION_NODE: [{ label: "命中的分支", value: "active_branch" }],
   REPLY_NODE: [{ label: "回复内容", value: "reply" }],
-  FUNCTION_LIB_NODE: [{ label: "函数结果", value: "function_result" }],
   FUNCTION_NODE: [{ label: "函数结果", value: "function_result" }],
   RERANKER_NODE: [{ label: "重排后的资料", value: "rerank_result" }, { label: "重排后的命中明细", value: "rerank_hits" }],
   APPLICATION_NODE: [{ label: "被调应用的输出", value: "app_output" }],
@@ -297,9 +287,6 @@ export const NODE_DEFAULT_DATA: Record<WorkflowNodeTypeName, Record<string, unkn
     content: "已为你整理如下：",
     replyType: "content",
     asResult: true,
-  },
-  FUNCTION_LIB_NODE: {
-    outputKey: "function_result",
   },
   FUNCTION_NODE: {
     outputKey: "function_result",
@@ -434,16 +421,6 @@ export const NODE_TYPE_META: readonly NodeTypeMetaRecord[] = [
     executable: true,
     configFields: NODE_CONFIG_FIELDS["REPLY_NODE"] ?? [],
     outputs: [{ key: "reply", label: "回复内容" }]
-  },
-  {
-    type: "FUNCTION_LIB_NODE",
-    label: "函数库",
-    description: "调用平台内置的公共函数（不是执行自定义脚本 —— 沙箱在 0.9.0），结果写进流程变量",
-    category: "扩展",
-    catalogEnabled: true,
-    executable: true,
-    configFields: NODE_CONFIG_FIELDS["FUNCTION_LIB_NODE"] ?? [],
-    outputs: [{ key: "function_result", label: "函数结果" }]
   },
   {
     type: "FUNCTION_NODE",

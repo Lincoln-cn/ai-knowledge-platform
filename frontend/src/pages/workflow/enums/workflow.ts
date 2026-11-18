@@ -7,8 +7,6 @@ export enum WorkflowType {
   Condition = 'CONDITION_NODE',
   NumberCondition = 'NUMBER_CONDITION_NODE',
   Reply = 'REPLY_NODE',
-  FunctionLib = 'FUNCTION_LIB_NODE',
-  FunctionLibCustom = 'FUNCTION_NODE',
   RrerankerNode = 'RERANKER_NODE',
   Application = 'APPLICATION_NODE',
   DocumentExtractNode = 'DOCUMENT_EXTRACT_NODE',

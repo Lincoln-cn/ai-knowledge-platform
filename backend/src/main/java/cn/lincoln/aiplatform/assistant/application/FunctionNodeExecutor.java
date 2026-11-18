@@ -7,19 +7,14 @@ import org.springframework.stereotype.Component;
 /**
  * 函数节点：直接写函数名调一次内置函数，把结果写进流程变量。
  *
- * <h3>与 {@link FunctionLibNodeExecutor} 的关系</h3>
+ * <h3>为什么只有一个函数节点</h3>
  *
- * <p>两者执行完全相同，差别在面板形态与使用场合：
+ * <p>此前还有过一个 {@code FUNCTION_LIB_NODE}（「函数库」），配置三格、输出变量、执行核心与这里完全相同 ——
+ * 连面板都是同一个组件。早期设计里两者的差别是「从列表里挑」与「直接写名字」，而面板上的下拉本来就带 {@code allow-create}，一个控件两种用法都支持。于是那个类型在 0.9.2
+ * 被合并掉（见 {@code ROADMAP §11.44.7}）。
  *
- * <ul>
- *   <li>{@code FUNCTION_LIB_NODE} —— 面板从列表里挑，适合"我知道有个函数叫 trim，但不想背参数顺序"
- *   <li>{@code FUNCTION_NODE} —— 面板直接写名字，适合"这条流程是从别处导进来的，函数名已经写死了"
- * </ul>
- *
- * <p>为什么保留两个类型而不是合并：设计册与画布的节点目录把两者列为不同组件，且用户已有的草稿里 两种都可能存在。合并成一种会让旧图里的另一种类型变成"未知节点"。所以执行逻辑共用
- * （{@link FunctionInvocation}），类型标识保持两个。
- *
- * <p>★ 同样不执行用户写的代码 —— 见 {@link FunctionLibNodeExecutor} 的说明。
+ * <p>★ 「函数库」这个名字留给 {@code 0.9.0} 的脚本沙箱 —— 那个能力执行<strong>用户上传的代码</strong>，与这里调 内置纯函数是两件事（见 {@link
+ * FunctionInvocation}）。
  */
 @Component
 public class FunctionNodeExecutor implements NodeExecutor {

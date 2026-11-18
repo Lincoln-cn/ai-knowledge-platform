@@ -782,7 +782,6 @@ function toLegacy(type: string, config: any): LegacyBundle {
       return speechToTextToLegacy(config)
     case 'IMAGE_GENERATE_NODE':
       return imageGenerateToLegacy(config)
-    case 'FUNCTION_LIB_NODE':
     case 'FUNCTION_NODE':
       return functionToLegacy(config)
     case 'FORM_NODE':
@@ -824,7 +823,6 @@ function fromLegacy(type: string, nd: any, props: any): Record<string, any> {
       return speechToTextFromLegacy(nd)
     case 'IMAGE_GENERATE_NODE':
       return imageGenerateFromLegacy(nd)
-    case 'FUNCTION_LIB_NODE':
     case 'FUNCTION_NODE':
       return functionFromLegacy(nd)
     case 'FORM_NODE':

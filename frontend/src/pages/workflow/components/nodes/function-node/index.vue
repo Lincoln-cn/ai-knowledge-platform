@@ -96,7 +96,7 @@ const props = defineProps<{ nodeModel: any }>()
 const tick = ref(0)
 const names = ref<string[]>([])
 
-const typeLabel = computed(() => (props.nodeModel?.type === 'FUNCTION_LIB_NODE' ? '函数库' : '函数'))
+const typeLabel = computed(() => '函数')
 
 interface ArgLike {
   from?: 'literal' | 'variable'

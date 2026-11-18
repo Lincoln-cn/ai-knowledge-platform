@@ -1,6 +1,9 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -72,18 +75,30 @@ class WorkflowAdmissionServiceTest {
 
   @Test
   void aPlannedTypeBlocksBothPublishingAndExecution() {
+    // ★ 这一格只能用 mock 造：真实目录里 17 个类型现在全部 executable=true（0.9.2 把 FUNCTION_LIB_NODE
+    // 并进 FUNCTION_NODE 之后更是如此），而 PLANNED_TYPE 分支的条件是「known 且 !executable」。
+    // 这条用例原先拿 FUNCTION_LIB_NODE 当"规划中的类型"，但那条目在目录里 executable 其实是 true，
+    // 所以它一直红着（断言 isFalse、实际是 true）—— 见 ROADMAP §11.44.7。
+    NodeTypeCatalog plannedOnly = mock(NodeTypeCatalog.class);
+    when(plannedOnly.known(anyString())).thenReturn(true);
+    // 默认一律可执行，只把 FUNCTION_NODE 按下去 —— 不先铺这个默认值的话，mock 的 boolean
+    // 默认返回 false，START_NODE/REPLY_NODE 会一起被判成规划中的类型，PLANNED_TYPE 就不止一条了。
+    when(plannedOnly.executable(anyString())).thenReturn(true);
+    when(plannedOnly.executable("FUNCTION_NODE")).thenReturn(false);
+    WorkflowValidationService plannedValidation = new WorkflowValidationService(plannedOnly);
+    WorkflowAdmissionService plannedAdmission =
+        new WorkflowAdmissionService(plannedValidation, plannedOnly);
+
     // 末尾补一个 REPLY_NODE：不补的话发布这一层会因为「没有输出节点」先红，
     // 那样这条用例就证明不了「区别在类型上」—— 这正是第一版踩的坑。
     WorkflowValidationService.Graph planned =
         new WorkflowValidationService.Graph(
             List.of(
-                node("s1", "START_NODE"),
-                node("f1", "FUNCTION_LIB_NODE"),
-                node("r1", "REPLY_NODE")),
+                node("s1", "START_NODE"), node("f1", "FUNCTION_NODE"), node("r1", "REPLY_NODE")),
             List.of(edge("e1", "s1", "f1"), edge("e2", "f1", "r1")));
 
-    WorkflowValidationService.Result publishable = validation.validate(planned);
-    WorkflowValidationService.Result runnable = admission.admission(planned);
+    WorkflowValidationService.Result publishable = plannedValidation.validate(planned);
+    WorkflowValidationService.Result runnable = plannedAdmission.admission(planned);
 
     // 新语义（#113 判据 2）：implemented=false = 本版本不支持 ⇒ PLANNED_TYPE 由 WARNING 升为 ERROR，
     // 发布这一层现在也直接拒绝（收紧前这里断言 isTrue，即"发布只警告、准入才拦"的旧分界）。
