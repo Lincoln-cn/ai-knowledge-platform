@@ -1481,7 +1481,11 @@ public class ChatService {
       if (hits.isEmpty()) {
         // ★ 检索确实跑了、也确实一条都没命中 —— 与"没检索"必须能分开，否则用户没法判断
         //   该去补知识库，还是该去查开关/权限。
-        return RetrievalOutcome.empty("检索跑完了，但知识库里没有与这个问题相关的内容。");
+        // ★★ 但"没命中"还有一个更常见、更容易误导用户的成因（`#358`）：附件根本没进来
+        //   （解析/分段失败、或还在解析中）。那时说「知识库里没有相关内容」是假话 ——
+        //   用户会去改问法、去翻知识库，谁也想不到要重传文件。
+        return RetrievalOutcome.empty(
+            noHitNotice(conversationId, hasAttachments, "检索跑完了，但知识库里没有与这个问题相关的内容。"));
       }
       // ★★ 阈值过滤的**顺序**在 `#187` 收口时改过，两步各有理由：
       //   ① 先收候选（去重 + 超采样上限），**不**在这一步做阈值；
@@ -1504,7 +1508,8 @@ public class ChatService {
       }
       if (candidates.isEmpty()) {
         // 走到这里只有一种可能：hits 里有分段 id 但全部重复（去重后为空）。仍按"没有相关内容"处置。
-        return RetrievalOutcome.empty("检索跑完了，但知识库里没有与这个问题相关的内容。");
+        return RetrievalOutcome.empty(
+            noHitNotice(conversationId, hasAttachments, "检索跑完了，但知识库里没有与这个问题相关的内容。"));
       }
       cards = new LinkedHashMap<>();
       for (SegmentSearchPort.Card card : segmentSearch.load(candidates)) {
@@ -1671,6 +1676,23 @@ public class ChatService {
       return RetrievalOutcome.empty("命中的分段都取不到可展示的信息（可能刚被删除或还在解析中），本轮没有可用引用；可以稍后重试。");
     }
     return applyReferenceBudget(refs);
+  }
+
+  /**
+   * 零命中时该说哪句话（{@code #358}）。
+   *
+   * <p>★ 这条分叉的存在理由：零命中至少有六种成因（未开召回 / 取不到身份 / 取不到密级 / 阈值滤光 / 密级闸门 / 真的没有）， 而本轮还多出一种最容易被误读的 ——
+   * <strong>附件根本没进来</strong>（解析或分段失败、或还在解析中）。那时若 照说「知识库里没有相关内容」，用户会去改问法、去翻知识库，谁也想不到要重传那个文件：这就是
+   * {@code silent-failure} 的标准形状（说了一句听起来合理、但指向错误方向的真话）。
+   *
+   * <p>★ 实现放在 {@code ConversationAttachmentPort} 的实现侧而不是这里：判「附件现在检索不到」要读文档状态与 {@code
+   * fail_reason}，那是知识模块的知识；{@code conversation} 模块的 {@code package-info} 里没有 {@code knowledge}。
+   */
+  private String noHitNotice(UUID conversationId, boolean hasAttachments, String fallback) {
+    if (!hasAttachments || conversationAttachments == null) {
+      return fallback;
+    }
+    return conversationAttachments.describeAttachmentFailure(conversationId).orElse(fallback);
   }
 
   /**

@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.platform.knowledge;
 
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -79,6 +80,22 @@ public interface ConversationAttachmentPort {
    * @return 有没有至少一条会话域附件文档
    */
   boolean hasAttachments(UUID conversationId);
+
+  /**
+   * 本会话附件里有没有「现在检索不到」的，有的话给出一句能直接给用户看的原因。
+   *
+   * <p>★ 为什么需要它（{@code #358}）：问答链路在零命中时只会说「知识库里没有与这个问题相关的内容」—— 而当附件 本身没切出分段（{@code
+   * SEGMENT_FAILED}，例如"该内容 501 字，超出当前向量模型上限 500 字"）或还停在解析中时，
+   * 那句话是<strong>假话</strong>：不是库里没有，是这份附件根本没进来。用户于是会去改问法、去翻知识库， 谁也想不到要重传文件。
+   *
+   * <p>★ 只报「检索不到」的两种：① 已进失败态（带 {@code fail_reason}）；② 还在解析中（{@code PENDING_PARSE} / {@code
+   * SEGMENTING}）。★ <strong>{@code PENDING_EMBEDDING} 不算</strong> —— 会话域只走全文一路，
+   * 还没向量化的分段照样能被全文命中，把它报成"不可用"是另一种假话。
+   *
+   * @param conversationId 会话 id（{@code null} ⇒ empty）
+   * @return 有就用拿到的这句话替换掉「没有相关内容」；没有 ⇒ empty（走原本文案）
+   */
+  Optional<String> describeAttachmentFailure(UUID conversationId);
 
   /**
    * 彻底删除一个会话下的<strong>全部</strong>会话域文档行（{@code kb_document} + {@code kb_segment} +

@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -344,6 +345,39 @@ class AppRetrievalParamsTest {
         .isFalse();
   }
 
+  /**
+   * ★★ 附件没进来时，零引用必须怪附件，不许怪知识库（`#358`）。
+   *
+   * <p>红在哪：真栈实测（2026-11-18）—— 上传 1250 字附件后问「巡检口令是什么？」，两次不同问法都只得到
+   * 「检索跑完了，但知识库里没有与这个问题相关的内容」。而库里那条文档的真实状态是 {@code SEGMENT_FAILED}， {@code fail_reason} = 「该内容 501
+   * 字，超出当前向量模型上限 500 字。」 —— 一句听起来完全合理、却把用户 指向错误方向的真话：他会去改问法、去翻知识库，谁也想不到要重传那个文件。
+   *
+   * <p>⇒ 判据：零引用且本会话附件检索不到时，notice 必须是附件那句话，且**不能**出现「知识库里没有」。
+   */
+  @Test
+  void aBrokenAttachmentIsBlamedForTheEmptyResultNotTheLibrary() {
+    String failure =
+        "附件「长文档分段测试.md」没能进入检索：该内容 501 字，超出当前向量模型上限 500 字。" + " 可以删掉重传一次，或换一个格式（这份解析失败了）。";
+
+    Run run = runWithBrokenAttachment(failure);
+
+    assertThat(run.search.fullTextCalls.get())
+        .as("附件检索不到也要真的去检索一次 —— 否则这条测试会变成「因为没检索所以没命中」的假绿")
+        .isEqualTo(1);
+    assertThat(run.sink.notice())
+        .as("★ 附件没进来时不许说「知识库里没有相关内容」")
+        .contains("长文档分段测试.md")
+        .doesNotContain("知识库里没有与这个问题相关的内容");
+  }
+
+  /** 反证的另一半：附件一切正常时，文案必须还是原来那句（否则等于把所有零命中都怪到附件上）。 */
+  @Test
+  void aHealthyAttachmentKeepsTheOriginalWording() {
+    assertThat(runWithBrokenAttachment(null).sink.notice())
+        .as("附件没问题时仍应指向知识库")
+        .contains("知识库里没有与这个问题相关的内容");
+  }
+
   // ────────────────────────── 夹具 ──────────────────────────
 
   @Test
@@ -405,7 +439,9 @@ class AppRetrievalParamsTest {
       UUID conversationId,
       ChatPolicyResolver policy,
       boolean hasAttachments,
-      List<UUID> preparedKbIds) {}
+      List<UUID> preparedKbIds,
+      /** 附件「现在检索不到」时给用户看的那句话；{@code null} = 附件一切正常。 */
+      String attachmentFailure) {}
 
   private static Run run(RetrievalParams params, List<SegmentSearchPort.Scored> hits) {
     return run(params, new FixedSearchPort(hits, List.of()), List.of(), true);
@@ -502,7 +538,8 @@ class AppRetrievalParamsTest {
         service.setPolicyResolver(scenario.policy());
       }
       service.setConversationAttachments(
-          new FixedAttachments(scenario.conversationId(), scenario.hasAttachments()));
+          new FixedAttachments(
+              scenario.conversationId(), scenario.hasAttachments(), scenario.attachmentFailure()));
     }
     if (referenceBudgetChars != null) {
       service.setReferenceBudgetChars(referenceBudgetChars);
@@ -538,7 +575,18 @@ class AppRetrievalParamsTest {
         List.of(),
         false,
         null,
-        new Scenario(CONVERSATION_ID, policy, hasAttachments, List.of()));
+        new Scenario(CONVERSATION_ID, policy, hasAttachments, List.of(), null));
+  }
+
+  /** 便捷形状：会话已存在、策略固定、有附件，但**附件本身检索不到**（`#358`）。 */
+  private static Run runWithBrokenAttachment(String failure) {
+    return run(
+        new RetrievalParams(RetrievalMode.FULLTEXT, 0.30, 5, NoRefStrategy.FREE_ANSWER),
+        new FixedSearchPort(List.of(), List.of()),
+        List.of(),
+        false,
+        null,
+        new Scenario(CONVERSATION_ID, null, true, List.of(), failure));
   }
 
   private static SegmentSearchPort.Scored hit(UUID id, double score) {
@@ -715,14 +763,30 @@ class AppRetrievalParamsTest {
     private final UUID conversationId;
     private final boolean has;
 
+    /** 附件「现在检索不到」时给用户看的那句话；{@code null} = 附件一切正常（走原本文案）。 */
+    private final String failure;
+
     private FixedAttachments(UUID conversationId, boolean has) {
+      this(conversationId, has, null);
+    }
+
+    private FixedAttachments(UUID conversationId, boolean has, String failure) {
       this.conversationId = conversationId;
       this.has = has;
+      this.failure = failure;
     }
 
     @Override
     public boolean hasAttachments(UUID id) {
       return has && conversationId != null && conversationId.equals(id);
+    }
+
+    @Override
+    public Optional<String> describeAttachmentFailure(UUID id) {
+      if (!has || conversationId == null || !conversationId.equals(id)) {
+        return Optional.empty();
+      }
+      return Optional.ofNullable(failure);
     }
 
     @Override

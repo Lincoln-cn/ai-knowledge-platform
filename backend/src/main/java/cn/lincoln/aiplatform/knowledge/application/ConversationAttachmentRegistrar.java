@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.knowledge.application;
 
 import cn.lincoln.aiplatform.knowledge.domain.Document;
 import cn.lincoln.aiplatform.knowledge.domain.DocumentRepository;
+import cn.lincoln.aiplatform.knowledge.domain.DocumentStatus;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentEmbeddingRepository;
 import cn.lincoln.aiplatform.knowledge.domain.SegmentRepository;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
@@ -10,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -146,6 +148,40 @@ public class ConversationAttachmentRegistrar implements ConversationAttachmentPo
       return false;
     }
     return !repository.findConversationAttachments(conversationId).isEmpty();
+  }
+
+  /**
+   * 本会话附件里有没有「现在检索不到」的（{@code #358}）。
+   *
+   * <p>★ 只报两种：① 已进失败态 —— 带上 {@code fail_reason}（实测那句是「该内容 501 字，超出当前向量模型上限 500
+   * 字。」，用户看得懂也知道该重传还是该换格式）；② 还在解析中 —— 说实话比说"没有相关内容"好。
+   *
+   * <p>★ {@code PENDING_EMBEDDING} 刻意不报：会话域只走全文一路（{@code
+   * RetrievalScope#CONVERSATION_SCOPE_IN_VECTOR_PATH = false}），没向量化的分段照样能被全文命中 —— 实测就是这样（状态 {@code
+   * PENDING_EMBEDDING}、6 段、命中了 2 条）。把它报成"附件不可用"是另一种假话。
+   *
+   * <p>★ 多个附件时只报第一条：用户此刻要的是"为什么这次什么都没检索到"，不是一份清单；清单在知识库那边看得到。
+   */
+  @Override
+  public Optional<String> describeAttachmentFailure(UUID conversationId) {
+    if (conversationId == null) {
+      return Optional.empty();
+    }
+    for (Document attachment : repository.findConversationAttachments(conversationId)) {
+      DocumentStatus status = attachment.status();
+      String name = attachment.name() == null ? "附件" : attachment.name();
+      if (status != null && status.isFailed()) {
+        String reason =
+            attachment.failReason() == null || attachment.failReason().isBlank()
+                ? "没有留下具体原因"
+                : attachment.failReason();
+        return Optional.of("附件「" + name + "」没能进入检索：" + reason + " 可以删掉重传一次，或换一个格式（这份解析失败了）。");
+      }
+      if (status == DocumentStatus.PENDING_PARSE || status == DocumentStatus.SEGMENTING) {
+        return Optional.of("附件「" + name + "」还在解析中，稍等几秒再问一次。");
+      }
+    }
+    return Optional.empty();
   }
 
   /**

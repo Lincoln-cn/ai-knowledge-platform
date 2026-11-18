@@ -85,6 +85,18 @@ public enum DocumentStatus {
   }
 
   /**
+   * 是不是失败态（{@link #SEGMENT_FAILED} 或 {@link #EMBEDDING_FAILED}）。
+   *
+   * <p>★ 为什么要有一个方法，而不是让调用方写 {@code status == SEGMENT_FAILED || status ==
+   * EMBEDDING_FAILED}：这个判断的用途是「这份内容现在还能不能被检索到」，而两段各有失败态 —— 散在调用方写，
+   * 迟早有人只判一个（本次就是：问答链路把"附件切不出分段"报成了"知识库里没有相关内容"，因为它连 失败态都没看）。★ 加一态时若忘了改这里，{@code
+   * DocumentStatusClassificationTest} 会红（它逐个枚举成员断言分类）。
+   */
+  public boolean isFailed() {
+    return this == SEGMENT_FAILED || this == EMBEDDING_FAILED;
+  }
+
+  /**
    * 校验一次转移是否合法，非法则抛<strong>可读异常</strong>（带 from / to 与「状态未改变」）。
    *
    * <p>消息里必须出现两个状态名：排障时要一眼看出「谁想从哪儿跳到哪儿」，而不是只知道失败。
