@@ -3,6 +3,15 @@ import { request } from '@/lib/http'
 
 /* ────────────────────────── 契约类型 ────────────────────────── */
 
+/**
+ * 读数按「谁在问」切分。
+ *
+ * ★ 为什么需要它：看板上的读数此前是**全平台所有会话**混在一起 —— 评测脚本批量跑的几百轮
+ * 与真人问的一句同在一个数里，读起来就是"用量涨得猛、业务上没人用"。两者都是真数据，
+ * 但混在一起就失去了意义。
+ */
+export type AnalyticsSource = 'ALL' | 'GENERAL' | 'APPLICATION'
+
 export interface AnalyticsRange {
   /** 起始日期，YYYY-MM-DD */
   from: string
@@ -28,6 +37,10 @@ export interface AssistantRankItem {
   appId: string
   name: string
   callCount: number
+  /** 会话数（与提问数一起看才有意义） */
+  conversationCount: number
+  /** 每会话轮数 = 提问数 ÷ 会话数；277 次 / 1 个会话是脚本，277 次 / 120 个会话才是人在用 */
+  turnsPerConversation: number
   tokenCount: number
   satisfaction: number | null
 }
@@ -122,16 +135,24 @@ export interface OpsMetrics {
  * 仍要靠那条 WARN 区分，别把 0 当成"这个月真的没人问"。
  */
 
-export const getOverview = (range: AnalyticsRange) =>
+export const getOverview = (range: AnalyticsRange, source: AnalyticsSource = 'ALL') =>
   degradeOnMissingEndpoint(
-    request<OverviewMetrics>({ method: 'GET', url: '/analytics/overview', query: { ...range } }),
+    request<OverviewMetrics>({
+      method: 'GET',
+      url: '/analytics/overview',
+      query: { ...range, source }
+    }),
     { questionCount: 0, activeUserCount: 0, newUserCount: 0, tokenCount: 0, satisfaction: null },
     'GET /analytics/overview'
   )
 
-export const getTrend = (range: AnalyticsRange) =>
+export const getTrend = (range: AnalyticsRange, source: AnalyticsSource = 'ALL') =>
   degradeOnMissingEndpoint(
-    request<TrendPoint[]>({ method: 'GET', url: '/analytics/trend', query: { ...range } }),
+    request<TrendPoint[]>({
+      method: 'GET',
+      url: '/analytics/trend',
+      query: { ...range, source }
+    }),
     [],
     'GET /analytics/trend'
   )
@@ -147,9 +168,13 @@ export const listTopAssistants = (range: AnalyticsRange, limit = 10) =>
     'GET /analytics/assistants'
   )
 
-export const getQualityMetrics = (range: AnalyticsRange) =>
+export const getQualityMetrics = (range: AnalyticsRange, source: AnalyticsSource = 'ALL') =>
   degradeOnMissingEndpoint(
-    request<QualityMetrics>({ method: 'GET', url: '/analytics/quality', query: { ...range } }),
+    request<QualityMetrics>({
+      method: 'GET',
+      url: '/analytics/quality',
+      query: { ...range, source }
+    }),
     {
       avgRefCount: 0,
       firstTokenLatencyP50: null,

@@ -40,16 +40,18 @@ public class AnalyticsController {
   @PreAuthorize("hasAuthority('dashboard:view')")
   public ApiResponse<Overview> overview(
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
-      @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-    return ApiResponse.ok(analytics.overview(from, to));
+      @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+      @RequestParam(defaultValue = "ALL") AnalyticsService.SourceScope source) {
+    return ApiResponse.ok(analytics.overview(from, to, source));
   }
 
   @GetMapping("/trend")
   @PreAuthorize("hasAuthority('dashboard:view')")
   public ApiResponse<List<TrendPoint>> trend(
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
-      @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-    return ApiResponse.ok(analytics.trend(from, to));
+      @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+      @RequestParam(defaultValue = "ALL") AnalyticsService.SourceScope source) {
+    return ApiResponse.ok(analytics.trend(from, to, source));
   }
 
   @GetMapping("/assistants")
@@ -65,8 +67,9 @@ public class AnalyticsController {
   @PreAuthorize("hasAuthority('dashboard:view')")
   public ApiResponse<Quality> quality(
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
-      @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-    return ApiResponse.ok(analytics.quality(from, to));
+      @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+      @RequestParam(defaultValue = "ALL") AnalyticsService.SourceScope source) {
+    return ApiResponse.ok(analytics.quality(from, to, source));
   }
 
   /**

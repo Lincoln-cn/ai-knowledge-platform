@@ -5,6 +5,16 @@
       desc="用量、质量与反馈的总览；没有读数时显示横线而不是 0"
     >
       <template #actions>
+        <!--
+          ★ 来源与区间是两个正交的维度：区间管"多久"，来源管"谁问的"。
+          没有这一档时，评测脚本跑的几百轮与真人问的一句同在一个「提问数」里 ——
+          读起来就是"用量涨得猛、业务上没人用"，而两个读数其实都是真的。
+        -->
+        <el-radio-group v-model="source" size="small" @change="fetchAll">
+          <el-radio-button value="ALL">全部来源</el-radio-button>
+          <el-radio-button value="GENERAL">通用问答</el-radio-button>
+          <el-radio-button value="APPLICATION">应用</el-radio-button>
+        </el-radio-group>
         <el-radio-group v-model="rangeKey" size="small" @change="fetchAll">
           <el-radio-button value="7d">近 7 天</el-radio-button>
           <el-radio-button value="30d">近 30 天</el-radio-button>
@@ -115,12 +125,26 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="callCount" label="调用数" width="90" align="right">
+            <el-table-column prop="callCount" label="调用数" width="84" align="right">
               <template #default="{ row }">
                 <span class="num">{{ fmtCount(row.callCount) }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="tokenCount" label="Token" width="100" align="right">
+            <!-- ★ 这两个列是"机器在跑还是人在用"的唯一可读信号：277 次 / 1 个会话是脚本，
+                 277 次 / 120 个会话才是真人。只有调用数的时候，两者长得一模一样。 -->
+            <el-table-column prop="conversationCount" label="会话数" width="78" align="right">
+              <template #default="{ row }">
+                <span class="num">{{ fmtCount(row.conversationCount) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="turnsPerConversation" label="轮/会话" width="86" align="right">
+              <template #default="{ row }">
+                <span class="num" :class="{ hot: row.turnsPerConversation >= 50 }">
+                  {{ fmtTurns(row.turnsPerConversation) }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="tokenCount" label="Token" width="92" align="right">
               <template #default="{ row }">
                 <span class="num">{{ fmtCount(row.tokenCount) }}</span>
               </template>
@@ -202,6 +226,7 @@ import { analyticsApi, guardApi } from '@/api'
 import type {
   AssistantRankItem,
   AnalyticsRange,
+  AnalyticsSource,
   OverviewMetrics,
   QualityMetrics,
   TrendPoint
@@ -219,6 +244,14 @@ const RANGE_DAYS: Record<RangeKey, number> = { '7d': 7, '30d': 30 }
 const router = useRouter()
 
 const rangeKey = ref<RangeKey>('7d')
+
+/**
+ * 当前来源口径（`ALL` / `GENERAL` / `APPLICATION`）。
+ *
+ * ★ 默认 **ALL**，不默认「仅通用问答」：默认值一改，同一张看板的读数含义就跟着变了，
+ *   而看板上没有哪一处写着"这个数只算通用问答"。要切必须由人主动切。
+ */
+const source = ref<AnalyticsSource>('ALL')
 const loading = ref(false)
 const error = ref<string | null>(null)
 
@@ -280,10 +313,11 @@ const fetchAll = async () => {
   try {
     const q = range.value
     const [o, t, a, m, g] = await Promise.all([
-      analyticsApi.getOverview(q),
-      analyticsApi.getTrend(q),
+      analyticsApi.getOverview(q, source.value),
+      analyticsApi.getTrend(q, source.value),
+      // 排行不按来源过滤：它本来就是"按应用分组"，切到"仅通用问答"后只剩一行「未绑定」
       analyticsApi.listTopAssistants(q, 10),
-      analyticsApi.getQualityMetrics(q),
+      analyticsApi.getQualityMetrics(q, source.value),
       // 围栏读数单独 catch：它读不到不该让整页报错（下面那三块仍然可用）
       guardApi.getGuardStats(RANGE_DAYS[rangeKey.value]).catch(() => null)
     ])
@@ -318,6 +352,9 @@ const fmtRate = (n: number | null | undefined) =>
 const fmtAvg = (n: number | null | undefined) => (n == null ? '—' : n.toFixed(1))
 
 const fmtMs = (n: number | null | undefined) => (n == null ? '—' : `${n.toLocaleString()} ms`)
+
+/** 每会话轮数：一位小数就够，保留整数部分让「277.0」读起来仍是 277 次调用对 1 个会话 */
+const fmtTurns = (n: number | null | undefined) => (n == null ? '—' : n.toFixed(1))
 </script>
 
 <style scoped>
@@ -325,6 +362,17 @@ const fmtMs = (n: number | null | undefined) => (n == null ? '—' : `${n.toLoca
 .generic-tag {
   margin-left: var(--space-xs);
   transform: scale(0.9);
+}
+
+/*
+ * 「轮/会话」超过 50 标一下。
+ *
+ * ★ 这不是评分，是让人别把脚本批量跑出来的数当成真人在用：一次会话里问 277 轮，
+ *   只能是人写了个循环。阈值取 50（真人一次会话很少超过 20～30 轮，留一倍余量），
+ *   颜色用 warn 而不是 danger —— 它本身不是错误。
+ */
+.num.hot {
+  color: var(--color-warn);
 }
 
 .kpi-row {

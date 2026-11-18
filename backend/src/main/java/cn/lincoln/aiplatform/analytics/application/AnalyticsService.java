@@ -44,6 +44,37 @@ public class AnalyticsService {
    */
   static final String GENERIC_ASSISTANT_NAME = "通用对话（未绑定应用）";
 
+  /**
+   * 读数按「谁在问」切分：全部 / 只算通用问答 / 只算应用。
+   *
+   * <p>★ 为什么需要它：看板上那个「提问数」此前是**全平台所有会话的 USER 消息**。评测脚本批量跑出来的
+   * 几百轮和真人问的一句混在同一个数里，读起来就是"用量涨得很猛，但业务上没人用"。 两者都是真数据，但**混在一起就没有意义** ——
+   * 想知道的是"人用了多少"还是"机器跑了多少"，得能分开看。
+   *
+   * <p>★ 判据只有一条：{@code cv_conversation.assistant_id} 为 null = 通用问答，非 null = 某个应用。
+   * 不去猜"哪个应用是评测用的"（靠名字猜必然错），也不加用途字段（那要迁移与人工维护）。
+   */
+  public enum SourceScope {
+    ALL,
+    GENERAL,
+    APPLICATION
+  }
+
+  /**
+   * 把来源条件拼进 where。
+   *
+   * <p>★ 字符串拼接在这里是安全的：入参是**枚举**，没有外部可控片段；写成 {@code and (? = 'ALL' or …)} 会让每条 SQL 多三个占位符，而且 EXPLAIN
+   * 时看不出到底走没走条件。
+   */
+  private static String sourceClause(SourceScope scope) {
+    if (scope == null || scope == SourceScope.ALL) {
+      return "";
+    }
+    return scope == SourceScope.GENERAL
+        ? " and c.assistant_id is null"
+        : " and c.assistant_id is not null";
+  }
+
   private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
   private static final int MAX_RANGE_DAYS = 366;
 
@@ -56,18 +87,32 @@ public class AnalyticsService {
   /** 总览（全平台口径）。 */
   @Transactional(readOnly = true)
   public Overview overview(LocalDate from, LocalDate to) {
+    return overview(from, to, SourceScope.ALL);
+  }
+
+  /**
+   * 总览读数（可按来源切分）。
+   *
+   * <p>★ {@code newUserCount} 不跟着切：新注册用户是账号维度的事实，与"这一问来自通用问答还是某个应用" 无关 —— 跟着切会让人以为"应用侧新增了 N
+   * 个用户"，那是编出来的数。
+   */
+  public Overview overview(LocalDate from, LocalDate to, SourceScope scope) {
     Range range = range(from, to);
+    String source = sourceClause(scope);
     long questions =
         number(
             "select count(*) from cv_message m join cv_conversation c on c.id = m.conversation_id"
-                + " where c.deleted_at is null and m.role = 'USER' and m.created_at >= ? and"
+                + " where c.deleted_at is null"
+                + source
+                + " and m.role = 'USER' and m.created_at >= ? and"
                 + " m.created_at < ?",
             range);
     long activeUsers =
         number(
             "select count(distinct c.user_id) from cv_message m join cv_conversation c on c.id ="
-                + " m.conversation_id where c.deleted_at is null and m.role = 'USER' and"
-                + " m.created_at >= ? and m.created_at < ?",
+                + " m.conversation_id where c.deleted_at is null"
+                + source
+                + " and m.role = 'USER' and m.created_at >= ? and m.created_at < ?",
             range);
     long newUsers =
         number(
@@ -78,14 +123,18 @@ public class AnalyticsService {
         number(
             "select coalesce(sum(coalesce(m.prompt_tokens, 0) + coalesce(m.completion_tokens, 0)),"
                 + " 0) from cv_message m join cv_conversation c on c.id = m.conversation_id where"
-                + " c.deleted_at is null and m.role = 'ASSISTANT' and m.created_at >= ? and"
+                + " c.deleted_at is null"
+                + source
+                + " and m.role = 'ASSISTANT' and m.created_at >= ? and"
                 + " m.created_at < ?",
             range);
     Double satisfaction =
         nullableDecimal(
             "select 100.0 * count(*) filter (where m.feedback = 'UP') / nullif(count(*) filter"
                 + " (where m.feedback is not null), 0) from cv_message m join cv_conversation c on"
-                + " c.id = m.conversation_id where c.deleted_at is null and m.feedback is not null"
+                + " c.id = m.conversation_id where c.deleted_at is null"
+                + source
+                + " and m.feedback is not null"
                 + " and m.created_at >= ? and m.created_at < ?",
             range);
     return new Overview(questions, activeUsers, newUsers, tokens, satisfaction);
@@ -94,6 +143,12 @@ public class AnalyticsService {
   /** 按天趋势；没有数据的天补 0，前端折线不缺齿。 */
   @Transactional(readOnly = true)
   public List<TrendPoint> trend(LocalDate from, LocalDate to) {
+    return trend(from, to, SourceScope.ALL);
+  }
+
+  /** 按天趋势（可按来源切分）；没有数据的天补 0，前端折线不缺齿。 */
+  @Transactional(readOnly = true)
+  public List<TrendPoint> trend(LocalDate from, LocalDate to, SourceScope scope) {
     Range range = range(from, to);
     List<Map<String, Object>> rows =
         jdbc.queryForList(
@@ -101,7 +156,9 @@ public class AnalyticsService {
                 + "count(*) filter (where m.role = 'USER') as questions, "
                 + "count(distinct c.user_id) filter (where m.role = 'USER') as users "
                 + "from cv_message m join cv_conversation c on c.id = m.conversation_id "
-                + "where c.deleted_at is null and m.created_at >= ? and m.created_at < ? "
+                + "where c.deleted_at is null"
+                + sourceClause(scope)
+                + " and m.created_at >= ? and m.created_at < ? "
                 + "group by 1 order by 1",
             Timestamp.from(range.start()),
             Timestamp.from(range.end()));
@@ -142,6 +199,7 @@ public class AnalyticsService {
             + " coalesce(a.name, '"
             + GENERIC_ASSISTANT_NAME
             + "') as name, count(*) filter (where m.role = 'USER') as call_count,"
+            + " count(distinct c.id) as conversation_count,"
             + " coalesce(sum(case when m.role = 'ASSISTANT' then coalesce(m.prompt_tokens, 0) +"
             + " coalesce(m.completion_tokens, 0) else 0 end), 0) as token_count, 100.0 * count(*)"
             + " filter (where m.feedback = 'UP') / nullif(count(*) filter (where m.feedback is not"
@@ -150,13 +208,21 @@ public class AnalyticsService {
             + " where c.deleted_at is null and m.created_at >= ? and m.created_at < ? group by"
             + " a.id, a.name having count(*) filter (where m.role = 'USER') > 0 order by call_count"
             + " desc, name asc limit ?",
-        (rs, rowNum) ->
-            new AssistantRankItem(
-                rs.getObject("id", UUID.class),
-                rs.getString("name"),
-                rs.getLong("call_count"),
-                rs.getLong("token_count"),
-                round(rs.getBigDecimal("satisfaction"))),
+        (rs, rowNum) -> {
+          long calls = rs.getLong("call_count");
+          long conversations = rs.getLong("conversation_count");
+          return new AssistantRankItem(
+              rs.getObject("id", UUID.class),
+              rs.getString("name"),
+              calls,
+              conversations,
+              // 每会话轮数（保留一位小数）。这是"机器在跑"的唯一可读信号 —— 277 次调用对 1 个会话是
+              // 评测脚本，对 120 个会话才是真人在用。除零只在 conversations = 0 时发生，而 having 已经
+              // 把没有提问的会话滤掉了，这里仍显式兜一下（宁可显示 0 也不抛异常）。
+              conversations == 0 ? 0.0 : Math.round(calls * 10.0 / conversations) / 10.0,
+              rs.getLong("token_count"),
+              round(rs.getBigDecimal("satisfaction")));
+        },
         Timestamp.from(range.start()),
         Timestamp.from(range.end()),
         capped);
@@ -165,25 +231,37 @@ public class AnalyticsService {
   /** 质量读数；见类注释：没有数据源的三项返回 null，不伪造。 */
   @Transactional(readOnly = true)
   public Quality quality(LocalDate from, LocalDate to) {
+    return quality(from, to, SourceScope.ALL);
+  }
+
+  /** 质量读数（可按来源切分）；见类注释：没有数据源的三项返回 null，不伪造。 */
+  @Transactional(readOnly = true)
+  public Quality quality(LocalDate from, LocalDate to, SourceScope scope) {
     Range range = range(from, to);
+    String source = sourceClause(scope);
     Double avgRefs =
         nullableDecimal(
             "select avg(jsonb_array_length(m.reference_snapshot)) from cv_message m join"
-                + " cv_conversation c on c.id = m.conversation_id where c.deleted_at is null and"
-                + " m.role = 'ASSISTANT' and m.reference_snapshot is not null and"
+                + " cv_conversation c on c.id = m.conversation_id where c.deleted_at is null"
+                + source
+                + " and m.role = 'ASSISTANT' and m.reference_snapshot is not null and"
                 + " jsonb_typeof(m.reference_snapshot) = 'array' and m.created_at >= ? and"
                 + " m.created_at < ?",
             range);
     long up =
         number(
             "select count(*) from cv_message m join cv_conversation c on c.id = m.conversation_id"
-                + " where c.deleted_at is null and m.feedback = 'UP' and m.created_at >= ? and"
+                + " where c.deleted_at is null"
+                + source
+                + " and m.feedback = 'UP' and m.created_at >= ? and"
                 + " m.created_at < ?",
             range);
     long down =
         number(
             "select count(*) from cv_message m join cv_conversation c on c.id = m.conversation_id"
-                + " where c.deleted_at is null and m.feedback = 'DOWN' and m.created_at >= ? and"
+                + " where c.deleted_at is null"
+                + source
+                + " and m.feedback = 'DOWN' and m.created_at >= ? and"
                 + " m.created_at < ?",
             range);
     return new Quality(avgRefs == null ? 0.0 : avgRefs, null, null, up, down, 0);
@@ -418,8 +496,25 @@ public class AnalyticsService {
 
   public record TrendPoint(String day, long questions, long users) {}
 
+  /**
+   * 应用排行的一行。
+   *
+   * @param appId 应用 id；通用问答这一行用全零 UUID（见 {@link #topAssistants} 的注释）
+   * @param name 应用名，通用问答这一行是 {@link #GENERIC_ASSISTANT_NAME}
+   * @param callCount 提问数（USER 消息条数）
+   * @param conversationCount 会话数 —— 与提问数一起看才有意义：277 次 / 1 个会话是脚本，277 次 / 120 个会话才是人在用
+   * @param turnsPerConversation 每会话轮数（提问数 ÷ 会话数，保留一位小数）
+   * @param tokenCount prompt + completion
+   * @param satisfaction 满意度（%），无赞踩时为 null
+   */
   public record AssistantRankItem(
-      UUID appId, String name, long callCount, long tokenCount, Double satisfaction) {}
+      UUID appId,
+      String name,
+      long callCount,
+      long conversationCount,
+      double turnsPerConversation,
+      long tokenCount,
+      Double satisfaction) {}
 
   public record Quality(
       double avgRefCount,

@@ -72,18 +72,29 @@ export function overviewBetween(from: string, to: string): OverviewMetrics {
  * 第三条 satisfaction 故意为 null ——
  * 「无数据时显示 — 而不是 0」这条约定必须在界面上真的能被看到。
  */
-const rankUsageSeed: Array<{ appId: string; callCount: number; tokenCount: number; satisfaction: number | null }> = [
-  { appId: 'as1', callCount: 842, tokenCount: 712400, satisfaction: 94.2 },
-  { appId: 'as2', callCount: 615, tokenCount: 401200, satisfaction: 89.6 },
-  { appId: 'as3', callCount: 388, tokenCount: 256800, satisfaction: null },
-  { appId: 'as4', callCount: 274, tokenCount: 168300, satisfaction: 86.1 },
-  { appId: 'as5', callCount: 156, tokenCount: 97400, satisfaction: 92.0 }
+const rankUsageSeed: Array<{
+  appId: string
+  callCount: number
+  conversationCount: number
+  tokenCount: number
+  satisfaction: number | null
+}> = [
+  { appId: 'as1', callCount: 842, conversationCount: 96, tokenCount: 712400, satisfaction: 94.2 },
+  { appId: 'as2', callCount: 615, conversationCount: 74, tokenCount: 401200, satisfaction: 89.6 },
+  // ★ 刻意造一个"轮/会话"极高的行：脚本批量跑就是这样，光看调用数与真人很像
+  { appId: 'as3', callCount: 388, conversationCount: 2, tokenCount: 256800, satisfaction: null },
+  { appId: 'as4', callCount: 274, conversationCount: 44, tokenCount: 168300, satisfaction: 86.1 },
+  { appId: 'as5', callCount: 156, conversationCount: 31, tokenCount: 97400, satisfaction: 92.0 }
 ]
 
 /** 应用名从 assistants 取；查不到时显式给 '—'，不编一个名字 */
 const rankSeed: AssistantRankItem[] = rankUsageSeed.map((seed) => ({
   ...seed,
-  name: assistants.find((a) => a.id === seed.appId)?.name ?? '—'
+  name: assistants.find((a) => a.id === seed.appId)?.name ?? '—',
+  turnsPerConversation:
+    seed.conversationCount === 0
+      ? 0
+      : Math.round((seed.callCount * 10) / seed.conversationCount) / 10
 }))
 
 export function rankBetween(from: string, to: string, limit = 10): AssistantRankItem[] {
