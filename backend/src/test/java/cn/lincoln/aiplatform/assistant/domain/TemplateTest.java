@@ -108,4 +108,26 @@ class TemplateTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("内置模板");
   }
+
+  @Test
+  @DisplayName("payload 里允许 null 值 —— 内置模板的 modelId 就是 null，不许因此炸掉整个列表")
+  void payloadMayContainNullValues() {
+    // ★ 这条是回归测试：原先深拷用 `Map.copyOf`，它拒收 null 值 ⇒ 只要库里有内置模板
+    //   （V90 的三个 payload 都带 "modelId": null），`GET /templates` 就 500，
+    //   一个模板都读不出来。症状是"模板中心整个打不开"，而根因藏在一行深拷里。
+    Map<String, Object> config = new LinkedHashMap<>();
+    config.put("modelId", null);
+    config.put("name", "合同审查");
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("config", config);
+    payload.put("dependencies", java.util.List.of());
+
+    @SuppressWarnings("unchecked")
+    Map<String, Object> kept =
+        (Map<String, Object>) template(payload, true).payload().get("config");
+
+    assertThat(kept).containsKey("modelId");
+    assertThat(kept.get("modelId")).isNull();
+    assertThat(kept.get("name")).isEqualTo("合同审查");
+  }
 }

@@ -97,6 +97,10 @@ public record Template(
             copy.put(k, v);
           }
         });
-    return Map.copyOf(copy);
+    // ★ 这里不能用 `Map.copyOf`：bundle 里 `modelId` / `sourceAppId` 这类字段**合法地为 null**
+    //   （内置模板刻意不带模型 id，见 V90 的注释），而 `Map.copyOf` 拒收 null 值 ⇒ 列表一读就
+    //   `NullPointerException`（实测：`GET /templates` 直接 500，11 个模板一个都看不到）。
+    //   `unmodifiableMap` 给的是同样的"调用方改不动"的保证，且允许 null 值。
+    return java.util.Collections.unmodifiableMap(copy);
   }
 }
