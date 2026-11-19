@@ -51,10 +51,40 @@ public class DebugChatController {
   }
 
   /**
+   * 对比调试：同一个问题跑两次 —— 已保存的角色设定 vs 请求里带的那一版。
+   *
+   * <h3>★ 与「请求体里收配置」的区别（{@code BR-02-08}）</h3>
+   *
+   * <p>那条禁令防的是「调试用 A、线上用 B」。这里<strong>两份都跑、两份都返回</strong>，并且响应里明确分成 {@code saved} 与 {@code draft}
+   * 两个字段；请求体那份不落库、不影响任何后续轮。它是对照项，不是配置来源。
+   *
+   * <p>权限同上（{@code assistant:view}）：它只是"多跑一次给配置者看"，没有写任何东西。
+   */
+  @PostMapping(
+      "/{id:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}/debug/compare")
+  @PreAuthorize("hasAuthority('assistant:view')")
+  public ApiResponse<ChatService.DebugComparison> compare(
+      @PathVariable UUID id, @RequestBody CompareBody body) {
+    return ApiResponse.ok(
+        chat.debugCompare(
+            id,
+            body == null ? null : body.question(),
+            body == null ? null : body.draftRolePrompt()));
+  }
+
+  /**
    * 调试请求体。
    *
    * <p>★ 只有 {@code question}：模型 / 知识库 / 角色 / 检索参数全部来自应用配置 —— 请求体里再收一份， 就等于允许"调试时用 A 配置、线上用 B 配置"，
    * 而那正是 {@code BR-02-08} 要防的。
    */
   public record DebugBody(String question) {}
+
+  /**
+   * 对比调试的请求体。
+   *
+   * @param question 同一个问题（两次都用它）
+   * @param draftRolePrompt 表单里还没保存的角色设定；为 null / 空白时只跑一次并回 {@code draftRan = false}
+   */
+  public record CompareBody(String question, String draftRolePrompt) {}
 }

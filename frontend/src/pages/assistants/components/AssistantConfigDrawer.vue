@@ -259,6 +259,7 @@
           :published="assistant?.published ?? false"
           :warnings="publishWarnings"
           :dirty="dirty"
+          :draft-role-prompt="form.rolePrompt"
           @request-save="onDebugNeedsSave"
         />
       </div>

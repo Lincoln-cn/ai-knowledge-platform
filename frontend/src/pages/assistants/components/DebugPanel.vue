@@ -38,6 +38,56 @@
         @keyup.enter="send"
       />
       <el-button size="small" type="primary" :loading="sending" @click="send">发送</el-button>
+      <!--
+        ★ 「对比」只在表单脏着时有意义：没有改动，两版就是同一版（点了也只会跑一次）。
+           它不是"另一个发送按钮"，而是"用同一个问题跑两遍给我看"。
+      -->
+      <el-button
+        size="small"
+        :loading="comparing"
+        :disabled="!dirty || !question.trim()"
+        :title="dirty ? '用同一个问题各跑一次：已保存的那版 vs 你现在改的这版' : '表单没有改动，两版是同一版'"
+        @click="compare"
+      >
+        对比两版
+      </el-button>
+    </div>
+
+    <div v-if="comparison" class="cmp">
+      <div class="cmp-head">
+        <span class="h4">对比结果</span>
+        <span class="micro muted">同一个问题：{{ comparison.question }}</span>
+        <el-button link size="small" class="cmp-close" @click="comparison = null">收起</el-button>
+      </div>
+      <div v-if="!comparison.draftRan" class="cmp-same micro muted">
+        你现在改的那版与已保存的逐字相同，跑出来的会是同一份答案 —— 没有需要对比的差异。
+      </div>
+      <div v-else class="cmp-grid">
+        <div class="cmp-col">
+          <div class="cmp-col-head">
+            <span class="cmp-tag">已保存的</span>
+            <span class="micro muted">
+              {{ (comparison.saved.elapsedMs / 1000).toFixed(1) }}s ·
+              {{ comparison.saved.tokens === null ? '用量未上报' : `${comparison.saved.tokens} token` }}
+            </span>
+          </div>
+          <p class="cmp-text">{{ comparison.saved.answer }}</p>
+        </div>
+        <div class="cmp-col">
+          <div class="cmp-col-head">
+            <span class="cmp-tag draft">你现在改的</span>
+            <span class="micro muted">
+              {{ (comparison.draft!.elapsedMs / 1000).toFixed(1) }}s ·
+              {{ comparison.draft!.tokens === null ? '用量未上报' : `${comparison.draft!.tokens} token` }}
+            </span>
+          </div>
+          <p class="cmp-text">{{ comparison.draft!.answer }}</p>
+        </div>
+      </div>
+      <p class="cmp-note micro muted">
+        两栏用的是同一个问题、同一个模型与同一批检索结果 —— 差别只来自角色设定。
+        「你现在改的」那版<b>没有保存</b>，关掉抽屉就没了。
+      </p>
     </div>
 
     <p class="dbg-note micro muted">调试使用当前草稿配置，<b>不产生正式会话记录</b></p>
@@ -87,6 +137,14 @@ const props = defineProps<{
    * 而界面上看不出任何区别，用户会以为自己刚改的那句生效了。
    */
   dirty?: boolean
+  /**
+   * 表单里当前的「角色设定」。
+   *
+   * ★ 对比调试用它作为**对照项**：请求体里带过去的那版不落库、不影响任何后续轮，
+   * 只用于"同一个问题再跑一遍"。与"请求体里收配置"（`BR-02-08` 禁止）的区别是：
+   * 这里两份都跑、两份都返回，且界面上明确标出哪栏是已保存的。
+   */
+  draftRolePrompt?: string
 }>()
 
 const emit = defineEmits<{ (e: 'request-save'): void }>()
@@ -96,6 +154,13 @@ const sending = ref(false)
 const error = ref<string | null>(null)
 const turns = ref<DebugTurn[]>([])
 const listEl = ref<HTMLElement>()
+const comparing = ref(false)
+const comparison = ref<null | {
+  question: string
+  saved: DebugTurn
+  draft: DebugTurn | null
+  draftRan: boolean
+}>(null)
 
 const send = async () => {
   const q = question.value.trim()
@@ -152,6 +217,47 @@ const reset = () => {
   turns.value = []
   question.value = ''
   error.value = null
+  comparison.value = null
+}
+
+/**
+ * 对比调试：同一个问题跑两遍（已保存的 / 你现在改的）。
+ *
+ * ★ 它**不**走 `send()` 的"先保存再调试"拦截 —— 那套拦截的前提是"你想测的是刚改的配置，但后端只读已保存的"。
+ * 对比恰好把这件事摆明了：两版都跑，谁是谁写在标签上。所以这里既不保存、也不弹确认框。
+ */
+const compare = async () => {
+  const q = question.value.trim()
+  if (!q || !props.appId || comparing.value) return
+  comparing.value = true
+  error.value = null
+  try {
+    const r = await assistantsApi.compareAssistant(props.appId, q, props.draftRolePrompt ?? null)
+    const toTurn = (a: {
+      answer: string
+      refs: unknown[]
+      elapsedMs: number
+      tokens: number | null
+    }): DebugTurn => ({
+      question: q,
+      answer: a.answer,
+      refs: (a.refs ?? []) as DebugRef[],
+      elapsedMs: a.elapsedMs,
+      tokens: a.tokens
+    })
+    comparison.value = {
+      question: q,
+      saved: toTurn(r.saved),
+      draft: r.draft ? toTurn(r.draft) : null,
+      draftRan: r.draftRan
+    }
+  } catch (failure) {
+    const message = failure instanceof ApiError ? failure.message : '对比失败'
+    error.value = message
+    ElMessage.error(message)
+  } finally {
+    comparing.value = false
+  }
 }
 
 defineExpose({ reset, sendNow })
@@ -233,6 +339,78 @@ defineExpose({ reset, sendNow })
 .dbg-input {
   display: flex;
   gap: var(--space-xs);
+}
+
+/*
+ * 对比结果：两栏等宽并排。
+ * ★ 不用「左 A 右 B」的对比色块 —— 两栏同底色、只有标签不同，因为这里没有"哪个更好"，
+ *   只有"哪个是你刚改的"。给某一边加绿/红会让读者以为系统在判优劣。
+ */
+.cmp {
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius);
+  padding: var(--space-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.cmp-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+}
+
+.cmp-close {
+  margin-left: auto;
+}
+
+.cmp-same {
+  border-left: 2px solid var(--color-rule);
+  padding-left: var(--space-xs);
+}
+
+.cmp-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-sm);
+}
+
+.cmp-col {
+  min-width: 0;
+  border-top: 1px solid var(--color-rule);
+  padding-top: var(--space-2xs);
+}
+
+.cmp-col-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2xs);
+  margin-bottom: var(--space-3xs);
+}
+
+.cmp-tag {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--color-ink-2);
+}
+
+.cmp-tag.draft {
+  color: var(--color-accent);
+}
+
+.cmp-text {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+  color: var(--color-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cmp-note {
+  margin: 0;
 }
 
 .dbg-note {

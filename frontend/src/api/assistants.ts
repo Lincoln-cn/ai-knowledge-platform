@@ -295,6 +295,29 @@ export const debugAssistant = (id: string, question: string) =>
     body: { question }
   })
 
+/**
+ * 对比调试：同一个问题，跑「已保存的角色设定」与「表单里那版」各一次。
+ *
+ * ★ 请求体里带的那版**不落库**，它只作为对照项 —— 与「调试时用 A、线上用 B」是两件事（`BR-02-08`）：
+ * 这里两份都跑、两份都返回，响应里明确分成 `saved` 与 `draft`。
+ */
+export const compareAssistant = (
+  id: string,
+  question: string,
+  draftRolePrompt: string | null
+) =>
+  request<{
+    saved: { answer: string; refs: unknown[]; elapsedMs: number; tokens: number | null }
+    draft: { answer: string; refs: unknown[]; elapsedMs: number; tokens: number | null } | null
+    /** ★ false = 草稿与已保存的逐字相同（或草稿为空），只跑了一次 —— 不是失败 */
+    draftRan: boolean
+  }>({
+    method: 'POST',
+    url: '/assistants/:id/debug/compare',
+    path: { id },
+    body: { question, draftRolePrompt }
+  })
+
 /* ── 分享写（07 §3.1 / §8.1；阶段 1 只落了可选响应字段，分享是写） ── */
 
 /**

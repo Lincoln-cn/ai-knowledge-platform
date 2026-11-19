@@ -566,12 +566,56 @@ public class ChatService {
    * @throws BusinessException 应用不存在 / 不可见（404）· 空问题（400）· 上游失败（502）
    */
   public DebugAnswer debugTurn(UUID appId, String question) {
+    return runDebug(appId, question, null);
+  }
+
+  /**
+   * 对比调试：<strong>同一个问题</strong>跑两次 —— 一次用已保存的角色设定，一次用请求里带的那一版。
+   *
+   * <h3>★ 它为什么不算「请求体里收配置」（{@code BR-02-08} 的边界）</h3>
+   *
+   * <p>那条禁令要防的是「调试时用 A、线上用 B」：把请求体里的配置当<strong>唯一</strong>输入，于是调试结果看起来正常、 线上却是另一套。这里的语义相反 ——
+   * <strong>两份都跑、两份都返回</strong>，并且明确标出哪份是已保存的。 请求体里那份<strong>不落库、不影响后续任何一轮</strong>，它只作为对照项存在。
+   *
+   * <p>★ 若草稿与已保存的逐字相同（或草稿为空），<strong>只跑一次</strong>：返回的 {@code draft} 为 {@code null}、 {@code
+   * draftRan = false}。省下的是一次没有意义的模型调用，而不是"忘了跑"。
+   *
+   * @param appId 应用 id（看不见 ⇒ 404，同 {@link #debugTurn}）
+   * @param question 调试问题（非空）
+   * @param draftRolePrompt 表单里还没保存的角色设定（可为 null / 空 ⇒ 视为没改动）
+   * @return 已保存那份的答案 + 草稿那份的答案（没跑时为 null）
+   */
+  public DebugComparison debugCompare(UUID appId, String question, String draftRolePrompt) {
+    requireDebugQuestion(question);
+    String trimmed = question.strip();
+    // ★ 只 prepare 一次：两次调试除角色设定外必须完全同源（模型、库、检索参数都一样），
+    //   否则"两次结果不同"就分不清是提示词的功劳还是别的东西变了。
+    ChatTurnWriter.PreparedTurn turn = turns.prepareDebug(appId, trimmed);
+    String draft = draftRolePrompt == null ? "" : draftRolePrompt.strip();
+    String saved = turn.rolePrompt() == null ? "" : turn.rolePrompt().strip();
+    DebugAnswer savedAnswer = runDebug(turn, trimmed, null);
+    if (draft.isEmpty() || draft.equals(saved)) {
+      return new DebugComparison(savedAnswer, null, false);
+    }
+    return new DebugComparison(savedAnswer, runDebug(turn, trimmed, draft), true);
+  }
+
+  private void requireDebugQuestion(String question) {
     if (question == null || question.isBlank()) {
       throw new BusinessException(ErrorCode.BAD_REQUEST, "调试问题不能为空", "请输入要调试的问题");
     }
+  }
+
+  private DebugAnswer runDebug(UUID appId, String question, String roleOverride) {
+    requireDebugQuestion(question);
     String trimmed = question.strip();
+    return runDebug(turns.prepareDebug(appId, trimmed), trimmed, roleOverride);
+  }
+
+  private DebugAnswer runDebug(
+      ChatTurnWriter.PreparedTurn turn, String trimmed, String roleOverride) {
+    UUID appId = turn.appId();
     long startedAt = System.nanoTime();
-    ChatTurnWriter.PreparedTurn turn = turns.prepareDebug(appId, trimmed);
     RetrievalParams retrieval = effectiveRetrieval(turn);
     // ★ 调试链路不写库、没有会话历史 ⇒ 对话上文传 null（#297 的指代消解只在正式链路生效）
     // ★ 应用调试轮不消费 notice：它返回的是结构化结果（refs + 拒答判定），
@@ -585,7 +629,7 @@ public class ChatService {
       return new DebugAnswer(NO_REF_REFUSAL, refs, elapsedMs(startedAt), null);
     }
 
-    String prompt = promptOf(trimmed, refs, systemPromptOrNull(turn));
+    String prompt = promptOf(trimmed, refs, systemPromptOrNull(turn, roleOverride));
     DebugCollector collector = new DebugCollector();
     try {
       chatStream.stream(
@@ -616,6 +660,16 @@ public class ChatService {
    * @param tokens ★ {@code null} = 上游没有上报用量（{@code #142} 之前的生产实现就是这种），<strong>不是 0</strong>
    */
   public record DebugAnswer(String answer, List<SourceRef> refs, long elapsedMs, Integer tokens) {}
+
+  /**
+   * 对比调试的结果（{@code POST /assistants/:id/debug/compare} 的响应体）。
+   *
+   * @param saved 用<strong>已保存</strong>配置跑出来的那一份（始终有值）
+   * @param draft 用请求里那版角色设定跑出来的那一份；{@code draftRan = false} 时为 {@code null}
+   * @param draftRan 是否真的跑了第二次。★ 为 {@code false} 的原因是"草稿与已保存的逐字相同"，不是失败 ——
+   *     前端要据此说「没有改动，不需要对比」，而不是显示一个空栏
+   */
+  public record DebugComparison(DebugAnswer saved, DebugAnswer draft, boolean draftRan) {}
 
   /** 零引用时是否应当拒答 —— <strong>唯一</strong>的判定（流式与调试两条路都读它）。 */
   private static boolean refuses(List<SourceRef> refs, RetrievalParams retrieval) {
@@ -2260,6 +2314,16 @@ public class ChatService {
    * @return 提示词；{@code null} = 不加
    */
   private String systemPromptOrNull(ChatTurnWriter.PreparedTurn turn) {
+    return systemPromptOrNull(turn, null);
+  }
+
+  /**
+   * 拼系统提示词。
+   *
+   * @param roleOverride ★ 对比调试用：非 null 时<strong>替换</strong>本轮的角色设定（不叠加），其余（绑定的提示词）不变。 传 null
+   *     就是正式语义。
+   */
+  private String systemPromptOrNull(ChatTurnWriter.PreparedTurn turn, String roleOverride) {
     if (turn.appId() != null) {
       // ★★ 应用会话只读应用自己的 rolePrompt 与它绑的提示词，**不回落**到平台通用提示词（#183）。
       //   空 = 不加前缀，而不是"借用通用问答的口径"——两者混用会让应用的回答被平台口径污染。
@@ -2270,7 +2334,7 @@ public class ChatService {
         }
       }
       // ★ `#215`：rolePrompt 刻意排在**最后**（冲突时它赢），且与某条提示词逐字相同时不重复加
-      addIfUseful(parts, turn.rolePrompt());
+      addIfUseful(parts, roleOverride != null ? roleOverride : turn.rolePrompt());
       return parts.isEmpty() ? null : String.join("\n\n", parts);
     }
     if (policyResolver == null) {
