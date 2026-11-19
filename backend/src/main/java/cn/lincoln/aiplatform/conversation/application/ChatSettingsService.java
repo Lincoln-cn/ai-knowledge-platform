@@ -25,6 +25,22 @@ public class ChatSettingsService {
   }
 
   /**
+   * 通用问答的默认开场白 —— **全平台唯一一份**。
+   *
+   * <p>★ 为什么放在后端而不是前端常量：它会同时被两处用到 —— ① 新建通用问答会话时落成第一条消息 （{@code
+   * ConversationListService#ensurePrologue}）；② 设置页拿它当"留空会变成什么"的说明。
+   * 若前端再抄一份，管理员改了这里、页面提示还停在旧文案，而这种不一致**在界面上看不出来**。
+   *
+   * <p>★ 写法口径（给用户看，不是给模型看）：身份一句 → 怎么开始一句 → 能核对一句。第三句用 "编号能点开、不确定说不知道"代替免责声明，让用户知道该在哪里怀疑答案。
+   */
+  public static final String DEFAULT_PROLOGUE =
+      String.join(
+          "\n",
+          "你问什么，我答什么，不带预设的应用场景。",
+          "问题直接写在下面就行，一句话也够；有文件可以拖进来，我会先读再答。",
+          "回答里的编号能点开，核对它依据的是哪段原文；不确定的地方我会说不知道。");
+
+  /**
    * @return 当前设置
    */
   @Transactional(readOnly = true)
@@ -53,6 +69,7 @@ public class ChatSettingsService {
             command.heartbeatIntervalMs(),
             command.firstTokenBudgetMs(),
             command.systemPrompt(),
+            command.prologue(),
             Boolean.TRUE.equals(command.retrievalEnabled()),
             command.retrievalKbIds(),
             command.retrievalThreshold() == null ? 0.3 : command.retrievalThreshold(),
@@ -93,6 +110,7 @@ public class ChatSettingsService {
    * @param heartbeatIntervalMs 心跳间隔
    * @param firstTokenBudgetMs 首字延迟预算
    * @param systemPrompt 通用问答的初始提示词（可空 = 不加前缀）
+   * @param prologue 通用问答空态的开场白（可空 = 用平台默认文案；给用户看，不进 prompt）
    * @param maxOutputTokens 单轮最大输出（可空）
    */
   public record ChatSettingsCommand(
@@ -102,6 +120,7 @@ public class ChatSettingsService {
       long heartbeatIntervalMs,
       long firstTokenBudgetMs,
       String systemPrompt,
+      String prologue,
       Boolean retrievalEnabled,
       java.util.List<UUID> retrievalKbIds,
       Double retrievalThreshold,

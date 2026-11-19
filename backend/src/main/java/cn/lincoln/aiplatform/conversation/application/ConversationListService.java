@@ -64,15 +64,19 @@ public class ConversationListService {
 
   private final AppOpeningPort openings;
 
+  private final ChatSettingsService settings;
+
   public ConversationListService(
       ConversationRepository conversations,
       AppBindingPort appBindings,
       MessageRepository messages,
-      AppOpeningPort openings) {
+      AppOpeningPort openings,
+      ChatSettingsService settings) {
     this.conversations = conversations;
     this.appBindings = appBindings;
     this.messages = messages;
     this.openings = openings;
+    this.settings = settings;
   }
 
   /**
@@ -155,10 +159,12 @@ public class ConversationListService {
      * 判据，不能靠某个实现恰好守规矩（`#286` 的"开场白为空时不造消息"）。
      */
     Optional<String> prologue =
-        openings
-            .prologueOf(conversation.assistantId())
-            .map(String::strip)
-            .filter(text -> !text.isEmpty());
+        conversation.assistantId() == null
+            ? generalPrologue()
+            : openings
+                .prologueOf(conversation.assistantId())
+                .map(String::strip)
+                .filter(text -> !text.isEmpty());
     if (prologue.isEmpty()) {
       return;
     }
@@ -169,6 +175,26 @@ public class ConversationListService {
       return;
     }
     messages.save(Message.prologue(UUID.randomUUID(), conversation.id(), prologue.get()));
+  }
+
+  /**
+   * 通用问答的开场白：设置里填的优先，留空用平台默认文案。
+   *
+   * <p>★ 这是「两种业务形态分叉」的落点：专用应用的开场白由应用自己写（`as_assistant.prologue`）， 通用问答没有应用，也就没有地方安放这段话 ——
+   * 在此之前用户打开通用问答只看到一句"开始提问"， 不知道这里是什么、能拿它做什么。端口 {@code AppOpeningPort} 保持"没有应用就没有应用开场白"
+   * 的语义不变，这段文案是本类的职责（它才是"会话第一条消息"的组装点）。
+   *
+   * <p>★ 留空**不等于**没有开场白：那是"用默认文案"。用户看不出区别，而"打开就有一句介绍" 属于产品口径，不该由某次保存时忘了填来决定。
+   */
+  private Optional<String> generalPrologue() {
+    if (settings == null) {
+      return Optional.of(ChatSettingsService.DEFAULT_PROLOGUE);
+    }
+    String configured = settings.get().prologue();
+    if (configured != null && !configured.isBlank()) {
+      return Optional.of(configured.strip());
+    }
+    return Optional.of(ChatSettingsService.DEFAULT_PROLOGUE);
   }
 
   /**

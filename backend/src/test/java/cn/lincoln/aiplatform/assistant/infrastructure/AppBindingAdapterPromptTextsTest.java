@@ -10,6 +10,7 @@ import cn.lincoln.aiplatform.assistant.domain.Assistant;
 import cn.lincoln.aiplatform.assistant.domain.AssistantRepository;
 import cn.lincoln.aiplatform.assistant.domain.AssistantType;
 import cn.lincoln.aiplatform.assistant.domain.PromptConfig;
+import cn.lincoln.aiplatform.assistant.domain.PromptKind;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.assistant.AppBindingPort.AppBinding;
 import java.time.Instant;
@@ -99,7 +100,10 @@ class AppBindingAdapterPromptTextsTest {
   }
 
   private static PromptConfig prompt(String callWord, UUID typeId, String roleName) {
-    return new PromptConfig(UUID.randomUUID(), roleName, callWord, typeId, "说明", "📄", NOW);
+    // ★ 这个夹具造的是**角色指令**（对话中要拼进 role_prompt 的那种），kind 必须给 ROLE：
+    //   提问模板（QUESTION）是给用户看的问法示例，永远不会拼进模型上下文。
+    return new PromptConfig(
+        UUID.randomUUID(), PromptKind.ROLE, null, roleName, callWord, typeId, "说明", "📄", NOW);
   }
 
   private static AppBinding bindingWith(List<PromptConfig> stored, List<UUID> boundIds) {

@@ -37,7 +37,7 @@ class ConversationLifecycleServiceTest {
   void setUp() {
     conversations = new FakeConversations();
     // 生命周期用例不经过 create()：消息仓储与开场白端口都不会被触达
-    service = new ConversationListService(conversations, null, null, null);
+    service = new ConversationListService(conversations, null, null, null, null);
   }
 
   @Test

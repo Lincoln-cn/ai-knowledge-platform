@@ -42,11 +42,10 @@ public class ChatSettingsStore {
     List<ChatSettingsView> found =
         jdbc.query(
             "select default_model_id, stream_enabled, idle_timeout_ms, heartbeat_interval_ms,"
-                + " first_token_budget_ms, system_prompt, retrieval_enabled, retrieval_kb_ids,"
-                + " retrieval_threshold, retrieval_top_n, history_max_messages,"
-                + " suggestion_enabled, suggestion_count,"
-                + " max_output_tokens, updated_at"
-                + " from cv_chat_settings where id = ?",
+                + " first_token_budget_ms, system_prompt, prologue, retrieval_enabled,"
+                + " retrieval_kb_ids, retrieval_threshold, retrieval_top_n, history_max_messages,"
+                + " suggestion_enabled, suggestion_count, max_output_tokens, updated_at from"
+                + " cv_chat_settings where id = ?",
             (rs, rowNum) -> {
               UUID modelId = rs.getObject("default_model_id", UUID.class);
               Integer maxTokens = rs.getObject("max_output_tokens", Integer.class);
@@ -57,6 +56,7 @@ public class ChatSettingsStore {
                   rs.getLong("heartbeat_interval_ms"),
                   rs.getLong("first_token_budget_ms"),
                   rs.getString("system_prompt"),
+                  rs.getString("prologue"),
                   rs.getBoolean("retrieval_enabled"),
                   toUuidList(rs.getArray("retrieval_kb_ids")),
                   rs.getDouble("retrieval_threshold"),
@@ -91,7 +91,7 @@ public class ChatSettingsStore {
         jdbc.update(
             "update cv_chat_settings set default_model_id = ?, stream_enabled = ?,"
                 + " idle_timeout_ms = ?, heartbeat_interval_ms = ?, first_token_budget_ms = ?,"
-                + " system_prompt = ?, retrieval_enabled = ?, retrieval_kb_ids = ?,"
+                + " system_prompt = ?, prologue = ?, retrieval_enabled = ?, retrieval_kb_ids = ?,"
                 + " retrieval_threshold = ?, retrieval_top_n = ?, history_max_messages = ?,"
                 + " suggestion_enabled = ?, suggestion_count = ?,"
                 + " max_output_tokens = ?, updated_at = now(), updated_by = ?"
@@ -102,6 +102,7 @@ public class ChatSettingsStore {
             settings.heartbeatIntervalMs(),
             settings.firstTokenBudgetMs(),
             settings.systemPrompt(),
+            settings.prologue(),
             settings.retrievalEnabled(),
             settings.retrievalKbIds() == null
                 ? null
