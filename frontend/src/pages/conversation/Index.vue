@@ -670,7 +670,7 @@ const starterQuestions = computed<{ label: string; text: string; fromApp: boolea
   return GENERAL_ASK_SAMPLES.map((q) => ({ label: q, text: q, fromApp: false }))
 })
 
-const starterHint = computed(() => (appBrief.value ? '试试这些问题' : '试试'))
+const starterHint = computed(() => (appBrief.value ? '试试这些问题' : '试试这样问'))
 
 /**
  * 应用快捷问题是"试试这样问"，点即发；通用问答的示例是一句话骨架，
