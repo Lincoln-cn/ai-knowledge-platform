@@ -80,9 +80,6 @@
           :show-thinking="showThinkingToggle"
           :thinking="thinking"
           @update:thinking="thinking = $event"
-          :rerank-listwise="rerankListwise"
-          @update:rerank-listwise="rerankListwise = $event"
-          :global-listwise="globalListwise"
           @send="onSend"
           @stop="chat.stop"
         />
@@ -164,7 +161,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { assistantsApi, conversationsApi, retrievalApi } from '@/api'
+import { assistantsApi, conversationsApi } from '@/api'
 import type { Assistant } from '@/api/assistants'
 import type { ChatMessage } from '@/api/conversations'
 import { useSessionStore } from '@/stores/session'
@@ -195,37 +192,17 @@ const session = useSessionStore()
 const appId = computed(() => (route.query.appId as string) || '')
 const history = useHistoryPanel()
 const thinking = ref(false)
-/**
- * 本会话的列表重排（LLM listwise）开关 —— **请求级**。
- *
- * ★ 三态，`null` 是默认值（跟随应用 / 全局）。`false` 与 `null` 语义不同：
- * `false` 是"这次只要快、不要重排"这个有意义的决定，`null` 是"别管我，按配置来"。
+/*
+ * ★ 这里原先有 `rerankListwise`（请求级重排三态）与 `globalListwise`（全局读数），
+ *   2026-11-19 评审后撤掉：重排是检索运行参数，终端用户没有判断依据
+ *   （不知道 listwise 是什么、不知道开了每题慢 2–8 秒），决策责任已归管理员
+ *   （检索引擎页）与配置者（应用 / 知识库面板）。
+ *   现在请求里**不传** `rerankListwise`，等于跟随全局；后端字段与优先级一行未改。
  */
-const rerankListwise = ref<boolean | null>(null)
-/**
- * 平台全局的重排（LLM listwise）生效值。
- *
- * ★ 只用于把「跟随」翻译成一行看得懂的读数 —— 三态开关本身早就是对的，
- * 缺的是"跟随到了什么"。读不到就保持 `null`，界面上显示「跟随全局」而不是编一个值。
- * 接口 `GET /retrieval/settings` 登录即可读（`RetrievalSettingsController` 类注释：
- * 这几个值直接决定一次问答要等多久，排障时任何人都该看得到）。
- */
-const globalListwise = ref<boolean | null>(null)
-
-async function loadGlobalListwise() {
-  try {
-    const settings = await retrievalApi.getEngineSettings()
-    globalListwise.value = !!settings.listwiseEnabled
-  } catch {
-    // 读不到不是错误：降级成"跟随全局"（不带读数），不打断会话
-    globalListwise.value = null
-  }
-}
 
 const chat = useChatSession({
   appId: appId.value || undefined,
-  thinking,
-  rerankListwise
+  thinking
 })
 
 const activeConversation = ref<ConversationEx | null>(null)
@@ -713,8 +690,6 @@ const onBack = () => {
 onMounted(async () => {
   syncWide()
   document.addEventListener('keydown', onEsc)
-  // 与首屏渲染无关的读数，不 await —— 拿不到就显示「跟随全局」
-  void loadGlobalListwise()
   await loadHistory()
 
   // ★ 真后端 Conversation 不带 app 展示字段（C7）⇒ 应用页补一次 getAssistant

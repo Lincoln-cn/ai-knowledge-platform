@@ -41,22 +41,19 @@
           <span>思考模式</span>
         </label>
         <!--
-          ★ 请求级重排开关（三态）。用三态而不是 checkbox：`跟随 / 开 / 关` 是三个决定，
-          而 checkbox 只有两个 —— 把"跟随"塞进 unchecked 会让用户没法表达"这次强制关"。
+          ★ 这里原先有一个请求级「重排」三态开关（跟随 / 开 / 关），已删除。
 
-          ★ 原先是一个 108px 宽的 `el-select`，三个选项文字被截断，选中了也看不出"到底生效了没有"
-          （「跟随」时实际生效值来自应用 / 全局配置，界面上完全不可见）。改成三态分段按钮 +
-          右侧一行「当前生效」读数：选「跟随」时必须把跟随到的那个值写出来。
+          理由（2026-11-19 评审）：重排是**检索运行参数**，不是使用选项 ——
+          终端用户不知道 listwise 是什么，也不知道开了每题会慢 2–8 秒，
+          他只能感觉到「这个平台卡」。而决策责任已经有两处归属：
+          管理员在「检索引擎」页管全局，配置者在应用配置 / 知识库面板管本应用。
+
+          所以请求里保持**不传** `rerankListwise`（= 跟随全局），后端字段与
+          `RetrievalService` 的三档优先级一行都不改，这是纯前端删除。
+
+          ★ 注意：`thinking`（思考模式）**保留**给用户 —— 它是可感知的（更慢但更深入），
+          用户能凭使用体验自己判断要不要开。重排做不到这一点。
         -->
-        <div class="tool rerank">
-          <span class="rerank-name">重排</span>
-          <el-radio-group v-model="rerankChoice" size="small" :disabled="disabled">
-            <el-radio-button value="auto">跟随</el-radio-button>
-            <el-radio-button value="on">开</el-radio-button>
-            <el-radio-button value="off">关</el-radio-button>
-          </el-radio-group>
-          <span class="micro muted rerank-state" :title="rerankHint">{{ rerankStateText }}</span>
-        </div>
       </div>
 
       <div class="right">
@@ -98,64 +95,18 @@ const props = defineProps<{
   placeholder?: string
   showThinking?: boolean
   thinking?: boolean
-  /** 请求级重排开关三态：null = 跟随应用 / 全局 */
-  rerankListwise?: boolean | null
-  /** 平台全局的重排（LLM listwise）生效值；null = 读不到（不编一个值出来） */
-  globalListwise?: boolean | null
 }>()
 
 const emit = defineEmits<{
   send: [text: string, attachments: AttachmentDraft[]]
   stop: []
   'update:thinking': [value: boolean]
-  'update:rerankListwise': [value: boolean | null]
 }>()
 
 const text = ref('')
 const attachments = ref<AttachmentDraft[]>([])
 const inputEl = ref<HTMLTextAreaElement>()
 const thinking = ref(props.thinking ?? false)
-const rerankListwise = ref<boolean | null>(props.rerankListwise ?? null)
-
-watch(rerankListwise, (v) => emit('update:rerankListwise', v))
-watch(
-  () => props.rerankListwise,
-  (v) => {
-    // ★ 只认三态里的值；`undefined` 不能传下去 —— 那会被当成"没设过"，把用户的"强制关"吞掉
-    if (v === true || v === false || v === null) rerankListwise.value = v
-  }
-)
-
-/**
- * 三态在界面上的表示。
- *
- * `el-radio-button` 用 `null` 当选中值会和"未选中"混在一起，所以内部用
- * `'auto' | 'on' | 'off'` 三个字符串，出门再翻译回 `boolean | null`。
- */
-const rerankChoice = computed<'auto' | 'on' | 'off'>({
-  get: () => (rerankListwise.value === true ? 'on' : rerankListwise.value === false ? 'off' : 'auto'),
-  set: (v) => {
-    rerankListwise.value = v === 'on' ? true : v === 'off' ? false : null
-  }
-})
-
-/**
- * 「跟随」时到底跟随到了什么 —— 这是 1.4 的核心：三态开关本身没问题，
- * 问题是用户选了「跟随」之后界面上没有任何东西说清"现在到底开没开"。
- */
-const rerankStateText = computed(() => {
-  if (rerankListwise.value === true) return '本次开启'
-  if (rerankListwise.value === false) return '本次关闭'
-  if (props.globalListwise === true) return '跟随全局 · 开'
-  if (props.globalListwise === false) return '跟随全局 · 关'
-  return '跟随全局'
-})
-
-const rerankHint = computed(() =>
-  props.globalListwise === null || props.globalListwise === undefined
-    ? '列表重排（LLM listwise）：走交叉编码器把候选段重排一遍，质量更准但每题慢 2～8 秒。当前「跟随」的目标值读不到（全局设置接口不可用）'
-    : `列表重排（LLM listwise）：走交叉编码器把候选段重排一遍，质量更准但每题慢 2～8 秒。全局当前${props.globalListwise ? '开' : '关'}`
-)
 
 /** 上传中或已失败的附件不允许发出去 —— 发送时只带真实 id */
 const hasBlockingAtt = computed(() =>
@@ -425,26 +376,6 @@ defineExpose({ sendText, fillText, reset, focus: () => inputEl.value?.focus() })
 
 .tool.check {
   cursor: pointer;
-}
-
-/* 重排三态：外层只是排布容器，hover 高亮交给里面的分段按钮 */
-.tool.rerank {
-  gap: var(--space-2xs);
-  padding-left: var(--space-3xs);
-}
-
-.tool.rerank:hover {
-  background: transparent;
-  color: var(--color-muted);
-}
-
-.rerank-name {
-  color: var(--color-muted);
-}
-
-/* 固定宽度：切换三态时不让右侧「发送」按钮左右跳 */
-.rerank-state {
-  min-width: 6.5em;
 }
 
 .hidden-file {
