@@ -251,15 +251,46 @@ public class DocumentController {
   @PreAuthorize("hasAuthority('knowledge:document:upload')")
   public ApiResponse<List<DocumentView>> registerFiles(
       @PathVariable UUID kbId,
-      @org.springframework.web.bind.annotation.RequestParam("files")
+      @org.springframework.web.bind.annotation.RequestParam(value = "files", required = false)
           List<org.springframework.web.multipart.MultipartFile> files,
-      @org.springframework.web.bind.annotation.RequestParam("docType") String docType,
+      @org.springframework.web.bind.annotation.RequestParam(value = "docType", required = false)
+          String docType,
       @org.springframework.web.bind.annotation.RequestParam(value = "orgId", required = false)
           String orgId,
-      @org.springframework.web.bind.annotation.RequestParam("classification")
+      @org.springframework.web.bind.annotation.RequestParam(
+              value = "classification",
+              required = false)
           ClassificationLevel classification,
       @AuthenticationPrincipal Jwt jwt)
       throws java.io.IOException {
+    // ★ 四个必填参数一次报全，而不是让 Spring 逐个抛。
+    //
+    //   实测（#358）：建完库第一次上传的人要试四次才知道全集 —— 先缺 files、再缺 docType、
+    //   再缺 classification、最后缺 orgId，每次一次 400。四次往返里前三次的信息
+    //   （"原来还有下一个"）对他没有任何用，而很容易在这期间以为"上传坏了"。
+    //
+    //   ★ 所以这里把 required 全放开、自己收一遍。文案只报"缺哪几个名字"，
+    //   语义解释仍留给用例层（orgId 的"责任部门必填"在 documentService.register 里），
+    //   避免同一件事两处文案。
+    java.util.List<String> missing = new java.util.ArrayList<>();
+    if (files == null || files.isEmpty()) {
+      missing.add("files");
+    }
+    if (docType == null || docType.isBlank()) {
+      missing.add("docType");
+    }
+    if (classification == null) {
+      missing.add("classification");
+    }
+    if (orgId == null || orgId.isBlank()) {
+      missing.add("orgId");
+    }
+    if (!missing.isEmpty()) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "缺少必填参数：" + String.join("、", missing),
+          "一次传全即可 —— files（可多个文件）、docType（文种 code）、classification（密级）、orgId（责任部门 id）");
+    }
     java.util.List<String> names = new java.util.ArrayList<>();
     java.util.List<byte[]> contents = new java.util.ArrayList<>();
     for (org.springframework.web.multipart.MultipartFile file : files) {
