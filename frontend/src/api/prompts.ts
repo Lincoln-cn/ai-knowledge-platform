@@ -151,3 +151,140 @@ export const restorePromptConfigVersion = (id: string, versionNo: number) =>
     path: { id, v: versionNo },
     body: {}
   })
+
+/* ────────────────────── 提示词评测（ROADMAP §11.63） ────────────────────── */
+
+/** 一套评测集。`itemCount` 是实时算的（题目随时可增删）。 */
+export interface PromptEvalSet {
+  id: string
+  name: string
+  createdAt: string
+  itemCount: number
+}
+
+export interface PromptEvalItem {
+  id: string
+  ordinal: number
+  question: string
+}
+
+export type EvalSide = 'SAVED' | 'DRAFT'
+
+/** 三档里 `SAME` 是最常用的那个 —— 大多数改法本来就不改变答案。 */
+export type EvalVerdict = 'BETTER' | 'SAME' | 'WORSE'
+
+/** 一条答案。`verdict` / `note` 只在 DRAFT 侧有值（语义是"草稿相对基线"）。 */
+export interface PromptEvalAnswer {
+  id: string
+  itemId: string
+  ordinal: number
+  question: string
+  side: EvalSide
+  answer: string
+  elapsedMs: number | null
+  passCount: number
+  failCount: number
+  verdict: EvalVerdict | null
+  note: string | null
+}
+
+/**
+ * 汇总。★ `winRate` 为 `null` 表示"还没评"，不是"胜率 0" —— 界面上必须分开显示。
+ */
+export interface PromptEvalSummary {
+  winRate: number | null
+  ratedItems: number
+  totalItems: number
+  better: number
+  same: number
+  worse: number
+}
+
+export interface PromptEvalRun {
+  id: string
+  setId: string
+  baseVersionNo: number | null
+  status: 'RUNNING' | 'DONE' | 'FAILED'
+  itemTotal: number
+  itemDone: number
+  failReason: string | null
+  startedAt: string
+  finishedAt: string | null
+  answers: PromptEvalAnswer[]
+  summary: PromptEvalSummary
+}
+
+export const listPromptEvalSets = (configId: string) =>
+  request<PromptEvalSet[]>({
+    method: 'GET',
+    url: '/prompt-configs/:id/eval-sets',
+    path: { id: configId }
+  })
+
+export const createPromptEvalSet = (configId: string, name: string) =>
+  request<{ id: string }>({
+    method: 'POST',
+    url: '/prompt-configs/:id/eval-sets',
+    path: { id: configId },
+    body: { name }
+  })
+
+export const deletePromptEvalSet = (setId: string) =>
+  request<void>({ method: 'DELETE', url: '/prompt-eval-sets/:setId', path: { setId } })
+
+export const listPromptEvalItems = (setId: string) =>
+  request<PromptEvalItem[]>({
+    method: 'GET',
+    url: '/prompt-eval-sets/:setId/items',
+    path: { setId }
+  })
+
+export const addPromptEvalItem = (setId: string, question: string) =>
+  request<PromptEvalItem>({
+    method: 'POST',
+    url: '/prompt-eval-sets/:setId/items',
+    path: { setId },
+    body: { question }
+  })
+
+export const deletePromptEvalItem = (itemId: string) =>
+  request<void>({ method: 'DELETE', url: '/prompt-eval-items/:itemId', path: { itemId } })
+
+/**
+ * 起一次评测。
+ *
+ * ★ 立刻返回 runId，真正跑在后台（30 题 = 60 次模型调用）。
+ * `appId` 是执行环境：问题要经过真实检索才有意义，检索范围由应用决定。
+ * `draftText` 是输入框里那版正文，服务端整段落库 —— 它可能永远不会被保存。
+ */
+export const startPromptEvalRun = (setId: string, appId: string, draftText: string) =>
+  request<{ id: string }>({
+    method: 'POST',
+    url: '/prompt-eval-sets/:setId/runs',
+    path: { setId },
+    body: { appId, draftText }
+  })
+
+export const getPromptEvalRun = (runId: string) =>
+  request<PromptEvalRun>({ method: 'GET', url: '/prompt-eval-runs/:runId', path: { runId } })
+
+/** 评一档。评分写在"草稿相对基线"这一侧。 */
+export const ratePromptEvalAnswer = (
+  runId: string,
+  itemId: string,
+  verdict: EvalVerdict,
+  note?: string
+) =>
+  request<void>({
+    method: 'PUT',
+    url: '/prompt-eval-runs/:runId/items/:itemId/rating',
+    path: { runId, itemId },
+    body: { verdict, note: note ?? null }
+  })
+
+export const clearPromptEvalRating = (runId: string, itemId: string) =>
+  request<void>({
+    method: 'DELETE',
+    url: '/prompt-eval-runs/:runId/items/:itemId/rating',
+    path: { runId, itemId }
+  })

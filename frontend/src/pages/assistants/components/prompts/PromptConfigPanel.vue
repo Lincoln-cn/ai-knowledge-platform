@@ -64,6 +64,7 @@
           <el-button link size="small" type="primary" @click="emit('edit', row)">编辑</el-button>
           <!-- 「历史」与编辑并列：改之前先看看以前是怎么写的，是同一个动作的两半 -->
           <el-button link size="small" @click="openHistory(row)">历史</el-button>
+          <el-button link size="small" @click="openEval(row)">评测</el-button>
           <el-button link size="small" type="danger" @click="emit('remove', row)">删除</el-button>
           <span v-if="row.usageCount > 0" class="micro muted">被 {{ row.usageCount }} 应用引用</span>
         </template>
@@ -80,6 +81,12 @@
       />
     </div>
 
+    <PromptEvalDrawer
+      ref="evalDrawerRef"
+      :current-text="evalRow?.callWord ?? ''"
+      :current-name="evalRow?.roleName"
+    />
+
     <PromptVersionDrawer
       ref="versionDrawerRef"
       :current-text="historyRow?.callWord ?? ''"
@@ -93,6 +100,7 @@
 import { computed, ref, watch } from 'vue'
 import type { PromptConfig, PromptKind, PromptType } from '@/api/prompts'
 import PromptVersionDrawer from './PromptVersionDrawer.vue'
+import PromptEvalDrawer from './PromptEvalDrawer.vue'
 
 const props = defineProps<{
   list: PromptConfig[]
@@ -121,6 +129,14 @@ const emit = defineEmits<{
 }>()
 
 const versionDrawerRef = ref<InstanceType<typeof PromptVersionDrawer> | null>(null)
+const evalDrawerRef = ref<InstanceType<typeof PromptEvalDrawer> | null>(null)
+const evalRow = ref<PromptConfig | null>(null)
+
+/** 打开评测抽屉；草稿默认带出当前正文，基线由服务端取已保存值 */
+function openEval(row: PromptConfig) {
+  evalRow.value = row
+  evalDrawerRef.value?.open(row.id, row.roleName)
+}
 /** 打开历史抽屉那一行；抽屉要用它的「当前正文」做对比基线 */
 const historyRow = ref<PromptConfig | null>(null)
 
