@@ -258,6 +258,8 @@
           :app-id="assistant?.id ?? null"
           :published="assistant?.published ?? false"
           :warnings="publishWarnings"
+          :dirty="dirty"
+          @request-save="onDebugNeedsSave"
         />
       </div>
     </div>
@@ -444,7 +446,18 @@ const fillForm = (a: Assistant) => {
   form.multiTurn = a.multiTurn
   form.thinkingEnabled = a.thinkingEnabled
   form.quickQuestions = [...a.quickQuestions]
+  snapshot.value = JSON.stringify(toBody())
 }
+
+/**
+ * 表单里有没有未保存的改动。
+ *
+ * ★ 用"快照 + 序列化比较"而不是逐字段判：字段会越加越多，逐字段判总会漏一个，
+ * 而漏掉的那个恰好就是"改了但以为保存了"的那一个。`toBody()` 已经是提交形状，
+ * 比它自己就够了。
+ */
+const snapshot = ref('')
+const dirty = computed(() => !!props.assistant && JSON.stringify(toBody()) !== snapshot.value)
 
 const loadPublishWarnings = async () => {
   if (!props.assistant?.id) {
@@ -479,17 +492,33 @@ const toBody = () => ({
 
 const saveDraft = async () => {
   const valid = await formRef.value?.validate().catch(() => false)
-  if (!valid || !props.assistant) return
+  if (!valid || !props.assistant) return false
   saving.value = true
   try {
     await assistantsApi.updateAssistant(props.assistant.id, toBody())
+    snapshot.value = JSON.stringify(toBody())
     ElMessage.success('草稿已保存')
     emit('saved')
     await loadPublishWarnings()
+    return true
   } catch (error) {
     ElMessage.error(error instanceof ApiError ? error.message : '保存失败')
+    return false
   } finally {
     saving.value = false
+  }
+}
+
+/**
+ * 调试面板发现表单脏了、用户选择「保存并调试」：存成功后立刻把那一问发出去。
+ *
+ * ★ 不这样做的话用户要连点两下（保存 → 再点发送），而中间那一下很容易忘 ——
+ * 忘了就又回到"测的是旧配置"，和没修一样。
+ */
+const onDebugNeedsSave = async () => {
+  const ok = await saveDraft()
+  if (ok) {
+    await debugRef.value?.sendNow()
   }
 }
 

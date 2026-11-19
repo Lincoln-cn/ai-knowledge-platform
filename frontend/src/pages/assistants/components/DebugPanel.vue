@@ -57,7 +57,7 @@
 
 <script setup lang="ts">
 import { nextTick, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { assistantsApi } from '@/api'
 import { ApiError } from '@/api/types'
 
@@ -79,7 +79,17 @@ const props = defineProps<{
   appId: string | null
   published: boolean
   warnings: string[]
+  /**
+   * 表单里有未保存的改动。
+   *
+   * ★ 这个面板调的 `POST /assistants/{id}/debug` 读的是**已保存**的配置（后端拒绝在请求体里收配置：
+   * 那等于允许"调试用 A、线上用 B"，是 `BR-02-08` 要防的）。所以表单脏着点发送，测的是旧配置 ——
+   * 而界面上看不出任何区别，用户会以为自己刚改的那句生效了。
+   */
+  dirty?: boolean
 }>()
+
+const emit = defineEmits<{ (e: 'request-save'): void }>()
 
 const question = ref('')
 const sending = ref(false)
@@ -88,6 +98,30 @@ const turns = ref<DebugTurn[]>([])
 const listEl = ref<HTMLElement>()
 
 const send = async () => {
+  const q = question.value.trim()
+  if (!q || !props.appId || sending.value) return
+  if (props.dirty) {
+    // 不直接发：先把"你看到的是旧配置"这件事说清，并给一条能走下去的路（保存并调试）。
+    // 不给"仍然用旧配置"这个选项 —— 那正是这个面板原先的隐性行为。
+    try {
+      await ElMessageBox.confirm(
+        '调试读的是已保存的配置。你刚改的内容还没保存，现在发出去测的是旧的那一版。',
+        '先保存再调试',
+        { confirmButtonText: '保存并调试', cancelButtonText: '取消', type: 'warning' }
+      )
+    } catch {
+      return
+    }
+    emit('request-save')
+    return
+  }
+  await sendNow()
+}
+
+/**
+ * 真正发送。`request-save` 的接收方保存成功后会调这里，避免"保存了但还要再点一次发送"。
+ */
+const sendNow = async () => {
   const q = question.value.trim()
   if (!q || !props.appId || sending.value) return
   sending.value = true
@@ -120,7 +154,7 @@ const reset = () => {
   error.value = null
 }
 
-defineExpose({ reset })
+defineExpose({ reset, sendNow })
 </script>
 
 <style scoped>
