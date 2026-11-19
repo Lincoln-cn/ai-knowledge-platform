@@ -45,11 +45,13 @@
           <span v-if="msg.role !== 'USER'" class="avatar" aria-hidden="true">AI</span>
           <header class="msg-head">
             <!--
-              ★ 开场白标 `PROLOGUE` 而不是 `ANSWER`（#286）：它与回答同样落在助手那一侧，
-                但它不是模型这一次生成的 —— 让用户能一眼看出"这句话是应用配置的"。
+              ★ 开场白标「开场白」而不是「回答」（#286）：它与回答同样落在助手那一侧，
+                但它不是模型这一次生成的 —— 让用户能一眼看出"这句话是配置好的"。
+              ★ 三个标签都写中文：`PROLOGUE` / `QUERY` / `ANSWER` 是数据里的枚举值，
+                把它们印在界面上等于让用户读我们的字段名。
             -->
             <span class="label">{{
-              msg.kind === 'PROLOGUE' ? 'PROLOGUE' : msg.role === 'USER' ? 'QUERY' : 'ANSWER'
+              msg.kind === 'PROLOGUE' ? '开场白' : msg.role === 'USER' ? '提问' : '回答'
             }}</span>
             <span v-if="msg.role !== 'USER' && botIcon" class="bot-name tiny muted ellipsis">{{ botIcon }}</span>
             <span v-if="msg.status === 'GENERATING'" class="stat">

@@ -43,6 +43,15 @@ export interface ChatSettings {
    */
   systemPrompt: string | null
   /**
+   * 通用问答空态显示的**开场白**（给用户看的那段话）。
+   *
+   * ★★ 与 `systemPrompt` 是两件事：那个进 prompt 约束模型，这个只渲染在页面上。
+   *   分段写清是因为「通用问答没有应用」⇒ 没有 `as_assistant.prologue` 可用，
+   *   在此之前用户打开通用问答只看到一句"开始提问"，不知道这里到底是什么。
+   *   `null` / 空 = 用平台默认文案（页面里那一段）。
+   */
+  prologue: string | null
+  /**
    * 通用问答是否走召回。
    *
    * ★★ 默认 `false`：不配置就不检索。之前通用问答在**静默做全库检索**，

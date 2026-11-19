@@ -164,7 +164,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { assistantsApi, conversationsApi, promptsApi, retrievalApi } from '@/api'
+import { assistantsApi, conversationsApi, retrievalApi } from '@/api'
 import type { Assistant } from '@/api/assistants'
 import type { ChatMessage } from '@/api/conversations'
 import { useSessionStore } from '@/stores/session'
@@ -668,43 +668,40 @@ const onSuggest = (text: string) => {
 }
 
 /**
- * 空态平铺的"照着问的话"。
+ * 通用问答空态平铺的引导问题 —— **按问法形态固化**，不从模板库拉。
  *
- * ★ 应用自带快捷问题优先：那是应用配置者针对这个应用写的，比通用模板贴题。
- * 没有应用（或应用没配）时，回落到**提问模板库** —— 这正是用户提的缺的中间那一环：
- * `quick_questions` 只在应用里出现，"我该问什么"这件事在没有应用时没人管。
+ * ★ 为什么固化而不是读库：这四条的作用是教用户"可以这样问"（总结 / 比较 / 判断 / 解释），
+ *   形态本身就是产品设计的一部分。若改成读模板库，运营往里加一条"比较型"就会与第二条
+ *   重复，而空态能放几条、放哪几种形态就没人决定了 —— 那是把产品决定交给数据。
+ *   模板库仍然有用：它在「提示词 → 提问模板」里由运营维护，供应用配置者挑选。
+ *
+ * ★ 专用应用那条路不读这里：应用自带 `quick_questions`，有就用（那是应用配置者
+ *   针对这个应用写的，比任何通用示例都贴题）；没有就整块不显示。
  */
-const libraryTemplates = ref<string[]>([])
+const GENERAL_ASK_SAMPLES = [
+  '这份资料的主要结论是什么？',
+  '这两个方案有什么差别？',
+  '按制度，这种情况该怎么处理？',
+  '这个概念是什么意思，用一句话说清'
+]
 
-const starterQuestions = computed<{ label: string; text: string; fromLibrary: boolean }[]>(() => {
+const starterQuestions = computed<{ label: string; text: string; fromApp: boolean }[]>(() => {
   const quick = appBrief.value?.quickQuestions ?? []
-  if (quick.length) return quick.map((q) => ({ label: q, text: q, fromLibrary: false }))
-  return libraryTemplates.value.map((q) => ({ label: q, text: q, fromLibrary: true }))
+  if (quick.length) return quick.map((q) => ({ label: q, text: q, fromApp: true }))
+  // 有应用但没配快捷问题：这是应用作者的决定，不该由平台替他编问题
+  if (appBrief.value) return []
+  return GENERAL_ASK_SAMPLES.map((q) => ({ label: q, text: q, fromApp: false }))
 })
 
-const starterHint = computed(() =>
-  appBrief.value?.quickQuestions?.length ? '试试这些问题' : '不知道问什么？点一句先填进去'
-)
-
-/** 应用快捷问题照旧点即发；模板库的点进输入框即可（留一步改 {占位}） */
-const onStarter = (q: { label: string; text: string; fromLibrary: boolean }) => {
-  if (q.fromLibrary) composerRef.value?.fillText(q.text)
-  else onSuggest(q.text)
-}
+const starterHint = computed(() => (appBrief.value ? '试试这些问题' : '试试'))
 
 /**
- * 拉提问模板（最多 6 条给空态平铺）。
- *
- * ★ 失败不打扰：这一段是"锦上添花"的引导，拉不到就只显示空态文案 ——
- * 为它弹一条错误提示，会把"我只是刚打开这一页"变成一次故障体验。
+ * 应用快捷问题是"试试这样问"，点即发；通用问答的示例是一句话骨架，
+ * 通常还要换成自己的对象 ⇒ 只填进输入框，留一步可改。
  */
-const loadStarterTemplates = async () => {
-  try {
-    const result = await promptsApi.listPromptConfigs({ kind: 'QUESTION', page: 1, size: 6 })
-    libraryTemplates.value = result.list.map((p) => p.callWord).filter(Boolean)
-  } catch {
-    libraryTemplates.value = []
-  }
+const onStarter = (q: { label: string; text: string; fromApp: boolean }) => {
+  if (q.fromApp) onSuggest(q.text)
+  else composerRef.value?.fillText(q.text)
 }
 
 const onBack = () => {
@@ -718,8 +715,6 @@ onMounted(async () => {
   document.addEventListener('keydown', onEsc)
   // 与首屏渲染无关的读数，不 await —— 拿不到就显示「跟随全局」
   void loadGlobalListwise()
-  // 空态的提问模板同理：晚到一点无所谓，拉不到就当没有
-  void loadStarterTemplates()
   await loadHistory()
 
   // ★ 真后端 Conversation 不带 app 展示字段（C7）⇒ 应用页补一次 getAssistant

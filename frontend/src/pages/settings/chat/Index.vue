@@ -67,6 +67,24 @@
           </div>
 
           <div class="field field-wide">
+            <label class="field-label">开场白</label>
+            <el-input
+              v-model="form.prologue"
+              type="textarea"
+              :rows="3"
+              :disabled="!canEdit"
+              maxlength="600"
+              show-word-limit
+              placeholder="留空 = 用平台默认文案（打开对话页就能看到）"
+            />
+            <div class="field-note micro muted">
+              用户打开通用问答时，空态里先看到的就是这段话 —— 说明这里是什么、能怎么用。
+              <b>它只显示在页面上，不进 prompt</b>（进 prompt 的是下面那个「初始提示词」）。
+              留空则用平台默认文案。
+            </div>
+          </div>
+
+          <div class="field field-wide">
             <label class="field-label">初始提示词</label>
             <el-input
               v-model="form.systemPrompt"
@@ -375,7 +393,8 @@ const form = reactive<ChatSettings>({
   idleTimeoutMs: 60000,
   heartbeatIntervalMs: 20000,
   firstTokenBudgetMs: 10000,
-  systemPrompt: null,
+  systemPrompt: null,
+  prologue: null as string | null,
   retrievalEnabled: false,
   retrievalKbIds: null,
   retrievalThreshold: 0.3,
@@ -413,7 +432,8 @@ function payload(): Omit<ChatSettings, 'updatedAt'> {
     idleTimeoutMs: form.idleTimeoutMs,
     heartbeatIntervalMs: form.heartbeatIntervalMs,
     firstTokenBudgetMs: form.firstTokenBudgetMs,
-    systemPrompt: form.systemPrompt?.trim() ? form.systemPrompt.trim() : null,
+    systemPrompt: form.systemPrompt?.trim() ? form.systemPrompt.trim() : null,
+    prologue: form.prologue?.trim() ? form.prologue.trim() : null,
     retrievalEnabled: form.retrievalEnabled,
     retrievalKbIds: form.retrievalKbIds?.length ? form.retrievalKbIds : null,
     retrievalThreshold: form.retrievalThreshold,

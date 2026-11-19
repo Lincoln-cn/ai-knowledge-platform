@@ -36,22 +36,6 @@
             @change="onPickFiles"
           />
         </label>
-        <!--
-          ★ 提示词入口改成「上弹抽屉」而不是气泡下拉（用户原话：「不要做成下拉，
-          多了不好看，能不能集成在输入框上方，做一个上弹的抽屉，按照分类使用」）。
-
-          抽屉从输入框上沿向上展开：左分类、右列表、搜索置顶。宽度跟输入框一致，
-          打开时不遮住输入框本身 —— 用户是在"一边看题目一边改"的状态里选模板的。
-        -->
-        <button
-          type="button"
-          class="tool"
-          :class="{ on: drawerOpen }"
-          :disabled="disabled"
-          @click="toggleDrawer"
-        >
-          <el-icon><MagicStick /></el-icon><span>提示词</span>
-        </button>
         <label v-if="showThinking" class="tool check">
           <input v-model="thinking" type="checkbox" :disabled="disabled" />
           <span>思考模式</span>
@@ -94,82 +78,14 @@
       </div>
     </div>
 
-    <!-- 上弹抽屉：分类在左、题目在右。`v-if` 而不是 `v-show` —— 关着时不占 DOM -->
-    <div v-if="drawerOpen" class="prompt-drawer panel" @keydown.esc="drawerOpen = false">
-      <div class="pd-head">
-        <el-input
-          v-model="promptKeyword"
-          size="small"
-          placeholder="搜索模板名或问题"
-          clearable
-          class="pd-search"
-        />
-        <button type="button" class="pd-close" title="关闭（Esc）" @click="drawerOpen = false">
-          ×
-        </button>
-      </div>
-
-      <div class="pd-body">
-        <div class="pd-cats">
-          <button
-            type="button"
-            class="pd-cat"
-            :class="{ on: !activeType }"
-            @click="activeType = ''"
-          >全部</button>
-          <button
-            v-for="t in promptTypes"
-            :key="t"
-            type="button"
-            class="pd-cat"
-            :class="{ on: activeType === t }"
-            @click="activeType = t"
-          >{{ t }}</button>
-        </div>
-
-        <div class="pd-list">
-          <div v-if="promptLoading" class="micro muted pd-state">正在读取提问模板…</div>
-          <div v-else-if="promptError" class="micro muted pd-state">
-            {{ promptError }}
-            <button type="button" class="pd-retry" @click="loadPrompts">重试</button>
-          </div>
-          <div v-else-if="!visiblePrompts.length" class="micro muted pd-state">
-            {{
-              promptKeyword.trim()
-                ? '没有匹配的模板'
-                : '还没有提问模板 —— 管理员可在「提示词 → 提问模板」里添加'
-            }}
-          </div>
-          <button
-            v-for="p in visiblePrompts"
-            :key="p.id"
-            type="button"
-            class="pd-item"
-            :title="p.callWord"
-            @click="insertPrompt(p)"
-          >
-            <span class="pd-icon">{{ p.icon }}</span>
-            <span class="pd-text">
-              <span class="pd-name">{{ p.roleName }}</span>
-              <span class="pd-q">{{ p.callWord }}</span>
-            </span>
-          </button>
-        </div>
-      </div>
-
-      <div class="pd-foot micro muted">
-        点一条就填进输入框（已有内容会先问一句）。<code>{例}</code> 这样的花括号是留给你替换的。
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { MagicStick, Paperclip } from '@element-plus/icons-vue'
+import { Paperclip } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { conversationsApi, promptsApi } from '@/api'
-import type { PromptConfig } from '@/api/prompts'
+import { conversationsApi } from '@/api'
 import {
   errText,
   formatBytes,
@@ -254,95 +170,15 @@ watch(
   }
 )
 
-/**
- * 提问模板（`kind: 'QUESTION'`）—— **不是**角色指令。
+/*
+ * ★ 这里原先有一个「提示词」入口（上弹抽屉 + 分类 + 搜索 + 12 条模板库）。
+ *   它被撤掉了 —— **同一页有两个入口做同一件事**：空态已经平铺了一排推荐问题，
+ *   再挂一个"翻全部模板"的抽屉，用户要先决定"我该点哪一个"，而他来这一页只想问一句话。
  *
- * ★★ 这里接错一次对象，记下来免得再错：
- * 原先这里拉的是提示词库里的**角色指令**（`kind: 'ROLE'`，「请逐条审查这份合同…」），
- * 那是给**模型**用的身份设定，出现在对话页只会让用户看到一段看不懂的指令文本。
- * 对话页要的是**提问模板**：遇到"不知道该问什么"时，给用户一句照着问的话。
- * 两者的分界写在 `api/prompts.ts` 的 `PromptKind` 上。
- *
- * 拉取时机：点开抽屉时才拉。输入框挂载就发一次请求，属于给每个用户多付一次没人用的往返。
+ *   模板库仍然存在，位置变成两处：① 运营在「提示词 → 提问模板」里维护；
+ *   ② 对话页空态按问法形态挑几条展示（见 conversation/Index.vue 的推荐问题）。
+ *   终端用户不需要看到"目录"，他只需要看到"几个好问题"。
  */
-const promptList = ref<PromptConfig[]>([])
-const promptLoading = ref(false)
-const promptError = ref('')
-const promptLoaded = ref(false)
-const promptKeyword = ref('')
-const drawerOpen = ref(false)
-/** 当前选中的分类；空串 = 全部 */
-const activeType = ref('')
-
-/** 分类清单取自数据本身（不另维护一份枚举），顺序沿用接口返回顺序 */
-const promptTypes = computed(() => {
-  const seen: string[] = []
-  for (const p of promptList.value) {
-    const name = p.typeName || '未分类'
-    if (!seen.includes(name)) seen.push(name)
-  }
-  return seen
-})
-
-/** 当前分类 + 关键词过滤后的列表 */
-const visiblePrompts = computed(() => {
-  const kw = promptKeyword.value.trim().toLowerCase()
-  return promptList.value.filter((p) => {
-    if (activeType.value && (p.typeName || '未分类') !== activeType.value) return false
-    if (!kw) return true
-    return `${p.roleName} ${p.callWord} ${p.typeName}`.toLowerCase().includes(kw)
-  })
-})
-
-async function loadPrompts() {
-  promptLoading.value = true
-  promptError.value = ''
-  try {
-    const result = await promptsApi.listPromptConfigs({
-      // ★ 显式传 QUESTION：不传会把角色指令一起拉回来
-      kind: 'QUESTION',
-      page: 1,
-      size: 100
-    })
-    promptList.value = result.list
-    promptLoaded.value = true
-  } catch (e) {
-    // ★ 不静默：抽屉里显示失败原因 + 重试，否则用户会以为"模板库是空的"
-    promptError.value = errText(e, '提问模板读取失败').reason
-  } finally {
-    promptLoading.value = false
-  }
-}
-
-function toggleDrawer() {
-  drawerOpen.value = !drawerOpen.value
-  if (drawerOpen.value && !promptLoaded.value && !promptLoading.value) void loadPrompts()
-}
-
-/**
- * 把一条提问模板填进输入框。
- *
- * ★ 规则是用户定的：输入框空 ⇒ 直接填入；已有文字 ⇒ **先确认再覆盖**。
- * 不做"追加到末尾"：模板要解决的是"我不知道该怎么问"，而在一段已有文字后面
- * 再挂一个问题，得到的是两个问题拼成的一段。
- */
-async function insertPrompt(p: PromptConfig) {
-  if (text.value.trim()) {
-    const confirmed = await ElMessageBox.confirm(
-      '输入框里已经有内容，填入模板会替换掉它。',
-      '替换输入框内容',
-      { confirmButtonText: '替换', cancelButtonText: '取消', type: 'warning' }
-    ).then(
-      () => true,
-      () => false
-    )
-    if (!confirmed) return
-  }
-  text.value = p.callWord
-  drawerOpen.value = false
-  await nextTick()
-  inputEl.value?.focus()
-}
 
 async function onPickFiles(e: Event) {
   const input = e.target as HTMLInputElement
@@ -438,6 +274,20 @@ function reset() {
  * 通常还要改掉里面的 {占位}。
  */
 async function fillText(value: string) {
+  // ★ 确认逻辑放在这里，而不是各个入口各写一遍：空态推荐问题与应用快捷问题都会走到
+  //   这条路上，规则分叉过一次（一处直接覆盖、另一处会问）—— 用户看到的就是
+  //   "有时候会问、有时候不问"，而这类不一致最终会被当成"这功能不稳"。
+  if (text.value.trim() && text.value.trim() !== value.trim()) {
+    const confirmed = await ElMessageBox.confirm(
+      '输入框里已经有内容，填入模板会替换掉它。',
+      '替换输入框内容',
+      { confirmButtonText: '替换', cancelButtonText: '取消', type: 'warning' }
+    ).then(
+      () => true,
+      () => false
+    )
+    if (!confirmed) return
+  }
   text.value = value
   await nextTick()
   inputEl.value?.focus()
@@ -613,174 +463,4 @@ defineExpose({ sendText, fillText, reset, focus: () => inputEl.value?.focus() })
   color: var(--color-accent);
 }
 
-/*
- * 上弹抽屉：从输入框上沿向上展开。
- * ★ 用 `bottom: 100%` 而不是 `top` —— 输入框高度随字数变化，钉在底部才不动。
- */
-.prompt-drawer {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + var(--space-2xs));
-  z-index: 20;
-  padding: var(--space-xs) var(--space-sm) var(--space-2xs);
-  max-height: 360px;
-  display: flex;
-  flex-direction: column;
-  box-shadow: var(--shadow-float);
-}
-
-.pd-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-  padding-bottom: var(--space-2xs);
-  border-bottom: 1px solid var(--color-rule);
-}
-
-.pd-search {
-  flex: 1;
-}
-
-.pd-close {
-  border: none;
-  background: transparent;
-  color: var(--color-muted);
-  font-size: var(--text-lg);
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 var(--space-3xs);
-}
-
-.pd-close:hover {
-  color: var(--color-ink);
-}
-
-.pd-body {
-  display: flex;
-  gap: var(--space-sm);
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-/* 分类常驻左栏：题目一多，靠搜索不如按分类点两下 */
-.pd-cats {
-  /* 分类多了也要能滚，且不跟着列表一起滚 */
-  overflow-y: auto;
-  flex: none;
-  width: 96px;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3xs);
-  padding: var(--space-2xs) 0;
-  overflow-y: auto;
-}
-
-.pd-cat {
-  text-align: left;
-  border: none;
-  background: transparent;
-  color: var(--color-muted);
-  font-family: inherit;
-  font-size: var(--text-xs);
-  padding: var(--space-3xs) var(--space-2xs);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.pd-cat:hover {
-  background: var(--color-hover);
-  color: var(--color-ink);
-}
-
-.pd-cat.on {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-  font-weight: 600;
-}
-
-.pd-list {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  /* ★ 必须能滚：抽屉定高 360px，14 条模板加上每条两行正文会顶出去，
-     没有 overflow 时最后几条会被 `.pd-foot` 压在下面 —— 看得见入口、点不到那一条。 */
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3xs);
-  padding: var(--space-2xs) 0;
-  overflow-y: auto;
-}
-
-.pd-state {
-  padding: var(--space-xs) 0;
-}
-
-.pd-retry {
-  border: none;
-  background: transparent;
-  color: var(--color-accent);
-  font-family: inherit;
-  font-size: var(--text-2xs);
-  cursor: pointer;
-  padding: 0 var(--space-3xs);
-}
-
-.pd-item {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2xs);
-  text-align: left;
-  border: 1px solid transparent;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  padding: var(--space-3xs) var(--space-2xs);
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.pd-item:hover {
-  border-color: var(--color-accent-line);
-  background: var(--color-surface);
-}
-
-.pd-icon {
-  flex: none;
-  font-size: var(--text-sm);
-  line-height: var(--leading-tight);
-}
-
-.pd-text {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.pd-name {
-  font-size: var(--text-2xs);
-  font-weight: 600;
-  color: var(--color-ink);
-}
-
-.pd-q {
-  font-size: var(--text-xs);
-  color: var(--color-muted);
-  line-height: var(--leading-tight);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.pd-foot {
-  padding-top: var(--space-2xs);
-  border-top: 1px solid var(--color-rule);
-}
-
-.pd-foot code {
-  font-family: var(--font-mono);
-}
 </style>
