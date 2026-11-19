@@ -10,7 +10,7 @@
  * - 必须选执行环境（应用）—— 问题要经过真实检索才有意义，检索范围由应用决定。
  * - 汇总里 `winRate` 为 null 显示「还没评」，不显示 0% —— 0% 会被读成"改坏了"。
  */
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { assistantsApi, promptsApi } from '@/api'
 import type {
@@ -42,6 +42,10 @@ const runId = ref<string | null>(null)
 const run = ref<PromptEvalRun | null>(null)
 const busy = ref(false)
 let timer: ReturnType<typeof setInterval> | undefined
+// ★ 两个一次性标志：`finished` 防止"DONE 之后还被 start() 建了个 interval 再跑一次"，
+//   `notified` 防止同一次结果弹两条提示（实测会叠两条「跑完了，可以开始评」）。
+let finished = false
+let notified = false
 
 /** 按题把两侧答案配起来：左基线、右草稿。 */
 const pairs = computed(() => {
@@ -90,11 +94,16 @@ const summaryText = computed(() => {
 })
 
 async function open(id: string, name?: string) {
+  // ★ 先让一帧：调用方（配置面板）在同一个 tick 里刚把 `evalRow` 赋成这一行，
+  //   props 还没流下来 —— 同步读 `props.currentText` 会拿到空串（第一次）或上一行的正文。
+  await nextTick()
   configId.value = id
   setTitle(name)
   visible.value = true
   run.value = null
   runId.value = null
+  finished = false
+  notified = false
   draftText.value = props.currentText
   setId.value = null
   items.value = []
@@ -246,9 +255,14 @@ async function start() {
   try {
     const created = await promptsApi.startPromptEvalRun(setId.value, appId.value, draftText.value)
     runId.value = created.id
+    finished = false
+    notified = false
     await poll(true)
     stopPolling()
-    timer = setInterval(() => void poll(false), 2000)
+    // 初始那次可能已经跑完（题少时）—— 那就别再建 interval
+    if (!finished) {
+      timer = setInterval(() => void poll(false), 2000)
+    }
   } catch (e) {
     ElMessage.error(readable(e))
   } finally {
@@ -263,8 +277,10 @@ async function poll(initial: boolean) {
   try {
     run.value = await promptsApi.getPromptEvalRun(runId.value)
     if (run.value.status !== 'RUNNING') {
+      finished = true
       stopPolling()
-      if (!initial) {
+      if (!initial && !notified) {
+        notified = true
         ElMessage.success(run.value.status === 'FAILED' ? '跑失败了' : '跑完了，可以开始评')
       }
     }
