@@ -9,6 +9,8 @@ import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -94,7 +96,9 @@ public class PromptCatalogController {
   @PutMapping("/prompt-configs/{id}")
   @PreAuthorize("hasAuthority('assistant:edit')")
   public ApiResponse<PromptConfigView> updateConfig(
-      @PathVariable UUID id, @RequestBody UpsertPromptConfigBody body) {
+      @PathVariable UUID id,
+      @RequestBody UpsertPromptConfigBody body,
+      @AuthenticationPrincipal Jwt jwt) {
     return ApiResponse.ok(
         catalog.updateConfig(
             id,
@@ -104,7 +108,29 @@ public class PromptCatalogController {
             body.callWord(),
             body.typeId(),
             body.description(),
-            body.icon()));
+            body.icon(),
+            UUID.fromString(jwt.getSubject())));
+  }
+
+  /** 历史版本列表（新的在前，只给摘要）。 */
+  @GetMapping("/prompt-configs/{id}/versions")
+  public ApiResponse<java.util.List<PromptCatalogService.PromptConfigVersionSummary>> listVersions(
+      @PathVariable UUID id) {
+    return ApiResponse.ok(catalog.listVersions(id));
+  }
+
+  /** 某一版的全文 —— 前端拿两版自己算逐行 diff。 */
+  @GetMapping("/prompt-configs/{id}/versions/{versionNo}")
+  public ApiResponse<PromptCatalogService.PromptConfigVersionDetail> getVersion(
+      @PathVariable UUID id, @PathVariable int versionNo) {
+    return ApiResponse.ok(catalog.getVersion(id, versionNo));
+  }
+
+  /** 回滚到某一版：写成新的一版，历史不删。 */
+  @PostMapping("/prompt-configs/{id}/versions/{versionNo}/restore")
+  public ApiResponse<PromptConfigView> restoreVersion(
+      @PathVariable UUID id, @PathVariable int versionNo, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(catalog.restoreVersion(id, versionNo, UUID.fromString(jwt.getSubject())));
   }
 
   @DeleteMapping("/prompt-configs/{id}")

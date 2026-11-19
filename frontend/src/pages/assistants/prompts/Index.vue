@@ -50,6 +50,7 @@
       @filter="onFilter"
       @search="onSearch"
       @page="onPage"
+      @restored="loadConfigs"
     />
 
     <PromptFormDialog ref="formRef" :types="types" :kind="kind" @saved="onSaved" />

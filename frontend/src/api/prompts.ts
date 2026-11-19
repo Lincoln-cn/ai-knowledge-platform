@@ -100,3 +100,54 @@ export const updatePromptConfig = (id: string, body: Partial<UpsertPromptConfigB
 
 export const deletePromptConfig = (id: string) =>
   request<void>({ method: 'DELETE', url: '/prompt-configs/:id', path: { id } })
+
+/* ────────────────────── 版本历史（ROADMAP §11.62） ────────────────────── */
+
+/** 一版历史的摘要（列表用）。`versionNo` 越大越新。 */
+export interface PromptConfigVersionSummary {
+  versionNo: number
+  savedAt: string
+  savedBy: string | null
+  /** 正文前 60 字 —— 列表里够辨认，看全文再按需取。 */
+  preview: string
+}
+
+/** 某一版的全文；`callWord` 就是正文。 */
+export interface PromptConfigVersionDetail {
+  versionNo: number
+  roleName: string
+  callWord: string
+  typeId: string
+  description: string
+  icon: string
+  savedAt: string
+  savedBy: string | null
+}
+
+export const listPromptConfigVersions = (id: string) =>
+  request<PromptConfigVersionSummary[]>({
+    method: 'GET',
+    url: '/prompt-configs/:id/versions',
+    path: { id }
+  })
+
+export const getPromptConfigVersion = (id: string, versionNo: number) =>
+  request<PromptConfigVersionDetail>({
+    method: 'GET',
+    url: '/prompt-configs/:id/versions/:v',
+    path: { id, v: versionNo }
+  })
+
+/**
+ * 回滚到某一版。
+ *
+ * ★ 语义是"以那一版的内容再写一次"，服务端会生成**新的一版** —— 历史一条都不删。
+ * 所以回滚之后版本数 +1，而不是回到当时的样子。
+ */
+export const restorePromptConfigVersion = (id: string, versionNo: number) =>
+  request<PromptConfig>({
+    method: 'POST',
+    url: '/prompt-configs/:id/versions/:v/restore',
+    path: { id, v: versionNo },
+    body: {}
+  })

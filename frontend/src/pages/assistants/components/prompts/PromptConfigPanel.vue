@@ -59,9 +59,11 @@
         </template>
       </el-table-column>
       <el-table-column label="描述" prop="description" min-width="140" show-overflow-tooltip />
-      <el-table-column label="操作" width="160">
+      <el-table-column label="操作" width="200">
         <template #default="{ row }">
           <el-button link size="small" type="primary" @click="emit('edit', row)">编辑</el-button>
+          <!-- 「历史」与编辑并列：改之前先看看以前是怎么写的，是同一个动作的两半 -->
+          <el-button link size="small" @click="openHistory(row)">历史</el-button>
           <el-button link size="small" type="danger" @click="emit('remove', row)">删除</el-button>
           <span v-if="row.usageCount > 0" class="micro muted">被 {{ row.usageCount }} 应用引用</span>
         </template>
@@ -77,12 +79,20 @@
         @current-change="(p: number) => emit('page', p)"
       />
     </div>
+
+    <PromptVersionDrawer
+      ref="versionDrawerRef"
+      :current-text="historyRow?.callWord ?? ''"
+      :current-name="historyRow?.roleName"
+      @restored="emit('restored')"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { PromptConfig, PromptKind, PromptType } from '@/api/prompts'
+import PromptVersionDrawer from './PromptVersionDrawer.vue'
 
 const props = defineProps<{
   list: PromptConfig[]
@@ -106,7 +116,18 @@ const emit = defineEmits<{
   filter: [string]
   search: [string]
   page: [number]
+  /** 回滚成功后让父级重拉列表（当前正文变了） */
+  restored: []
 }>()
+
+const versionDrawerRef = ref<InstanceType<typeof PromptVersionDrawer> | null>(null)
+/** 打开历史抽屉那一行；抽屉要用它的「当前正文」做对比基线 */
+const historyRow = ref<PromptConfig | null>(null)
+
+function openHistory(row: PromptConfig) {
+  historyRow.value = row
+  versionDrawerRef.value?.open(row.id, row.roleName)
+}
 
 const typeId = ref(props.activeTypeId)
 const keyword = ref(props.activeKeyword)

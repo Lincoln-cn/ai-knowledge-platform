@@ -1,9 +1,11 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import cn.lincoln.aiplatform.assistant.domain.PromptConfig;
+import cn.lincoln.aiplatform.assistant.domain.PromptConfigVersion;
 import cn.lincoln.aiplatform.assistant.domain.PromptKind;
 import cn.lincoln.aiplatform.assistant.domain.PromptType;
 import cn.lincoln.aiplatform.assistant.infrastructure.JpaPromptConfigRepository;
+import cn.lincoln.aiplatform.assistant.infrastructure.JpaPromptConfigVersionRepository;
 import cn.lincoln.aiplatform.assistant.infrastructure.JpaPromptTypeRepository;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
@@ -32,12 +34,17 @@ public class PromptCatalogService {
 
   private final JpaPromptTypeRepository types;
   private final JpaPromptConfigRepository configs;
+  private final JpaPromptConfigVersionRepository versions;
   private final JdbcTemplate jdbc;
 
   public PromptCatalogService(
-      JpaPromptTypeRepository types, JpaPromptConfigRepository configs, JdbcTemplate jdbc) {
+      JpaPromptTypeRepository types,
+      JpaPromptConfigRepository configs,
+      JpaPromptConfigVersionRepository versions,
+      JdbcTemplate jdbc) {
     this.types = types;
     this.configs = configs;
+    this.versions = versions;
     this.jdbc = jdbc;
   }
 
@@ -197,6 +204,114 @@ public class PromptCatalogService {
         config.createdAt());
   }
 
+  /**
+   * 改一条提示词；内容真的变了才把**旧值**追加成一版历史（ROADMAP §11.62）。
+   *
+   * <p>★ 三个判据：(a) 比较的是"这次要写进去的值"与"现在库里的值"，不是"请求体有没有这些字段"—— 传 null 表示沿用旧值，不能因此判成"变了"；(b)
+   * 全等就**不写版本**：点开编辑器又保存一次不该多一版噪声；(c) 落的是**改之前**的快照 —— 历史表回答的是"以前长什么样"，最新一版始终在 {@code
+   * as_prompt_config} 里。
+   */
+  private void snapIfChanged(
+      PromptConfig config,
+      PromptKind kind,
+      UUID appId,
+      String roleName,
+      String callWord,
+      UUID typeId,
+      String description,
+      String icon,
+      UUID actorId) {
+    PromptKind nextKind = kind == null ? config.kind() : kind;
+    UUID nextAppId = nextKind == PromptKind.QUESTION ? appId : null;
+    String nextRoleName = roleName == null ? config.roleName() : roleName;
+    String nextCallWord = callWord == null ? config.callWord() : callWord;
+    UUID nextTypeId = typeId == null ? config.typeId() : typeId;
+    String nextDescription = description == null ? config.description() : description;
+    String nextIcon = icon == null ? config.icon() : icon;
+    boolean unchanged =
+        nextKind == config.kind()
+            && java.util.Objects.equals(nextAppId, config.appId())
+            && nextRoleName.equals(config.roleName())
+            && nextCallWord.equals(config.callWord())
+            && nextTypeId.equals(config.typeId())
+            && nextDescription.equals(config.description())
+            && nextIcon.equals(config.icon());
+    if (unchanged) {
+      return;
+    }
+    int nextVersionNo = versions.maxVersionNo(config.id()) + 1;
+    versions.save(
+        new PromptConfigVersion(
+            UUID.randomUUID(), config.id(), nextVersionNo, config, Instant.now(), actorId));
+  }
+
+  /** 某条提示词的历史版本（新的在前）；只给摘要，正文按需取。 */
+  @Transactional(readOnly = true)
+  public List<PromptConfigVersionSummary> listVersions(UUID configId) {
+    requireConfig(configId);
+    return versions.findByConfigIdOrderByVersionNoDesc(configId).stream()
+        .map(
+            v ->
+                new PromptConfigVersionSummary(
+                    v.versionNo(), v.savedAt(), v.savedBy(), previewOf(v.callWord())))
+        .toList();
+  }
+
+  /** 某一版的全文（用于前端做逐行 diff）。 */
+  @Transactional(readOnly = true)
+  public PromptConfigVersionDetail getVersion(UUID configId, int versionNo) {
+    requireConfig(configId);
+    PromptConfigVersion v =
+        versions
+            .findByConfigIdAndVersionNo(configId, versionNo)
+            .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "这个版本不存在（可能已被清理）"));
+    return new PromptConfigVersionDetail(
+        v.versionNo(),
+        v.roleName(),
+        v.callWord(),
+        v.typeId(),
+        v.description(),
+        v.icon(),
+        v.savedAt(),
+        v.savedBy());
+  }
+
+  /**
+   * 把某一版内容写回成**新的一版**（历史不删）。
+   *
+   * <p>★ 不做"删掉 v4 之后的历史"：回滚本身也是一次修改，它应该留下痕迹 —— 否则"回滚过"这件事在记录里消失， 事后没人知道是谁把版本倒回去过。
+   */
+  @Transactional
+  public PromptConfigView restoreVersion(UUID configId, int versionNo, UUID actorId) {
+    PromptConfigVersion v =
+        versions
+            .findByConfigIdAndVersionNo(configId, versionNo)
+            .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "这个版本不存在（可能已被清理）"));
+    return updateConfig(
+        configId,
+        v.kind(),
+        v.appId(),
+        v.roleName(),
+        v.callWord(),
+        v.typeId(),
+        v.description(),
+        v.icon(),
+        actorId);
+  }
+
+  private PromptConfig requireConfig(UUID configId) {
+    return configs
+        .findById(configId)
+        .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "提示词不存在"));
+  }
+
+  private static String previewOf(String text) {
+    if (text == null) {
+      return "";
+    }
+    return text.length() <= 60 ? text : text.substring(0, 60) + "…";
+  }
+
   @Transactional
   public PromptConfigView updateConfig(
       UUID id,
@@ -206,7 +321,8 @@ public class PromptCatalogService {
       String callWord,
       UUID typeId,
       String description,
-      String icon) {
+      String icon,
+      UUID actorId) {
     PromptConfig config =
         configs
             .findById(id)
@@ -214,6 +330,7 @@ public class PromptCatalogService {
     if (typeId != null) {
       requireType(typeId);
     }
+    snapIfChanged(config, kind, appId, roleName, callWord, typeId, description, icon, actorId);
     try {
       config.update(
           kind == null ? config.kind() : kind,
@@ -292,6 +409,21 @@ public class PromptCatalogService {
 
   /** 类型视图。 */
   public record PromptTypeView(UUID id, String typeName, String icon, long promptCount) {}
+
+  /** 版本摘要（列表用）。 */
+  public record PromptConfigVersionSummary(
+      int versionNo, Instant savedAt, UUID savedBy, String preview) {}
+
+  /** 某一版的全文。 */
+  public record PromptConfigVersionDetail(
+      int versionNo,
+      String roleName,
+      String callWord,
+      UUID typeId,
+      String description,
+      String icon,
+      Instant savedAt,
+      UUID savedBy) {}
 
   /** 模板视图。 */
   public record PromptConfigView(
