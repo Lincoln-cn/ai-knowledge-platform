@@ -19,12 +19,25 @@ export interface PromptType {
   promptCount: number
 }
 
+/**
+ * 提示词的两种用途。
+ *
+ * - `ROLE` 角色指令：给**模型**的身份设定。在应用配置里选用后写进应用的 `role_prompt`。
+ * - `QUESTION` 提问模板：给**终端用户**的问法示例。出现在对话页的空态与上弹抽屉里，正文就是那句问题。
+ *
+ * ★ 两者共用一张表（字段几乎重合），差别只在受益对象 —— 见后端 `PromptKind` 的说明。
+ */
+export type PromptKind = 'ROLE' | 'QUESTION'
+
 /** 提示词配置（字段命名沿用了被替换的旧契约） */
 export interface PromptConfig {
   id: string
-  /** 角色名称 */
+  kind: PromptKind
+  /** 提问模板推荐给哪个应用；null = 通用。★ 只是候选池标注，运行期不读 */
+  appId: string | null
+  /** 名称（角色指令叫"角色名称"，提问模板叫"模板名"） */
   roleName: string
-  /** 提示词正文 */
+  /** 正文：角色指令是给模型的指令，提问模板就是用户会看到的那句问题 */
   callWord: string
   typeId: string
   typeName: string
@@ -39,6 +52,12 @@ export interface PromptTypeQuery extends PageQuery {}
 
 export interface PromptConfigQuery extends PageQuery {
   typeId?: string
+  /**
+   * 只看某一类。★ 不传 = 全部；调用方要"只看角色指令"必须显式传 `'ROLE'` ——
+   * 给它一个默认值，提问模板就会悄悄混进应用配置的选用列表。
+   */
+  kind?: PromptKind
+  appId?: string
 }
 
 export interface UpsertPromptTypeBody {
@@ -47,6 +66,8 @@ export interface UpsertPromptTypeBody {
 }
 
 export interface UpsertPromptConfigBody {
+  kind?: PromptKind
+  appId?: string | null
   roleName: string
   callWord: string
   typeId: string

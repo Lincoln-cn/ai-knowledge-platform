@@ -7,10 +7,15 @@
     @closed="reset"
   >
     <el-form ref="formRef" :model="form" :rules="rules" label-width="88px">
-      <el-form-item label="角色名称" prop="roleName">
-        <el-input v-model="form.roleName" maxlength="30" show-word-limit placeholder="例如：合同审查助手" />
+      <el-form-item :label="isQuestion ? '模板名' : '角色名称'" prop="roleName">
+        <el-input
+          v-model="form.roleName"
+          maxlength="30"
+          show-word-limit
+          :placeholder="isQuestion ? '例如：合同风险快速过一遍' : '例如：合同审查助手'"
+        />
       </el-form-item>
-      <el-form-item label="提示词" prop="callWord">
+      <el-form-item :label="isQuestion ? '问题' : '提示词'" prop="callWord">
         <el-input
           v-model="form.callWord"
           type="textarea"
@@ -18,11 +23,15 @@
           resize="none"
           maxlength="500"
           show-word-limit
-          placeholder="定义助手的行为指令，可复用在多个应用上"
+          :placeholder="
+            isQuestion
+              ? '写用户会照着问的那句话，例如：这份{文书}里有没有对我方不利的条款？'
+              : '定义助手的行为指令，可复用在多个应用上'
+          "
         />
       </el-form-item>
       <el-form-item label="类别" prop="typeId">
-        <el-select v-model="form.typeId" placeholder="选择提示词类型" style="width: 100%">
+        <el-select v-model="form.typeId" placeholder="选择类别" style="width: 100%">
           <el-option v-for="t in types" :key="t.id" :label="t.typeName" :value="t.id" />
         </el-select>
       </el-form-item>
@@ -62,10 +71,12 @@ import { computed, reactive, ref } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { promptsApi } from '@/api'
 import { ApiError } from '@/api/types'
-import type { PromptConfig, PromptType, UpsertPromptConfigBody } from '@/api/prompts'
+import type { PromptConfig, PromptKind, PromptType, UpsertPromptConfigBody } from '@/api/prompts'
 
 const props = defineProps<{
   types: PromptType[]
+  /** 新建哪一档。编辑既有条目时以那一行自己的 kind 为准，不吃这个值 */
+  kind: PromptKind
 }>()
 const emit = defineEmits<{ saved: [] }>()
 
@@ -84,14 +95,21 @@ const form = reactive({
   icon: ICONS[0]
 })
 
-const title = computed(() => (editing.value ? '编辑提示词' : '新建提示词'))
+/** 编辑既有条目时跟着那一行走；新建时跟着当前档位 */
+const effectiveKind = computed<PromptKind>(() => editing.value?.kind ?? props.kind)
+const isQuestion = computed(() => effectiveKind.value === 'QUESTION')
 
-const rules: FormRules = {
-  roleName: [{ required: true, message: '请输入角色名称', trigger: 'blur' }],
-  callWord: [{ required: true, message: '请输入提示词', trigger: 'blur' }],
+const title = computed(() => {
+  const noun = isQuestion.value ? '模板' : '提示词'
+  return editing.value ? `编辑${noun}` : `新建${noun}`
+})
+
+const rules = computed<FormRules>(() => ({
+  roleName: [{ required: true, message: `请输入${isQuestion.value ? '模板名' : '角色名称'}`, trigger: 'blur' }],
+  callWord: [{ required: true, message: `请输入${isQuestion.value ? '问题' : '提示词'}`, trigger: 'blur' }],
   typeId: [{ required: true, message: '请选择类别', trigger: 'change' }],
   description: [{ required: true, message: '请填写描述', trigger: 'blur' }]
-}
+}))
 
 const reset = () => {
   formRef.value?.resetFields()
@@ -125,6 +143,7 @@ const submit = async () => {
   saving.value = true
   try {
     const body: UpsertPromptConfigBody = {
+      kind: effectiveKind.value,
       roleName: form.roleName,
       callWord: form.callWord,
       typeId: form.typeId,

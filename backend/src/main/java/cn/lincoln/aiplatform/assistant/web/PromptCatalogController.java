@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.assistant.web;
 import cn.lincoln.aiplatform.assistant.application.PromptCatalogService;
 import cn.lincoln.aiplatform.assistant.application.PromptCatalogService.PromptConfigView;
 import cn.lincoln.aiplatform.assistant.application.PromptCatalogService.PromptTypeView;
+import cn.lincoln.aiplatform.assistant.domain.PromptKind;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import java.util.UUID;
@@ -69,8 +70,10 @@ public class PromptCatalogController {
       @RequestParam(required = false) Integer page,
       @RequestParam(required = false) Integer size,
       @RequestParam(required = false) UUID typeId,
-      @RequestParam(required = false) String keyword) {
-    return ApiResponse.ok(catalog.listConfigs(page, size, typeId, keyword));
+      @RequestParam(required = false) String keyword,
+      @RequestParam(required = false) PromptKind kind,
+      @RequestParam(required = false) UUID appId) {
+    return ApiResponse.ok(catalog.listConfigs(page, size, typeId, keyword, kind, appId));
   }
 
   @PostMapping("/prompt-configs")
@@ -79,7 +82,13 @@ public class PromptCatalogController {
   public ApiResponse<PromptConfigView> createConfig(@RequestBody UpsertPromptConfigBody body) {
     return ApiResponse.ok(
         catalog.createConfig(
-            body.roleName(), body.callWord(), body.typeId(), body.description(), body.icon()));
+            body.kind(),
+            body.appId(),
+            body.roleName(),
+            body.callWord(),
+            body.typeId(),
+            body.description(),
+            body.icon()));
   }
 
   @PutMapping("/prompt-configs/{id}")
@@ -88,7 +97,14 @@ public class PromptCatalogController {
       @PathVariable UUID id, @RequestBody UpsertPromptConfigBody body) {
     return ApiResponse.ok(
         catalog.updateConfig(
-            id, body.roleName(), body.callWord(), body.typeId(), body.description(), body.icon()));
+            id,
+            body.kind(),
+            body.appId(),
+            body.roleName(),
+            body.callWord(),
+            body.typeId(),
+            body.description(),
+            body.icon()));
   }
 
   @DeleteMapping("/prompt-configs/{id}")
@@ -103,5 +119,11 @@ public class PromptCatalogController {
 
   /** 模板新建/更新请求。 */
   public record UpsertPromptConfigBody(
-      String roleName, String callWord, UUID typeId, String description, String icon) {}
+      PromptKind kind,
+      UUID appId,
+      String roleName,
+      String callWord,
+      UUID typeId,
+      String description,
+      String icon) {}
 }

@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import cn.lincoln.aiplatform.assistant.domain.PromptConfig;
+import cn.lincoln.aiplatform.assistant.domain.PromptKind;
 import cn.lincoln.aiplatform.assistant.domain.PromptType;
 import cn.lincoln.aiplatform.assistant.infrastructure.JpaPromptConfigRepository;
 import cn.lincoln.aiplatform.assistant.infrastructure.JpaPromptTypeRepository;
@@ -110,10 +111,10 @@ public class PromptCatalogService {
     types.deleteById(id);
   }
 
-  /** 模板列表（分页 + 类型筛选 + 关键字）。 */
+  /** 模板列表（分页 + 类型筛选 + 关键字 + 用途 + 推荐应用）。 */
   @Transactional(readOnly = true)
   public PageResult<PromptConfigView> listConfigs(
-      Integer page, Integer size, UUID typeId, String keyword) {
+      Integer page, Integer size, UUID typeId, String keyword, PromptKind kind, UUID appId) {
     int safePage = page == null || page < 1 ? 1 : page;
     int safeSize = size == null || size < 1 ? 20 : Math.min(size, MAX_PAGE_SIZE);
     Map<UUID, PromptType> typeMap =
@@ -121,6 +122,10 @@ public class PromptCatalogService {
     String kw = keyword == null ? null : keyword.strip().toLowerCase(Locale.ROOT);
     List<PromptConfigView> all =
         configs.findAllByOrderByCreatedAtDesc().stream()
+            // ★ kind 为 null 表示不过滤（管理页的「全部」）。调用方要"只看角色指令"必须显式传 ROLE ——
+            //   从前这里的含义就是角色指令，给一个默认值会让"提问模板悄悄混进应用配置的选用列表"。
+            .filter(c -> kind == null || kind == c.kind())
+            .filter(c -> appId == null || appId.equals(c.appId()))
             .filter(c -> typeId == null || typeId.equals(c.typeId()))
             .filter(
                 c ->
@@ -134,6 +139,8 @@ public class PromptCatalogService {
                   PromptType t = typeMap.get(c.typeId());
                   return new PromptConfigView(
                       c.id(),
+                      c.kind(),
+                      c.appId(),
                       c.roleName(),
                       c.callWord(),
                       c.typeId(),
@@ -151,19 +158,35 @@ public class PromptCatalogService {
 
   @Transactional
   public PromptConfigView createConfig(
-      String roleName, String callWord, UUID typeId, String description, String icon) {
+      PromptKind kind,
+      UUID appId,
+      String roleName,
+      String callWord,
+      UUID typeId,
+      String description,
+      String icon) {
     requireType(typeId);
     PromptConfig config =
         new PromptConfig(
-            UUID.randomUUID(), roleName, callWord, typeId, description, icon, Instant.now());
+            UUID.randomUUID(),
+            kind,
+            appId,
+            roleName,
+            callWord,
+            typeId,
+            description,
+            icon,
+            Instant.now());
     try {
       configs.save(config);
     } catch (IllegalArgumentException e) {
-      throw new BusinessException(ErrorCode.BAD_REQUEST, e.getMessage(), "检查角色名称、提示词与图标");
+      throw new BusinessException(ErrorCode.BAD_REQUEST, e.getMessage(), "检查名称、正文与图标");
     }
     PromptType t = types.findById(typeId).orElse(null);
     return new PromptConfigView(
         config.id(),
+        config.kind(),
+        config.appId(),
         config.roleName(),
         config.callWord(),
         config.typeId(),
@@ -176,7 +199,14 @@ public class PromptCatalogService {
 
   @Transactional
   public PromptConfigView updateConfig(
-      UUID id, String roleName, String callWord, UUID typeId, String description, String icon) {
+      UUID id,
+      PromptKind kind,
+      UUID appId,
+      String roleName,
+      String callWord,
+      UUID typeId,
+      String description,
+      String icon) {
     PromptConfig config =
         configs
             .findById(id)
@@ -186,6 +216,8 @@ public class PromptCatalogService {
     }
     try {
       config.update(
+          kind == null ? config.kind() : kind,
+          appId,
           roleName == null ? config.roleName() : roleName,
           callWord == null ? config.callWord() : callWord,
           typeId == null ? config.typeId() : typeId,
@@ -193,12 +225,14 @@ public class PromptCatalogService {
           icon == null ? config.icon() : icon,
           Instant.now());
     } catch (IllegalArgumentException e) {
-      throw new BusinessException(ErrorCode.BAD_REQUEST, e.getMessage(), "检查角色名称、提示词与图标");
+      throw new BusinessException(ErrorCode.BAD_REQUEST, e.getMessage(), "检查名称、正文与图标");
     }
     configs.save(config);
     PromptType t = types.findById(config.typeId()).orElse(null);
     return new PromptConfigView(
         config.id(),
+        config.kind(),
+        config.appId(),
         config.roleName(),
         config.callWord(),
         config.typeId(),
@@ -262,6 +296,8 @@ public class PromptCatalogService {
   /** 模板视图。 */
   public record PromptConfigView(
       UUID id,
+      PromptKind kind,
+      UUID appId,
       String roleName,
       String callWord,
       UUID typeId,

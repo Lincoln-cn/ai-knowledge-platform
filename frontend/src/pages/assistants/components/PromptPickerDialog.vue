@@ -68,6 +68,10 @@ const fetch = async () => {
   loading.value = true
   try {
     const result = await promptsApi.listPromptConfigs({
+      // ★ 应用配置里选的是**角色指令**（写进应用的 role_prompt）。
+      // 不传 kind 会把「提问模板」（用户照着问的话）也列进来，选错了就是让模型
+      // 把一句问题当成身份设定 —— 这类错在界面上看不出，只会在回答里变味。
+      kind: 'ROLE',
       keyword: keyword.value || undefined,
       typeId: typeId.value || undefined,
       page: 1,

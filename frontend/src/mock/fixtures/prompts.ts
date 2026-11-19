@@ -14,7 +14,11 @@ export const promptTypes: PromptType[] = [
   { id: 'pt4', typeName: '写作辅助', icon: '✍️', promptCount: 1 }
 ]
 
-export const promptConfigs: PromptConfig[] = [
+/**
+ * ★ 这里只写"因条目而异"的字段，`kind` / `appId` 由下面的 map 统一补：
+ * 加两列时不必回头改 8 段字面量（与 `mock/fixtures/models.ts` 同一手法）。
+ */
+const promptConfigSeed: Array<Omit<PromptConfig, 'kind' | 'appId'>> = [
   {
     id: 'pc1',
     roleName: '合同审查助手',
@@ -104,3 +108,9 @@ export const promptConfigs: PromptConfig[] = [
     createdAt: '2026-02-05T09:45:00Z'
   }
 ]
+
+export const promptConfigs: PromptConfig[] = promptConfigSeed.map((p) =>
+  p.id === 'pc2'
+    ? { ...p, kind: 'QUESTION' as const, appId: null }
+    : { ...p, kind: 'ROLE' as const, appId: null }
+)

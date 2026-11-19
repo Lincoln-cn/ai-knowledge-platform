@@ -127,9 +127,11 @@ export const promptRoutes: MockRoute[] = [
     ({ query }) => {
       const keyword = String(query.keyword ?? '')
       const typeId = query.typeId ? String(query.typeId) : ''
+      const kind = query.kind ? String(query.kind) : ''
       const list = promptConfigs
         .filter((c) => !keyword || c.roleName.includes(keyword) || c.callWord.includes(keyword))
         .filter((c) => !typeId || c.typeId === typeId)
+        .filter((c) => !kind || c.kind === kind)
       return paginate(list, query)
     }
   ],
@@ -146,6 +148,8 @@ export const promptRoutes: MockRoute[] = [
       }
       const created: PromptConfig = {
         id: `pc${Date.now()}`,
+        kind: input.kind ?? 'ROLE',
+        appId: input.kind === 'QUESTION' ? (input.appId ?? null) : null,
         roleName: input.roleName,
         callWord: input.callWord,
         typeId: type.id,

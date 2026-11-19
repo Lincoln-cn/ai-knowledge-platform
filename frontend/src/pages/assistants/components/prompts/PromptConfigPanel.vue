@@ -1,7 +1,7 @@
 <template>
   <div class="panel wrap">
     <div class="hd">
-      <span class="h4">提示词配置</span>
+      <span class="h4">{{ isQuestion ? '提问模板' : '角色指令' }}</span>
       <div class="row gap-8">
         <el-select v-model="typeId" size="small" placeholder="全部类别" style="width: 140px" @change="emit('filter', typeId)">
           <el-option label="全部类别" value="" />
@@ -10,13 +10,15 @@
         <el-input
           v-model="keyword"
           size="small"
-          placeholder="搜索角色名称 / 提示词"
+          :placeholder="isQuestion ? '搜索模板名 / 问题' : '搜索角色名称 / 提示词'"
           style="width: 200px"
           clearable
           @keyup.enter="emit('search', keyword)"
           @clear="emit('search', '')"
         />
-        <el-button size="small" type="primary" @click="emit('create')">新建提示词</el-button>
+        <el-button size="small" type="primary" @click="emit('create')">
+          {{ isQuestion ? '新建模板' : '新建提示词' }}
+        </el-button>
       </div>
     </div>
 
@@ -27,22 +29,30 @@
       <template #empty>
         <div class="empty">
           <template v-if="keyword">
-            <div class="empty-title">没有匹配「{{ keyword }}」的提示词</div>
+            <div class="empty-title">没有匹配「{{ keyword }}」的{{ isQuestion ? '模板' : '提示词' }}</div>
             <div>换个关键词，或清空搜索看全部</div>
             <el-button link size="small" type="primary" @click="clearKeyword">清空搜索</el-button>
           </template>
           <template v-else>
-            <div class="empty-title">还没有提示词</div>
-            <div>提示词决定应用以什么角色、用什么口径回答</div>
-            <el-button size="small" type="primary" @click="emit('create')">新建提示词</el-button>
+            <div class="empty-title">还没有{{ isQuestion ? '提问模板' : '角色指令' }}</div>
+            <div>
+              {{
+                isQuestion
+                  ? '提问模板是给用户看的问法示例：出现在对话页的空态和上弹抽屉里，正文就是那句问题'
+                  : '角色指令决定应用以什么身份、用什么口径回答，在应用配置里「从提示词选用」'
+              }}
+            </div>
+            <el-button size="small" type="primary" @click="emit('create')">
+              {{ isQuestion ? '新建模板' : '新建提示词' }}
+            </el-button>
           </template>
         </div>
       </template>
       <el-table-column label="图标" width="60">
         <template #default="{ row }"><span class="icon">{{ row.icon }}</span></template>
       </el-table-column>
-      <el-table-column label="角色名称" prop="roleName" min-width="120" show-overflow-tooltip />
-      <el-table-column label="提示词" prop="callWord" min-width="200" show-overflow-tooltip />
+      <el-table-column :label="isQuestion ? '模板名' : '角色名称'" prop="roleName" min-width="120" show-overflow-tooltip />
+      <el-table-column :label="isQuestion ? '问题' : '提示词'" prop="callWord" min-width="200" show-overflow-tooltip />
       <el-table-column label="类别" width="110">
         <template #default="{ row }">
           <el-tag size="small" effect="plain">{{ row.typeName }}</el-tag>
@@ -71,8 +81,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import type { PromptConfig, PromptType } from '@/api/prompts'
+import { computed, ref, watch } from 'vue'
+import type { PromptConfig, PromptKind, PromptType } from '@/api/prompts'
 
 const props = defineProps<{
   list: PromptConfig[]
@@ -83,7 +93,11 @@ const props = defineProps<{
   pageSize: number
   activeTypeId: string
   activeKeyword: string
+  kind: PromptKind
 }>()
+
+/** 一套组件两种用途：只换称呼，不换布局 —— 两套表格会让同一件事长成两个样子 */
+const isQuestion = computed(() => props.kind === 'QUESTION')
 
 const emit = defineEmits<{
   create: []
