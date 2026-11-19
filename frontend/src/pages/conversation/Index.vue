@@ -53,16 +53,23 @@
           @load-earlier="chat.loadEarlier"
         />
 
-        <div v-if="showsQuickAsks && appBrief?.quickQuestions.length" class="quick-asks">
-          <span class="micro muted">试试这些问题</span>
+        <!--
+          空态给"照着问的话"，三个来源按优先级回落（全部为空时整块不显示）：
+          ① 应用自带的快捷问题 —— 点即发，它们是"试试这样问"；
+          ② 提问模板库 —— 点**只填不发**，因为模板里通常有 {占位} 要改；
+          ③ 都没有 —— 不显示这一块，让空态文案独自承担引导（不要多一行"暂无推荐"）。
+        -->
+        <div v-if="showsQuickAsks && starterQuestions.length" class="quick-asks">
+          <span class="micro muted">{{ starterHint }}</span>
           <div class="quick-chips">
             <button
-              v-for="q in appBrief.quickQuestions"
-              :key="q"
+              v-for="q in starterQuestions"
+              :key="q.text"
               type="button"
               class="quick-chip"
-              @click="onSuggest(q)"
-            >{{ q }}</button>
+              :title="q.text"
+              @click="onStarter(q)"
+            >{{ q.label }}</button>
           </div>
         </div>
 
@@ -157,7 +164,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { assistantsApi, conversationsApi, retrievalApi } from '@/api'
+import { assistantsApi, conversationsApi, promptsApi, retrievalApi } from '@/api'
 import type { Assistant } from '@/api/assistants'
 import type { ChatMessage } from '@/api/conversations'
 import { useSessionStore } from '@/stores/session'
@@ -660,6 +667,46 @@ const onSuggest = (text: string) => {
   composerRef.value?.sendText(text)
 }
 
+/**
+ * 空态平铺的"照着问的话"。
+ *
+ * ★ 应用自带快捷问题优先：那是应用配置者针对这个应用写的，比通用模板贴题。
+ * 没有应用（或应用没配）时，回落到**提问模板库** —— 这正是用户提的缺的中间那一环：
+ * `quick_questions` 只在应用里出现，"我该问什么"这件事在没有应用时没人管。
+ */
+const libraryTemplates = ref<string[]>([])
+
+const starterQuestions = computed<{ label: string; text: string; fromLibrary: boolean }[]>(() => {
+  const quick = appBrief.value?.quickQuestions ?? []
+  if (quick.length) return quick.map((q) => ({ label: q, text: q, fromLibrary: false }))
+  return libraryTemplates.value.map((q) => ({ label: q, text: q, fromLibrary: true }))
+})
+
+const starterHint = computed(() =>
+  appBrief.value?.quickQuestions?.length ? '试试这些问题' : '不知道问什么？点一句先填进去'
+)
+
+/** 应用快捷问题照旧点即发；模板库的点进输入框即可（留一步改 {占位}） */
+const onStarter = (q: { label: string; text: string; fromLibrary: boolean }) => {
+  if (q.fromLibrary) composerRef.value?.fillText(q.text)
+  else onSuggest(q.text)
+}
+
+/**
+ * 拉提问模板（最多 6 条给空态平铺）。
+ *
+ * ★ 失败不打扰：这一段是"锦上添花"的引导，拉不到就只显示空态文案 ——
+ * 为它弹一条错误提示，会把"我只是刚打开这一页"变成一次故障体验。
+ */
+const loadStarterTemplates = async () => {
+  try {
+    const result = await promptsApi.listPromptConfigs({ kind: 'QUESTION', page: 1, size: 6 })
+    libraryTemplates.value = result.list.map((p) => p.callWord).filter(Boolean)
+  } catch {
+    libraryTemplates.value = []
+  }
+}
+
 const onBack = () => {
   router.push('/')
 }
@@ -671,6 +718,8 @@ onMounted(async () => {
   document.addEventListener('keydown', onEsc)
   // 与首屏渲染无关的读数，不 await —— 拿不到就显示「跟随全局」
   void loadGlobalListwise()
+  // 空态的提问模板同理：晚到一点无所谓，拉不到就当没有
+  void loadStarterTemplates()
   await loadHistory()
 
   // ★ 真后端 Conversation 不带 app 展示字段（C7）⇒ 应用页补一次 getAssistant
