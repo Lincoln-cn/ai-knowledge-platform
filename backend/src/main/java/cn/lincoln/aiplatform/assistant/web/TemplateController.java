@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.assistant.web;
 import cn.lincoln.aiplatform.assistant.application.AssistantView;
 import cn.lincoln.aiplatform.assistant.application.TemplateService;
 import cn.lincoln.aiplatform.assistant.domain.Template;
+import cn.lincoln.aiplatform.platform.web.ApiResponse;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,18 +43,24 @@ public class TemplateController {
     return UUID.fromString(jwt.getSubject());
   }
 
-  /** 列表（所有登录用户可看：模板本来就是给人挑的） */
+  /**
+   * 列表（所有登录用户可看：模板本来就是给人挑的）。
+   *
+   * <p>★ 必须包 {@link ApiResponse}：本项目的响应包络是「每个端点自己包」，没有全局 {@code ResponseBodyAdvice}（全仓零命中）。前端
+   * {@code lib/http.ts} 统一取 {@code res.data.data}， 裸返回会被读成 {@code undefined} —— 实测就是模板页 {@code
+   * rows.length} 抛 {@code Cannot read properties of undefined}，页面只剩标题、表格一直是空的。
+   */
   @GetMapping
   @PreAuthorize("hasAuthority('assistant:view')")
-  public List<TemplateView> list() {
-    return templates.list().stream().map(TemplateView::of).toList();
+  public ApiResponse<List<TemplateView>> list() {
+    return ApiResponse.ok(templates.list().stream().map(TemplateView::of).toList());
   }
 
   /** 详情 */
   @GetMapping("/{id}")
   @PreAuthorize("hasAuthority('assistant:view')")
-  public TemplateView get(@PathVariable UUID id) {
-    return TemplateView.of(templates.get(id));
+  public ApiResponse<TemplateView> get(@PathVariable UUID id) {
+    return ApiResponse.ok(TemplateView.of(templates.get(id)));
   }
 
   /**
@@ -65,30 +72,41 @@ public class TemplateController {
   @PostMapping
   @PreAuthorize("hasAuthority('assistant:edit')")
   @ResponseStatus(HttpStatus.CREATED)
-  public TemplateView create(@RequestBody CreateBody body, @AuthenticationPrincipal Jwt jwt) {
-    return TemplateView.of(
-        templates.createFromApp(
-            body.sourceAppId(), body.name(), body.description(), body.category(), actorOf(jwt)));
+  public ApiResponse<TemplateView> create(
+      @RequestBody CreateBody body, @AuthenticationPrincipal Jwt jwt) {
+    return ApiResponse.ok(
+        TemplateView.of(
+            templates.createFromApp(
+                body.sourceAppId(),
+                body.name(),
+                body.description(),
+                body.category(),
+                actorOf(jwt))));
   }
 
   /** 从模板建一个应用（建应用本身要 {@code assistant:edit}） */
   @PostMapping("/{id}/instantiate")
   @PreAuthorize("hasAuthority('assistant:edit')")
   @ResponseStatus(HttpStatus.CREATED)
-  public AssistantView instantiate(
+  public ApiResponse<AssistantView> instantiate(
       @PathVariable UUID id,
       @RequestBody(required = false) InstantiateBody body,
       @AuthenticationPrincipal Jwt jwt) {
     boolean skip = body != null && Boolean.TRUE.equals(body.skipMissingReferences());
-    return templates.instantiate(id, skip, actorOf(jwt));
+    return ApiResponse.ok(templates.instantiate(id, skip, actorOf(jwt)));
   }
 
-  /** 删模板（内置模板会被拒） */
+  /**
+   * 删模板（内置模板会被拒）。
+   *
+   * <p>★ 从 {@code void + 204} 改成 {@code ApiResponse<Void> + 200}：{@code 204} 按 HTTP 语义**不许带
+   * body**，而前端统一按包络解包，204 会让"删掉了"和"没删掉"在契约上长得一样。改成一个空的成功包络， 删除失败时才有地方放原因（现在是靠 400 状态码 + 错误包络）。
+   */
   @DeleteMapping("/{id}")
   @PreAuthorize("hasAuthority('assistant:edit')")
-  @ResponseStatus(HttpStatus.NO_CONTENT)
-  public void delete(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+  public ApiResponse<Void> delete(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
     templates.delete(id, actorOf(jwt));
+    return ApiResponse.ok();
   }
 
   /**

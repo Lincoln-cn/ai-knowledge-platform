@@ -156,7 +156,12 @@ function formatTime(s: string) {
 async function reload() {
   loading.value = true
   try {
-    rows.value = (await templatesApi.listTemplates()) as unknown as templatesApi.Template[]
+    const res = (await templatesApi.listTemplates()) as unknown as templatesApi.Template[]
+    // ★ 这里必须自己兜一层：后端曾经裸返回数组（漏包 ApiResponse），而 `lib/http.ts` 统一取
+    //   `res.data.data` ⇒ 读回来是 undefined，直接把 `rows` 赋成 undefined，模板页每次更新都抛
+    //   `Cannot read properties of undefined (reading 'length')`，界面只剩下标题、表格永远空着。
+    //   后端已修，但"契约漂移时页面不该白屏"这条防线留在这里。
+    rows.value = Array.isArray(res) ? res : []
   } catch (e) {
     ElMessage.error(`读模板失败：${(e as Error).message}`)
   } finally {
