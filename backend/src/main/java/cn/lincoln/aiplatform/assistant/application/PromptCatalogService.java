@@ -299,6 +299,15 @@ public class PromptCatalogService {
         actorId);
   }
 
+  /**
+   * 按 id 取配置（只读）。
+   *
+   * <p>★ 给评测用：它要拿"当前已保存的正文"与草稿比，也需要判断这条提示词还在不在。 不暴露实体给控制器 —— 这是应用层之间的读口。
+   */
+  public java.util.Optional<PromptConfig> findConfig(UUID id) {
+    return configs.findById(id);
+  }
+
   private PromptConfig requireConfig(UUID configId) {
     return configs
         .findById(configId)
