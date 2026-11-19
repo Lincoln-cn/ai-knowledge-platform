@@ -8149,8 +8149,18 @@ Open objectives（截至本节）：0.9.3 已结项（版本抬到 0.9.3、`CHAN
 
 | 迁移 | 内容 | 幂等键 |
 |---|---|---|
-| `V100__assistant_prompt_config_seed.sql` | **14 条**提示词：合同法务 4（条款审查清单 / 违约责任对等 / 争议解决评估 / 要点摘要）· 制度咨询 4（条款溯源 / 多制度冲突 / 适用情形 / 流程拆解）· 写作辅助 3（公文润色 / 会议纪要 / 邮件回复）· 通用 3（要点提取 / 术语解释 / 多文档对比） | `role_name` |
-| `V101__assistant_template_seed_more.sql` | **8 个**内置模板：财务报销 / 客服话术 / 研发知识库 / 行政公文 / 销售支持 / 培训考核 / 合规风控 / 指标口径 | `name`（`uq_as_template_name_live` 只对未删行唯一） |
+| `V106__assistant_prompt_config_seed.sql` | **14 条**提示词：合同法务 4（条款审查清单 / 违约责任对等 / 争议解决评估 / 要点摘要）· 制度咨询 4（条款溯源 / 多制度冲突 / 适用情形 / 流程拆解）· 写作辅助 3（公文润色 / 会议纪要 / 邮件回复）· 通用 3（要点提取 / 术语解释 / 多文档对比） | `role_name` |
+| `V107__assistant_template_seed_more.sql` | **8 个**内置模板：财务报销 / 客服话术 / 研发知识库 / 行政公文 / 销售支持 / 培训考核 / 合规风控 / 指标口径 | `name`（`uq_as_template_name_live` 只对未删行唯一） |
+
+- ★★★ **取号事故（2026-11-19，当天就炸了）**：这两条迁移最初取的是 `V100` / `V101`，而 `platform` 与
+  `conversation` 里早就有 `V100__platform_retrieval_engine_settings.sql` 与 `V101__conversation_memory.sql`
+  ⇒ 后端<strong>启动即失败</strong>：`FlywayException: Found more than one migration with version 100`。
+  界面侧的表现是"重启了但服务没起来"，日志之外没有任何征兆。
+  **Flyway 的版本号是整个 classpath 共享的一条序列，与放在哪个子目录无关** —— 分模块目录很容易让人以为"各目录各管
+  各的号段"。教训与我上一批写下的判据正好对上：「新迁移动手前须再扫一次全局最大号」，而我当时**只扫了 assistant
+  一个目录**。已改名为 `V106` / `V107`，并新增闸门 `FlywayMigrationVersionTest`（扫全树、版本号唯一、并断言
+  "至少扫到一个迁移"防空绿；反证：把两个文件改成同一个号 ⇒ 恰好 1 条红且报错直接列出两个冲突文件）。
+  ★ 同族坑：`target/classes` 里的旧副本**不会被编译删除** ⇒ 改名后要手动清，否则 Flyway 仍扫到重复。
 
 - **不新增提示词类型**：类型权威源在「基础数据 → 提示词类型」（`platform_dict_item`），再建一套就是第二份分类法
   —— 这也正是 `V47` 当时刻意不写 seed 的理由（库里一份、页面再建一份 = 双真源）。本次只往已有 4 个类型里填正文。
