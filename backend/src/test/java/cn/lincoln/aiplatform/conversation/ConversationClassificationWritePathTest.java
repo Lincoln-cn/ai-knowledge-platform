@@ -188,6 +188,7 @@ class ConversationClassificationWritePathTest {
         TokenUsage.zero(),
         1200L,
         null,
+        null,
         null);
 
     assertThat(maxClassificationInDb(id))
@@ -237,6 +238,7 @@ class ConversationClassificationWritePathTest {
         TokenUsage.zero(),
         1100L,
         null,
+        null,
         null);
 
     assertThat(maxClassificationInDb(id))
@@ -269,6 +271,7 @@ class ConversationClassificationWritePathTest {
         null,
         TokenUsage.zero(),
         900L,
+        null,
         null,
         null);
 

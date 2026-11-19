@@ -414,9 +414,13 @@ public class ChatTurnWriter implements ChatTurnStore {
       List<SourceRef> references,
       TokenUsage usage,
       long durationMs,
+      Integer firstTokenMs,
       String failReason,
       String failHint) {
     Message message = requireMessage(messageId);
+    // ★ 首字与终态**无关**：拒答/失败也可能已经吐过字（前半句生成完再断）。
+    //   所以它写在 switch 之前，三个终态共享同一次记录。
+    message.markFirstToken(firstTokenMs);
     if (fullTextSoFar.length() > persistedChars) {
       message.appendText(fullTextSoFar.substring(persistedChars));
     }

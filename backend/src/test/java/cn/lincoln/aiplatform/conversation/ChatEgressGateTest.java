@@ -304,6 +304,7 @@ class ChatEgressGateTest {
         List<SourceRef> references,
         TokenUsage usage,
         long durationMs,
+        Integer firstTokenMs,
         String failReason,
         String failHint) {
       // 本类不关心落库内容

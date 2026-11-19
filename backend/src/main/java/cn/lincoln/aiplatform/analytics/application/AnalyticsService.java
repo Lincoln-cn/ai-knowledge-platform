@@ -264,7 +264,19 @@ public class AnalyticsService {
                 + " and m.feedback = 'DOWN' and m.created_at >= ? and"
                 + " m.created_at < ?",
             range);
-    return new Quality(avgRefs == null ? 0.0 : avgRefs, null, null, up, down, 0);
+    // ★ B4（首字延迟 P50）：V113 之前这一列不存在，于是这个读数一直是 null、
+    //   回执上显示 `—` —— 那是"没有读数"，不是"0 毫秒"。现在按 `first_token_ms`
+    //   的中位数算；仍然排除空值（空 = 这一轮没吐过字，不是极快）。
+    Double firstTokenP50 =
+        nullableDecimal(
+            "select percentile_cont(0.5) within group (order by m.first_token_ms)"
+                + " from cv_message m join cv_conversation c on c.id = m.conversation_id"
+                + " where c.deleted_at is null"
+                + source
+                + " and m.role = 'ASSISTANT' and m.first_token_ms is not null"
+                + " and m.created_at >= ? and m.created_at < ?",
+            range);
+    return new Quality(avgRefs == null ? 0.0 : avgRefs, firstTokenP50, null, up, down, 0);
   }
 
   /**

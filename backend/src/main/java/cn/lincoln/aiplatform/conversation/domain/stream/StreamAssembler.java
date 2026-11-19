@@ -105,6 +105,10 @@ public final class StreamAssembler {
   private boolean metaEmitted;
   private boolean refsEmitted;
   private boolean deltaEmitted;
+
+  /** 第一个正文增量的时刻（{@code System.nanoTime()} 口径）；{@code null} = 还没吐过字。V113。 */
+  private Long firstDeltaNanos;
+
   private boolean settled;
 
   private final StringBuilder text = new StringBuilder();
@@ -209,10 +213,38 @@ public final class StreamAssembler {
    */
   public synchronized void delta(String chunk) {
     requireNotSettled("delta");
+    // ★ 首字时刻只记一次（V113）：B4 量的就是"从提问到第一个字"，
+    //   后面每个增量再记就变成"最后一个字"了，那是 durationMs 的事。
+    if (firstDeltaNanos == null) {
+      firstDeltaNanos = System.nanoTime();
+    }
     flushPendingBeforeFirstDelta();
     emit(new StreamEvent.Delta(chunk));
     deltaEmitted = true;
     text.append(chunk);
+  }
+
+  /**
+   * 从收到提问到收到第一个正文增量的毫秒数（V113 · B4 的读数来源）。
+   *
+   * <p>★ 返回 {@code null} 表示这一轮**没有可测的首字** —— 没吐过字（被拒答 / 首字前失败）。 调用方必须把它当"没有读数"而不是 0，否则统计 P50 时 0
+   * 会被算成极快。
+   *
+   * @param startedAtNanos 这一轮开始的时刻（{@link System#nanoTime()} 口径，须与内部计时同源）
+   * @return 毫秒；无首字时为 {@code null}
+   */
+  public synchronized Integer firstTokenMs(long startedAtNanos) {
+    if (firstDeltaNanos == null) {
+      return null;
+    }
+    long millis = elapsedMillis(startedAtNanos, firstDeltaNanos);
+    // 负数只可能来自计时器用错（同源 nanoTime 不会回拨）⇒ 当成"没有可测首字"，
+    // 而不是把一条负延迟塞进统计把 P50 拉低。
+    return millis < 0 ? null : (int) Math.min(millis, Integer.MAX_VALUE);
+  }
+
+  private static long elapsedMillis(long fromNanos, long toNanos) {
+    return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(toNanos - fromNanos);
   }
 
   /**

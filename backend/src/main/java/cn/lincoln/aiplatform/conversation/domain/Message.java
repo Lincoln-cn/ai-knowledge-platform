@@ -144,6 +144,17 @@ public class Message {
   @Column(name = "duration_ms")
   private Long durationMs;
 
+  /**
+   * 从提问到收到第一个正文增量的毫秒数（V113）。
+   *
+   * <p>★ 与 {@link #durationMs} 是**两个量**，不许互相冒充：那个是整轮（含检索、生成、收尾）， 这个只到"第一个字"。长回答上两者能差一个数量级，拿
+   * duration 算 B4 会让它永远"达标"。
+   *
+   * <p>★ 空 = 这一轮没有可测的首字（未生成、被拒答、首字前就失败），**不是 0** —— 统计 P50 时必须把这批排除，否则 0 会被算成"极快"。
+   */
+  @Column(name = "first_token_ms")
+  private Integer firstTokenMs;
+
   /** 实际使用的模型。★ 本批只落列：写入它需要"这一轮用的是哪个模型"这个上下文，属下一批。 */
   @Column(name = "model_id")
   private UUID modelId;
@@ -482,6 +493,29 @@ public class Message {
   /** 生成耗时（毫秒）。★ 可空 = 还没有终态。 */
   public Long durationMs() {
     return durationMs;
+  }
+
+  /** 从提问到第一个字的毫秒数。★ 可空 = 这一轮没有可测的首字（不是 0）。 */
+  public Integer firstTokenMs() {
+    return firstTokenMs;
+  }
+
+  /**
+   * 记录首字时刻（V113）。
+   *
+   * <p>★ 幂等且**只认第一次**：首字是"第一次吐字"这件事，后来再调用说明调用方算错了； 但这里不抛，因为流式链路里重试/补发都可能出现，把它当成一次普通写入会更好。
+   *
+   * <p>★ 负值忽略而不是抛：时钟回拨或计时器用错会产生负数，而"首字延迟是负的" 进入统计后会把 P50 拉低 —— 让这一轮退化成"没有可测首字"比留一条坏数更安全。
+   *
+   * @param firstTokenMs 毫秒（{@code null} 或负数 = 不记）
+   */
+  public void markFirstToken(Integer firstTokenMs) {
+    if (firstTokenMs == null || firstTokenMs < 0) {
+      return;
+    }
+    if (this.firstTokenMs == null) {
+      this.firstTokenMs = firstTokenMs;
+    }
   }
 
   /** 实际使用的模型 id（本批没有写路径，恒为 {@code null}）。 */

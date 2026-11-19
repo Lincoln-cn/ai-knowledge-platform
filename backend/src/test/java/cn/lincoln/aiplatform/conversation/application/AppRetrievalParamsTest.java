@@ -878,6 +878,7 @@ class AppRetrievalParamsTest {
         List<SourceRef> references,
         TokenUsage usage,
         long durationMs,
+        Integer firstTokenMs,
         String failReason,
         String failHint) {}
   }

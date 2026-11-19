@@ -236,4 +236,28 @@ class StreamAssemblerSequenceTest {
         .findFirst()
         .orElseThrow(() -> new AssertionError("没有 refs 帧 —— 零命中也必须发 refs（空列表）"));
   }
+
+  @Test
+  void aTurnThatNeverProducedTextHasNoFirstTokenReading() {
+    // ★ 空 ≠ 0：没吐过字的轮次（拒答 / 首字前失败）必须是 null ——
+    //   否则 B4 的 P50 会被一批 0 拉成"极快"，而那是这条读数唯一会说谎的方式。
+    StreamAssembler assembler = assembler();
+    long startedAt = System.nanoTime();
+    assertThat(assembler.firstTokenMs(startedAt)).isNull();
+  }
+
+  @Test
+  void firstTokenIsMeasuredOnceFromTheTurnStart() {
+    StreamAssembler assembler = assembler();
+    long startedAt = System.nanoTime();
+    // 装配器要求"第一个 delta 之前必须已经拿到 refs"（否则 [N] 会在引用到达前出现）
+    assembler.references(List.of());
+    assembler.delta("第");
+    Integer first = assembler.firstTokenMs(startedAt);
+    assertThat(first).isNotNull().isGreaterThanOrEqualTo(0);
+    assembler.delta("二");
+    assertThat(assembler.firstTokenMs(startedAt))
+        .as("再吐字不改首字时刻（那是 durationMs 的事）")
+        .isEqualTo(first);
+  }
 }

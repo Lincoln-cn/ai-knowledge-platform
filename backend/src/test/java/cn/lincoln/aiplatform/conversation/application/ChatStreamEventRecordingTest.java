@@ -1009,6 +1009,7 @@ class ChatStreamEventRecordingTest {
         List<SourceRef> references,
         TokenUsage usage,
         long durationMs,
+        Integer firstTokenMs,
         String failReason,
         String failHint) {
       finishSawInterrupt = Thread.currentThread().isInterrupted();

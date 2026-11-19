@@ -1232,6 +1232,7 @@ public class ChatService {
           run.refsBound ? run.refs : null,
           done.tokens(),
           durationMs,
+          run.assembler.firstTokenMs(run.startedAtNanos),
           failure.reason(),
           failure.hint());
       log.info(
