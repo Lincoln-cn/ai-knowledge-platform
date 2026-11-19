@@ -242,8 +242,11 @@ async function doInstantiate() {
     })) as { id?: string }
     ElMessage.success('已建出新应用')
     instVisible.value = false
-    // ★ 建完直接带去应用详情：让用户看到「建出来了」而不是只收到一条 toast
-    if (created?.id) router.push(`/assistants/${created.id}`)
+    // ★ 建完带到应用列表并高亮那一张卡。
+    //   原先是 `router.push('/assistants/{id}')` —— 那个地址**不存在**（应用配置是列表页里的抽屉，
+    //   没有独立路由），实测直接落到 404「页面不存在」，用户会以为建失败了。
+    //   列表页支持 `?focus=<id>`：定位并短暂描边，正好是"让人看见建出来的在哪"。
+    if (created?.id) router.push({ path: '/assistants', query: { focus: created.id } })
     else await reload()
   } catch (e) {
     ElMessage.error(`建应用失败：${(e as Error).message}`)
