@@ -8197,3 +8197,119 @@ Open objectives（截至本节）：0.9.3 已结项（版本抬到 0.9.3、`CHAN
 `vue-tsc` 0 错 · `npm test` 80/80 · `npm run build` 通过。真栈复核：`#/analytics` 出现
 `全部来源 | 通用问答 | 应用` 三态与排行五列；`#/assistants/prompts` 显示 **14 条**。
 「会话数 / 轮/会话」两列在旧后端上显示 `—`（字段还没下发），重启后为真值。
+
+---
+
+## 11.62 提示词版本历史（0.9.5 · 一条提示词的「多版本纵向对比」）
+
+> 用户原话（2026-11-19）：**「我倒没想着做多文档对比，我想做的是 在提示词页面的多版本 对比」**。
+> 我上一轮误解成"多份提示词横向比"，这条记下纠正后的范围：**同一条提示词，改一次存一版，能看两次之间改了什么、能回退**。
+
+### 11.62.1 为什么做（现象 → 根因 → 危害）
+
+**现象**：`as_prompt_config` 只有 `created_at` / `updated_at`，没有版本。`PromptCatalogService.updateConfig`
+最后一句是 `configs.save(config)` —— **原地覆盖**。改一次，上一版永久消失。
+
+**根因**：提示词被当成"可编辑的一段文本"，而不是"一份会被反复改的配置资产"。写过 200–300 字的角色指令都知道，
+改一句话之后想不起上一版是怎么写的；改坏了只能凭记忆重写。
+
+**危害**：不是"少个功能"，而是**改动的代价不对等** —— 修改很轻（点一下编辑），回退不可能。
+人一旦知道"改了就回不去"，就会倾向于不改，指令于是停在第一版。
+
+### 11.62.2 数据形状
+
+新表 `as_prompt_config_version`（迁移 `V112`）：
+
+```sql
+create table if not exists as_prompt_config_version (
+  id          uuid primary key default gen_random_uuid(),
+  config_id   uuid not null references as_prompt_config(id),
+  version_no  int  not null,
+  role_name   varchar(64)  not null,
+  call_word   varchar(1000) not null,
+  type_id     uuid not null,
+  description varchar(500) not null default '',
+  icon        varchar(16) not null,
+  kind        varchar(16) not null default 'ROLE',
+  app_id      uuid,
+  saved_at    timestamptz not null default now(),
+  saved_by    uuid,
+  unique (config_id, version_no)
+);
+create index idx_as_prompt_config_version on as_prompt_config_version (config_id, version_no desc);
+```
+
+★ **不把 `as_prompt_config` 改成"版本表 + 当前指针"**：所有读路径（应用配置选词、导出包、对话页提示词内核）
+都读当前表，动它会牵连一大片。让当前表继续当"最新一版"，版本表只追加。
+
+★ 迁移动手时把现存 26 条（14 条 `ROLE` + 12 条 `QUESTION`）初始化成 `v1`，`saved_at = created_at`
+（否则第一版永远是空的，用户点"版本"看不到任何东西）。
+
+### 11.62.3 写入策略
+
+`PromptCatalogService.updateConfig` 在 `config.update(...)` **之前**追加一版，同一事务：
+
+1. 比较 5 个字段（`roleName` / `callWord` / `typeId` / `description` / `icon` + `kind` / `appId`），
+   **全等则不写版本** —— 只点开编辑点保存不该多一版噪声。
+2. 否则 `version_no = (select coalesce(max(version_no),0)+1)`，落旧值（改之前的快照），`saved_by = 当前 actorId`。
+3. 再执行原有的 `config.update` + `save`。
+
+★ **守卫**：`updateConfig` 连改三次 ⇒ 版本表有 `v1/v2/v3`，且**当前表的值 == `v3` 的值**。
+这条能红（把追加逻辑去掉就红），防的是"两处写入漂移"——那比"没有版本"更难发现。
+
+### 11.62.4 接口
+
+```
+GET  /prompt-configs/{id}/versions                    → [{versionNo, savedAt, savedBy, preview}]
+GET  /prompt-configs/{id}/versions/{v}                → 该版全文（用于 diff 两版）
+POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成新一期（v(n+1)），历史不删
+```
+
+`GET /versions` 只要列表摘要（`preview` = 正文前 60 字），全文按需取 —— 26 条 × 每配置十几版也不会一次拉爆。
+
+★ **不做** `GET .../diff?from=&to=`：diff 是纯前端渲染问题，后端算完还得传回两份文本，多一层往返；
+前端拿两版全文自己算（LCS 按行比，约 50 行）。
+
+### 11.62.5 界面
+
+提示词管理页（`frontend/src/pages/assistants/components/prompts/PromptConfigPanel.vue`）每行操作区加「历史」：
+
+- 抽屉左侧版本列表：`v3 · 今天 22:10 · 管理员` / `v2 · 昨天` / `v1 · 10-15`，默认选中最新两版
+- 右侧逐行 diff：新增**绿底**、删除**红底带删除线**、未变灰
+- 顶部「回滚到此版」（`ElMessageBox.confirm` 后写成新版本，不删历史）
+- 空态：只有一版时提示「还没有修改记录，改一次这里就会出现两个版本」
+
+★ 令牌纪律：全部走 `var(--color-*)` / `var(--space-*)`；不引 diff 库（依赖白名单里没有，
+`frontend/README.md` 要加一条就得写理由，为一个抽屉不值得）。
+
+### 11.62.6 明确不做（两条边界，都是有理由的）
+
+1. **不在提示词页"跑模型看效果"**：角色指令的实际效果 = 这段指令 + 应用绑定的模型 + 知识库 + 检索参数。
+   在提示词页裸跑，测的是"裸模型 + 这段指令"，与线上可能差很远 —— 更糟的是它给人"我测过了"的错觉。
+   效果比对归**应用配置**（同问题跑两版），上下文完整。
+2. **不做多份提示词横向比**（3 份以上并排）：人眼比不过来，最后变成"谁写得更长"。
+   本节的"多版本"指的是**同一条**提示词的纵向历史。
+
+### 11.62.7 验收判据
+
+| 判据 | 怎么核对 |
+|---|---|
+| 版本能被看见 | 改一条提示词两次 ⇒ 抽屉里有 `v1/v2`，diff 显示新增那一段 |
+| 内容没变不产生版本 | 打开编辑器直接保存 ⇒ 版本数不变 |
+| 回滚不删历史 | 回滚到 `v1` ⇒ 版本数 +1，`v1` 仍在列表里 |
+| 当前表与最新版一致 | 守卫测试（`11.62.3` 的 ★）能红 |
+| 迁移初始化 | 迁移后 `select config_id, count(*) from as_prompt_config_version group by 1` ⇒ 每条恰好 1 行 |
+
+### 11.62.8 版本规划（0.9.5）
+
+**0.9.5 的范围 = 本节（提示词版本历史）+ 一条 P0 修复**：
+
+- **P0**：应用配置页的调试面板**测的是已保存配置，而界面没有提示**（`DebugPanel.vue:96` 直接发请求，
+  `AssistantConfigDrawer.vue` 只有手动「保存草稿」按钮）。改了提示词点调试 → 看到的是旧效果，
+  而 `DebugChatController` 的注释却写着"前端点「发送」前会先保存草稿"——**承诺没兑现**。
+  修法：表单脏了就拦住 + 「保存并调试」。
+- **本节**：版本表 + 4 个端点 + 版本抽屉 + diff + 回滚。
+
+**不放进 0.9.5**：应用配置里的"同问题跑两版"（效果比对）—— 它依赖一个只读的 candidates 端点，
+且要解决"候选配置不落库"的语义，单独一版做更干净（记 `0.9.6` 候选）。
+
