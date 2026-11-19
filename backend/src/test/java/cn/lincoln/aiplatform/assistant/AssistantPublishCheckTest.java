@@ -654,6 +654,50 @@ class AssistantPublishCheckTest {
     }
   }
 
+  /**
+   * ★ 内置模板的 payload 刻意不带 {@code modelId}（模板要能在任何环境里用）， 而「简单应用必须绑定一个对话模型」是创建时的硬校验 —— 两者撞在一起，
+   * 用户点「从模板建应用」只会看到一个 400（实测：`简单应用必须绑定一个对话模型`）。 补位必须由当前环境回答"用哪个模型"，不能写进模板。
+   */
+  @Test
+  void aBundleWithoutModelIsFilledWithOneFromThisMachine() {
+    models.put(MODEL, "本地小模型", true);
+
+    var created = service.importBundle(bundle(null), true, OWNER);
+
+    assertThat(created.modelId()).as("补上了这台上已加载的那个模型").isEqualTo(MODEL);
+  }
+
+  /** 反过来：一台机器上根本没有已加载的对话模型时，要说"去加载一个"，而不是抛内部错误。 */
+  @Test
+  void withoutAnyLoadedModelTheImportSaysWhatToDo() {
+    assertThatThrownBy(() -> service.importBundle(bundle(null), true, OWNER))
+        .isInstanceOf(BusinessException.class)
+        .hasMessageContaining("没有已加载的对话模型");
+  }
+
+  /** 一个最小可用的导出包：只关心 `config.modelId` 这一个分量的用例用它。 */
+  private static AssistantBundleView bundle(UUID modelId) {
+    return new AssistantBundleView(
+        AssistantService.BUNDLE_FORMAT,
+        Instant.parse("2026-11-19T00:00:00Z"),
+        false,
+        new AssistantBundleView.Config(
+            "模板来的应用",
+            "📄",
+            "从模板建的",
+            "SIMPLE",
+            modelId,
+            List.of(),
+            "你是助手，只依据资料回答",
+            List.of(),
+            null,
+            true,
+            false,
+            null,
+            List.of()),
+        List.of());
+  }
+
   private static final class FakeModels implements ModelStatusPort {
 
     private final Map<UUID, ModelSnapshot> snapshots = new LinkedHashMap<>();
@@ -665,6 +709,12 @@ class AssistantPublishCheckTest {
     @Override
     public Optional<ModelSnapshot> find(UUID modelId) {
       return Optional.ofNullable(snapshots.get(modelId));
+    }
+
+    /** ★ 覆盖默认实现（默认返回空）：不覆盖的话，「模板不带模型」那条路径在本测试里永远走"没有可用模型"分支， 补位逻辑等于没被验证过。 */
+    @Override
+    public Optional<ModelSnapshot> pickLoadedChatModel() {
+      return snapshots.values().stream().filter(ModelSnapshot::loaded).findFirst();
     }
   }
 

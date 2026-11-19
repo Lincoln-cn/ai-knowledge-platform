@@ -26,6 +26,25 @@ public interface ModelStatusPort {
   Optional<ModelSnapshot> find(UUID modelId);
 
   /**
+   * 挑一个当前可用的对话模型（"这台上现在有哪个能用"）。
+   *
+   * <p>★ 与 {@link #find} 的语义差别是本方法存在的唯一理由：{@code find} 回答"我绑定的那一个现在能用吗"（按 id 精确），
+   * 这个方法回答"给我一个能用的"（按目录顺序挑第一个已加载的对话模型）。
+   *
+   * <p>★ 为什么需要它：内置应用模板的 payload **刻意不带 {@code modelId}**（模板要能在任何环境里用）， 而"简单应用必须绑定对话模型"是创建时的硬校验 ⇒
+   * 从模板建应用必然 400。补位只能在建应用这一步做， 且必须由当前环境回答"用哪个模型"，不能写进模板。
+   *
+   * <p>★ 默认返回空而不是要求每个实现都写一遍：这是<strong>给一条特定路径用的能力</strong>， 不是核心查询。生产的唯一实现 {@code
+   * ModelStatusAdapter} 会覆盖它；测试里的 lambda 替身不该被它牵连 （{@link #find} 是唯一抽象方法时，本接口可以被写成
+   * lambda，加第二个抽象方法会让全仓的 lambda 当场编译红）。
+   *
+   * @return 没有已加载的对话模型 ⇒ empty（调用方要把"没有可用模型"说成人话，而不是"内部错误"）
+   */
+  default Optional<ModelSnapshot> pickLoadedChatModel() {
+    return Optional.empty();
+  }
+
+  /**
    * 一条模型快照。
    *
    * @param id 模型 id

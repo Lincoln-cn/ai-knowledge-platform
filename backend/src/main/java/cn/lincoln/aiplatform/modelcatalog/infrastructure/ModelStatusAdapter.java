@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.modelcatalog.infrastructure;
 
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
+import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
 import cn.lincoln.aiplatform.platform.model.ModelStatusPort;
@@ -32,6 +33,16 @@ public class ModelStatusAdapter implements ModelStatusPort {
       return Optional.empty();
     }
     return models.findById(modelId).map(ModelStatusAdapter::snapshot);
+  }
+
+  @Override
+  public Optional<ModelSnapshot> pickLoadedChatModel() {
+    // ★ 复用 ModelRepository.search 而不是新开一条查询：它已经把 kind / status 拼进 SQL
+    //   （查完再筛会让 total 与页内条数对不上，这条口径见接口注释）。
+    //   取第 1 条 = 与「模型」页默认排序（按 name）一致，用户在同一页看到的第一个可用模型就是它。
+    return models.search(null, ModelKind.CHAT, ModelStatus.LOADED, null, 0, 1).stream()
+        .findFirst()
+        .map(ModelStatusAdapter::snapshot);
   }
 
   private static ModelSnapshot snapshot(Model model) {

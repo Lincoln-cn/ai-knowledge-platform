@@ -684,9 +684,9 @@ public class AssistantService {
             config.icon(),
             config.description(),
             type,
-            // ★ 模型 id 原样保留：SIMPLE 应用创建时必须有模型，剥掉它会让「跳过引用」直接 400；
-            //   模型未加载的后果留给发布校验（AS-I2）说，不在这里改配置
-            config.modelId(),
+            // ★ 模型 id 由 resolveModelId 决定：模板里刻意是 null，这里用"当前环境挑一个能用的"补位；
+            //   已经带了 id 的包（导出的应用）原样保留
+            resolveModelId(config, type),
             config.rolePrompt(),
             keepSatisfiedKbs(config.kbIds()),
             keepSatisfiedPrompts(config.promptIds()),
@@ -698,6 +698,33 @@ public class AssistantService {
             List.of(),
             null);
     return create(draft, ownerId);
+  }
+
+  /**
+   * 解出这次导入要用的对话模型 id。
+   *
+   * <p>★ 为什么需要补位：内置模板的 payload <strong>刻意不带 modelId</strong>（模板要能在任何环境里用），
+   * 而「简单应用必须绑定一个对话模型」是创建时的硬校验 ⇒ 原样透传必然 400， 用户看到的是「服务内部错误」或「简单应用必须绑定一个对话模型」， 而真正该做的事是"在这台上挑一个能用的"。
+   *
+   * <p>★ 只对 {@link AssistantType#SIMPLE} 补位：编排应用没有"应用级模型"， 模型在各节点里（见 {@link AssistantType#WORKFLOW}
+   * 的注释）。
+   *
+   * <p>★ 补位值来自当前环境（{@link ModelStatusPort#pickLoadedChatModel()}），**不写回模板** ——
+   * 模板是配置快照，模型是环境绑定；把某个模型写进模板，换一台机器就错。
+   */
+  private UUID resolveModelId(AssistantBundleView.Config config, AssistantType type) {
+    if (config.modelId() != null || type != AssistantType.SIMPLE) {
+      return config.modelId();
+    }
+    return modelStatus
+        .pickLoadedChatModel()
+        .map(ModelStatusPort.ModelSnapshot::id)
+        .orElseThrow(
+            () ->
+                new BusinessException(
+                    ErrorCode.BAD_REQUEST,
+                    "这台上没有已加载的对话模型，建不出「简单」应用",
+                    "模板刻意不绑定模型（它要在任何环境里都能用）。请先在「模型」页加载一个对话模型，或改用「编排」类型"));
   }
 
   /** 导入时的权威依赖复算：与 {@link #dependenciesOf} 同一套判据，只是入参换成了包里的 ids。 */
