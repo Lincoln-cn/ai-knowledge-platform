@@ -1729,6 +1729,8 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
 | `as_prompt_eval_run` | 一次评测运行：两个版本 × 全部问题 | `id / set_id / base_version_no / draft_text / status / started_at / finished_at` |
 | `as_prompt_eval_answer` | 一次运行里每题的产出与评分 | `id / run_id / item_id / side(SAVED/DRAFT) / answer / elapsed_ms / pass_count / fail_count / verdict(BETTER/SAME/WORSE) / note / scored_by / scored_at` |
 
+★ **已落库**：`V114__as_prompt_eval.sql` 建这 4 张表（全部 `on delete cascade` 到 `as_prompt_config`，`status`/`side`/`verdict` 都有 check 约束，`(run_id, item_id, side)` 唯一）。后端服务与界面仍未做。
+
 ★ `draft_text` **把草稿正文整段存下来**（不引用版本号）：评测常常发生在"还没保存"的那一版上，而一旦保存就变成新版本 —— 存正文才能复现当时到底测了什么。
 
 **行为**
