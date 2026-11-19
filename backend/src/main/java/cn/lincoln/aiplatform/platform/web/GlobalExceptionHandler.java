@@ -198,6 +198,29 @@ public class GlobalExceptionHandler {
   }
 
   /**
+   * 缺少必填的 multipart 表单部分（如知识库上传少带 {@code files}）⇒ 400。
+   *
+   * <p>★ 与 {@link #onMissingParameter} 是同一族，但**不是同一个异常**：查询参数缺失抛 {@code
+   * MissingServletRequestParameterException}，而表单 part 缺失抛 {@code
+   * MissingServletRequestPartException} —— 只映射前者的后果是，调用方把字段名写成单数 {@code file}（会话附件那条路就叫 {@code
+   * file}）时，界面收到的是 「服务内部错误 / 请把这次操作的时间反馈给管理员」，也就是**把一次拼写错误报成了服务端故障**。 实测见 {@code #358}：`POST
+   * /knowledge-bases/{kb}/documents` 少 {@code files} 时就是 500。
+   *
+   * <p>文案里直接回显 part 名：调用方要靠它对照"我传的到底是哪一个名字"。
+   */
+  @ExceptionHandler(
+      org.springframework.web.multipart.support.MissingServletRequestPartException.class)
+  public ResponseEntity<ApiResponse<Void>> onMissingPart(
+      org.springframework.web.multipart.support.MissingServletRequestPartException cause) {
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .body(
+            ApiResponse.fail(
+                ErrorCode.BAD_REQUEST,
+                "缺少必填表单部分：" + cause.getRequestPartName(),
+                "请把这个名字作为 multipart 的一个 part 传上来（注意单复数：会话附件上传用 file，知识库文档上传用 files）"));
+  }
+
+  /**
    * 路径参数类型不匹配（如 {@code /users/not-a-uuid}）。
    *
    * <p>★ 必须显式映射成 <strong>400</strong>：它是"调用方传错了 id"（他自己能修）， 落进兜底 handler 会变成 500「服务内部错误」（得来找后端）。
