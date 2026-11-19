@@ -71,14 +71,19 @@
             placeholder="定义助手的身份、语气与边界"
           />
           <div class="row gap-8" style="width: 100%; margin-top: var(--space-2xs)">
-            <!-- ★ `#184`：/prompt-configs 与 /prompt-types 后端未实现（真栈 404）⇒ 不再保留一个
-                 "弹窗打开但永远空"的入口。显式禁用 + 写明原因，等提示词域落地后再恢复。 -->
-            <el-button size="small" disabled title="提示词模板尚未接入（/prompt-configs 未实现）">
-              从提示词选用
-            </el-button>
+            <!--
+              ★ 原先这里是禁用的，写着「`#184`：/prompt-configs 后端未实现（真栈 404）」。
+              那已经过时了 —— 提示词域早已落地（`V47` 建表、`V100` 种 14 条角色指令，
+              `GET /prompt-configs` 实测可用）。一个**明明能用却被禁用**的按钮，
+              比没有这个按钮更糟：用户只会以为功能没做。
+              现在接的是同一个 `PromptPickerDialog`（与对话页共用一个内核）。
+            -->
+            <el-button size="small" @click="openPromptPicker">从提示词选用</el-button>
             <el-button size="small" @click="form.rolePrompt = ''">清空</el-button>
           </div>
-          <div class="hint micro">提示词模板管理尚未接入（后端 /prompt-configs 未实现），当前请直接编辑角色设定</div>
+          <div class="hint micro">
+            选中的提示词会写进「角色设定」（同一条不会重复写入），之后可以继续手工改
+          </div>
         </el-form-item>
 
         <el-form-item label="提示词">
@@ -92,7 +97,7 @@
             >{{ p.icon }} {{ p.roleName }}</el-tag>
             <span v-if="!pickedPrompts.length" class="micro muted">未选用提示词模板</span>
           </div>
-          <div class="hint micro">选用后写入「角色设定」，可再手工微调</div>
+          <!-- 上方「角色设定」那里已经说过"会写进角色设定"，这里不再重复同一句话 -->
         </el-form-item>
 
         <el-form-item label="知识库">
@@ -256,13 +261,20 @@
         />
       </div>
     </div>
+
+    <!-- 提示词选用：与「提示词 → 角色指令」页同一份数据；只列 ROLE，提问模板不该写进角色设定 -->
+    <PromptPickerDialog
+      ref="promptPickerRef"
+      v-model="form.promptIds"
+      @picked="onPromptsPicked"
+    />
   </el-drawer>
 </template>
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { assistantsApi, modelsApi, knowledgeApi } from '@/api'
+import { assistantsApi, modelsApi, knowledgeApi, promptsApi } from '@/api'
 import { ApiError, ErrorCode } from '@/api/types'
 import type { Assistant, PublishCheckItem } from '@/api/assistants'
 import type { RetrievalMode, RetrievalParams } from '@/api/retrieval'
@@ -270,6 +282,7 @@ import type { ModelInfo, ThinkingMode } from '@/api/models'
 import type { KnowledgeBase } from '@/api/knowledge'
 import type { PromptConfig } from '@/api/prompts'
 import DebugPanel from './DebugPanel.vue'
+import PromptPickerDialog from './PromptPickerDialog.vue'
 
 const props = defineProps<{ assistant: Assistant | null }>()
 const emit = defineEmits<{ saved: []; published: [] }>()
@@ -280,10 +293,15 @@ const saving = ref(false)
 const publishing = ref(false)
 const formRef = ref<FormInstance>()
 const debugRef = ref<InstanceType<typeof DebugPanel>>()
+const promptPickerRef = ref<InstanceType<typeof PromptPickerDialog>>()
 
 const chatModels = ref<ModelInfo[]>([])
 const allKbs = ref<KnowledgeBase[]>([])
-const pickedPrompts = ref<PromptConfig[]>([])
+// ★ 角色指令目录（只在打开抽屉时拉一次，size 200 足够覆盖当前规模）。
+//   选中的名字**从目录里查**，不另存一份 —— 两份状态迟早对不上：
+//   原先 pickedPrompts 是独立的 ref，而 fillForm 只填了 form.promptIds，
+//   于是打开已有应用时"提示词"一栏永远显示"未选用"（promptIds 明明有值）。
+const allPrompts = ref<PromptConfig[]>([])
 const kbDraft = ref('')
 const publishWarnings = ref<string[]>([])
 
@@ -347,9 +365,36 @@ const pickedKbs = computed(() =>
 
 const availableKbs = computed(() => allKbs.value.filter((k) => !form.kbIds.includes(k.id)))
 
+const pickedPrompts = computed(() =>
+  form.promptIds
+    .map((id) => allPrompts.value.find((p) => p.id === id))
+    .filter((p): p is PromptConfig => Boolean(p))
+)
+
 const removePrompt = (id: string) => {
+  // 只解除"引用"：已经写进角色设定的文字不撤 —— 用户可能已经改过它，
+  // 悄悄删掉那段话比留着更难解释。要改就手工改。
   form.promptIds = form.promptIds.filter((x) => x !== id)
-  pickedPrompts.value = pickedPrompts.value.filter((p) => p.id !== id)
+}
+
+const openPromptPicker = () => promptPickerRef.value?.open()
+
+/**
+ * 选用完成后：记 id，并把新选中的正文追加进「角色设定」。
+ *
+ * <p>★ 判重靠 `rolePrompt.includes(callWord)`，**不能**靠"选前 id 集合做差"：
+ * 弹窗先 emit `update:modelValue`（v-model 当场改掉 `form.promptIds`）再 emit `picked`，
+ * 等这里拿到手时差集已经是空的 —— 实测就是"tag 出现了、角色设定没变"。
+ *
+ * <p>同一段正文只追加一次：反复打开弹窗点确定不会把话叠两遍。
+ */
+const onPromptsPicked = (rows: PromptConfig[]) => {
+  form.promptIds = rows.map((r) => r.id)
+  const extra = rows
+    .map((r) => r.callWord)
+    .filter((text) => text && !form.rolePrompt.includes(text))
+    .join('\n')
+  if (extra) form.rolePrompt = form.rolePrompt ? `${form.rolePrompt}\n${extra}` : extra
 }
 
 const addKb = (id: string) => {
@@ -362,12 +407,18 @@ const removeKb = (id: string) => {
 }
 
 const loadOptions = async () => {
-  const [modelResult, kbResult] = await Promise.all([
+  const [modelResult, kbResult, promptResult] = await Promise.all([
     modelsApi.listModels({ kind: 'CHAT', status: 'LOADED', size: 50 }),
-    knowledgeApi.listKnowledgeBases({ size: 50 }).catch(() => ({ list: [], total: 0, page: 1, size: 50 }))
+    knowledgeApi.listKnowledgeBases({ size: 50 }).catch(() => ({ list: [], total: 0, page: 1, size: 50 })),
+    // kind: 'ROLE' —— 提问模板是给用户看的问法示例，写进角色设定会把"身份"变成"问题"。
+    // 拉失败不挡抽屉：提示词只是可选引用，缺它时按钮点了会各自报错（见 PromptPickerDialog）
+    promptsApi
+      .listPromptConfigs({ kind: 'ROLE', size: 200 })
+      .catch(() => ({ list: [], total: 0, page: 1, size: 200 }))
   ])
   chatModels.value = modelResult.list
   allKbs.value = kbResult.list
+  allPrompts.value = promptResult.list
 }
 
 const fillForm = (a: Assistant) => {
@@ -485,7 +536,6 @@ const reset = () => {
   formRef.value?.clearValidate()
   debugRef.value?.reset()
   publishWarnings.value = []
-  pickedPrompts.value = []
 }
 
 const open = async () => {
