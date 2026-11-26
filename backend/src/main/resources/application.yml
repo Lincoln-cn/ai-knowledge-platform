@@ -102,6 +102,10 @@ app:
         enabled: ${AIP_NEIGHBOR_CONTEXT_ENABLED:false}
         before: ${AIP_NEIGHBOR_CONTEXT_BEFORE:1}
         after: ${AIP_NEIGHBOR_CONTEXT_AFTER:1}
+      # 拼给模型的上下文总字符预算（`ChatService` 读它，超出按检索顺序截断）。
+      # ★ 声明在这里的理由：代码里 `@Value("${app.chat.retrieval.reference-budget-chars:8000}")`
+      #   带默认值 ⇒ 不声明也能起，但"运维以为改得动、其实改的是不存在的键"没法被发现。
+      reference-budget-chars: ${AIP_REFERENCE_BUDGET_CHARS:8000}
   audit:
     retention:
       enabled: ${AUDIT_RETENTION_ENABLED:false}

@@ -40,10 +40,16 @@ public class RiskService {
 
   private final JdbcTemplate jdbc;
 
-  /** 文件存储所在目录 —— 磁盘读数取它所在的分区，而不是 JVM 的工作目录（两者可能不是同一个盘）。 */
+  /**
+   * 文件存储所在目录 —— 磁盘读数取它所在的分区，而不是 JVM 的工作目录（两者可能不是同一个盘）。
+   *
+   * <p>★ 键名是 {@code app.files.root}（复数），与 {@code FileStoreConfig} 用的是同一个： 这里曾经写成 {@code
+   * app.file.root}（单数）+ 默认值 {@code ./data} —— 那个键在 {@code application.yml}
+   * 里根本不存在，于是永远走默认值、读的是工作目录所在盘。 症状与注释里刻意避免的那件事一模一样，而且它不会报错（{@code #361}）。
+   */
   private final String storageRoot;
 
-  public RiskService(JdbcTemplate jdbc, @Value("${app.file.root:./data}") String storageRoot) {
+  public RiskService(JdbcTemplate jdbc, @Value("${app.files.root:data/files}") String storageRoot) {
     this.jdbc = jdbc;
     this.storageRoot = storageRoot;
   }
