@@ -248,7 +248,9 @@ export const promptEvalRoutes: MockRoute[] = [
       if (!draft) throw new ApiError(ErrorCode.NOT_FOUND, '这道题还没有草稿侧结果')
       draft.verdict = verdict
       draft.note = note ?? null
-      return runView(run)
+      // 契约是 `request<void>`（src/api/prompts.ts 的 `ratePromptEvalAnswer`）——
+      // 返回整份 run 会让 mock 的顶层形状与契约种类不符；页面评完本来就会 poll 一次重拉。
+      return null
     }
   ],
 
@@ -264,7 +266,8 @@ export const promptEvalRoutes: MockRoute[] = [
         draft.verdict = null
         draft.note = null
       }
-      return runView(run)
+      // 同 PUT 那条：契约是 `request<void>`。
+      return null
     }
   ]
 ]

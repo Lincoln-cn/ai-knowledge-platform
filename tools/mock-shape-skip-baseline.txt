@@ -22,7 +22,7 @@
 # 改坏了闸门也是 exit 0，读数与"一致"完全一样。
 #
 # ── 数字 ──
-跳过 43
+跳过 44
 #
 src/mock/handlers/assistants.ts | POST | /assistants | 返回表达式解析不出：withOwnerName(created)
 src/mock/handlers/assistants.ts | POST | /assistants/import | 返回表达式解析不出：withOwnerName(created)
@@ -54,6 +54,7 @@ src/mock/handlers/knowledge.ts | PATCH | /knowledge-bases/:id/enabled | 返回�
 src/mock/handlers/knowledge.ts | PUT | /knowledge-bases/:id/grants | 返回表达式解析不出：kb
 src/mock/handlers/orgs.ts | PUT | /orgs/:id | 判不了（mock 返回多分支联合，只部分分支与契约相符 —— 可能是守卫收窄）
 src/mock/handlers/orgs.ts | POST | /orgs/:id/move | 判不了（mock 返回多分支联合，只部分分支与契约相符 —— 可能是守卫收窄）
+src/mock/handlers/prompts.ts | PUT | /prompt-configs/:id | 返回表达式解析不出：item
 src/mock/handlers/providers.ts | POST | /model-providers | 返回表达式解析不出：toPublic(created)
 src/mock/handlers/providers.ts | GET | /model-providers/:id | 返回表达式解析不出：toPublic(p)
 src/mock/handlers/providers.ts | PUT | /model-providers/:id | 返回表达式解析不出：toPublic(p)
@@ -94,3 +95,21 @@ src/mock/handlers/compliance.ts | POST | /compliance/agreement/consent | 返回�
 #
 # ★ 想把这四条真的收进"一致"桶，需要解析器支持"局部变量指向同文件内的字面量对象"，
 #   那是 `_MockShaper._infer` 的一次结构性改造，属独立批次；本批不顺手做。
+
+# ── 43 → 44 是 2026-11-27 止红时补上的一处（`src/mock/handlers/prompts.ts` 的 `PUT /prompt-configs/:id`）──
+# 那一行的返回是 `item` —— 由同函数里的 `const item = findConfig(path.id)` 赋值，
+# 而 `findConfig` 是「在 `promptConfigs` 数组里按 id 找一条」的 helper。
+# 解析器只认同文件/夹具里的**字面量**与**helper 的返回表达式**，不追"局部变量指向哪一条记录"，
+# 所以这处的形状判不了。它属清单里**已有**的 `返回表达式解析不出：item` 类别
+# （`assistants.ts` 的 credentials / api-keys 有 4 处同因），不是新的解析器缺陷。
+#
+# ★ 形状本身是人工核过的：`item` 就是 `promptConfigs` 数组里的元素，而
+#   `GET /prompt-configs` 返回同一批元素、那一处已经在"一致"桶里 ——
+#   也就是说这处的正确性另有读数为证，跳过它只是"少看一处"，不是"看漏一处"。
+# ★ 想收进"一致"桶，需要让解析器支持「局部变量 = 同函数内 `const x = helper(...)` 的结果」，
+#   与上一条同属 `_MockShaper._infer` 的结构性改造；本批只补齐数字与理由。
+#
+# ★ 这一处为什么值得单独记一笔：它在 0.9.7 那批代码里就存在，而基线一直是 43 ——
+#   说明"跳过数只增不减"这条规矩**一直在被绕过**（数字没改、闸门也绿）。
+#   真正把它挡住的不是数字，是第三轮 CI 里"不一致 2 处"先被修掉、跳过数这才露出来。
+#   ⇒ 判据：**跳过桶的隐蔽性恰恰来自它与"一致"读数同形**，所以每次动 mock 都要重新数一遍。
