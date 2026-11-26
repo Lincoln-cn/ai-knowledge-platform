@@ -207,7 +207,13 @@ def main() -> int:
             # ── 应用管理 + 提示词 ──
             def assistants():
                 body = goto("/assistants")
-                check("配置" in body and "概览" in body, "应用管理：有配置/概览操作", "")
+                # ★ 2026-11 订正：「配置 / 概览」只出现在**我拥有的**应用上，而 mock 的 admin（u1）
+                #   名下没有应用（fixtures 的 ownerId 是 u3/u4，见 mock/fixtures/assistants.ts）
+                #   ⇒ 旧断言 `"概览" in body` 恒红，且它红的原因与"页面坏了"无关。
+                #   现在断页面骨架 + 卡片上确有操作入口（"开始对话" 对所有人的应用都渲染）。
+                actions = page.locator(".ac-actions button").count()
+                check("应用管理" in body and actions > 0,
+                      "应用管理：列表渲染且有卡片操作入口", f"卡片操作按钮 {actions} 个")
 
             def prompts():
                 body = goto("/assistants/prompts")
@@ -216,7 +222,9 @@ def main() -> int:
                 # 用元素计数而不是文本 —— desc 里仍会出现「提示词类型」四个字（说明它不在本页）。
                 new_type = page.locator("button", has_text="新建类型").count()
                 type_panel = page.locator(".h4", has_text="提示词类型").count()
-                check("提示词配置" in body and new_type == 0 and type_panel == 0,
+                # ★ 2026-11 订正：页头已按 kind 分两档渲染（「提示词 · 角色指令」/「提示词 · 提问模板」），
+                #   旧断言 `"提示词配置" in body` 词已不存在 —— 保留的是"本页没有类型维护入口"那两条。
+                check("提示词" in body and new_type == 0 and type_panel == 0,
                       "提示词：页面只管配置（类型已归基础数据）",
                       f"新建类型按钮 {new_type} 个 / 类型面板 {type_panel} 个")
 
@@ -360,14 +368,14 @@ def main() -> int:
                 goto("/org", wait=1800)
                 check(page.locator(".org-page").count() > 0, "组织机构：页面已渲染", "")
                 # ★ 这个菜单是**分组折叠**的（`_shell` 里 `v-if="openGroup === group.title"`：点了分组标题
-                #   才渲染出 `a.menu-item`）⇒ 断言必须走真实路径：先展开「管理」，再看那一项在不在。
-                #   ⚠️ 第一版直接 `a:has-text('组织机构')` 拿到 **0 个**，那不是"菜单没这项"，
-                #      而是它还没被展开 —— 探针的错，不是产品的错（本项目反复踩的"读数先怀疑探针"）。
-                page.get_by_role("button", name="管理", exact=True).first.click()
+                #   才渲染出 `a.menu-item`）⇒ 断言必须走真实路径：先展开「组织与权限」，再看那一项在不在。
+                #   ⚠️ 旧分组名「管理」在 0.9.4 的菜单重排中已拆成五个分组（routes.ts）——
+                #      `name="管理"` 因此恒超时，那是**断言过期**，不是"菜单没这项"。
+                page.get_by_role("button", name="组织与权限", exact=True).first.click()
                 page.wait_for_timeout(500)
                 items = [t.strip() for t in page.locator("a.menu-item").all_inner_texts()]
                 check(any("组织机构" in t for t in items),
-                      "组织机构：左侧「管理」分组里有独立入口（不塞进系统管理）",
+                      "组织机构：左侧「组织与权限」分组里有独立入口（不塞进系统管理）",
                       f"分组内条目 = {items}")
                 nodes = [t.strip() for t in page.locator(".org-page .el-tree-node").all_inner_texts()]
                 flat = " ".join(nodes)

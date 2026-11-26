@@ -129,8 +129,10 @@ with sync_playwright() as p:
         body = page.inner_text("body")
         check("工作台" in body, "登录成功进入工作台", page.url)
         check("管理员" in body, "登录态来自 /users/me（mock 按令牌识别）", "")
-        stats = page.locator(".stat").count()
-        check(stats == 4, "工作台指标条渲染 4 项", f"实际 {stats} 项")
+        # ★ 2026-11 订正：四张统计卡已并入「近 7 天运行回执」（InstrumentCard），`.stat` 不再存在。
+        #   断言行数而不是卡数 —— 回执的行是真实读数，行数随口径增删，但"渲染出读数"这件事不变。
+        rows = page.locator(".instrument .ins-row").count()
+        check(rows >= 4, "工作台运行回执渲染读数", f"实际 {rows} 行")
         apps = page.locator(".app-row").count()
         check(apps > 0, "工作台列出常用应用", f"实际 {apps} 行")
         # 外壳由左侧栏改成带框顶栏（Cobalt 签名 5）：
@@ -309,16 +311,25 @@ with sync_playwright() as p:
         check("冒烟测试模型" in page.inner_text(".grid"), "新建模型落到列表", "")
 
     def s15():
+        # ★ 2026-11 订正：这条原意是「探测失败不阻断，给出手工声明」——拿 glm4:9b 当样本。
+        #   但 `#1.7` 落地后「不健康的基础模型不许配置」（ModelCreateForm.vue：
+        #   `:disabled="isEdit || item.health === 'UNHEALTHY'"`）⇒ 那个目录项**点不动**，
+        #   旧写法 `.click()` 会在 disabled 的按钮上一直等到 30s 超时（这也是原报告里
+        #   ⑮⑯ 一起红的原因：⑮ 抛错后对话框没关，⑯ 的卡片被遮罩挡住）。
+        #   ⇒ 改断当前设计的正确行为：**它还在目录里（可见），但不可选，且给出原因**。
+        #     探测失败后手工声明那条路径仍在（左栏「或在目录区手动填写」+ 能力声明的来源标签），
+        #     只是不再能通过"选一个坏模型"走到 —— 那正是设计想要的。
         page.locator("button", has_text="添加模型").first.click()
         page.wait_for_timeout(900)
         dlg = page.locator(".el-dialog:visible").first
-        dlg.locator("button.catalog-item", has_text="glm4:9b").first.click()
-        page.wait_for_timeout(400)
-        dlg.locator("button", has_text="自动探测").first.click()
-        page.wait_for_timeout(1300)
-        msg = page.locator(".el-message").first.inner_text() if page.locator(".el-message").count() else ""
-        check("无法自动探测" in msg and "手工声明" in msg,
-              "探测失败不阻断，且给出手工声明这一步", msg[:70])
+        item = dlg.locator("button.catalog-item", has_text="glm4:9b").first
+        check(item.count() == 1, "不健康的基础模型仍在目录里（看见它，但选不了）", "")
+        check(item.is_disabled(), "不健康的基础模型不可选", f"disabled={item.is_disabled()}")
+        title = item.get_attribute("title") or ""
+        check("不健康" in title and "503" in title,
+              "不可选时给出原因（title 带上游报错原文）", title[:80])
+        dlg_text = dlg.inner_text()
+        check("手动填写" in dlg_text, "目录区仍保留手工填写入口", "")
         page.locator(".el-dialog:visible .el-dialog__footer button:has-text('取消')").click()
         page.wait_for_timeout(500)
 

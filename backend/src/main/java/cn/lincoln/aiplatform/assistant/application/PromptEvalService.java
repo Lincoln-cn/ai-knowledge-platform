@@ -12,7 +12,7 @@ import cn.lincoln.aiplatform.assistant.infrastructure.JpaPromptEvalAnswerReposit
 import cn.lincoln.aiplatform.assistant.infrastructure.JpaPromptEvalItemRepository;
 import cn.lincoln.aiplatform.assistant.infrastructure.JpaPromptEvalRunRepository;
 import cn.lincoln.aiplatform.assistant.infrastructure.JpaPromptEvalSetRepository;
-import cn.lincoln.aiplatform.conversation.application.ChatService;
+import cn.lincoln.aiplatform.platform.conversation.DebugChatPort;
 import cn.lincoln.aiplatform.platform.domain.BusinessException;
 import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import jakarta.annotation.PreDestroy;
@@ -52,7 +52,7 @@ public class PromptEvalService {
   private final JpaPromptEvalRunRepository runs;
   private final JpaPromptEvalAnswerRepository answers;
   private final PromptCatalogService catalog;
-  private final ChatService chat;
+  private final DebugChatPort chat;
 
   /**
    * 评测线程池：固定 2 条。
@@ -74,7 +74,7 @@ public class PromptEvalService {
       JpaPromptEvalRunRepository runs,
       JpaPromptEvalAnswerRepository answers,
       PromptCatalogService catalog,
-      ChatService chat) {
+      DebugChatPort chat) {
     this.sets = sets;
     this.items = items;
     this.runs = runs;
@@ -217,7 +217,7 @@ public class PromptEvalService {
     int done = 0;
     try {
       for (PromptEvalItem item : questions) {
-        ChatService.DebugComparison cmp;
+        DebugChatPort.DebugComparison cmp;
         try {
           cmp = chat.debugCompare(appId, item.question(), draft);
         } catch (RuntimeException e) {
@@ -239,7 +239,7 @@ public class PromptEvalService {
     }
   }
 
-  private void saveAnswer(UUID runId, UUID itemId, EvalSide side, ChatService.DebugAnswer answer) {
+  private void saveAnswer(UUID runId, UUID itemId, EvalSide side, DebugChatPort.DebugAnswer answer) {
     PromptEvalAnswer row = new PromptEvalAnswer(UUID.randomUUID(), runId, itemId, side);
     if (answer != null) {
       row.recordAnswer(answer.answer(), (int) Math.min(answer.elapsedMs(), Integer.MAX_VALUE));

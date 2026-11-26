@@ -158,7 +158,19 @@ final class CaliberShape {
           "assistant/V90__assistant_template_builtin_seed.sql",
           "assistant/V91__assistant_workflow_record_user.sql",
           "assistant/V97__assistant_workflow_pause.sql",
-          "assistant/V99__assistant_trigger_schedule.sql");
+          "assistant/V99__assistant_trigger_schedule.sql",
+          // ★★ 2026-11-19/20 批（V106–V114）：清单此前停在 V105，本批新增的九个迁移漏登，
+          //   MigrationInventoryTest 当场红 —— `#267` 的教训（漏登 ⇒ 对所有口径断言不存在）又长回来了。
+          //   新增迁移时同步这里，删迁移时也要同步（两侧都咬）。
+          "assistant/V106__assistant_prompt_config_seed.sql",
+          "assistant/V107__assistant_template_seed_more.sql",
+          "assistant/V108__assistant_prompt_config_kind.sql",
+          "assistant/V109__assistant_question_template_seed.sql",
+          "conversation/V110__conversation_chat_settings_prologue.sql",
+          "assistant/V111__assistant_template_multi_turn_shape.sql",
+          "assistant/V112__as_prompt_config_version.sql",
+          "conversation/V113__message_first_token_ms.sql",
+          "assistant/V114__as_prompt_eval.sql");
 
   private CaliberShape() {}
 
