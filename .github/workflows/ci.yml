@@ -122,10 +122,16 @@ jobs:
             tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
           tesseract --list-langs
 
+      # ★ `--dim 1024` 不是随便挑的：seed 的 `v900` 把 bge-m3 登记成 1024 维
+      #   （`backend/src/main/resources/db/seed/V900__sample_business_data.sql` 的
+      #   `ai_model` 行），而桩的默认是 768。两处不一致时 `RoutingEmbeddingAdapter`
+      #   会以「向量维度与模型登记不符」拒掉这一批向量、该组检索被跳过 ——
+      #   表现是摄取看起来成功、检索却少一路（`#348` 的形态）。
+      #   本机启动器 `scripts/aip-stub.cmd` 已经带上了这个参数，CI 这边当时没跟。
       - name: 起 OpenAI 桩服务（向量化与模型目录都打它）
         working-directory: backend
         run: |
-          python tools/openai_stub.py --port 11999 > /tmp/stub.log 2>&1 &
+          python tools/openai_stub.py --port 11999 --dim 1024 > /tmp/stub.log 2>&1 &
           for i in $(seq 1 30); do
             if curl -sf http://localhost:11999/v1/models > /dev/null; then
               echo "桩服务就绪"
