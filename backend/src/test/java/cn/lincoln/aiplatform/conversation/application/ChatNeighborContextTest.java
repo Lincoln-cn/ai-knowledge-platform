@@ -43,9 +43,8 @@ class ChatNeighborContextTest {
    * 反射调私有的 {@code promptOf(question, refs, systemPrompt, neighbors, memoryBlock)}
    * （它只做字符串拼接，没有副作用，测试不必起上下文）。
    *
-   * <p>★ 0.9.0 的长期记忆让这个签名多了第 5 个参数 {@code memoryBlock}；本辅助方法仍按四参暴露给
-   * 下面两条断言，记忆块传空串 —— 那两条断言看的是"邻居段不产生引用"与"无邻居时逐字不变"，
-   * 与记忆块无关。★ 反射失败是**运行期**的：签名再变，这里会红，而那正是它该红的地方。
+   * <p>★ 0.9.0 的长期记忆让这个签名多了第 5 个参数 {@code memoryBlock}；本辅助方法仍按四参暴露给 下面两条断言，记忆块传空串 ——
+   * 那两条断言看的是"邻居段不产生引用"与"无邻居时逐字不变"， 与记忆块无关。★ 反射失败是**运行期**的：签名再变，这里会红，而那正是它该红的地方。
    */
   private static String promptOf(
       String question, List<SourceRef> refs, String systemPrompt, Map<UUID, List<String>> neighbors)

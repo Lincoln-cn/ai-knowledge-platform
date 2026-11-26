@@ -239,7 +239,8 @@ public class PromptEvalService {
     }
   }
 
-  private void saveAnswer(UUID runId, UUID itemId, EvalSide side, DebugChatPort.DebugAnswer answer) {
+  private void saveAnswer(
+      UUID runId, UUID itemId, EvalSide side, DebugChatPort.DebugAnswer answer) {
     PromptEvalAnswer row = new PromptEvalAnswer(UUID.randomUUID(), runId, itemId, side);
     if (answer != null) {
       row.recordAnswer(answer.answer(), (int) Math.min(answer.elapsedMs(), Integer.MAX_VALUE));
