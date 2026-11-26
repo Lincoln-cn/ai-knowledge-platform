@@ -513,6 +513,7 @@ grep -c 'MimeHeaders.removeHeader' logs/ai-platform.log  # 被 NPE 擦痕的次�
 | `app.chat.retrieval.neighbor-context.enabled`（`AIP_NEIGHBOR_CONTEXT_ENABLED`） | false | 查询侧的**上下文窗口**（`#65`）：把命中段的**邻座正文**一并拼进"给模型的上下文"，用于补上被硬分段边界劈开的那半句（"…见下表" / 表在下一节）。★ **不产生新引用**：`SourceRef` 的条数、编号、`full` 一律不变，邻居段只标一句"与上段相邻，仅供理解上下文，不单独编号"。★ 默认关 = 凡是主链路上多一次数据库查询的开关，缺省必须与不做这件事一致 |
 | `app.chat.retrieval.neighbor-context.before`（`AIP_NEIGHBOR_CONTEXT_BEFORE`） | 1 | 往上取几个邻座段（`0` = 不往上取） |
 | `app.chat.retrieval.neighbor-context.after`（`AIP_NEIGHBOR_CONTEXT_AFTER`） | 1 | 往下取几个邻座段（`0` = 不往下取） |
+| `app.chat.retrieval.reference-budget-chars`（`AIP_REFERENCE_BUDGET_CHARS`） | 8000 | 拼进「参考资料」的正文总字数上限。★ **按模型窗口调**：粗算 = 窗口 token × 0.6，8k 窗口建议 3000、32k 建议 8000、128k 建议 20000。★ 设 `0` 或负数 = 不限制（回到"没有任何上限"的老行为）—— 那正是这条存在的原因：`topN` 条 × 段长 + 邻座段在窗口小的模型上会顶到上下文上限，而顶了之后界面只显示"回答失败 / 答一半"，**真正的原因（太长）一个字都不显示**。★ 为什么不由模型的 `contextWindow` 自动算：那一列对向量模型恒为 null、对话模型也常缺值，自动算的失败形态是"悄悄按 0 裁"，比不裁更糟 |
 
 ## 八之补三、把本机 Ollama 登记成服务商（`#288`，建议一开始就做）
 
