@@ -1156,6 +1156,41 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 
 这一节回答"下一次打开这个仓库先干哪件"。判据只有一条：**哪件事挡着 `§二` 的门槛**。
 
+> **2026-11-27 状态（会话丢失后重核）**：① 的 **B4** 与 **④ 0.9.7 提示词评测**都已落码、已在 `main`。
+> 现在真正挡门的是 **B2 的口径** —— 它是「转公开四问」里 B 那一问唯一没定的答案。
+> 排在最前面三件：**B2 人工抽 20 条校准 → 重启后端补真栈读数（`scripts/prompt_eval_check.py`、
+> `scripts/smoke_check.py`）→ 真栈 20 条端到端闸门逐条归因**（上一轮 8/20 红里混了环境问题，
+> 见 `§11.64.1`）。
+
+### 11.64.1 2026-11-27 止红记录（两轮：CI 4 红 → 快闸 2 红）
+
+head `d13afbef` 上 5 个 workflow 有 4 个红。逐条根因与处置：
+
+| # | 红在哪 | 根因 | 处置 |
+|---|---|---|---|
+| 1 | 快闸 · `check_release_metadata.py` | `0.9.5` 发版只改了 `CHANGELOG` + `frontend/package.json`，漏改 `backend/pom.xml`（停在 `0.9.3`）与 `package-lock.json` | 三处对齐 `0.9.5`（不顺手发 0.9.7：真栈读数未补齐） |
+| 2 | `ModuleBoundaryTest` | `PromptEvalService` 直接依赖 `conversation` 的 `ChatService`，而 `assistant` 的允许依赖里没有 `conversation` | 按「SPI 放 `platform`、实现放提供方模块」抽 `platform.conversation.DebugChatPort` + `conversation.application.DebugChatAdapter` |
+| 3 | `MigrationInventoryTest` | `CaliberShape.MIGRATION_FILES` 停在 `V105`，11-19/20 批的 `V106`–`V114` 九条全未登记（`#267` 同类） | 补登九条 |
+| 4 | `ChatNeighborContextTest` | `ChatService.promptOf` 已由三参变五参（多 `memoryBlock`），测试按三参反射 ⇒ 运行期 `NoSuchMethod`（编译不报） | 反射签名跟随 |
+| 5 | 前端 · 冒烟（`smoke_test.py` 37 条） | 三处**断言过期**：四张统计卡已并入运行回执（`.stat` 已不存在）；`⑮` 拿 `glm4:9b` 当"探测失败"样本，而 `#1.7` 之后它 `disabled`（点击必然 30s 超时，并连带把 `⑯` 的对话框挡住） | 改断当前设计：回执行数 · 「不健康 ⇒ 可见但不可选且给出原因」 |
+| 6 | 前端 · 功能点（`verify_features.py` 55 条） | 三处**断言过期**：配置/概览只对"我拥有的"应用渲染（mock admin 名下没有应用）；页头已改「提示词 · 角色指令」；菜单「管理」已拆成五组 | 改断页面骨架 + 卡片操作入口 · 去词级断言 · 展开「组织与权限」 |
+
+第二轮（head `358dd473`，上面五条已修后又露出来的一批 —— 前一轮被"更红的那条"挡在后面）：
+
+| # | 红在哪 | 根因 | 处置 |
+|---|---|---|---|
+| 7 | 快闸 · `check_release_metadata.py` | 同 #1，已归零 | — |
+| 8 | 快闸 · `check_design.py` | **36 处内联色值**，形态全是 `var(--不存在的令牌, #死fallback)`：`--color-success`/`--color-warning`/`--color-primary`/`--color-danger-bg`/`--color-border-strong`/`--color-bg-elevated` 这六个名字 `tokens.css` 里根本没有 ⇒ 浏览器一直在吃 fallback，令牌改了它们不动。另 1 处彩色粗条、5 处裸 px 首列 | 换成真令牌（`--color-ok`/`--color-warn`/`--color-accent`/`--color-danger-soft`/`--color-rule-strong`/`--color-surface`）并删 fallback；粗条改底色区分；栅格改 `auto`/`max-content`/比例 |
+| 9 | 快闸 · `check_states.py` | `#354` 那批新页（`error-logs`/`guard-hits`/`login-logs`/`memories`）的表格只有「暂无数据」，没有下一步 | `empty-text` 补动作引导；`guard-hits` 的区块级说明补 `class="empty"` |
+
+★ **这一批的共同形状**：**除 #2 是真越界之外，其余都是"读数跟着产品改了、断言没跟"**。
+判据仍然照 `MEMORY` 那条：**某脚本报错时先把全部退出码列一遍，不要猜**；而"断言过期"与
+"产品坏了"在日志里长得一样 —— 区分它们只能靠**回到 DOM 去看现在实际渲染了什么**。
+★ 第二轮那三条是**另一形状**：产品本身有债（用了六个不存在的令牌 + 新页没写空态），
+而闸门一直**红在更早的一步上，把它们挡在后面**。教训是 **一个红着的闸门会让后面的闸门失去读数** ——
+所以"只修眼前那条红、让它变绿就停下来"是错的，必须一次把**这一档全部闸门**跑一遍。
+
+
 **① 补读数（优先级最高，约 2.5 天）**
 
 `§二` 的三张清单里功能面已经基本齐了，卡住「可用阶段」的是**读数**而不是功能。
@@ -1163,7 +1198,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 
 | 缺口 | 现状 | 要做的 |
 |---|---|---|
-| **B4 首字延迟** | 回执里显示 `—` | `cv_message` 加 `first_token_ms` 列 + 流式链路记首字时刻 + `AnalyticsService` 用 `percentile_cont(0.5)` 算 P50 |
+| **B4 首字延迟** | ★ **已落**（`V113` + 流式记首字 + `percentile_cont(0.5)`）；本机看板仍 `—`，因为后端没重启、`V113` 没执行 | 重启后端后核一次读数 |
 | **B2 答案可用率** | 95.7%，但判分是 LLM + 20 条校准 | 扩到人工抽检，或**明确接受**这个口径并写进台账 |
 | **A5 / A6 / A8** | 未实测 | A5 空态与错误态盘点 · A6 多轮指代（10 轮窗口）· A8 并发与限流 |
 | **B5–B7** | 无系统读数 | 语料评测脚本已在，缺的是跑一次并把数进台账 |
@@ -1180,10 +1215,13 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 按单量排：`#352`+`#353`（各 0.5 天，一起做）→ `#357`（1 天）→ `#355`（1.5–2 天）→
 `#356`（2 天）→ `#354`（2–3 天）。
 
-**④ 0.9.7 提示词评测（`§11.63`，约 2 天）**
+**④ 0.9.7 提示词评测（`§11.63`）—— ★ 已落码，未发版**
 
-设计已写死在 `§11.63`，等 ① 之后开工。**0.9.6 候选**（应用配置"同问题跑两版"）已在
-`§11.62.8` 记为候选，尚未排期。
+四表（`V114`）+ 服务与端点 + 评测抽屉 + mock 十个端点 + `scripts/prompt_eval_check.py` 全部在 `main`；
+mock 链路全通（胜率 75%，与 `PromptEvalServiceTest` 同一算法），**真栈仍 `SKIP`**
+（`404 接口不存在` ⇒ 后端没重启，`V113`/`V114` 没执行）。
+发版条件 = 真栈跑通一次且读数进台账；在那之前版本号停在 `0.9.5`。
+**0.9.6 候选**（应用配置"同问题跑两版"）已在 `§11.62.8` 记为候选，尚未排期。
 
 **不做的**（写下来，免得反复讨论）：提示词一键优化与自动应用（`§11.63.4`）·
 跨提示词横向比（`§11.63.4`）· 把 `as_prompt_config` 改成版本表+指针（`§11.62.2`）·
@@ -1729,7 +1767,9 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
 | `as_prompt_eval_run` | 一次评测运行：两个版本 × 全部问题 | `id / set_id / base_version_no / draft_text / status / started_at / finished_at` |
 | `as_prompt_eval_answer` | 一次运行里每题的产出与评分 | `id / run_id / item_id / side(SAVED/DRAFT) / answer / elapsed_ms / pass_count / fail_count / verdict(BETTER/SAME/WORSE) / note / scored_by / scored_at` |
 
-★ **已落库**：`V114__as_prompt_eval.sql` 建这 4 张表（全部 `on delete cascade` 到 `as_prompt_config`，`status`/`side`/`verdict` 都有 check 约束，`(run_id, item_id, side)` 唯一）。后端服务与界面仍未做。
+★ **已落库**：`V114__as_prompt_eval.sql` 建这 4 张表（全部 `on delete cascade` 到 `as_prompt_config`，`status`/`side`/`verdict` 都有 check 约束，`(run_id, item_id, side)` 唯一）。
+
+★ **已落码**（2026-11-19/20 批，全部在 `main`）：`PromptEvalService` + `PromptEvalController`（service/controller + 端点）· 前端评测抽屉 `PromptEvalDrawer.vue` · mock 十个端点 · 验收脚本 `scripts/prompt_eval_check.py`。★ **发版状态：未发 0.9.7** —— 真栈链路仍是 `SKIP`（`404 接口不存在`：后端未重启，重启才会执行 `V113`/`V114`），所以三处版本号暂时对齐到 `0.9.5`（详见本节末尾的状态行与 `§11.64`）。
 
 ★ `draft_text` **把草稿正文整段存下来**（不引用版本号）：评测常常发生在"还没保存"的那一版上，而一旦保存就变成新版本 —— 存正文才能复现当时到底测了什么。
 

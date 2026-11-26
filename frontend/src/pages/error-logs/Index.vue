@@ -42,7 +42,7 @@
         :data="rows"
         size="small"
         row-key="rowId"
-        empty-text="这段时间没有失败记录 —— 不等于系统没出错（未捕获异常不落库，见页脚）"
+        empty-text="这段时间没有失败记录 · 点击「刷新」重新拉一次；未捕获异常不落库（见页脚）"
       >
         <el-table-column label="时间" width="180">
           <template #default="{ row }">{{ formatTime(row.at) }}</template>
@@ -173,8 +173,8 @@ onMounted(fetchPage)
   margin-bottom: var(--space-md);
 }
 .notice.err {
-  background: var(--color-danger-bg, #fef2f2);
-  color: var(--color-danger, #b91c1c);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 .retry {
   margin-left: auto;

@@ -252,11 +252,11 @@ onMounted(fetchAll)
   flex-direction: column;
   gap: var(--space-2xs);
   padding: var(--space-md) var(--space-lg);
-  background: var(--color-bg-elevated, #fff);
+  background: var(--color-surface);
 }
 
 .kpi.warn .kpi-value {
-  color: var(--color-warning, #b26a00);
+  color: var(--color-warn);
 }
 
 .kpi-label {
@@ -271,11 +271,11 @@ onMounted(fetchAll)
 }
 
 .kpi-value.ok {
-  color: var(--color-success, #2f855a);
+  color: var(--color-ok);
 }
 
 .kpi-value.partial {
-  color: var(--color-warning, #b26a00);
+  color: var(--color-warn);
 }
 
 .kpi-note {
@@ -302,7 +302,7 @@ onMounted(fetchAll)
 .eval-note code {
   padding: 0 4px;
   border-radius: var(--radius-sm, 4px);
-  background: var(--color-bg-sunken, rgba(0, 0, 0, 0.04));
+  background: var(--color-sunken);
   font-family: var(--font-mono, monospace);
   font-size: 12px;
 }

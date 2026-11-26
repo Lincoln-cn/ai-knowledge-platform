@@ -224,7 +224,9 @@ defineExpose({ open })
 
 .vh-body {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  /* 左列表 : 右内容 = 2 : 3。不用裸 px 定左栏宽 —— 那个数没有基准，
+     版本多一条 / 标题长一格就失衡（`#42`）。比例栅格两端都跟着容器走。 */
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   gap: var(--space-md);
   min-height: 0;
 }
@@ -319,7 +321,8 @@ defineExpose({ open })
 
 .vh-line {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
+  /* 首列是行号：宽度由"最大行号几位数"决定，不是由某个像素值决定。 */
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: var(--space-2xs);
   padding: 2px var(--space-xs);
   font-size: var(--text-sm);

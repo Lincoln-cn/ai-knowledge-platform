@@ -56,7 +56,7 @@
         <el-button size="small" @click="reload">查询</el-button>
       </div>
 
-      <el-table v-loading="loading" :data="rows" size="small" row-key="id" empty-text="这段时间没有登录记录">
+      <el-table v-loading="loading" :data="rows" size="small" row-key="id" empty-text="这段时间没有登录记录 · 点击「清除筛选」看全部">
         <el-table-column label="时间" width="180">
           <template #default="{ row }">{{ formatTime(row.at) }}</template>
         </el-table-column>
@@ -204,8 +204,8 @@ onMounted(fetchPage)
   margin-bottom: var(--space-md);
 }
 .notice.err {
-  background: var(--color-danger-bg, #fef2f2);
-  color: var(--color-danger, #b91c1c);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 .retry {
   margin-left: auto;
@@ -240,13 +240,13 @@ onMounted(fetchPage)
   font-size: 15px;
 }
 .chip.ok .chip-value {
-  color: var(--color-success, #15803d);
+  color: var(--color-ok);
 }
 .chip.bad .chip-value {
-  color: var(--color-danger, #b91c1c);
+  color: var(--color-danger);
 }
 .chip.warn .chip-value {
-  color: var(--color-warning, #b45309);
+  color: var(--color-warn);
 }
 .chip.clear {
   color: var(--color-text-secondary);
@@ -280,7 +280,7 @@ onMounted(fetchPage)
 .tag-note {
   margin-left: var(--space-xs);
   font-size: 12px;
-  color: var(--color-warning, #b45309);
+  color: var(--color-warn);
 }
 .pager {
   display: flex;

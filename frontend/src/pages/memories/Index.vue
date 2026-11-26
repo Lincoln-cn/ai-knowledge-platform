@@ -210,7 +210,7 @@ onMounted(load);
         </div>
       </div>
 
-      <el-table v-loading="loading" :data="items" size="small" empty-text="还没有记忆">
+      <el-table v-loading="loading" :data="items" size="small" empty-text="还没有记忆 —— 点击下方输入框写一条，或在对话里让它自己记住">
         <el-table-column label="层级" width="96">
           <template #default="{ row }">{{ levelLabel(row.level) }}</template>
         </el-table-column>

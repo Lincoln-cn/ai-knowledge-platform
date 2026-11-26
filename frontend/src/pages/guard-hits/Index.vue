@@ -42,8 +42,8 @@
         </div>
       </div>
       <div class="panel-body">
-        <div v-if="!page.recent.length" class="micro muted">
-          {{ days === 0 ? '还没有任何拦截记录。' : '这段时间里没有拦截记录。' }}
+        <div v-if="!page.recent.length" class="empty micro muted">
+          {{ days === 0 ? '还没有任何拦截记录。' : '这段时间里没有拦截记录。' }}点击「刷新」重新拉一次。
         </div>
         <template v-else>
           <el-table v-loading="loading" :data="page.recent" size="small" row-key="at">

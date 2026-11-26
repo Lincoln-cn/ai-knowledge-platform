@@ -80,8 +80,8 @@ onMounted(load)
   margin-bottom: var(--space-md);
 }
 .notice.err {
-  background: var(--color-danger-bg, #fef2f2);
-  color: var(--color-danger, #b91c1c);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 .retry {
   margin-left: auto;
@@ -100,16 +100,16 @@ onMounted(load)
   border-left-width: 3px;
 }
 .card.ok {
-  border-left-color: var(--color-success, #15803d);
+  border-left-color: var(--color-ok);
 }
 .card.warn {
-  border-left-color: var(--color-warning, #b45309);
+  border-left-color: var(--color-warn);
 }
 .card.crit {
-  border-left-color: var(--color-danger, #b91c1c);
+  border-left-color: var(--color-danger);
 }
 .card.unknown {
-  border-left-color: var(--color-border-strong, #9ca3af);
+  border-left-color: var(--color-rule-strong);
 }
 .card-head {
   display: flex;
@@ -124,16 +124,16 @@ onMounted(load)
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--color-success, #15803d);
+  background: var(--color-ok);
 }
 .card.warn .dot {
-  background: var(--color-warning, #b45309);
+  background: var(--color-warn);
 }
 .card.crit .dot {
-  background: var(--color-danger, #b91c1c);
+  background: var(--color-danger);
 }
 .card.unknown .dot {
-  background: var(--color-border-strong, #9ca3af);
+  background: var(--color-rule-strong);
 }
 .card-value {
   margin-top: var(--space-xs);
@@ -152,10 +152,10 @@ onMounted(load)
   border-top: 1px solid var(--color-border);
   font-size: 12px;
   line-height: 1.6;
-  color: var(--color-warning, #b45309);
+  color: var(--color-warn);
 }
 .card.crit .card-hint {
-  color: var(--color-danger, #b91c1c);
+  color: var(--color-danger);
 }
 .foot {
   margin-top: var(--space-md);

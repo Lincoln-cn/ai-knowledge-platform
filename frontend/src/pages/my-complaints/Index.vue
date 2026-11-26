@@ -230,7 +230,8 @@ onMounted(load)
 }
 .detail-row {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr);
+  /* 首列是字段名：宽度取同列最长的那一个，不猜像素（与受理台那条同口径）。 */
+  grid-template-columns: auto minmax(0, 1fr);
   gap: var(--space-sm);
   padding: var(--space-2xs) 0;
   font-size: 13px;

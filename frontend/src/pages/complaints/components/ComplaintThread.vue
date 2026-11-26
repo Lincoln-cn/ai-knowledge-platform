@@ -220,7 +220,7 @@ function fmtSize(bytes: number): string {
 }
 
 .thread-error {
-  color: var(--color-danger, #c45656);
+  color: var(--color-danger);
 }
 
 .thread-list {
@@ -233,18 +233,19 @@ function fmtSize(bytes: number): string {
 }
 
 .thread-item {
-  border-left: 3px solid var(--color-rule);
+  border-left: 1px solid var(--color-rule);
   padding: var(--space-xs) var(--space-sm);
-  background: var(--color-surface-sunken, rgba(0, 0, 0, 0.02));
+  background: var(--color-sunken);
 }
 
-/* 两种口吻用不同色条：同一张单上"我说的"和"平台答复的"要一眼分得开 */
+/* 两种口吻用**底色**区分，不用彩色粗条：时间线上要读的是先后顺序，
+   左右两条色带一出现，视线会先去比颜色而不是看内容（`design.md` 反模式）。 */
 .thread-item.side-requester {
-  border-left-color: var(--color-primary, #409eff);
+  background: var(--color-accent-soft);
 }
 
 .thread-item.side-handler {
-  border-left-color: var(--color-success, #67c23a);
+  background: var(--color-ok-soft);
 }
 
 .thread-meta {
@@ -300,7 +301,7 @@ function fmtSize(bytes: number): string {
   background: none;
   border: none;
   padding: 0;
-  color: var(--color-primary, #409eff);
+  color: var(--color-accent);
   cursor: pointer;
   font-size: inherit;
 }

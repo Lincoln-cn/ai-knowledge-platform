@@ -183,7 +183,8 @@ defineExpose({
 <style scoped>
 .arg-row {
   display: grid;
-  grid-template-columns: 108px 1fr 52px;
+  /* 参数名 / 值 / 类型：两侧都按内容自适应，中间那列吃剩余宽度。 */
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   width: 100%;
   margin-bottom: 6px;

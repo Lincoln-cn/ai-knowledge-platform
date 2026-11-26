@@ -234,7 +234,7 @@ function clear() {
         max-width: 88%;
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        background: var(--color-primary-bg, #eff6ff);
+        background: var(--color-accent-soft);
         font-size: 13px;
         line-height: 1.6;
         white-space: pre-wrap;
@@ -246,12 +246,12 @@ function clear() {
         padding: var(--space-sm);
         border: 1px solid var(--color-rule);
         border-radius: var(--radius-md);
-        background: var(--color-surface-2, #fafafa);
+        background: var(--color-surface-2);
     }
 
     .answer.failed {
-        border-color: var(--color-danger, #b91c1c);
-        background: var(--color-danger-bg, #fef2f2);
+        border-color: var(--color-danger);
+        background: var(--color-danger-soft);
     }
 
     .answer-text {
@@ -264,7 +264,7 @@ function clear() {
 
     .fail-title {
         font-weight: 600;
-        color: var(--color-danger, #b91c1c);
+        color: var(--color-danger);
     }
 
     .fail-list {
@@ -272,7 +272,7 @@ function clear() {
         padding-left: 18px;
         font-size: 12px;
         line-height: 1.7;
-        color: var(--color-danger, #b91c1c);
+        color: var(--color-danger);
     }
 
     .answer-meta {
