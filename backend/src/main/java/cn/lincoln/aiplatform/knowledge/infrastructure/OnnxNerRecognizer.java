@@ -6,6 +6,7 @@ import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
+import cn.lincoln.aiplatform.knowledge.application.EntityExtractor;
 import cn.lincoln.aiplatform.knowledge.domain.EntityRecognizer;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
@@ -52,10 +53,13 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>★ 2026-11-11 加了 PERSON（{@link #PERSON_LABELS}）：同一天 {@code HanlpEntityRecognizer} 也加了。**两个实现的
  * {@code supportedTypes()} 必须一致** —— 否则换一个 bean 行为就变， 而调用方是按接口声明写代码的（见 {@code §11.36.3} 第 ② 条纪律）。
  *
- * <h3>关系不在这里抽</h3>
+ * <h3>关系交给规则层（不在模型里抽）</h3>
  *
- * <p>{@link #relations(String)} 返回空列表，与 {@code HanlpEntityRecognizer} 的做法一致： 关系靠标记词规则（{@code
- * EntityExtractor}），模型只负责认出实体。 「返回空」表示这一层抽不出关系，不是「没有关系」。
+ * <p>模型只认实体；关系走标记词规则（{@code EntityExtractor}），与 {@code HanlpEntityRecognizer} 同一套判据。
+ *
+ * <p>★ 2026-11-27（`#368`）：这里以前直接返回空列表，理由写的是"关系靠规则层"， 可规则层只被 {@code HanlpEntityRecognizer} 组合过 —— 而
+ * {@code application.yml} 的默认值是 onnx ⇒ <b>关系一条都抽不出来</b>， {@code kb_relation} 恒空，关系召回那一路静默失效。 这与
+ * 2026-11-11 HanLP 那次是同一个坑（见 {@code HanlpEntityRecognizer#relations} 的注释）： "抽不出"与"没有关系"读数完全一样。
  *
  * <h3>碎片收敛</h3>
  *
@@ -95,6 +99,15 @@ public class OnnxNerRecognizer implements EntityRecognizer {
   private final Path modelDir;
   private final int threads;
   private final List<String> orgSuffixes;
+
+  /**
+   * 关系抽取的规则层（`#368`）。
+   *
+   * <p>★ 它<b>不允许为空</b>：构造时若调用方没传就自建一份（内置机构后缀 + 内置标记词）。 兜底在这里而不是在调用方，是为了让"忘了传"的后果停在"用了默认词表"，
+   * 而不是退化成"静默不抽关系" —— 后者不会有任何异常，只会在关系表里少一批行。
+   */
+  private final EntityExtractor relationExtractor;
+
   private static final JsonMapper MAPPER = JsonMapper.builder().build();
 
   private volatile OrtSession session;
@@ -103,12 +116,28 @@ public class OnnxNerRecognizer implements EntityRecognizer {
   private volatile String loadFailure;
 
   public OnnxNerRecognizer(Path modelDir, int threads, List<String> orgSuffixes) {
+    this(modelDir, threads, orgSuffixes, null);
+  }
+
+  /**
+   * @param relationExtractor 规则层；{@code null} 表示用内置词表自建一份
+   */
+  public OnnxNerRecognizer(
+      Path modelDir, int threads, List<String> orgSuffixes, EntityExtractor relationExtractor) {
     this.modelDir = modelDir;
     this.threads = Math.max(1, threads);
     this.orgSuffixes = List.copyOf(orgSuffixes);
     if (this.orgSuffixes.isEmpty()) {
       throw new IllegalArgumentException("机构后缀为空：收敛层会把所有候选都丢掉");
     }
+    this.relationExtractor =
+        relationExtractor != null
+            ? relationExtractor
+            : new EntityExtractor(
+                new EntityExtractor.Dictionary(
+                    this.orgSuffixes,
+                    List.of(),
+                    JdbcEntityDictionaryAdapter.builtin().relationMarks()));
   }
 
   public OnnxNerRecognizer(Path modelDir, int threads) {
@@ -125,10 +154,17 @@ public class OnnxNerRecognizer implements EntityRecognizer {
     return List.of("ORG", "PERSON");
   }
 
-  /** ★ 返回空 = 这一层不抽关系，不是"没有关系"。关系由 {@code EntityExtractor} 的标记词规则负责。 */
+  /**
+   * 关系交给规则层。
+   *
+   * <p>两个 {@code Relation} 是不同包里的两个 record（{@code EntityExtractor.Relation} 在 application、{@link
+   * EntityRecognizer.Relation} 在 domain），必须显式转换，不能直接返回。
+   */
   @Override
   public List<Relation> relations(String text) {
-    return List.of();
+    return relationExtractor.relations(text).stream()
+        .map(r -> new Relation(r.type(), r.from(), r.to()))
+        .toList();
   }
 
   @Override

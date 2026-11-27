@@ -113,13 +113,15 @@ class OnnxNerRecognizerTest {
   }
 
   @Test
-  @DisplayName("关系返回空，且这是'这一层不抽'而不是'没有关系'")
-  void relationsAreNotHandledHere() {
+  @DisplayName("关系由规则层抽出来，不是返回空（#368）")
+  void relationsComeFromTheRuleLayer() {
     OnnxNerRecognizer recognizer = new OnnxNerRecognizer(MODEL_DIR, 2);
 
-    // 关系由 EntityExtractor 的标记词规则抽；如果这个类哪天开始返回非空，
-    // 说明有人加了第二条关系抽取路径，那条路径必须同时解决"与规则冲突时谁赢"。
-    assertThat(recognizer.relations("综合部隶属财务资产部管理。")).isEmpty();
+    // ★ 2026-11-27（#368）：这条断言原来是 isEmpty()。它是"钉住 bug"的形状 ——
+    //   一个测试把"关系恒空"写成了期望值，于是应用默认跑 onnx 时 kb_relation 一直是 0 行，
+    //   而全部测试都是绿的。现在断言反过来：这句子必须产出一条 BELONGS_TO。
+    assertThat(recognizer.relations("综合部隶属财务资产部管理。"))
+        .containsExactly(new EntityRecognizer.Relation("BELONGS_TO", "综合部", "财务资产部"));
     // ★ 2026-11-11 加了 PERSON（§11.36.1 的 B 项）—— 与 HanlpEntityRecognizer 的
     //   supportedTypes() 必须一致；两个实现对不上时，换一个 bean 行为就变。
     assertThat(recognizer.supportedTypes()).containsExactly("ORG", "PERSON");
