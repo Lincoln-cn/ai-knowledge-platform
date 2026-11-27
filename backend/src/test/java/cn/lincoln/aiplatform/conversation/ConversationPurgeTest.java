@@ -191,6 +191,12 @@ class ConversationPurgeTest {
         .isEqualTo(2);
     assertThat(Files.exists(diskA)).as("删前：A 的磁盘字节在").isTrue();
     assertThat(Files.exists(diskB)).as("删前：B 的磁盘字节在").isTrue();
+    // ★ 对照组 B 的条数取删前基准，不写魔数：每会话的消息条数会随产品演进变化
+    //   （开场白落库那一次就从 2 变 3），而这条断言要说的是"B 一根手指没被碰"，
+    //   不是"B 恰好有几条"（2026-11-27 全量回归就红在这个 2 上）。
+    long messagesInBBefore =
+        count("select count(*) from cv_message where conversation_id = ?::uuid", convB);
+    assertThat(messagesInBBefore).as("删前：B 自己的消息条数（后面拿它当基准）").isGreaterThan(0);
 
     // ── 软删 + 彻底删除 ──
     HttpResponse<String> soft = delete("/api/v1/conversations/" + convA, admin);
@@ -209,8 +215,8 @@ class ConversationPurgeTest {
         .as("★ 消息必须跟着走 —— cv_message 无外键，不显式删就是永远没人管的孤儿行")
         .isEqualTo(0);
     assertThat(count("select count(*) from cv_message where conversation_id = ?::uuid", convB))
-        .as("对照组 B 的消息必须还在")
-        .isEqualTo(2);
+        .as("对照组 B 的消息必须还在 —— 与它自己删前的条数一致（开场白也算，别写魔数）")
+        .isEqualTo(messagesInBBefore);
     assertThat(
             count(
                 "select count(*) from cv_conversation_feedback where conversation_id = ?::uuid",
