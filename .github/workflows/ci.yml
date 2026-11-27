@@ -152,9 +152,23 @@ jobs:
           cat /tmp/stub.log
           exit 1
 
+      # ★ 三次重试：Maven Central 对本仓的匿名请求会限流（HTTP 429），
+      #   已连续三次让这条闸门死在"构建"而不是"读数"上（2026-11-27 ~ 11-28）。
+      #   429 是瞬时的，等 30 秒再拉基本就过去了；重试的是**这整个命令**，
+      #   所以还要 `-DskipTests` 之外的 goal 语义不变（package 是幂等的）。
+      #   ★ 重试要有上限与可见的失败：三次都失败就 exit 1，不许把限流读成"产品坏了"。
       - name: 构建后端 jar
         working-directory: backend
-        run: mvn -B -q -DskipTests package
+        run: |
+          for attempt in 1 2 3; do
+            if mvn -B -q -DskipTests package; then
+              exit 0
+            fi
+            echo "::warning::第 ${attempt} 次构建失败（多为 Maven Central 限流 429），30 秒后重试"
+            sleep 30
+          done
+          echo "::error::构建后端 jar 连续三次失败 —— 先看日志里是 429 还是真编译错误"
+          exit 1
 
       # ★ 用 `--app.security.captcha.enabled=false` 起：闸门要能在没有任何人工的情况下跑完
       #   （验证码是给人看的）。生产不许关，这里关的是**测试实例**。
