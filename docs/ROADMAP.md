@@ -1162,7 +1162,7 @@ M6 结束时基于 B1–B7 实测值做一次正式复盘：**H1 不成立**（�
 > `scripts/smoke_check.py`）→ 真栈 20 条端到端闸门逐条归因**（上一轮 8/20 红里混了环境问题，
 > 见 `§11.64.1`）。
 
-### 11.64.1 2026-11-27 止红记录（两轮：CI 4 红 → 快闸 2 红）
+### 11.64.1 2026-11-27 止红记录（四批：CI 4 红 → 快闸 2 红 → 快闸逐条 → 后端 22 条）
 
 head `d13afbef` 上 5 个 workflow 有 4 个红。逐条根因与处置：
 
@@ -1189,6 +1189,37 @@ head `d13afbef` 上 5 个 workflow 有 4 个红。逐条根因与处置：
 ★ 第二轮那三条是**另一形状**：产品本身有债（用了六个不存在的令牌 + 新页没写空态），
 而闸门一直**红在更早的一步上，把它们挡在后面**。教训是 **一个红着的闸门会让后面的闸门失去读数** ——
 所以"只修眼前那条红、让它变绿就停下来"是错的，必须一次把**这一档全部闸门**跑一遍。
+
+第三轮（head `3b9f0950` → `65aff122` → `c94102c9`，快闸逐条剥到底）：
+
+| # | 红在哪 | 根因 | 处置 |
+|---|---|---|---|
+| 10 | 快闸 · `check_mock_endpoints.py` | 0.9.7 的两处评分接口契约是 `request<void>`，mock 却返回整个 run 对象；跳过数 `43→44`（`PUT /prompt-configs/:id` 的 `return item` 解析不出） | 两处改 `return null`；基线改 44 并**写明为什么解析不了**（闸门规矩：跳过只能减，新增必须说清） |
+| 11 | 快闸 · `check_contract_consumers.py`（第三格 `#79` 首次实跑） | `POST /assistants/{}/workflow/resume` 零消费（后端与 e2e 有、界面没恢复入口）；两条老基线该收回（`workflow/records` 已接 `workflow/Index.vue:472`、`getComplaint` 三个投诉页在调） | 登记新基线一条 + 收回两条 |
+| 12 | 真栈 · 起桩维度 | CI 起桩用默认 `--dim 768`，而 seed 把 `bge-m3` 登记成 1024 | `--dim 1024`（`c57848ea`，对应 `#360`） |
+| 13 | 快闸 · `check_config_keys.py` | `RiskService` 读 `${app.file.root}`（**单数**，yml 里不存在）⇒ 磁盘体检永远读 JVM 工作目录那块盘，与该字段注释「不要读工作目录」相反且不报错；`reference-budget-chars` 未声明 | 改 `${app.files.root}` + yml 补声明（`65aff122`，`#361` 已关） |
+| 14 | 快闸 · `check_config_docs.py` | 新增的 `app.chat.retrieval.reference-budget-chars` 未进 `deploy/README.md` | 配置表补一行（`c94102c9`）。★ 新增一个 `app.*` 键要同时动四处：`@Value` / yml / `deploy/README` / 启动器 |
+| 15 | 后端 · `ContractDriftTest` ×2 + `AuthorizationDeclarationTest` | 投诉附件端点返回**原始字节**，前端走 `fetch` 直取（`request<T>()` 是 JSON 封装，会把字节变成 0 字节文件）⇒ 必须登记契约例外；恢复版本端点漏了 `@PreAuthorize` | 登记例外（三要素：为什么 / 真源 / 删除条件）+ 补 `assistant:edit`（`33e1ec84`） |
+| 16 | 真栈 · 11/20 红 | **夹具维度两派混用**：768 派（`check_s1_knowledge_chain_e2e.py:291`、`check_s3_conversation_chain_e2e.py:408`、`check_public_share_e2e.py:237`、`check_refs_jump_e2e.py:202`）与 1024 派（`check_classification_e2e.py:197`、`check_multihop_e2e.py:278`、`check_query_understanding_e2e.py:198`、`check_segmentation_e2e.py:245`）；而 `e866dee8` 之后「同 baseModel 只允许一个维度集合」⇒ **先跑哪派哪派赢**，桩取 768 或 1024 都注定失败 | 统一 1024（与 seed、`scripts/aip-stub.cmd` 一致，`1c1a082a`） |
+
+★ **第三轮的共同形状与第二轮相反**：这一批**大多是闸门自己在长**（第三格首次实跑、mock 形状、配置键/文档三件联动）。
+新闸门第一次跑就会把"此前没人读的东西"读出来 —— 所以**它红不一定是它错**，第一问是"这条读数以前有没有人看过"。
+★ 同轮顺带订正 `docs/验收台账.md` 的 B2：同一条「人工校准」在 `:43` 写着"未做"、在 `:141` 写着做完了（`#40` 那种"同一状态两处各写一份"），
+且错的那格正好是**转公开四问**要读的格子。用户 2026-11-27 拍板接受「LLM 全量 + 20 条抽样校准」口径 ⇒ B2 转 ✅，并在台账里写清三条适用边界。
+
+第四批（后端整包 22 条失败，head `45892065353` 读数，逐簇处置，**待第八轮 CI 复核**）：
+
+| 簇 | 条数 | 根因 | 处置 |
+|---|---|---|---|
+| A 建向量模型 400 | 7 | 三个 knowledge 测试的夹具给 `LOCAL_INFERENCE` 模型写死了 `apiBase: localhost:11434` —— 单测环境没有服务在听，`#1.7` 的上游健康探测判它 UNHEALTHY，于是建模型直接 400（与 `#360` 同源） | 去掉 `apiBase`（`LOCAL_INFERENCE` 可留空；探测只在有地址时生效） |
+| B 建对话模型 400 | 3 | 同上（`PromptUsageCountHttpTest` ×2、`ModelApiTest.load_上游不可达…`） | 前两类去掉 `apiBase`；`ModelApiTest` 改为**先用可达桩建模型、再 `update api_base` 指向不可达地址**，保住「LOAD 阶段不可达 ⇒ LOAD_FAILED」这条覆盖 |
+| C 产品变了、断言没跟 | 13 | ① `refs` 事件多了可选 `notice`（零命中且有话可说时的唯一出处）② 通用会话现在也有开场白（平台默认文案）⇒ 消息条数 4→6、分享页 `messages` 非空 ③ `RERANKER` / `IMAGE_GENERATE` 都落地成 `executable=true` ⇒ 「规划中类型」这三条断言**失去被测对象**（会永远绿） ④ `GuardText.hashPrefix` 是规则内容指纹，属摘要白名单的"指纹"一侧 | ① 断言改 `refs` + `notice` ② 改断"有一条 PROLOGUE 且文案 = 后端常量"、条数 6、公开读非空数组 ③ 三条改用**假目录**（mock `NodeTypeCatalog`）造 `PLANNED_TYPE` —— 判据不能依赖"真目录里恰好还有不可执行类型" ④ 白名单补 `GuardText` 并写明它为什么不属于国密一侧 |
+
+★ **C 簇最值得记的一条**：`RERANKER` / `IMAGE_GENERATE` 落地后，那三条断言不是"红了"，而是**变成了永远绿的空断言** ——
+一条测试丢失被测对象时**不会报红**，它只是不再说话。所以"某类型还没实现"这类判据必须由**假目录**给出，不能借真目录的现状。
+★ `ChatStreamUsageHttpTest.realStackFeedsTheModelReportedUsageIntoDoneTokens` 的 `HTTP/1.1 header parser received no bytes`
+（类级 41.28s、方法仅 0.168s 就 EOF）暂判**环境/资源类 flaky**，另开 `#362` 记账，不放宽断言。
+
 
 
 **① 补读数（优先级最高，约 2.5 天）**

@@ -457,14 +457,22 @@ class ModelApiTest {
   @Order(31)
   void load_上游不可达时LOAD_FAILED且原因可读() throws Exception {
     jdbc.update("delete from ai_model");
-    // 建模型时用一个立即拒绝连接的 apiBase（127.0.0.1:1 没有监听 ⇒ connection refused）
+    // ★ 用**可达的桩**建模型：`#1.7` 之后建模型前会先探测上游，不可达会被当场 400 拒掉
+    //   （"不健康不许配置"正是那条规则的本意）。本条要测的是 **LOAD 阶段**的失败路径，
+    //   所以先建一个能探通的，再把 api_base 改成拒绝连接的地址，让 LOAD 去撞不可达。
     HttpResponse<String> create =
         post(
             "/api/v1/models",
-            "{\"name\":\"不可达模型\",\"kind\":\"CHAT\",\"supplier\":\"EXTERNAL_API\",\"baseModel\":\"stub-plain\",\"apiBase\":\"http://127.0.0.1:1\"}",
+            "{\"name\":\"不可达模型\",\"kind\":\"CHAT\",\"supplier\":\"EXTERNAL_API\",\"baseModel\":\"stub-plain\",\"apiBase\":\"http://localhost:"
+                + stubPort
+                + "\"}",
             adminToken);
     assertThat(create.statusCode()).as("外部 API 必须带 apiBase：" + create.body()).isEqualTo(200);
     String id = jsonField(create.body(), "id");
+    // 127.0.0.1:1 没有监听 ⇒ connection refused（比一个黑洞地址更快给出原因）
+    jdbc.update(
+        "update ai_model set api_base = 'http://127.0.0.1:1' where id = ?",
+        java.util.UUID.fromString(id));
 
     HttpResponse<String> loadRes = post("/api/v1/models/" + id + "/load", "", adminToken);
     assertThat(loadRes.statusCode()).isEqualTo(200);

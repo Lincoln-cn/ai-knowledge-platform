@@ -69,7 +69,10 @@ class ConversationShareHttpTest {
 
     HttpResponse<String> publicRead = send(null, "GET", "/api/v1/public/shares/" + token, null);
     assertThat(publicRead.statusCode()).as(publicRead.body()).isEqualTo(200);
-    assertThat(publicRead.body()).contains("\"messages\":[]");
+    assertThat(publicRead.body())
+        .as("★ 通用会话创建时就落一条开场白 ⇒ 这里的 messages 不再是空数组。" + "本用例要验的是「公开读能读到这条会话」，不是「它里面没有消息」")
+        .contains("\"messages\":[")
+        .doesNotContain("\"messages\":[]");
 
     String messageId = insertMessage(conversationId);
 

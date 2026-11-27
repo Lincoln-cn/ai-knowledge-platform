@@ -140,6 +140,9 @@ class PromptUsageCountHttpTest {
   }
 
   private String createChatModel(String token, String name) throws Exception {
+    // ★ 不传 apiBase：本地推理走默认上游。原先写死 `http://localhost:11434/v1`，而单测环境
+    //   没有服务在听 —— `#1.7` 的上游健康探测会判 UNHEALTHY（ClosedChannelException），
+    //   于是"建对话模型"直接 400。本类要的是"提示词被引用时不能删"，与上游通不通无关。
     HttpResponse<String> response =
         send(
             token,
@@ -148,7 +151,7 @@ class PromptUsageCountHttpTest {
             "{\"name\":\""
                 + name
                 + "\",\"kind\":\"CHAT\",\"supplier\":\"LOCAL_INFERENCE\","
-                + "\"baseModel\":\"stub-plain\",\"apiBase\":\"http://localhost:11434/v1\"}");
+                + "\"baseModel\":\"stub-plain\"}");
     assertThat(response.statusCode()).as("建对话模型应 200/201，实际：%s", response.body()).isIn(200, 201);
     return stringField(response.body(), "id");
   }

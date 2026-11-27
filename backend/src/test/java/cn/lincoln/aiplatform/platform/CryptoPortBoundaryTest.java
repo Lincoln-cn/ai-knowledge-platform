@@ -61,10 +61,13 @@ class CryptoPortBoundaryTest {
    *   <li>{@code SearchText} —— ★ 它的 {@code contentHash}
    *       是<b>内容指纹</b>，不是安全摘要：换算法会让<b>全部历史分段哈希失效</b>、 触发整库重算（{@code
    *       SEG-I7}）。所以它<b>不能</b>跟着"密码算法合规"一起换 —— 两者要换的时机不同，混在一个端口里 等于让一次国密适配悄悄改变数据指纹
+   *   <li>{@code GuardText} —— 它的 {@code hashPrefix} 是<b>规则内容指纹</b>（归一化后取 SHA-256 前 8
+   *       位），用来判断"规则没变就不用重新编译守卫"。与安全摘要无关：换算法只会让这份缓存失效一次， 不动任何历史数据 —— 和 {@code SearchText}
+   *       一样属"内容指纹"一侧，不跟国密走
    * </ul>
    */
   private static final Set<String> DIGEST_ALLOWLIST =
-      new TreeSet<>(List.of("AesGcmCryptoPort", "SearchText"));
+      new TreeSet<>(List.of("AesGcmCryptoPort", "GuardText", "SearchText"));
 
   @Test
   void jcaCipherUsersMustBeExactlyAllowlisted() {

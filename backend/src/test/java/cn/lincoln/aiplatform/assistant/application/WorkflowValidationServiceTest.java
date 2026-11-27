@@ -1,6 +1,9 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -117,8 +120,8 @@ class WorkflowValidationServiceTest {
   }
 
   @Test
-  @DisplayName("未知类型是错误；规划中（implemented=false）类型本版本不支持 ⇒ 也是错误")
-  void unknownTypeAndUnimplementedTypeAreBothErrors() {
+  @DisplayName("未知类型是错误")
+  void unknownTypeIsAnError() {
     WorkflowValidationService.Result unknown =
         service.validate(
             new WorkflowValidationService.Graph(
@@ -129,17 +132,35 @@ class WorkflowValidationServiceTest {
                 List.of(edge("a", "c"))));
     assertThat(codes(unknown)).contains("UNKNOWN_TYPE");
     assertThat(unknown.passed()).isFalse();
+  }
+
+  @Test
+  @DisplayName("目录里有、本版本跑不了的类型：发布直接拒绝（不是警告）")
+  void unimplementedTypeIsAnErrorNotAWarning() {
+    /*
+     * ★ 为什么这条要造一个假目录：真目录（workflow/node-types.json）里今天已经一个
+     *   「目录里有但跑不了」的类型都不剩了（RERANKER 在 #333 落地成可执行），
+     *   于是原先拿 RERANKER 当样本的断言已经失去被测对象 —— 它变成了一条永远绿的断言。
+     *   判据必须由假目录守着：将来谁再往目录里加一个规划中的节点，这里仍然说得清它该报错。
+     */
+    NodeTypeCatalog catalog = mock(NodeTypeCatalog.class);
+    when(catalog.known(anyString())).thenReturn(true);
+    when(catalog.executable(anyString())).thenReturn(true);
+    when(catalog.executable("PLANNED_TYPE")).thenReturn(false);
 
     WorkflowValidationService.Result planned =
-        service.validate(
-            new WorkflowValidationService.Graph(
-                List.of(
-                    node("a", "START_NODE"), node("b", "RERANKER_NODE"), node("c", "AI_CHAT_NODE")),
-                List.of(edge("a", "b"), edge("b", "c"))));
+        new WorkflowValidationService(catalog)
+            .validate(
+                new WorkflowValidationService.Graph(
+                    List.of(
+                        node("a", "START_NODE"),
+                        node("b", "PLANNED_TYPE"),
+                        node("c", "AI_CHAT_NODE")),
+                    List.of(edge("a", "b"), edge("b", "c"))));
     assertThat(codes(planned)).contains("PLANNED_TYPE");
     assertThat(planned.passed())
         .as(
-            "新语义（#113 判据 2）：implemented=false = 本版本不支持 ⇒ PLANNED_TYPE 由 WARNING 升为 ERROR，"
+            "新语义（#113 判据 2）：executable=false = 本版本不支持 ⇒ PLANNED_TYPE 由 WARNING 升为 ERROR，"
                 + "含它的图直接拒绝发布（收紧前这里断言的是 isTrue，即只警告仍放行）")
         .isFalse();
   }

@@ -1,6 +1,9 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.List;
@@ -91,15 +94,29 @@ class WorkflowCompilerTest {
         .as("人工介入节点（QUESTION_NODE）必须进中断点清单")
         .containsExactly("q");
 
+    /*
+     * ★ 为什么这里造一个假目录：真目录（workflow/node-types.json）里今天已经没有任何
+     *   「目录里有但本版本跑不了」的类型（RERANKER / IMAGE_GENERATE 都已落地成可执行），
+     *   原来拿 RERANKER 当样本的断言会变成永远绿 —— 它不再守任何东西。
+     *   判据由假目录守着：将来谁往目录里加一个规划中的节点，这里仍然说得清它进中断点清单。
+     */
+    NodeTypeCatalog plannedCatalog = mock(NodeTypeCatalog.class);
+    when(plannedCatalog.known(anyString())).thenReturn(true);
+    when(plannedCatalog.executable(anyString())).thenReturn(true);
+    when(plannedCatalog.executable("PLANNED_TYPE")).thenReturn(false);
+
     WorkflowCompiler.CompileResult unplanned =
-        compiler.compile(
-            new WorkflowCompiler.Graph(
-                List.of(
-                    node("s", "START_NODE"), node("k", "RERANKER_NODE"), node("r", "REPLY_NODE")),
-                List.of(edge("s", "k", null), edge("k", "r", null))));
+        new WorkflowCompiler(plannedCatalog)
+            .compile(
+                new WorkflowCompiler.Graph(
+                    List.of(
+                        node("s", "START_NODE"),
+                        node("k", "PLANNED_TYPE"),
+                        node("r", "REPLY_NODE")),
+                    List.of(edge("s", "k", null), edge("k", "r", null))));
     assertThat(unplanned.ok()).isTrue();
     assertThat(unplanned.plan().interruptNodeIds())
-        .as("本版本不支持的节点（implemented=false，如 RERANKER）必须进中断点清单")
+        .as("本版本不支持的节点（executable=false）必须进中断点清单 —— 跑到它要停下来，不能悄悄跳过")
         .containsExactly("k");
   }
 

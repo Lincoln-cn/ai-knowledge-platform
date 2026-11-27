@@ -1,6 +1,9 @@
 package cn.lincoln.aiplatform.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -94,14 +97,25 @@ class WorkflowInterruptPublishTest {
   @Test
   @DisplayName("反证 · 规划中的节点（IMAGE_GENERATE_NODE）仍然拒绝发布")
   void aPlannedTypeIsStillRejected() {
+    /*
+     * ★ 假目录的理由同 {@code WorkflowValidationServiceTest.unimplementedTypeIsAnErrorNotAWarning}：
+     *   真目录里已经没有「目录里有但跑不了」的类型了（IMAGE_GENERATE_NODE 也已落地），
+     *   原先拿它当样本的这条反证已经空转。
+     */
+    NodeTypeCatalog catalog = mock(NodeTypeCatalog.class);
+    when(catalog.known(anyString())).thenReturn(true);
+    when(catalog.executable(anyString())).thenReturn(true);
+    when(catalog.executable("PLANNED_TYPE")).thenReturn(false);
+
     WorkflowValidationService.Result result =
-        service.validate(
-            new WorkflowValidationService.Graph(
-                List.of(
-                    node("s1", "START_NODE"),
-                    node("g1", "IMAGE_GENERATE_NODE"),
-                    node("r1", "REPLY_NODE")),
-                List.of(edge("s1", "g1"), edge("g1", "r1"))));
+        new WorkflowValidationService(catalog)
+            .validate(
+                new WorkflowValidationService.Graph(
+                    List.of(
+                        node("s1", "START_NODE"),
+                        node("g1", "PLANNED_TYPE"),
+                        node("r1", "REPLY_NODE")),
+                    List.of(edge("s1", "g1"), edge("g1", "r1"))));
 
     assertThat(result.passed()).as("规划中的节点还没实现，发布后这一步不会执行 ⇒ 必须拒绝").isFalse();
     assertThat(codes(result)).contains("PLANNED_TYPE");

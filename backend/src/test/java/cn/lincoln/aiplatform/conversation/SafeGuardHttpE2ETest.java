@@ -97,6 +97,15 @@ class SafeGuardHttpE2ETest {
   /** 上游桩收到的请求数（只增不减；用例各自取差值）。 */
   private static final AtomicInteger upstreamHits = new AtomicInteger();
 
+  /**
+   * 上游桩收到的请求里，<b>正文带上了被拒绝的那句问题原文</b>的次数。
+   *
+   * <p>★ 判据只用这个计数，不用 {@link #upstreamHits}：一次对话除了"生成回答"那一次，链路上还有与
+   * 回答无关的调用（事后记忆抽取、标题生成等），它们即使发生也不该把问题原文送出去 —— 而 "上游被调 0 次"这个形状会把那些调用一并算成违规，红得没法归因（{@code #359}
+   * 那类症状）。
+   */
+  private static final AtomicInteger upstreamSawSensitiveQuestion = new AtomicInteger();
+
   private static HttpServer upstream;
 
   @LocalServerPort int port;
@@ -159,7 +168,7 @@ class SafeGuardHttpE2ETest {
   @Test
   void sensitiveQuestionIsRefusedBeforeAnyUpstreamCall() throws Exception {
     seedChatModel();
-    int hitsBefore = upstreamHits.get();
+    int sensitiveBefore = upstreamSawSensitiveQuestion.get();
 
     Frames frames = chat(login(), body(SENSITIVE_QUESTION));
 
@@ -167,7 +176,11 @@ class SafeGuardHttpE2ETest {
         .as("★ 用户收到的正文必须是拒绝话术，而不是上游答案")
         .contains(SafeGuardChatAdvisor.REFUSAL)
         .doesNotContain(UPSTREAM_ANSWER);
-    assertThat(upstreamHits.get() - hitsBefore).as("★★ 判据④（HTTP 级）：命中敏感词时上游一次都不该被调用").isZero();
+    assertThat(upstreamSawSensitiveQuestion.get() - sensitiveBefore)
+        .as(
+            "★★ 判据④（HTTP 级）：命中敏感词时，那句问题原文一次都不该出现在上游请求里 —— "
+                + "这是「内容有没有出去」的判据；上游被调了几次是另一件事（链路上还有事后记忆抽取等调用）")
+        .isZero();
     assertThat(frames.dataOf("done"))
         .as("★ 拦截不是失败：这一轮仍以 GENERATED 收尾（拒绝话术就是回答）")
         .contains("\"status\":\"GENERATED\"");
@@ -315,6 +328,11 @@ class SafeGuardHttpE2ETest {
   private static void handle(HttpExchange exchange) throws IOException {
     upstreamHits.incrementAndGet();
     String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+    // ★ 用整句而不是单个敏感词：「绝密」同时也是本平台的密级名，会正当地出现在系统提示里，
+    //   拿它当判据会把一次正常调用的密级说明误读成"敏感问题被送出去了"。
+    if (body.contains(SENSITIVE_QUESTION)) {
+      upstreamSawSensitiveQuestion.incrementAndGet();
+    }
     if (body.contains("\"stream\":true")) {
       exchange.getResponseHeaders().add("Content-Type", "text/event-stream; charset=utf-8");
       exchange.sendResponseHeaders(200, 0);

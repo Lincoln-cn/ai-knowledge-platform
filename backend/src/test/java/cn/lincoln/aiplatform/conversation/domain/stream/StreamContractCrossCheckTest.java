@@ -122,8 +122,11 @@ class StreamContractCrossCheckTest {
     List<String> java = componentNames(StreamEvent.References.class);
 
     assertThat(java)
-        .as("★ refs 事件的 payload 就是那个数组本身 —— 不许自己加一个 {references: [...]} 包装（前端按数组解析）")
-        .containsExactly("refs");
+        .as(
+            "★ refs 事件的 payload 是「refs 数组 + 可选 notice」两个平级字段 —— 不许把 refs 再包一层"
+                + "{references: [...]}（前端按数组解析）。notice 只在零命中且有话可说时出现，"
+                + "既是「为什么一条引用都没有」的唯一出处，也保证既有帧的字节形状不变")
+        .containsExactly("refs", "notice");
   }
 
   /**

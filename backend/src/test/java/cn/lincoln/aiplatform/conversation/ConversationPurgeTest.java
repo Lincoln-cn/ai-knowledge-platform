@@ -135,8 +135,8 @@ class ConversationPurgeTest {
                 "select count(*) from cv_message where conversation_id in (?::uuid, ?::uuid)",
                 convA,
                 convB))
-        .as("删前：四条消息都在")
-        .isEqualTo(4);
+        .as("删前：六条消息都在（每会话 = 开场白 + 用户 + 助手 —— 开场白也是 cv_message 里的一行，按它删才不留孤儿）")
+        .isEqualTo(6);
     assertThat(
             count(
                 "select count(*) from cv_conversation_feedback where conversation_id in (?::uuid,"

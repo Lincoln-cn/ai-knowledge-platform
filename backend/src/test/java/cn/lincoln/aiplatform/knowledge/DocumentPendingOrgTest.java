@@ -156,11 +156,14 @@ class DocumentPendingOrgTest {
         "select id from kb_document where kb_id = ?::uuid and name = ?", UUID.class, kbId, name);
   }
 
+  // ★ 不传 apiBase：本地推理走默认上游。`#1.7` 的上游健康探测只在有地址时生效，
+  //   而这里原先写死 `http://localhost:11434/v1` —— 单测环境没有服务在听，探测判 UNHEALTHY，
+  //   于是「建向量模型」直接 400，三条与本意无关的断言跟着红（真栈那轮的同一条规则也是这么红的）。
   private String createKb(String token) throws Exception {
     String model =
         """
         {"name":"PENDING-ORG-%s","kind":"EMBEDDING","supplier":"LOCAL_INFERENCE",
-         "baseModel":"bge-m3","apiBase":"http://localhost:11434/v1","dimension":768}\
+         "baseModel":"bge-m3","dimension":768}\
         """
             .formatted(UUID.randomUUID().toString().substring(0, 8));
     Matcher m = ID.matcher(post("/api/v1/models", model, token).body());

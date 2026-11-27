@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 import cn.lincoln.aiplatform.conversation.application.ChatHistoryService;
+import cn.lincoln.aiplatform.conversation.application.ChatSettingsService;
 import cn.lincoln.aiplatform.conversation.application.ChatTurnWriter;
 import cn.lincoln.aiplatform.conversation.application.ConversationListService;
 import cn.lincoln.aiplatform.conversation.application.MessageFeedbackService;
@@ -189,10 +190,19 @@ class PrologueMessageTest {
   }
 
   @Test
-  void aGenericConversationHasNoPrologue() {
+  void aGenericConversationFallsBackToThePlatformPrologue() {
     UUID conversationId = conversations.create(user, null).id();
 
-    assertThat(messages.listByConversation(conversationId)).as("★ 通用问答没有应用 ⇒ 没有开场白").isEmpty();
+    List<Message> stored = messages.listByConversation(conversationId);
+    assertThat(stored)
+        .as(
+            "★ 通用问答没有应用，但不该是一片空白 —— 平台默认文案落成第一条消息。"
+                + "AppOpeningPort 的「没有应用就没有应用开场白」语义没变，这段由会话这一层补上")
+        .hasSize(1);
+    assertThat(stored.get(0).kind()).as("它是开场白，不是一轮问答").isEqualTo(MessageKind.PROLOGUE);
+    assertThat(stored.get(0).content())
+        .as("文案的唯一出处是后端常量（设置页拿它当「留空会变成什么」的说明，前端不抄第二份）")
+        .isEqualTo(ChatSettingsService.DEFAULT_PROLOGUE);
   }
 
   // ────────────────────────── ⑤ 两个"不许碰它"的入口 ──────────────────────────
