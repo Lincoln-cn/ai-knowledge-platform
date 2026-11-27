@@ -160,4 +160,18 @@ class ModelParamSchemaTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("20");
   }
+
+  @Test
+  @DisplayName("JSON 里默认值的键名是 default，不是 record 的字段名 defaultValue")
+  void defaultValueUsesTheShortJsonKey() {
+    String json =
+        ModelParamSchema.write(
+            List.of(
+                new ModelParamSchema.Param(
+                    "temperature", "温度", "number", 0.35, 0.0, 2.0, List.of(), null)));
+    // ★ 这条是 2026-11-28 真栈核对踩出来的：前端按 default 提交，record 字段叫 defaultValue，
+    //   没有 @JsonProperty 时那个值被当成未知属性丢掉 —— 库里存下的是 defaultValue: null。
+    assertThat(json).contains("\"default\":0.35").doesNotContain("defaultValue");
+    assertThat(ModelParamSchema.parse(json).get(0).defaultValue()).isEqualTo(0.35);
+  }
 }

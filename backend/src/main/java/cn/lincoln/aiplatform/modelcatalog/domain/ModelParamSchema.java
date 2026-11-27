@@ -57,11 +57,18 @@ public final class ModelParamSchema {
    * @param options {@code enum} 的候选值
    * @param help 一句话说明（会显示在输入框下方）
    */
+  /**
+   * 一条参数声明。
+   *
+   * <p>★ {@code defaultValue} 在 JSON 里固定写成 {@code default}：{@code default} 是 Java
+   * 关键字，做不了字段名，但它是这条声明里唯一顺口的键名（迁移注释与 ROADMAP 写的都是它）。 不用注解的后果很具体：前端按 {@code default}
+   * 提交，反序列化时被当成未知属性丢掉， 于是"填了默认值、保存后在库里找不到"—— 2026-11-28 真栈核对时实际踩到过一次。
+   */
   public record Param(
       String key,
       String label,
       String type,
-      Object defaultValue,
+      @com.fasterxml.jackson.annotation.JsonProperty("default") Object defaultValue,
       Double min,
       Double max,
       List<String> options,
