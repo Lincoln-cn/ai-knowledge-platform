@@ -36,6 +36,13 @@ BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5280").rstrip("/
 API = BASE + "/api/v1"
 DOCX = Path(__file__).resolve().parent.parent / "backend/src/test/resources/fixtures/structured.docx"
 
+# ★ 夹具的向量维度 = 这张表的后缀。维度决定向量写哪张表（`vec_embedding_<dim>`），
+#   所以建模型的维度与查表的表名必须是**同一个常量**：写死一边，另一边一改就静默读错表
+#   （本轮真实发生：维度统一到 1024 之后，断言仍查 `vec_embedding_768` ⇒
+#   「进度 4/4 而向量 0/4」，看着像向量化没写，其实写进了 1024 那张）。
+#   1024 与 CI 桩 `--dim 1024`、seed V900 里 bge-m3 的登记一致。
+EMBED_DIM = 1024
+
 # ────────────────────────── 直连库的连接 ──────────────────────────
 # ★ 为什么必须可配置：CI 里的 PG 是 job 的 **service 容器**，本机没有叫 aip-postgres 的容器可 exec。
 #
@@ -242,7 +249,7 @@ def main() -> int:  # noqa: C901
                         "kind": "EMBEDDING",
                         "supplier": "LOCAL_INFERENCE",
                         "baseModel": "bge-m3",
-                        "dimension": 1024,
+                        "dimension": EMBED_DIM,
                     },
                 )
                 model_id = (created.get("data") or {}).get("id")
@@ -485,8 +492,12 @@ def main() -> int:  # noqa: C901
                 db_processed == db_segments and db_segments > 0,
                 f"库里进度走满：{db_processed}/{db_segments}",
             )
+            # ★ 表名跟着维度走（`EMBED_DIM`）：维度决定向量写哪张表，写死 768 会在
+            #   夹具登记成 1024 之后读到 0 行 —— 而那时向量其实写进 1024 那张表了。
+            #   本脚本上一轮就是这么红的（进度 4/4 而向量 0/4，`#360` 的尾巴）。
             vectors = psql_int(
-                f"select count(*) from vec_embedding_768 where metadata::jsonb ->> 'document_id' = '{doc_id}'"
+                f"select count(*) from vec_embedding_{EMBED_DIM} "
+                f"where metadata::jsonb ->> 'document_id' = '{doc_id}'"
             )
             check(vectors == db_segments, f"向量条数 == 分段数（{vectors} / {db_segments}）")
 
