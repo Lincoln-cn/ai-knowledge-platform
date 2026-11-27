@@ -377,7 +377,10 @@ public class ChatController {
         .body(
             assembler.streamOf(
                 new ChatStreamAssembler.AsyncTurn(
-                    started.turn(), started.question(), started.continueFrom()),
+                    started.turn(),
+                    started.question(),
+                    started.continueFrom(),
+                    started.continueRefs()),
                 httpResponse));
   }
 

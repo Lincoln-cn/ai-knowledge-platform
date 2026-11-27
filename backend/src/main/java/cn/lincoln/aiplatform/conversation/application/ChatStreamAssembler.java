@@ -101,7 +101,10 @@ public class ChatStreamAssembler {
       Authorizer authorize,
       // ★ 续写（#371 第 41 条）：已经写出的正文；null = 不是续写。
       //   放在最后一位而不是第三位，是为了让既有的两参/四参构造点一个字都不用改。
-      String continueFrom) {
+      String continueFrom,
+      // ★ 续写沿用**原来那批**引用（不重新检索）：装配器要求第一个 delta 之前必须发过 refs 帧，
+      //   而前端也要靠它渲染正文里的 [N]。null = 这批引用从来没到过（这时按空数组发）。
+      java.util.List<cn.lincoln.aiplatform.conversation.domain.SourceRef> continueRefs) {
 
     /**
      * 只给"这一轮怎么跑"的入口（登录面用它）。
@@ -110,12 +113,16 @@ public class ChatStreamAssembler {
      * #streamOf} 里被显式读出来，而不是藏在一个恒等函数里。
      */
     public AsyncTurn(ChatTurnWriter.PreparedTurn turn, String question) {
-      this(turn, question, null, null, null);
+      this(turn, question, null, null, null, null);
     }
 
-    /** 续写的那一轮（{@code ChatMode.CONTINUE}）：带上已经写出的正文。 */
-    public AsyncTurn(ChatTurnWriter.PreparedTurn turn, String question, String continueFrom) {
-      this(turn, question, null, null, continueFrom);
+    /** 续写的那一轮（{@code ChatMode.CONTINUE}）：带上已经写出的正文与原来那批引用。 */
+    public AsyncTurn(
+        ChatTurnWriter.PreparedTurn turn,
+        String question,
+        String continueFrom,
+        java.util.List<cn.lincoln.aiplatform.conversation.domain.SourceRef> continueRefs) {
+      this(turn, question, null, null, continueFrom, continueRefs);
     }
 
     /**
@@ -129,7 +136,7 @@ public class ChatStreamAssembler {
         String question,
         Runnable beforeStream,
         Authorizer authorize) {
-      this(turn, question, beforeStream, authorize, null);
+      this(turn, question, beforeStream, authorize, null, null);
     }
   }
 
@@ -197,6 +204,7 @@ public class ChatStreamAssembler {
                   asyncTurn.turn(),
                   asyncTurn.question(),
                   asyncTurn.continueFrom(),
+                  asyncTurn.continueRefs(),
                   event -> {
                     write(event, out);
                     flushContainer(response);

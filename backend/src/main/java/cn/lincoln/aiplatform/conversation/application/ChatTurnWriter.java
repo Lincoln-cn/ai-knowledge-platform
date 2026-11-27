@@ -565,7 +565,8 @@ public class ChatTurnWriter implements ChatTurnStore {
    * @param question 这一轮原来的问题（取自那条回答之前最近的用户消息）
    * @param alreadyWritten 这条回答<strong>已经写出</strong>的正文（可能是空串：停止时一个字都没吐）
    */
-  public record Continuing(PreparedTurn turn, String question, String alreadyWritten) {}
+  public record Continuing(
+      PreparedTurn turn, String question, String alreadyWritten, List<SourceRef> references) {}
 
   /**
    * 准备续写那一轮（契约 {@code ChatMode.CONTINUE} + {@code targetMessageId}）。
@@ -636,7 +637,10 @@ public class ChatTurnWriter implements ChatTurnStore {
             app == null ? null : app.retrieval(),
             null,
             userId);
-    return new Continuing(turn, previous.content(), alreadyWritten);
+    // ★ 原引用一起带出去：续写不重新检索，但**必须**把同一批引用再发一次 ——
+    //   流的装配器有一条硬规矩「第一个 delta 之前必须已经拿到检索结果」，而前端的编号
+    //   也是靠 refs 帧渲染的。带的是快照（可能为 null = 这批引用从来没到过）。
+    return new Continuing(turn, previous.content(), alreadyWritten, target.references());
   }
 
   /**

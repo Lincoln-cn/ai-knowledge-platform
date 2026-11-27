@@ -463,7 +463,10 @@ public class ChatService {
    * @param question 送进模型的问题（★ 调用方必须用它）
    */
   public record StartedTurn(
-      ChatTurnWriter.PreparedTurn turn, String question, String continueFrom) {
+      ChatTurnWriter.PreparedTurn turn,
+      String question,
+      String continueFrom,
+      List<SourceRef> continueRefs) {
 
     /**
      * 不是续写的那种（{@code NEW} / {@code REGENERATE}）。
@@ -472,7 +475,7 @@ public class ChatService {
      * {@code null} 更能说明这一点。
      */
     public StartedTurn(ChatTurnWriter.PreparedTurn turn, String question) {
-      this(turn, question, null);
+      this(turn, question, null, null);
     }
   }
 
@@ -499,7 +502,11 @@ public class ChatService {
       }
       ChatTurnWriter.Continuing continuing =
           turns.prepareContinue(targetMessageId, request.userId());
-      return new StartedTurn(continuing.turn(), continuing.question(), continuing.alreadyWritten());
+      return new StartedTurn(
+          continuing.turn(),
+          continuing.question(),
+          continuing.alreadyWritten(),
+          continuing.references());
     }
     if (effective == ChatMode.NEW) {
       ChatTurnWriter.PreparedTurn turn = startTurn(request);
@@ -753,7 +760,26 @@ public class ChatService {
    */
   public void streamTurn(
       ChatTurnWriter.PreparedTurn turn, String question, String continueFrom, EventSink sink) {
-    streamTurnWithTerminalGate(turn, question, continueFrom, sink, TerminalGate.NONE);
+    streamTurnWithTerminalGate(turn, question, continueFrom, null, sink, TerminalGate.NONE);
+  }
+
+  /**
+   * 续写专用入口：把"被续写那条消息上已有的引用"一并带进来。
+   *
+   * <p>★ 为什么要带：装配器有一条硬规矩 —— 第一个 {@code delta} 之前必须已经发过 {@code refs} 帧（否则正文里的 {@code [N]}
+   * 会先出现而没有引用可点）。续写不重新检索，于是它必须把 <strong>原来那批</strong>引用再发一次；不发就是"这一轮没有 refs"，装配器直接判失败。
+   *
+   * @param continueFrom 已经写出的正文（{@code null} = 不是续写）
+   * @param continueRefs 原消息的引用快照（可为 {@code null} = 这批引用从来没到过）
+   * @param sink 事件出口
+   */
+  public void streamTurn(
+      ChatTurnWriter.PreparedTurn turn,
+      String question,
+      String continueFrom,
+      List<SourceRef> continueRefs,
+      EventSink sink) {
+    streamTurnWithTerminalGate(turn, question, continueFrom, continueRefs, sink, TerminalGate.NONE);
   }
 
   /**
@@ -775,10 +801,25 @@ public class ChatService {
    * @param sink 事件出口（断线时由它抛异常）
    * @param terminalGate 收尾入口的把手（生产传 {@link TerminalGate#NONE}）
    */
+  /**
+   * 不带引用快照的那一档（既有调用点与测试用它）。
+   *
+   * <p>★ 为什么留着：它的语义是"这次没有可沿用的引用"，与续写那条路要的"沿用原引用"是两个 不同的输入。让它在这里显式传 {@code null}，比让每个调用点都写一遍更能说明这一点。
+   */
   void streamTurnWithTerminalGate(
       ChatTurnWriter.PreparedTurn turn,
       String question,
       String continueFrom,
+      EventSink sink,
+      TerminalGate terminalGate) {
+    streamTurnWithTerminalGate(turn, question, continueFrom, null, sink, terminalGate);
+  }
+
+  void streamTurnWithTerminalGate(
+      ChatTurnWriter.PreparedTurn turn,
+      String question,
+      String continueFrom,
+      List<SourceRef> continueRefs,
       EventSink sink,
       TerminalGate terminalGate) {
     final boolean continuing = continueFrom != null;
@@ -858,8 +899,18 @@ public class ChatService {
         run.pump();
         maybeGuessSuggestions(turn, question, refs);
       } else {
-        // ★ 不发 refs 帧：前端收到 done 时若这一轮没有 refs 帧，保留气泡上已有的引用（后半段的来源是同一批）
-        log.info("续写：沿用原消息的引用与 {} 字正文，不重新检索（会话 {}）", continueFrom.length(), turn.conversationId());
+        // ★ 把**原来那批**引用再发一次（不是重新检索出来的，也不是空数组）：
+        //   ① 装配器的硬规矩是"第一个 delta 之前必须已经发过 refs"；
+        //   ② 前端靠 refs 帧渲染正文里的 [N]，不发就等于后半段的编号点了没反应。
+        //   两者要的是"同一批引用"，所以这里发的是快照 —— 判据是续写前后引用集合不变。
+        List<SourceRef> inherited = continueRefs == null ? List.of() : continueRefs;
+        run.assembler.references(inherited, null);
+        run.pump();
+        log.info(
+            "续写：沿用原消息的 {} 条引用与 {} 字正文，不重新检索（会话 {}）",
+            inherited.size(),
+            continueFrom.length(),
+            turn.conversationId());
       }
 
       // ★★ `#185`：无引用策略的**生产消费点**。
