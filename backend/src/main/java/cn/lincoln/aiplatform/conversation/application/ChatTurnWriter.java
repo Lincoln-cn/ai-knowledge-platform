@@ -556,6 +556,90 @@ public class ChatTurnWriter implements ChatTurnStore {
   }
 
   /**
+   * 续写那一轮的读数：接的是哪一段、要问的问题是什么。
+   *
+   * <p>★ {@code alreadyWritten} 是<strong>必须</strong>带出来的：提示词要把它交给模型（"以下是已经
+   * 写出的部分，接着写"），而这一轮落库走的是"追加未落库的尾巴"，两处都以它为基准。
+   *
+   * @param turn 这一轮的落库读数（{@code assistantMessageId} = 被续写的那条消息）
+   * @param question 这一轮原来的问题（取自那条回答之前最近的用户消息）
+   * @param alreadyWritten 这条回答<strong>已经写出</strong>的正文（可能是空串：停止时一个字都没吐）
+   */
+  public record Continuing(PreparedTurn turn, String question, String alreadyWritten) {}
+
+  /**
+   * 准备续写那一轮（契约 {@code ChatMode.CONTINUE} + {@code targetMessageId}）。
+   *
+   * <p>★★ 与 {@link #prepareRegenerate} 的差别只有一处、但它是全部：这里调 {@link Message#resume()} （保留正文与引用），那边调
+   * {@link Message#restart()}（清空正文与引用）。
+   *
+   * <p>★ 领域守卫（不是助手 / 还在生成中 / 不在「已停止」）由 {@code Message#resume()} 抛 {@link IllegalArgumentException}
+   * ⇒ controller 转 400，文案直接告诉人下一步该做什么。
+   *
+   * <p>★ 条件与 {@code prepareRegenerate} 逐条对齐，少一条就会出现"续写能看见别人的回答"： 消息不可见 / 会话不是你的 / 前面没有用户提问，三处都必须挡。
+   *
+   * @param targetMessageId 要接着写的那条助手消息
+   * @param userId 当前登录用户（★ 归属的权威是<strong>会话</strong>，与重新生成同一条口径）
+   * @return 这一轮 + 原来的问题 + 已经写出的正文
+   */
+  // ★ @Transactional 不能漏：理由与 prepareRegenerate 逐字相同（Assistant.kbIds 懒加载集合）
+  @Transactional
+  public Continuing prepareContinue(UUID targetMessageId, UUID userId) {
+    Message target =
+        messages
+            .findById(targetMessageId)
+            .orElseThrow(() -> notFound("消息不存在", "它可能已被删除，或者不在你的可见范围内"));
+    Conversation conversation =
+        conversations
+            .findById(target.conversationId())
+            .filter(found -> found.userId().equals(userId))
+            .orElseThrow(() -> notFound("消息不存在", "它可能已被删除，或者不在你的可见范围内"));
+
+    if (target.kind() == cn.lincoln.aiplatform.conversation.domain.MessageKind.PROLOGUE) {
+      throw new BusinessException(ErrorCode.BAD_REQUEST, "开场白不是模型生成的回答，不能续写", "续写只对模型回答成立");
+    }
+    // ★ 先取正文**再** resume：resume 之后状态已经是 GENERATING，而我们要交给提示词的是"停止那一刻的正文"
+    String alreadyWritten = target.content() == null ? "" : target.content();
+    target.resume();
+    messages.save(target);
+
+    Message previous =
+        preceding(conversation.id(), target.id())
+            .orElseThrow(
+                () ->
+                    new BusinessException(
+                        ErrorCode.BAD_REQUEST, "这条回答前面没有用户提问，无法续写", "续写需要找到这一轮原来的问题"));
+
+    String traceId = "trace_" + target.id();
+    log.info(
+        "会话 {} 续写：接着助手消息 {} 已写出的 {} 字继续（trace {}）",
+        conversation.id(),
+        target.id(),
+        alreadyWritten.length(),
+        traceId);
+    AppBindingPort.AppBinding app =
+        conversation.assistantId() == null ? null : requireVisibleApp(conversation.assistantId());
+    PreparedTurn turn =
+        new PreparedTurn(
+            conversation.id(),
+            target.id(),
+            previous.id(),
+            traceId,
+            target.modelId() == null ? "" : target.modelId().toString(),
+            target.modelId(),
+            app == null ? List.of() : app.kbIds(),
+            app == null || app.multiTurn(),
+            app != null && app.thinkingEnabled(),
+            app == null ? null : app.appId(),
+            app == null ? null : app.rolePrompt(),
+            app == null ? List.of() : app.promptTexts(),
+            app == null ? null : app.retrieval(),
+            null,
+            userId);
+    return new Continuing(turn, previous.content(), alreadyWritten);
+  }
+
+  /**
    * "同会话里 target 之前最近的一条 USER 消息"<strong>唯一</strong>的实现。
    *
    * <p>★ 抽成一个方法而不是写两遍：问题与用户消息 id 必须命中<strong>同一条</strong>消息 —— 若两处各算一遍，"问的是 A、记的是 B"这种错会静默发生。

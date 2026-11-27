@@ -597,6 +597,54 @@ public class Message {
   }
 
   /**
+   * 续写：接着这条回答<strong>已经写出的那段</strong>继续生成（契约 {@code ChatMode.CONTINUE}）。
+   *
+   * <h3>与 {@link #restart()} 的差别只有一处，但那一处就是全部</h3>
+   *
+   * <p>{@code restart} 把 {@code content} 清空（重新生成 = 换一个答案）；本方法<strong>保留</strong> {@code content} 与
+   * {@code references}（续写 = 把同一段话接着写下去）。两者的收尾路径相同： 都是"生成中 → 终态"，所以收尾那边一行都不用改。
+   *
+   * <h3>★ 保留与清空，逐项</h3>
+   *
+   * <ul>
+   *   <li><b>content 保留</b> —— 它就是"已经写出来的那半段"。落库走的是"追加未落库的尾巴" （{@code ChatTurnWriter#flush} /
+   *       {@code #finish}），只要本次生成的字符计数从 0 起算， 追加就落在它后面。
+   *   <li><b>references 保留</b> —— 续写<strong>不重新检索</strong>：这一轮的引用还是那批来源， 若后半段冒出新的 {@code
+   *       segment_id}，那说明偷偷重检了，是 bug 不是特性。 领域侧的兜底是 {@link #bindReferences} 的"只能绑一次"，它会在第二次绑定时抛。
+   *   <li><b>用量保留</b> —— 续写是新的一次模型调用，{@link #addUsage} 本来就是累加语义， 「这条回答一共花了多少」仍然对。
+   *   <li><b>赞踩保留</b> —— 续写没有换掉这段回答，用户对它的评价仍然成立（{@code restart} 清它 是因为那条被评价的回答已经不存在了）。
+   *   <li><b>失败原因 / 耗时清空</b> —— 上一次的失败原因说的是上一次的尝试，留着会与新的终态矛盾。
+   * </ul>
+   *
+   * <h3>★ 为什么只允许从 {@code STOPPED} 续写</h3>
+   *
+   * <p>契约给的入口是"对已停止的回答显示继续"。{@code GENERATED}（已经完整答完）再续写等于让模型 无话找话；{@code
+   * FAILED}（这一轮没答成）应当重新生成而不是接在失败文本后面 —— 失败时的正文 可能是一句错误提示，接着它写会得到一段自相矛盾的回答。
+   *
+   * <p>★ 代价如实写：{@code duration_ms} 记的是<strong>最后一次</strong>续写的耗时，不是整条回答累计 （没有那一列）。这与 {@code
+   * restart} 的取舍同族，写在 {@code ROADMAP} 而不是假装它累计。
+   *
+   * @throws IllegalArgumentException 不是助手消息 / 还在生成中 / 不在「已停止」状态
+   */
+  public void resume() {
+    if (kind == MessageKind.PROLOGUE) {
+      throw new IllegalArgumentException("开场白不是模型生成的回答，不能续写");
+    }
+    requireAssistant("resume");
+    if (status == MessageStatus.GENERATING) {
+      throw new IllegalArgumentException("这一条还在生成中，等它结束或先停止再续写");
+    }
+    if (status != MessageStatus.STOPPED) {
+      throw new IllegalArgumentException(
+          "只有「已停止」的回答可以续写（这条消息现在 " + status + "）—— 答完的应当重新提问，失败过的应当重新生成");
+    }
+    this.failReason = null;
+    this.failHint = null;
+    this.durationMs = null;
+    this.status = MessageStatus.GENERATING;
+  }
+
+  /**
    * 赞 / 踩 / 取消评价（S3 的「赞/取消赞刷新后仍在」）。
    *
    * <h3>★ 三条守卫，各对应一种"能写进去但语义不成立"的形状</h3>

@@ -70,6 +70,23 @@ public interface ChatTurnStore {
   ChatTurnWriter.PreparedTurn prepareRegenerate(UUID targetMessageId, UUID userId);
 
   /**
+   * 续写的一轮：接着目标助手消息<strong>已经写出的那段</strong>继续，不新增消息（契约 {@code CONTINUE}）。
+   *
+   * <p>★ 与 {@link #prepareRegenerate} 的差别只有一处、但它是全部：这里<strong>保留</strong>正文与引用， 那边清空。所以返回类型也不同 ——
+   * 续写必须把"已经写出的是什么"一起带出来，提示词与落库两条路 都以它为基准。
+   *
+   * @param targetMessageId 要接着写的那条助手消息
+   * @param userId 归属判定用它（看不见 ⇒ 404）
+   * @return 这一轮读数 + 原来的问题 + 已写出的正文
+   */
+  default ChatTurnWriter.Continuing prepareContinue(UUID targetMessageId, UUID userId) {
+    // ★ 默认实现 = 明确"这个实现不支持续写"，而不是返回 null：
+    //   返回 null 会让调用方在下一行 NPE，而堆栈指不到"续写没被实现"这件事上。
+    //   与 prepareDebug 同一条口径（接口上给默认实现，是为了不让每个测试用的假实现都跟着改）。
+    throw new UnsupportedOperationException("这个 ChatTurnStore 实现不支持续写（#371 第 41 条）");
+  }
+
+  /**
    * 取某条用户消息的正文 —— {@code REGENERATE} 用它把"这一轮问的是什么"读回来。
    *
    * @param userMessageId 用户消息 id（可为 {@code null}）

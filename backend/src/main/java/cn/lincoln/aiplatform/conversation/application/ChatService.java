@@ -462,7 +462,19 @@ public class ChatService {
    * @param turn 落库读数（{@code REGENERATE} 时 {@code assistantMessageId} 是<strong>被覆盖的那条</strong>）
    * @param question 送进模型的问题（★ 调用方必须用它）
    */
-  public record StartedTurn(ChatTurnWriter.PreparedTurn turn, String question) {}
+  public record StartedTurn(
+      ChatTurnWriter.PreparedTurn turn, String question, String continueFrom) {
+
+    /**
+     * 不是续写的那种（{@code NEW} / {@code REGENERATE}）。
+     *
+     * <p>★ 留着两参构造器不是因为"省事"：这两个模式的读数里<strong>没有</strong>"已写内容"这个东西， 让它们构造一个 {@code null} 比让每个调用点都写一遍
+     * {@code null} 更能说明这一点。
+     */
+    public StartedTurn(ChatTurnWriter.PreparedTurn turn, String question) {
+      this(turn, question, null);
+    }
+  }
 
   /**
    * 按<strong>模式</strong>启动一轮（契约 {@code mode} + {@code targetMessageId}）。
@@ -479,9 +491,15 @@ public class ChatService {
   public StartedTurn startTurn(ChatRequest request, ChatMode mode, UUID targetMessageId) {
     ChatMode effective = mode == null ? ChatMode.NEW : mode;
     if (effective == ChatMode.CONTINUE) {
-      // ★★ 显式拒绝，不静默当 NEW：静默降级会**新增一条消息**，与契约的"接着已有内容续写"直接矛盾，
-      //   而界面上它看起来完全正常（多出一问一答）。见 ChatMode 的类注释。
-      throw new BusinessException(ErrorCode.BAD_REQUEST, "继续生成（CONTINUE）尚未实现", "本版请使用普通提问或重新生成");
+      // ★ 续写：接着 targetMessageId 那条回答**已经写出的那段**继续（不新增消息、不重新检索）。
+      //   三条定死的取舍见 ChatTurnWriter#prepareContinue 与 ROADMAP §11.65.3 ③b。
+      if (targetMessageId == null) {
+        throw new BusinessException(
+            ErrorCode.BAD_REQUEST, "续写必须给出 targetMessageId", "请指明要接着哪一条回答继续写");
+      }
+      ChatTurnWriter.Continuing continuing =
+          turns.prepareContinue(targetMessageId, request.userId());
+      return new StartedTurn(continuing.turn(), continuing.question(), continuing.alreadyWritten());
     }
     if (effective == ChatMode.NEW) {
       ChatTurnWriter.PreparedTurn turn = startTurn(request);
@@ -718,7 +736,24 @@ public class ChatService {
    * @param sink 事件出口（断线时由它抛异常）
    */
   public void streamTurn(ChatTurnWriter.PreparedTurn turn, String question, EventSink sink) {
-    streamTurnWithTerminalGate(turn, question, sink, TerminalGate.NONE);
+    streamTurn(turn, question, null, sink);
+  }
+
+  /**
+   * 带"续写起点"的那条入口（契约 {@code ChatMode.CONTINUE}）。
+   *
+   * <p>★ {@code continueFrom} 非空 ⇒ 本轮<strong>不检索</strong>：那一轮的引用已经绑在被续写的那条 消息上（{@code
+   * bindReferences} 只能绑一次，第二次会抛），重新检索会换掉"当时看到的那批来源"， 而后半段若再冒出新的 {@code
+   * segment_id}，读者会看到一条回答的上下两半引用自不同批材料。
+   *
+   * @param turn 落库读数
+   * @param question 这一轮原来的问题
+   * @param continueFrom 已经写出的正文（{@code null} = 不是续写）
+   * @param sink 事件出口
+   */
+  public void streamTurn(
+      ChatTurnWriter.PreparedTurn turn, String question, String continueFrom, EventSink sink) {
+    streamTurnWithTerminalGate(turn, question, continueFrom, sink, TerminalGate.NONE);
   }
 
   /**
@@ -743,8 +778,10 @@ public class ChatService {
   void streamTurnWithTerminalGate(
       ChatTurnWriter.PreparedTurn turn,
       String question,
+      String continueFrom,
       EventSink sink,
       TerminalGate terminalGate) {
+    final boolean continuing = continueFrom != null;
     long startedAtNanos = System.nanoTime();
     StreamAssembler assembler =
         new StreamAssembler(
@@ -800,22 +837,30 @@ public class ChatService {
       RetrievalParams retrieval = effectiveRetrieval(turn);
       // ★ 指代消解的对话上文（#297 判据 3）：最近 2 轮的「问 + 答前 200 字」，
       //   只给查询理解那段提示词用（不进模型 prompt、不额外加 LLM 调用）。
+      // ★★ 续写**不检索**（见 streamTurn 的 javadoc）：`outcome` 保持 null，下游三处都按它分支。
       RetrievalOutcome outcome =
-          retrieve(
-              question,
-              turn.kbIds(),
-              turn.conversationId(),
-              turn.modelId(),
-              retrieval,
-              recentContextOf(turn));
-      List<SourceRef> refs = outcome.refs();
+          continuing
+              ? null
+              : retrieve(
+                  question,
+                  turn.kbIds(),
+                  turn.conversationId(),
+                  turn.modelId(),
+                  retrieval,
+                  recentContextOf(turn));
+      List<SourceRef> refs = continuing ? List.of() : outcome.refs();
       // ★ notice 只在这一轮零引用时非空 ⇒ 随 refs 帧一起发出去，界面才说得出"为什么没有引用"。
       //   这是本项目的头号病（silent-failure）在检索链路上的收口点：没有它，用户与管理员
       //   面对的都是同一句"没有引用"，而这句后面有六种完全不同的成因。
-      run.assembler.references(refs, outcome.notice());
-      run.bindRefs(refs);
-      run.pump();
-      maybeGuessSuggestions(turn, question, refs);
+      if (!continuing) {
+        run.assembler.references(refs, outcome.notice());
+        run.bindRefs(refs);
+        run.pump();
+        maybeGuessSuggestions(turn, question, refs);
+      } else {
+        // ★ 不发 refs 帧：前端收到 done 时若这一轮没有 refs 帧，保留气泡上已有的引用（后半段的来源是同一批）
+        log.info("续写：沿用原消息的引用与 {} 字正文，不重新检索（会话 {}）", continueFrom.length(), turn.conversationId());
+      }
 
       // ★★ `#185`：无引用策略的**生产消费点**。
       //
@@ -824,7 +869,7 @@ public class ChatService {
       //
       //   ★ 拒答**不调用模型**：既省一次调用，也让"零引用 ⇒ 固定文案"这条承诺不被模型改写。
       //   ★ 正文仍走 delta（`refs` 已经交进装配器，所以顺序 meta → refs → delta → done 不变）。
-      if (refs.isEmpty() && retrieval.noRefStrategy() == NoRefStrategy.REFUSE) {
+      if (!continuing && refs.isEmpty() && retrieval.noRefStrategy() == NoRefStrategy.REFUSE) {
         log.info(
             "应用 {} 的无引用策略是 REFUSE，本轮零引用 ⇒ 直接回拒答文案，不调用模型（会话 {}）",
             turn.appId(),
@@ -839,7 +884,7 @@ public class ChatService {
         }
         run.modelDone.set(true);
       } else {
-        model = startModelThread(turn, question, refs, neighborContextOf(refs), run);
+        model = startModelThread(turn, question, refs, neighborContextOf(refs), continueFrom, run);
       }
       awaitTerminal(turn, run);
       // ★ 长期记忆（0.9.0）：终态已落库之后再抽取 —— 用"用户问的"与"模型答的"这一对原文，
@@ -933,6 +978,7 @@ public class ChatService {
       String question,
       List<SourceRef> refs,
       java.util.Map<UUID, List<String>> neighborTexts,
+      String continueFrom,
       Run run) {
     // ★★ `#168`：历史在**本方法（调用方线程）**里读好再传进去。
     //   理由与同文件检索那条注释逐字相同：访问范围是 ThreadLocal，新建的模型线程上它是空的。
@@ -958,7 +1004,13 @@ public class ChatService {
         withCurrent.add(
             new cn.lincoln.aiplatform.platform.model.ChatMessage(
                 cn.lincoln.aiplatform.platform.model.ChatMessage.Role.USER,
-                promptOf(question, refs, systemPromptOrNull(turn), neighborTexts, memoryBlock)));
+                promptOf(
+                    question,
+                    refs,
+                    systemPromptOrNull(turn),
+                    neighborTexts,
+                    memoryBlock,
+                    continueFrom)));
         history = List.copyOf(withCurrent);
       }
     }
@@ -2402,7 +2454,17 @@ public class ChatService {
   }
 
   private static String promptOf(String question, List<SourceRef> refs, String systemPrompt) {
-    return promptOf(question, refs, systemPrompt, java.util.Map.of(), "");
+    return promptOf(question, refs, systemPrompt, java.util.Map.of(), "", null);
+  }
+
+  /** 不是续写的那种（{@code NEW} / {@code REGENERATE}）：没有"已写出部分"这一段。 */
+  private static String promptOf(
+      String question,
+      List<SourceRef> refs,
+      String systemPrompt,
+      java.util.Map<UUID, List<String>> neighbors,
+      String memoryBlock) {
+    return promptOf(question, refs, systemPrompt, neighbors, memoryBlock, null);
   }
 
   /**
@@ -2469,7 +2531,8 @@ public class ChatService {
       List<SourceRef> refs,
       String systemPrompt,
       java.util.Map<UUID, List<String>> neighbors,
-      String memoryBlock) {
+      String memoryBlock,
+      String continueFrom) {
     // ★ 初始提示词拼在**问题之前**，而不是作为一条 system 消息：
     //   `ChatMessage.Role` 只有 USER/ASSISTANT（它的 javadoc 明确写「system 由提示词承担」），
     //   所以"系统口径"在这个工程里本来就住在 prompt 文本里。
@@ -2488,10 +2551,25 @@ public class ChatService {
       head.append(memoryBlock.strip()).append("\n\n");
     }
     String prefix = head.toString();
-    if (refs.isEmpty()) {
-      return prefix + question;
+    StringBuilder body = new StringBuilder(prefix).append(question);
+    // ★★ 续写（#371 第 41 条）：把"已经写出的那段"交给模型，并说清接着写什么、不要做什么。
+    //   三条禁令都对应一个真会出现的结果：
+    //     · 不重复 ⇒ 否则界面上是同一段话出现两遍（气泡里前半段 + 后半段重头再来）
+    //     · 不说"接着上文" ⇒ 否则答案正文里出现一句元叙述，而它会被当成回答的一部分存档
+    //     · 不加新引用编号 ⇒ 这一轮**没有重新检索**，新编号背后没有来源，点了会跳空
+    if (continueFrom != null && !continueFrom.isBlank()) {
+      body.append("\n\n已经写出的部分（同一个回答的前半段，上次生成被停止）：\n")
+          .append(continueFrom.strip())
+          .append(
+              "\n\n请从上面这段的结尾处接着往下写：\n"
+                  + "- 不要重复已经写过的内容，也不要重新开头、重新介绍；\n"
+                  + "- 不要写「接着上文」「继续如下」这类过渡话，直接从断开处续写；\n"
+                  + "- 保持与前半段一致的语气与格式；不要新增引用编号（这一轮没有新的检索结果）。");
     }
-    StringBuilder prompt = new StringBuilder(prefix).append(question).append("\n\n参考资料：\n");
+    if (refs.isEmpty()) {
+      return body.toString();
+    }
+    StringBuilder prompt = body.append("\n\n参考资料：\n");
     for (SourceRef ref : refs) {
       prompt
           .append('[')

@@ -201,7 +201,12 @@ class ChatStreamEventRecordingTest {
                 fixture
                     .chatService()
                     .streamTurnWithTerminalGate(
-                        turn, QUESTION, new ReentrantTerminalSink(sink, gate), gate))
+                        turn,
+                        QUESTION,
+                        // 不是续写（#371 第 41 条给这条路径加了"续写起点"，这里显式传 null）
+                        null,
+                        new ReentrantTerminalSink(sink, gate),
+                        gate))
         .as("★★ 收尾里出现第二个收尾入口，不许把一次正常收尾变成异常（守着它的是 terminalTaken 那道 CAS）")
         .doesNotThrowAnyException();
 

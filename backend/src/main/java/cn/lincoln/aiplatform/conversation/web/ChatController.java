@@ -376,7 +376,8 @@ public class ChatController {
         .contentType(MediaType.TEXT_EVENT_STREAM)
         .body(
             assembler.streamOf(
-                new ChatStreamAssembler.AsyncTurn(started.turn(), started.question()),
+                new ChatStreamAssembler.AsyncTurn(
+                    started.turn(), started.question(), started.continueFrom()),
                 httpResponse));
   }
 

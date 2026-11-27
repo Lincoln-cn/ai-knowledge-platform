@@ -98,7 +98,10 @@ public class ChatStreamAssembler {
       ChatTurnWriter.PreparedTurn turn,
       String question,
       Runnable beforeStream,
-      Authorizer authorize) {
+      Authorizer authorize,
+      // ★ 续写（#371 第 41 条）：已经写出的正文；null = 不是续写。
+      //   放在最后一位而不是第三位，是为了让既有的两参/四参构造点一个字都不用改。
+      String continueFrom) {
 
     /**
      * 只给"这一轮怎么跑"的入口（登录面用它）。
@@ -107,7 +110,26 @@ public class ChatStreamAssembler {
      * #streamOf} 里被显式读出来，而不是藏在一个恒等函数里。
      */
     public AsyncTurn(ChatTurnWriter.PreparedTurn turn, String question) {
-      this(turn, question, null, null);
+      this(turn, question, null, null, null);
+    }
+
+    /** 续写的那一轮（{@code ChatMode.CONTINUE}）：带上已经写出的正文。 */
+    public AsyncTurn(ChatTurnWriter.PreparedTurn turn, String question, String continueFrom) {
+      this(turn, question, null, null, continueFrom);
+    }
+
+    /**
+     * 既有的四参形状（公开面那条：自带 {@code beforeStream} 与 {@code authorize}）。
+     *
+     * <p>★ 它恒不续写：公开面走 {@code X-Access-Credential}，契约那边只允许 {@code NEW} （{@code ChatController}
+     * 里显式拒绝非 {@code NEW}）。
+     */
+    public AsyncTurn(
+        ChatTurnWriter.PreparedTurn turn,
+        String question,
+        Runnable beforeStream,
+        Authorizer authorize) {
+      this(turn, question, beforeStream, authorize, null);
     }
   }
 
@@ -174,6 +196,7 @@ public class ChatStreamAssembler {
               chatService.streamTurn(
                   asyncTurn.turn(),
                   asyncTurn.question(),
+                  asyncTurn.continueFrom(),
                   event -> {
                     write(event, out);
                     flushContainer(response);
