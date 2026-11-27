@@ -2085,16 +2085,38 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
 - **「被 N 段提到」与「关系 N 条」分两列**：关系靠标记词规则，抽不到就没有边；合成一个数会让「0 条边」被读成「这个实体不重要」。
 - **截断必须说**：库里 800 个实体只画 80 个时，页面要写「库里一共 800 个」，否则「图上没有」会被读成「库里没有」。
 
+**收尾时发现并修掉的更靠前一层问题**（`#376`，`063c0f2c`）：
+
+按「`kb_relation` 非零行」去验时，三张表全是 0 行 —— 不是关系这一路的问题，而是
+**实体抽取在真栈从未成功过**：配置默认值 `models/bert-chinese-ner-onnx` 相对**仓库根**写，
+而后端从 `backend/` 启动 ⇒ 解析成 `backend/models/…`（不存在）⇒ 加载失败 ⇒
+`recognize()` 返回空 ⇒ 被 `try/catch` 吞成「抽到 0 个实体」，文档状态照常 `SUCCEEDED`。
+
+更糟的是状态页会骗人：`EntityRecognizerStatusAdapter` 自己有一份"找不到就试上一层"的解析，
+于是 `/models/ner` 在抽取前报「三个文件都在」、抽取后报「模型文件不存在」。
+**判据与使用不是同一个函数算出来的，它就不是健康状态** —— 处置是把解析收成
+`OnnxNerRecognizer.resolveModelDir` 一处，状态页改调它（`OnnxNerRecognizerTest` 13/13）。
+
+修完的读数（真栈，重启后）：`kb_entity 4 行`（信息中心/综合部/财务资产部/运维科）、
+`kb_entity_mention 4 行`、`kb_relation 3 行`（含 `BELONGS_TO(综合部, 财务资产部)`）、
+`GET /models/ner` 的 `loaded` 由 `false` 变 `true` 且 `modelDir` 前后一致。
+
+**已验（2026-11-28 补）**：
+
+- **实体/关系/图谱的非空态**：`GET /knowledge-bases/{kbId}/entity-graph` 返回
+  `nodes 4 · edges 3 · truncated false`，每条边都带 `segmentId`（此前只验到空态）。
+- **`kb_relation` 非零行**（`§11.65.5` 判据 1）：成立，见上。
+
 **未验项（如实记，不写成"已验证"）**：
 
 - **参数真的进上游请求体**：只有单测证据（`ModelParamUpstreamTest` 起 `HttpServer` 桩抓请求体原文，
   断言 `"temperature":0.35` 与 `"top_k":40` 在里面；删掉 `putAll(split.official())` 时
   `springAiCarriesParams` 会红）。真栈容器内没跑过带 AI 节点参数的工作流 —— 那条路径要跑一次完整编排。
-- **实体/关系/图谱的非空态**：真栈 5 个库都没跑过实体抽取，所以只验到「空态 + 结构正确」。
-  非空态的渲染由 mock 数据 + `build:mock` 与冒烟覆盖。
-- **`kb_relation` 非零行**（`§11.65.5` 判据 1）：同上，需要一次带标记词的文档抽取。
 
----
+**已知未修（另开账）**：
+
+- `#377`：内置字典把「下属」映射成 `BELONGS_TO`，而方向是"左→右" ⇒ 「信息中心下属运维科」
+  抽成"信息中心隶属运维科"，方向反了。检索不受影响（只用段 id），但界面会显示反。
 
 ## 附录：归档索引
 
