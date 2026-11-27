@@ -116,12 +116,18 @@
     <div v-show="step === 2" class="step-body split-step">
       <div class="split-left">
         <h4 class="sec-title">分段规则</h4>
-        <el-radio-group v-model="segForm.strategy" class="strategy-group">
-          <el-radio-button value="auto">智能分段</el-radio-button>
-          <el-radio-button value="custom">自定义</el-radio-button>
-        </el-radio-group>
+        <!--
+          ★ 这一格此前是「智能分段 / 自定义」两个单选（#371 第 74 条）。
+            但后端只实现了 AUTO：`SegmentService#preview` 对 CUSTOM **明确拒绝**
+            （静默按 AUTO 处理会让这句承诺变成谎话）。所以选项撤掉，只留事实：
+            多给一个点了就报错的选项，比不给选项更糟。
+        -->
+        <div class="strategy-line">
+          <el-tag size="small" effect="plain" type="success">智能分段</el-tag>
+          <span class="micro muted">按段落与语义边界切分（四层规则：段落 → 标题层级 → 句末 → 长度兜底）</span>
+        </div>
         <div class="hint micro">
-          {{ segForm.strategy === 'AUTO' ? '自动按段落与语义边界切分，适合大多数文档' : '按固定长度切分，适合结构化文档' }}
+          下面两个参数对智能分段同样生效：<b>分段长度</b>是单段上限（超过会切）、<b>重叠长度</b>是相邻段共享的上下文。
         </div>
 
         <div class="slider-row">
@@ -421,7 +427,11 @@ const loadOrgTree = async () => {
 }
 
 const segForm = reactive({
-  strategy: 'AUTO' as 'AUTO' | 'CUSTOM',
+  /*
+   * ★ 本版只有 AUTO 一种切分策略（后端 `SegmentService` 对 CUSTOM 明确拒绝）。
+   *   这里不再暴露成可改项：界面能改的值必须真的能生效。
+   */
+  strategy: 'AUTO' as const,
   segmentLength: 500,
   overlap: 60
 })
@@ -963,16 +973,11 @@ defineExpose({ open })
   letter-spacing: var(--tracking-body);
 }
 
-.strategy-group {
-  width: 100%;
-}
-
-.strategy-group :deep(.el-radio-button) {
-  flex: 1;
-}
-
-.strategy-group :deep(.el-radio-button__inner) {
-  width: 100%;
+.strategy-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
 }
 
 .slider-row {
