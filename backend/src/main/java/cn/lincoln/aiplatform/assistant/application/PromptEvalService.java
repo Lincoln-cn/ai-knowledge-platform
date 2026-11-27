@@ -25,6 +25,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -203,8 +205,48 @@ public class PromptEvalService {
             UUID.randomUUID(), setId, null, draft, questions.size(), Instant.now(), actorId);
     runs.save(run);
     UUID runId = run.id();
-    evalExecutor.submit(() -> runInBackground(runId, appId, questions, draft));
+    // ★ 在**请求线程**上捕获身份：评测跑在独立线程池里，而 `debugCompare` 的可见性判定读的是
+    //   当前请求的身份（`AccessScopeAdapter#canSee` → `currentScope()`）。
+    //   ★ 不传播的症状极具误导性：后台线程没有身份 ⇒ 第一道 `requireVisibleApp` 直接 404
+    //     「应用不存在 · 它可能已被删除，或者不在你的可见范围内」—— 而应用好好的、就是刚刚选那一个
+    //     （2026-11-27 真栈实测：`scripts/prompt_eval_check.py` 建集与起运行都成功，逐题跑时挂在这里）。
+    //   ★ 与 `ChatStreamAssembler#streamOf` 同一条做法：**带过去，不绕过** —— 校验照旧发生，
+    //     只是发生在它该发生的那个身份下。
+    SecurityContext context = SecurityContextHolder.getContext();
+    evalExecutor.submit(() -> runWithIdentity(context, runId, appId, questions, draft));
     return runId;
+  }
+
+  /**
+   * 在请求的身份下跑后台任务。
+   *
+   * <p>★ 收尾必须换回原值：线程池的线程是复用的，残留身份会让**下一次**任务看见上一次那个人的范围 （那比 404 更危险 —— 它会把别人的库当成自己的）。
+   */
+  private void runWithIdentity(
+      SecurityContext context,
+      UUID runId,
+      UUID appId,
+      List<PromptEvalItem> questions,
+      String draft) {
+    runAs(context, () -> runInBackground(runId, appId, questions, draft));
+  }
+
+  /**
+   * 在给定身份下执行 {@code body}，结束换回原值。
+   *
+   * <p>★ 包私有，唯一目的是**能被单测钉住**：{@code SecurityContextHolder} 是 {@code ThreadLocal}，这段语义 （带过去 +
+   * 换回来）在本项目已经踩过两次（{@code ChatStreamAssembler#streamOf} 与本类），第三次不该再靠人读代码发现。
+   *
+   * <p>★ {@code finally} 不是可选项：线程池的线程会被复用，残留身份会让**下一次**任务看见上一次那个人的范围 —— 那比 404 更危险，它会把别人的库当成自己的。
+   */
+  static void runAs(SecurityContext context, Runnable body) {
+    SecurityContext previous = SecurityContextHolder.getContext();
+    SecurityContextHolder.setContext(context);
+    try {
+      body.run();
+    } finally {
+      SecurityContextHolder.setContext(previous);
+    }
   }
 
   /**
