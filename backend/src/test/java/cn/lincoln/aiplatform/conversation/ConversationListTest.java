@@ -96,6 +96,7 @@ class ConversationListTest {
                 Optional.of(
                     new AppBinding(
                         invocation.getArgument(0),
+                        "",
                         null,
                         List.of(),
                         false,
@@ -119,6 +120,43 @@ class ConversationListTest {
         .hasSize(1);
     assertThat(page.list().get(0).id()).isEqualTo(mine);
     assertThat(page.list().get(0).ownerId()).as("★ 归属人必须是当前用户").isEqualTo(owner);
+  }
+
+  /**
+   * ★ `#366`：列表里的应用名必须来自绑定本身。
+   *
+   * <p>此前它恒为空串（端口不带名字），于是应用市场为了显示「最近使用」的应用名，只好拿会话里的 {@code appId} 逐个调 {@code GET /assistants/:id}
+   * 去补 —— 应用已被删除时那些请求是 404；调用方 catch 住了、界面没错， 但走查闸门按网络层计数 ⇒ 一个自造的探测性 404 把闸门顶红。
+   */
+  @Test
+  void appNameComesFromTheBindingInsteadOfAnEmptyString() {
+    UUID owner = newOwner();
+    UUID appId = UUID.randomUUID();
+    when(appBindings.findVisibleById(appId))
+        .thenReturn(
+            Optional.of(
+                new AppBinding(
+                    appId,
+                    "报销问答",
+                    null,
+                    List.of(),
+                    false,
+                    false,
+                    "",
+                    List.of(),
+                    RetrievalParams.platformDefaults())));
+    UUID conversationId = UUID.randomUUID();
+    conversations.save(new Conversation(conversationId, owner, appId, "带应用的会话"));
+
+    PageResult<ConversationListService.ConversationListItem> page =
+        list.list(owner, null, null, null, 1, 20);
+
+    assertThat(page.list())
+        .filteredOn(item -> item.id().equals(conversationId))
+        .singleElement()
+        .extracting(ConversationListService.ConversationListItem::appName)
+        .as("★ 空串会让前端以为「取不到名字」，于是它去逐个查详情 —— 那条路在应用被删时必然 404")
+        .isEqualTo("报销问答");
   }
 
   @Test

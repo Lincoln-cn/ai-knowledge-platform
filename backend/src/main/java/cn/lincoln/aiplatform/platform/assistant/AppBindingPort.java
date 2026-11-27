@@ -61,9 +61,13 @@ public interface AppBindingPort {
    * @param thinkingEnabled 应用的思考开关（{@code #185}）。★ 它只表达"用户想不想思考"；能不能关由模型能力声明 {@code ThinkingMode}
    *     决定 —— 适配器按模型三态决定是否发送 {@code reasoning_effort}，这里不替模型做主
    * @param retrieval 应用级检索参数（{@code #185}）。★ 它此前不在这份事实里，于是配置页的阈值 / TopN / 无引用策略 全是死控件；问答链路只能读平台设置
+   * @param name 应用名（{@code #366}）。★ 它此前不在这份事实里，于是会话列表的 {@code appName} 只能给空串，
+   *     而应用市场为了显示"最近使用"的应用名，只好拿会话里的 {@code appId} 逐个调 {@code GET /assistants/:id} —— 应用已被删除时那个请求是
+   *     404，虽然调用方 {@code catch} 掉了、界面没错，但走查闸门按网络层计数 ⇒ 一个自造的探测性 404 把闸门顶红。名字随绑定一起给出来，这条路就不需要了。
    */
   record AppBinding(
       UUID appId,
+      String name,
       UUID modelId,
       List<UUID> kbIds,
       boolean multiTurn,

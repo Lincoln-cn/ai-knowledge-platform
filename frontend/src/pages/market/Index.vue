@@ -224,10 +224,10 @@ const fetchRecent = async () => {
   try {
     // 会话列表按 updatedAt 倒序 ⇒ 同一个应用的第一条就是它最近的那次会话
     const result = await conversationsApi.listConversations({ mine: true, size: 20 })
-    const latest = new Map<string, { lastTitle: string; updatedAt: string }>()
+    const latest = new Map<string, { appName: string; lastTitle: string; updatedAt: string }>()
     for (const c of result.list as Conversation[]) {
       if (!c.appId || latest.has(c.appId)) continue
-      latest.set(c.appId, { lastTitle: c.title || '', updatedAt: c.updatedAt })
+      latest.set(c.appId, { appName: c.appName || '', lastTitle: c.title || '', updatedAt: c.updatedAt })
       if (latest.size >= 5) break
     }
     /*
@@ -239,18 +239,17 @@ const fetchRecent = async () => {
      * 却看起来像五个不同的东西；用户点下去进的是哪个应用，完全看不出来。
      * 会话标题的正确位置是 `title` 属性（"上次在聊什么"），不是主文本。
      */
-    const items = await Promise.all(
-      [...latest.entries()].map(async ([appId, meta]) => {
-        try {
-          const app = await assistantsApi.getAssistant(appId)
-          return { appId, appName: app.name || '未命名应用', ...meta }
-        } catch {
-          // 应用已删除、或对我已不可见 ⇒ 这条点进去只会 404，不列它
-          return null
-        }
-      }),
-    )
-    recent.value = items.filter((x): x is RecentApp => x !== null)
+    /*
+     * ★★ 应用名直接取会话行里的 `appName`（2026-11-27，`#366`），不再逐个查详情。
+     *
+     * 此前这里对每个 appId 调一次 `assistantsApi.getAssistant(appId)` 补名字：
+     * 应用已被删除时那个请求必然 404 —— 调用方 catch 住了、界面看不出问题，但网络层
+     * 留了一条 404，走查闸门按网络层计数，于是「应用市场有失败接口」被顶红。
+     * 现在 `GET /conversations` 本身带应用名，空名就说明应用已删或对我不可见 ⇒ 不列它。
+     */
+    recent.value = [...latest.entries()]
+      .filter(([, meta]) => meta.appName !== '')
+      .map(([appId, meta]) => ({ appId, ...meta }))
   } catch {
     // 最近使用是增强信息，失败不影响主列表
     recent.value = []

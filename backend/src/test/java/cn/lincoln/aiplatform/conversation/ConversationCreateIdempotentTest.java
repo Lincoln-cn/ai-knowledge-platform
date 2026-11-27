@@ -69,6 +69,7 @@ class ConversationCreateIdempotentTest {
                 Optional.of(
                     new AppBinding(
                         invocation.getArgument(0),
+                        "",
                         null,
                         List.of(),
                         false,

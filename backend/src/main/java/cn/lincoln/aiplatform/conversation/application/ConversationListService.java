@@ -342,12 +342,14 @@ public class ConversationListService {
     String appName = "";
     if (appId != null) {
       // ★ 取不到应用名不是错误：应用可能已被删除，而"这条会话还在"是事实。
-      //   给空串而不是 null —— 契约里 appName 是必填 string。
-      // ★ `AppBindingPort.AppBinding` 只带三种事实（appId / modelId / kbIds），**不含应用名**
-      //   ⇒ 这里给空串。★ 这是**已知缺口**，不是省略：契约里 `appName` 是必填 string，
-      //   给 null 会让前端渲染出 `undefined`；给空串至少不破坏渲染。
-      //   ★ 要补它需要端口多一个字段（或一次批量取名）—— 记在这里，别让下一个人以为是漏写。
-      appName = "";
+      //   给空串而不是 null —— 契约里 appName 是必填 string（给 null 会让前端渲染出 `undefined`）。
+      // ★ `#366`：名字随 `AppBinding.name()` 一起给出，这里不再恒为空串。
+      //   此前它恒空，于是前端（应用市场的"最近使用"）只好拿 appId 逐个调 `GET /assistants/:id`
+      //   去补名字 —— 应用已被删除时那个请求是 404；调用方 `catch` 住了、界面没错，
+      //   但走查闸门按网络层计数 ⇒ 一个自造的探测性 404 把闸门顶红。
+      // ★ 代价是每页多 N 次按主键的单查（N = 本页会话数，≤ 20）。要省就加一个批量取名方法；
+      //   在那之前先保证"列表里能读到名字"成立 —— 空串是个骗过渲染的假读数。
+      appName = appBindings.findVisibleById(appId).map(AppBindingPort.AppBinding::name).orElse("");
     }
     return new ConversationListItem(
         conversation.id(),

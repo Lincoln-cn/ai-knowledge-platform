@@ -63,6 +63,8 @@ public class AppBindingAdapter implements AppBindingPort {
   private AppBinding binding(Assistant app) {
     return new AppBinding(
         app.id(),
+        // ★ `#366`：应用名随绑定一起给出 —— 会话列表与"最近使用"都靠它，不必再各自去问详情
+        app.name(),
         app.modelId(),
         app.kbIds(),
         app.multiTurn(),
