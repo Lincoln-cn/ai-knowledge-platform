@@ -11,6 +11,7 @@ import cn.lincoln.aiplatform.modelcatalog.domain.ModelStatus;
 import cn.lincoln.aiplatform.modelcatalog.domain.Supplier;
 import cn.lincoln.aiplatform.modelcatalog.domain.ThinkingMode;
 import cn.lincoln.aiplatform.modelcatalog.domain.ToolsMode;
+import cn.lincoln.aiplatform.platform.knowledge.EntityRecognizerStatusPort;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
 import cn.lincoln.aiplatform.platform.web.PageResult;
 import jakarta.validation.constraints.NotBlank;
@@ -48,10 +49,15 @@ public class ModelController {
 
   private final ModelService modelService;
   private final RerankStatusService rerankStatusService;
+  private final EntityRecognizerStatusPort entityRecognizerStatus;
 
-  public ModelController(ModelService modelService, RerankStatusService rerankStatusService) {
+  public ModelController(
+      ModelService modelService,
+      RerankStatusService rerankStatusService,
+      EntityRecognizerStatusPort entityRecognizerStatus) {
     this.modelService = modelService;
     this.rerankStatusService = rerankStatusService;
+    this.entityRecognizerStatus = entityRecognizerStatus;
   }
 
   // ────────────────────────── 查询 ──────────────────────────
@@ -129,6 +135,22 @@ public class ModelController {
   @PreAuthorize("hasAuthority('model:manage')")
   public ApiResponse<RerankStatusService.RerankStatus> rerankStatus() {
     return ApiResponse.ok(rerankStatusService.status());
+  }
+
+  /**
+   * 实体识别（NER）模型的只读状态（`#369`）。
+   *
+   * <p>与 {@link #rerankStatus()} 同一类：它不是注册模型（`ai_model` 里没有这一行、`ModelKind` 里也没有 `NER`），由
+   * `app.entity.recognizer` + 模型目录决定。端点在 `/models` 下，是因为 "模型页要显示它"就是这一条的全部内容。
+   *
+   * <p>★ 只读、不给写端点：换 NER 模型 = 换 onnx 文件 + 改配置 + 重启，不是改一个字符串。
+   *
+   * <p>★ 它同时回答"配置说的是谁"（{@code configured}）与"实际在跑谁"（{@code impl}）—— 两者不一致时界面才有机会提示（配错时应用根本起不来，但
+   * `AIP_ENTITY_RECOGNIZER` 与实际 bean 的一致性仍值得在页面上摊开）。
+   */
+  @GetMapping("/ner")
+  public ApiResponse<EntityRecognizerStatusPort.Status> nerStatus() {
+    return ApiResponse.ok(entityRecognizerStatus.status());
   }
 
   // ────────────────────────── 注册 CRUD ──────────────────────────

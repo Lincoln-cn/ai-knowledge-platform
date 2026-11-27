@@ -144,6 +144,34 @@ public class OnnxNerRecognizer implements EntityRecognizer {
     this(modelDir, threads, DEFAULT_ORG_SUFFIXES);
   }
 
+  /**
+   * 模型目录（只读）。
+   *
+   * <p>模型页要显示"它从哪里加载"，见 {@code EntityRecognizerStatusAdapter}。
+   */
+  public Path modelDir() {
+    return modelDir;
+  }
+
+  /**
+   * 当前进程是否已把模型载入内存。
+   *
+   * <p>★ onnx 是惰性加载的（第一次抽取才读文件），所以"配置正确"与"已经能用"是两件事 —— 模型页要能分别显示它们。这个方法<b>不触发加载</b>：打开模型页不该顺手读
+   * 400MB。
+   */
+  public boolean loaded() {
+    return session != null;
+  }
+
+  /**
+   * 上次加载失败的原因，没失败过为 {@code null}。
+   *
+   * <p>与 {@link #loaded()} 配合：它的值就是"为什么没加载上"，直接给人看。
+   */
+  public String loadFailure() {
+    return loadFailure;
+  }
+
   @Override
   public String name() {
     return "onnx-bert-ner";

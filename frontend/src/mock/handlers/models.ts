@@ -87,6 +87,22 @@ const rerankStatus = () => ({
   forwardBatch: 5
 })
 
+/**
+ * 实体识别（NER）状态（#369）：与 rerank 同形 —— 进程内模型，不在 `ai_model` 里。
+ * mock 侧给"onnx 实现 + 三个文件在 + 已加载"，与真栈默认一致，免得页面在 mock 下显红。
+ */
+const nerStatus = () => ({
+  impl: 'onnx-bert-ner',
+  configured: 'onnx',
+  modelDir: 'models/bert-chinese-ner-onnx',
+  modelFilePresent: true,
+  tokenizerPresent: true,
+  configFilePresent: true,
+  loaded: true,
+  supportedTypes: ['ORG', 'PERSON'],
+  reason: null
+})
+
 export const modelRoutes: MockRoute[] = [
   [
     'GET',
@@ -108,6 +124,8 @@ export const modelRoutes: MockRoute[] = [
   ['GET', '/models/local-onnx', () => localOnnxStatus()],
 
   ['GET', '/models/rerank', () => rerankStatus()],
+
+  ['GET', '/models/ner', () => nerStatus()],
 
   [
     'POST',

@@ -172,6 +172,67 @@
       </div>
     </section>
 
+    <!--
+      实体识别（NER）模型（#369）。
+      ★ 与重排那条同样：它不在 `ai_model` 里，`ModelKind` 里也没有 NER ——
+        它是进程内模型，由 `app.entity.recognizer` + 模型目录决定。
+        只读：换它 = 换 onnx 文件 + 改配置 + 重启，不是改一个字段。
+    -->
+    <section class="onnx-runtime panel ner-runtime">
+      <div class="onnx-main">
+        <div class="onnx-head">
+          <span class="onnx-title ellipsis" :title="ner?.impl || '实体识别（NER）'">
+            {{ ner?.impl || '实体识别（NER）' }}
+          </span>
+          <el-tag size="small" effect="plain" type="info">进程内 · 实体识别</el-tag>
+          <span class="status" :class="nerStateClass">
+            <i class="dot" :class="nerDot" />
+            {{ nerStateLabel }}
+          </span>
+        </div>
+
+        <p class="onnx-desc micro muted">
+          文档入库时抽机构与人名，抽出来的实体进 <code>kb_entity</code>，供「实体」页签查看与归并。
+          关系（隶属 / 下设 / 负责 / 释义）由<b>标记词规则</b>给出，不是这个模型给的 ——
+          模型只负责认出实体。
+        </p>
+
+        <div class="onnx-facts micro">
+          <span><span class="onnx-key">类型</span>实体识别 · 抽取阶段</span>
+          <span>
+            <span class="onnx-key">接口能力</span>
+            {{ ner ? ner.supportedTypes.join(' / ') : '未知' }}
+          </span>
+          <span>
+            <span class="onnx-key">配置</span>
+            {{ ner?.configured ?? '未知' }}
+          </span>
+          <span>
+            <span class="onnx-key">文件</span>
+            {{ nerFilesText }}
+          </span>
+          <span>
+            <span class="onnx-key">已加载</span>
+            {{ ner ? (ner.loaded ? '是（已用过）' : '否（首次抽取时才读）') : '未知' }}
+          </span>
+          <span class="onnx-path" :title="ner?.modelDir">
+            <span class="onnx-key">模型</span>
+            <code>{{ fileOf(ner?.modelDir) }}</code>
+          </span>
+        </div>
+
+        <div v-if="ner?.reason" class="onnx-note micro">{{ ner.reason }}</div>
+        <div v-if="nerError" class="onnx-note err micro">
+          <b>状态读取失败：</b>{{ nerError }}
+          <el-button link size="small" @click="fetchNer">重试</el-button>
+        </div>
+      </div>
+
+      <div class="onnx-actions">
+        <span class="micro muted">只读 · 改配置后需重启</span>
+      </div>
+    </section>
+
     <div ref="gridEl" v-loading="loading" class="grid">
       <el-card v-for="m in list" :key="m.id" shadow="never" class="model-card" :class="{ failed: m.status === 'LOAD_FAILED' }">
         <div class="mc-head">
@@ -399,7 +460,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, Loading, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { modelsApi, providersApi } from '@/api'
-import type { LocalOnnxStatus, ModelInfo, ModelKind, ModelReference, ModelStatus, RerankStatus } from '@/api/models'
+import type { LocalOnnxStatus, ModelInfo, ModelKind, ModelReference, ModelStatus, NerStatus, RerankStatus } from '@/api/models'
 import { ApiError } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import ModelFormDialog from './components/ModelFormDialog.vue'
@@ -506,6 +567,8 @@ const warmingUp = ref(false)
 /** 重排模型状态（#352）：只读，不参与列表与加载生命周期 */
 const rerank = ref<RerankStatus | null>(null)
 const rerankError = ref<string | null>(null)
+const ner = ref<NerStatus | null>(null)
+const nerError = ref<string | null>(null)
 
 /** 筛选/分页入 URL —— 刷新与直链不丢状态（一.2） */
 const query = reactive({
@@ -639,6 +702,53 @@ const rerankDot = computed(() => {
   return s.filesPresent ? 'ok' : 'err'
 })
 
+/**
+ * 实体识别（NER）状态：后端 `/models/ner`（#369）。
+ *
+ * ★ 与重排那条同一口径：读失败时保留整块、把原因写进 `nerError` ——
+ * 整块消失会让"接口不可达"看起来像"这台机器没有 NER"。
+ */
+const fetchNer = async () => {
+  try {
+    ner.value = await modelsApi.getNerStatus()
+    nerError.value = null
+  } catch (e) {
+    ner.value = null
+    nerError.value = e instanceof ApiError ? e.message : '读取实体识别状态失败（接口不可达）'
+  }
+}
+
+const nerStateLabel = computed(() => {
+  const s = ner.value
+  if (!s) return nerError.value ? '状态未知（读取失败）' : '读取中…'
+  if (s.reason) return '不可用'
+  return s.loaded ? '可用' : '可用（未加载）'
+})
+
+const nerStateClass = computed(() => {
+  const s = ner.value
+  if (!s) return nerError.value ? 'st-err' : 'st-idle'
+  return s.reason ? 'st-err' : 'st-ok'
+})
+
+const nerDot = computed(() => {
+  const s = ner.value
+  if (!s) return nerError.value ? 'err' : ''
+  return s.reason ? 'err' : 'ok'
+})
+
+/** 三个文件的状态合成一句 —— 缺哪个要能一眼看出来，而不是笼统一个「缺失」。 */
+const nerFilesText = computed(() => {
+  const s = ner.value
+  if (!s) return '未知'
+  const missing = [
+    s.modelFilePresent ? '' : 'model.onnx',
+    s.tokenizerPresent ? '' : 'tokenizer.json',
+    s.configFilePresent ? '' : 'config.json'
+  ].filter(Boolean)
+  return missing.length ? `缺 ${missing.join(' / ')}` : '已就位'
+})
+
 const localOnnxStateLabel = computed(() => {
   const s = localOnnx.value
   if (!s) return localOnnxError.value ? '状态未知（读取失败）' : '读取中…'
@@ -747,7 +857,13 @@ const schedule = () => {
   const interval = nextInterval()
   pollCount += 1
   timer = setTimeout(async () => {
-    await Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx(), fetchRerank()])
+    await Promise.all([
+      fetchList(),
+      fetchGlobalLoadingCount(),
+      fetchLocalOnnx(),
+      fetchRerank(),
+      fetchNer()
+    ])
     schedule()
   }, interval)
 }
@@ -758,7 +874,13 @@ const onVisibility = () => {
     return
   }
   // 回到前台立即补一次，不等下一个周期
-  Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx(), fetchRerank()]).then(schedule)
+  Promise.all([
+    fetchList(),
+    fetchGlobalLoadingCount(),
+    fetchLocalOnnx(),
+    fetchRerank(),
+    fetchNer()
+  ]).then(schedule)
 }
 
 /** 服务商下拉的候选（`#289` 打磨：从服务商页点「N 个模型」跳过来时，得能看出筛的是哪个） */
@@ -778,7 +900,13 @@ onMounted(() => {
     gridObserver = new ResizeObserver(onGridResize)
     gridObserver.observe(gridEl.value)
   }
-  Promise.all([fetchList(), fetchGlobalLoadingCount(), fetchLocalOnnx(), fetchRerank()]).then(schedule)
+  Promise.all([
+    fetchList(),
+    fetchGlobalLoadingCount(),
+    fetchLocalOnnx(),
+    fetchRerank(),
+    fetchNer()
+  ]).then(schedule)
   fetchProviders()
 })
 

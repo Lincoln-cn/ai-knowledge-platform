@@ -231,6 +231,34 @@ export const getRerankStatus = () =>
   request<RerankStatus>({ method: 'GET', url: '/models/rerank' })
 
 /**
+ * 实体识别（NER）模型的只读状态（#369）。
+ *
+ * ★ 与 `RerankStatus` 同一类：它不是 `ai_model` 里的一行 —— NER 是进程内模型，
+ *   `ModelKind` 里也没有 `NER`。它由 `app.entity.recognizer` + 模型目录决定。
+ *   `configured` 与 `impl` 分开给：配的是 hanlp 却在跑 onnx 这种事，只有两个值都摆出来才看得出来。
+ */
+export interface NerStatus {
+  /** 实现名：`onnx-bert-ner` / `hanlp` */
+  impl: string
+  /** 配置原值（`app.entity.recognizer`） */
+  configured: string
+  /** 解析后的模型目录；hanlp 实现为空串 */
+  modelDir: string
+  modelFilePresent: boolean
+  tokenizerPresent: boolean
+  /** ★ 标签表从这里读，缺了必然抽不出实体（见后端 OnnxNerRecognizer 类注释里那次踩坑） */
+  configFilePresent: boolean
+  /** 当前进程是否已把模型载入内存（onnx 惰性加载，第一次抽取才读） */
+  loaded: boolean
+  supportedTypes: string[]
+  /** 可用时为 null；否则是不可用原因（文件缺失 / 加载失败原文） */
+  reason: string | null
+}
+
+export const getNerStatus = () =>
+  request<NerStatus>({ method: 'GET', url: '/models/ner' })
+
+/**
  * 基础模型目录。★ 契约由 GET 改成 POST（密钥不能进查询串）；返回形状不变（BaseModelOption[]）。
  * 上游不可达时返回空数组，可读提示在包络的 `hint` 字段 —— 用 `onHint` 收（成功包络也可能带 hint）。
  */
