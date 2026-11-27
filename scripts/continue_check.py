@@ -102,7 +102,14 @@ def stream_chat(token, body, on_meta=None, on_delta=None, stop_after=None):
 
     done = None
     events = []
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+    try:
+        response = urllib.request.urlopen(req, timeout=TIMEOUT)
+    except urllib.error.HTTPError as e:
+        # ★ 流还没开始就被拒（越权 404 / 业务 400 / 500）：把状态码与响应体原样报出来 ——
+        #   否则调用方只能看到一个裸 HTTPError，分不清是"没资格"还是"链路坏了"。
+        body_text = e.read().decode("utf-8", "replace")[:400]
+        raise RuntimeError(f"聊天流被拒：HTTP {e.code} · {body_text}") from None
+    with response as r:
         event = None
         for raw in r:
             line = raw.decode("utf-8", "replace").rstrip("\r\n")
@@ -156,6 +163,21 @@ def ask_then_stop(token, conversation_id, app_id, question):
     return got["messageId"], (done or {}).get("status"), got["text"]
 
 
+def stop_midway(token, body, conversation_id, message_id, stop_after=40):
+    """发一次流，读到 `stop_after` 个字就调 stop —— 造一条「已停止」的回答。"""
+
+    def on_delta(chunk):
+        if len(chunk) and not state["stopped"]:
+            state["text"] += chunk
+            if len(state["text"]) >= stop_after:
+                state["stopped"] = True
+                call(f"/conversations/{conversation_id}/messages/{message_id}/stop", token, method="POST")
+
+    state = {"text": "", "stopped": False}
+    events, done = stream_chat(token, body, on_delta=on_delta)
+    return events, done
+
+
 def main():
     args = sys.argv[1:]
     wanted = None
@@ -198,11 +220,11 @@ def main():
     head_refs = {r.get("segmentId") or r.get("id") for r in (target.get("refs") or [])}
     print(f"  前半段 {len(head_text)} 字 · 引用 {len(head_refs)} 条 · 会话里 {len(before)} 条消息")
 
-    # ---------- 续写 ----------
+    # ---------- 续写（第一次就停在半路，好让第二次还有可续的状态） ----------
     body = {"conversationId": conversation_id, "mode": "CONTINUE", "targetMessageId": message_id}
     if app_id:
         body["appId"] = app_id
-    events, done = stream_chat(token, body)
+    events, done = stop_midway(token, body, conversation_id, message_id, stop_after=40)
     kinds = [e for e, _ in events]
     deltas = sum(len(p.get("text", "")) for e, p in events if e == "delta")
     print(f"  续写流：{len(events)} 帧（delta {kinds.count('delta')} 个 · {deltas} 字）· done={done}")
@@ -236,18 +258,17 @@ def main():
     check(refs2 == head_refs, "引用不变", f"续写前 {len(head_refs)} 条 · 续写后 {len(refs2)} 条")
     check(target2.get("status") in ("GENERATED", "STOPPED"), "状态回到终态", f"status={target2.get('status')}")
 
-    # ---------- 再续一次（第二次续写要能接上） ----------
-    if target2.get("status") == "STOPPED":
-        third = dict(body)
-        events3, done3 = stream_chat(token, third)
-        after3 = messages_of(token, conversation_id)
-        target3 = next((m for m in after3 if m.get("id") == message_id), None)
-        text3 = (target3 or {}).get("content") or ""
-        check(done3 is not None and text3.startswith(text2) and len(text3) > len(text2),
-              "第二次续写仍接在同一段后", f"{len(text2)} → {len(text3)} 字")
-        check(len(after3) == len(before), "两次续写都不新增消息", f"{len(before)} → {len(after3)}")
-    else:
-        print("[SKIP] 第二次续写：这一轮已经生成完（GENERATED），没有可续的「已停止」状态")
+    # ---------- 再续一次，这次让它跑完 ----------
+    # ★ 为什么第二次要跑完：对一条已经 GENERATED 的回答再发 CONTINUE 是**非法请求**
+    #   （领域层明确拒绝）。判据要的是"多次续写都能接上"，那就一路 STOPPED 续到底。
+    events3, done3 = stream_chat(token, dict(body))
+    after3 = messages_of(token, conversation_id)
+    target3 = next((m for m in after3 if m.get("id") == message_id), None)
+    text3 = (target3 or {}).get("content") or ""
+    check(done3 is not None and text3.startswith(text2), "第三次续写接在第二次之后",
+          f"{len(text2)} → {len(text3)} 字")
+    check(len(text3) > len(text2), "第三次续写也变长了", f"+{len(text3) - len(text2)} 字")
+    check(len(after3) == len(before), "两次续写都不新增消息", f"{len(before)} → {len(after3)}")
 
     # ---------- 清理 ----------
     st, _ = call(f"/conversations/{conversation_id}", token, method="DELETE")
