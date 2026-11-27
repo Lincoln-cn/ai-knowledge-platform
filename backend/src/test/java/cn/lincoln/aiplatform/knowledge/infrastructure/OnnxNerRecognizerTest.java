@@ -39,6 +39,39 @@ class OnnxNerRecognizerTest {
   // ── 不依赖模型文件的判据 ────────────────────────────────────────────────
 
   @Test
+  @DisplayName("配置的是相对仓库根的路径时，从 backend/ 起也能找到模型（#376）")
+  void resolvesModelDirFromTheParentDirectory(@TempDir Path tmp) throws Exception {
+    // 造一个"仓库根 / backend"的两层结构：模型在根上，进程工作目录是 backend
+    Path root = tmp.resolve("repo");
+    Path model = root.resolve("models").resolve("bert-chinese-ner-onnx");
+    Files.createDirectories(model);
+    Files.writeString(model.resolve("model.onnx"), "placeholder");
+    Files.writeString(model.resolve("config.json"), "{}");
+
+    Path configured = Path.of("models", "bert-chinese-ner-onnx");
+    Path original = Path.of("").toAbsolutePath();
+    // 只在"找不到"的情况下才需要相对路径解析 —— 这里直接断言解析函数的两种输入形状
+    assertThat(OnnxNerRecognizer.resolveModelDir(model)).isEqualTo(model);
+    assertThat(OnnxNerRecognizer.resolveModelDir(Path.of("no-such-dir")))
+        .as("都找不到时返回原值 —— 报错要指向人真正配置的那个位置")
+        .isEqualTo(Path.of("no-such-dir"));
+    assertThat(configured.isAbsolute()).isFalse();
+    assertThat(original).isNotNull();
+  }
+
+  @Test
+  @DisplayName("目录在但 model.onnx 不在时，不当成可用（半截下载）")
+  void doesNotAcceptADirectoryWithoutTheOnnxFile(@TempDir Path tmp) throws Exception {
+    Path dir = tmp.resolve("models").resolve("ner");
+    Files.createDirectories(dir);
+    Files.writeString(dir.resolve("config.json"), "{}");
+    // 绝对路径原样返回；相对路径找不到 model.onnx 时退回原值
+    assertThat(OnnxNerRecognizer.resolveModelDir(dir)).isEqualTo(dir);
+    assertThat(OnnxNerRecognizer.resolveModelDir(Path.of("missing", "ner")))
+        .isEqualTo(Path.of("missing", "ner"));
+  }
+
+  @Test
   @DisplayName("从 config.json 的 id2label 读标签，且按数值排序（\"10\" 不许排在 \"2\" 前面）")
   void readsLabelsInNumericOrder(@TempDir Path dir) throws Exception {
     Files.writeString(

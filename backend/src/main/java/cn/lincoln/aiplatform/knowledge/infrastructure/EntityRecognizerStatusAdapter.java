@@ -46,7 +46,8 @@ class EntityRecognizerStatusAdapter implements EntityRecognizerStatusPort {
           recognizer.supportedTypes(),
           null);
     }
-    Path dir = resolve(modelDir);
+    // ★ 与真实加载用同一个解析（OnnxNerRecognizer#resolveModelDir）：判据与使用分家会让状态页说瞎话（#376）。
+    Path dir = OnnxNerRecognizer.resolveModelDir(Path.of(modelDir));
     boolean modelFile = Files.isRegularFile(dir.resolve("model.onnx"));
     boolean tokenizer = Files.isRegularFile(dir.resolve("tokenizer.json"));
     boolean configFile = Files.isRegularFile(dir.resolve("config.json"));
@@ -80,20 +81,5 @@ class EntityRecognizerStatusAdapter implements EntityRecognizerStatusPort {
         onnx.loaded(),
         recognizer.supportedTypes(),
         reason);
-  }
-
-  /**
-   * 相对路径按"当前工作目录 → 上一层"解析。
-   *
-   * <p>与 {@code RerankStatusService#resolve} 同款：后端可能从 {@code backend/} 启动，也可能是仓库根，
-   * 两种工作目录下都要能找到默认的相对路径。
-   */
-  private static Path resolve(String configured) {
-    Path configuredPath = Path.of(configured);
-    if (configuredPath.isAbsolute() || Files.exists(configuredPath)) {
-      return configuredPath;
-    }
-    Path fromParent = Path.of("..").resolve(configured).normalize();
-    return Files.exists(fromParent) ? fromParent : configuredPath;
   }
 }

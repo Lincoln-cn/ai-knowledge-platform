@@ -124,7 +124,7 @@ public class OnnxNerRecognizer implements EntityRecognizer {
    */
   public OnnxNerRecognizer(
       Path modelDir, int threads, List<String> orgSuffixes, EntityExtractor relationExtractor) {
-    this.modelDir = modelDir;
+    this.modelDir = resolveModelDir(modelDir);
     this.threads = Math.max(1, threads);
     this.orgSuffixes = List.copyOf(orgSuffixes);
     if (this.orgSuffixes.isEmpty()) {
@@ -142,6 +142,35 @@ public class OnnxNerRecognizer implements EntityRecognizer {
 
   public OnnxNerRecognizer(Path modelDir, int threads) {
     this(modelDir, threads, DEFAULT_ORG_SUFFIXES);
+  }
+
+  /**
+   * 把配置里的模型目录解析成"真的能找到 model.onnx 的那个位置"。
+   *
+   * <p>★ 为什么需要这一步：配置默认值 {@code models/bert-chinese-ner-onnx} 是相对**仓库根**写的， 而后端常常从 {@code backend/}
+   * 启动 —— 于是 {@code modelDir.resolve("model.onnx")} 指向 {@code backend/models/…}，那里没有文件。结果是：加载失败 →
+   * {@code recognize()} 返回空 → 实体与关系表恒 0 行，而文档状态照常 {@code SUCCEEDED}（`#376`）。
+   *
+   * <p>★ 状态页（{@code EntityRecognizerStatusAdapter}）必须调用**同一个方法**：
+   * 曾经两处各写一份解析，于是出现过"状态页说三个文件都在、实际加载说文件不存在" 这种自相矛盾的读数 —— 健康判定与真实使用不是同一个函数算出来的，它就不是健康状态。
+   *
+   * <p>判据用 {@code model.onnx} 是否存在（不是"目录是否存在"）：只有目录没有模型的半截下载 不该被当成可用。
+   *
+   * @param configured 配置值（可能是相对路径）
+   * @return 能找到 {@code model.onnx} 的路径；都找不到时返回 {@code configured} 原值， 让报错信息指向人真正配置的那个位置
+   */
+  public static Path resolveModelDir(Path configured) {
+    if (configured == null || configured.isAbsolute()) {
+      return configured;
+    }
+    if (Files.isRegularFile(configured.resolve("model.onnx"))) {
+      return configured;
+    }
+    Path fromParent = Path.of("..").resolve(configured).normalize();
+    if (Files.isRegularFile(fromParent.resolve("model.onnx"))) {
+      return fromParent;
+    }
+    return configured;
   }
 
   /**
