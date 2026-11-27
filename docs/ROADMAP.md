@@ -1930,6 +1930,10 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
 
 ### 11.65.3 六批工作项
 
+> ★ **状态（2026-11-28）：六批全部落地**，范围与 2026-11-27 的拍板一致（没有缩范围、没有挪版本）。
+> 逐批的提交号、读数与「未验项」见 `§11.65.7`。
+
+
 | 批 | 范围 | Issue | 工时 | 依赖 |
 |---|---|---|---|---|
 | ① 修 bug | 关系抽取接回 onnx 这一路 | `#368` | 半个工作日 | — |
@@ -2021,8 +2025,8 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
 4. 实体页、关系区、图谱三档判据全过；图谱的每条边都能一键回到原文段。
 5. CONTINUE 的两条判据全过（引用一致、连续两次能接上），且 `scripts/` 里有一条可复跑的验收脚本。
 6. 模型参数：表单按元数据渲染、值落库、**且能在上游请求里看到它**。
-5. 闸门：快闸 11 道 + 前端 `build:mock` / `smoke_test.py` / `verify_features.py` + 浏览器闸门 + 真栈 20 条，全绿（沿用 0.9.7 的读数口径）。
-6. 版本号三处同源改 0.9.8（`backend/pom.xml` / `frontend/package.json` / `frontend/package-lock.json` 两处）+ `CHANGELOG.md` 一节 + `python tools/check_release_metadata.py` exit 0。
+7. 闸门：快闸 11 道 + 前端 `build:mock` / `smoke_test.py` / `verify_features.py` + 浏览器闸门 + 真栈 20 条，全绿（沿用 0.9.7 的读数口径）。
+8. 版本号三处同源改 0.9.8（`backend/pom.xml` / `frontend/package.json` / `frontend/package-lock.json` 两处）+ `CHANGELOG.md` 一节 + `python tools/check_release_metadata.py` exit 0。
 
 ### 11.65.6 排期、拍板点与账本订正
 
@@ -2039,6 +2043,56 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
 - `#296` 加评论订正：R2 / R3 / R4 已实现并给出出处，保留 R1 / R5 为真欠账（**不关 Issue**，它还有两条是假的"欠账"）
 - `#368` / `#369` / `#370` 各加一条评论写明排期在 0.9.8 的哪一批
 
+
+### 11.65.7 落地记录（2026-11-28）
+
+| 批 | 提交 | 真栈 / 闸门读数 |
+|---|---|---|
+| ① 关系抽取接回 onnx | `fa8ad48d` | 单测 11/11；**反证已跑**（把 `relations()` 改回 `List.of()` ⇒ `relationsComeFromTheRuleLayer` 红） |
+| ② NER 进模型页 | `a9e9ec11` | `GET /models/ner` 200；缺文件时点名缺的是哪个（单测 `namesTheMissingFile`） |
+| ③a 分段选项 | `cf5554fb` | 界面只剩「智能分段」；后端对 `CUSTOM` 仍明确拒绝（没改成静默当 AUTO） |
+| ③b 断点续写 | `c8abbd41` + `5d6d26cc` + `3c0c7ceb` | `scripts/continue_check.py` **15 条通过 · 0 条失败** |
+| ③c 模型参数 | `34adf93d` + `8bd2d7fe` | 真栈 `PUT`/`GET /models/{id}` 读写一致；上游透传见下方「未验项」 |
+| ④⑤⑥ 实体与关系 | `8cf99113` | `GET /knowledge-bases/{id}/entity-graph` 200（5 个库皆空态：都没跑过实体抽取） |
+
+**③b 续写的真栈读数**（`python scripts/continue_check.py`，18088）：
+
+```
+[PASS] 续写恰好发一次引用帧 —— 收到 1 次
+[PASS] 续写不新增消息 —— 续写前 3 条 · 续写后 3 条
+[PASS] 前半段原样保留（续写接在后面） —— 前半段 39 字 · 现在 179 字
+[PASS] 引用不变 / 状态回到终态（GENERATED）
+[PASS] 第三次续写接在第二次之后 —— 147 → 342 字
+[PASS] 两次续写都不新增消息 —— 3 → 3
+```
+
+★ 这一段修过一个"看上去能跑、其实整轮必失败"的实现：`c8abbd41` 第一版让续写**完全不发** refs 帧，
+而 `StreamAssembler.flushPendingBeforeFirstDelta()` 在 `refsKnown == false` 时直接抛 ——
+真栈第一次跑就是 `delta 0 个 · done.status=FAILED`。正确语义是「不重新检索，但要把**同一批**引用再发一次」。
+判据也据此改了：从"续写不发 refs 帧"变成"**恰好发一次**、且 `segmentId` 集合与前半段相等"。
+
+**③c 参数的两个真栈发现**：
+
+1. `defaultValue` 与 `default` 键名错位（`8bd2d7fe`）：前端按 `default` 提交、record 字段叫 `defaultValue`，
+   反序列化当成未知属性丢掉 ⇒ 库里存成 `"default": null`。**不报错、不空白，每层都成功** ——
+   正是这一批要修的那类病。修完读回是 `"default":0.35`。
+2. 参数进上游：`NativeSpringAiChatModel.payload()` 里硬编码的 `temperature: 0.2` 就是落点 ——
+   官方键覆盖它、其余键原样透传。
+
+**⑥ 图谱的三条取舍**（写给以后想改的人）：
+
+- **不做力导向**：每次刷新位置都不同，两张截图没法对比，也没法说「上周这条边还在」。环形布局按提及数排大小、按名字定角度，同一份数据画出来是同一张图。
+- **「被 N 段提到」与「关系 N 条」分两列**：关系靠标记词规则，抽不到就没有边；合成一个数会让「0 条边」被读成「这个实体不重要」。
+- **截断必须说**：库里 800 个实体只画 80 个时，页面要写「库里一共 800 个」，否则「图上没有」会被读成「库里没有」。
+
+**未验项（如实记，不写成"已验证"）**：
+
+- **参数真的进上游请求体**：只有单测证据（`ModelParamUpstreamTest` 起 `HttpServer` 桩抓请求体原文，
+  断言 `"temperature":0.35` 与 `"top_k":40` 在里面；删掉 `putAll(split.official())` 时
+  `springAiCarriesParams` 会红）。真栈容器内没跑过带 AI 节点参数的工作流 —— 那条路径要跑一次完整编排。
+- **实体/关系/图谱的非空态**：真栈 5 个库都没跑过实体抽取，所以只验到「空态 + 结构正确」。
+  非空态的渲染由 mock 数据 + `build:mock` 与冒烟覆盖。
+- **`kb_relation` 非零行**（`§11.65.5` 判据 1）：同上，需要一次带标记词的文档抽取。
 
 ---
 
