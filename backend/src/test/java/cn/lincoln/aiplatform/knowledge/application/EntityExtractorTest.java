@@ -143,4 +143,62 @@ class EntityExtractorTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("机构后缀为空");
   }
+
+  /** 七类关系的词表（0.9.9 把受控关系从四类扩到七类，见 V118）。 */
+  private static Dictionary dictSeven() {
+    return new Dictionary(
+        List.of("部", "局", "处", "科", "室", "中心", "集团", "公司", "委员会", "办公室"),
+        List.of("经理", "主任", "部长", "总裁", "总经理", "主管", "专员"),
+        Map.of(
+            "隶属", "BELONGS_TO",
+            "包括", "CONTAINS",
+            "下属", "CONTAINS",
+            "负责", "RESPONSIBLE_FOR",
+            "是指", "DEFINES",
+            "担任", "WORKS_AT",
+            "属于", "PART_OF",
+            "依据", "REFERENCES"));
+  }
+
+  @Test
+  @DisplayName("任职：左端人名必须由 NER 给，规则层自己抽不出真实人名")
+  void worksAtNeedsPersonOnTheLeft() {
+    List<Relation> got =
+        new EntityExtractor(dictSeven()).relations("张三担任信息技术中心主任。", Map.of("张三", "PERSON"));
+
+    assertThat(got).contains(new Relation("WORKS_AT", "张三", "信息技术中心"));
+  }
+
+  @Test
+  @DisplayName("★ 反证：不给人名时 WORKS_AT 一条都不该有 —— 否则就成了「收下了但没用」")
+  void withoutKnownPersonThereIsNoWorksAt() {
+    List<Relation> got = new EntityExtractor(dictSeven()).relations("张三担任信息技术中心主任。");
+
+    assertThat(got).extracting(Relation::type).doesNotContain("WORKS_AT");
+  }
+
+  @Test
+  @DisplayName("属于（PART_OF）：从部分指向整体，与 CONTAINS 方向相反")
+  void partOfIsTheReverseOfContains() {
+    List<Relation> got = new EntityExtractor(dictSeven()).relations("运维科属于信息技术中心。");
+
+    assertThat(got).contains(new Relation("PART_OF", "运维科", "信息技术中心"));
+  }
+
+  @Test
+  @DisplayName("依据（REFERENCES）：右端只能是书名号里的文书名")
+  void referencesNeedsBookTitledDocument() {
+    List<Relation> got = new EntityExtractor(dictSeven()).relations("财务资产部依据《固定资产管理办法》办理。");
+
+    assertThat(got).contains(new Relation("REFERENCES", "财务资产部", "固定资产管理办法"));
+  }
+
+  @Test
+  @DisplayName("★ #377：「下属」是上级包含下级（CONTAINS），曾经被抽成隶属、方向反了")
+  void subordinateIsContainsNotBelongsTo() {
+    List<Relation> got = new EntityExtractor(dictSeven()).relations("信息技术中心下属运维科。");
+
+    assertThat(got).contains(new Relation("CONTAINS", "信息技术中心", "运维科"));
+    assertThat(got).extracting(Relation::type).doesNotContain("BELONGS_TO");
+  }
 }

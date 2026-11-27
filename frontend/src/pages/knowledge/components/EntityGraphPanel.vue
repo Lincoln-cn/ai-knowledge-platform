@@ -13,8 +13,9 @@
  * ★ 每条边都要能回到原文那一段（`segmentId` 是取证位置）。没有它，
  * 用户只能相信「系统说这俩有关系」—— 那是另一类产品。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import * as echarts from 'echarts'
 import { getEntityGraph, type EntityGraph, type EntityGraphEdge, type EntityGraphNode } from '@/api/knowledge'
 
 const props = defineProps<{ kbId: string }>()
@@ -34,11 +35,14 @@ const totalRelations = computed(() => graph.value?.totalRelations ?? 0)
 const typeLabel = (t: string) =>
   ({ ORG: '组织', PERSON: '人名' } as Record<string, string>)[t] || t || '未标类型'
 
-/** 关系类型：与后端 `chk_kb_relation_type` 的四类一一对应。 */
+/** 关系类型：与后端 `chk_kb_relation_type` 的七类一一对应（0.9.9 从四类扩到七类）。 */
 const RELATION_LABEL: Record<string, string> = {
   BELONGS_TO: '隶属',
   CONTAINS: '包含',
+  PART_OF: '属于',
   RESPONSIBLE_FOR: '负责',
+  WORKS_AT: '任职',
+  REFERENCES: '依据',
   DEFINES: '定义'
 }
 const relationLabel = (t: string) => RELATION_LABEL[t] || t
@@ -59,36 +63,34 @@ const degreeOf = computed(() => {
   return (id: string) => map.get(id) || 0
 })
 
-/* ───────────────────── 图谱布局 ─────────────────────
- * ★ 环形布局，不做力导向：力导向每次刷新位置都不同，两张截图没法对比，
- * 也没法说「上周这条边还在」。按提及数排大小、按名字定角度，同一份数据画出来是同一张图。
+/* ───────────────────── 图谱（echarts graph） ─────────────────────
+ * ★ 2026-11-28 从手写 SVG 换成 echarts graph：用户原话「渲染的有点生硬」。
+ *   标签自动避让、曲线边、箭头、缩放拖拽都是现成的，而 echarts 本来就在依赖表里
+ *   （`frontend/README.md` 白名单 + `GuardTrendChart.vue` 已有用法）。
+ * ★ 布局仍然固定：`layout: 'circular'`，环上顺序由实体顺序决定。不用力导向 ——
+ *   力导向每次刷新位置都不同，两张截图没法对比，也说不清「上周这条边还在」。
  */
 const MAX_DRAWN = 80
 const drawn = computed(() => nodes.value.slice(0, MAX_DRAWN))
 const hiddenCount = computed(() => Math.max(0, nodes.value.length - drawn.value.length))
-
-const W = 720
-const H = 460
-const CX = W / 2
-const CY = H / 2
-const R = 165
-
-const positions = computed(() => {
-  const map = new Map<string, { x: number; y: number; r: number }>()
-  const list = drawn.value
-  const maxMentions = Math.max(1, ...list.map((n) => n.mentions))
-  list.forEach((n, i) => {
-    const angle = (Math.PI * 2 * i) / Math.max(1, list.length) - Math.PI / 2
-    const size = 7 + Math.round((Math.min(n.mentions, maxMentions) / maxMentions) * 9)
-    map.set(n.id, { x: CX + R * Math.cos(angle), y: CY + R * Math.sin(angle), r: size })
-  })
-  return map
-})
-
-/** 只画两端都在画面里的边；其余边在「关系」视图里仍能看到（并标注是哪一端缺了）。 */
-const drawnEdges = computed(() =>
-  edges.value.filter((e) => positions.value.has(e.from) && positions.value.has(e.to))
+const drawnIds = computed(() => new Set(drawn.value.map((n) => n.id)))
+/** 只画两端都在画面里的边；其余边在「关系」视图里仍能看到（并标注哪一端缺了）。 */
+const drawnEdges = computed(
+  () => edges.value.filter((e) => drawnIds.value.has(e.from) && drawnIds.value.has(e.to))
 )
+
+const graphEl = ref<HTMLDivElement>()
+let chart: echarts.ECharts | null = null
+
+/** 令牌是 oklch，echarts 只认 rgb/hex ⇒ 用一次性探针取浏览器算出来的值。 */
+const cssColor = (token: string): string => {
+  const probe = document.createElement('span')
+  probe.style.color = `var(${token})`
+  document.documentElement.appendChild(probe)
+  const resolved = getComputedStyle(probe).color
+  probe.remove()
+  return resolved
+}
 
 const selectedNode = ref('')
 const selectedEdge = ref<EntityGraphEdge | null>(null)
@@ -109,8 +111,113 @@ const pickEdge = (e: EntityGraphEdge) => {
   selectedEdge.value = selectedEdge.value?.id === e.id ? null : e
 }
 
-const isDimmed = (e: EntityGraphEdge) =>
-  !!selectedNode.value && e.from !== selectedNode.value && e.to !== selectedNode.value
+/** echarts 回调里的 data 形状（它给的是 `unknown`，这里收窄一次就够）。 */
+type GraphItem = {
+  id?: string
+  name?: string
+  source?: string
+  target?: string
+  type?: string
+  mentions?: number
+}
+type GraphParams = { dataType?: string; data?: GraphItem }
+
+const nameById = (id: string) => nodes.value.find((n) => n.id === id)?.name || '（不在本页实体里）'
+
+const renderGraph = () => {
+  if (!chart) return
+  const ink = cssColor('--color-ink-2')
+  const muted = cssColor('--color-ink-3')
+  const rule = cssColor('--color-rule-strong')
+  const accent = cssColor('--color-accent')
+  const surface = cssColor('--color-surface')
+  const soft = cssColor('--color-accent-soft')
+  const maxMentions = Math.max(1, ...drawn.value.map((n) => n.mentions))
+
+  chart.setOption(
+    {
+      tooltip: {
+        confine: true,
+        backgroundColor: surface,
+        borderColor: rule,
+        textStyle: { color: ink, fontSize: 12 },
+        formatter: (raw: unknown) => {
+          const p = raw as GraphParams
+          const d = p.data || {}
+          if (p.dataType === 'edge') {
+            return `${d.source ? nameById(d.source) : ''} · ${relationLabel(String(d.type || ''))} · ${d.target ? nameById(d.target) : ''}`
+          }
+          const deg = d.id ? edges.value.filter((e) => e.from === d.id || e.to === d.id).length : 0
+          return `${d.name || ''}<br/>被 ${d.mentions ?? 0} 段提到 · ${deg} 条关系`
+        }
+      },
+      series: [
+        {
+          type: 'graph',
+          layout: 'circular',
+          circular: { rotateLabel: false },
+          roam: true,
+          draggable: false,
+          selectedMode: false,
+          data: drawn.value.map((n) => ({
+            id: n.id,
+            name: n.name,
+            value: n.mentions,
+            mentions: n.mentions,
+            symbolSize: 9 + (Math.min(n.mentions, maxMentions) / maxMentions) * 11,
+            itemStyle: {
+              color: surface,
+              borderColor: n.type === 'PERSON' ? accent : rule,
+              borderWidth: 1.5
+            },
+            label: { show: true, color: ink, fontSize: 12, position: 'right' },
+            emphasis: {
+              itemStyle: { color: soft, borderColor: accent, borderWidth: 2 },
+              label: { color: accent }
+            }
+          })),
+          links: drawnEdges.value.map((e) => ({
+            id: e.id,
+            source: e.from,
+            target: e.to,
+            type: e.type,
+            lineStyle: { color: rule, width: 1, curveness: 0.12, opacity: 0.9 }
+          })),
+          labelLayout: { hideOverlap: true },
+          edgeSymbol: ['none', 'arrow'],
+          edgeSymbolSize: 7,
+          edgeLabel: {
+            show: true,
+            fontSize: 12,
+            color: muted,
+            backgroundColor: surface,
+            padding: [1, 4],
+            borderRadius: 3,
+            formatter: (raw: unknown) => relationLabel(String((raw as GraphParams).data?.type || ''))
+          },
+          emphasis: {
+            focus: 'adjacency',
+            lineStyle: { width: 2, color: accent }
+          }
+        }
+      ]
+    },
+    true
+  )
+}
+
+const onChartClick = (raw: unknown) => {
+  const p = raw as GraphParams
+  const d = p.data || {}
+  if (p.dataType === 'edge' && d.id) {
+    const hit = edges.value.find((e) => e.id === d.id)
+    if (hit) pickEdge(hit)
+    return
+  }
+  if (d.id) pickNode(d.id)
+}
+
+const resize = () => chart?.resize()
 
 const gotoSource = (e: EntityGraphEdge) => {
   if (!e.documentId) {
@@ -136,7 +243,29 @@ const load = async () => {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  window.addEventListener('resize', resize)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', resize)
+  chart?.dispose()
+  chart = null
+})
+
+/* 图谱是 v-if 里的一块容器：切到这一页时才建实例，切走时不销毁（回来还是同一张图）。 */
+watch([() => view.value, () => graph.value], async () => {
+  if (view.value !== 'graph') return
+  await nextTick()
+  if (!graphEl.value) return
+  if (!chart) {
+    chart = echarts.init(graphEl.value)
+    chart.on('click', onChartClick)
+  }
+  chart.resize()
+  renderGraph()
+})
 </script>
 
 <template>
@@ -145,8 +274,8 @@ onMounted(load)
       <div class="head-main">
         <h3>实体与关系</h3>
         <p class="hint">
-          文档摄取时自动抽取实体（机构 / 人名）；关系由标记词规则给出，只认四类：
-          隶属、包含、负责、定义。<b>抽不到就没有边</b> —— 没有边不等于没有关系，
+          文档摄取时自动抽取实体（机构 / 人名）；关系由标记词规则给出，认七类：
+          隶属、包含、属于、负责、任职、依据、定义。<b>抽不到就没有边</b> —— 没有边不等于没有关系，
           只等于「这一段没有用「隶属」这类词说出来」。
         </p>
       </div>
@@ -222,7 +351,7 @@ onMounted(load)
         :data="edges"
         size="small"
         class="tbl"
-        empty-text="还没有关系 —— 关系靠标记词规则抽取，点「刷新」重读；文档里没有「隶属 / 包含 / 负责 / 定义」这类说法时，这里本来就该是空的"
+        empty-text="还没有关系 —— 关系靠标记词规则抽取，点「刷新」重读；文档里没有「隶属 / 包含 / 属于 / 负责 / 任职 / 依据 / 定义」这类说法时，这里本来就该是空的"
       >
         <el-table-column label="关系" min-width="320">
           <template #default="{ row }">
@@ -246,44 +375,10 @@ onMounted(load)
 
       <div v-else class="graph-wrap">
         <p class="micro muted graph-hint">
-          点一个实体看它的关系；点一条边看它是从哪一段读出来的。
+          点一个实体看它的关系（相邻的会高亮）；点一条边看它是从哪一段读出来的。图上可以滚轮缩放、拖动平移。
           <span v-if="hiddenCount">（图里只画了前 {{ drawn.length }} 个实体，另有 {{ hiddenCount }} 个在「实体」视图里）</span>
         </p>
-        <svg :viewBox="`0 0 ${W} ${H}`" class="graph" role="img" aria-label="实体关系图">
-          <defs>
-            <marker id="eg-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
-              <path d="M0,0 L0,6 L7,3 z" fill="var(--color-rule-strong)" />
-            </marker>
-          </defs>
-          <g class="edges">
-            <line
-              v-for="e in drawnEdges"
-              :key="e.id"
-              :x1="positions.get(e.from)?.x"
-              :y1="positions.get(e.from)?.y"
-              :x2="positions.get(e.to)?.x"
-              :y2="positions.get(e.to)?.y"
-              :class="['edge', { dim: isDimmed(e), on: selectedEdge?.id === e.id }]"
-              marker-end="url(#eg-arrow)"
-              @click="pickEdge(e)"
-            />
-          </g>
-          <g class="nodes">
-            <g
-              v-for="n in drawn"
-              :key="n.id"
-              :class="['node', { on: selectedNode === n.id }]"
-              @click="pickNode(n.id)"
-            >
-              <circle :cx="positions.get(n.id)?.x" :cy="positions.get(n.id)?.y" :r="positions.get(n.id)?.r" />
-              <text
-                :x="positions.get(n.id)?.x"
-                :y="(positions.get(n.id)?.y || 0) + (positions.get(n.id)?.r || 0) + 13"
-                text-anchor="middle"
-              >{{ n.name }}</text>
-            </g>
-          </g>
-        </svg>
+        <div ref="graphEl" class="graph" role="img" aria-label="实体关系图" />
 
         <div v-if="selectedEdge" class="pick">
           <b>{{ nameOf(selectedEdge.from) }}</b>
@@ -384,9 +479,13 @@ onMounted(load)
   margin: 0 6px;
   padding: 0 6px;
   border-radius: 999px;
+  /* ★ 底色是 `accent-soft`（oklch 96%，很浅），字必须用**深色**的 accent-hover（52%）。
+     2026-11-28 之前这里写的是 `--color-accent-ink`（oklch 99%，近白）—— 那个令牌的语义是
+     「压在 accent 实底上的前景色」，放到浅底上就是白字白底，四类关系标签几乎看不见。 */
   background: var(--color-accent-soft);
-  color: var(--color-accent-ink);
+  color: var(--color-accent-hover);
   font-size: var(--text-2xs);
+  font-weight: 500;
 }
 .graph-wrap {
   display: flex;
@@ -396,42 +495,13 @@ onMounted(load)
 .graph-hint {
   margin: 0;
 }
+/* echarts 的画布要一个确定的高度（它不参与 flex 剩余空间分配，给 auto 会塌成 0）。 */
 .graph {
   width: 100%;
-  height: auto;
+  height: 420px;
   background: var(--color-surface-2);
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-sm, 4px);
-}
-.edge {
-  stroke: var(--color-rule-strong);
-  stroke-width: 1;
-  cursor: pointer;
-}
-.edge.on {
-  stroke: var(--color-accent);
-  stroke-width: 2;
-}
-.edge.dim {
-  opacity: 0.18;
-}
-.node circle {
-  fill: var(--color-surface);
-  stroke: var(--color-accent-line);
-  stroke-width: 1.5;
-  cursor: pointer;
-}
-.node.on circle {
-  fill: var(--color-accent-soft);
-  stroke: var(--color-accent);
-  stroke-width: 2;
-}
-.node text {
-  /* SVG 里的字号也走令牌：11px 低于可读下限（闸门判据 ≥12px），而 viewBox 会整体缩放，
-     这里再压小只会让缩放后更糊。 */
-  font-size: var(--text-2xs);
-  fill: var(--color-ink-2);
-  pointer-events: none;
 }
 .pick {
   display: flex;

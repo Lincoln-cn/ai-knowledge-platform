@@ -85,7 +85,10 @@ public class JdbcEntityDictionaryAdapter implements EntityDictionaryPort {
     List<String> personTitles = List.of();
     Map<String, String> relationMarks = new LinkedHashMap<>();
     relationMarks.put("隶属", "BELONGS_TO");
-    relationMarks.put("下属", "BELONGS_TO");
+    // ★ 2026-11-28 修 `#377`：「下属」曾映射成 BELONGS_TO，而抽取方向恒是"标记词左→右"，
+    //   于是「信息中心下属运维科」被抽成"信息中心隶属运维科" —— 方向反了。
+    //   「下属」的语义是上级包含下级 ⇒ CONTAINS（整体 → 部分），方向正确。
+    relationMarks.put("下属", "CONTAINS");
     relationMarks.put("归口", "BELONGS_TO");
     relationMarks.put("下设", "CONTAINS");
     relationMarks.put("包括", "CONTAINS");
@@ -94,6 +97,23 @@ public class JdbcEntityDictionaryAdapter implements EntityDictionaryPort {
     relationMarks.put("牵头", "RESPONSIBLE_FOR");
     relationMarks.put("是指", "DEFINES");
     relationMarks.put("简称", "DEFINES");
+    // ── 0.9.9 新增三类（受控关系从四类扩到七类，见 V118）──
+    // 任职（人 → 组织）：左端要靠 NER 抽到的人名，规则层自己抽不出真实人名。
+    relationMarks.put("担任", "WORKS_AT");
+    relationMarks.put("任职于", "WORKS_AT");
+    relationMarks.put("就职于", "WORKS_AT");
+    // ★ 刻意**不**内置单字「任」：它在中文里歧义太大（责任 / 任务 / 任何 / 任期…），
+    //   而抽取只要求"两端是实体"这一道门，挡不住「张三负责安全生产，责任到人」这类句子。
+    //   需要「张三任信息中心主任」这种写法的库，请在 `kb_entity_dict` 里自己加一条
+    //   RELATION_MARK：「任」→ `WORKS_AT` —— 字典本来就是可配的，而内置表给的是
+    //   "能跑起来的**下限**"，不是"覆盖所有写法"。
+    // 属于（部分 → 整体）：与 CONTAINS 方向相反
+    relationMarks.put("属于", "PART_OF");
+    // 依据（谁 → 哪份文书）：右端必须是书名号里的文书名
+    relationMarks.put("依据", "REFERENCES");
+    relationMarks.put("根据", "REFERENCES");
+    relationMarks.put("按照", "REFERENCES");
+    relationMarks.put("参照", "REFERENCES");
     return new EntityExtractor.Dictionary(orgSuffixes, personTitles, relationMarks);
   }
 }

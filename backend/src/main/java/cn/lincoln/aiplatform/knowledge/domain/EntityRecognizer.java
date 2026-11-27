@@ -82,7 +82,7 @@ public interface EntityRecognizer {
   /**
    * 抽出来的一条受控关系。
    *
-   * @param type 取 {@code BELONGS_TO|CONTAINS|RESPONSIBLE_FOR|DEFINES}
+   * @param type 取 {@code BELONGS_TO|CONTAINS|PART_OF|RESPONSIBLE_FOR|DEFINES|WORKS_AT|REFERENCES}
    * @param from 头实体名（**必须在同一次 {@link #recognize} 的结果里**，否则调用方 无法溯源）
    * @param to 尾实体名（同上）
    */
@@ -97,5 +97,20 @@ public interface EntityRecognizer {
    */
   default List<Relation> relations(String text) {
     return List.of();
+  }
+
+  /**
+   * 抽关系，**带上同一次 {@link #recognize} 的结果**（2026-11-28 加）。
+   *
+   * <p>★ 为什么要多这一个参数：{@link Relation} 的契约要求 {@code from}/{@code to} 必须在同一次 {@code recognize}
+   * 的结果里。规则层自己抽不出真实人名（只认「张伟经理」那种职务词在名字后面的写法）， 于是「张三任信息中心主任」能认出"张三"却成不了边 —— 标记词加了、约束放了，读数还是 0，
+   * 而且没有任何报错。
+   *
+   * <p>默认实现忽略 {@code entities} 并委托 {@link #relations(String)}：不吃实体集合的实现 行为不变，不需要为了签名写空方法。
+   *
+   * @param entities 同一次 {@link #recognize} 的返回；{@code null} 或空等价于不提供
+   */
+  default List<Relation> relations(String text, List<Recognized> entities) {
+    return relations(text);
   }
 }

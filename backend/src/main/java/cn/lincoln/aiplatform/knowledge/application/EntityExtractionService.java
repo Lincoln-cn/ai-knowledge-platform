@@ -170,7 +170,8 @@ public class EntityExtractionService {
         //   不带库标识就只能吃全局默认表 —— 那样数据库里配的字典一个字都不生效。
         List<EntityRecognizer.Recognized> found = recognizer.recognize(kbId, text);
         // 关系用同一个识别器抽（接口给了 default 空实现，所以不是所有实现都有关系）
-        List<EntityRecognizer.Relation> relations = recognizer.relations(text);
+        // ★ 把本次识别到的实体一起传下去：规则层要靠它认人名（WORKS_AT 的左端）
+        List<EntityRecognizer.Relation> relations = recognizer.relations(text, found);
         if (relations != null && !relations.isEmpty() && segment.id() != null) {
           pendingRelations.add(new PendingRelation(segment.id(), relations));
         }

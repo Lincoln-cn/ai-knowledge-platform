@@ -224,6 +224,26 @@ public class OnnxNerRecognizer implements EntityRecognizer {
         .toList();
   }
 
+  /**
+   * 带实体集合的关系抽取：把本次识别到的实体名与类型交给规则层。
+   *
+   * <p>★ 少了这一步，「张三任信息中心主任」就成不了边 —— 规则层自己抽不出真实人名 （只认「张伟经理」），`WORKS_AT` 的左端在人名上永远找不到实体。
+   */
+  @Override
+  public List<Relation> relations(String text, List<Recognized> entities) {
+    Map<String, String> knownTypes = new LinkedHashMap<>();
+    if (entities != null) {
+      for (Recognized r : entities) {
+        if (r != null && r.name() != null && r.type() != null) {
+          knownTypes.putIfAbsent(r.name(), r.type());
+        }
+      }
+    }
+    return relationExtractor.relations(text, knownTypes).stream()
+        .map(r -> new Relation(r.type(), r.from(), r.to()))
+        .toList();
+  }
+
   @Override
   public List<Recognized> recognize(String text) {
     if (text == null || text.isBlank()) {

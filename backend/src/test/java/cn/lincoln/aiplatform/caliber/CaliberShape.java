@@ -176,7 +176,11 @@ final class CaliberShape {
           // 0.9.8：更正 kb_relation 的表注释（V96 那句「检索链路今天不消费它」已过时）。
           // ★ 为什么是单独一条迁移：已应用的迁移文件不可修改（改注释也会让 Flyway 校验和失配，
           //   后端直接起不来，2026-11-27 实测），所以更正说明只能新增一条 comment 迁移。
-          "knowledge/V116__kb_relation_comment.sql");
+          "knowledge/V116__kb_relation_comment.sql",
+          // 0.9.8 可调参数声明（ai_model.param_schema）
+          "modelcatalog/V117__modelcatalog_param_schema.sql",
+          // 0.9.9 受控关系从四类扩到七类
+          "knowledge/V118__kb_relation_more_types.sql");
 
   private CaliberShape() {}
 

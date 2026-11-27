@@ -8,8 +8,10 @@ import com.hankcs.hanlp.corpus.tag.Nature;
 import com.hankcs.hanlp.seg.Segment;
 import com.hankcs.hanlp.seg.common.Term;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -225,6 +227,23 @@ public class HanlpEntityRecognizer implements EntityRecognizer {
     // ★ 两个 Relation 是不同包里的两个 record（EntityExtractor.Relation 在 application、
     //   EntityRecognizer.Relation 在 domain），必须显式转换，不能直接返回。
     return relationExtractor.relations(text).stream()
+        .map(r -> new Relation(r.type(), r.from(), r.to()))
+        .toList();
+  }
+
+  @Override
+  public List<Relation> relations(String text, List<Recognized> entities) {
+    // ★ 为什么要把实体集合交给规则层：「张三任信息中心主任」里的人是 NER 认出来的，
+    //   规则层只认「张伟经理」那种写法；不传这份集合，WORKS_AT（人 → 组织）一条都抽不到。
+    Map<String, String> knownTypes = new LinkedHashMap<>();
+    if (entities != null) {
+      for (Recognized r : entities) {
+        if (r != null && r.name() != null && r.type() != null) {
+          knownTypes.putIfAbsent(r.name(), r.type());
+        }
+      }
+    }
+    return relationExtractor.relations(text, knownTypes).stream()
         .map(r -> new Relation(r.type(), r.from(), r.to()))
         .toList();
   }

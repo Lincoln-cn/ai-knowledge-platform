@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.knowledge.application;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -62,6 +63,28 @@ public final class EntityExtractor {
    * 是一个够用又不越句的量。
    */
   private static final int RELATION_WINDOW = 20;
+
+  /**
+   * 受控关系的**两端类型约束**（2026-11-28 加）。
+   *
+   * <p>★ 加一类关系，必须同时说清"两端各是什么"。只有标记词、没有端类型，等于允许 「负责固定资产的购置」这种动宾短语当右端 —— 那是规则抽取最容易出错的地方。
+   *
+   * <p>七类里：`BELONGS_TO` / `CONTAINS` / `PART_OF` 是组织间；`WORKS_AT` 是人与组织 （人 →
+   * 组织，方向与句子里的"张三任信息中心主任"一致）；`REFERENCES` 是"谁依据了哪份文书" （文书必须带书名号，那是 {@link #DOC} 抽出来的）。
+   */
+  private record Shape(Set<String> fromTypes, Set<String> toTypes) {}
+
+  private static final Shape ORG_TO_ORG = new Shape(Set.of("ORG"), Set.of("ORG"));
+
+  private static final Map<String, Shape> SHAPES =
+      Map.of(
+          "BELONGS_TO", ORG_TO_ORG,
+          "CONTAINS", ORG_TO_ORG,
+          "PART_OF", ORG_TO_ORG,
+          "RESPONSIBLE_FOR", new Shape(Set.of("ORG", "PERSON"), Set.of("ORG", "PERSON")),
+          "DEFINES", new Shape(Set.of("ORG", "TERM"), Set.of("TERM")),
+          "WORKS_AT", new Shape(Set.of("PERSON"), Set.of("ORG")),
+          "REFERENCES", new Shape(Set.of("ORG", "DOC"), Set.of("DOC")));
 
   private static final Pattern DOC = Pattern.compile("《([^《》]{2,40})》");
 
@@ -187,30 +210,54 @@ public final class EntityExtractor {
    * RELATION_MARK}），否则"加了词但不知道 加成了什么"，比不让他加更糟。
    */
   public List<Relation> relations(String text) {
+    return relations(text, Map.of());
+  }
+
+  /**
+   * 用**外部给的实体集合**抽关系（2026-11-28 加，为 `WORKS_AT` 与 `REFERENCES` 铺路）。
+   *
+   * <p>★ 为什么需要这个重载：本类自己 {@link #extract} 抽得出 ORG / DOC / TERM，但**抽不出真实人名** ——
+   * 它只认「张伟经理」这种职务词在名字后面的写法（`PERSON_TAIL`），而制度文里更常见的是 「张三任信息中心主任」。人名要靠 NER 模型给（`OnnxNerRecognizer` 的
+   * `PERSON`，实测 F1 98.7%）。
+   *
+   * <p>不传这份集合的后果不是"少抽几条"，而是 `WORKS_AT`（人 → 组织）**一条都抽不到**： 左端在人名上永远找不到符合类型的实体。那正是"收下了但没用"的形态 ——
+   * 标记词加了、 约束放了，读数还是 0，而且没有任何报错。
+   *
+   * @param knownTypes 外部识别出来的「实体名 → 类型」；与规则自己抽到的合并，同名的类型取并集
+   */
+  public List<Relation> relations(String text, Map<String, String> knownTypes) {
     if (text == null || text.isBlank()) {
       return List.of();
     }
-    Set<String> names = new LinkedHashSet<>();
+    // 名字 → 它可能是哪些类型（同名既可能是机构也可能是术语，见 extract 的去重键）
+    Map<String, Set<String>> typesByName = new LinkedHashMap<>();
+    // 先放外部给的（NER 的模型置信度高于规则），再补规则自己抽到的（书名号文书名等）
+    knownTypes.forEach(
+        (name, type) -> {
+          if (name != null && !name.isBlank() && type != null) {
+            typesByName.computeIfAbsent(name, k -> new LinkedHashSet<>()).add(type);
+          }
+        });
     for (Candidate candidate : extract(text)) {
-      names.add(candidate.name());
+      typesByName
+          .computeIfAbsent(candidate.name(), k -> new LinkedHashSet<>())
+          .add(candidate.type());
     }
     List<Relation> result = new ArrayList<>();
     Set<String> seen = new LinkedHashSet<>();
     for (Map.Entry<String, String> mark : relationMarks.entrySet()) {
-      // ★ 不能用一个"(机构)(标记词)(机构)"的正则整体匹配：那种写法把"哪一部分是实体"
+      Shape shape = SHAPES.getOrDefault(mark.getValue(), ORG_TO_ORG);
+      // ★ 不能用一个"(实体)(标记词)(实体)"的正则整体匹配：那种写法把"哪一部分是实体"
       // 交给正则去猜，而标记词的位置其实是确定的。改成**先定位标记词，再在它左右的
-      // 窗口里各找最近的一个机构名** —— 这与"两端都必须在实体表里"是同一条判据的
-      // 两种落地方式，但后者对"综合部隶属财务资产部"这种紧邻句更稳。
+      // 窗口里各找最近的一个实体名**，并且按关系类型分别限定两端允许的类型。
       int at = text.indexOf(mark.getKey());
       while (at >= 0) {
-        String from = nearestOrgBefore(text, at);
         int toStart = at + mark.getKey().length();
-        String to = nearestOrgAt(text, toStart);
+        String from = nearestNameBefore(text, at, typesByName, shape.fromTypes());
+        String to = nearestNameAfter(text, toStart, typesByName, shape.toTypes());
         if (from != null
             && to != null
             && !from.equals(to)
-            && names.contains(from)
-            && names.contains(to)
             && seen.add(mark.getValue() + "|" + from + "|" + to)) {
           result.add(new Relation(mark.getValue(), from, to));
         }
@@ -220,22 +267,57 @@ public final class EntityExtractor {
     return List.copyOf(result);
   }
 
-  /** 标记词左侧窗口里**最靠右**的机构名（离标记词最近的那一个）。 */
-  private String nearestOrgBefore(String text, int markStart) {
+  /**
+   * 标记词左侧窗口里**最靠右**的、类型在 {@code allowed} 里的实体名。
+   *
+   * <p>用的是"候选名在窗口里最后出现的位置"，不是再跑一遍正则 —— 这样"哪个名字算实体"与 {@link #extract} 完全一致，不会出现"抽取认为它是实体、关系这边不认"的分裂。
+   */
+  private String nearestNameBefore(
+      String text, int markStart, Map<String, Set<String>> typesByName, Set<String> allowed) {
     int from = Math.max(0, markStart - RELATION_WINDOW);
-    Matcher matcher = org.matcher(text.substring(from, markStart));
-    String last = null;
-    while (matcher.find()) {
-      last = matcher.group(1).strip();
+    String window = text.substring(from, markStart);
+    String best = null;
+    int bestAt = -1;
+    for (Map.Entry<String, Set<String>> entry : typesByName.entrySet()) {
+      if (entry.getValue().stream().noneMatch(allowed::contains)) {
+        continue;
+      }
+      int at = window.lastIndexOf(entry.getKey());
+      if (at < 0) {
+        continue;
+      }
+      // 位置更靠右的优先；同一位置取更长的名字（"财务资产部"优先于"资产部"）
+      if (at > bestAt
+          || (at == bestAt && best != null && entry.getKey().length() > best.length())) {
+        best = entry.getKey();
+        bestAt = at;
+      }
     }
-    return last;
+    return best;
   }
 
-  /** 标记词右侧窗口里**最靠左**的机构名（离标记词最近的那一个）。 */
-  private String nearestOrgAt(String text, int markEnd) {
+  /** 标记词右侧窗口里**最靠左**的、类型在 {@code allowed} 里的实体名。 */
+  private String nearestNameAfter(
+      String text, int markEnd, Map<String, Set<String>> typesByName, Set<String> allowed) {
     int to = Math.min(text.length(), markEnd + RELATION_WINDOW);
-    Matcher matcher = org.matcher(text.substring(markEnd, to));
-    return matcher.find() ? matcher.group(1).strip() : null;
+    String window = text.substring(markEnd, to);
+    String best = null;
+    int bestAt = Integer.MAX_VALUE;
+    for (Map.Entry<String, Set<String>> entry : typesByName.entrySet()) {
+      if (entry.getValue().stream().noneMatch(allowed::contains)) {
+        continue;
+      }
+      int at = window.indexOf(entry.getKey());
+      if (at < 0) {
+        continue;
+      }
+      if (at < bestAt
+          || (at == bestAt && best != null && entry.getKey().length() > best.length())) {
+        best = entry.getKey();
+        bestAt = at;
+      }
+    }
+    return best;
   }
 
   private String suffixAlt() {
@@ -288,7 +370,8 @@ public final class EntityExtractor {
    *
    * @param orgSuffixes 机构后缀（部 / 局 / 中心 …）。为空时构造直接抛错 —— 没有后缀 就一个机构名都抽不出来，那是配置错误，不该静默跑出一个空结果
    * @param personTitles 职务词（经理 / 主任 …）。空表示这个库不抽人员
-   * @param relationMarks 标记词 → 受控关系名（`BELONGS_TO` / `CONTAINS` / `RESPONSIBLE_FOR` / `DEFINES`）
+   * @param relationMarks 标记词 → 受控关系名（七类，见 {@link #SHAPES}：`BELONGS_TO` / `CONTAINS` / `PART_OF` /
+   *     `RESPONSIBLE_FOR` / `DEFINES` / `WORKS_AT` / `REFERENCES`）
    */
   public record Dictionary(
       List<String> orgSuffixes, List<String> personTitles, Map<String, String> relationMarks) {
@@ -303,6 +386,9 @@ public final class EntityExtractor {
   /** 抽出来的实体候选。{@code type} 取 {@code ORG|PERSON|DOC|TERM|OTHER}。 */
   public record Candidate(String type, String name) {}
 
-  /** 一条受控关系。{@code type} 取 {@code BELONGS_TO|CONTAINS|RESPONSIBLE_FOR|DEFINES}。 */
+  /**
+   * 一条受控关系。{@code type} 取 {@code
+   * BELONGS_TO|CONTAINS|PART_OF|RESPONSIBLE_FOR|DEFINES|WORKS_AT|REFERENCES}。
+   */
   public record Relation(String type, String from, String to) {}
 }
