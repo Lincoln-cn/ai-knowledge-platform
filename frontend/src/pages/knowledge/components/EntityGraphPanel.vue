@@ -427,7 +427,9 @@ onMounted(load)
   stroke-width: 2;
 }
 .node text {
-  font-size: 11px;
+  /* SVG 里的字号也走令牌：11px 低于可读下限（闸门判据 ≥12px），而 viewBox 会整体缩放，
+     这里再压小只会让缩放后更糊。 */
+  font-size: var(--text-2xs);
   fill: var(--color-ink-2);
   pointer-events: none;
 }
