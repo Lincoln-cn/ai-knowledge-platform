@@ -475,6 +475,30 @@ public class ChatController {
   }
 
   /**
+   * 流还没开始时的<strong>另一类</strong>业务错误：领域层的守卫抛的是 {@link IllegalArgumentException} —— {@code
+   * Message#resume} 的"只有「已停止」的回答可以续写"就属于这一类。
+   *
+   * <p>★★ 为什么必须也写在控制器级（{@code #373}）：全局 {@code GlobalExceptionHandler#onIllegalState} 返回的 {@code
+   * ResponseEntity} <strong>没有</strong>显式 {@code contentType}，于是错误响应的媒体类型回到"按请求的 {@code Accept}
+   * 协商"；而这条链路的 {@code Accept} 只有 {@code text/event-stream} ⇒ {@code
+   * HttpMediaTypeNotAcceptableException} ⇒ 容器兜成 <strong>500 空体</strong>。实测同一请求三种 Accept： {@code
+   * application/json} 与不带 Accept 都是 {@code 400 + 完整包络}，而 {@code text/event-stream} 是 {@code 500 + 0
+   * 字节} ⇒ 用户只看到"生成失败"，看不到"只有已停止的回答可以续写"。
+   *
+   * <p>⇒ 与 {@link #onBusiness} 同形状：显式给出 {@code application/json}，让<strong>同一份错误</strong>在任何 {@code
+   * Accept} 下都是同一个形状。
+   *
+   * @param cause 领域守卫抛出的异常（message 是给人看的，直接进包络）
+   * @return {@code 400} + 统一包络，媒体类型恒为 {@code application/json}
+   */
+  @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
+  public ResponseEntity<ApiResponse<Void>> onIllegalState(RuntimeException cause) {
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .contentType(MediaType.APPLICATION_JSON)
+        .body(ApiResponse.fail(ErrorCode.BAD_REQUEST, cause.getMessage()));
+  }
+
+  /**
    * 取当前登录用户（JWT 的 {@code sub}）。
    *
    * <p>★ 取不到 ⇒ {@code 401}（不是 500、也不是"当成匿名继续"）：本端点要求认证， 而"有请求、没身份"只可能来自网关 / 过滤器链出问题 ——
