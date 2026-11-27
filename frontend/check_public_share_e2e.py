@@ -234,7 +234,7 @@ def ensure_embedding_model(token: str) -> tuple[str, bool]:
             "supplier": "LOCAL_INFERENCE",
             "baseModel": "bge-m3",
             "apiBase": STUB_API_BASE,
-            "dimension": 768,
+            "dimension": 1024,  # 与 CI 桩 `--dim 1024`、seed V900 的 bge-m3 登记一致；同 baseModel 只允许一个维度集合（#360）
         },
     )
     if status not in (200, 201):

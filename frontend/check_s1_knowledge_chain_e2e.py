@@ -288,13 +288,13 @@ def main() -> int:
                 "kind": "EMBEDDING",
                 "supplier": "LOCAL_INFERENCE",
                 "baseModel": "bge-m3",
-                "dimension": 768,
+                "dimension": 1024,  # 与 CI 桩 `--dim 1024`、seed V900 的 bge-m3 登记一致；同 baseModel 只允许一个维度集合（#360）
             },
         )
         model_id = (created.get("data") or {}).get("id") or ""
         if not check(status == 200 and bool(model_id), f"建向量模型（{status}）"):
             return 1
-        note(f"向量模型 {model_id}：桩返回 {768} 维（与 `_EMBED_DIM` 一致）")
+        note(f"向量模型 {model_id}：桩返回 1024 维（与 CI 桩 `--dim 1024` 一致）")
 
         status, kb = api(
             "POST",
