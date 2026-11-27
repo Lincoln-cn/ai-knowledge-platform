@@ -262,6 +262,11 @@
             v-else-if="activeTab === 'hittest'"
             :kb-id="openedKb.id"
           />
+          <EntityGraphPanel
+            v-else-if="activeTab === 'entities'"
+            :kb-id="openedKb.id"
+            @goto-segment="gotoSegments"
+          />
           <EntityMergePanel
             v-else-if="activeTab === 'merge'"
             :kb-id="openedKb.id"
@@ -304,6 +309,7 @@ import SegmentPanel from './components/SegmentPanel.vue'
 import QuestionPanel from './components/QuestionPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import HitTestPanel from './components/HitTestPanel.vue'
+import EntityGraphPanel from './components/EntityGraphPanel.vue'
 import EntityMergePanel from './components/EntityMergePanel.vue'
 
 const route = useRoute()
@@ -329,6 +335,7 @@ const TABS = [
   { key: 'segments', label: '分段' },
   { key: 'questions', label: '问题' },
   { key: 'hittest', label: '命中测试' },
+  { key: 'entities', label: '实体与关系' },
   { key: 'merge', label: '实体归并' },
   { key: 'settings', label: '设置' }
 ] as const

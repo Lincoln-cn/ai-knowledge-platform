@@ -36,6 +36,73 @@ const refreshCategoryCounts = () => {
  */
 const createRequestIdToKbId = new Map<string, string>()
 
+/**
+ * 实体与关系的 mock 样例（0.9.8 ④⑤⑥）。
+ *
+ * ★ 刻意让「被多少段提到」与「关系数」不一致：`财务资产部` 被 6 段提到但只有 2 条边。
+ * 界面把这两个数分开显示才有意义 —— 合成一个数时，「关系 0 条」会被读成「这个实体不重要」。
+ *
+ * ★ 每条边都带 `documentId` / `segmentId`：图谱上点一条边要能回到原文那一段。
+ * mock 里给的是 fixtures 里真实存在的文档/分段 id 形状，点「看原文」能跳到分段视图。
+ */
+const entityGraphSample = (kbId: string) => {
+  const nodes = [
+    { id: 'eg-1', name: '财务资产部', type: 'ORG', source: 'RULE', confidence: 1, mentions: 6 },
+    { id: 'eg-2', name: '综合部', type: 'ORG', source: 'RULE', confidence: 1, mentions: 4 },
+    { id: 'eg-3', name: '预算科', type: 'ORG', source: 'RULE', confidence: 1, mentions: 3 },
+    { id: 'eg-4', name: '张伟', type: 'PERSON', source: 'MODEL', confidence: 0.98, mentions: 2 },
+    { id: 'eg-5', name: '采购中心', type: 'ORG', source: 'RULE', confidence: 1, mentions: 1 }
+  ]
+  const edges = [
+    {
+      id: 'egr-1',
+      type: 'BELONGS_TO',
+      from: 'eg-2',
+      to: 'eg-1',
+      documentId: 'doc-1',
+      segmentId: 'seg-1',
+      confidence: 0.8
+    },
+    {
+      id: 'egr-2',
+      type: 'CONTAINS',
+      from: 'eg-1',
+      to: 'eg-3',
+      documentId: 'doc-1',
+      segmentId: 'seg-2',
+      confidence: 0.8
+    },
+    {
+      id: 'egr-3',
+      type: 'RESPONSIBLE_FOR',
+      from: 'eg-4',
+      to: 'eg-3',
+      documentId: 'doc-2',
+      segmentId: 'seg-3',
+      confidence: 0.8
+    },
+    {
+      id: 'egr-4',
+      type: 'DEFINES',
+      from: 'eg-1',
+      to: 'eg-5',
+      documentId: 'doc-2',
+      segmentId: null,
+      confidence: 0.8
+    }
+  ]
+  return {
+    nodes,
+    edges,
+    truncated: false,
+    totalEntities: nodes.length,
+    totalRelations: edges.length,
+    entityLimit: 500,
+    relationLimit: 2000,
+    kbId
+  }
+}
+
 export const knowledgeRoutes: MockRoute[] = [
   [
     'GET',
@@ -248,6 +315,16 @@ export const knowledgeRoutes: MockRoute[] = [
       }
       refreshCategoryCounts()
       return undefined
+    }
+  ],
+
+  [
+    'GET',
+    '/knowledge-bases/:kbId/entity-graph',
+    ({ path, token }) => {
+      // 可见性走与其它读端点同一个判定：看不见的库一律 404（不是"返回空"）
+      findKb(path.kbId, token)
+      return entityGraphSample(path.kbId)
     }
   ]
 ]

@@ -152,3 +152,58 @@ export const confirmEntityMerge = (kbId: string, keepId: string, mergeName: stri
     path: { kbId },
     body: { keepId, mergeName }
   })
+/* ──────────────────── 实体与关系（0.9.8 ④⑤⑥，`#370`） ──────────────────── */
+
+/**
+ * 图上的一个实体。
+ *
+ * ★ `mentions`（被多少段提到）与「图里有几条边」是两个数：关系靠标记词规则抽取，
+ * 一个实体可以被 200 段提到而没有任何边。合成一个数会让「0 条边」被读成「不重要」。
+ */
+export interface EntityGraphNode {
+  id: string
+  name: string
+  type: string
+  source: string
+  confidence: number
+  mentions: number
+}
+
+/** 图上的一条边。`segmentId` 是取证位置 —— 没有它，这条边就回不到原文那一段。 */
+export interface EntityGraphEdge {
+  id: string
+  type: string
+  from: string
+  to: string
+  documentId: string | null
+  segmentId: string | null
+  confidence: number
+}
+
+export interface EntityGraph {
+  nodes: EntityGraphNode[]
+  edges: EntityGraphEdge[]
+  /** 实体被截断（超过上限）。界面必须提示「只画了一部分」，否则会读成「库里没有」 */
+  truncated: boolean
+  totalEntities: number
+  totalRelations: number
+  entityLimit: number
+  relationLimit: number
+}
+
+/**
+ * 一次取齐实体、关系与图谱。
+ *
+ * ★ 不拆成三个端点：三样是同一个面板的三个视图，分开请求会变成两份可能不一致的快照
+ * （实体列表里没有的实体，关系里却有指向它的边）。
+ */
+export const getEntityGraph = (
+  kbId: string,
+  query: { entityLimit?: number; relationLimit?: number } = {}
+) =>
+  request<EntityGraph>({
+    method: 'GET',
+    url: '/knowledge-bases/:kbId/entity-graph',
+    path: { kbId },
+    query
+  })

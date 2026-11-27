@@ -16,6 +16,12 @@ public class JdbcEntityRelationRepository implements EntityRelationRepository {
 
   private final JdbcTemplate jdbc;
 
+  /** 默认一次列多少条关系（图谱一次画几千条边已经读不动了）。 */
+  private static final int DEFAULT_LIST_LIMIT = 2000;
+
+  /** 关系列表的硬上限：这个口子是给人看图的，不是导出工具。 */
+  private static final int MAX_LIST_LIMIT = 5000;
+
   public JdbcEntityRelationRepository(JdbcTemplate jdbc) {
     this.jdbc = jdbc;
   }
@@ -76,6 +82,46 @@ public class JdbcEntityRelationRepository implements EntityRelationRepository {
     // 两端都命中的边会让同一段出现两次，distinct 已去重；这里再保一层顺序稳定。
     Set<UUID> ordered = new LinkedHashSet<>(rows);
     return new ArrayList<>(ordered);
+  }
+
+  /**
+   * 列一个库里的关系（看图用），join 两端实体取名字与类型。
+   *
+   * <p>★ 上限写死两级（默认 2000 / 封顶 5000）：这个口子是给人看图的，不是导出工具。 真到了要导出的量级，需要的是分页与筛选，而不是把上限调大。
+   */
+  @Override
+  public List<RelationRow> listOf(UUID kbId, int limit) {
+    if (kbId == null) {
+      return List.of();
+    }
+    int capped = limit <= 0 ? DEFAULT_LIST_LIMIT : Math.min(limit, MAX_LIST_LIMIT);
+    return jdbc.query(
+        """
+        select r.id, r.type, r.from_entity, r.to_entity, r.document_id, r.segment_id, r.confidence,
+               f.name as from_name, f.type as from_type,
+               t.name as to_name, t.type as to_type
+          from kb_relation r
+          join kb_entity f on f.id = r.from_entity
+          join kb_entity t on t.id = r.to_entity
+         where r.kb_id = ?
+         order by r.created_at desc, r.id
+         limit ?
+        """,
+        (rs, i) ->
+            new RelationRow(
+                rs.getObject("id", UUID.class),
+                rs.getString("type"),
+                rs.getObject("from_entity", UUID.class),
+                rs.getString("from_name"),
+                rs.getString("from_type"),
+                rs.getObject("to_entity", UUID.class),
+                rs.getString("to_name"),
+                rs.getString("to_type"),
+                rs.getObject("document_id", UUID.class),
+                rs.getObject("segment_id", UUID.class),
+                rs.getDouble("confidence")),
+        kbId,
+        capped);
   }
 
   @Override

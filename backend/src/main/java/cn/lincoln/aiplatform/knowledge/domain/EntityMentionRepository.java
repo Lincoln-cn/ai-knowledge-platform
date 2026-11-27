@@ -26,6 +26,16 @@ public interface EntityMentionRepository {
   /** 某个实体出现在哪些段（扩召回要用）。 */
   List<UUID> segmentIdsOf(UUID entityId);
 
+  /**
+   * 每个实体被多少段提到过（键 = 实体 id）。
+   *
+   * <p>★ 为什么要在库里数、而不是界面拿实体列表后逐个问：实体页要按"提得多"排序， 逐个问就是 N+1 次往返。一次 {@code group by} 换掉 N 次查询。
+   *
+   * <p>★ 没有记录的实体<b>不出现在 map 里</b>（不是 0）—— 调用方要按 {@code getOrDefault(id, 0)} 读，
+   * 这一点与"库里没有这个实体"是两件事，别混。
+   */
+  java.util.Map<UUID, Integer> countsOf(UUID kbId);
+
   /** 一条待写入的关联。 */
   record Mention(UUID entityId, UUID kbId, UUID documentId, UUID segmentId) {}
 }

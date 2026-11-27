@@ -1,7 +1,9 @@
 package cn.lincoln.aiplatform.knowledge.infrastructure;
 
 import cn.lincoln.aiplatform.knowledge.domain.EntityMentionRepository;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -58,5 +60,20 @@ public class JdbcEntityMentionRepository implements EntityMentionRepository {
         "select segment_id from kb_entity_mention where entity_id = ? order by segment_id",
         (rs, i) -> rs.getObject(1, UUID.class),
         entityId);
+  }
+
+  @Override
+  public Map<UUID, Integer> countsOf(UUID kbId) {
+    if (kbId == null) {
+      return Map.of();
+    }
+    Map<UUID, Integer> out = new LinkedHashMap<>();
+    jdbc.query(
+        "select entity_id, count(*) as n from kb_entity_mention where kb_id = ? group by entity_id",
+        (java.sql.ResultSet rs) -> {
+          out.put(rs.getObject("entity_id", UUID.class), rs.getInt("n"));
+        },
+        kbId);
+    return out;
   }
 }

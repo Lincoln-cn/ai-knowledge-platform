@@ -79,4 +79,31 @@ public interface EntityRelationRepository {
       UUID documentId,
       UUID segmentId,
       double confidence) {}
+
+  /**
+   * 列一个库里的关系（给人看的那一面）：带两端实体的名字与类型、取证文档与段。
+   *
+   * <p>★ 与 {@link #segmentIdsOf} 的分工要说清，否则以后有人会想"合并成一个方法"： 那个是检索侧要的「哪几段有相关关系陈述」，<b>只暴露段
+   * id</b>；这个是界面上要说清的 「谁 —什么关系→ 谁，从哪一段读出来的」。前者的形状被钉死是刻意的（改表不改检索）。
+   *
+   * <p>★ 失败语义同 {@link #segmentIdsOf}：查库失败抛异常，不吞成空列表。
+   *
+   * @param kbId 知识库 id（{@code null} 返回空列表）
+   * @param limit 上限（{@code <=0} 时用默认 2000 —— 图谱一次画几千条边已经读不动了）
+   */
+  List<RelationRow> listOf(UUID kbId, int limit);
+
+  /** 一条已入库的关系（带两端实体的名字与类型，够界面直接渲染）。 */
+  record RelationRow(
+      UUID id,
+      String type,
+      UUID fromId,
+      String fromName,
+      String fromType,
+      UUID toId,
+      String toName,
+      String toType,
+      UUID documentId,
+      UUID segmentId,
+      double confidence) {}
 }
