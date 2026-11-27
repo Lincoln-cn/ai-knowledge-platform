@@ -162,10 +162,45 @@ export interface PromptEvalSet {
   itemCount: number
 }
 
+/** 第 1 层机械断言的类型（ROADMAP §11.63.2）。每一条只比一件事 —— 混在一起就定位不到"哪条要求没被满足"。 */
+export type AssertionKind =
+  | 'CONTAINS'
+  | 'NOT_CONTAINS'
+  | 'REGEX'
+  | 'MAX_CHARS'
+  | 'MIN_CHARS'
+  | 'LIST'
+  | 'UNCERTAIN'
+
+/**
+ * 一条断言。
+ *
+ * ★ `value` 按 `kind` 解释：CONTAINS / NOT_CONTAINS 是要找的子串，REGEX 是正则，
+ * MAX_CHARS / MIN_CHARS 是正整数，LIST / UNCERTAIN 不需要值（留空）。
+ */
+export interface PromptAssertion {
+  id: string
+  /** 人写的原话；留空时服务端按类型给一句默认文案 */
+  label: string
+  kind: AssertionKind
+  value: string
+}
+
+/** 一条断言的判定结果。`detail` 要能单独读明白，不是只有 true/false。 */
+export interface PromptAssertionResult {
+  assertionId: string
+  label: string
+  kind: AssertionKind
+  passed: boolean
+  detail: string
+}
+
 export interface PromptEvalItem {
   id: string
   ordinal: number
   question: string
+  /** ★ 空数组 = 这道题没设断言（界面必须显示"未设断言"，不是"0 通过 0 失败"） */
+  assertions: PromptAssertion[]
 }
 
 export type EvalSide = 'SAVED' | 'DRAFT'
@@ -184,6 +219,8 @@ export interface PromptEvalAnswer {
   elapsedMs: number | null
   passCount: number
   failCount: number
+  /** 逐条判定明细：哪条断言、期望什么、实际为什么没过 */
+  assertionResults: PromptAssertionResult[]
   verdict: EvalVerdict | null
   note: string | null
 }
@@ -198,6 +235,11 @@ export interface PromptEvalSummary {
   better: number
   same: number
   worse: number
+  /** 两侧答案一起算的断言通过条数 */
+  assertionPass: number
+  assertionFail: number
+  /** 有断言的答案行数；为 0 时上面三个数没有意义，界面按"未设断言"显示 */
+  assertionAnswers: number
 }
 
 export interface PromptEvalRun {
@@ -249,6 +291,19 @@ export const addPromptEvalItem = (setId: string, question: string) =>
 
 export const deletePromptEvalItem = (itemId: string) =>
   request<void>({ method: 'DELETE', url: '/prompt-eval-items/:itemId', path: { itemId } })
+
+/**
+ * 整张断言表替换（增、删、改都走这一个入口）。
+ *
+ * ★ 只影响以后的运行：已跑完的读数是当时的快照，改定义不会回头改写它们。
+ */
+export const replacePromptEvalAssertions = (itemId: string, assertions: PromptAssertion[]) =>
+  request<PromptEvalItem>({
+    method: 'PUT',
+    url: '/prompt-eval-items/:itemId/assertions',
+    path: { itemId },
+    body: { assertions }
+  })
 
 /**
  * 起一次评测。

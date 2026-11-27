@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -29,6 +30,17 @@ public class PromptEvalItem {
   @Column(name = "question", nullable = false, length = 1000)
   private String question;
 
+  /**
+   * 这道题的机械断言定义（JSON 数组，见 {@link PromptAssertions}）。
+   *
+   * <p>★ 存的是 JSON 文本而不是 jsonb：判定与展示都只按"这道题"整块读写，没有一处需要按断言内容做库侧查询 （理由写在
+   * `V115__as_prompt_eval_assertions.sql` 的注释里）。
+   *
+   * <p>★ 空数组 = 没设断言，与"设了断言且全过"是两件事 —— 界面上必须分开显示。
+   */
+  @Column(name = "assertions", nullable = false)
+  private String assertions = "[]";
+
   protected PromptEvalItem() {}
 
   public PromptEvalItem(UUID id, UUID setId, int ordinal, String question) {
@@ -36,6 +48,15 @@ public class PromptEvalItem {
     this.setId = setId;
     this.ordinal = ordinal;
     this.question = question;
+  }
+
+  public List<PromptAssertions.Def> assertions() {
+    return PromptAssertions.parseDefs(assertions);
+  }
+
+  /** 整张断言表替换（增删都走这里，不做单条增删：一次编辑后的形状才是一致的那一份）。 */
+  public void replaceAssertions(List<PromptAssertions.Def> defs) {
+    this.assertions = PromptAssertions.writeDefs(defs);
   }
 
   public UUID id() {

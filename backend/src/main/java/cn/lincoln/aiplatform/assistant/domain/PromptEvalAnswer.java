@@ -7,6 +7,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -50,6 +51,17 @@ public class PromptEvalAnswer {
   @Column(name = "fail_count", nullable = false)
   private int failCount;
 
+  /**
+   * 每条断言的判定快照（JSON 数组，见 {@link PromptAssertions}）。
+   *
+   * <p>★ 存快照而不是每次按当前定义重算：断言定义可以随时改，改了不该改写历史运行的读数 —— 要看新定义的结果就重跑一次（与 {@code draft_text} 整段存正文同一条理由）。
+   *
+   * <p>★ 空数组 = 跑的时候这道题没设断言。这时 {@code passCount}/{@code failCount} 都是 0， 但**不许显示成「0 通过 0 失败」**——
+   * 那会把"没测"读成"测了且都好"。
+   */
+  @Column(name = "assertion_results", nullable = false)
+  private String assertionResults = "[]";
+
   @Enumerated(EnumType.STRING)
   @Column(name = "verdict", length = 8)
   private EvalVerdict verdict;
@@ -78,14 +90,21 @@ public class PromptEvalAnswer {
   }
 
   /**
-   * 记录第 1 层机械断言的结果。
+   * 记录第 1 层机械断言的判定结果。
    *
-   * @param pass 满足的断言条数
-   * @param fail 未满足的断言条数
+   * <p>★ 计数由结果算出来（不单独传）：两处各传一次，迟早会出现"结果是 3 条、计数写 2"的错位， 而错位以后读数就没有意义了。
+   *
+   * @param results 每条断言的判定；空列表表示这道题跑的时候没设断言
    */
-  public void recordAssertions(int pass, int fail) {
-    this.passCount = Math.max(pass, 0);
-    this.failCount = Math.max(fail, 0);
+  public void recordAssertions(List<PromptAssertions.Result> results) {
+    List<PromptAssertions.Result> safe = results == null ? List.of() : results;
+    this.assertionResults = PromptAssertions.writeResults(safe);
+    this.passCount = PromptAssertions.passedCount(safe);
+    this.failCount = PromptAssertions.failedCount(safe);
+  }
+
+  public List<PromptAssertions.Result> assertionResults() {
+    return PromptAssertions.parseResults(assertionResults);
   }
 
   /** 人工评一档（{@code note} 可空）。 */

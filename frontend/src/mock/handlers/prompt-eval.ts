@@ -1,6 +1,8 @@
 import { ApiError, ErrorCode } from '@/api/types'
 import type {
   EvalVerdict,
+  PromptAssertion,
+  PromptAssertionResult,
   PromptEvalAnswer,
   PromptEvalItem,
   PromptEvalRun,
@@ -37,6 +39,107 @@ function requireWrite(token: string): void {
 type EvalSetRow = PromptEvalSet & { configId: string }
 type EvalItemRow = PromptEvalItem & { setId: string }
 
+/** 判定词表与后端 `PromptAssertions` 保持一致：两边对同一句话给出同一个结论，界面才不会自相矛盾。 */
+const UNCERTAIN_WORDS = [
+  '没有提到',
+  '未提到',
+  '未提及',
+  '没有提及',
+  '无法确定',
+  '不确定',
+  '无法回答',
+  '不能确定',
+  '不知道',
+  '未涉及',
+  '没有涉及',
+  '未找到',
+  '没有找到',
+  '没有相关',
+  '无相关',
+  '无法判断'
+]
+
+/** 列表项：`- x` / `* x` / `• x` / `1. x` / `1、x` / `(1) x`。 */
+const LIST_LINE = /^\s*(?:[-*•]\s+|\d+\s*[.、)）]\s+|\(\d+\)\s*)\S/gm
+
+function labelOf(a: PromptAssertion): string {
+  const label = (a.label ?? '').trim()
+  if (label) return label
+  const value = (a.value ?? '').trim()
+  switch (a.kind) {
+    case 'CONTAINS':
+      return `必须出现「${value}」`
+    case 'NOT_CONTAINS':
+      return `不许出现「${value}」`
+    case 'REGEX':
+      return `必须匹配 /${value}/`
+    case 'MAX_CHARS':
+      return `不超过 ${value} 字`
+    case 'MIN_CHARS':
+      return `不少于 ${value} 字`
+    case 'LIST':
+      return '要分点输出'
+    case 'UNCERTAIN':
+      return '不确定时要说出来'
+  }
+}
+
+/** 逐条判。空数组进来就空数组出去 —— 「没设断言」与「全过」必须分得开。 */
+function judge(answer: string, defs: PromptAssertion[]): PromptAssertionResult[] {
+  const text = answer ?? ''
+  const stripped = text.trim()
+  return defs.map((a) => {
+    const value = (a.value ?? '').trim()
+    const base = { assertionId: a.id, label: labelOf(a), kind: a.kind }
+    switch (a.kind) {
+      case 'CONTAINS': {
+        const ok = text.includes(value)
+        return { ...base, passed: ok, detail: ok ? `出现了「${value}」` : `没有出现「${value}」` }
+      }
+      case 'NOT_CONTAINS': {
+        const ok = !text.includes(value)
+        return { ...base, passed: ok, detail: ok ? `没有出现「${value}」` : `不该出现「${value}」，但出现了` }
+      }
+      case 'REGEX': {
+        try {
+          const ok = new RegExp(value).test(text)
+          return { ...base, passed: ok, detail: ok ? `匹配到 /${value}/` : `没有匹配 /${value}/` }
+        } catch {
+          return { ...base, passed: false, detail: '正则写错了' }
+        }
+      }
+      case 'MAX_CHARS': {
+        const limit = Number(value)
+        if (!Number.isInteger(limit) || limit <= 0) {
+          return { ...base, passed: false, detail: `上限写错了：「${value}」不是正整数` }
+        }
+        return { ...base, passed: stripped.length <= limit, detail: `字数 ${stripped.length} / 上限 ${limit}` }
+      }
+      case 'MIN_CHARS': {
+        const limit = Number(value)
+        if (!Number.isInteger(limit) || limit <= 0) {
+          return { ...base, passed: false, detail: `下限写错了：「${value}」不是正整数` }
+        }
+        return { ...base, passed: stripped.length >= limit, detail: `字数 ${stripped.length} / 下限 ${limit}` }
+      }
+      case 'LIST': {
+        const count = (text.match(LIST_LINE) ?? []).length
+        return { ...base, passed: count >= 2, detail: `列表项 ${count} 个（至少 2 个）` }
+      }
+      case 'UNCERTAIN': {
+        const hit = UNCERTAIN_WORDS.find((w) => text.includes(w))
+        return {
+          ...base,
+          passed: hit !== undefined,
+          detail: hit ? `说了「${hit}」` : '没有出现「没有提到 / 无法确定」这类表述'
+        }
+      }
+      default:
+        return { ...base, passed: false, detail: '断言定义不完整' }
+    }
+  })
+}
+
 const sets: EvalSetRow[] = []
 const items: EvalItemRow[] = []
 type RunRow = Omit<PromptEvalRun, 'summary'> & { draftText: string; savedText: string }
@@ -64,13 +167,26 @@ function summaryOf(answers: PromptEvalAnswer[]): PromptEvalSummary {
   const same = drafts.filter((a) => a.verdict === 'SAME').length
   const worse = drafts.filter((a) => a.verdict === 'WORSE').length
   const rated = drafts.length
+  let assertionPass = 0
+  let assertionFail = 0
+  let assertionAnswers = 0
+  for (const a of answers) {
+    if (a.passCount + a.failCount > 0) {
+      assertionAnswers++
+      assertionPass += a.passCount
+      assertionFail += a.failCount
+    }
+  }
   return {
     winRate: rated === 0 ? null : (better + same * 0.5) / rated,
     ratedItems: rated,
     totalItems: new Set(answers.map((a) => a.itemId)).size,
     better,
     same,
-    worse
+    worse,
+    assertionPass,
+    assertionFail,
+    assertionAnswers
   }
 }
 
@@ -95,10 +211,23 @@ function answerOne(run: RunRow, index: number): void {
   const item = setItems(run.setId)[index]
   if (!item) return
   const stamp = new Date().toISOString()
-  const base = { itemId: item.id, ordinal: item.ordinal, question: item.question, verdict: null as EvalVerdict | null, note: null, passCount: 1, failCount: 0 }
+  const base = { itemId: item.id, ordinal: item.ordinal, question: item.question, verdict: null as EvalVerdict | null, note: null }
+  // ★ 断言按**当时这道题上挂的定义**判（后端同口径）：先判再塞进答案行，别在这里写死"通过 1 条"
+  const judged = (side: 'SAVED' | 'DRAFT') => {
+    const answer = fakeAnswer(item.question, side)
+    const results = judge(answer, item.assertions ?? [])
+    return {
+      answer,
+      results,
+      passCount: results.filter((r) => r.passed).length,
+      failCount: results.filter((r) => !r.passed).length
+    }
+  }
+  const saved = judged('SAVED')
+  const draft = judged('DRAFT')
   run.answers.push(
-    { ...base, id: `${run.id}-${item.id}-S`, side: 'SAVED', answer: fakeAnswer(item.question, 'SAVED'), elapsedMs: 820 + index * 40 },
-    { ...base, id: `${run.id}-${item.id}-D`, side: 'DRAFT', answer: fakeAnswer(item.question, 'DRAFT'), elapsedMs: 910 + index * 40 }
+    { ...base, id: `${run.id}-${item.id}-S`, side: 'SAVED', answer: saved.answer, elapsedMs: 820 + index * 40, passCount: saved.passCount, failCount: saved.failCount, assertionResults: saved.results },
+    { ...base, id: `${run.id}-${item.id}-D`, side: 'DRAFT', answer: draft.answer, elapsedMs: 910 + index * 40, passCount: draft.passCount, failCount: draft.failCount, assertionResults: draft.results }
   )
   run.itemDone = index + 1
   if (run.itemDone >= run.itemTotal) {
@@ -172,7 +301,8 @@ export const promptEvalRoutes: MockRoute[] = [
         id: `pei${Date.now()}`,
         setId: path.setId,
         ordinal,
-        question
+        question,
+        assertions: []
       }
       items.push(created)
       return created
@@ -188,6 +318,40 @@ export const promptEvalRoutes: MockRoute[] = [
       if (index < 0) throw new ApiError(ErrorCode.NOT_FOUND, '题目不存在')
       items.splice(index, 1)
       return undefined
+    }
+  ],
+
+  [
+    'PUT',
+    '/prompt-eval-items/:itemId/assertions',
+    ({ path, body, token }) => {
+      requireWrite(token)
+      const index = items.findIndex((i) => i.id === path.itemId)
+      if (index < 0) throw new ApiError(ErrorCode.NOT_FOUND, '题目不存在')
+      const { assertions } = body as { assertions?: PromptAssertion[] }
+      const input = assertions ?? []
+      if (input.length > 20) {
+        throw new ApiError(ErrorCode.BAD_REQUEST, '一道题最多 20 条断言', '断言是给人逐条核对的，再多就不会有人看读数了')
+      }
+      input.forEach((a, i) => {
+        const where = `第 ${i + 1} 条断言`
+        if (!a.kind) throw new ApiError(ErrorCode.BAD_REQUEST, `${where}没有判定类型`)
+        const needsValue = a.kind !== 'LIST' && a.kind !== 'UNCERTAIN'
+        if (needsValue && !(a.value ?? '').trim()) {
+          throw new ApiError(ErrorCode.BAD_REQUEST, `${where}要填内容`, '改好这一条再保存')
+        }
+      })
+      items[index] = {
+        ...items[index],
+        // 新增的几条前端还不知道 id（传空串）：在这里补，否则两条断言会共用一个空 id
+        assertions: input.map((a) => ({
+          id: a.id && a.id.trim() ? a.id : `pas${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+          label: (a.label ?? '').trim(),
+          kind: a.kind,
+          value: (a.value ?? '').trim()
+        }))
+      }
+      return items[index]
     }
   ],
 

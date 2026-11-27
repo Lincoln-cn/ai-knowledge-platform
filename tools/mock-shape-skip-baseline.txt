@@ -21,8 +21,15 @@
 # 于是它从跳过桶挪到"一致"。★ 那一处正是「跳过桶藏真缺陷」的样板：它在跳过桶里时
 # 改坏了闸门也是 exit 0，读数与"一致"完全一样。
 #
+# 44 → 45（2026-11-27 · 0.9.7 第 1 层断言）：`PUT /prompt-eval-items/:itemId/assertions` 在 mock 里
+# `return items[index]` —— 解析器不追"数组元素访问"，与既有 `return item` / `return items[0]` 同类，
+# 不是解析器新出现的缺陷。人工核过形状：`items[index]` 就是上面 `GET /prompt-eval-sets/:setId/items`
+# 返回的同一批元素（`EvalItemRow`，多了 `setId` 这个内部字段），契约是 `request<PromptEvalItem>`。
+# ★ 同族教训（`#263`）：跳过桶最危险的状态是"它在里面改坏了也没人发现"，
+#   所以这一条是"判不了"而不是"判过"，写在这里是为了让下一个改它的人知道它没被管住。
+#
 # ── 数字 ──
-跳过 44
+跳过 45
 #
 src/mock/handlers/assistants.ts | POST | /assistants | 返回表达式解析不出：withOwnerName(created)
 src/mock/handlers/assistants.ts | POST | /assistants/import | 返回表达式解析不出：withOwnerName(created)
@@ -54,6 +61,7 @@ src/mock/handlers/knowledge.ts | PATCH | /knowledge-bases/:id/enabled | 返回�
 src/mock/handlers/knowledge.ts | PUT | /knowledge-bases/:id/grants | 返回表达式解析不出：kb
 src/mock/handlers/orgs.ts | PUT | /orgs/:id | 判不了（mock 返回多分支联合，只部分分支与契约相符 —— 可能是守卫收窄）
 src/mock/handlers/orgs.ts | POST | /orgs/:id/move | 判不了（mock 返回多分支联合，只部分分支与契约相符 —— 可能是守卫收窄）
+src/mock/handlers/prompt-eval.ts | PUT | /prompt-eval-items/:itemId/assertions | 返回表达式解析不出：items[index]
 src/mock/handlers/prompts.ts | PUT | /prompt-configs/:id | 返回表达式解析不出：item
 src/mock/handlers/providers.ts | POST | /model-providers | 返回表达式解析不出：toPublic(created)
 src/mock/handlers/providers.ts | GET | /model-providers/:id | 返回表达式解析不出：toPublic(p)

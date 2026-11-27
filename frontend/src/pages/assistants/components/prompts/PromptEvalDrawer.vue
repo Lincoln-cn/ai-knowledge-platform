@@ -13,8 +13,10 @@
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { assistantsApi, promptsApi } from '@/api'
+import PromptAssertionsDialog from './PromptAssertionsDialog.vue'
 import type {
   EvalVerdict,
+  PromptAssertionResult,
   PromptEvalAnswer,
   PromptEvalItem,
   PromptEvalRun,
@@ -68,6 +70,56 @@ const pairs = computed(() => {
     .sort((a, b) => a.ordinal - b.ordinal)
 })
 
+/** 断言编辑框：当前在编辑哪道题。 */
+const assertItem = ref<PromptEvalItem | null>(null)
+const assertDlg = ref<InstanceType<typeof PromptAssertionsDialog> | null>(null)
+
+function openAssertions(it: PromptEvalItem) {
+  assertItem.value = it
+  assertDlg.value?.open()
+}
+
+/** 保存回来后只替换那一条题目的断言：整表重拉会让正在看的答案闪一下。 */
+function onAssertionsSaved(saved: PromptEvalItem) {
+  const i = items.value.findIndex((x) => x.id === saved.id)
+  if (i >= 0) {
+    items.value[i] = saved
+  }
+  if (assertItem.value?.id === saved.id) {
+    assertItem.value = saved
+  }
+}
+
+/** 这道题在这两侧有没有判过断言（空数组 = 没设断言，不是"全过"）。 */
+function hasAssertions(p: { saved?: PromptEvalAnswer; draft?: PromptEvalAnswer }) {
+  return (p.saved?.assertionResults.length ?? 0) + (p.draft?.assertionResults.length ?? 0) > 0
+}
+
+/** 一侧的通过情况：没设断言时返回「未设」，不要显示 0/0（会被读成"测了且都好"）。 */
+function tally(a?: PromptEvalAnswer) {
+  const rows = a?.assertionResults ?? []
+  if (rows.length === 0) {
+    return '未设'
+  }
+  return `${rows.filter((r) => r.passed).length}/${rows.length}`
+}
+
+/** 失败明细：两侧都列出来并标明是哪一侧 —— 判据 3 要能指到"哪道题哪条断言"。 */
+function failedRows(p: { saved?: PromptEvalAnswer; draft?: PromptEvalAnswer }) {
+  const out: { side: string; r: PromptAssertionResult }[] = []
+  for (const r of p.saved?.assertionResults ?? []) {
+    if (!r.passed) {
+      out.push({ side: '已保存', r })
+    }
+  }
+  for (const r of p.draft?.assertionResults ?? []) {
+    if (!r.passed) {
+      out.push({ side: '草稿', r })
+    }
+  }
+  return out
+}
+
 const progress = computed(() => {
   if (!run.value) {
     return ''
@@ -91,6 +143,22 @@ const summaryText = computed(() => {
   }
   const pct = Math.round(s.winRate * 100)
   return `胜率 ${pct}%（更好 ${s.better} · 差不多 ${s.same} · 更差 ${s.worse}，已评 ${s.ratedItems} / ${s.totalItems}）`
+})
+
+/**
+ * 断言通过率。
+ *
+ * ★ 与胜率**分开显示**：胜率是"人觉得哪个好"，断言是"机械上有没有满足要求"，两者不是同一个读数。
+ * ★ 没设断言时返回空串 —— 显示成 0% 会被读成"一条都没过"。
+ */
+const assertionText = computed(() => {
+  const s = run.value?.summary
+  if (!s || !s.assertionAnswers) {
+    return ''
+  }
+  const total = s.assertionPass + s.assertionFail
+  const pct = total > 0 ? Math.round((s.assertionPass / total) * 100) : 0
+  return `断言 ${s.assertionPass} / ${total} 通过（${pct}%）`
 })
 
 async function open(id: string, name?: string) {
@@ -354,6 +422,15 @@ defineExpose({ open })
             <div v-for="it in items" :key="it.id" class="pe-item">
               <span class="pe-ordinal">{{ it.ordinal }}</span>
               <span class="pe-question">{{ it.question }}</span>
+              <el-button
+                text
+                size="small"
+                class="pe-assert-btn"
+                :class="{ 'pe-assert-btn-off': it.assertions.length === 0 }"
+                @click="openAssertions(it)"
+              >
+                {{ it.assertions.length ? `断言 ${it.assertions.length}` : '断言' }}
+              </el-button>
               <el-button text size="small" type="danger" @click="removeItem(it)">×</el-button>
             </div>
             <div v-if="items.length === 0" class="pe-empty">
@@ -399,6 +476,7 @@ defineExpose({ open })
 
         <div v-if="run" class="pe-summary">
           <span class="pe-win">{{ summaryText }}</span>
+          <span v-if="assertionText" class="pe-assert-sum">{{ assertionText }}</span>
         </div>
 
         <div class="pe-answers">
@@ -415,6 +493,21 @@ defineExpose({ open })
               <div class="pe-side">
                 <div class="pe-side-tag">草稿</div>
                 <div class="pe-answer">{{ p.draft?.answer || '—' }}</div>
+              </div>
+            </div>
+            <div v-if="hasAssertions(p)" class="pe-asserts">
+              <div class="pe-assert-hd micro muted">
+                断言 已保存 {{ tally(p.saved) }} · 草稿 {{ tally(p.draft) }}
+              </div>
+              <div
+                v-for="(f, i) in failedRows(p)"
+                :key="`${f.r.assertionId}-${f.side}-${i}`"
+                class="pe-assert-row"
+              >
+                <span class="pe-assert-side micro">{{ f.side }}</span>
+                <span class="pe-assert-x">✗</span>
+                <span class="pe-assert-label">{{ f.r.label }}</span>
+                <span class="pe-assert-detail micro muted">{{ f.r.detail }}</span>
               </div>
             </div>
             <div class="pe-rate">
@@ -450,6 +543,8 @@ defineExpose({ open })
         </div>
       </section>
     </div>
+
+    <PromptAssertionsDialog ref="assertDlg" :item="assertItem" @saved="onAssertionsSaved" />
   </el-drawer>
 </template>
 
@@ -543,6 +638,16 @@ defineExpose({ open })
   display: flex;
 }
 
+/* 断言入口：设了断言的那几题要一眼看出来（0 条时是灰的，不抢注意力） */
+.pe-assert-btn {
+  flex: 0 0 auto;
+  font-size: var(--text-2xs, 12px);
+}
+
+.pe-assert-btn-off {
+  color: var(--color-ink-faint);
+}
+
 .pe-run {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
@@ -556,6 +661,14 @@ defineExpose({ open })
 .pe-win {
   font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
+}
+
+/* 断言读数与胜率分开写：一个是"人觉得哪个好"，一个是"机械上有没有满足要求" */
+.pe-assert-sum {
+  margin-left: var(--space-sm);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-ink-2);
 }
 
 .pe-answers {
@@ -596,6 +709,47 @@ defineExpose({ open })
   word-break: break-word;
   max-height: 180px;
   overflow-y: auto;
+}
+
+.pe-asserts {
+  margin-top: var(--space-2xs);
+  padding-top: var(--space-2xs);
+  border-top: 1px solid var(--color-rule);
+}
+
+.pe-assert-hd {
+  font-variant-numeric: tabular-nums;
+}
+
+.pe-assert-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2xs);
+  padding: 2px 0;
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+/* 哪一侧没过 —— 两侧用同一批断言判，失败项必须能分清来源 */
+.pe-assert-side {
+  flex: 0 0 auto;
+  color: var(--color-ink-faint);
+}
+
+.pe-assert-x {
+  flex: 0 0 auto;
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.pe-assert-label {
+  flex: 0 0 auto;
+  color: var(--color-ink);
+}
+
+.pe-assert-detail {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .pe-rate {

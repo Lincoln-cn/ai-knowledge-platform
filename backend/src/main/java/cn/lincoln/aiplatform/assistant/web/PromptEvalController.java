@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.assistant.web;
 
 import cn.lincoln.aiplatform.assistant.application.PromptEvalService;
 import cn.lincoln.aiplatform.assistant.domain.EvalVerdict;
+import cn.lincoln.aiplatform.assistant.domain.PromptAssertions;
 import cn.lincoln.aiplatform.platform.web.ApiResponse;
 import java.util.List;
 import java.util.UUID;
@@ -85,6 +86,21 @@ public class PromptEvalController {
     eval.deleteItem(itemId);
   }
 
+  /**
+   * 整张断言表替换（第 1 层机械断言，§11.63.2）。
+   *
+   * <p>★ 一个端点管增删改三件事：断言是一组互相配合的判据，前端一次编辑后的形状才是一致的。
+   *
+   * <p>★ 只影响**以后**的运行：已跑完的读数是当时的快照，改定义不会回头改写它们（要看新定义就重跑一次）。
+   */
+  @PutMapping("/prompt-eval-items/{itemId}/assertions")
+  @PreAuthorize("hasAuthority('assistant:edit')")
+  public ApiResponse<PromptEvalService.ItemView> replaceAssertions(
+      @PathVariable UUID itemId, @RequestBody AssertionsBody body) {
+    List<PromptAssertions.Def> defs = body.assertions() == null ? List.of() : body.assertions();
+    return ApiResponse.ok(eval.replaceAssertions(itemId, defs));
+  }
+
   // ── 运行 ──────────────────────────────────────────────────────
 
   /**
@@ -138,6 +154,9 @@ public class PromptEvalController {
   public record RunBody(UUID appId, String draftText) {}
 
   public record RatingBody(EvalVerdict verdict, String note) {}
+
+  /** 断言表。元素形状 = {@link PromptAssertions.Def}（{@code id} 可空，服务端补）。 */
+  public record AssertionsBody(List<PromptAssertions.Def> assertions) {}
 
   public record CreateSetResult(UUID id) {}
 

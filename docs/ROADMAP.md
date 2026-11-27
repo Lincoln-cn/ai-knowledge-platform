@@ -1810,13 +1810,23 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
 | 表 | 用途 | 关键列 |
 |---|---|---|
 | `as_prompt_eval_set` | 评测集：一条提示词的一组问题 | `id / prompt_config_id / name / created_at / created_by` |
-| `as_prompt_eval_item` | 评测集里的问题 | `id / set_id / ordinal / question` |
+| `as_prompt_eval_item` | 评测集里的问题 | `id / set_id / ordinal / question / assertions` |
 | `as_prompt_eval_run` | 一次评测运行：两个版本 × 全部问题 | `id / set_id / base_version_no / draft_text / status / started_at / finished_at` |
-| `as_prompt_eval_answer` | 一次运行里每题的产出与评分 | `id / run_id / item_id / side(SAVED/DRAFT) / answer / elapsed_ms / pass_count / fail_count / verdict(BETTER/SAME/WORSE) / note / scored_by / scored_at` |
+| `as_prompt_eval_answer` | 一次运行里每题的产出与评分 | `id / run_id / item_id / side(SAVED/DRAFT) / answer / elapsed_ms / pass_count / fail_count / assertion_results / verdict(BETTER/SAME/WORSE) / note / scored_by / scored_at` |
 
 ★ **已落库**：`V114__as_prompt_eval.sql` 建这 4 张表（全部 `on delete cascade` 到 `as_prompt_config`，`status`/`side`/`verdict` 都有 check 约束，`(run_id, item_id, side)` 唯一）。
 
-★ **已落码**（2026-11-19/20 批，全部在 `main`）：`PromptEvalService` + `PromptEvalController`（service/controller + 端点）· 前端评测抽屉 `PromptEvalDrawer.vue` · mock 十个端点 · 验收脚本 `scripts/prompt_eval_check.py`。★ **发版状态：未发 0.9.7** —— 真栈链路仍是 `SKIP`（`404 接口不存在`：后端未重启，重启才会执行 `V113`/`V114`），所以三处版本号暂时对齐到 `0.9.5`（详见本节末尾的状态行与 `§11.64`）。
+★ **已落码**（2026-11-19/20 批 + 2026-11-27 批，全部在 `main`）：`PromptEvalService` + `PromptEvalController`（service/controller + 端点）· 前端评测抽屉 `PromptEvalDrawer.vue` · 断言编辑框 `PromptAssertionsDialog.vue` · 纯函数判定器 `assistant/domain/PromptAssertions.java` · mock 十一个端点 · 验收脚本 `scripts/prompt_eval_check.py`。
+
+**第 1 层断言的数据形状**（`V115__as_prompt_eval_assertions.sql`）：定义挂**题**上（`as_prompt_eval_item.assertions`）、判定结果挂**答案**上（`as_prompt_eval_answer.assertion_results`），两列都是 text 存 JSON（只按"这道题 / 这条答案"整块读写，没有库侧查询需求；要按断言统计时再换 jsonb 是一次新建列迁移，不算返工）。
+
+**断言七种**（每条只比一件事，混在一起就定位不到"哪条要求没被满足"）：`CONTAINS`（必须出现）/ `NOT_CONTAINS`（不许出现）/ `REGEX`（匹配）/ `MAX_CHARS` / `MIN_CHARS`（字数上下限）/ `LIST`（至少两个列表项）/ `UNCERTAIN`（资料里没有时要承认）。★ 判定**不调用模型**：零成本、可离线、可进单测（`PromptAssertionsTest` 10 条）。
+
+★ **三种"零"必须分开**：没设断言（`assertions = []`，返回空结果）/ 设了且全过（每条 `passed=true`）/ 设了且有失败（`detail` 要能单独读明白，例如"没有出现「第七条」"）。把第一种显示成「0 通过 0 失败」等于把"没测"说成"测了且都好"。
+
+★ **改定义不回头改写历史**：断言定义挂题、判定结果挂答案 —— 改一次定义，已经跑完的那次读数是它当时的快照；要看新定义就重跑一次。
+
+★ **发版状态**：真栈已跑通（2026-11-27 本机 18088，判据 1/2/4/5 已核，判据 3 待新端点重启后核）；三处版本号在真栈判据核完之前停在 `0.9.5`。
 
 ★ `draft_text` **把草稿正文整段存下来**（不引用版本号）：评测常常发生在"还没保存"的那一版上，而一旦保存就变成新版本 —— 存正文才能复现当时到底测了什么。
 
@@ -1824,8 +1834,9 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
 
 1. 提示词页每行加「评测」→ 抽屉：选评测集（或新建）、选基线版本（默认 = 当前）、显示"草稿 = 当前表单值或最新版"。
 2. 点「开始」⇒ 后端按 `set_id` 逐题跑两次（`saved` 用 `base_version_no` 的正文、`draft` 用 `draft_text`），**复用 `ChatService.debugCompare` 的同一条只读路径语义**（不写会话、不写消息）。
-3. 结果表：每题一行，两版答案并排 + 自动断言通过/失败数 + 人工三档（更好 / 差不多 / 更差）。
-4. 汇总：**胜率** = (更好 × 1 + 差不多 × 0.5) / 已评题数；断言通过率单列；未评题数必须显示（不许把没评的当"差不多"）。
+3. 结果表：每题一行，两版答案并排 + **每条断言的判定明细**（失败项要写清是哪一侧、哪条断言、为什么没过）+ 人工三档（更好 / 差不多 / 更差）。
+4. 汇总：**胜率** = (更好 × 1 + 差不多 × 0.5) / 已评题数；断言通过率单列（**两侧答案各判一遍再累计** —— 基线那版也在产出答案，凭什么只测草稿）；未评题数必须显示（不许把没评的当"差不多"）。
+5. 题目列表每行有「断言 N」入口（N = 当前条数，0 条时是灰的）→ 打开断言编辑框：加一条 / 改类型 / 改值 / 起名 / 删一条，**整张表一次保存**（断言是一组互相配合的判据，逐条即时保存会留下"改了两条、第三条没存"的半截状态）。
 
 **成本与并发**：一次评测 = 2 × 题数 次模型调用。题数上限 30，超过要求分批（避免一次点下去几分钟没反应）。运行状态用 `status` 落库，前端轮询（不做 SSE：这是一次性任务，不是对话）。
 
@@ -1840,13 +1851,13 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
 
 1. 一次评测跑完，**每道题都有两版答案**，且两版用同一个问题、同一个模型、同一批检索结果。
 2. 人工评三档可存、可改、可清空；汇总里的胜率**随已评题数变化**，未评题数单独显示。
-3. 断言判据可增删；某条断言判错时，读数里能看出是"哪道题哪条断言"。
+3. 断言判据可增删；某条断言判错时，读数里能看出是"哪道题哪条断言"。★ **可核对的形状**：`PUT /prompt-eval-items/{id}/assertions` 整表替换 → 读回条数一致；跑完那次运行的答案行里带 `assertionResults`（每条有 `assertionId / label / kind / passed / detail`）；失败项的 `detail` 能单独读明白（"没有出现「X」"而不是只有 `false`）。★ 验收脚本用**同一个不可能出现的串**挂两条方向相反的断言（`CONTAINS` 必败 + `NOT_CONTAINS` 必过）—— 它们互为反证：实现如果把 `NOT_CONTAINS` 判反了，两条会同真同假，而"一过一败"只在判定真的分开时成立。
 4. 评测运行**不产生任何** `cv_conversation` / `cv_message` 行（与调试同一条判据）。
 5. 删掉评测集时级联删掉题、运行、答案，不留孤儿。
 
 ### 11.63.6 版本规划
 
-- **0.9.7**：本节 11.63.3 的最小形态（4 张表 + 评测抽屉 + 人工三档 + 胜率汇总 + 第 1 层断言）。
+- **0.9.7**：本节 11.63.3 的形态（4 张表 + `V115` 两列 + 评测抽屉 + 断言编辑框 + 人工三档 + 胜率汇总 + 第 1 层七种断言完整实现）。★ 第 1 层是**完整实现**、不是占位：定义可增删改、判定七种、失败项能定位到题与断言（`#364` 因此关闭）。
 - **0.9.8 候选**：模型裁判（第 3 层）+ 与回归集（第 4 层）打通。
 - 一直不做：一键优化、自动应用。
 

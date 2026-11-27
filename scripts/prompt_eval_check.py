@@ -128,11 +128,36 @@ def main():
     print(f"评测集：{set_name}（{set_id}）")
 
     questions = ["这份合同的违约责任条款对我方是否对等？", "如果对方迟延交付，我们能主张什么？"]
+    item_ids = []
     for q in questions:
         st, txt = call(f"/prompt-eval-sets/{set_id}/items", token, "POST", {"question": q})
         if st not in (200, 201):
             call(f"/prompt-eval-sets/{set_id}", token, "DELETE")
             return fail("加题", st, txt)
+        item_ids.append(data(txt)["id"])
+
+    # ③.5 第 1 层机械断言（§11.63.5 判据 3）：给第 1 题挂两条，一条必过、一条必败。
+    #
+    # ★ 两条用**同一个不可能出现的串**，方向相反：CONTAINS 必败、NOT_CONTAINS 必过。
+    #   这样它们互为反证 —— 实现如果把 NOT_CONTAINS 判反了，两条会同真同假，
+    #   而"一过一败"这个读数只在判定真的分开时才成立。
+    IMPOSSIBLE = "ZZZ-这条断言故意不可能命中-7f3a"
+    defs = [
+        {"id": "", "label": "不许出现占位串", "kind": "NOT_CONTAINS", "value": IMPOSSIBLE},
+        {"id": "", "label": "必须出现占位串", "kind": "CONTAINS", "value": IMPOSSIBLE},
+    ]
+    first_item = item_ids[0]
+    st, txt = call(f"/prompt-eval-items/{first_item}/assertions", token, "PUT", {"assertions": defs})
+    if st != 200:
+        call(f"/prompt-eval-sets/{set_id}", token, "DELETE")
+        return fail("设断言", st, txt)
+    st, txt = call(f"/prompt-eval-sets/{set_id}/items", token)
+    saved_defs = next((i["assertions"] for i in data(txt) if i["id"] == first_item), [])
+    ok_defs = len(saved_defs) == 2 and all(d.get("id") for d in saved_defs)
+    print(f"[{'PASS' if ok_defs else 'FAIL'}] 断言可增：保存 2 条并读回 {len(saved_defs)} 条（每条都有 id）")
+    if not ok_defs:
+        call(f"/prompt-eval-sets/{set_id}", token, "DELETE")
+        return 1
 
     # ④ 起运行（草稿 = 当前正文 + 一句，确保与已保存版不同）
     draft = config["callWord"] + "\n另外：给结论时先说'结论'两个字。"
@@ -174,6 +199,25 @@ def main():
         call(f"/prompt-eval-sets/{set_id}", token, "DELETE")
         return 1
 
+    # ⑤.5 断言判定：判据 3 的后半 —— 读数要能指到"哪道题、哪条断言"
+    mine = [a for a in answers if a["itemId"] == first_item]
+    by_side = {a["side"]: a.get("assertionResults") or [] for a in mine}
+    ok_shape = all(len(v) == 2 for v in by_side.values()) and len(by_side) == 2
+    ok_split = all(sum(1 for r in v if r["passed"]) == 1 for v in by_side.values()) if ok_shape else False
+    failed = [r for v in by_side.values() for r in v if not r["passed"]]
+    ok_detail = bool(failed) and all(IMPOSSIBLE in r["detail"] for r in failed) and all(r["label"] for r in failed)
+    def passed_of(side):
+        return sum(1 for r in by_side.get(side, []) if r["passed"])
+
+    print(
+        f"[{'PASS' if ok_shape and ok_split and ok_detail else 'FAIL'}] 断言判定 ⇒ "
+        f"已保存 {passed_of('SAVED')}/2 · 草稿 {passed_of('DRAFT')}/2"
+        f"（每条断言一过一败；失败项带断言名与原因）"
+    )
+    if not (ok_shape and ok_split and ok_detail):
+        call(f"/prompt-eval-sets/{set_id}", token, "DELETE")
+        return 1
+
     # ⑥ 评分 → 胜率：第 1 题 BETTER、第 2 题 SAME ⇒ (1 + 0.5) / 2 = 0.75
     item_ids = [a["itemId"] for a in answers if a["side"] == "DRAFT"]
     seen, ordered = set(), []
@@ -192,13 +236,32 @@ def main():
         call(f"/prompt-eval-sets/{set_id}", token, "DELETE")
         return fail("查汇总", st, txt)
     summary = data(txt)["summary"]
+    ok_assert_sum = summary.get("assertionAnswers", 0) >= 2 and summary.get("assertionPass", 0) >= 2 and summary.get("assertionFail", 0) >= 2
+    print(
+        f"[{'PASS' if ok_assert_sum else 'FAIL'}] 断言汇总 ⇒ {summary.get('assertionPass')} 过 / {summary.get('assertionFail')} 败"
+        f"（{summary.get('assertionAnswers')} 条答案判过断言；没设断言时这组数必须是 0，不能冒充 100%）"
+    )
     rate = summary["winRate"]
     ok_rate = rate is not None and abs(rate - 0.75) < 1e-9
     print(f"[{'PASS' if ok_rate else 'FAIL'}] 胜率 ⇒ {rate}（期望 0.75；更好 {summary['better']} · 差不多 {summary['same']} · 更差 {summary['worse']}，已评 {summary['ratedItems']}/{summary['totalItems']}）")
 
+    # ⑦ 断言可删：减到 1 条、再清空 —— 已跑完的读数不跟着变
+    st, txt = call(f"/prompt-eval-items/{first_item}/assertions", token, "PUT", {"assertions": defs[:1]})
+    ok_one = st == 200 and len(data(txt)["assertions"]) == 1
+    st, txt = call(f"/prompt-eval-items/{first_item}/assertions", token, "PUT", {"assertions": []})
+    ok_zero = st == 200 and len(data(txt)["assertions"]) == 0
+    print(f"[{'PASS' if ok_one and ok_zero else 'FAIL'}] 断言可删 ⇒ 减到 1 条、再清空都成功")
+
+    st, txt = call(f"/prompt-eval-runs/{run_id}", token)
+    after = data(txt) if st == 200 else {}
+    still = [a for a in (after.get("answers") or []) if a["itemId"] == first_item and (a.get("assertionResults") or [])]
+    ok_snapshot = len(still) == 2
+    print(f"[{'PASS' if ok_snapshot else 'FAIL'}] 改定义不回头改写历史 ⇒ 那次运行仍有 {len(still)} 侧断言读数（快照）")
+
     call(f"/prompt-eval-sets/{set_id}", token, "DELETE")
     print(f"已清理评测集 {set_name}")
-    return 0 if ok_rate else 1
+    all_ok = ok_rate and ok_assert_sum and ok_one and ok_zero and ok_snapshot
+    return 0 if all_ok else 1
 
 
 if __name__ == "__main__":

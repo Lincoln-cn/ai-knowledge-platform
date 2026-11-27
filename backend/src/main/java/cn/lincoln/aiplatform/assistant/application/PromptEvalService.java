@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.assistant.application;
 
 import cn.lincoln.aiplatform.assistant.domain.EvalSide;
 import cn.lincoln.aiplatform.assistant.domain.EvalVerdict;
+import cn.lincoln.aiplatform.assistant.domain.PromptAssertions;
 import cn.lincoln.aiplatform.assistant.domain.PromptConfig;
 import cn.lincoln.aiplatform.assistant.domain.PromptEvalAnswer;
 import cn.lincoln.aiplatform.assistant.domain.PromptEvalItem;
@@ -135,7 +136,7 @@ public class PromptEvalService {
   public List<ItemView> listItems(UUID setId) {
     sets.findById(setId).orElseThrow(() -> notFound("评测集"));
     return items.findBySetIdOrderByOrdinalAsc(setId).stream()
-        .map(i -> new ItemView(i.id(), i.ordinal(), i.question()))
+        .map(i -> new ItemView(i.id(), i.ordinal(), i.question(), i.assertions()))
         .toList();
   }
 
@@ -153,13 +154,56 @@ public class PromptEvalService {
     }
     PromptEvalItem item = new PromptEvalItem(UUID.randomUUID(), setId, existing + 1, trimmed);
     items.save(item);
-    return new ItemView(item.id(), item.ordinal(), item.question());
+    return new ItemView(item.id(), item.ordinal(), item.question(), item.assertions());
   }
 
   @Transactional
   public void deleteItem(UUID itemId) {
     items.findById(itemId).orElseThrow(() -> notFound("题目"));
     items.deleteById(itemId);
+  }
+
+  /**
+   * 整张断言表替换（增、删、改都走这一个入口）。
+   *
+   * <p>★ 为什么不做「加一条 / 删一条」两个端点：断言是一组**互相配合**的判据，前端一次编辑后的形状才是一致的； 分成多条端点会让"改了两条、第三条没保存"这种半截状态进入库。
+   *
+   * <p>★ 校验失败要给出**第几条**错在哪：断言写错是定义错误，不是答案不合格 —— 让人能改对，而不是反复重跑。
+   */
+  @Transactional
+  public ItemView replaceAssertions(UUID itemId, List<PromptAssertions.Def> defs) {
+    PromptEvalItem item = items.findById(itemId).orElseThrow(() -> notFound("题目"));
+    List<PromptAssertions.Def> clean = normalizeAssertions(defs);
+    item.replaceAssertions(clean);
+    items.save(item);
+    return new ItemView(item.id(), item.ordinal(), item.question(), clean);
+  }
+
+  private static List<PromptAssertions.Def> normalizeAssertions(List<PromptAssertions.Def> defs) {
+    List<PromptAssertions.Def> input = defs == null ? List.of() : defs;
+    if (input.size() > PromptAssertions.MAX_PER_ITEM) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "一道题最多 " + PromptAssertions.MAX_PER_ITEM + " 条断言",
+          "断言是给人逐条核对的，再多就不会有人看读数了");
+    }
+    List<PromptAssertions.Def> out = new ArrayList<>(input.size());
+    for (int i = 0; i < input.size(); i++) {
+      PromptAssertions.Def def = input.get(i);
+      try {
+        PromptAssertions.validate(def, i);
+      } catch (IllegalArgumentException e) {
+        throw new BusinessException(ErrorCode.BAD_REQUEST, e.getMessage(), "改好这一条再保存");
+      }
+      out.add(
+          new PromptAssertions.Def(
+              // 新增的那几条前端还不知道 id（传空串），在这里补 —— 否则界面上两条断言会共用一个空 id
+              def.id() == null || def.id().isBlank() ? UUID.randomUUID().toString() : def.id(),
+              def.label() == null ? "" : def.label().strip(),
+              def.kind(),
+              def.value() == null ? "" : def.value().strip()));
+    }
+    return out;
   }
 
   // ── 运行 ──────────────────────────────────────────────────────
@@ -269,9 +313,8 @@ public class PromptEvalService {
               "第 " + item.ordinal() + " 题跑失败：" + readable(e),
               "检查应用绑定的模型与知识库是否可用");
         }
-        Instant now = Instant.now();
-        saveAnswer(runId, item.id(), EvalSide.SAVED, cmp.saved());
-        saveAnswer(runId, item.id(), EvalSide.DRAFT, cmp.draftRan() ? cmp.draft() : cmp.saved());
+        saveAnswer(runId, item, EvalSide.SAVED, cmp.saved());
+        saveAnswer(runId, item, EvalSide.DRAFT, cmp.draftRan() ? cmp.draft() : cmp.saved());
         done++;
         advance(runId, done);
       }
@@ -281,12 +324,18 @@ public class PromptEvalService {
     }
   }
 
+  /**
+   * 落一条答案并当场判断言。
+   *
+   * <p>★ 判定用的是**跑这次时的断言定义**（{@code item.assertions()}），结果作为快照存进答案行： 断言定义之后被改掉，也不该让历史运行的读数跟着变。
+   */
   private void saveAnswer(
-      UUID runId, UUID itemId, EvalSide side, DebugChatPort.DebugAnswer answer) {
-    PromptEvalAnswer row = new PromptEvalAnswer(UUID.randomUUID(), runId, itemId, side);
+      UUID runId, PromptEvalItem item, EvalSide side, DebugChatPort.DebugAnswer answer) {
+    PromptEvalAnswer row = new PromptEvalAnswer(UUID.randomUUID(), runId, item.id(), side);
     if (answer != null) {
       row.recordAnswer(answer.answer(), (int) Math.min(answer.elapsedMs(), Integer.MAX_VALUE));
     }
+    row.recordAssertions(PromptAssertions.check(row.answer(), item.assertions()));
     answers.save(row);
   }
 
@@ -324,9 +373,10 @@ public class PromptEvalService {
   public RunView getRun(UUID runId) {
     PromptEvalRun run = runs.findById(runId).orElseThrow(() -> notFound("评测运行"));
     List<PromptEvalItem> questions = items.findBySetIdOrderByOrdinalAsc(run.setId());
+    List<PromptEvalAnswer> all = answers.findByRunId(runId);
     var byItem = new java.util.HashMap<UUID, PromptEvalAnswer>();
     var drafts = new java.util.HashMap<UUID, PromptEvalAnswer>();
-    for (PromptEvalAnswer a : answers.findByRunId(runId)) {
+    for (PromptEvalAnswer a : all) {
       if (a.side() == EvalSide.DRAFT) {
         drafts.put(a.itemId(), a);
       } else {
@@ -355,7 +405,7 @@ public class PromptEvalService {
         run.startedAt(),
         run.finishedAt(),
         views,
-        summarize(questions, drafts.values()));
+        summarize(questions, all));
   }
 
   /**
@@ -363,12 +413,23 @@ public class PromptEvalService {
    *
    * <p>★ 未评的题不参与计算，但 {@code totalItems} 与 {@code ratedItems} 都要给出来 —— 20 题里评了 3 题得出的 100% 不能当结论看。
    */
-  private Summary summarize(List<PromptEvalItem> questions, Iterable<PromptEvalAnswer> drafts) {
+  private Summary summarize(List<PromptEvalItem> questions, List<PromptEvalAnswer> all) {
     int better = 0;
     int same = 0;
     int worse = 0;
-    for (PromptEvalAnswer a : drafts) {
-      if (a.verdict() == null) {
+    int assertionPass = 0;
+    int assertionFail = 0;
+    int assertionAnswers = 0;
+    for (PromptEvalAnswer a : all) {
+      // ★ 断言通过率按**两侧答案各判一遍**累计：基线那版也在产出答案，凭什么只测草稿？
+      //   而「有没有设断言」要看结果条数 —— 计数为 0 且结果为空，是"没设"，不是"全过"。
+      int checked = a.passCount() + a.failCount();
+      if (checked > 0) {
+        assertionAnswers++;
+        assertionPass += a.passCount();
+        assertionFail += a.failCount();
+      }
+      if (a.side() != EvalSide.DRAFT || a.verdict() == null) {
         continue;
       }
       switch (a.verdict()) {
@@ -378,7 +439,16 @@ public class PromptEvalService {
       }
     }
     int rated = better + same + worse;
-    return new Summary(winRate(better, same, worse), rated, questions.size(), better, same, worse);
+    return new Summary(
+        winRate(better, same, worse),
+        rated,
+        questions.size(),
+        better,
+        same,
+        worse,
+        assertionPass,
+        assertionFail,
+        assertionAnswers);
   }
 
   /**
@@ -462,6 +532,7 @@ public class PromptEvalService {
         a.elapsedMs(),
         a.passCount(),
         a.failCount(),
+        a.assertionResults(),
         a.verdict(),
         a.note());
   }
@@ -469,7 +540,8 @@ public class PromptEvalService {
   /** 评测集摘要。{@code itemCount} 实时算，不落库（题目随时可增删）。 */
   public record SetView(UUID id, String name, Instant createdAt, int itemCount) {}
 
-  public record ItemView(UUID id, int ordinal, String question) {}
+  public record ItemView(
+      UUID id, int ordinal, String question, List<PromptAssertions.Def> assertions) {}
 
   /** 一条答案。{@code verdict} / {@code note} 只在 DRAFT 侧有值。 */
   public record AnswerView(
@@ -482,6 +554,7 @@ public class PromptEvalService {
       Integer elapsedMs,
       int passCount,
       int failCount,
+      List<PromptAssertions.Result> assertionResults,
       EvalVerdict verdict,
       String note) {}
 
@@ -493,7 +566,15 @@ public class PromptEvalService {
    * @param totalItems 题总数
    */
   public record Summary(
-      Double winRate, int ratedItems, int totalItems, int better, int same, int worse) {}
+      Double winRate,
+      int ratedItems,
+      int totalItems,
+      int better,
+      int same,
+      int worse,
+      int assertionPass,
+      int assertionFail,
+      int assertionAnswers) {}
 
   public record RunView(
       UUID id,
