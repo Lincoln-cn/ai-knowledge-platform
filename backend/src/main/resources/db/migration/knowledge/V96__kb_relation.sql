@@ -25,7 +25,7 @@ create table kb_relation (
 );
 
 comment on table kb_relation is
-  '实体间的受控关系（四类）。不是知识图谱，但检索链路**会**消费它：自 2026-11-11 起 RelationRecallPort 把命中实体参与过的关系段并入候选（见 RetrievalService）。';
+  '实体间的受控关系（四类）。不是知识图谱：检索链路今天不消费它（同 §11.27.5 的触发条件）。';
 comment on column kb_relation.segment_id is
   '取证位置。没有它，引用只能定位到文档、无法核对这句话到底在哪。';
 comment on column kb_relation.confidence is

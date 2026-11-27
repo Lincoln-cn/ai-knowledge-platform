@@ -172,7 +172,11 @@ final class CaliberShape {
           "conversation/V113__message_first_token_ms.sql",
           "assistant/V114__as_prompt_eval.sql",
           // 0.9.7 第 1 层断言：两列 JSON（题目侧定义、答案侧判定快照）
-          "assistant/V115__as_prompt_eval_assertions.sql");
+          "assistant/V115__as_prompt_eval_assertions.sql",
+          // 0.9.8：更正 kb_relation 的表注释（V96 那句「检索链路今天不消费它」已过时）。
+          // ★ 为什么是单独一条迁移：已应用的迁移文件不可修改（改注释也会让 Flyway 校验和失配，
+          //   后端直接起不来，2026-11-27 实测），所以更正说明只能新增一条 comment 迁移。
+          "knowledge/V116__kb_relation_comment.sql");
 
   private CaliberShape() {}
 
