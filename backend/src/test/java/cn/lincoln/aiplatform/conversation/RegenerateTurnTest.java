@@ -217,28 +217,35 @@ class RegenerateTurnTest {
   }
 
   @Test
-  void continueModeIsRejectedInsteadOfSilentlyBehavingLikeNew() {
+  void continueModeResumesTheStoppedAnswerWithoutAddingAMessage() {
     UUID conversationId = seedConversation();
-    UUID answer = seedTurn(conversationId, "报销标准是多少", "第一次的答案");
+    // ★ 造一条「生成到一半被停掉」的回答：seedTurn 走的是 complete()，那是 GENERATED，
+    //   而 stop() 只接受 GENERATING（三态状态机，终态不可再转）。
+    Message asked = Message.user(UUID.randomUUID(), conversationId, "报销标准是多少");
+    messages.save(asked);
+    Message assistant = new Message(UUID.randomUUID(), conversationId, "");
+    assistant.appendText("第一次的答案");
+    assistant.stop(100L);
+    messages.save(assistant);
+    UUID answer = assistant.id();
     int before = messageCount(conversationId);
 
-    var refused =
-        catchThrowableOfType(
-            BusinessException.class,
-            () ->
-                chat.startTurn(
-                    new ChatService.ChatRequest(null, conversationId, "继续", OWNER),
-                    ChatMode.CONTINUE,
-                    answer));
+    ChatService.StartedTurn started =
+        chat.startTurn(
+            new ChatService.ChatRequest(null, conversationId, "", OWNER),
+            ChatMode.CONTINUE,
+            answer);
 
-    assertThat(refused)
-        .as(
-            "★★ CONTINUE 必须**显式拒绝**，不许静默当 NEW —— "
-                + "静默降级会新增一条消息，与契约『接着已有内容续写』直接矛盾，"
-                + "而界面上它看起来完全正常（这正是 silent-failure 的形状）")
-        .isNotNull();
-    assertThat(refused.getMessage()).contains("尚未实现");
-    assertThat(messageCount(conversationId)).as("★ 而且**一条消息都不许新增**（拒绝必须是纯粹的拒绝）").isEqualTo(before);
+    assertThat(started.turn().assistantMessageId())
+        .as("★★ 续写要**接着那一条**写，不是新开一条：新开一条会让引用编号、上下文条数与复制粘贴的位置全错位")
+        .isEqualTo(answer);
+    assertThat(messageCount(conversationId))
+        .as("★ 消息总数必须不变 —— 这是「续写」与「重新提问」唯一可核对的差别")
+        .isEqualTo(before);
+    assertThat(started.continueFrom()).as("★ 前半段要原样交给模型（提示词里那段「已经写出的部分」就是它）").isEqualTo("第一次的答案");
+    assertThat(messages.findById(answer).orElseThrow().status())
+        .as("★ 续写期间这条要回到「生成中」：否则界面上按钮还亮着，点第二次会与第一次打架")
+        .isEqualTo(cn.lincoln.aiplatform.conversation.domain.MessageStatus.GENERATING);
   }
 
   // ────────────────────────── 工具 ──────────────────────────

@@ -42,7 +42,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -261,7 +260,7 @@ class ChatStreamHttpTest {
   @Autowired AtomicInteger failAfterFrames;
 
   /** 那一次写失败真的发生了（★ "注入生效了吗"本身要可断言）。 */
-  @Autowired CountDownLatch writeFailureFired;
+  @Autowired AtomicInteger writeFailureCount;
 
   /**
    * 服务端<strong>尝试</strong>写出去的事件名（含写失败那一次之后的重试）。
@@ -845,7 +844,7 @@ class ChatStreamHttpTest {
     try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
       var running = pool.submit(() -> chat(login(), body(fixture.appId(), null, "差旅住宿标准")));
       messageId = waitForAssistantInStatus("GENERATING", 10_000);
-      assertThat(writeFailureFired.await(10, java.util.concurrent.TimeUnit.SECONDS))
+      assertThat(awaitWriteFailure(10_000))
           .as("★★ 前置：注入的那一次写失败真的发生了（没发生的话下面每一条都在验一条没被触发的路径）")
           .isTrue();
       response = running.get(60, java.util.concurrent.TimeUnit.SECONDS);
@@ -1141,14 +1140,24 @@ class ChatStreamHttpTest {
    * <p>★ 每个用例开头与 {@code @AfterEach} 各调一次：注入是一个<strong>进程级</strong>开关（bean 是单例）， 漏掉重置会让下一条用例莫名其妙地读到
    * {@code FAILED}。
    */
+  /** 等注入真的发生（轮询计数器；★ 不能用 latch —— 见 {@code writeFailureCount} 那段注释）。 */
+  private boolean awaitWriteFailure(long millis) throws InterruptedException {
+    long until = System.currentTimeMillis() + millis;
+    while (System.currentTimeMillis() < until) {
+      if (writeFailureCount.get() > 0) {
+        return true;
+      }
+      Thread.sleep(20);
+    }
+    return writeFailureCount.get() > 0;
+  }
+
   private void resetWriteFailureInjection() {
     failAfterFrames.set(0);
     synchronized (attemptedFrames) {
       attemptedFrames.clear();
     }
-    while (writeFailureFired.getCount() > 0) {
-      writeFailureFired.countDown();
-    }
+    writeFailureCount.set(0);
   }
 
   /**
@@ -1172,9 +1181,16 @@ class ChatStreamHttpTest {
       return new AtomicInteger();
     }
 
+    /**
+     * 注入是否真的发生过（★ 用计数器而不是 latch）。
+     *
+     * <p>原先这里是 `new CountDownLatch(1)`，而 {@code resetWriteFailureInjection()} 为了"清零" 会把它 countDown
+     * 到 0 —— 于是 {@code await(...)} 永远立刻返回 true，那条"注入真的发生了"的前置
+     * 断言变成了<strong>假绿</strong>。它在本批（2026-11-28）真的骗过人：注入因为重写点过期而完全没生效， 用例却因为这条前置通过、只在最后一条断言上红。
+     */
     @Bean
-    CountDownLatch writeFailureFired() {
-      return new CountDownLatch(1);
+    AtomicInteger writeFailureCount() {
+      return new AtomicInteger();
     }
 
     @Bean
@@ -1199,7 +1215,7 @@ class ChatStreamHttpTest {
         ModelEgressPort modelEgress,
         MultiHopService multiHop,
         AtomicInteger failAfterFrames,
-        CountDownLatch writeFailureFired,
+        AtomicInteger writeFailureCount,
         List<String> attemptedFrames) {
       return new WriteFailingChatService(
           turns,
@@ -1211,7 +1227,7 @@ class ChatStreamHttpTest {
           modelEgress,
           multiHop,
           failAfterFrames,
-          writeFailureFired,
+          writeFailureCount,
           attemptedFrames);
     }
   }
@@ -1224,7 +1240,7 @@ class ChatStreamHttpTest {
   static final class WriteFailingChatService extends ChatService {
 
     private final AtomicInteger failAfterFrames;
-    private final CountDownLatch writeFailureFired;
+    private final AtomicInteger writeFailureCount;
     private final List<String> attemptedFrames;
 
     WriteFailingChatService(
@@ -1237,7 +1253,7 @@ class ChatStreamHttpTest {
         ModelEgressPort modelEgress,
         MultiHopService multiHop,
         AtomicInteger failAfterFrames,
-        CountDownLatch writeFailureFired,
+        AtomicInteger writeFailureCount,
         List<String> attemptedFrames) {
       super(
           turns,
@@ -1253,23 +1269,36 @@ class ChatStreamHttpTest {
               ? null
               : new cn.lincoln.aiplatform.retrieval.application.HopDeciderAdapter(multiHop));
       this.failAfterFrames = failAfterFrames;
-      this.writeFailureFired = writeFailureFired;
+      this.writeFailureCount = writeFailureCount;
       this.attemptedFrames = attemptedFrames;
     }
 
+    /**
+     * ★★ 重写点必须跟着装配器实际调用的那个入口走。
+     *
+     * <p>{@code ChatStreamAssembler} 自 0.9.8 起调的是<strong>五参</strong> {@code streamTurn(turn,
+     * question, continueFrom, continueRefs, sink)}（续写要带原引用）。 只重写三参会<strong>匹配不到</strong>真实调用 ——
+     * 注入静默失效，而前置断言（当时用 latch， 已被 reset 清零）照样通过，于是这条用例只在最后一条断言上红，看起来像"产品把 DISCONNECT 判成了 COMPLETE"。
+     */
     @Override
     public void streamTurn(
-        ChatTurnWriter.PreparedTurn turn, String question, ChatService.EventSink sink) {
+        ChatTurnWriter.PreparedTurn turn,
+        String question,
+        String continueFrom,
+        java.util.List<cn.lincoln.aiplatform.conversation.domain.SourceRef> continueRefs,
+        ChatService.EventSink sink) {
       int failAfter = failAfterFrames.get();
       AtomicBoolean broken = new AtomicBoolean(false);
       super.streamTurn(
           turn,
           question,
+          continueFrom,
+          continueRefs,
           event -> {
             attemptedFrames.add(event.kind().wireName());
             if (failAfter > 0 && !broken.get() && attemptedFrames.size() > failAfter) {
               broken.set(true);
-              writeFailureFired.countDown();
+              writeFailureCount.incrementAndGet();
               throw ChatStreamWriter.disconnected(new IOException("测试注入：写连接失败"));
             }
             sink.onEvent(event);

@@ -238,6 +238,7 @@ public final class WorkflowNodeKeys {
         Config.PROMPT_IDS,
         Config.THINKING_ENABLED,
         Config.MULTI_TURN,
+        Config.MODEL_PARAMS,
         Config.FUNCTION_NAME,
         Config.FUNCTION_ARGS,
         Config.OUTPUT_KEY);

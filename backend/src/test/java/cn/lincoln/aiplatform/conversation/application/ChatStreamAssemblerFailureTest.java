@@ -86,8 +86,10 @@ class ChatStreamAssemblerFailureTest {
     MockHttpServletResponse response = new MockHttpServletResponse();
     response.setCommitted(true);
     doThrow(new IllegalStateException("上游在流中途炸了"))
+        // ★ 装配器现在走五参入口（带 continueFrom / continueRefs）—— stub 打在旧的三参上
+        //   就匹配不到真实调用，测试会"什么都没发生"地变绿或变红。
         .when(chatService)
-        .streamTurn(any(), any(), any());
+        .streamTurn(any(), any(), any(), any(), any());
 
     assertThatCode(() -> stream(response)).doesNotThrowAnyException();
 
@@ -107,7 +109,9 @@ class ChatStreamAssemblerFailureTest {
     //   而"未提交"这条分支的前提恰恰是「一个字节都没出去」（真机上只可能是"第一帧就写失败"）。
     //   所以这里用替身把 committed 那个读数按住不动。
     HttpServletResponse response = neverCommitted();
-    doThrow(new IllegalStateException("开流之前就炸了")).when(chatService).streamTurn(any(), any(), any());
+    doThrow(new IllegalStateException("开流之前就炸了"))
+        .when(chatService)
+        .streamTurn(any(), any(), any(), any(), any());
 
     assertThatThrownBy(() -> stream(response))
         .isInstanceOf(IllegalStateException.class)
@@ -123,7 +127,7 @@ class ChatStreamAssemblerFailureTest {
     response.setCommitted(true);
     doThrow(new UncheckedIOException(new IOException("Broken pipe")))
         .when(chatService)
-        .streamTurn(any(), any(), any());
+        .streamTurn(any(), any(), any(), any(), any());
 
     assertThatCode(() -> stream(response)).doesNotThrowAnyException();
 
