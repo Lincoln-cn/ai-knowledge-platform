@@ -2052,7 +2052,7 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
 | ② NER 进模型页 | `a9e9ec11` | `GET /models/ner` 200；缺文件时点名缺的是哪个（单测 `namesTheMissingFile`） |
 | ③a 分段选项 | `cf5554fb` | 界面只剩「智能分段」；后端对 `CUSTOM` 仍明确拒绝（没改成静默当 AUTO） |
 | ③b 断点续写 | `c8abbd41` + `5d6d26cc` + `3c0c7ceb` | `scripts/continue_check.py` **15 条通过 · 0 条失败** |
-| ③c 模型参数 | `34adf93d` + `8bd2d7fe` | 真栈 `PUT`/`GET /models/{id}` 读写一致；上游透传见下方「未验项」 |
+| ③c 模型参数 | `34adf93d` + `8bd2d7fe` | 真栈 `PUT`/`GET /models/{id}` 读写一致；上游透传 `python scripts/model_param_check.py` 7/7（见下方读数） |
 | ④⑤⑥ 实体与关系 | `8cf99113` | `GET /knowledge-bases/{id}/entity-graph` 200（5 个库皆空态：都没跑过实体抽取） |
 
 **③b 续写的真栈读数**（`python scripts/continue_check.py`，18088）：
@@ -2107,11 +2107,15 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
   `nodes 4 · edges 3 · truncated false`，每条边都带 `segmentId`（此前只验到空态）。
 - **`kb_relation` 非零行**（`§11.65.5` 判据 1）：成立，见上。
 
-**未验项（如实记，不写成"已验证"）**：
+- **参数真的进上游请求体**（`scripts/model_param_check.py`，7 条全过）：真栈跑一次完整的编排执行
+  （`POST /assistants/{appId}/workflow/debug`，图 = `START → AI 对话 → 回复`），判据取**桩服务收到的
+  原始请求体**（`GET http://localhost:11434/__stub/requests`）：带 `modelParams = {temperature: 0.37,
+  top_k: 41}` 时请求体里 `temperature == 0.37`（官方键盖掉了硬编码的 `0.2`）、`top_k == 41`
+  （非官方键原样透传）；不带 `modelParams` 时 `temperature == 0.2` 且请求体里没有 `top_k`
+  （`keys = ['messages', 'model', 'stream', 'temperature']`）—— 两次读数不同，「参数生效」才不是错觉。
 
-- **参数真的进上游请求体**：只有单测证据（`ModelParamUpstreamTest` 起 `HttpServer` 桩抓请求体原文，
-  断言 `"temperature":0.35` 与 `"top_k":40` 在里面；删掉 `putAll(split.official())` 时
-  `springAiCarriesParams` 会红）。真栈容器内没跑过带 AI 节点参数的工作流 —— 那条路径要跑一次完整编排。
+**未验项**：无。往后每加一条读数，要同时加一条**能红**的反证 ——
+`scripts/model_param_check.py` 的对照组（不带参数必须回到默认值）就是这一条的样板。
 
 **已知未修（另开账）**：
 
