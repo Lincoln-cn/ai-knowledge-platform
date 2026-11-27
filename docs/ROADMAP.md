@@ -1247,8 +1247,20 @@ E: Failed to fetch https://packages.microsoft.com/ubuntu/26.04/prod/dists/resolu
 | 17 | 本机后端起不来（`spotless:check` 报 2 个文件） | `DebugChatPort.java` / `DebugChatAdapter.java` 是新建文件，纯 LF；仓库 `core.autocrlf=true` 且无 `.gitattributes`，spotless 按**平台原生行尾**判 ⇒ Windows 上红、Linux CI 绿，八轮 CI 都看不见 | 字节级转 CRLF（仓库内容不变，提交时 autocrlf 转回 LF） |
 | 18 | 真栈评测每题 404「应用不存在」 | 评测在独立线程池里跑，`SecurityContextHolder` 是 ThreadLocal ⇒ 后台线程没有身份 ⇒ `canSee` 判"看不见"⇒ 被翻成 404。`ChatStreamAssembler` 踩过同一种 | 提交任务前取 `SecurityContext`，`runAs` 带进后台线程、`finally` 清空（**带过去、不绕过**校验），`#363` |
 | 19 | 判据 3 只有形状没有实体 | `recordAssertions(int,int)` 零调用点、表上没有存断言的位置、mock 硬编码 `passCount: 1` ⇒ 「断言可增删」与「能定位到题与断言」两半都不存在 | `V115` 两列 + `PromptAssertions` 七种判定 + 整表替换端点 + 抽屉编辑与明细，`#364` |
-| 20 | 真栈 11/20 → 2/20 | 维度统一（第三轮 #16）+ 桩 1024 生效；剩 `check_segmentation_e2e.py`（`向量条数 == 分段数（0/4）`，而同脚本 71 段那套正常）与 `check_flow_walkthrough.py`（A3 失败闸门应用，日志里有桩的 `fail_rate` 注入 500） | 未处置，下一轮定位 |
-| 21 | `scripts/smoke_check.py` 第 1 条恒 PASS | 判定写成 `"pass" if True else "fail"`，且「库内已执行到 112」是硬编码字面量 —— 实测 V114/V115 都已执行，它仍打印"差 2 条" | 登记 `#365`（未修，不影响本版） |
+| 20 | 真栈 11/20 → 2/20 | 维度统一（第三轮 #16）+ 桩 1024 生效；剩 `check_segmentation_e2e.py`（`向量条数 == 分段数（0/4）`，而同脚本 71 段那套正常）与 `check_flow_walkthrough.py`（A3 失败闸门应用，日志里有桩的 `fail_rate` 注入 500） | 两条都定位到根因，见第七批 22 与 `cb09f30a` |
+| 21 | `scripts/smoke_check.py` 第 1 条恒 PASS | 判定写成 `"pass" if True else "fail"`，且「库内已执行到 112」是硬编码字面量 —— 实测 V114/V115 都已执行，它仍打印"差 2 条" | 第七批 23 修：改真读库 + 读不到标 SKIP，`#365`（`1603c55`） |
+
+第七批（`0.9.7` 发版后第一轮，本机真栈 + 种子数据，2026-11-27）：
+
+| # | 症状 | 根因 | 处置 |
+| --- | --- | --- | --- |
+| 22 | 真栈 `check_flow_walkthrough.py` 报 `[NG] 应用市场（/market）没有失败接口 —— 实际：['404 /assistants/<id>']`，而前一轮同一条是 `[]` | 会话列表的 `appName` 恒空串（端口不带名字）⇒ 市场页为显示「最近使用」只好逐个 `GET /assistants/:id` 补名。应用已被删除时那是必然的 404：调用方 catch 了、界面没错，但**走查闸门按网络层计数** ⇒ 一个自造的探测性 404 把闸门顶红 | `AppBindingPort.AppBinding` 补 `name`、`ConversationListService.toItem` 用它、市场页直接取会话行的 `appName`（空名 = 应用已删/不可见 ⇒ 不列），`#366`（`05d55caf`） |
+| 23 | `python scripts/smoke_check.py` 本机每轮都是 `10 / 11`，唯一那条红永远是 `JAiRouter8080: None` | 第 0 条把 JAiRouter 与三项必需进程并列成「四个进程可达」，而 `§298` 写明开发期不需要 JAiRouter（试用期 0.5.0 起才有） | 必需三项判红、网关不在只在 detail 注明，`#367`；同批把第 1 条迁移差值改成真读库（读不到标 SKIP），`#365`，`1603c55` |
+
+★ **第七批的形状是"闸门自己造出来的红"** —— 22 与 23 都不是产品坏了：一个是界面为了补一个空字段而发了一个注定失败的请求，一个是前置断言把可选依赖写成必需。判据是：
+
+- **一条恒定的红与一条恒定的绿一样没有读数价值** —— 前者训练人"这张表总有一条红、跳过它看剩下的"，于是下次真有红也一起被跳过。
+- **判据去读"网络层"时，先说清谁允许它失败**：`catch` 掉一个错误只让界面变好，不让读数变好；要么别发那个请求，要么把它写进基线并说明为什么。
 
 ★ **第六批的形状是"环境与身份"**：18 是线程模型，17 是行尾模型。两者的共同点是**本地与 CI 的判据不同源**——
 spotless 在 Windows 与 Linux 上按各自原生行尾判，`SecurityContextHolder` 在 MVC 线程与自建线程池里行为不同。
@@ -1583,7 +1595,7 @@ Tiptap 占位符芯片（无落点，先搁置）。
 - **网关管理凭据 + 持续健康面板**：`1.7` 落地的是"绑定时真实探测"；JAiRouter 的
   `GET /api/config/instance/{serviceType}`（带 `healthStatus` / `adapterResolved` / `adapterWarning`）需要新增存储列，
   单独记账。
-- **会话列表 `appName` 恒空**：前端已兜底，根因在后端 `listConversations` 没 join 应用名，该开 Issue。
+- ~~**会话列表 `appName` 恒空**~~：**已修**（2026-11-27，`#366` / `05d55caf`）—— `AppBindingPort.AppBinding` 补了 `name`，`ConversationListService.toItem` 用它，市场页不再逐个 `GET /assistants/:id` 补名（那条探测性 404 曾把真栈走查闸门顶红）。
 - **重排「开了也不生效」**：未配 cross-encoder 时请求成功但重排静默不发生，属同一族静默失败。
 - unslop 尚未过的页面：运营看板 / 运营指标 / 审计记录 / 登录日志 / 错误日志 / 风险提示 / 反馈处理 / 投诉举报 /
   拦截记录 / 组织机构 / 用户角色 / 基础数据 / 应用模板 / 提示词管理 / 记忆管理 / 安全围栏 / 长期记忆 / 合规备案。

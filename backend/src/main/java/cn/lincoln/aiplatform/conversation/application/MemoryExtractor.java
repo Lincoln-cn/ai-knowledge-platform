@@ -7,6 +7,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,11 +81,26 @@ public class MemoryExtractor {
         return List.of();
       }
       List<MemoryService.MemoryDraft> drafts = new ArrayList<>();
+      Set<String> badKinds = new TreeSet<>();
+      int skipped = 0;
       for (Item item : raw.memories()) {
         if (item == null || item.content() == null || item.content().isBlank()) {
           continue;
         }
-        MemoryKind kind = MemoryKind.of(item.kind());
+        /*
+         * ★ 一条记忆的种类不合规，不该让**整轮**抽取作废（#359）。
+         *
+         * 实测（真栈闸门日志多次）：模型偶尔把 `kind` 写成 `memories-1.kind` 这类 schema 路径，
+         * 于是 `MemoryKind.of` 抛 IllegalArgumentException，被下面那一层 catch 接住 ⇒
+         * 这一轮抽出的其它记忆**一起丢掉**，日志只有一句「抽取记忆失败」，看不出是几条坏了几条好。
+         * 抽取是旁路任务：跳过坏的那条、留下好的，比整轮归零更接近它自己的目的地。
+         */
+        Optional<MemoryKind> parsed = kindOrEmpty(item.kind(), badKinds);
+        if (parsed.isEmpty()) {
+          skipped++;
+          continue;
+        }
+        MemoryKind kind = parsed.get();
         int importance = Math.max(1, Math.min(5, item.importance()));
         MemoryLevel level = levelOf(kind);
         drafts.add(
@@ -101,10 +118,31 @@ public class MemoryExtractor {
           break;
         }
       }
+      if (skipped > 0) {
+        // 条数与「坏的都长什么样」分开报：同一句 schema 路径出现两次时，前者是 2、后者只有 1 个样本。
+        LOG.warn("这一轮抽出的记忆里有 {} 条种类不合规，已跳过（其余照常落库）：{}", skipped, badKinds);
+      }
       return drafts;
     } catch (RuntimeException e) {
       LOG.warn("抽取记忆失败（这一轮不留记忆）：{}", e.toString());
       return List.of();
+    }
+  }
+
+  /**
+   * 把模型给的种类字符串解析成枚举；不认识就返回 {@link Optional#empty()} 并把它记进 {@code badKinds}。
+   *
+   * <p>★ 这是 `#359` 的落点：不确定的种类要能**被跳过**，而不是把整轮抽取打断。调用方用 {@code badKinds} 在轮末打一条 warn ——
+   * 只记"有几条坏、坏成什么样"，不逐条刷屏。
+   */
+  static Optional<MemoryKind> kindOrEmpty(String raw, Set<String> badKinds) {
+    try {
+      return Optional.of(MemoryKind.of(raw));
+    } catch (IllegalArgumentException e) {
+      if (badKinds != null) {
+        badKinds.add(raw == null ? "null" : raw);
+      }
+      return Optional.empty();
     }
   }
 
