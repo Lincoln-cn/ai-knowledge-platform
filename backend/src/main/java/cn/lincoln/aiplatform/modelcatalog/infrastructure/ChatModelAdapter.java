@@ -342,6 +342,18 @@ public class ChatModelAdapter implements ChatPort {
       Model model, String prompt, java.util.Map<String, Object> params, Duration timeout) {
     try {
       ResolvedUpstream target = upstream.resolve(model);
+      // ★ 参数为空就走**原来那个**六参调用：多绕一层带参数的路径，会让"没用参数"也变成一条
+      //   要验证的路，而且任何重写过六参的假网关（`OutboundPiiPassthroughTest`）都会突然
+      //   落到父类的真实 HTTP 实现上 —— 2026-11-28 的架构闸门就是这么红的。
+      if (params == null || params.isEmpty()) {
+        return gateway.chatCompletion(
+            model.baseModel(),
+            target.apiBase(),
+            target.apiKey(),
+            prompt,
+            timeout,
+            target.authStyle());
+      }
       return gateway.chatCompletion(
           model.baseModel(),
           target.apiBase(),

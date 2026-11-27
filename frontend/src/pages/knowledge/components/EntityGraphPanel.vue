@@ -47,6 +47,41 @@ const RELATION_LABEL: Record<string, string> = {
 }
 const relationLabel = (t: string) => RELATION_LABEL[t] || t
 
+/**
+ * 图上不画常驻的边标签，改成「按语义分组着色 + 图例 + 悬停/点击看名字」。
+ *
+ * ★ 2026-11-28 用户反馈两件事，都是常驻边标签带来的：
+ *   ① 拖动画布后标签不跟着走（echarts graph 的 edgeLabel 在 roam 之后位置不重算）；
+ *   ② 其中一个标签是白色的、看不见 —— 它的字色取 `--color-ink-3`，而这个令牌**不存在**，
+ *      探针解析不出来就继承了根元素的颜色，暗色环境下正好是浅色，白底白字。
+ *   标签去掉之后这两个问题一并消失，图也清爽：谁和谁什么关系，点那条边看下面。
+ */
+type RelationGroup = 'hierarchy' | 'duty' | 'document'
+
+const RELATION_GROUP: Record<string, RelationGroup> = {
+  BELONGS_TO: 'hierarchy',
+  CONTAINS: 'hierarchy',
+  PART_OF: 'hierarchy',
+  RESPONSIBLE_FOR: 'duty',
+  WORKS_AT: 'duty',
+  REFERENCES: 'document',
+  DEFINES: 'document'
+}
+
+const groupOf = (t: string): RelationGroup => RELATION_GROUP[t] || 'hierarchy'
+
+/** 图例只列这一张图里真的出现过的分组 —— 空图例同样是"看着做了、其实没内容"。 */
+const legendGroups = computed(() => {
+  const seen = new Set<RelationGroup>()
+  for (const e of drawnEdges.value) seen.add(groupOf(e.type))
+  const all: { key: RelationGroup; label: string }[] = [
+    { key: 'hierarchy', label: '层级 / 归属' },
+    { key: 'duty', label: '责任 / 任职' },
+    { key: 'document', label: '依据 / 定义' }
+  ]
+  return all.filter((g) => seen.has(g.key))
+})
+
 const nameOf = computed(() => {
   const map = new Map<string, string>()
   for (const n of nodes.value) map.set(n.id, n.name)
@@ -124,14 +159,23 @@ type GraphParams = { dataType?: string; data?: GraphItem }
 
 const nameById = (id: string) => nodes.value.find((n) => n.id === id)?.name || '（不在本页实体里）'
 
+/** 三种分组各一个颜色（令牌解析成 rgb —— echarts 不认 oklch）。 */
+const lineColorOf = (t: string): string => {
+  const group = groupOf(t)
+  if (group === 'duty') return cssColor('--color-accent')
+  if (group === 'document') return cssColor('--color-ok')
+  return cssColor('--color-rule-strong')
+}
+
 const renderGraph = () => {
   if (!chart) return
   const ink = cssColor('--color-ink-2')
-  const muted = cssColor('--color-ink-3')
   const rule = cssColor('--color-rule-strong')
   const accent = cssColor('--color-accent')
+  const accentSoft = cssColor('--color-accent-soft')
+  const warn = cssColor('--color-warn')
+  const warnSoft = cssColor('--color-warn-soft')
   const surface = cssColor('--color-surface')
-  const soft = cssColor('--color-accent-soft')
   const maxMentions = Math.max(1, ...drawn.value.map((n) => n.mentions))
 
   chart.setOption(
@@ -156,45 +200,54 @@ const renderGraph = () => {
           type: 'graph',
           layout: 'circular',
           circular: { rotateLabel: false },
+          // circular 会把环铺满容器；节点只有几个时贴边太散，默认缩一点留白更匀。
+          zoom: 1,
           roam: true,
           draggable: false,
           selectedMode: false,
-          data: drawn.value.map((n) => ({
-            id: n.id,
-            name: n.name,
-            value: n.mentions,
-            mentions: n.mentions,
-            symbolSize: 9 + (Math.min(n.mentions, maxMentions) / maxMentions) * 11,
-            itemStyle: {
-              color: surface,
-              borderColor: n.type === 'PERSON' ? accent : rule,
-              borderWidth: 1.5
-            },
-            label: { show: true, color: ink, fontSize: 12, position: 'right' },
-            emphasis: {
-              itemStyle: { color: soft, borderColor: accent, borderWidth: 2 },
-              label: { color: accent }
+          data: drawn.value.map((n) => {
+            // 两类实体用两种颜色：组织（蓝）与人名（琥珀）。原先一律"白底浅灰边"，在浅灰画布上
+            // 几乎看不见圆点 —— 用户 2026-11-28 的原话是「渲染的有点生硬」。
+            const person = n.type === 'PERSON'
+            const stroke = person ? warn : accent
+            return {
+              id: n.id,
+              name: n.name,
+              value: n.mentions,
+              mentions: n.mentions,
+              symbolSize: 10 + (Math.min(n.mentions, maxMentions) / maxMentions) * 12,
+              itemStyle: {
+                color: person ? warnSoft : accentSoft,
+                borderColor: stroke,
+                borderWidth: 1.5
+              },
+              // 标签放**下面**：放右侧时它会被相邻的线穿过去，读起来像错字。
+              // 标签加一层画布色的描边：线从字底下穿过时字仍读得出来（不加就只能靠躲）。
+              label: {
+                show: true,
+                color: ink,
+                fontSize: 12,
+                position: 'bottom',
+                distance: 5,
+                textBorderColor: surface,
+                textBorderWidth: 3
+              },
+              emphasis: {
+                itemStyle: { borderWidth: 2.5, shadowBlur: 6, shadowColor: stroke },
+                label: { color: stroke, fontWeight: 600 }
+              }
             }
-          })),
+          }),
           links: drawnEdges.value.map((e) => ({
             id: e.id,
             source: e.from,
             target: e.to,
             type: e.type,
-            lineStyle: { color: rule, width: 1, curveness: 0.12, opacity: 0.9 }
+            lineStyle: { color: lineColorOf(e.type), width: 1.4, curveness: 0.08, opacity: 0.9 }
           })),
           labelLayout: { hideOverlap: true },
           edgeSymbol: ['none', 'arrow'],
           edgeSymbolSize: 7,
-          edgeLabel: {
-            show: true,
-            fontSize: 12,
-            color: muted,
-            backgroundColor: surface,
-            padding: [1, 4],
-            borderRadius: 3,
-            formatter: (raw: unknown) => relationLabel(String((raw as GraphParams).data?.type || ''))
-          },
           emphasis: {
             focus: 'adjacency',
             lineStyle: { width: 2, color: accent }
@@ -378,7 +431,15 @@ watch([() => view.value, () => graph.value], async () => {
           点一个实体看它的关系（相邻的会高亮）；点一条边看它是从哪一段读出来的。图上可以滚轮缩放、拖动平移。
           <span v-if="hiddenCount">（图里只画了前 {{ drawn.length }} 个实体，另有 {{ hiddenCount }} 个在「实体」视图里）</span>
         </p>
+        <p v-if="legendGroups.length" class="legend">
+          <span class="micro muted">线色</span>
+          <span v-for="g in legendGroups" :key="g.key" class="legend-item">
+            <i :class="['dot', g.key]" />{{ g.label }}
+          </span>
+          <span class="micro muted">—— 点一条边看具体关系与取证</span>
+        </p>
         <div ref="graphEl" class="graph" role="img" aria-label="实体关系图" />
+
 
         <div v-if="selectedEdge" class="pick">
           <b>{{ nameOf(selectedEdge.from) }}</b>
@@ -495,10 +556,40 @@ watch([() => view.value, () => graph.value], async () => {
 .graph-hint {
   margin: 0;
 }
+.legend {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  font-size: var(--text-2xs);
+  color: var(--color-ink-2);
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.dot {
+  display: inline-block;
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+}
+.dot.hierarchy {
+  background: var(--color-rule-strong);
+}
+.dot.duty {
+  background: var(--color-accent);
+}
+.dot.document {
+  background: var(--color-ok);
+}
+
 /* echarts 的画布要一个确定的高度（它不参与 flex 剩余空间分配，给 auto 会塌成 0）。 */
 .graph {
   width: 100%;
-  height: 420px;
+  height: 440px;
   background: var(--color-surface-2);
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-sm, 4px);
