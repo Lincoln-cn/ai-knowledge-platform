@@ -114,7 +114,10 @@ jobs:
   # ─────────────────────── ② 全量回归（整包 mvn verify）───────────────────────
   backend:
     name: 后端 · 全量回归（整包 verify）
-    runs-on: ubuntu-latest
+    # ★ 与 ci.yml 的 realstack job 同一条理由（2026-11-27 的 403）：`ubuntu-latest` 漂到 26.04 后
+    #   runner 预置的 microsoft 源没有该 dists，`apt-get update` 会带崩「装 OCR」这一步。
+    #   本 job 只要官方源里的 tesseract ⇒ 固定 24.04（LTS），别跟着 latest 漂。
+    runs-on: ubuntu-24.04
     # ★ 上限的历史（三次读数，逐次写在下面，因为它直接决定"这个 job 给不给得出答案"）：
     #   ① 2026-10-17 拆分前实测 `mvn verify` 一步 871 秒（14.5 分钟），于是给了 40 分钟。
     #   ② 2026-10-31 起跑一次，**40 分钟到点时还在跑**（`knowledge.DocumentAuditFailureTest`，
@@ -167,6 +170,8 @@ jobs:
       #   （`deploy/README.md` §三 的离线交付清单里，这三行与镜像是同源的。）
       - name: 装 OCR 引擎与语言包
         run: |
+          # ★ 用不到的源会把整条 update 带崩（理由同 ci.yml 的 realstack job）。
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng

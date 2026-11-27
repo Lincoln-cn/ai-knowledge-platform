@@ -1220,6 +1220,22 @@ head `d13afbef` 上 5 个 workflow 有 4 个红。逐条根因与处置：
 ★ `ChatStreamUsageHttpTest.realStackFeedsTheModelReportedUsageIntoDoneTokens` 的 `HTTP/1.1 header parser received no bytes`
 （类级 41.28s、方法仅 0.168s 就 EOF）暂判**环境/资源类 flaky**，另开 `#362` 记账，不放宽断言。
 
+第五批（2026-11-27 第八轮的 CI 环境红，与代码无关）：
+
+```
+E: Failed to fetch https://packages.microsoft.com/ubuntu/26.04/prod/dists/resolute/InRelease  403  Forbidden
+##[error]Process completed with exit code 100.
+```
+
+根因 = `ubuntu-latest` **漂到了 26.04 (resolute)**，而 runner 镜像预置的 `packages.microsoft.com` 源没有该版本的
+`dists` ⇒ `apt-get update` 403 ⇒ 真栈 job 在「装 OCR 引擎与语言包」这一步就死了，**端到端一条都没跑**。
+处置：两个装 apt 的 job（`ci.yml` 的 `realstack`、`ci-backend.yml` 的 `backend`）固定成 `ubuntu-24.04`，
+并在 `apt-get update` 前删掉用不到的 `microsoft-prod.list`（本 job 只需要官方源里的 tesseract / postgresql-client）。
+判据是**失败点回到闸门本身**（真栈的失败行从"装环境"变成某条 e2e 的读数）。
+★ 这条与第四批的区别很值得记：第四批是"产品变了、断言没跟"，这一批是**环境变了、闸门没跟** ——
+两者在 CI 里都表现成"真栈 · 端到端闸门 failure"，而真因一个在代码、一个在镜像；
+跟着 `latest` 漂的 runner 会把"环境变更"伪装成"产品失败"，所以装配步骤要像断言一样**钉住版本**。
+
 
 
 **① 补读数（优先级最高，约 2.5 天）**

@@ -46,7 +46,12 @@ jobs:
   # ══════════════════════════════════════════════════════════════════════════════
   realstack:
     name: 真栈 · 端到端闸门
-    runs-on: ubuntu-latest
+    # ★ 固定版本而不是 `ubuntu-latest`：2026-11-27 起 `latest` 漂到 **26.04 (resolute)**，
+    #   而镜像里预置的 `packages.microsoft.com` 源没有 26.04 的 dists ⇒ 下面那句
+    #   `apt-get update` 直接 403，整个 job 在「装 OCR」就死了（端到端一条都没跑）。
+    #   本 job 需要的只是 Ubuntu 官方源里的 tesseract 与 postgresql-client，
+    #   24.04 是 LTS、包确定；跟着 `latest` 漂会再换来一次"闸门红在装环境"的诊断成本。
+    runs-on: ubuntu-24.04
     # ★ 实测 6 分 17 秒；给 30 分钟上限。
     #   ★ 补这一条的理由：本文件拆出来之前，整条 ci.yml **没有一处 `timeout-minutes`** ——
     #     卡住时会占满 GitHub 默认的 6 小时。那不只是慢，它会把同一并发组里的后续运行**挤掉**
@@ -117,6 +122,10 @@ jobs:
       #   真栈 job 尤其需要它 —— 它是唯一会去点「上传扫描件 → 已识别 N/M 页」这条链的地方。
       - name: 装 OCR 引擎与语言包
         run: |
+          # ★ 24.04 的镜像同样预置了 microsoft 源（.NET / powershell 用）。本 job 不依赖它，
+          #   而它对当前 runner 的 dists 一旦不可用就会把整条 `apt-get update` 带崩（见 runs-on 处的注释）。
+          #   删掉一个用不到的源，比给 `apt-get update` 加 `|| true` 安全 —— 后者会把真失败静默掉。
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
