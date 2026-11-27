@@ -67,13 +67,23 @@ def jload(line):
 
 def note(no, name, ok, detail):
     rows.append((no, name, ok, detail))
-    print(f"[{no}] {'PASS' if ok == 'pass' else ('BLOCK' if ok == 'block' else 'FAIL')}  {name}  —— {detail}")
+    tag = {"pass": "PASS", "skip": "SKIP", "block": "BLOCK"}.get(ok, "FAIL")
+    print(f"[{no}] {tag}  {name}  —— {detail}")
 
 
-# 0 前置：四个进程
-ports = {}
-for name, url in [("后端18088", BE + "/actuator/health"), ("前端5280", "http://localhost:5280/"),
-                  ("JAiRouter8080", "http://127.0.0.1:8080/actuator/health"), ("桩11434", "http://127.0.0.1:11434/v1/models")]:
+# 0 前置：必需三个进程 + 可选一个网关
+#
+# ★ `ROADMAP §298-299` 的口径：开发期只需要 PostgreSQL + 应用（2 个），**不需要 JAiRouter**；
+#   试用期（0.5.0 起）才多一个 JAiRouter。此前这里把 8080 的 JAiRouter 和必需项并列，
+#   于是本机每次冒烟都是「10 / 11 通过」而唯一那条红永远是"网关没起" —— 一条恒定红
+#   的断言训练人忽略整张表，它自己也不再是读数。现在分开：必需三项必须 200，
+#   JAiRouter 不在就 SKIP 并说明"试用期部署才有它"。
+REQUIRED = [("后端18088", BE + "/actuator/health"), ("前端5280", "http://localhost:5280/"),
+            ("桩11434", "http://127.0.0.1:11434/v1/models")]
+OPTIONAL = [("JAiRouter8080", "http://127.0.0.1:8080/actuator/health")]
+
+
+def probe(url):
     st, _ = call("", base=url) if url.endswith("health") else (None, None)
     if st is None:
         try:
@@ -81,18 +91,72 @@ for name, url in [("后端18088", BE + "/actuator/health"), ("前端5280", "http
                 st = r.status
         except Exception:
             st = None
-    ports[name] = st
-ok0 = all(v == 200 for v in ports.values())
-note(0, "前置：四个进程可达", "pass" if ok0 else "fail", str(ports))
+    return st
+
+
+ports = {}
+for name, url in REQUIRED + OPTIONAL:
+    ports[name] = probe(url)
+missing = [n for n, _ in REQUIRED if ports[n] != 200]
+gateway = ports.get("JAiRouter8080")
+if missing:
+    note(0, "前置：必需三个进程可达", "fail", f"缺 {missing} · 全部读数 {ports}")
+else:
+    note(0, "前置：必需三个进程可达", "pass",
+         f"{ports} · JAiRouter " + ("在（试用期形状）" if gateway == 200
+                                  else "不在（ROADMAP §298：开发期不需要它）"))
 
 # 1 迁移：库里最新版本 vs 代码里最大号
-import glob, re, os
-files = glob.glob("D:/IdeaProjects/ai-plantform/backend/src/main/resources/db/migration/*/V*.sql")
+#
+# ★★ 这一条此前是假读数（#365）：判定写成 `"pass" if True else "fail"`（恒 PASS），
+#    而"库内已执行到 112"是写死的字面量 —— 实测库里已到 V115，脚本仍打印"差 3 条"。
+#    一个恒 PASS 的检查比没有检查更糟：它把"没人读过"伪装成"读过了、没问题"。
+#    现在真的去读库；读不到（没有 psql、没有 docker、没给环境变量）就标 SKIP，
+#    并把"怎么让它能读"写在 detail 里 —— 不许猜，也不许默认通过。
+import glob, re, os, subprocess
+
+files = glob.glob(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "backend/src/main/resources/db/migration/*/V*.sql"))
 code_max = max(int(m.group(1)) for f in files if (m := re.search(r"[\\/]V(\d+)__", f)))
 st, txt = call("/auth/login", method="POST", body={"username": "admin", "password": "admin"})
 tok = json.loads(txt)["data"]["accessToken"]
-note(1, "迁移：代码最大号 vs 库内已执行", "pass" if True else "fail",
-     f"代码最大 V{code_max}（库内已执行到 112，差 {code_max - 112} 条 → 需重启才补齐）")
+
+
+def applied_max():
+    """库内已成功执行的最大迁移号。三条来源，按可靠性依次尝试；都没有就返回 None。"""
+    env = os.environ.get("AIP_DB_MAX_MIGRATION")
+    if env and env.strip().isdigit():
+        return int(env.strip()), "环境变量 AIP_DB_MAX_MIGRATION"
+    sql = "select coalesce(max(version::int), 0) from flyway_schema_history where success"
+    tries = [
+        (["docker", "exec", "-e", "PGPASSWORD=aiplatform", "aip-postgres",
+          "psql", "-U", "aiplatform", "-d", "aiplatform", "-tAc", sql], "docker exec aip-postgres"),
+        (["psql", os.environ.get("DB_URL", "postgresql://localhost:15433/aiplatform"),
+          "-tAc", sql], "本机 psql"),
+    ]
+    for cmd, label in tries:
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        except (FileNotFoundError, subprocess.SubprocessError):
+            continue
+        raw = (out.stdout or "").strip().splitlines()
+        if out.returncode == 0 and raw and raw[-1].strip().isdigit():
+            return int(raw[-1].strip()), label
+    return None, None
+
+
+db_max, source = applied_max()
+if db_max is None:
+    note(1, "迁移：代码最大号 vs 库内已执行", "skip",
+         f"代码最大 V{code_max} · 读不到库内版本（没有 psql/docker，也没给 AIP_DB_MAX_MIGRATION）"
+         f" ⇒ 这一条没验过，别当它过了")
+elif db_max == code_max:
+    note(1, "迁移：代码最大号 vs 库内已执行", "pass",
+         f"代码最大 V{code_max} = 库内 V{db_max}（来源：{source}）")
+else:
+    note(1, "迁移：代码最大号 vs 库内已执行", "fail",
+         f"代码最大 V{code_max} · 库内 V{db_max}，差 {code_max - db_max} 条 ⇒ 需要重启后端让它跑迁移"
+         f"（来源：{source}）")
 
 # 2 登录 + 角色差异
 logins = {}
@@ -206,5 +270,11 @@ has_health = bool(lst) and "health" in (lst[0] or {})
 note(10, "模型健康字段（base-models）", "pass" if st == 200 and has_health else "fail",
      f"{st} 条数={len(lst or [])} 含 health={has_health}")
 
-print("\n汇总：", sum(1 for r in rows if r[2] == "pass"), "/", len(rows), "通过")
+passed = sum(1 for r in rows if r[2] == "pass")
+skipped = [r[0] for r in rows if r[2] == "skip"]
+failed = [r[0] for r in rows if r[2] not in ("pass", "skip")]
+tail = f"（跳过 {len(skipped)} 条：{skipped}）" if skipped else ""
+print("\n汇总：", passed, "/", len(rows), "通过", tail)
+if failed:
+    print("未通过：", failed)
 print("会话 id（供清理）：", conv)
