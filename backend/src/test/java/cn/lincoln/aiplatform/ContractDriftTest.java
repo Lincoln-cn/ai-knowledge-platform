@@ -232,7 +232,24 @@ class ContractDriftTest {
           //   ③ ★ 触发条件（防黑洞）：一旦前端做了留存期管理界面并把这条写进 api/** 的 request({...})
           //      字面量，**这一条必须从这里删掉**。另一条触发：真删执行体上线时端点形状大概率变
           //      （从"试算"变"提交"），那时本来就要重新设计这条契约。
-          "/conversations/retention/dry-run");
+          "/conversations/retention/dry-run",
+          // ★ 投诉附件下载（#362 · 0.9.7 之前的合规页就带着它）—— 后端有、api/** 的 url 字面量里没有，而它只能这样。
+          //
+          //   ① 为什么是例外：这个端点返回的是**原始字节**（blob），而契约层的 `request<T>()` 是 axios
+          //      JSON 封装（统一包络解包 + JSON 解析 + 拦截器）。把字节塞进那条链会被当 JSON 解析，
+          //      于是"下载到一个 0 字节文件"而不报错。所以前端走 fetch 直取（与 SSE 同族：
+          //      形态特殊，不是"前端漏接线"——它**确实在用**，见真源）。
+          //
+          //   ② 真源在哪：frontend/src/api/compliance.ts 的 `downloadComplaintAttachment()` 里的
+          //      `fetch(`${API_PREFIX}/complaints/attachments/${attachment.id}`)`；
+          //      后端侧 = platform/compliance/web/ComplaintController 的
+          //      `@GetMapping("/attachments/{attachmentId}")`（类级 /api/v1/complaints）。
+          //
+          //   ③ ★ 触发条件（防黑洞）：一旦 `request()` 长出一条能取字节的通道（例如 responseType: 'blob'
+          //      并在 api/** 里写成 url 字面量），或者前端改成"先取元数据、再走独立字节通道"，
+          //      **这一条必须从这里删掉** —— 那时两侧都能对账，留着它就是给这条路径开一个
+          //      "永远不必再对账"的后门。
+          "/complaints/attachments/{*}");
 
   /**
    * {@code request({ method: 'GET', url: '/x' })} 的选项对象起始 —— 锚定左花括号。

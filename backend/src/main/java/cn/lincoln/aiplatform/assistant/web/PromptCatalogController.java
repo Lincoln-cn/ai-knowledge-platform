@@ -128,6 +128,7 @@ public class PromptCatalogController {
 
   /** 回滚到某一版：写成新的一版，历史不删。 */
   @PostMapping("/prompt-configs/{id}/versions/{versionNo}/restore")
+  @PreAuthorize("hasAuthority('assistant:edit')")
   public ApiResponse<PromptConfigView> restoreVersion(
       @PathVariable UUID id, @PathVariable int versionNo, @AuthenticationPrincipal Jwt jwt) {
     return ApiResponse.ok(catalog.restoreVersion(id, versionNo, UUID.fromString(jwt.getSubject())));
