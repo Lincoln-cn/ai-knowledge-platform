@@ -124,6 +124,14 @@ public class Model {
   @Column(name = "remark", length = 512)
   private String remark;
 
+  /**
+   * 可调参数声明（{@code V117} · 0.9.8 §11.65.3 ③c）：JSON 数组，元素形状见 {@link ModelParamSchema.Param}。
+   *
+   * <p>★ 存原文而不是解析后的对象：这一列的读法只有"整块交给界面 / 整块交给调用方"两种， 在实体里再持有一份结构化副本，只会带来"两份谁为准"的问题。
+   */
+  @Column(name = "param_schema", nullable = false)
+  private String paramSchema = "[]";
+
   @CreationTimestamp
   @Column(name = "created_at", nullable = false, updatable = false)
   private Instant createdAt;
@@ -266,6 +274,16 @@ public class Model {
   /** 改备注。 */
   public void remark(String remark) {
     this.remark = remark;
+  }
+
+  /** 可调参数声明原文（永远是合法 JSON 数组；空数组 = 这个模型没有暴露可调参数）。 */
+  public String paramSchema() {
+    return paramSchema == null || paramSchema.isBlank() ? "[]" : paramSchema;
+  }
+
+  /** 覆盖参数声明；{@code null}/空白存成 {@code []}（列是 not null，且"没有"必须能读出来）。 */
+  public void paramSchema(String paramSchema) {
+    this.paramSchema = paramSchema == null || paramSchema.isBlank() ? "[]" : paramSchema;
   }
 
   /** 改思考模式能力声明（只对对话模型有意义）。 */

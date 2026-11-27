@@ -43,6 +43,15 @@ public final class WorkflowNodeKeys {
     private Config() {}
 
     public static final String MODEL_ID = "modelId";
+
+    /**
+     * 这次调用给模型的采样参数值（{@code #371} 第 135 条）：{@code {"temperature":0.3,"top_k":40}}。
+     *
+     * <p>★ 它是<strong>值</strong>不是声明：声明在 {@code ai_model.param_schema}（这个模型支持哪些可调参数），
+     * 值在这里（这次调用要用多少）。两者分开，改一次调用不会动到模型登记。
+     */
+    public static final String MODEL_PARAMS = "modelParams";
+
     public static final String KB_IDS = "kbIds";
     public static final String KB_ID = "kbId";
     public static final String DOC_ID = "docId";

@@ -249,6 +249,25 @@ public class UpstreamGateway {
     return chatCompletion(model, apiBase, apiKey, prompt, timeout, AuthStyle.BEARER);
   }
 
+  /** 带采样参数的单轮补全（{@code #371} 第 135 条）。 */
+  public String chatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      String prompt,
+      Duration timeout,
+      AuthStyle authStyle,
+      java.util.Map<String, Object> params) {
+    return chatCompletion(
+        model,
+        apiBase,
+        apiKey,
+        List.of(Map.of("role", "user", "content", prompt)),
+        timeout,
+        authStyle,
+        params);
+  }
+
   public String chatCompletion(
       String model,
       String apiBase,
@@ -289,7 +308,20 @@ public class UpstreamGateway {
       List<Map<String, String>> history,
       Duration timeout,
       AuthStyle authStyle) {
-    return chatCompletionWithUsage(model, apiBase, apiKey, history, timeout, authStyle).content();
+    return chatCompletion(model, apiBase, apiKey, history, timeout, authStyle, Map.of());
+  }
+
+  /** 带采样参数的多轮补全（{@code #371} 第 135 条）。 */
+  public String chatCompletion(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      AuthStyle authStyle,
+      java.util.Map<String, Object> params) {
+    return chatCompletionWithUsage(model, apiBase, apiKey, history, timeout, authStyle, params)
+        .content();
   }
 
   /**
@@ -305,12 +337,35 @@ public class UpstreamGateway {
       List<Map<String, String>> history,
       Duration timeout,
       AuthStyle authStyle) {
+    return chatCompletionWithUsage(
+        model, apiBase, apiKey, history, timeout, authStyle, java.util.Map.of());
+  }
+
+  /**
+   * 带采样参数的一次性补全（{@code #371} 第 135 条）。
+   *
+   * <p>★ 参数落进请求体，不是留在 Java 里：官方键用官方名，其余键按原名透传 —— 上游不认识的自定义键由上游决定要不要忽略，
+   * 但"我们这边到底发没发"必须可核对（真栈判据看的就是请求体）。
+   */
+  public ChatResult chatCompletionWithUsage(
+      String model,
+      String apiBase,
+      String apiKey,
+      List<Map<String, String>> history,
+      Duration timeout,
+      AuthStyle authStyle,
+      java.util.Map<String, Object> params) {
     // ★★ 用序列化器拼请求体，**不要**手拼字符串 —— 真栈闸门实测抓到过：
     //   查询理解的提示词是**多行**的，而 escape() 只处理了反斜杠与引号，换行原样留在 JSON
     //   字符串里 ⇒ 上游按"请求体不是合法 JSON"直接 400。那是最难查的一类错：
     //   本地单测全绿，因为夹具里的提示词恰好是单行。
     //   映射成 Map 再序列化，控制字符的转义交给序列化器。
-    Map<String, Object> payload = Map.of("model", model, "messages", history);
+    Map<String, Object> payload = new java.util.LinkedHashMap<>();
+    payload.put("model", model);
+    payload.put("messages", history);
+    if (params != null && !params.isEmpty()) {
+      payload.putAll(params);
+    }
     String body =
         post(resolve(apiBase, "/chat/completions"), writeJson(payload), apiKey, authStyle, timeout);
     try {

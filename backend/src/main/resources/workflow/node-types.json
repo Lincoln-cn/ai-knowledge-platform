@@ -74,6 +74,14 @@
         "default": null
       },
       {
+        "key": "modelParams",
+        "label": "模型参数",
+        "type": "object",
+        "required": false,
+        "panelOnly": true,
+        "default": {}
+      },
+      {
         "key": "rolePrompt",
         "label": "角色提示词",
         "type": "string",

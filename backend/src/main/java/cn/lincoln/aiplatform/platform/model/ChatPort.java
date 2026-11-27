@@ -114,6 +114,26 @@ public interface ChatPort {
   String complete(UUID modelId, String prompt, Duration timeout);
 
   /**
+   * 带采样参数的一次性补全（{@code #371} 第 135 条）。
+   *
+   * <p>★ 默认实现<strong>不静默丢弃</strong>：参数非空就抛，参数为空才委托。理由 —— 静默丢弃正是这一批要修的病
+   * （界面填了温度、请求里没有、每一层都返回成功）。宁可让"实现没跟上"当场报错，也不要让它看起来生效了。
+   *
+   * <p>★ 生产实现（{@code ChatModelAdapter}）覆盖本方法：官方键 {@code temperature} / {@code top_p} / {@code
+   * max_tokens} 写进请求体的同名字段，其余键按原名透传。
+   *
+   * @param params 本次调用要覆盖的参数（键为 {@code ModelParamSchema} 里声明的 key）；{@code null}/空 = 用默认
+   */
+  default String complete(
+      UUID modelId, String prompt, java.util.Map<String, Object> params, Duration timeout) {
+    if (params == null || params.isEmpty()) {
+      return complete(modelId, prompt, timeout);
+    }
+    throw new IllegalStateException(
+        "这个 ChatPort 实现不支持采样参数：这次调用带了 " + params.keySet() + "，但它只实现了三参 complete");
+  }
+
+  /**
    * 发一次对话补全，并把输出解析成 {@code type} 的实例 —— ★ <strong>格式说明与解析都交给官方转换器</strong> （适配器里用 {@code
    * org.springframework.ai.converter.BeanOutputConverter}：{@code getFormat()} 生成 "只输出 JSON"的指令与
    * schema，{@code convert(...)} 解析响应）。

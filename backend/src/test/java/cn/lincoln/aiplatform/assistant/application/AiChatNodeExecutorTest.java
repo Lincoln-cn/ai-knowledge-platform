@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -188,5 +189,33 @@ class AiChatNodeExecutorTest {
     Set<String> declared = NodeExecutorSources.implementedTypes();
     assertThat(declared).as("扫描必须读得动：读空说明正则与源码形状已经对不上").isNotEmpty();
     assertThat(declared).as("AI_CHAT_NODE 是这条测试的由来（#326），它必须在").contains("AI_CHAT_NODE");
+  }
+
+  @Test
+  @DisplayName("节点上配了模型参数，就把它交给 ChatPort（#371 第 135 条）")
+  void handsModelParamsToTheChatPort() {
+    ChatPort chatPort = mock(ChatPort.class);
+    when(chatPort.complete(any(), anyString(), anyMap(), any(Duration.class))).thenReturn("带温度的回答");
+    FlowState state = new FlowState();
+    Map<String, Object> params = Map.of("temperature", 0.3, "top_k", 40);
+
+    new AiChatNodeExecutor(chatPort)
+        .execute(
+            context(
+                "住宿标准是多少？",
+                Map.of(
+                    AiChatNodeExecutor.CONFIG_MODEL_ID,
+                    MODEL_ID.toString(),
+                    AiChatNodeExecutor.CONFIG_MODEL_PARAMS,
+                    params),
+                state));
+
+    assertThat(state.read(AiChatNodeExecutor.ANSWER_KEY)).isEqualTo("带温度的回答");
+    var captor = org.mockito.ArgumentCaptor.forClass(Map.class);
+    verify(chatPort).complete(any(), anyString(), captor.capture(), any(Duration.class));
+    assertThat(captor.getValue())
+        .as("配置里的值要原样交出去：在这一层做归一会让「界面写错了」变成「上游才知道」")
+        .containsEntry("temperature", 0.3)
+        .containsEntry("top_k", 40);
   }
 }

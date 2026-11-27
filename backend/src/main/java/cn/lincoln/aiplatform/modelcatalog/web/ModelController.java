@@ -194,6 +194,18 @@ public class ModelController {
   }
 
   /**
+   * 单条模型（含参数声明 {@code paramSchema}）。
+   *
+   * <p>★ 为什么需要它：编排节点的"参数设置"弹窗只拿得到 modelId，却要按这条模型的<strong>声明</strong> 渲染表单 —— 翻列表再 find
+   * 一遍在模型多起来之后会变成"弹窗打开慢半拍"， 而且列表接口的字段是分页视图，拿它当详情用迟早会缺字段（{@code #371} 第 135 条）。
+   */
+  @GetMapping("/{id}")
+  @PreAuthorize("hasAuthority('model:manage')")
+  public ApiResponse<ModelView> get(@PathVariable UUID id) {
+    return ApiResponse.ok(modelService.get(id));
+  }
+
+  /**
    * 读某个模型的引用面（{@code #300}）：列表页的"删除"按钮靠它显示「N 处关联」。
    *
    * <p>★ 单独一个只读端点而不是只放在 409 响应体里 —— 否则用户必须先点一次删除才知道能不能删。
@@ -259,7 +271,13 @@ public class ModelController {
       Integer dimension,
       ThinkingMode thinking,
       ToolsMode tools,
-      String remark) {
+      String remark,
+      /**
+       * 可调参数声明（JSON 数组原文，{@code V117}）。{@code null} = 不改；{@code "[]"} = 清空。
+       *
+       * <p>★ 收原文：解析与校验只在 {@code ModelService#normalizeParamSchema} 一处，避免两套口径。
+       */
+      String paramSchema) {
 
     ModelService.UpsertCommand toCommand() {
       return new ModelService.UpsertCommand(
@@ -274,7 +292,8 @@ public class ModelController {
           null,
           thinking,
           tools,
-          remark);
+          remark,
+          paramSchema);
     }
   }
 

@@ -94,11 +94,24 @@ public class ChatModelAdapter implements ChatPort {
 
   @Override
   public String complete(UUID modelId, String prompt, Duration timeout) {
+    return complete(modelId, prompt, java.util.Map.of(), timeout);
+  }
+
+  /**
+   * 带采样参数的一次性补全（{@code #371} 第 135 条）。
+   *
+   * <p>★ 两条上游路径都要带：Spring AI 那条走 {@link NativeSpringAiChatModel} 的请求体，兜底网关那条走 {@code
+   * UpstreamGateway} 的 payload。只改一条的后果是"启不启用 Spring AI"决定参数有没有效 —— 这正是最难查的那种差异。
+   */
+  @Override
+  public String complete(
+      UUID modelId, String prompt, java.util.Map<String, Object> params, Duration timeout) {
     Model model = requireChatModel(modelId);
+    java.util.Map<String, Object> values = params == null ? java.util.Map.of() : params;
     if (springAi.enabled()) {
-      return springAi.complete(upstream.resolve(model), model.baseModel(), prompt, timeout);
+      return springAi.complete(upstream.resolve(model), model.baseModel(), prompt, values, timeout);
     }
-    return chat(model, prompt, timeout);
+    return chat(model, prompt, values, timeout);
   }
 
   /**
@@ -322,6 +335,11 @@ public class ChatModelAdapter implements ChatPort {
   }
 
   private String chat(Model model, String prompt, Duration timeout) {
+    return chat(model, prompt, java.util.Map.of(), timeout);
+  }
+
+  private String chat(
+      Model model, String prompt, java.util.Map<String, Object> params, Duration timeout) {
     try {
       ResolvedUpstream target = upstream.resolve(model);
       return gateway.chatCompletion(
@@ -330,7 +348,8 @@ public class ChatModelAdapter implements ChatPort {
           target.apiKey(),
           prompt,
           timeout,
-          target.authStyle());
+          target.authStyle(),
+          params);
     } catch (UpstreamGateway.UpstreamUnreachableException e) {
       throw upstreamFailure(e);
     }

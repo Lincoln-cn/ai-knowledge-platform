@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.assistant.application;
 
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -36,6 +37,9 @@ public class AiChatNodeExecutor implements NodeExecutor {
   /** 节点的 {@code properties.config} 里读模型 id 的键。 */
   static final String CONFIG_MODEL_ID = WorkflowNodeKeys.Config.MODEL_ID;
 
+  /** 节点的 {@code properties.config} 里读采样参数的键（{@code #371} 第 135 条）。 */
+  static final String CONFIG_MODEL_PARAMS = WorkflowNodeKeys.Config.MODEL_PARAMS;
+
   /** 一次补全的上限。与对话链路的口径一致，慢于此值多半是上游不可达。 */
   static final Duration TIMEOUT = Duration.ofSeconds(60);
 
@@ -62,8 +66,15 @@ public class AiChatNodeExecutor implements NodeExecutor {
     UUID modelId = modelIdOf(context.nodeConfig());
     String prompt = buildPrompt(question, retrieval);
 
-    log.debug("#workflow AI 对话节点开始：model={} 检索资料长度={}", modelId, retrieval.length());
-    String answer = chatPort.complete(modelId, prompt, TIMEOUT);
+    Map<String, Object> modelParams = modelParamsOf(context.nodeConfig());
+    log.debug(
+        "#workflow AI 对话节点开始：model={} 检索资料长度={} 采样参数={}", modelId, retrieval.length(), modelParams);
+    // ★ 没配参数就走原来的三参：多绕一层只会让"没配参数"也变成一条需要验证的路径，
+    //   而这一批要证明的是"配了参数真的会传下去"（判据在 ModelParamUpstreamTest）。
+    String answer =
+        modelParams.isEmpty()
+            ? chatPort.complete(modelId, prompt, TIMEOUT)
+            : chatPort.complete(modelId, prompt, modelParams, TIMEOUT);
     if (answer == null || answer.isBlank()) {
       // 空回答是"上游返回了 200 但没有正文"，与"调用失败"不是一回事，但在流程里后果一样（用户看不到任何东西）。
       throw new IllegalStateException("AI 对话节点拿到了空回答：模型 " + modelId + " 返回了空正文");
@@ -95,6 +106,33 @@ public class AiChatNodeExecutor implements NodeExecutor {
    * <p>★ 配了就用配的，没配就取平台默认（{@link ChatPort#pickChatModel()}）。这条取舍的理由： 编排节点的 {@code modelId}
    * 在画布上是**可选**的（{@code base-node} 那边展示的是"AI 模型·某模型" 这种提示文案），把一个可选字段做成必填会让所有老图在升级后突然不能跑。
    */
+  /**
+   * 读这次调用要用的采样参数值。
+   *
+   * <p>★ 形状不对（不是对象）时<strong>报错</strong>而不是当空：参数这一块的失败模式是"填了不生效"， 而"静默忽略一个填错的形状"正是那条路的第一步。
+   *
+   * <p>★ 键名不做归一：归一（{@code topP → top_p}）发生在 {@code ModelParamSchema.split}，只在真正拼请求体那一处做一次 ——
+   * 在这里顺手归一会让"到了上游才发现的拼写错误"在更早的地方被悄悄修好，反而查不出是界面写错了。
+   */
+  static Map<String, Object> modelParamsOf(Map<String, Object> config) {
+    Object raw = config == null ? null : config.get(CONFIG_MODEL_PARAMS);
+    if (raw == null) {
+      return Map.of();
+    }
+    if (!(raw instanceof Map<?, ?> map)) {
+      throw new IllegalStateException(
+          "AI 对话节点的模型参数形状不对：要一个对象（如 {\"temperature\": 0.3}），实际是 " + raw.getClass().getSimpleName());
+    }
+    Map<String, Object> values = new LinkedHashMap<>();
+    map.forEach(
+        (key, value) -> {
+          if (key != null && !String.valueOf(key).isBlank()) {
+            values.put(String.valueOf(key), value);
+          }
+        });
+    return values;
+  }
+
   private UUID modelIdOf(Map<String, Object> config) {
     Object raw = config == null ? null : config.get(CONFIG_MODEL_ID);
     if (raw instanceof String text && !text.isBlank()) {

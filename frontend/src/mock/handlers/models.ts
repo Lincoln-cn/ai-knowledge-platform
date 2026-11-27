@@ -127,6 +127,14 @@ export const modelRoutes: MockRoute[] = [
 
   ['GET', '/models/ner', () => nerStatus()],
 
+  // 单条模型（0.9.8 `#371` 第 135 条）：编排节点的参数弹窗按这条模型的 `paramSchema` 渲染表单。
+  // ★ 必须排在 `/models/:id` 的 PUT/DELETE 之前 —— mock 路由按数组顺序匹配。
+  [
+    'GET',
+    '/models/:id',
+    ({ path }) => findModel(path.id)
+  ],
+
   [
     'POST',
     '/models/local-onnx/warmup',
@@ -260,6 +268,8 @@ export const modelRoutes: MockRoute[] = [
         tools: input.kind === 'CHAT' ? (input.tools ?? 'UNSUPPORTED') : 'UNSUPPORTED',
         builtin: false,
         remark: input.remark,
+        // 参数声明：只有对话模型能声明（与后端 ModelService.normalizeParamSchema 同口径）
+        paramSchema: input.kind === 'CHAT' ? (input.paramSchema ?? '[]') : '[]',
         providerId: input.providerId ?? null,
         providerName: input.providerId ? providerNameOf(input.providerId) : undefined,
         legacyDirect: !input.providerId
@@ -299,6 +309,16 @@ export const modelRoutes: MockRoute[] = [
 
       if (input.name) model.name = input.name
       if (input.remark !== undefined) model.remark = input.remark
+      if (input.paramSchema !== undefined) {
+        if (model.kind !== 'CHAT') {
+          throw new ApiError(
+            ErrorCode.BAD_REQUEST,
+            '只有对话模型可以声明可调参数',
+            '采样参数（温度、top_p、max_tokens 等）是对话请求的字段；向量/重排模型没有请求体可调'
+          )
+        }
+        model.paramSchema = input.paramSchema
+      }
       if (input.providerId !== undefined) {
         model.providerId = input.providerId || null
         model.providerName = input.providerId ? providerNameOf(input.providerId) : undefined

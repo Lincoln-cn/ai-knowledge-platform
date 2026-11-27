@@ -195,6 +195,24 @@
       <el-form-item label="备注">
         <el-input v-model="form.remark" type="textarea" :rows="2" resize="none" maxlength="100" show-word-limit />
       </el-form-item>
+
+      <!-- 可调参数声明（0.9.8 `#371` 第 135 条）：这里声明「这个模型支持哪些参数」，
+           值在编排节点的「参数设置」里填。声明什么，那边就显示什么 —— 不声明就不显示，
+           不做"能填但送不到上游"的假表单。 -->
+      <el-form-item v-if="form.kind === 'CHAT'" label="可调参数">
+        <el-input
+          v-model="form.paramSchema"
+          type="textarea"
+          :rows="4"
+          resize="none"
+          placeholder='[{"key":"temperature","label":"温度","type":"number","default":0.2,"min":0,"max":2}]'
+        />
+        <div class="hint micro">
+          JSON 数组。type 取 number / integer / boolean / enum / string；
+          temperature、top_p、max_tokens 映射成请求体同名字段，其余键原样透传。留空 = 不暴露可调参数。
+        </div>
+        <div v-if="paramSchemaError" class="hint micro param-schema-error">{{ paramSchemaError }}</div>
+      </el-form-item>
     </el-form>
 
     <!-- 右：基础模型目录 -->
@@ -359,7 +377,40 @@ const form = reactive({
   thinking: 'NONE' as ThinkingMode,
   tools: 'UNSUPPORTED' as ToolsMode,
   dimension: null as number | null,
-  remark: ''
+  remark: '',
+  /** 可调参数声明（JSON 数组字符串）；空数组 = 不暴露 */
+  paramSchema: '[]'
+})
+
+/**
+ * 参数声明这一栏的本地校验：JSON 数组 + 每条 key/type。
+ *
+ * ★ 后端还会再校验一遍（权威），这里只拦"明显拼错了" ——
+ *   否则管理员要等一次 400 才知道少了个逗号（`#371` 第 135 条）。
+ */
+const paramSchemaError = computed(() => {
+  const raw = form.paramSchema.trim()
+  if (!raw || raw === '[]') return ''
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return '这一段不是合法 JSON（检查逗号与引号）'
+  }
+  if (!Array.isArray(parsed)) return '要一个 JSON 数组，不是对象'
+  for (let i = 0; i < parsed.length; i += 1) {
+    const item = parsed[i] as Record<string, any> | null
+    if (!item || typeof item !== 'object') return `第 ${i + 1} 条不是对象`
+    if (typeof item.key !== 'string' || !item.key.trim()) return `第 ${i + 1} 条缺少 key`
+    const type = String(item.type || '')
+    if (!['number', 'integer', 'boolean', 'enum', 'string'].includes(type)) {
+      return `第 ${i + 1} 条的 type 不认识：${type || '（空）'}`
+    }
+    if (type === 'enum' && (!Array.isArray(item.options) || item.options.length === 0)) {
+      return `第 ${i + 1} 条是 enum，但没给 options`
+    }
+  }
+  return ''
 })
 
 const rules: FormRules = {
@@ -663,6 +714,7 @@ const load = async () => {
     form.tools = m.tools
     form.dimension = m.dimension
     form.remark = m.remark ?? ''
+    form.paramSchema = m.paramSchema && m.paramSchema.trim() ? m.paramSchema : '[]'
     dimText.value = m.dimension != null ? String(m.dimension) : ''
     // 编辑已有模型：值来自库，不是本次手填；仍标「目录」以外的来源会让用户误解，
     // 这里统一按「目录/带出」展示（编辑态不可改基础模型与维度）。
@@ -678,6 +730,10 @@ const load = async () => {
 const submit = async (): Promise<boolean> => {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return false
+  if (paramSchemaError.value) {
+    ElMessage.error(paramSchemaError.value)
+    return false
+  }
 
   saving.value = true
   try {
@@ -693,6 +749,7 @@ const submit = async (): Promise<boolean> => {
         tools: form.tools,
         remark: form.remark,
         providerId: form.providerId || null,
+        ...(form.kind === 'CHAT' ? { paramSchema: form.paramSchema.trim() || '[]' } : {}),
         ...upstream
       })
       ElMessage.success('已保存')
@@ -714,7 +771,7 @@ const submit = async (): Promise<boolean> => {
         remark: form.remark,
         // ★ 向量模型不接受 thinking/tools（后端 400）—— 只在对话模型时下发
         ...(form.kind === 'CHAT'
-          ? { thinking: form.thinking, tools: form.tools }
+          ? { thinking: form.thinking, tools: form.tools, paramSchema: form.paramSchema.trim() || '[]' }
           : {}),
         ...upstream
       }
@@ -757,6 +814,11 @@ defineExpose({ load, submit, reset })
 /* `#288`：不绑定服务商是一条**会悄悄少掉三件事**的路，所以它配一条橙色提示而不是灰字。 */
 .hint-warn {
   color: var(--el-color-warning);
+}
+
+/* 参数声明写坏了要当场说，不要等一次 400（`#371` 第 135 条）。 */
+.param-schema-error {
+  color: var(--color-danger);
 }
 
 .provider-summary {

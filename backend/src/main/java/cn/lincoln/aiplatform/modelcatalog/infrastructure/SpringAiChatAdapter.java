@@ -85,6 +85,22 @@ public class SpringAiChatAdapter {
     return callWith(modelOf(target, baseModel, timeout), List.of(new UserMessage(prompt)));
   }
 
+  /**
+   * 一次性补全，带上本次调用的采样参数（{@code #371} 第 135 条）。
+   *
+   * <p>★ 参数一路跟到请求体：{@link NativeSpringAiChatModel#payload} 里按官方键覆盖默认的 {@code
+   * temperature}，其余键原样透传。判据是「上游收到的请求体里有这几个字段」，不是「Java 里存了一份」。
+   */
+  public String complete(
+      ResolvedUpstream target,
+      String baseModel,
+      String prompt,
+      java.util.Map<String, Object> params,
+      Duration timeout) {
+    return callWith(
+        modelOf(target, baseModel, timeout, null, params), List.of(new UserMessage(prompt)));
+  }
+
   /** 带角色边界的多轮补全。 */
   public String completeConversation(
       ResolvedUpstream target, String baseModel, List<ChatMessage> messages, Duration timeout) {
@@ -217,6 +233,15 @@ public class SpringAiChatAdapter {
 
   private NativeSpringAiChatModel modelOf(
       ResolvedUpstream target, String baseModel, Duration timeout, String reasoningEffort) {
+    return modelOf(target, baseModel, timeout, reasoningEffort, java.util.Map.of());
+  }
+
+  private NativeSpringAiChatModel modelOf(
+      ResolvedUpstream target,
+      String baseModel,
+      Duration timeout,
+      String reasoningEffort,
+      java.util.Map<String, Object> params) {
     return new NativeSpringAiChatModel(
         target.apiBase(),
         defaultBaseUrl,
@@ -224,7 +249,8 @@ public class SpringAiChatAdapter {
         baseModel,
         target.authStyle(),
         timeout,
-        reasoningEffort);
+        reasoningEffort,
+        params);
   }
 
   /**

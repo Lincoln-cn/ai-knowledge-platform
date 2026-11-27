@@ -4,6 +4,7 @@ import cn.lincoln.aiplatform.modelcatalog.domain.AuthStyle;
 import cn.lincoln.aiplatform.modelcatalog.domain.Model;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelHealth;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelKind;
+import cn.lincoln.aiplatform.modelcatalog.domain.ModelParamSchema;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelProvider;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelProviderRepository;
 import cn.lincoln.aiplatform.modelcatalog.domain.ModelRepository;
@@ -354,6 +355,7 @@ public class ModelService {
     }
     // ★ 与 update 同口径：能力声明只对对话模型有意义，传了就 400，不静默改写
     validateCapabilityFields(command.kind(), command.thinking(), command.tools());
+    String paramSchema = normalizeParamSchema(command.kind(), command.paramSchema());
 
     ModelProvider provider = requireProvider(command.providerId());
     if (provider != null && (hasText(command.apiBase()) || hasText(command.apiKey()))) {
@@ -410,6 +412,7 @@ public class ModelService {
             command.remark(),
             operatorId);
     model.bindProvider(provider == null ? null : provider.id());
+    model.paramSchema(paramSchema);
     models.save(model);
     return view(model);
   }
@@ -453,6 +456,9 @@ public class ModelService {
     }
     if (command.remark() != null) {
       model.remark(command.remark());
+    }
+    if (command.paramSchema() != null) {
+      model.paramSchema(normalizeParamSchema(model.kind(), command.paramSchema()));
     }
     if (model.kind() == ModelKind.CHAT) {
       if (command.thinking() != null) {
@@ -855,6 +861,35 @@ public class ModelService {
    *
    * <p>★ 传了就 400，不静默改写成 NONE / UNSUPPORTED： 「看起来改了、实际没改」比 400 更伤人，且两条路径口径必须一致。
    */
+  /**
+   * 把界面交上来的参数声明校验并归一（{@code #371} 第 135 条）。
+   *
+   * <p>★ 三类拒绝都带"第 N 条参数"，因为管理员改的是一张表 —— 只说"参数不合法"，他找不到是哪一行。
+   *
+   * <p>★ 非对话模型不接受参数声明：与 {@code thinking}/{@code tools} 同口径（传了就 400，不静默忽略）。
+   * 静默忽略的后果是"填了、保存成功、永远不生效"，而参数声明这一块正好是"填了不生效"最容易被信以为真的地方。
+   */
+  private static String normalizeParamSchema(ModelKind kind, String raw) {
+    if (raw == null) {
+      return null;
+    }
+    List<ModelParamSchema.Param> parsed;
+    try {
+      parsed = ModelParamSchema.parseStrict(raw);
+      ModelParamSchema.validate(parsed);
+    } catch (IllegalArgumentException illegal) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST, illegal.getMessage(), "改好这一条参数再保存（字段名 + 类型 + 默认值）");
+    }
+    if (!parsed.isEmpty() && kind != ModelKind.CHAT) {
+      throw new BusinessException(
+          ErrorCode.BAD_REQUEST,
+          "只有对话模型可以声明可调参数",
+          "采样参数（温度、top_p、max_tokens 等）是对话请求的字段；向量/重排模型没有请求体可调");
+    }
+    return ModelParamSchema.write(parsed);
+  }
+
   private static void validateCapabilityFields(
       ModelKind kind, ThinkingMode thinking, ToolsMode tools) {
     // ★ 只有对话模型有能力声明：向量模型与多模态三种都固定为 NONE / UNSUPPORTED。
@@ -1154,7 +1189,49 @@ public class ModelService {
       Integer contextWindow,
       ThinkingMode thinking,
       ToolsMode tools,
-      String remark) {}
+      String remark,
+      /**
+       * 可调参数声明的 JSON 数组原文（{@code V117}）。{@code null} = 不改；空串/{@code []} = 清空。
+       *
+       * <p>★ 收原文而不是收 {@code List<Param>}：Web 层拿到什么就交什么，解析与校验只在这一处， 免得"控制器替服务校验一遍、服务再校验一遍"两套口径。
+       */
+      String paramSchema) {
+
+    /**
+     * 不带参数声明的老构造（12 参）。
+     *
+     * <p>★ 留着它是为了让"只是建个模型"的调用点（十几个测试与内部调用）一个字都不用改 —— 与 {@code ChatStreamAssembler.AsyncTurn}
+     * 的四参兼容构造器同一条理由：新增字段不该把既有调用点全变成编译错误， 那会让人为了让它编过而随手填一个值。
+     */
+    public UpsertCommand(
+        String name,
+        ModelKind kind,
+        Supplier supplier,
+        String baseModel,
+        UUID providerId,
+        String apiBase,
+        String apiKey,
+        Integer dimension,
+        Integer contextWindow,
+        ThinkingMode thinking,
+        ToolsMode tools,
+        String remark) {
+      this(
+          name,
+          kind,
+          supplier,
+          baseModel,
+          providerId,
+          apiBase,
+          apiKey,
+          dimension,
+          contextWindow,
+          thinking,
+          tools,
+          remark,
+          null);
+    }
+  }
 
   /**
    * 基础模型目录结果：选项列表 + 上游不可达/为空时的可读 hint。

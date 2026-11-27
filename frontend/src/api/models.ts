@@ -11,6 +11,23 @@ export type ModelKind = 'CHAT' | 'EMBEDDING' | 'TTS' | 'STT' | 'IMAGE'
 export type ModelStatus = 'NOT_LOADED' | 'LOADING' | 'LOADED' | 'LOAD_FAILED'
 export type Supplier = 'LOCAL_INFERENCE' | 'EXTERNAL_API'
 
+/**
+ * 一条可调参数声明（对照后端 `ModelParamSchema.Param`，表列 `ai_model.param_schema`）。
+ *
+ * <p>`type` 的取值与后端一致：`number` / `integer` / `boolean` / `enum` / `string`；
+ * `temperature` / `top_p` / `max_tokens` 三个官方键会被映射成上游请求体的同名字段，其余键原样透传。
+ */
+export interface ModelParamDecl {
+  key: string
+  label?: string
+  type: 'number' | 'integer' | 'boolean' | 'enum' | 'string'
+  default?: unknown
+  min?: number | null
+  max?: number | null
+  options?: string[] | null
+  help?: string
+}
+
 export interface ModelInfo {
   id: string
   name: string
@@ -28,6 +45,11 @@ export interface ModelInfo {
   /** 是否内置（硬编码不可删） */
   builtin: boolean
   remark?: string
+  /**
+   * 可调参数声明（0.9.8，`#371` 第 135 条）：这个模型**支持**哪些采样参数。
+   * 空数组/空串 = 没有暴露可调参数；表单要显示「这个模型没有暴露可调参数」而不是渲染一个空表单。
+   */
+  paramSchema?: string
   /** 绑定的服务商；null/缺省 = 旧式直连 / 默认上游 */
   providerId?: string | null
   providerName?: string
@@ -211,12 +233,24 @@ export interface UpsertModelBody {
   thinking?: ThinkingMode
   tools?: ToolsMode
   remark?: string
+  /** 可调参数声明（JSON 数组字符串）。只有对话模型可以声明 */
+  paramSchema?: string
 }
 
 /* ────────────────────────── 接口 ────────────────────────── */
 
 export const listModels = (query: ModelQuery = {}) =>
   request<PageResult<ModelInfo>>({ method: 'GET', url: '/models', query })
+
+/**
+ * 单条模型（含 `paramSchema` 声明）。
+ *
+ * <p>★ 编排节点的「参数设置」弹窗只拿得到 modelId，却要按这条模型的声明渲染表单 ——
+ * 翻列表再 find 一遍在模型多起来之后会变成「弹窗打开慢半拍」，
+ * 而且列表接口的字段是分页视图，拿它当详情用迟早会缺字段（`#371` 第 135 条）。
+ */
+export const getModel = (id: string) =>
+  request<ModelInfo>({ method: 'GET', url: '/models/:id', path: { id } })
 
 /** 本地 ONNX（进程内）的真实状态 —— 模型管理页的 ONNX 卡片/状态条读它 */
 export const getLocalOnnxStatus = () =>

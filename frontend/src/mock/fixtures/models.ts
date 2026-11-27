@@ -23,7 +23,14 @@ export const models: ModelInfo[] = [
     thinking: 'NONE',
     tools: 'SUPPORTED',
     builtin: true,
-    remark: '内置对话模型，轻量、响应快'
+    remark: '内置对话模型，轻量、响应快',
+    // 可调参数声明（0.9.8 `#371` 第 135 条）：编排节点「参数设置」弹窗按这份声明渲染表单。
+    // ★ 刻意含一个非官方键 `top_k` —— 它证明"不是白名单放行"，而是官方键映射、其余原样透传。
+    paramSchema: JSON.stringify([
+      { key: 'temperature', label: '温度', type: 'number', default: 0.2, min: 0, max: 2, help: '越高越发散' },
+      { key: 'max_tokens', label: '最大输出 token', type: 'integer', default: 1024, min: 1, max: 8192 },
+      { key: 'top_k', label: 'top_k', type: 'integer', default: 40, min: 1, max: 100, help: '非官方键，原样透传给上游' }
+    ])
   },
   // ★ #301：m2 / m3 绑在 provider-jairouter 下 —— "有模型的服务商"在 mock 下要有一份数据，
   //   删除守卫（弹确认框 / force 也 409）才走得通。m2 自己被应用引用（见 modelReferences）

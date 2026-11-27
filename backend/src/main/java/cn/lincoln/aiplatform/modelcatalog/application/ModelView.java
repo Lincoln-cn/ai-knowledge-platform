@@ -55,7 +55,13 @@ public record ModelView(
      * <p>★ 它必须<strong>出现在列表里</strong>：界面在点删除之前就要知道"这个模型动不得"，等到点了才吃 409 已经晚了。 与 {@code apiKey}
      * 不同它不是秘密 —— 它是删除守卫的读数。
      */
-    long referenceCount) {
+    long referenceCount,
+    /**
+     * 可调参数声明原文（JSON 数组，见 {@link cn.lincoln.aiplatform.modelcatalog.domain.ModelParamSchema}）。
+     *
+     * <p>★ 放在最后一位：这个 record 的构造点只有一个（{@link #from}），但把新字段插在中间会让 "哪个参数对哪个字段"在 diff 里看不出变化。
+     */
+    String paramSchema) {
 
   /** 从聚合映射成视图。★ 不拷贝 apiKeyCipher / apiKeyIv —— 它们永远不出网。 */
   public static ModelView from(Model model) {
@@ -87,6 +93,7 @@ public record ModelView(
         provider == null ? null : provider.kind(),
         provider == null ? null : provider.egress(),
         model.providerId() == null,
-        referenceCount);
+        referenceCount,
+        model.paramSchema());
   }
 }

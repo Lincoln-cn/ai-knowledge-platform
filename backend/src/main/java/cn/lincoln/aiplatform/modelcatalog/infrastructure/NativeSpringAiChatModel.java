@@ -67,6 +67,14 @@ final class NativeSpringAiChatModel implements ChatModel {
   /** 能力映射出来的 {@code reasoning_effort}；{@code null} = 这个模型不该带这个字段（{@code #185}）。 */
   private final String reasoningEffort;
 
+  /**
+   * 本次调用的采样参数（{@code #371} 第 135 条）；空表 = 全用默认。
+   *
+   * <p>★ 存的是<strong>已经验过的值</strong>（键名与类型都过 {@code ModelParamSchema}），这里只负责塞进请求体： 官方键 {@code
+   * temperature} / {@code top_p} / {@code max_tokens} 用官方名，其余键按原名透传。
+   */
+  private final java.util.Map<String, Object> params;
+
   private Integer promptTokens;
   private Integer completionTokens;
 
@@ -91,6 +99,18 @@ final class NativeSpringAiChatModel implements ChatModel {
       AuthStyle authStyle,
       Duration timeout,
       String reasoningEffort) {
+    this(apiBase, defaultBaseUrl, apiKey, baseModel, authStyle, timeout, reasoningEffort, null);
+  }
+
+  NativeSpringAiChatModel(
+      String apiBase,
+      String defaultBaseUrl,
+      String apiKey,
+      String baseModel,
+      AuthStyle authStyle,
+      Duration timeout,
+      String reasoningEffort,
+      java.util.Map<String, Object> params) {
     String base =
         trimTrailingSlash(apiBase == null || apiBase.isBlank() ? defaultBaseUrl : apiBase);
     // 与网关同一口径：apiBase 已经是 .../v1 时不再拼一次
@@ -101,6 +121,7 @@ final class NativeSpringAiChatModel implements ChatModel {
     this.baseModel = baseModel;
     this.timeout = timeout;
     this.reasoningEffort = reasoningEffort;
+    this.params = params == null ? java.util.Map.of() : java.util.Map.copyOf(params);
   }
 
   @Override
@@ -232,6 +253,15 @@ final class NativeSpringAiChatModel implements ChatModel {
       body.put("stream_options", Map.of("include_usage", true));
     }
     body.put("temperature", 0.2);
+    // ★ 采样参数（#371 第 135 条）：先写默认 0.2，再用这次调用给的值覆盖。
+    //   官方键用官方名（topP → top_p 之类已在 ModelParamSchema.split 里归一），
+    //   其余键按原名透传 —— 上游不认识就忽略，但"我们确实发了"这件事可核对。
+    if (!params.isEmpty()) {
+      cn.lincoln.aiplatform.modelcatalog.domain.ModelParamSchema.Split split =
+          cn.lincoln.aiplatform.modelcatalog.domain.ModelParamSchema.split(params);
+      body.putAll(split.official());
+      body.putAll(split.extra());
+    }
     if (reasoningEffort != null) {
       body.put("reasoning_effort", reasoningEffort);
     }
