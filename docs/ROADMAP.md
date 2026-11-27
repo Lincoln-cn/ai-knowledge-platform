@@ -1256,6 +1256,7 @@ E: Failed to fetch https://packages.microsoft.com/ubuntu/26.04/prod/dists/resolu
 | --- | --- | --- | --- |
 | 22 | 真栈 `check_flow_walkthrough.py` 报 `[NG] 应用市场（/market）没有失败接口 —— 实际：['404 /assistants/<id>']`，而前一轮同一条是 `[]` | 会话列表的 `appName` 恒空串（端口不带名字）⇒ 市场页为显示「最近使用」只好逐个 `GET /assistants/:id` 补名。应用已被删除时那是必然的 404：调用方 catch 了、界面没错，但**走查闸门按网络层计数** ⇒ 一个自造的探测性 404 把闸门顶红 | `AppBindingPort.AppBinding` 补 `name`、`ConversationListService.toItem` 用它、市场页直接取会话行的 `appName`（空名 = 应用已删/不可见 ⇒ 不列），`#366`（`05d55caf`） |
 | 23 | `python scripts/smoke_check.py` 本机每轮都是 `10 / 11`，唯一那条红永远是 `JAiRouter8080: None` | 第 0 条把 JAiRouter 与三项必需进程并列成「四个进程可达」，而 `§298` 写明开发期不需要 JAiRouter（试用期 0.5.0 起才有） | 必需三项判红、网关不在只在 detail 注明，`#367`；同批把第 1 条迁移差值改成真读库（读不到标 SKIP），`#365`，`1603c55` |
+| 24 | 真栈日志反复 `未知的记忆种类：memories-1.kind`，而记忆一条都没落 | 模型偶尔把 schema 路径当值抄回来 ⇒ `MemoryKind.of` 抛，被外层 `catch (RuntimeException)` 接住 ⇒ **整轮**抽取归零（好的那几条一起丢），日志只有一句「抽取记忆失败」 | 单条降级：`MemoryExtractor.kindOrEmpty` 跳过坏值并留痕，轮末用「条数 + 坏值样本」两量打一条 warn，`#359`（`5b9d9de7`） |
 
 ★ **第七批的形状是"闸门自己造出来的红"** —— 22 与 23 都不是产品坏了：一个是界面为了补一个空字段而发了一个注定失败的请求，一个是前置断言把可选依赖写成必需。判据是：
 

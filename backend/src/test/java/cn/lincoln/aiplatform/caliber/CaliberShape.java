@@ -170,7 +170,9 @@ final class CaliberShape {
           "assistant/V111__assistant_template_multi_turn_shape.sql",
           "assistant/V112__as_prompt_config_version.sql",
           "conversation/V113__message_first_token_ms.sql",
-          "assistant/V114__as_prompt_eval.sql");
+          "assistant/V114__as_prompt_eval.sql",
+          // 0.9.7 第 1 层断言：两列 JSON（题目侧定义、答案侧判定快照）
+          "assistant/V115__as_prompt_eval_assertions.sql");
 
   private CaliberShape() {}
 
