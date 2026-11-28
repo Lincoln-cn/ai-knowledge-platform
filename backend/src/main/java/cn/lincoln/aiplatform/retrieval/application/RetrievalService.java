@@ -33,11 +33,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 命中测试（三模式 + RRF + 查询理解）—— 第 10 周的判据 ④ 与第 12 周的判据 ①②③ 都落在这个类里。
@@ -91,6 +96,24 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class RetrievalService implements SegmentRetrievalPort {
+
+  /**
+   * 检索各路并行用的执行器（2026-11-28）。
+   *
+   * <p>★ 用虚拟线程而不是固定池：这些任务几乎全在等数据库，固定池的线程数会变成一个 「并发上限」，而真正该限的是<strong>连接数</strong>（见 {@link
+   * #DB_PERMITS}）。 虚拟线程在这里只做一件事：让"等 IO"不占 OS 线程。
+   */
+  private static final ExecutorService PARALLEL = Executors.newVirtualThreadPerTaskExecutor();
+
+  /**
+   * 同时在飞的数据库查询条数上限。
+   *
+   * <p>★ 为什么必须有它：HikariCP 的 {@code maximum-pool-size} 是 10 （{@code application.yml}），而并行就是"一个请求开 N
+   * 条查询"。没有这个闸， 几个并发请求就能把池占满、后来的请求全部排队 —— 那时并行<strong>把平均延迟降下来了、 把 p99 抬上去了</strong>，这是最难查的一类回归。
+   *
+   * <p>取 6 的算法：池 10 里留 4 条给"非检索"的请求，同时保证单个请求的 3 路并行一定拿得到。
+   */
+  private static final Semaphore DB_PERMITS = new Semaphore(6, true);
 
   private static final Logger log = LoggerFactory.getLogger(RetrievalService.class);
 
@@ -299,7 +322,16 @@ public class RetrievalService implements SegmentRetrievalPort {
   }
 
   /** 端口实现：只交出"排好序的分段 + 那条直答"，trace / detected 留在 {@link #detailed} 里。 */
-  @Transactional(readOnly = true)
+  /**
+   * ★ <strong>这里刻意没有 {@code @Transactional}</strong>（2026-11-28 改并行时去掉）。
+   *
+   * <p>原因：Spring 的只读事务把连接绑在<em>当前线程</em>上，而并行任务在别的线程里跑 —— 它们会各自去池里借新连接，于是"一个事务"变成"N
+   * 条连接"，那个注解只剩下"看起来有"。
+   *
+   * <p>去掉之后语义变化只有一条：<em>多路查询不再共享同一个数据库快照</em>。检索是只读的，
+   * 且几路之间没有原子性要求（一路看到的是这一秒、另一路是下一秒，对"哪几段最相关"没有影响）， 所以这个变化可以接受 ——
+   * 但它是<strong>能被感知到的差异</strong>，记在这里而不是埋掉。
+   */
   @Override
   public Outcome retrieve(Spec request) {
     Detailed detailed = detailed(request);
@@ -384,8 +416,10 @@ public class RetrievalService implements SegmentRetrievalPort {
     timer.add("查询理解", understood.elapsedMs());
 
     int candidateLimit = Math.min(request.topNOrDefault() * OVERFETCH, CANDIDATE_LIMIT_CAP);
-    Map<UUID, Double> vectorScores = new HashMap<>();
-    Map<UUID, Double> textScores = new HashMap<>();
+    // ★ 并行之后这两张表会被多个线程同时 merge ⇒ 必须是并发容器
+    //   （ConcurrentHashMap.merge 是原子操作，HashMap.merge 不是）
+    Map<UUID, Double> vectorScores = new ConcurrentHashMap<>();
+    Map<UUID, Double> textScores = new ConcurrentHashMap<>();
 
     // ③ 每个子问题：它的 N 条查询各检索一次 → 子问题内 RRF
     List<List<UUID>> perSubQuestion = new ArrayList<>();
@@ -413,8 +447,18 @@ public class RetrievalService implements SegmentRetrievalPort {
     List<List<String>> plan = planPaths(understood.understanding());
     for (List<String> queries : plan) {
       List<List<UUID>> perQuery = new ArrayList<>();
+      // ★★ 并行在这一层（2026-11-28）：同一个子问题内的 N 条查询**同时**发出去。
+      //   为什么偏偏是这一层：
+      //   ① N 条查询之间没有任何数据依赖，各自都是"一次全文 + 一次向量"，时间全花在等数据库上；
+      //   ② 它是最外层的循环体，再往上（多个子问题之间）并行会让 RRF 的路序变得不可解释；
+      //   ③ 三路扩召回不在这里再拆一层 —— 实测它们一共 0.17 秒（见 StageTimer 的读数），
+      //      为这点收益多一层线程与日志交织不值得。
+      //   ★ 顺序仍然保留：下面按 running 的下标顺序 join，perQuery 的次序与串行版逐位一致。
+      List<CompletableFuture<List<UUID>>> running = new ArrayList<>(queries.size());
       for (String query : queries) {
-        // ★ 每一路开始前检查余量（10 §6.2 第 6 项）—— 耗尽就用已拿到的结果继续，不是失败
+        // ★ 派发前检查余量（10 §6.2 第 6 项）—— 耗尽就用已拿到的结果继续，不是失败。
+        //   ★ 与串行版的一处差异（如实记）：串行时"每路开始前"都能拦住，并行时只拦得住**还没派发**的；
+        //     已经飞出去的那几路不会被打断。预算是软上限，这个差别可以接受。
         if (elapsedMs(retrievalStartedAt) > budget.totalBudgetMs()) {
           budgetExhausted = true;
           log.warn(
@@ -426,23 +470,48 @@ public class RetrievalService implements SegmentRetrievalPort {
           break;
         }
         pathsAttempted++;
+        running.add(
+            CompletableFuture.supplyAsync(
+                () -> {
+                  // ★ 连接闸：并行的是"查询"，被限的是"连接"（理由见 DB_PERMITS 的注释）。
+                  //   用 acquireUninterruptibly 而不是 tryAcquire：拿不到许可时排队是正确的行为，
+                  //   而"拿不到就同步跑"会让并行在高峰时静默退化成串行 —— 那又是一个看不出来的降级。
+                  DB_PERMITS.acquireUninterruptibly();
+                  try {
+                    return retrieveOneQuery(
+                        query,
+                        mode,
+                        scope,
+                        candidateLimit,
+                        request.thresholdOrDefault(),
+                        vectorScores,
+                        textScores,
+                        timer);
+                  } finally {
+                    DB_PERMITS.release();
+                  }
+                },
+                PARALLEL));
+      }
+      for (int index = 0; index < running.size(); index++) {
         try {
-          perQuery.add(
-              retrieveOneQuery(
-                  query,
-                  mode,
-                  scope,
-                  candidateLimit,
-                  request.thresholdOrDefault(),
-                  vectorScores,
-                  textScores,
-                  timer));
+          perQuery.add(running.get(index).join());
           paths++;
-        } catch (BusinessException failure) {
+        } catch (CompletionException failure) {
+          Throwable cause = failure.getCause();
           // ★ 部分成功是常态（{@code 10 §3.2.3}）：一条路坏掉不该让整次检索失败 ——
           //   否则多查询会变成一个"降低可用性"的特性，与初衷相反
-          pathFailed = true;
-          log.warn("查询「{}」检索失败，丢弃这一路：{}", query, failure.getMessage());
+          if (cause instanceof BusinessException business) {
+            pathFailed = true;
+            log.warn("查询「{}」检索失败，丢弃这一路：{}", queries.get(index), business.getMessage());
+          } else if (cause instanceof RuntimeException runtime) {
+            // 与串行版同口径：只兜业务异常，其它照原样抛出去（吞掉会让未知错误变成"少一路"）。
+            // ★ 这里要抛 cause 而不是 CompletionException 本身 —— 串行版调用方接到的就是原异常，
+            //   多包一层会让"是谁抛的"从类型上看不出来。
+            throw runtime;
+          } else {
+            throw failure;
+          }
         }
       }
       // ★ 实体扩召回（0.6.2）：问题里提到的机构出现过的段，作为**一路候选**参与子问题内 RRF。
@@ -785,7 +854,7 @@ public class RetrievalService implements SegmentRetrievalPort {
    * <p>★ 它现在只剩"把 {@link Outcome} 翻成 {@link HitTestView}"这一件事 —— 检索策略一行都不在这里（{@link #retrieve}）。这是
    * `#378` 的收口点：同一个问句在命中测试与对话里走的是<strong>同一段</strong>代码。
    */
-  @Transactional(readOnly = true)
+  /** 同 {@link #retrieve(Spec)}：并行之后不许再拿"绑在线程上"的事务（理由见那处注释）。 */
   public HitTestView hitTest(HitTestQuery request) {
     validate(request);
     Detailed outcome = detailed(specOf(request));

@@ -47,7 +47,13 @@ final class StageTimer {
    * @param name 阶段名（中文，与日志同词）
    * @param millis 毫秒（允许为 0 —— 亚毫秒的阶段不必掩盖）
    */
-  void add(String name, long millis) {
+  /**
+   * 记一段耗时。
+   *
+   * <p>★ 自 2026-11-28 起检索各路并行（{@code RetrievalService} 的 PARALLEL）， 这个方法会被多个线程同时调用 ⇒ 必须加锁。锁的粒度是整次
+   * add（十几个指令）， 每次检索只调十几次，竞争可以忽略；换 ConcurrentHashMap + LongAdder 反而更绕。
+   */
+  synchronized void add(String name, long millis) {
     if (silent) {
       return;
     }
