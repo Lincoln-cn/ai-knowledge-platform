@@ -6,6 +6,7 @@ import cn.lincoln.aiplatform.conversation.domain.SourceRef;
 import cn.lincoln.aiplatform.conversation.domain.TokenUsage;
 import cn.lincoln.aiplatform.conversation.domain.stream.EventKind;
 import cn.lincoln.aiplatform.conversation.domain.stream.StreamEvent;
+import cn.lincoln.aiplatform.conversation.domain.stream.StreamStatus;
 import cn.lincoln.aiplatform.conversation.domain.stream.StreamTerminationPath;
 import cn.lincoln.aiplatform.platform.access.AccessScopePort;
 import cn.lincoln.aiplatform.platform.access.ClassificationLevel;
@@ -90,18 +91,47 @@ class ChatQaRouteTest {
     assertThat(segments).as("★ 但全文那一路照常（撤掉一路不该把整轮打空）").contains(SEGMENT_TEXT.toString());
   }
 
+  @Test
+  void directAnswerIsReturnedAsIsWithoutCallingTheModel() {
+    RecordingStore store = new RecordingStore();
+    ChatService chatService =
+        newChatService(
+            store,
+            new FixedQaPort(null, true),
+            (modelId, prompt, timeout, callback) -> {
+              throw new AssertionError("★★ 直答型问答对命中时不许调用模型 —— 这条红了就是直答分支没生效");
+            });
+    RecordingSink sink = new RecordingSink();
+
+    chatService.streamTurn(store.prepare(null, null, QUESTION, UUID.randomUUID()), QUESTION, sink);
+
+    assertThat(sink.text()).as("★★ 直答：正文必须是问答对的答案原文（不是模型的、也不是拒答文案）").contains("预算事项由财务资产部统一受理。");
+    assertThat(sink.done().status())
+        .as("★ 直答也走完整收尾（GENERATED），不是一条特殊终态")
+        .isEqualTo(StreamStatus.GENERATED);
+    assertThat(store.finishCount()).as("★ 收尾照常落库一次").isEqualTo(1);
+  }
+
   private static ChatService newChatService(RecordingStore store, QaRecallPort qaRecallPort) {
+    return newChatService(
+        store,
+        qaRecallPort,
+        // ★ 模型侧几毫秒写完：本类只读 refs，不读时序
+        (modelId, prompt, timeout, callback) -> {
+          callback.onChunk("预算事项由财务资产部统一受理。");
+          callback.onUsage(120, 40);
+          callback.onEnd(ChatStreamPort.End.COMPLETE, null);
+        });
+  }
+
+  private static ChatService newChatService(
+      RecordingStore store, QaRecallPort qaRecallPort, ChatStreamPort model) {
     ChatService chatService =
         new ChatService(
             store,
             new FixedSearchPort(),
             new KnownScope(),
-            // ★ 模型侧几毫秒写完：本类只读 refs，不读时序
-            (modelId, prompt, timeout, callback) -> {
-              callback.onChunk("预算事项由财务资产部统一受理。");
-              callback.onUsage(120, 40);
-              callback.onEnd(ChatStreamPort.End.COMPLETE, null);
-            },
+            model,
             new ChatStopSignal(),
             PROPERTIES,
             UNRESTRICTED_EGRESS,
@@ -121,9 +151,15 @@ class ChatQaRouteTest {
   private static final class FixedQaPort implements QaRecallPort {
 
     private final UUID segmentId;
+    private final boolean directAnswer;
 
     private FixedQaPort(UUID segmentId) {
+      this(segmentId, false);
+    }
+
+    private FixedQaPort(UUID segmentId, boolean directAnswer) {
       this.segmentId = segmentId;
+      this.directAnswer = directAnswer;
     }
 
     @Override
@@ -135,7 +171,7 @@ class ChatQaRouteTest {
               QUESTION,
               "预算事项由财务资产部统一受理。",
               segmentId,
-              false,
+              directAnswer,
               ClassificationLevel.INTERNAL,
               0.95));
     }
@@ -220,6 +256,17 @@ class ChatQaRouteTest {
       events.add(event);
     }
 
+    /** 正文 = 所有 delta 事件的文本拼接（直答时应当只有一段）。 */
+    private String text() {
+      StringBuilder text = new StringBuilder();
+      for (StreamEvent event : events) {
+        if (event instanceof StreamEvent.Delta delta) {
+          text.append(delta.text());
+        }
+      }
+      return text.toString();
+    }
+
     private List<String> referenceSegments() {
       return events.stream()
           .filter(event -> event.kind() == EventKind.REFS)
@@ -229,7 +276,6 @@ class ChatQaRouteTest {
           .toList();
     }
 
-    @SuppressWarnings("unused")
     private StreamEvent.StreamDoneEvent done() {
       return (StreamEvent.StreamDoneEvent)
           events.stream()
@@ -286,7 +332,13 @@ class ChatQaRouteTest {
         Integer firstTokenMs,
         String failReason,
         String failHint) {
-      // 本类只读 refs，落库内容不参与判定
+      finishCount++;
+    }
+
+    private int finishCount;
+
+    private int finishCount() {
+      return finishCount;
     }
 
     @Override

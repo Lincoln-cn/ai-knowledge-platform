@@ -945,7 +945,28 @@ public class ChatService {
       //
       //   ★ 拒答**不调用模型**：既省一次调用，也让"零引用 ⇒ 固定文案"这条承诺不被模型改写。
       //   ★ 正文仍走 delta（`refs` 已经交进装配器，所以顺序 meta → refs → delta → done 不变）。
-      if (!continuing && refs.isEmpty() && retrieval.noRefStrategy() == NoRefStrategy.REFUSE) {
+      // ★★ 直答（#78）：问答对标定问法命中且被标成直答型 ⇒ 原样返回答案，不调用模型。
+      //   ★ 它排在拒答之前：直答是"人事先标好的一条确定答案"，比"零引用就拒答"更具体 ——
+      //     被标成直答的问答对本来就常常没有出处分段，先走拒答会让这个开关永远不生效。
+      if (!continuing && outcome.directAnswer() != null) {
+        String directText = outcome.directAnswer().answer();
+        log.info(
+            "会话 {} 命中直答型问答对 {} ⇒ 直接返回答案（{} 字），不调用模型",
+            turn.conversationId(),
+            outcome.directAnswer().qaId(),
+            directText.length());
+        try {
+          run.assembler.delta(directText);
+          run.pump();
+        } catch (UncheckedIOException disconnected) {
+          // ★ 与拒答/模型线程同一条处置：写不出去 ⇒ 交给收尾线程按 DISCONNECT 收
+          run.disconnected = true;
+          log.info("直答正文写不出去（连接已断）：{}", disconnected.getMessage());
+        }
+        run.modelDone.set(true);
+      } else if (!continuing
+          && refs.isEmpty()
+          && retrieval.noRefStrategy() == NoRefStrategy.REFUSE) {
         log.info(
             "应用 {} 的无引用策略是 REFUSE，本轮零引用 ⇒ 直接回拒答文案，不调用模型（会话 {}）",
             turn.appId(),
@@ -1472,16 +1493,33 @@ public class ChatService {
    *
    * <p>★ 只在 {@code refs} 为空时非空：有引用时再说"为什么没有"是噪音。
    */
-  private record RetrievalOutcome(List<SourceRef> refs, String notice) {
+  private record RetrievalOutcome(List<SourceRef> refs, String notice, DirectAnswer directAnswer) {
 
     static RetrievalOutcome empty(String notice) {
-      return new RetrievalOutcome(List.of(), notice);
+      return new RetrievalOutcome(List.of(), notice, null);
     }
 
     static RetrievalOutcome of(List<SourceRef> refs) {
-      return new RetrievalOutcome(refs, null);
+      return new RetrievalOutcome(refs, null, null);
+    }
+
+    static RetrievalOutcome direct(String notice, DirectAnswer directAnswer) {
+      return new RetrievalOutcome(List.of(), notice, directAnswer);
     }
   }
+
+  /**
+   * 直答型问答对的命中（{@code #78}）。
+   *
+   * <p>★ 它是"跳过一切"的强动作：命中即原样返回 {@link #answer()}，<b>不</b>参与融合、<b>不</b>调用模型。 这也正是它默认关闭的理由 ——
+   * 判错时用户拿到的是一段语气笃定、而且没有任何环节能纠正的答案。
+   *
+   * @param qaId 命中的问答对 id（留痕用：用户反馈"这条答得不对"时要能定位到它）
+   * @param question 标定问法（给用户看"它把这个问题理解成了什么"）
+   * @param answer 答案正文
+   * @param score 问句与标定问法的词元 F1（0..1）
+   */
+  private record DirectAnswer(UUID qaId, String question, String answer, double score) {}
 
   private RetrievalOutcome retrieve(
       String question,
@@ -1664,7 +1702,20 @@ public class ChatService {
       // ★★ 第五路（问答对，0.9.9）：挂在知识库上的问答对，有出处的那部分作为一路候选参与融合。
       //   没有出处的那部分进不了融合（RRF 按段排名合并，没段就没有名次），它们由直答支负责，
       //   见 #78。
-      hits = withQaRoute(question, scope, retrieval, hits);
+      QaRoute qa = withQaRoute(question, scope, retrieval, hits);
+      hits = qa.hits();
+      if (qa.directAnswer() != null) {
+        // ★★ 直答（#78）：命中即答案 —— 不参与融合、不调模型、也不进引用清单。
+        //   引用为空是对的：答案本身就是问答对，没有"第几条分段"可指。
+        DirectAnswer direct = qa.directAnswer();
+        log.info(
+            "问答对直答命中：标定问法「{}」（score {}），本轮跳过融合与模型调用（会话 {}）",
+            direct.question(),
+            direct.score(),
+            conversationId);
+        return RetrievalOutcome.direct(
+            "本次回答直接取自知识库问答对（标定问法：「" + direct.question() + "」），未调用模型。", direct);
+      }
       if (hits.isEmpty()) {
         // ★ 检索确实跑了、也确实一条都没命中 —— 与"没检索"必须能分开，否则用户没法判断
         //   该去补知识库，还是该去查开关/权限。
@@ -1941,7 +1992,8 @@ public class ChatService {
             + referenceBudgetChars
             + " 字），已省略 "
             + dropped
-            + " 条。提问更具体一些，或调大「通用问答 → 引用正文预算」。");
+            + " 条。提问更具体一些，或调大「通用问答 → 引用正文预算」。",
+        null);
   }
 
   /** 复制一条引用、只换正文（其余字段原样）—— 编号与相似度都还属于原来那一条。 */
@@ -2136,19 +2188,32 @@ public class ChatService {
    *
    * <p>★ 失败只 warn：这一路是补强，不是主干。它挂掉时本轮必须照常给全文/向量那几路的结果。
    */
-  private List<SegmentSearchPort.Scored> withQaRoute(
+  private record QaRoute(List<SegmentSearchPort.Scored> hits, DirectAnswer directAnswer) {}
+
+  private QaRoute withQaRoute(
       String question,
       RetrievalScope scope,
       RetrievalParams retrieval,
       List<SegmentSearchPort.Scored> hits) {
     if (qaRecallPort == null || scope.hasConversationScope()) {
-      return hits;
+      return new QaRoute(hits, null);
     }
     try {
       List<QaRecallPort.Match> matches =
           qaRecallPort.recall(
               new QaRecallPort.Query(
                   question, scope.sharedKbIds(), retrieval.threshold(), QA_ROUTE_LIMIT));
+      // ★ 直答型先挑出来：它一命中就跳过融合与模型，所以必须在"有没有候选"之前决定。
+      //   多条命中取分最高的那条 —— 其余条数在日志里说清楚（"另外还有 N 条相近问答对"），
+      //   不静默只留一条。
+      DirectAnswer direct =
+          matches.stream()
+              .filter(QaRecallPort.Match::directAnswer)
+              .max(java.util.Comparator.comparingDouble(QaRecallPort.Match::score))
+              .map(
+                  match ->
+                      new DirectAnswer(match.id(), match.question(), match.answer(), match.score()))
+              .orElse(null);
       Map<UUID, Double> bySegment = new LinkedHashMap<>();
       for (QaRecallPort.Match match : matches) {
         if (match.segmentId() == null) {
@@ -2157,17 +2222,17 @@ public class ChatService {
         bySegment.merge(match.segmentId(), match.score(), Math::max);
       }
       if (bySegment.isEmpty()) {
-        return hits;
+        return new QaRoute(hits, direct);
       }
       log.info("问答对扩召回：命中 {} 条，其中 {} 条挂了出处分段，作为一路候选参与融合", matches.size(), bySegment.size());
       List<SegmentSearchPort.Scored> route =
           bySegment.entrySet().stream()
               .map(entry -> new SegmentSearchPort.Scored(entry.getKey(), entry.getValue()))
               .toList();
-      return RecallFusion.fuse(hits, route);
+      return new QaRoute(RecallFusion.fuse(hits, route), direct);
     } catch (RuntimeException failure) {
       log.warn("问答对扩召回失败，本轮少一路候选：{}", failure.toString());
-      return hits;
+      return new QaRoute(hits, null);
     }
   }
 
