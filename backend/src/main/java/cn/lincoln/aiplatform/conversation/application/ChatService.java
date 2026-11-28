@@ -19,6 +19,7 @@ import cn.lincoln.aiplatform.platform.retrieval.HopDeciderPort;
 import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
 import cn.lincoln.aiplatform.platform.retrieval.QueryUnderstandingPort;
 import cn.lincoln.aiplatform.platform.retrieval.QueryUnderstandingPort.SubQuestion;
+import cn.lincoln.aiplatform.platform.retrieval.RecallFusion;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
@@ -29,7 +30,6 @@ import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -2322,27 +2322,19 @@ public class ChatService {
    */
   private static List<SegmentSearchPort.Scored> fuseHybrid(
       List<SegmentSearchPort.Scored> routeA, List<SegmentSearchPort.Scored> routeB) {
-    return fuseHybrid(List.of(routeA, routeB));
+    return RecallFusion.fuse(routeA, routeB);
   }
 
+  /**
+   * 多路融合（子问题内多查询、多向量模型两条都会走到这里）。
+   *
+   * <p>★ <strong>实现已收口到 {@link RecallFusion}</strong>（{@code #378} 那一批）：这里此前有一份自实现的 RRF， 与 {@code
+   * RetrievalService} 用的 {@link Rrf} 是两份代码、同一条口径。两份各改一处的风险已经真实发作过
+   * ——"命中测试四路召回、真实对话只有两路"就是它的后果。现在只留一次委托，改融合规则只改一处。
+   */
   private static List<SegmentSearchPort.Scored> fuseHybrid(
       List<List<SegmentSearchPort.Scored>> routes) {
-    final int k = 60;
-    Map<UUID, Double> rrfScore = new LinkedHashMap<>();
-    Map<UUID, Double> displayScore = new LinkedHashMap<>();
-    for (List<SegmentSearchPort.Scored> route : routes) {
-      int rank = 1;
-      for (SegmentSearchPort.Scored hit : route) {
-        rrfScore.merge(hit.segmentId(), 1.0 / (k + rank), Double::sum);
-        displayScore.merge(hit.segmentId(), hit.score(), Math::max);
-        rank++;
-      }
-    }
-    List<SegmentSearchPort.Scored> fused = new ArrayList<>(rrfScore.size());
-    rrfScore.keySet().stream()
-        .sorted(Comparator.comparingDouble(rrfScore::get).reversed())
-        .forEach(id -> fused.add(new SegmentSearchPort.Scored(id, displayScore.get(id))));
-    return fused;
+    return RecallFusion.fuse(routes);
   }
 
   /**
