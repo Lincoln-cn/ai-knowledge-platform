@@ -98,6 +98,18 @@ def main() -> int:
 
     token = login()
     print(f"已登录（{BASE}）· 知识库 {KB}")
+    # ---------- 0. 环境前置：通用问答的召回开关必须开着 ----------
+    # ★ 关着的时候对话链路**根本不检索**（`refs` 帧的 notice 会说「通用问答没有开启知识库召回」），
+    #   于是「直答型问答对没命中」这个结论无从谈起 —— 实测就栽在这里：代码改了三轮都"没生效"，
+    #   真正的原因是 cv_chat_settings.retrieval_enabled 默认 false。
+    status, settings = call("/chat-settings", token)
+    payload = (settings or {}).get("data") or {}
+    if status == 200 and not payload.get("retrievalEnabled", False):
+        print("[FAIL] 环境未就绪：通用问答的知识库召回关着（cv_chat_settings.retrieval_enabled = false）")
+        print("       含义：这一轮对话不会检索知识库，本判据测的是「有没有检索」而不是「直答生没生效」。")
+        print("       处置：管理员在「设置 → 通用问答」打开知识库召回，或 PUT /api/v1/chat-settings 置 retrievalEnabled=true。")
+        return 3
+
 
     # ---------- 1. 建一条直答型问答对（同问句已存在就复用/改开关） ----------
     st, listing = call(f"/knowledge-bases/{KB}/qa-pairs?page=1&size=200", token)
