@@ -82,7 +82,7 @@ public class OnnxRerankerAdapter implements RerankPort {
   private RetrievalEngineSettingsStore engineSettings;
 
   @Autowired(required = false)
-  void setEngineSettings(RetrievalEngineSettingsStore engineSettings) {
+  public void setEngineSettings(RetrievalEngineSettingsStore engineSettings) {
     this.engineSettings = engineSettings;
   }
 
@@ -108,7 +108,10 @@ public class OnnxRerankerAdapter implements RerankPort {
    * 的构造器已经拒了小于 32 的值， 走到兜底只可能是"没配"。
    */
   private int maxLength() {
-    int configured = properties.maxLength();
+    int configured =
+        engineSettings == null
+            ? properties.maxLength()
+            : engineSettings.current().rerankMaxLength();
     return configured >= 32 ? configured : DEFAULT_MAX_LENGTH;
   }
 
@@ -120,12 +123,20 @@ public class OnnxRerankerAdapter implements RerankPort {
 
   private final AtomicReference<String> loadFailure = new AtomicReference<>();
 
-  /** 一次加载好的推理组件。 */
+  /**
+   * 一次加载好的推理组件。
+   *
+   * <p>★ {@code maxLength} 记在这里是有用的：tokenizer 的截断长度在构造时就固定了 （{@code
+   * optMaxLength}），而它是<b>懒加载后缓存</b>的 —— 配置页把长度从 512 改成 256 之后， 若不复用旧 bundle 就会一直按 512
+   * 跑，页面上改了、实际没变，而且没有任何提示。
+   */
   private record Bundle(
       OrtEnvironment environment,
       OrtSession session,
       HuggingFaceTokenizer tokenizer,
-      boolean needsTokenTypeIds) {}
+      boolean needsTokenTypeIds,
+      int maxLength,
+      java.nio.file.Path tokenizerPath) {}
 
   public OnnxRerankerAdapter(RerankProperties properties) {
     this.properties = properties;
@@ -174,16 +185,61 @@ public class OnnxRerankerAdapter implements RerankPort {
     }
   }
 
+  /** 按给定截断长度建 tokenizer（首次加载与「配置改短后重建」共用这一处）。 */
+  private static HuggingFaceTokenizer tokenizerOf(java.nio.file.Path path, int maxLength)
+      throws java.io.IOException {
+    return HuggingFaceTokenizer.builder()
+        .optTokenizerPath(path)
+        .optMaxLength(maxLength)
+        .optTruncation(true)
+        .optAddSpecialTokens(true)
+        .optPadding(false)
+        .build();
+  }
+
+  /**
+   * 尽力释放旧 tokenizer。
+   *
+   * <p>★ 吞掉异常而不是让重建失败：DJL 的 tokenizer 是否实现 {@code AutoCloseable} 取决于版本， 而「释放不了」只是少还一点 JNI
+   * 句柄（配置变更频率极低，重启即全释放）， 让它把一次正常检索打成失败就不值了。
+   */
+  private static void suppress(Object tokenizer) {
+    if (tokenizer instanceof AutoCloseable closeable) {
+      try {
+        closeable.close();
+      } catch (Exception ignored) {
+        // 见 javadoc：尽力而为
+      }
+    }
+  }
+
   /** 懒加载：第一次调用时才建 {@code OrtSession}；失败缓存下来（重启才重试）。 */
   private Bundle requireBundle() throws Exception {
+    int wanted = maxLength();
     Bundle ready = bundle.get();
-    if (ready != null) {
+    if (ready != null && ready.maxLength() == wanted) {
       return ready;
     }
     synchronized (this) {
       ready = bundle.get();
-      if (ready != null) {
+      if (ready != null && ready.maxLength() == wanted) {
         return ready;
+      }
+      if (ready != null) {
+        // ★ 只重建 tokenizer：截断长度与 OrtSession 无关，重载 275MB 的模型没必要。
+        HuggingFaceTokenizer rebuilt = tokenizerOf(ready.tokenizerPath(), wanted);
+        suppress(ready.tokenizer());
+        Bundle swapped =
+            new Bundle(
+                ready.environment(),
+                ready.session(),
+                rebuilt,
+                ready.needsTokenTypeIds(),
+                wanted,
+                ready.tokenizerPath());
+        bundle.set(swapped);
+        log.info("重排截断长度改为 {} 个 token，tokenizer 已重建（模型未重载）", wanted);
+        return swapped;
       }
       String failure = loadFailure.get();
       if (failure != null) {
@@ -215,15 +271,9 @@ public class OnnxRerankerAdapter implements RerankPort {
           options.close();
         }
         needsTokenTypeIds = session.getInputNames().contains(TOKEN_TYPE_IDS);
-        HuggingFaceTokenizer tokenizer =
-            HuggingFaceTokenizer.builder()
-                .optTokenizerPath(tokenizerPath)
-                .optMaxLength(maxLength())
-                .optTruncation(true)
-                .optAddSpecialTokens(true)
-                .optPadding(false)
-                .build();
-        Bundle loaded = new Bundle(environment, session, tokenizer, needsTokenTypeIds);
+        HuggingFaceTokenizer tokenizer = tokenizerOf(tokenizerPath, wanted);
+        Bundle loaded =
+            new Bundle(environment, session, tokenizer, needsTokenTypeIds, wanted, tokenizerPath);
         bundle.set(loaded);
         log.info(
             "cross-encoder 重排已加载：{}（token_type_ids={}，窗口 topK={}）",

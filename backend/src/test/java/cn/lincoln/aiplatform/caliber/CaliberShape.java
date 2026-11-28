@@ -182,7 +182,9 @@ final class CaliberShape {
           // 0.9.9 受控关系从四类扩到七类
           "knowledge/V118__kb_relation_more_types.sql",
           // 0.9.9 问答对接进检索：直答开关 + 问句分词索引（#78）
-          "knowledge/V119__kb_qa_pair_direct_answer.sql");
+          "knowledge/V119__kb_qa_pair_direct_answer.sql",
+          // 0.9.9 重排截断长度进配置页（可运行时改）
+          "platform/V120__platform_retrieval_max_length.sql");
 
   private CaliberShape() {}
 

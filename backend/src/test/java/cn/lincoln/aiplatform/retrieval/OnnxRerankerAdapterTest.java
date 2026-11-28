@@ -3,6 +3,9 @@ package cn.lincoln.aiplatform.retrieval;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalEngineSettings;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalEngineSettingsStore;
 import cn.lincoln.aiplatform.retrieval.application.OnnxRerankerAdapter;
 import java.nio.file.Path;
 import java.util.List;
@@ -93,11 +96,80 @@ class OnnxRerankerAdapterTest {
     Assumptions.assumeTrue(
         MODEL.toFile().isFile() && TOKENIZER.toFile().isFile(),
         "模型文件不在（CI runner 没有 1GB 的 model.onnx）⇒ 跳过依赖真实推理的判据");
-    return new OnnxRerankerAdapter(
-        new RerankProperties(true, 5, MODEL.toString(), TOKENIZER.toString(), false, 5, 5, 512));
+    return new OnnxRerankerAdapter(props());
+  }
+
+  private static RerankProperties props() {
+    return new RerankProperties(true, 5, MODEL.toString(), TOKENIZER.toString(), false, 5, 5, 512);
+  }
+
+  /**
+   * 判据：截断长度必须<b>从库里读</b>，而且改了之后 tokenizer 真的重建。
+   *
+   * <p>★ 这条要能红的姿势：把 {@code OnnxRerankerAdapter.maxLength()} 改回只读 {@code properties.maxLength()}，或者把
+   * {@code Bundle} 的命中条件改回"有就复用"，第二次断言立刻红。
+   *
+   * <p>为什么必须测到这一层：{@code HuggingFaceTokenizer.optMaxLength} 在<b>构造时</b>固定，而 tokenizer 是懒加载缓存的 ——
+   * 不重建就会出现「界面上从 512 改成 64、实际还按 512 截断」，并且没有任何报错。
+   */
+  @Test
+  void changingMaxLengthAtRuntimeRebuildsTheTokenizer() throws Exception {
+    OnnxRerankerAdapter adapter = newAdapter();
+    FixedSettings settings = new FixedSettings(engineSettings(512));
+    adapter.setEngineSettings(settings);
+
+    UUID a = seg(1);
+    UUID b = seg(2);
+    List<UUID> input = List.of(a, b);
+    Map<UUID, String> texts = Map.of(a, ON_TOPIC, b, OFF_TOPIC_HANDBOOK);
+
+    adapter.rerank(QUESTION, input, texts, 2);
+    assertThat(bundleMaxLength(adapter)).as("首次加载按库里的 512").isEqualTo(512);
+
+    settings.value = engineSettings(64);
+    adapter.rerank(QUESTION, input, texts, 2);
+    assertThat(bundleMaxLength(adapter))
+        .as("★★ 库里把截断长度改成 64 之后 tokenizer 必须重建 —— 这条红了就是「界面上改了、实际还按 512 跑」")
+        .isEqualTo(64);
   }
 
   private static UUID seg(int value) {
     return UUID.fromString(String.format("50000000-0000-4000-8000-%012d", value));
+  }
+
+  private static RetrievalEngineSettings engineSettings(int maxLength) {
+    return new RetrievalEngineSettings(true, true, true, 10, 5, maxLength, false, 5, null);
+  }
+
+  /**
+   * 只覆盖 {@code current()} 的替身。
+   *
+   * <p>构造时传 {@code null} 的 {@code JdbcTemplate} 是安全的：本类从不调 {@code loadOrFallback()}，因此永远不碰库。
+   */
+  private static final class FixedSettings extends RetrievalEngineSettingsStore {
+
+    private RetrievalEngineSettings value;
+
+    FixedSettings(RetrievalEngineSettings initial) {
+      super(null, props(), new RetrievalBudgetProperties(5000, 5000, 0.6, false, false));
+      this.value = initial;
+    }
+
+    @Override
+    public RetrievalEngineSettings current() {
+      return value;
+    }
+  }
+
+  /** 读适配器里缓存的那个 {@code Bundle} 记下的截断长度（不重跑推理就能看出实际用的是多少）。 */
+  private static int bundleMaxLength(OnnxRerankerAdapter adapter) throws Exception {
+    java.lang.reflect.Field field = OnnxRerankerAdapter.class.getDeclaredField("bundle");
+    field.setAccessible(true);
+    Object reference = field.get(adapter);
+    Object bundle = ((java.util.concurrent.atomic.AtomicReference<?>) reference).get();
+    assertThat(bundle).as("重排跑过一次之后 bundle 必须已经建出来").isNotNull();
+    java.lang.reflect.Method method = bundle.getClass().getDeclaredMethod("maxLength");
+    method.setAccessible(true);
+    return (int) method.invoke(bundle);
   }
 }

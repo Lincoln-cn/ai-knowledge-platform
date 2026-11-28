@@ -50,19 +50,21 @@ public class RetrievalEngineSettingsService {
                 command.rerankEnabled(),
                 command.rerankTopK(),
                 command.rerankForwardBatch(),
+                command.rerankMaxLength(),
                 command.listwiseEnabled(),
                 command.listwiseTopK(),
                 null)
             .checked();
     RetrievalEngineSettings saved = store.save(candidate, operator);
     log.info(
-        "检索引擎配置保存 by {}：qu={} retry={} rerank={} 窗口={} 批={} listwise={}/{}",
+        "检索引擎配置保存 by {}：qu={} retry={} rerank={} 窗口={} 批={} 长度={} listwise={}/{}",
         operator,
         saved.queryUnderstandingEnabled(),
         saved.queryUnderstandingRetry(),
         saved.rerankEnabled(),
         saved.rerankTopK(),
         saved.rerankForwardBatch(),
+        saved.rerankMaxLength(),
         saved.listwiseEnabled(),
         saved.listwiseTopK());
     return saved;
@@ -80,6 +82,7 @@ public class RetrievalEngineSettingsService {
       boolean rerankEnabled,
       int rerankTopK,
       int rerankForwardBatch,
+      int rerankMaxLength,
       boolean listwiseEnabled,
       int listwiseTopK) {}
 }

@@ -9,14 +9,14 @@ import org.junit.jupiter.api.Test;
 /**
  * 配置页那几格的范围校验（`platform/V100`）。
  *
- * <p>★ 为什么这些断言值得写：三个上限（窗口 50 / 批 100 / listwise 20）在**三处**被引用 —— 迁移里的 `check` 约束、这个 record
- * 的常量、页面上的提示。任何一处单独松动，另两处不会报错， 只会表现为"页面上能填 500、后端接受、重排把 500 条一次喂进去"。所以校验必须有一条能红的断言。
+ * <p>★ 为什么这些断言值得写：四个上限（窗口 50 / 批 100 / 截断长度 32–2048 / listwise 20）在**三处**被引用 —— 迁移里的 `check` 约束、这个
+ * record 的常量、页面上的提示。任何一处单独松动，另两处不会报错， 只会表现为"页面上能填 500、后端接受、重排把 500 条一次喂进去"。所以校验必须有一条能红的断言。
  */
 class RetrievalEngineSettingsTest {
 
   private static RetrievalEngineSettings of(int topK, int forwardBatch, int listwiseTopK) {
     return new RetrievalEngineSettings(
-        true, true, true, topK, forwardBatch, false, listwiseTopK, null);
+        true, true, true, topK, forwardBatch, 512, false, listwiseTopK, null);
   }
 
   @Test
@@ -85,10 +85,42 @@ class RetrievalEngineSettingsTest {
   }
 
   @Test
+  void maxLengthBoundariesAreAccepted() {
+    // 32 与 2048 是迁移 check 的两端，必须都被接受：写成 < 而迁移写 <= 会让
+    // 「页面上能填 32、保存时被后端拒」反复发生，而两处都读得通。
+    assertThat(
+            new RetrievalEngineSettings(true, true, true, 10, 5, 32, false, 5, null)
+                .checked()
+                .rerankMaxLength())
+        .isEqualTo(32);
+    assertThat(
+            new RetrievalEngineSettings(true, true, true, 10, 5, 2048, false, 5, null)
+                .checked()
+                .rerankMaxLength())
+        .isEqualTo(2048);
+  }
+
+  @Test
+  void maxLengthOutOfRangeIsRejected() {
+    // 31 太小（一个短标题都放不下，重排分数退化成噪声），2049 超过模型可用上限。
+    assertThatThrownBy(
+            () ->
+                new RetrievalEngineSettings(true, true, true, 10, 5, 31, false, 5, null).checked())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("截断长度");
+    assertThatThrownBy(
+            () ->
+                new RetrievalEngineSettings(true, true, true, 10, 5, 2049, false, 5, null)
+                    .checked())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("截断长度");
+  }
+
+  @Test
   void updatedAtIsCarriedThrough() {
     Instant at = Instant.parse("2026-11-15T05:00:00Z");
     assertThat(
-            new RetrievalEngineSettings(true, true, true, 10, 5, false, 5, at)
+            new RetrievalEngineSettings(true, true, true, 10, 5, 512, false, 5, at)
                 .checked()
                 .updatedAt())
         .isEqualTo(at);

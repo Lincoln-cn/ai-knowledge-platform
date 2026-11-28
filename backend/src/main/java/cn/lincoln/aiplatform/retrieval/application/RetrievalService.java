@@ -316,6 +316,7 @@ public class RetrievalService implements SegmentRetrievalPort {
         rerankProperties.enabled(),
         rerankProperties.topK(),
         rerankProperties.forwardBatch(),
+        rerankProperties.maxLength(),
         rerankProperties.listwiseEnabled(),
         rerankProperties.listwiseTopK(),
         null);

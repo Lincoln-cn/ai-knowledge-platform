@@ -7,7 +7,10 @@
       <template #actions>
         <span class="meta-line micro">
           <span>查询理解 <b>{{ form.queryUnderstandingEnabled ? '开' : '关' }}</b></span>
-          <span>重排 <b>{{ form.rerankEnabled ? `${form.rerankTopK} 条` : '关' }}</b></span>
+          <span
+            >重排
+            <b>{{ form.rerankEnabled ? `${form.rerankTopK} 条 · ${form.rerankMaxLength} token` : '关' }}</b></span
+          >
           <span>listwise <b>{{ form.listwiseEnabled ? `${form.listwiseTopK} 条` : '关' }}</b></span>
           <span v-if="updatedAtText" class="muted">上次修改 {{ updatedAtText }}</span>
         </span>
@@ -113,6 +116,25 @@
               这一项与上面的「窗口」是两件事：窗口决定看多少条，这里决定一次算几条。
             </div>
           </div>
+
+          <div class="field">
+            <label class="field-label">截断长度（token）</label>
+            <el-input-number
+              v-model="form.rerankMaxLength"
+              :min="32"
+              :max="2048"
+              :step="64"
+              :disabled="!canEdit || !form.rerankEnabled"
+              controls-position="right"
+              class="field-control"
+            />
+            <div class="field-note micro muted">
+              每条候选截到多少个 token 再送进重排。默认 512；
+              <span class="muted" title="2026-11-28 实测：同一条问句，512→256 让重排 6595ms→4389ms（−33%）、合计 10096ms→8482ms（−16%）">
+                调到 256 大约让重排快三分之一</span
+              >，代价是长条文的尾巴被砍掉 —— <b>改这一格必须重跑语料看引用准确率</b>，别只看耗时。
+            </div>
+          </div>
         </div>
       </section>
 
@@ -199,6 +221,7 @@ const EMPTY: RetrievalEngineSettingsUpdate = {
   rerankEnabled: true,
   rerankTopK: 10,
   rerankForwardBatch: 5,
+  rerankMaxLength: 512,
   listwiseEnabled: false,
   listwiseTopK: 5
 }
@@ -227,6 +250,7 @@ function adopt(data: RetrievalEngineSettingsUpdate & { updatedAt?: string | null
   form.rerankEnabled = data.rerankEnabled
   form.rerankTopK = data.rerankTopK
   form.rerankForwardBatch = data.rerankForwardBatch
+  form.rerankMaxLength = data.rerankMaxLength
   form.listwiseEnabled = data.listwiseEnabled
   form.listwiseTopK = data.listwiseTopK
   updatedAt.value = data.updatedAt ?? null
@@ -240,6 +264,7 @@ function toPayload(): RetrievalEngineSettingsUpdate {
     rerankEnabled: form.rerankEnabled,
     rerankTopK: form.rerankTopK,
     rerankForwardBatch: form.rerankForwardBatch,
+    rerankMaxLength: form.rerankMaxLength,
     listwiseEnabled: form.listwiseEnabled,
     listwiseTopK: form.listwiseTopK
   }

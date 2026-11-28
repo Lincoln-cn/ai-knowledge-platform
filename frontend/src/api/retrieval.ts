@@ -208,6 +208,8 @@ export interface RetrievalEngineSettings {
   rerankTopK: number
   /** 0 = 整个窗口一次前向 */
   rerankForwardBatch: number
+  /** 重排的截断长度（token）。截到 256 大约省一半前向计算，代价是长条文会被砍掉尾巴。 */
+  rerankMaxLength: number
   listwiseEnabled: boolean
   listwiseTopK: number
   updatedAt?: string | null

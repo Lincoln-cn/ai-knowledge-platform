@@ -3,6 +3,7 @@ package cn.lincoln.aiplatform.retrieval.application;
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.retrieval.ListwiseRerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalEngineSettingsStore;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -52,6 +53,28 @@ public class LlmListwiseRerankerAdapter implements ListwiseRerankPort {
   private final ChatPort chatPort;
   private final RerankProperties properties;
 
+  /**
+   * 运行时设置（配置页可改）。可为 {@code null} —— 那些直接 {@code new llm(...)} 的测试不接库，走 yml 值。
+   *
+   * <p>★ 这个类原来只读 {@link RerankProperties}，于是**页面上把 listwise 打开也不会生效** （`RetrievalService`
+   * 那边按库里的值决定要不要调，调进来又被这里的启动值挡回去）； 而窗口是 {@code Math.min(topK, properties.listwiseTopK())} ⇒
+   * 只能调小、调大无效，且不报错。 2026-11-28 一并改成「库优先」。
+   */
+  private RetrievalEngineSettingsStore engineSettings;
+
+  /** 运行时设置走 setter：构造器被测试直接调用，不为一个旋钮改签名（同 {@code OnnxRerankerAdapter}）。 */
+  @Autowired(required = false)
+  public void setEngineSettings(RetrievalEngineSettingsStore engineSettings) {
+    this.engineSettings = engineSettings;
+  }
+
+  /** 是否开启（库优先，yml 兜底）。 */
+  private boolean listwiseEnabled() {
+    return engineSettings == null
+        ? properties.listwiseEnabled()
+        : engineSettings.current().listwiseEnabled();
+  }
+
   @Autowired
   public LlmListwiseRerankerAdapter(ChatPort chatPort, RerankProperties properties) {
     this.chatPort = chatPort;
@@ -61,10 +84,12 @@ public class LlmListwiseRerankerAdapter implements ListwiseRerankPort {
   @Override
   public List<UUID> rerank(
       String query, List<UUID> candidateIds, Map<UUID, String> texts, int topK) {
-    if (candidateIds == null || candidateIds.size() < 2 || !properties.listwiseEnabled()) {
+    if (candidateIds == null || candidateIds.size() < 2 || !listwiseEnabled()) {
       return candidateIds == null ? List.of() : List.copyOf(candidateIds);
     }
-    int window = Math.min(Math.min(topK, properties.listwiseTopK()), candidateIds.size());
+    // ★ 不再和 properties.listwiseTopK() 取 min：topK 就是调用方按库里的值传进来的，
+    //   再压一次启动配置会让「页面上调到 20 实际还是 5」，而且不报错。
+    int window = Math.min(topK, candidateIds.size());
     if (window < 2) {
       return List.copyOf(candidateIds);
     }

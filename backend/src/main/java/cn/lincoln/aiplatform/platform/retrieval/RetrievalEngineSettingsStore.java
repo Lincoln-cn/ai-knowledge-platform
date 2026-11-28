@@ -96,7 +96,8 @@ public class RetrievalEngineSettingsStore {
         jdbc.update(
             "update pf_retrieval_settings set query_understanding_enabled = ?,"
                 + " query_understanding_retry = ?, rerank_enabled = ?, rerank_top_k = ?,"
-                + " rerank_forward_batch = ?, listwise_enabled = ?, listwise_top_k = ?,"
+                + " rerank_forward_batch = ?, rerank_max_length = ?,"
+                + " listwise_enabled = ?, listwise_top_k = ?,"
                 + " updated_at = now(), updated_by = ?"
                 + " where id = ?",
             settings.queryUnderstandingEnabled(),
@@ -104,6 +105,7 @@ public class RetrievalEngineSettingsStore {
             settings.rerankEnabled(),
             settings.rerankTopK(),
             settings.rerankForwardBatch(),
+            settings.rerankMaxLength(),
             settings.listwiseEnabled(),
             settings.listwiseTopK(),
             operator,
@@ -115,12 +117,13 @@ public class RetrievalEngineSettingsStore {
     RetrievalEngineSettings saved = loadOrFallback();
     snapshot = saved;
     log.info(
-        "检索引擎配置已更新：qu={} retry={} rerank={} 窗口={} 批={} listwise={}",
+        "检索引擎配置已更新：qu={} retry={} rerank={} 窗口={} 批={} 长度={} listwise={}",
         saved.queryUnderstandingEnabled(),
         saved.queryUnderstandingRetry(),
         saved.rerankEnabled(),
         saved.rerankTopK(),
         saved.rerankForwardBatch(),
+        saved.rerankMaxLength(),
         saved.listwiseEnabled());
     return saved;
   }
@@ -135,7 +138,8 @@ public class RetrievalEngineSettingsStore {
       List<RetrievalEngineSettings> found =
           jdbc.query(
               "select query_understanding_enabled, query_understanding_retry, rerank_enabled,"
-                  + " rerank_top_k, rerank_forward_batch, listwise_enabled, listwise_top_k,"
+                  + " rerank_top_k, rerank_forward_batch, rerank_max_length,"
+                  + " listwise_enabled, listwise_top_k,"
                   + " updated_at from pf_retrieval_settings where id = ?",
               (rs, rowNum) ->
                   new RetrievalEngineSettings(
@@ -144,6 +148,7 @@ public class RetrievalEngineSettingsStore {
                       rs.getBoolean("rerank_enabled"),
                       rs.getInt("rerank_top_k"),
                       rs.getInt("rerank_forward_batch"),
+                      rs.getInt("rerank_max_length"),
                       rs.getBoolean("listwise_enabled"),
                       rs.getInt("listwise_top_k"),
                       rs.getObject("updated_at", java.time.OffsetDateTime.class) == null
@@ -166,13 +171,14 @@ public class RetrievalEngineSettingsStore {
    */
   private RetrievalEngineSettings fallback(String reason) {
     log.warn(
-        "{} —— 检索引擎配置回落到 application.yml：qu={} retry={} rerank={} 窗口={} 批={} listwise={}",
+        "{} —— 检索引擎配置回落到 application.yml：qu={} retry={} rerank={} 窗口={} 批={} 长度={} listwise={}",
         reason,
         budgetDefaults.queryUnderstandingEnabled(),
         budgetDefaults.queryUnderstandingRetryOnParseFailure(),
         rerankDefaults.enabled(),
         rerankDefaults.topK(),
         rerankDefaults.forwardBatch(),
+        rerankDefaults.maxLength(),
         rerankDefaults.listwiseEnabled());
     return new RetrievalEngineSettings(
         budgetDefaults.queryUnderstandingEnabled(),
@@ -180,6 +186,7 @@ public class RetrievalEngineSettingsStore {
         rerankDefaults.enabled(),
         rerankDefaults.topK(),
         rerankDefaults.forwardBatch(),
+        rerankDefaults.maxLength(),
         rerankDefaults.listwiseEnabled(),
         rerankDefaults.listwiseTopK(),
         null);

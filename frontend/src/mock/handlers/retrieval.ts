@@ -58,6 +58,7 @@ const engineSettings = {
   rerankEnabled: true,
   rerankTopK: 10,
   rerankForwardBatch: 5,
+  rerankMaxLength: 512,
   listwiseEnabled: false,
   listwiseTopK: 5,
   updatedAt: null as string | null
@@ -340,12 +341,19 @@ export const retrievalRoutes: MockRoute[] = [
       rerankEnabled: input.rerankEnabled ?? engineSettings.rerankEnabled,
       rerankTopK: input.rerankTopK ?? engineSettings.rerankTopK,
       rerankForwardBatch: input.rerankForwardBatch ?? engineSettings.rerankForwardBatch,
+      rerankMaxLength: input.rerankMaxLength ?? engineSettings.rerankMaxLength,
       listwiseEnabled: input.listwiseEnabled ?? engineSettings.listwiseEnabled,
       listwiseTopK: input.listwiseTopK ?? engineSettings.listwiseTopK
     }
-    // 三个上限与后端 `RetrievalEngineSettings.checked()` 逐字一致
+    // 四个上限与后端 `RetrievalEngineSettings.checked()` 逐字一致
     if (next.rerankTopK < 1 || next.rerankTopK > 50) {
       throw new ApiError(ErrorCode.BAD_REQUEST, '重排窗口要在 1～50 之间，现在写的是 ' + next.rerankTopK)
+    }
+    if (next.rerankMaxLength < 32 || next.rerankMaxLength > 2048) {
+      throw new ApiError(
+        ErrorCode.BAD_REQUEST,
+        '重排截断长度要在 32～2048 个 token 之间，现在写的是 ' + next.rerankMaxLength
+      )
     }
     if (next.rerankForwardBatch < 0 || next.rerankForwardBatch > 100) {
       throw new ApiError(
