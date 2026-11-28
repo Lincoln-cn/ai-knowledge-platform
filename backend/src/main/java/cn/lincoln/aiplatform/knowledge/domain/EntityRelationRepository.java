@@ -31,6 +31,26 @@ public interface EntityRelationRepository {
   int insertAll(UUID kbId, List<Candidate> relations);
 
   /**
+   * 删掉一篇文档产出过的全部关系，返回删掉的行数。
+   *
+   * <p>★ 为什么需要它（`#379`）：唯一键是 {@code (from_entity, to_entity, type)}， <strong>{@code type}
+   * 在键里</strong> —— 抽取规则一改（比如「下属」从 {@code BELONGS_TO} 改成 {@code CONTAINS}），重抽出来的边就成了"另一条边"，而 {@link
+   * #insertAll} 是 {@code on conflict do nothing}，旧的那条永远不会消失。
+   *
+   * <p>后果不是"多一条数据"：图谱上会出现两条方向相反的箭头，而且**两条都带 segment_id**， 看起来同样可信；关系扩召回也会跟着给错方向。
+   *
+   * <p>★ 按文档删而不是按分段删：一次重抽就是一篇文档的全部段 （{@code DocumentService} 一次把整篇的段传下来），按分段删会漏掉"这次没重抽到"的那几段，
+   * 旧边照样留着。
+   *
+   * <p>★ 代价：这篇文档的边会有短暂空窗（删完到插完之间）。抽取本来就不在事务里、也不影响 文档可用性，所以这个空窗可以接受；真出问题下次重抽会补回来。
+   *
+   * @param kbId 知识库 id（{@code null} 返回 0，不删任何东西）
+   * @param documentId 文档 id（{@code null} 返回 0 —— 没有文档标识就没法判定"这篇文档的边"）
+   * @return 删除的行数
+   */
+  int deleteByDocument(UUID kbId, UUID documentId);
+
+  /**
    * 这些实体参与过关系陈述的那几段。
    *
    * <p>★ 返回的是<strong>关系的原文段</strong>，不是「关联实体出现的段」。这两种语义的差别见 {@code

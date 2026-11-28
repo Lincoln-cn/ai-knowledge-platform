@@ -56,6 +56,16 @@ public class JdbcEntityRelationRepository implements EntityRelationRepository {
   }
 
   @Override
+  public int deleteByDocument(UUID kbId, UUID documentId) {
+    if (kbId == null || documentId == null) {
+      // 没有文档标识就不动手：删"这个库的全部边"会把别的文档的成果一起清掉。
+      return 0;
+    }
+    return jdbc.update(
+        "delete from kb_relation where kb_id = ? and document_id = ?", kbId, documentId);
+  }
+
+  @Override
   public List<UUID> segmentIdsOf(UUID kbId, Collection<UUID> entityIds) {
     if (kbId == null || entityIds == null || entityIds.isEmpty()) {
       return List.of();

@@ -223,6 +223,19 @@ public class EntityExtractionService {
         }
         // ★ 关系放在 mention 之后：两端实体必须是**已经入库**的，
         //   否则这条边在图里没有端点（kb_relation 的两个外键会直接拒绝）。
+        // ★ 重抽前先清掉这篇文档上次产出的边（#379）。
+        //   唯一键是 (from, to, type)，type 一变新旧两条就都留着 ⇒ 图谱上出现
+        //   「信息中心 包含 运维科」与「信息中心 隶属 运维科」两条方向相反的箭头，
+        //   而两条都带 segment_id，看起来同样可信。所以"只 insert 不删"是错的。
+        //   ★ 删在插之前、且不受"这次抽到几条"影响：一条都没抽到也要清 ——
+        //     规则改掉的那种边正是"这次抽不出来"的。
+        if (documentId != null) {
+          int removed = relationRepository.deleteByDocument(kbId, documentId);
+          if (removed > 0) {
+            log.info("#实体关系 重抽前清掉旧边 {} 条（文档 {}，kb={}）", removed, documentId, kbId);
+          }
+        }
+
         if (!pendingRelations.isEmpty()) {
           int related = 0;
           List<EntityRelationRepository.Candidate> edges = new ArrayList<>();
