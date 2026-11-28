@@ -5,6 +5,7 @@ import cn.lincoln.aiplatform.platform.domain.ErrorCode;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.retrieval.EntityRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.ListwiseRerankPort;
+import cn.lincoln.aiplatform.platform.retrieval.QaRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.RelationRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
@@ -118,6 +119,9 @@ public class RetrievalService {
    */
   private static final int HOP_MIN_HITS = 3;
 
+  /** 回包里最多带几条问答对明细。 */
+  private static final int QA_DETAIL_LIMIT = 5;
+
   /**
    * 时间预算的"该降级了"水位（{@code 10 §6.3}：D1 = 时间预算用掉 <strong>60%</strong> / 多跳判定失败）。
    *
@@ -170,6 +174,20 @@ public class RetrievalService {
   private final EntityRecallPort entityRecallPort;
 
   private final RelationRecallPort relationRecallPort;
+
+  /**
+   * 第五路：问答对。{@code null} = 这一路没接（日志里也不报错）。
+   *
+   * <p>★ 为什么它走 setter 而不是构造器参数：这个类的两个构造器已经被四处测试直接 {@code new} 出来， 加一个参数就得改四处，而且改错一次会让「7
+   * 参便捷版」与「生产版」的长度同时对不上。 一个可选依赖不该拥有改所有调用点的权力。
+   */
+  private QaRecallPort qaRecallPort;
+
+  /** 问答对召回端口的可选注入：容器里没有这个 bean 时这一路自动跳过。 */
+  @Autowired(required = false)
+  void setQaRecallPort(QaRecallPort qaRecallPort) {
+    this.qaRecallPort = qaRecallPort;
+  }
 
   private final MultiHopService multiHop;
 
@@ -354,6 +372,9 @@ public class RetrievalService {
     List<RelationRecallPort.Relation> detectedRelations = new ArrayList<>();
     Set<UUID> entityHits = new java.util.LinkedHashSet<>();
     Set<UUID> relationHits = new java.util.LinkedHashSet<>();
+    List<QaRecallPort.Match> qaMatches = new ArrayList<>();
+    Set<UUID> qaHits = new java.util.LinkedHashSet<>();
+    String qaFailure = null;
     String entityFailure = null;
     String relationFailure = null;
 
@@ -437,6 +458,33 @@ public class RetrievalService {
           // ★ 与实体扩召回同口径：多一路不是必经之路，失败不拖累整次检索，但必须留痕。
           relationFailure = failure.toString();
           log.warn("关系扩召回失败，本次少一路候选：{}", failure.toString());
+        }
+      }
+      // ★ 问答对扩召回（0.9.9）
+      if (!scope.isEmpty() && !scope.hasConversationScope() && qaRecallPort != null) {
+        try {
+          List<QaRecallPort.Match> matches =
+              qaRecallPort.recall(
+                  new QaRecallPort.Query(
+                      request.question(),
+                      scope.sharedKbIds(),
+                      request.thresholdOrDefault(),
+                      QA_DETAIL_LIMIT));
+          java.util.LinkedHashSet<UUID> byQa = new java.util.LinkedHashSet<>();
+          for (QaRecallPort.Match match : matches) {
+            qaMatches.add(match);
+            if (match.segmentId() != null) {
+              byQa.add(match.segmentId());
+            }
+          }
+          qaHits.addAll(byQa);
+          if (!byQa.isEmpty()) {
+            perQuery.add(new java.util.ArrayList<>(byQa));
+            paths++;
+          }
+        } catch (RuntimeException failure) {
+          qaFailure = failure.toString();
+          log.warn("问答对扩召回失败，本次少一路候选：{}", failure.toString());
         }
       }
       if (perQuery.isEmpty()) {
@@ -616,6 +664,9 @@ public class RetrievalService {
       if (relationHits.contains(id)) {
         channels.add("relation");
       }
+      if (qaHits.contains(id)) {
+        channels.add("qa");
+      }
       items.add(
           new HitTestView.Item(
               rank++,
@@ -646,7 +697,14 @@ public class RetrievalService {
         new HitTestView.Detected(
             List.copyOf(detectedEntities),
             List.copyOf(detectedRelations),
-            detectNote(detectedEntities, detectedRelations, entityFailure, relationFailure)));
+            List.copyOf(qaMatches),
+            detectNote(
+                detectedEntities,
+                detectedRelations,
+                qaMatches,
+                entityFailure,
+                relationFailure,
+                qaFailure)));
   }
 
   /**
@@ -664,8 +722,10 @@ public class RetrievalService {
   static String detectNote(
       List<EntityRecallPort.Entity> entities,
       List<RelationRecallPort.Relation> relations,
+      List<QaRecallPort.Match> qaMatches,
       String entityFailure,
-      String relationFailure) {
+      String relationFailure,
+      String qaFailure) {
     List<String> parts = new ArrayList<>(2);
     if (entityFailure != null) {
       parts.add("实体扩召回失败：" + entityFailure);
@@ -673,16 +733,32 @@ public class RetrievalService {
     if (relationFailure != null) {
       parts.add("关系扩召回失败：" + relationFailure);
     }
+    if (qaFailure != null) {
+      parts.add("问答对扩召回失败：" + qaFailure);
+    }
     if (!parts.isEmpty()) {
       return String.join("；", parts) + " —— 本次少一路候选";
     }
+    String qa = qaNote(qaMatches);
     if (entities.isEmpty() && relations.isEmpty()) {
-      return "问句里没有识别到实体，两路扩召回都没有起点";
+      String base = "问句里没有识别到实体，两路扩召回都没有起点";
+      return qa == null ? base : qa + "；" + base;
     }
     if (relations.isEmpty()) {
-      return "认出 " + entities.size() + " 个实体，但它们在这些文档里没有关系陈述（抽取后才有边，见知识库「实体与关系」）";
+      String base = "认出 " + entities.size() + " 个实体，但它们在这些文档里没有关系陈述（抽取后才有边，见知识库「实体与关系」）";
+      return qa == null ? base : qa + "；" + base;
     }
-    return null;
+    return qa;
+  }
+
+  /** 命中问答对时的那句话；没命中返回 null（不占位、不说空话）。 */
+  private static String qaNote(List<QaRecallPort.Match> qaMatches) {
+    if (qaMatches.isEmpty()) {
+      return null;
+    }
+    long withSegment = qaMatches.stream().filter(match -> match.segmentId() != null).count();
+    String base = "命中 " + qaMatches.size() + " 条问答对（" + withSegment + " 条挂了出处分段）";
+    return withSegment < qaMatches.size() ? base + "，没出处的那几条只能作为答案候选" : base;
   }
 
   // ────────────────────────── 内部 ──────────────────────────

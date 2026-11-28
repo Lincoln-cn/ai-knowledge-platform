@@ -91,13 +91,22 @@ public record HitTestView(
   public record Detected(
       List<cn.lincoln.aiplatform.platform.retrieval.EntityRecallPort.Entity> entities,
       List<cn.lincoln.aiplatform.platform.retrieval.RelationRecallPort.Relation> relations,
+      List<cn.lincoln.aiplatform.platform.retrieval.QaRecallPort.Match> qaMatches,
       String note) {
 
-    public static final Detected NONE = new Detected(List.of(), List.of(), null);
+    public static final Detected NONE = new Detected(List.of(), List.of(), List.of(), null);
 
-    /** 有没有正面的东西可念（有实体或关系）。 */
+    /** 兼容只有实体与关系的那一版调用点。 */
+    public Detected(
+        List<cn.lincoln.aiplatform.platform.retrieval.EntityRecallPort.Entity> entities,
+        List<cn.lincoln.aiplatform.platform.retrieval.RelationRecallPort.Relation> relations,
+        String note) {
+      this(entities, relations, List.of(), note);
+    }
+
+    /** 有没有正面的东西可念（有实体、有关系，或有问答对命中）。 */
     public boolean hasAnything() {
-      return !entities.isEmpty() || !relations.isEmpty();
+      return !entities.isEmpty() || !relations.isEmpty() || !qaMatches.isEmpty();
     }
   }
 }

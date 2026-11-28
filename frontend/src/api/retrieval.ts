@@ -101,7 +101,25 @@ export interface DetectedRelation {
 export interface HitTestDetected {
   entities: DetectedEntity[]
   relations: DetectedRelation[]
+  /** 第五路命中的问答对；老后端不下发时是 undefined（不是空数组，两者含义不同） */
+  qaMatches?: HitTestQaMatch[]
   note: string | null
+}
+
+/**
+ * 命中的问答对（第五路）。
+ *
+ * ★ `directAnswer` = 命中即直答：直接把 `answer` 当回答返回，不融合、不调模型。
+ * ★ `segmentId` 可空：手工编辑的问答对常常没有出处分段，它们进不了 RRF（没有段就没有名次），
+ * 只能作为答案候选 —— 界面上必须能看出这一条"无出处"。
+ */
+export interface HitTestQaMatch {
+  id: string
+  question: string
+  answer: string
+  segmentId: string | null
+  directAnswer: boolean
+  score: number
 }
 
 export interface HitTestRequest extends RetrievalParams {

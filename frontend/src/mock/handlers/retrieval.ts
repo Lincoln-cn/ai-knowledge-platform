@@ -208,8 +208,36 @@ const channelsOf = (body: HitTestRequest, index: number, total: number): string[
  */
 const detectedOf = (body: HitTestRequest, scored: Array<{ segmentId: string }>) => {
   const mentionsOrg = /部|中心|科|公司|局/.test(body.question)
+  // ★ 问答对这一路与实体无关：它按问法全文匹配，不按"问句里有没有机构名"。
+  //   这里给两条 —— 一条挂了出处分段、一条没有 —— 因为这两种在界面上长得必须不一样，
+  //   只放假的那一条，界面就永远看不到"无出处"的形态。
+  const qaMatches = scored.length
+    ? [
+        {
+          id: 'qa-1',
+          question: '财务资产部负责哪些预算事项',
+          answer: '财务资产部负责年度预算的编制、调整与执行监督，具体事项包括部门预算汇总与预算执行分析。',
+          segmentId: scored[0].segmentId,
+          directAnswer: false,
+          score: 0.92
+        },
+        {
+          id: 'qa-2',
+          question: '预算调整要走什么流程',
+          answer: '预算调整由需求部门提出，财务资产部审核后报分管领导审批；超过年度预算 10% 的还需上会。',
+          segmentId: null,
+          directAnswer: true,
+          score: 0.61
+        }
+      ]
+    : []
   if (!mentionsOrg) {
-    return { entities: [], relations: [], note: '问句里没有识别到实体，两路扩召回都没有起点' }
+    return {
+      entities: [],
+      relations: [],
+      qaMatches: [],
+      note: '问句里没有识别到实体，两路扩召回都没有起点'
+    }
   }
   const entities = [
     { name: '财务资产部', type: 'ORG', mentions: 6 },
@@ -219,6 +247,7 @@ const detectedOf = (body: HitTestRequest, scored: Array<{ segmentId: string }>) 
     return {
       entities,
       relations: [],
+      qaMatches,
       note: '认出 2 个实体，但它们在这些文档里没有关系陈述（抽取后才有边，见知识库「实体与关系」）'
     }
   }
@@ -227,6 +256,7 @@ const detectedOf = (body: HitTestRequest, scored: Array<{ segmentId: string }>) 
     relations: [
       { type: 'BELONGS_TO', from: '预算科', to: '财务资产部', segmentId: scored[0].segmentId }
     ],
+    qaMatches,
     note: null
   }
 }

@@ -30,7 +30,7 @@ class RetrievalDetectedNoteTest {
   void failureWinsOverEmptiness() {
     String note =
         RetrievalService.detectNote(
-            List.of(), List.of(), "java.lang.IllegalStateException: 连不上库", null);
+            List.of(), List.of(), List.of(), "java.lang.IllegalStateException: 连不上库", null, null);
 
     assertThat(note).contains("实体扩召回失败").contains("少一路候选");
   }
@@ -38,7 +38,7 @@ class RetrievalDetectedNoteTest {
   @Test
   @DisplayName("两路都空但都没失败 ⇒ 说的是「问句里没有识别到实体」，不是「失败」")
   void emptyIsNotAFailure() {
-    String note = RetrievalService.detectNote(List.of(), List.of(), null, null);
+    String note = RetrievalService.detectNote(List.of(), List.of(), List.of(), null, null, null);
 
     assertThat(note).contains("没有识别到实体").doesNotContain("失败");
   }
@@ -47,7 +47,8 @@ class RetrievalDetectedNoteTest {
   @DisplayName("认出实体但没有关系陈述 ⇒ 说出个数，并指出是没抽边而不是功能坏了")
   void entitiesWithoutRelationsSayWhatToDo() {
     String note =
-        RetrievalService.detectNote(List.of(entity("信息中心"), entity("运维科")), List.of(), null, null);
+        RetrievalService.detectNote(
+            List.of(entity("信息中心"), entity("运维科")), List.of(), List.of(), null, null, null);
 
     assertThat(note).contains("认出 2 个实体").contains("没有关系陈述").doesNotContain("失败");
   }
@@ -56,7 +57,8 @@ class RetrievalDetectedNoteTest {
   @DisplayName("有东西可念时返回 null —— 界面去念实体与关系本身，不另外解释")
   void whenThereIsSomethingTheNoteIsSilent() {
     String note =
-        RetrievalService.detectNote(List.of(entity("信息中心")), List.of(relation()), null, null);
+        RetrievalService.detectNote(
+            List.of(entity("信息中心")), List.of(relation()), List.of(), null, null, null);
 
     assertThat(note).isNull();
   }

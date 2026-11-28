@@ -115,6 +115,21 @@
             @click="emit('goto-segment', r.segmentId)"
           >{{ r.from }} —{{ relationLabel(r.type) }}→ {{ r.to }}</button>
         </template>
+        <template v-if="singleResult.detected.qaMatches?.length">
+          <span class="d-label">问答对命中</span>
+          <component
+            :is="q.segmentId ? 'button' : 'span'"
+            v-for="q in singleResult.detected.qaMatches"
+            :key="q.id"
+            :type="q.segmentId ? 'button' : undefined"
+            class="d-qa"
+            :class="{ direct: q.directAnswer }"
+            :title="q.directAnswer
+              ? '直答型：命中它就直接把它当回答，不再走生成'
+              : (q.segmentId ? '点开看它挂在哪一段上' : '没有出处分段：只能作为答案候选')"
+            @click="q.segmentId && emit('goto-segment', q.segmentId)"
+          >{{ q.question }}<span class="muted"> · {{ q.directAnswer ? '直答' : '召回' }}{{ q.segmentId ? '' : ' · 无出处' }} · {{ q.score.toFixed(2) }}</span></component>
+        </template>
         <span v-if="singleResult.detected.note" class="d-note">{{ singleResult.detected.note }}</span>
       </div>
       <div v-if="!singleResult.items.length" class="notice warn">
@@ -207,7 +222,8 @@ const CHANNEL_LABELS: Record<string, string> = {
   vector: '向量',
   text: '关键词',
   entity: '实体',
-  relation: '关系'
+  relation: '关系',
+  qa: '问答对'
 }
 const channelLabel = (c: string) => CHANNEL_LABELS[c] ?? c
 
@@ -400,6 +416,27 @@ onMounted(loadParams)
   cursor: pointer;
 }
 .d-relation:hover {
+  text-decoration: underline;
+}
+/* 问答对命中：召回型与直答型要一眼分开 —— 前者只是候选，后者会把生成整个跳过 */
+.d-qa {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  color: var(--color-ink);
+  border: 1px solid var(--color-rule);
+  font: inherit;
+  cursor: default;
+}
+.d-qa.direct {
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+  border-color: var(--color-warn);
+}
+button.d-qa {
+  cursor: pointer;
+}
+button.d-qa:hover {
   text-decoration: underline;
 }
 .d-note {
