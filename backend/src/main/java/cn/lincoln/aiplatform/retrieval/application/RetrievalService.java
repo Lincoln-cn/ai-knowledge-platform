@@ -320,7 +320,8 @@ public class RetrievalService {
           elapsedMs(startedAt),
           new HitTestView.Trace(
               1, 1, 0, 0, "没有可检索的知识库", false, 0, false, 1, HopStop.NOT_TRIGGERED.describe(), 0),
-          new HitTestView.Detected(List.of(), List.of(), "没有可检索的知识库，两路扩召回都没跑"));
+          new HitTestView.Detected(List.of(), List.of(), "没有可检索的知识库，两路扩召回都没跑"),
+          null);
     }
 
     // ② 查询理解
@@ -646,6 +647,15 @@ public class RetrievalService {
               request.question(), finalIds, rerankTexts, engine.listwiseTopK());
     }
 
+    // ★★ 直答（#78）：在命中集合里挑出「标成直答、且匹配分最高」的那一条。
+    //   为什么要在这里挑、而不是让调用方从 detected().qaMatches() 里挑：那个列表是"明细"（只留前 5 条），
+    //   一条最相关的直答完全可能排不进去 —— 那样开关就会时而生效、时而不生效，而且看不出来。
+    QaRecallPort.Match directAnswer =
+        qaMatches.stream()
+            .filter(QaRecallPort.Match::directAnswer)
+            .max(java.util.Comparator.comparingDouble(QaRecallPort.Match::score))
+            .orElse(null);
+
     List<Ranked> ranked = new ArrayList<>(finalIds.size());
     for (UUID id : finalIds) {
       SegmentSearchPort.Card card = cards.get(id);
@@ -700,7 +710,8 @@ public class RetrievalService {
                 qaMatches,
                 entityFailure,
                 relationFailure,
-                qaFailure)));
+                qaFailure)),
+        directAnswer);
   }
 
   /**
@@ -744,7 +755,8 @@ public class RetrievalService {
       RetrievalMode mode,
       long elapsedMs,
       HitTestView.Trace trace,
-      HitTestView.Detected detected) {}
+      HitTestView.Detected detected,
+      QaRecallPort.Match directAnswer) {}
 
   /** 一条命中的候选人：分段 + 展示卡片 + 分数 + 它是被哪几路捞上来的。 */
   public record Ranked(
