@@ -316,6 +316,10 @@ public class RetrievalService implements SegmentRetrievalPort {
    */
   private Detailed detailed(Spec request) {
     long startedAt = System.nanoTime();
+    // ★ 分阶段计时（2026-11-28 用户要求）：一条问句 20 秒里到底花在哪，此前只看得见
+    //   「查询理解」与「总计」两个数，中间那 9 秒是黑盒 —— 优化只能靠猜。
+    //   按阶段累计（多路 / 多跳会重复进入同一段，所以记次数），结束时既进回包也让日志念一遍。
+    StageTimer timer = new StageTimer();
     RetrievalMode mode = request.modeOrDefault();
 
     // ① 可见范围：看不见的库既不进检索、也不给"存在性"信号（07 §3.3 硬规矩 1）
@@ -337,6 +341,7 @@ public class RetrievalService implements SegmentRetrievalPort {
           List.of(),
           mode,
           elapsedMs(startedAt),
+          List.of(),
           new HitTestView.Trace(
               1, 1, 0, 0, "没有可检索的知识库", false, 0, false, 1, HopStop.NOT_TRIGGERED.describe(), 0),
           new HitTestView.Detected(List.of(), List.of(), "没有可检索的知识库，两路扩召回都没跑"),
@@ -376,6 +381,7 @@ public class RetrievalService implements SegmentRetrievalPort {
     //   "总预算"就在第 0 路被判耗尽（日志：检索预算 5000ms 已耗尽（已跑 0 路）），
     //   整条链路静默降级成单路，B1 读数在两轮之间摆动 30 个百分点。
     long retrievalStartedAt = System.nanoTime();
+    timer.add("查询理解", understood.elapsedMs());
 
     int candidateLimit = Math.min(request.topNOrDefault() * OVERFETCH, CANDIDATE_LIMIT_CAP);
     Map<UUID, Double> vectorScores = new HashMap<>();
@@ -429,7 +435,8 @@ public class RetrievalService implements SegmentRetrievalPort {
                   candidateLimit,
                   request.thresholdOrDefault(),
                   vectorScores,
-                  textScores));
+                  textScores,
+                  timer));
           paths++;
         } catch (BusinessException failure) {
           // ★ 部分成功是常态（{@code 10 §3.2.3}）：一条路坏掉不该让整次检索失败 ——
@@ -441,6 +448,7 @@ public class RetrievalService implements SegmentRetrievalPort {
       // ★ 实体扩召回（0.6.2）：问题里提到的机构出现过的段，作为**一路候选**参与子问题内 RRF。
       //   它是「多一路」不是新算法 —— 与另一条查询在结构上同类，所以进 perQuery。
       if (!scope.isEmpty()) {
+        long entityStartedAt = System.nanoTime();
         try {
           java.util.LinkedHashSet<UUID> byEntity = new java.util.LinkedHashSet<>();
           for (UUID kbId : scope.kbIdsWithModelRows()) {
@@ -461,6 +469,8 @@ public class RetrievalService implements SegmentRetrievalPort {
           //   自 0.9.9 起这条痕同时进回包（命中测试要能把它念出来）。
           entityFailure = failure.toString();
           log.warn("实体扩召回失败，本次少一路候选：{}", failure.toString());
+        } finally {
+          timer.add("实体扩召回", elapsedMs(entityStartedAt));
         }
       }
       // ★ 关系扩召回（0.6.7）：问题里的实体**参与过关系陈述**的那几段，作为又一路候选。
@@ -468,6 +478,7 @@ public class RetrievalService implements SegmentRetrievalPort {
       //   后者精确得多（一段里有关系陈述，几乎必然与"X 与谁有什么关系"这类问题相关），
       //   但覆盖面窄（只有抽到过关系的段才在里面）—— 两路都留着，让 RRF 去排。
       if (!scope.isEmpty()) {
+        long relationStartedAt = System.nanoTime();
         try {
           java.util.LinkedHashSet<UUID> byRelation = new java.util.LinkedHashSet<>();
           for (UUID kbId : scope.kbIdsWithModelRows()) {
@@ -484,6 +495,8 @@ public class RetrievalService implements SegmentRetrievalPort {
           // ★ 与实体扩召回同口径：多一路不是必经之路，失败不拖累整次检索，但必须留痕。
           relationFailure = failure.toString();
           log.warn("关系扩召回失败，本次少一路候选：{}", failure.toString());
+        } finally {
+          timer.add("关系扩召回", elapsedMs(relationStartedAt));
         }
       }
       // ★ 问答对扩召回（0.9.9）
@@ -499,6 +512,7 @@ public class RetrievalService implements SegmentRetrievalPort {
       //     （它传的是显式 kbIds，被归成共用库）。同一句问话两个入口两个结果，
       //     与 #378 是同一个形状：口径对不上，读数就不可比。
       if (!scope.isEmpty() && qaRecallPort != null) {
+        long qaStartedAt = System.nanoTime();
         try {
           List<QaRecallPort.Match> matches =
               qaRecallPort.recall(
@@ -522,15 +536,19 @@ public class RetrievalService implements SegmentRetrievalPort {
         } catch (RuntimeException failure) {
           qaFailure = failure.toString();
           log.warn("问答对扩召回失败，本次少一路候选：{}", failure.toString());
+        } finally {
+          timer.add("问答对扩召回", elapsedMs(qaStartedAt));
         }
       }
       if (perQuery.isEmpty()) {
         continue;
       }
+      long subFuseStartedAt = System.nanoTime();
       perSubQuestion.add(
           perQuery.size() == 1
               ? perQuery.getFirst()
               : Rrf.fuse(perQuery).stream().map(Rrf.Fused::segmentId).toList());
+      timer.add("子问题内融合", elapsedMs(subFuseStartedAt));
     }
 
     if (perSubQuestion.isEmpty()) {
@@ -544,7 +562,8 @@ public class RetrievalService implements SegmentRetrievalPort {
               candidateLimit,
               request.thresholdOrDefault(),
               vectorScores,
-              textScores);
+              textScores,
+              timer);
       perSubQuestion.add(retry);
       paths = 1;
       degradeLevel = 4;
@@ -558,6 +577,7 @@ public class RetrievalService implements SegmentRetrievalPort {
 
     // ④b ★★ 多跳（第 14 周 · 0.4.2，10 §3.4）：默认关；触发是规则判定，迭代**全部发生在生成前**
     //   —— 这是 §8.3 那条"SSE 契约一个字都不用改"的前提，不许打破。
+    long hopStartedAt = System.nanoTime();
     HopRun hop =
         request.multiHopEnabledOrDefault()
             ? runMultiHop(
@@ -575,6 +595,7 @@ public class RetrievalService implements SegmentRetrievalPort {
       degradeLevel = 1;
       degradeReason = join(hop.degradeReason(), degradeReason);
     }
+    timer.add("多跳", elapsedMs(hopStartedAt));
     log.info(
         "多跳：触发={} 轮次={} 停止原因={} 第 2 轮新增分段={}",
         hop.triggered(),
@@ -595,13 +616,17 @@ public class RetrievalService implements SegmentRetrievalPort {
       //   多跳找到的那条**不会被第 1 轮的 TopN 挤掉** —— 否则这一次迭代就白跑了。
       units.add(new RrfQuotaJoiner.Unit(units.size(), hop.ranking()));
     }
+    long fuseStartedAt = System.nanoTime();
     RrfQuotaJoiner.Result merged = RrfQuotaJoiner.join(units, request.topNOrDefault());
+    timer.add("配额合并", elapsedMs(fuseStartedAt));
     if (!merged.quotas().isEmpty()) {
       // §7.1 的合并层埋点：每个子问题分到几条、丢了几条 —— 没有它，"这个子问题为什么答得少"没人答得上
       log.info("子问题配额合并：{}（补足 {} 条）", RrfQuotaJoiner.describe(merged), merged.fillInCount());
     }
     List<UUID> ordered = merged.selected();
+    long verifyStartedAt = System.nanoTime();
     Set<UUID> visible = segmentSearch.visibleAmong(ordered, scope);
+    timer.add("可见性复核", elapsedMs(verifyStartedAt));
     List<UUID> kept = ordered.stream().filter(visible::contains).toList();
 
     // ⑤b ★★ "改写把结果改没了"要兜住 —— 这一条是**真栈闸门逼出来的**（见类注释末尾）。
@@ -617,7 +642,8 @@ public class RetrievalService implements SegmentRetrievalPort {
               candidateLimit,
               request.thresholdOrDefault(),
               vectorScores,
-              textScores);
+              textScores,
+              timer);
       Set<UUID> visibleOriginal = segmentSearch.visibleAmong(fromOriginal, scope);
       List<UUID> fallback = fromOriginal.stream().filter(visibleOriginal::contains).toList();
       if (!fallback.isEmpty()) {
@@ -634,9 +660,11 @@ public class RetrievalService implements SegmentRetrievalPort {
     Map<UUID, Double> scores = new HashMap<>(textScores);
     vectorScores.forEach((id, score) -> scores.merge(id, score, Math::max));
     Map<UUID, SegmentSearchPort.Card> cards = new LinkedHashMap<>();
+    long loadStartedAt = System.nanoTime();
     for (SegmentSearchPort.Card card : segmentSearch.load(finalIds)) {
       cards.put(card.segmentId(), card);
     }
+    timer.add("取卡片", elapsedMs(loadStartedAt));
 
     // ⑥b ★★ cross-encoder 重排（只重排前 topK 个，窗口与读数见 RerankPort）：
     //     离线实测 B3 引用准确率 57.9% → 68.2%（+10.3 点），单条 2.4s（p95 3.1s）；
@@ -661,7 +689,9 @@ public class RetrievalService implements SegmentRetrievalPort {
     //   就会出现"按新窗口重排、按旧 listwise 收尾"这种缝里的状态。
     RetrievalEngineSettings engine = effective();
     if (engine.rerankEnabled() && finalIds.size() > 1) {
+      long rerankStartedAt = System.nanoTime();
       finalIds = rerankPort.rerank(request.question(), finalIds, rerankTexts, engine.rerankTopK());
+      timer.add("重排", elapsedMs(rerankStartedAt));
     }
 
     // ⑥c ★★ LLM listwise（用户 2026-11-08：不默认开、做成配置）。接在 cross-encoder 之后：
@@ -672,9 +702,11 @@ public class RetrievalService implements SegmentRetrievalPort {
     Boolean listwiseWanted = request.rerankListwise();
     boolean listwiseOn = listwiseWanted != null ? listwiseWanted : engine.listwiseEnabled();
     if (listwiseOn && finalIds.size() > 1) {
+      long listwiseStartedAt = System.nanoTime();
       finalIds =
           listwiseRerankPort.rerank(
               request.question(), finalIds, rerankTexts, engine.listwiseTopK());
+      timer.add("listwise 重排", elapsedMs(listwiseStartedAt));
     }
 
     // ★★ 直答（#78）：在命中集合里挑出「标成直答、且匹配分最高」的那一条。
@@ -714,10 +746,13 @@ public class RetrievalService implements SegmentRetrievalPort {
       }
       ranked.add(new Ranked(id, card, scores.getOrDefault(id, 0.0), List.copyOf(channels)));
     }
+    List<HitTestView.Stage> stages = timer.stages(elapsedMs(startedAt));
+    log.info("检索分段耗时：{}", StageTimer.describe(stages));
     return new Detailed(
         ranked,
         mode,
         elapsedMs(startedAt),
+        stages,
         new HitTestView.Trace(
             understood.understanding().subQuestionCount(),
             attemptedPathsOr(pathsAttempted, paths),
@@ -769,7 +804,12 @@ public class RetrievalService implements SegmentRetrievalPort {
               hit.channels()));
     }
     return new HitTestView(
-        outcome.mode(), items, outcome.elapsedMs(), outcome.trace(), outcome.detected());
+        outcome.mode(),
+        items,
+        outcome.elapsedMs(),
+        outcome.trace(),
+        outcome.detected(),
+        outcome.stages());
   }
 
   /**
@@ -784,6 +824,7 @@ public class RetrievalService implements SegmentRetrievalPort {
       List<Ranked> hits,
       RetrievalMode mode,
       long elapsedMs,
+      List<HitTestView.Stage> stages,
       HitTestView.Trace trace,
       HitTestView.Detected detected,
       QaRecallPort.Match directAnswer) {}
@@ -985,7 +1026,8 @@ public class RetrievalService implements SegmentRetrievalPort {
                 candidateLimit,
                 request.thresholdOrDefault(),
                 vectorScores,
-                textScores);
+                textScores,
+                StageTimer.silent());
       } catch (BusinessException failure) {
         // §3.4.6 第一行：下一轮检索失败 ⇒ 用已有结果继续
         log.warn("多跳第 {} 轮检索失败，用已有结果继续：{}", rounds + 1, failure.getMessage());
@@ -1071,11 +1113,14 @@ public class RetrievalService implements SegmentRetrievalPort {
       int candidateLimit,
       double threshold,
       Map<UUID, Double> vectorScores,
-      Map<UUID, Double> textScores) {
+      Map<UUID, Double> textScores,
+      StageTimer timer) {
     List<UUID> vectorIds = List.of();
     if (mode != RetrievalMode.FULLTEXT) {
       try {
+        long vectorStartedAt = System.nanoTime();
         List<SegmentSearchPort.Scored> hits = vectorSearch(query, scope, candidateLimit);
+        timer.add("向量检索", elapsedMs(vectorStartedAt));
         for (SegmentSearchPort.Scored hit : hits) {
           vectorScores.merge(hit.segmentId(), hit.score(), Math::max);
         }
@@ -1098,8 +1143,10 @@ public class RetrievalService implements SegmentRetrievalPort {
 
     List<UUID> textIds = List.of();
     if (mode != RetrievalMode.VECTOR) {
+      long textStartedAt = System.nanoTime();
       List<SegmentSearchPort.Scored> hits =
           segmentSearch.fullText(new SegmentSearchPort.TextQuery(query, scope, candidateLimit));
+      timer.add("全文检索", elapsedMs(textStartedAt));
       for (SegmentSearchPort.Scored hit : hits) {
         textScores.merge(hit.segmentId(), hit.score(), Math::max);
       }

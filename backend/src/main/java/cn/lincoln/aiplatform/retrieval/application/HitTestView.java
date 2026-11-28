@@ -13,12 +13,36 @@ import java.util.UUID;
  *     它是"这一层到底做了什么"的唯一凭据，界面上能看到、日志里也记一份。可选字段，老前端不读也照常工作
  */
 public record HitTestView(
-    RetrievalMode mode, List<Item> items, long elapsedMs, Trace trace, Detected detected) {
+    RetrievalMode mode,
+    List<Item> items,
+    long elapsedMs,
+    Trace trace,
+    Detected detected,
+    List<Stage> stages) {
+
+  /** 兼容旧调用点（测试与跨模块的假数据）：没有分段耗时的时候给空列表，而不是逼所有人改。 */
+  public HitTestView(
+      RetrievalMode mode, List<Item> items, long elapsedMs, Trace trace, Detected detected) {
+    this(mode, items, elapsedMs, trace, detected, List.of());
+  }
 
   /** 兼容旧调用点（测试与跨模块的假数据）：没有诊断信息时给一个空壳，而不是逼所有人改。 */
   public HitTestView(RetrievalMode mode, List<Item> items, long elapsedMs, Trace trace) {
-    this(mode, items, elapsedMs, trace, Detected.NONE);
+    this(mode, items, elapsedMs, trace, Detected.NONE, List.of());
   }
+
+  /**
+   * 一个检索阶段的实测耗时（2026-11-28 用户要求：「对召回的每个步骤的耗时都进行追踪」）。
+   *
+   * <p>★ <strong>为什么必须是列表而不是固定字段</strong>：阶段会随实现变化增减（今天有 10 段，明天可能合并两段），
+   * 固定字段每改一次就要动一遍契约与前端；列表则只是"这次报告了哪几段"。而且多路 / 多跳会让同一个阶段进入多次， 所以带 {@code count} —— <em>"重排
+   * 8.5s"</em> 与 <em>"重排 8.5s ×3 次"</em> 是两种完全不同的结论。
+   *
+   * @param name 阶段名（中文，直接可读；它就是日志里那个词）
+   * @param ms 该阶段累计耗时（毫秒）；同名阶段多次进入时为总和
+   * @param count 进入次数（1 = 只跑了一次；3 = 三路子问题各跑一次）
+   */
+  public record Stage(String name, long ms, int count) {}
 
   /**
    * 一次检索的策略轨迹（{@code 10 §7.1} 的埋点口径落在这一处）。
