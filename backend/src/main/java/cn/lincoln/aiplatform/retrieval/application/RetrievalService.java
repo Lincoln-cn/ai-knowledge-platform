@@ -440,7 +440,7 @@ public class RetrievalService implements SegmentRetrievalPort {
       }
       // ★ 实体扩召回（0.6.2）：问题里提到的机构出现过的段，作为**一路候选**参与子问题内 RRF。
       //   它是「多一路」不是新算法 —— 与另一条查询在结构上同类，所以进 perQuery。
-      if (!scope.isEmpty() && !scope.hasConversationScope()) {
+      if (!scope.isEmpty()) {
         try {
           java.util.LinkedHashSet<UUID> byEntity = new java.util.LinkedHashSet<>();
           for (UUID kbId : scope.sharedKbIds()) {
@@ -467,7 +467,7 @@ public class RetrievalService implements SegmentRetrievalPort {
       //   与实体扩召回不是同一件事：那个要的是"提到过这个实体"，这个要的是"这里说了它和谁有关系"。
       //   后者精确得多（一段里有关系陈述，几乎必然与"X 与谁有什么关系"这类问题相关），
       //   但覆盖面窄（只有抽到过关系的段才在里面）—— 两路都留着，让 RRF 去排。
-      if (!scope.isEmpty() && !scope.hasConversationScope()) {
+      if (!scope.isEmpty()) {
         try {
           java.util.LinkedHashSet<UUID> byRelation = new java.util.LinkedHashSet<>();
           for (UUID kbId : scope.sharedKbIds()) {
@@ -487,7 +487,13 @@ public class RetrievalService implements SegmentRetrievalPort {
         }
       }
       // ★ 问答对扩召回（0.9.9）
-      if (!scope.isEmpty() && !scope.hasConversationScope() && qaRecallPort != null) {
+      // ★★ 三路扩召回（实体 / 关系 / 问答对）的条件里**不许**再出现 `!scope.hasConversationScope()`
+      //   （0.9.9 修）。它读的是 `conversationId != null`，而对话链路每一轮都带着会话 id ——
+      //   于是这三路在**真实问答里一次都没跑过**，只有命中测试（不带会话 id）跑得起来。
+      //   这正是 #378 那个形态在扩召回这一格上的重演：闸门绿着、产品没做那件事。
+      //   三路都只遍历 `scope.sharedKbIds()`（共用库 + 个人库，**不含会话域**）——
+      //   "会话附件不参与扩召回"已经由域本身保证，不需要拿会话 id 再挡一道。
+      if (!scope.isEmpty() && qaRecallPort != null) {
         try {
           List<QaRecallPort.Match> matches =
               qaRecallPort.recall(

@@ -47,6 +47,9 @@ import org.junit.jupiter.api.Test;
  */
 class ChatEntityRelationRouteTest {
 
+  /** 会话域的 ownerId：RetrievalScope 的构造器要求 conversationId 非空时它也必须非空。 */
+  private static final UUID SCOPE_OWNER = UUID.fromString("0d000000-0000-4000-8000-0000000000f1");
+
   private static final UUID KB_ID = UUID.fromString("0a000000-0000-4000-8000-0000000000f2");
 
   /** 全文路命中的分段。 */
@@ -214,7 +217,13 @@ class ChatEntityRelationRouteTest {
     @Override
     public RetrievalScope retrievalScope(
         Collection<UUID> requested, UUID conversationId, boolean includePersonal) {
-      return RetrievalScope.shared(List.of(KB_ID));
+      // ★★ 必须尊重 conversationId（0.9.9 修）：它一非空就说明"这一轮是在会话里跑的"。
+      //   这里曾经恒返回"只有共用库域"的 scope ⇒ 生产代码里 `!scope.hasConversationScope()`
+      //   在测试里恒真，三路扩召回（实体 / 关系 / 问答对）在**真实问答里一次都没跑过**，
+      //   而下面几条判据一直绿。漏洞是 0.9.9 用真栈的 scripts/qa_direct_check.py 抓出来的。
+      return conversationId == null
+          ? RetrievalScope.shared(List.of(KB_ID))
+          : new RetrievalScope(List.of(KB_ID), null, conversationId, SCOPE_OWNER);
     }
 
     @Override
