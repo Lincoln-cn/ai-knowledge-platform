@@ -2146,6 +2146,52 @@ POST /prompt-configs/{id}/versions/{v}/restore        → 以该版内容生成�
 - `#377`：内置字典把「下属」映射成 `BELONGS_TO`，而方向是"左→右" ⇒ 「信息中心下属运维科」
   抽成"信息中心隶属运维科"，方向反了。检索不受影响（只用段 id），但界面会显示反。
 
+### 11.66 ★ 检索策略收敛到一处（2026-11-28，`#378` 的修复）
+
+**问题**：命中测试走四路召回 + RRF + 多跳 + 重排，对话只走向量 + 全文两路。
+于是 `tools/check_b1_b3_quality.py` 打的 `/retrieval/test` 测的**不是真实问答链路** ——
+B1 95.5% / B3 89.9% 与「实体扩召回关 87.18% → 开 92.31%」都是同一个口径下的读数。
+更直接的证据：命中测试里演示的实体/关系命中，真实对话里根本不存在。
+
+**方案**：把策略移进检索模块，命中测试与对话都调它。
+
+| 步 | 提交 | 内容 |
+|---|---|---|
+| ① 融合收口 | `7ceca84c` | `platform/retrieval/RecallFusion`（N 路 RRF 一处实现），`ChatService.fuseHybrid` 改委托 |
+| ② 问答对数据层 | `250dacff` | `V119`：`direct_answer` + `question_tsv` 生成列 + GIN |
+| ③ 问答对召回 | `ac33b098` | `QaRecallPort` + `JdbcQaRecallAdapter`：命中判定用**词元 F1**，不用 `plainto_tsquery` |
+| ④ 抽 `RetrievalRequest` | `5c2e0568` `2a5c16d8` `e1d8830d` | `RetrievalService.retrieve(RetrievalRequest)`；`hitTest` 退化薄适配器；`Outcome` 带 `directAnswer` |
+| ⑤ 对话改调 | `21abe84c` | `ChatService.retrieve` 整段替换，删自身 302 行策略 |
+
+**三处语义差异（收口时才暴露的，都是"两处各写一份"留下的）**：
+
+1. **会话域进向量路：拒绝 → 摘掉并留痕**。原来 `RetrievalService.vectorSearch` 遇会话域直接抛
+   `BusinessException`。但对话传入的 `conversationId` **每一轮都有值**（它只说明"这是一次会话内提问"，
+   不代表本轮带了附件）⇒ 每一轮会话内问答的混合/向量检索整条挂掉，日志写「检索失败，本轮以
+   '零引用'继续」，用户看到的是"知识库里没有相关内容"。改成显式 `withoutConversation()` + 一条 info。
+   ★ **没有选"悄悄摘掉"**：那样"会话附件少看见几条"与"确实没命中"在读数上一模一样。
+   判据因此改成断言两件事（送进向量查询的范围里没有会话域 + 日志里有那句留痕），而不是断言"不抛"。
+2. **混合模式向量路失败：整条抛 → 只丢向量那一路**。原来 HYBRID 直接调 `vectorSearch`，抛了整条没跑，
+   全文一次都没调。纯向量模式仍然抛（没有第二路可退，退了就得到"零引用"）。
+3. **向量分组隔离的 catch 从 `BusinessException` 扩到 `RuntimeException`**。
+   `searchWithinOneModel` 抛的"模型未加载/返回空向量/维度对不上"是 `IllegalStateException` 一族，
+   原 catch 抓不到，一组坏就把全部组打死。
+
+**判据（缺一不可）**：
+
+- `AppRetrievalParamsTest` 19/19 · `RetrievalVectorScopeBoundaryTest` 4/4 · `RetrievalDomainScopeTest` 9/9
+- `WorkflowSearchAdapterTest` 3/3 · `ChatStreamHttpTest` 11/11 · `RegenerateTurnTest` 8/8
+- `ConversationAttachmentRetrievalHttpTest` 1/1 · `ChatQaRouteTest` 3/3 · `RecallFusionTest` 5/5
+- `QaRecallTest` 5/5 · `RetrievalRequestTest` 3/3 · `RetrievalDetectedNoteTest` 4/4
+- 三条 grep 断言，`conversation` 包内**零命中**：`segmentSearch.fullText` / `segmentSearch.vectorSearch` /
+  `queryUnderstanding.understand`（前两条正是"两处各写一份"的形状，第三条是"改写只在一边发生"的形状）
+
+**遗留**：
+
+- **B1/B3 要重跑**才算真实问答质量的读数。此前那组数字测的是命中测试通道，两者现在同源。
+- `kb_qa_pair.hit_count` 仍恒为 0（检索只读不写），记在 `#78`。
+- 会话附件仍然只走全文一路（`10 §4.1` 的既定口径未变），本次改的只是"怎么表达这件事"。
+
 ## 附录：归档索引
 
 被搬到 [`ROADMAP-归档-2026-11-20.md`](./ROADMAP-归档-2026-11-20.md) 的小节（一字未改）：
