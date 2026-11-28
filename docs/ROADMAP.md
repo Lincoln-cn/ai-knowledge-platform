@@ -2163,6 +2163,8 @@ B1 95.5% / B3 89.9% 与「实体扩召回关 87.18% → 开 92.31%」都是同�
 | ④ 抽 `RetrievalRequest` | `5c2e0568` `2a5c16d8` `e1d8830d` | `RetrievalService.retrieve(RetrievalRequest)`；`hitTest` 退化薄适配器；`Outcome` 带 `directAnswer` |
 | ⑤ 对话改调 | `21abe84c` | `ChatService.retrieve` 整段替换，删自身 302 行策略 |
 | ⑥ 搬端口 | `aac7a3d4` | 跨模块那一格从 `retrieval.application.RetrievalService` 搬成 `platform/retrieval/SegmentRetrievalPort`（**不开 `@NamedInterface`**，见下节） |
+| ⑦ 两路判据 | `64cb7f55` | `ChatEntityRelationRouteTest`：实体/关系各一段只可能来自扩召回，反证（两路空掉）⇒ 3 跑 2 红 |
+| ⑧ 读数口径 | `9177b1f9` | `tools/check_b1_b3_quality.py` 写明它测的是**检索策略**（与对话同一段代码），且不含会话域/生成/直答短路 |
 
 **三处语义差异（收口时才暴露的，都是"两处各写一份"留下的）**：
 
