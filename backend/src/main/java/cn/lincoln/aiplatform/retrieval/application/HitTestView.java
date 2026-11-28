@@ -12,7 +12,13 @@ import java.util.UUID;
  * @param trace ★ 策略层的可观测特征（第 12 周 · 0.4.0）—— <strong>后端不做埋点服务，就把它放进回包里</strong>：
  *     它是"这一层到底做了什么"的唯一凭据，界面上能看到、日志里也记一份。可选字段，老前端不读也照常工作
  */
-public record HitTestView(RetrievalMode mode, List<Item> items, long elapsedMs, Trace trace) {
+public record HitTestView(
+    RetrievalMode mode, List<Item> items, long elapsedMs, Trace trace, Detected detected) {
+
+  /** 兼容旧调用点（测试与跨模块的假数据）：没有诊断信息时给一个空壳，而不是逼所有人改。 */
+  public HitTestView(RetrievalMode mode, List<Item> items, long elapsedMs, Trace trace) {
+    this(mode, items, elapsedMs, trace, Detected.NONE);
+  }
 
   /**
    * 一次检索的策略轨迹（{@code 10 §7.1} 的埋点口径落在这一处）。
@@ -57,5 +63,41 @@ public record HitTestView(RetrievalMode mode, List<Item> items, long elapsedMs, 
       String docName,
       String kbName,
       double score,
-      String content) {}
+      String content,
+      List<String> channels) {
+
+    /** 兼容旧调用点：不标渠道时给空列表（不是 null —— 前端少写一处判空）。 */
+    public Item(
+        int rank,
+        UUID segmentId,
+        String title,
+        String docName,
+        String kbName,
+        double score,
+        String content) {
+      this(rank, segmentId, title, docName, kbName, score, content, List.of());
+    }
+  }
+
+  /**
+   * 命中测试的「为什么命中」诊断块：问句里认出了哪些实体、命中了哪几条关系陈述。
+   *
+   * <p>★ 为什么它是回包的<strong>同级字段</strong>而不是塞进 Trace：Trace 装的是「这一层做了什么」
+   * （子问题数、路数、降级档），而这一块装的是<strong>输入被理解成了什么</strong>。前者异常时才是问题， 后者为空是常态（问句里本来就可能没有机构名）。
+   *
+   * <p>★ 三个字段的来源必须是<strong>同一次</strong>召回（见 {@code EntityRecallPort#recall} 的 javadoc）：
+   * 另跑一遍识别器会得到另一批实体，界面就与真实用的那批对不上。
+   */
+  public record Detected(
+      List<cn.lincoln.aiplatform.platform.retrieval.EntityRecallPort.Entity> entities,
+      List<cn.lincoln.aiplatform.platform.retrieval.RelationRecallPort.Relation> relations,
+      String note) {
+
+    public static final Detected NONE = new Detected(List.of(), List.of(), null);
+
+    /** 有没有正面的东西可念（有实体或关系）。 */
+    public boolean hasAnything() {
+      return !entities.isEmpty() || !relations.isEmpty();
+    }
+  }
 }

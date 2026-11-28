@@ -173,14 +173,61 @@ const runHitTest = (body: HitTestRequest): HitTestResult => {
     docName: item.docName,
     kbName: item.kbName,
     score: item.score,
-    content: item.content
+    content: item.content,
+    // ★ 渠道：向量模式只有 vector、全文模式只有 text、混合模式两路都标上；
+    //   再按问句抽出的实体给最后两条挂 entity / relation —— 界面要能演示
+    //   「这条只被关系路捞上来」，否则那个徽标永远只有灰的两种。
+    channels: channelsOf(body, index, scored.length)
   }))
 
   return {
     mode: body.mode,
     items,
     elapsedMs: profile.elapsed + Math.floor(Math.random() * 20),
-    trace: { ...STUB_TRACE, ...multiHopTrace(body, scored) }
+    trace: { ...STUB_TRACE, ...multiHopTrace(body, scored) },
+    detected: detectedOf(body, scored)
+  }
+}
+
+/** 渠道：真后端由四路候选求并集得到，这里按模式与位次造一条合理的分布。 */
+const channelsOf = (body: HitTestRequest, index: number, total: number): string[] => {
+  const base: string[] = []
+  if (body.mode === 'VECTOR' || body.mode === 'HYBRID') base.push('vector')
+  if (body.mode === 'FULLTEXT' || body.mode === 'HYBRID') base.push('text')
+  // 最后一条只由扩召回捞上来 —— 这是命中测试最想让人看见的情形
+  if (index === total - 1 && total > 2) return ['relation']
+  if (index === total - 2 && total > 3) return [...base.filter((c) => c === 'vector'), 'entity']
+  return base
+}
+
+/**
+ * 诊断块：认出了哪些实体、命中了哪几条关系。
+ *
+ * ★ mock 里也有三档 note（没认出实体 / 认出了没关系 / 有东西可念），与后端的四档一一对应 ——
+ * 假数据只给"有东西"的那一种，界面就永远看不到空态长什么样。
+ */
+const detectedOf = (body: HitTestRequest, scored: Array<{ segmentId: string }>) => {
+  const mentionsOrg = /部|中心|科|公司|局/.test(body.question)
+  if (!mentionsOrg) {
+    return { entities: [], relations: [], note: '问句里没有识别到实体，两路扩召回都没有起点' }
+  }
+  const entities = [
+    { name: '财务资产部', type: 'ORG', mentions: 6 },
+    { name: '预算科', type: 'ORG', mentions: 3 }
+  ]
+  if (!scored.length) {
+    return {
+      entities,
+      relations: [],
+      note: '认出 2 个实体，但它们在这些文档里没有关系陈述（抽取后才有边，见知识库「实体与关系」）'
+    }
+  }
+  return {
+    entities,
+    relations: [
+      { type: 'BELONGS_TO', from: '预算科', to: '财务资产部', segmentId: scored[0].segmentId }
+    ],
+    note: null
   }
 }
 

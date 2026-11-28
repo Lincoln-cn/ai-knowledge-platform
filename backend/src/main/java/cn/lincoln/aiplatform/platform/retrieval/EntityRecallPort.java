@@ -35,4 +35,32 @@ public interface EntityRecallPort {
    * @return 段 id（去重、按 id 升序）；没有命中返回空列表，不返回 {@code null}
    */
   List<UUID> segmentsMentionedIn(UUID kbId, String question);
+
+  /**
+   * 一次实体扩召回的完整读数：段 + 明细（命中测试要看「问句里认出了什么」）。
+   *
+   * @param segments 参与 RRF 的段 —— 与 {@link #segmentsMentionedIn} 同口径、同顺序
+   * @param entities 这次实际用到的实体；一个都没认出来时是空列表
+   */
+  record Recall(List<UUID> segments, List<Entity> entities) {}
+
+  /**
+   * 问题里认出来的一个实体。
+   *
+   * @param mentions 这个实体在这个库里被多少段提到（0 表示实体表里有、但没有提及记录）
+   */
+  record Entity(String name, String type, int mentions) {}
+
+  /**
+   * 带明细的那一版。
+   *
+   * <p>★ 为什么不让调用方自己再跑一遍 {@code recognizer.recognize}：那是**另一批**实体（识别器有截断、 有别名归一），于是界面会出现「显示 3
+   * 个实体、实际只用了 2 个」这种新假象。判据与使用必须是同一次调用。
+   *
+   * <p>★ 默认实现返回**空明细**而不是抛异常：既有实现（含测试里的假实现）不必为了这个读数改动。 那样命中测试会显示「没有明细」—— 这是诚实的降级，不是静默失效，因为 {@code
+   * segments} 仍然是真实召回结果。
+   */
+  default Recall recall(UUID kbId, String question) {
+    return new Recall(segmentsMentionedIn(kbId, question), List.of());
+  }
 }

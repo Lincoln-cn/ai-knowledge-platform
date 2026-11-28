@@ -261,6 +261,7 @@
           <HitTestPanel
             v-else-if="activeTab === 'hittest'"
             :kb-id="openedKb.id"
+            @goto-segment="gotoSegments"
           />
           <EntityGraphPanel
             v-else-if="activeTab === 'entities'"

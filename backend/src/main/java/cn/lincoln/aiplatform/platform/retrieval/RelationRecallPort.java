@@ -42,4 +42,28 @@ public interface RelationRecallPort {
    * @return 段 id（去重、按 id 升序）；没有命中返回空列表，不返回 {@code null}
    */
   List<UUID> segmentsWithRelations(UUID kbId, String question);
+
+  /**
+   * 一次关系扩召回的完整读数：段 + 明细。
+   *
+   * @param segments 参与 RRF 的段 —— 与 {@link #segmentsWithRelations} 同口径、同顺序
+   * @param relations 这次命中的关系陈述（含取证段 id）；没有就是空列表
+   */
+  record Recall(List<UUID> segments, List<Relation> relations) {}
+
+  /**
+   * 一条命中的关系陈述。
+   *
+   * @param segmentId 这条关系是从哪一段读出来的（界面上点它要能回到原文）
+   */
+  record Relation(String type, String from, String to, UUID segmentId) {}
+
+  /**
+   * 带明细的那一版（与 {@link EntityRecallPort#recall} 同一个理由：判据与使用必须同一次）。
+   *
+   * <p>★ 默认实现给空明细，让既有实现不必改；命中测试会显示「没有明细」而不是编一个出来。
+   */
+  default Recall recall(UUID kbId, String question) {
+    return new Recall(segmentsWithRelations(kbId, question), List.of());
+  }
 }

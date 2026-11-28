@@ -125,6 +125,48 @@ public class JdbcEntityRelationRepository implements EntityRelationRepository {
   }
 
   @Override
+  public List<RelationRow> rowsOfEntities(UUID kbId, Collection<UUID> entityIds, int limit) {
+    if (kbId == null || entityIds == null || entityIds.isEmpty()) {
+      return List.of();
+    }
+    int capped = limit <= 0 ? DEFAULT_LIST_LIMIT : Math.min(limit, MAX_LIST_LIMIT);
+    String placeholders = String.join(", ", java.util.Collections.nCopies(entityIds.size(), "?"));
+    List<Object> args = new ArrayList<>();
+    args.add(kbId);
+    args.addAll(entityIds);
+    args.addAll(entityIds);
+    args.add(capped);
+    return jdbc.query(
+        """
+        select r.id, r.type, r.from_entity, r.to_entity, r.document_id, r.segment_id, r.confidence,
+               f.name as from_name, f.type as from_type,
+               t.name as to_name, t.type as to_type
+          from kb_relation r
+          join kb_entity f on f.id = r.from_entity
+          join kb_entity t on t.id = r.to_entity
+         where r.kb_id = ?
+           and (r.from_entity in (%s) or r.to_entity in (%s))
+         order by r.created_at desc, r.id
+         limit ?
+        """
+            .formatted(placeholders, placeholders),
+        (rs, i) ->
+            new RelationRow(
+                rs.getObject("id", UUID.class),
+                rs.getString("type"),
+                rs.getObject("from_entity", UUID.class),
+                rs.getString("from_name"),
+                rs.getString("from_type"),
+                rs.getObject("to_entity", UUID.class),
+                rs.getString("to_name"),
+                rs.getString("to_type"),
+                rs.getObject("document_id", UUID.class),
+                rs.getObject("segment_id", UUID.class),
+                rs.getDouble("confidence")),
+        args.toArray());
+  }
+
+  @Override
   public List<UUID> neighborEntityIds(UUID kbId, Collection<UUID> entityIds) {
     if (kbId == null || entityIds == null || entityIds.isEmpty()) {
       return List.of();

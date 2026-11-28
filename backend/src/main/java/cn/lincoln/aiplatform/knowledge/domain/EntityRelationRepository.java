@@ -93,6 +93,16 @@ public interface EntityRelationRepository {
    */
   List<RelationRow> listOf(UUID kbId, int limit);
 
+  /**
+   * 这些实体参与的关系（带两端名字与类型），按最近创建的在前。
+   *
+   * <p>★ 与 {@link #segmentIdsOf} 的分工：那个只回段 id 给检索侧融合（检索不关心关系长什么样）；
+   * 这个回关系本身，供命中测试回答「这次到底命中了哪几条关系陈述」—— 界面上要能念出来 「信息中心 —隶属→ 运维科」，而不是只说"命中了 3 段"。
+   *
+   * <p>★ 失败语义与 {@link #listOf} 同：查库失败抛异常，不吞成空列表。
+   */
+  List<RelationRow> rowsOfEntities(UUID kbId, Collection<UUID> entityIds, int limit);
+
   /** 一条已入库的关系（带两端实体的名字与类型，够界面直接渲染）。 */
   record RelationRow(
       UUID id,

@@ -28,6 +28,9 @@ public class JdbcRelationRecallAdapter implements RelationRecallPort {
   /** 一个问题最多认这么多个实体（与 {@code JdbcEntityRecallAdapter} 同口径，防止 IN 列表被撑爆）。 */
   private static final int MAX_ENTITIES = 8;
 
+  /** 明细最多念几条：命中测试是给人看的，念 200 条与念 20 条对判断"抽得对不对"没有区别。 */
+  private static final int DETAIL_LIMIT = 20;
+
   private final EntityRecognizer recognizer;
   private final EntityRepository entityRepository;
   private final EntityRelationRepository relationRepository;
@@ -43,12 +46,17 @@ public class JdbcRelationRecallAdapter implements RelationRecallPort {
 
   @Override
   public List<UUID> segmentsWithRelations(UUID kbId, String question) {
+    return recall(kbId, question).segments();
+  }
+
+  @Override
+  public Recall recall(UUID kbId, String question) {
     if (kbId == null || question == null || question.isBlank()) {
-      return List.of();
+      return new Recall(List.of(), List.of());
     }
     List<EntityRecognizer.Recognized> found = recognizer.recognize(kbId, question);
     if (found == null || found.isEmpty()) {
-      return List.of();
+      return new Recall(List.of(), List.of());
     }
     Set<UUID> entityIds = new LinkedHashSet<>();
     int taken = 0;
@@ -65,7 +73,8 @@ public class JdbcRelationRecallAdapter implements RelationRecallPort {
       entityId.ifPresent(entityIds::add);
     }
     if (entityIds.isEmpty()) {
-      return List.of();
+      // 认出来了但实体表里都没有 —— 这一路没有起点，明细也如实为空。
+      return new Recall(List.of(), List.of());
     }
     // ★ 第二跳（`§11.36.1` 的 C 项）：问题问 A、答案写在「B 与 C 的关系」那一段时，
     //   只查一跳永远找不到。先把 A 的邻居 B 也加进来，再统一查段。
@@ -79,7 +88,18 @@ public class JdbcRelationRecallAdapter implements RelationRecallPort {
     List<UUID> segments = relationRepository.segmentIdsOf(kbId, withNeighbors);
     if (segments.isEmpty()) {
       log.debug("#关系扩召回 实体有 {} 个，但没有任何关系陈述段（kb={}）", withNeighbors.size(), kbId);
-      return List.of();
+      return new Recall(List.of(), List.of());
+    }
+    // ★ 明细：这次命中的关系陈述本身（含取证段）。界面上要能念出
+    //   「信息中心 —隶属→ 运维科」，而不是只说"命中了 3 段" —— 后者无法让人判断抽得对不对。
+    List<Relation> relations = new ArrayList<>();
+    for (EntityRelationRepository.RelationRow row :
+        relationRepository.rowsOfEntities(kbId, withNeighbors, DETAIL_LIMIT)) {
+      if (row.segmentId() == null) {
+        // 存量回填的边没有段落 —— 无法核对，把它念给用户看等于编一个出处。
+        continue;
+      }
+      relations.add(new Relation(row.type(), row.fromName(), row.toName(), row.segmentId()));
     }
     log.debug(
         "#关系扩召回 命中 {} 个实体（含邻居 {}）、{} 段（kb={}）",
@@ -90,6 +110,6 @@ public class JdbcRelationRecallAdapter implements RelationRecallPort {
     // ★ 按 id 升序：名次交给 RRF，不在这里预排。
     List<UUID> ordered = new ArrayList<>(new LinkedHashSet<>(segments));
     ordered.sort(null);
-    return ordered;
+    return new Recall(ordered, List.copyOf(relations));
   }
 }

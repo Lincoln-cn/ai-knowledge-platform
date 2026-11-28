@@ -91,6 +91,32 @@
       </div>
       <!-- trace 是可选的：老后端/老 mock 不返回它，这一行就整个不出现（不显示占位、不显示 0） -->
       <div v-if="singleResult.trace" class="micro muted trace-line">{{ traceText(singleResult.trace) }}</div>
+
+      <!-- ★ 为什么命中：问句里认出了哪些实体、命中了哪几条关系（0.9.9）。
+           没有这一块时，实体扩召回与关系扩召回这两路在界面上完全不可见 ——
+           它们进了 RRF，但融合之后只剩段 id，谁被哪一路捞上来无从得知。 -->
+      <div v-if="singleResult.detected" class="detected micro">
+        <template v-if="singleResult.detected.entities.length">
+          <span class="d-label">问句里的实体</span>
+          <span
+            v-for="e in singleResult.detected.entities"
+            :key="e.name"
+            class="d-entity"
+          >{{ e.name }}<span class="muted"> · {{ entityTypeLabel(e.type) }} · {{ e.mentions }} 段</span></span>
+        </template>
+        <template v-if="singleResult.detected.relations.length">
+          <span class="d-label">关系命中</span>
+          <button
+            v-for="(r, i) in singleResult.detected.relations"
+            :key="i"
+            type="button"
+            class="d-relation"
+            :title="'点开看这条关系是从哪一段读出来的'"
+            @click="emit('goto-segment', r.segmentId)"
+          >{{ r.from }} —{{ relationLabel(r.type) }}→ {{ r.to }}</button>
+        </template>
+        <span v-if="singleResult.detected.note" class="d-note">{{ singleResult.detected.note }}</span>
+      </div>
       <div v-if="!singleResult.items.length" class="notice warn">
         没有命中任何分段。可降低相似度阈值、改用混合检索，或确认知识库已启用且分段已向量化。
       </div>
@@ -100,6 +126,9 @@
             <span class="hc-rank num">{{ item.rank }}</span>
             <span class="hc-title ellipsis">{{ item.title }}</span>
             <span class="grow" />
+            <span v-if="item.channels?.length" class="hc-channels">
+              <span v-for="c in item.channels" :key="c" class="chan" :class="c">{{ channelLabel(c) }}</span>
+            </span>
             <span class="hc-score num">{{ item.score.toFixed(2) }}</span>
           </div>
           <p class="hc-content" data-hit-content>
@@ -165,6 +194,36 @@ import { RETRIEVAL_MODE_LABELS, labelOf } from '@/constants/labels'
 import { highlightParts } from '@/utils/highlight'
 
 const props = defineProps<{ kbId?: string }>()
+/** 点关系要能回到原文那一段 —— 与「实体与关系」面板同一个出口（父级切到分段视图）。 */
+const emit = defineEmits<{ (e: 'goto-segment', segmentId: string): void }>()
+
+/**
+ * 渠道 → 中文。四个渠道对应检索链路里四条真实的召回路径：
+ * 向量（ANN）/ 关键词（全文）/ 实体（问题里的实体被提到过的段）/ 关系（实体参与过关系陈述的段）。
+ *
+ * ★ 不认识的渠道原样显示：后端将来加了一路，界面先显示原值比显示「未知」更有用。
+ */
+const CHANNEL_LABELS: Record<string, string> = {
+  vector: '向量',
+  text: '关键词',
+  entity: '实体',
+  relation: '关系'
+}
+const channelLabel = (c: string) => CHANNEL_LABELS[c] ?? c
+
+const ENTITY_TYPE_LABELS: Record<string, string> = { ORG: '组织', PERSON: '人名', DOC: '文档', TERM: '术语' }
+const entityTypeLabel = (t: string) => ENTITY_TYPE_LABELS[t] ?? t
+
+const RELATION_LABELS: Record<string, string> = {
+  BELONGS_TO: '隶属',
+  CONTAINS: '包含',
+  PART_OF: '属于',
+  RESPONSIBLE_FOR: '负责',
+  WORKS_AT: '任职',
+  REFERENCES: '依据',
+  DEFINES: '定义'
+}
+const relationLabel = (t: string) => RELATION_LABELS[t] ?? t
 
 const MODES: Array<{ value: RetrievalMode; label: string; desc: string }> = [
   { value: 'VECTOR', label: '向量检索', desc: '按语义相似度召回，适合同义改写' },
@@ -310,6 +369,69 @@ onMounted(loadParams)
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
+}
+
+/* ── 0.9.9：为什么命中 ─────────────────────────────────────────
+   ★ 只被「关系」路捞上来的那一条，现在一眼能看出来（以前它与「向量命中」长得一模一样）。 */
+.detected {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  margin: var(--space-xs) 0 var(--space-sm);
+}
+.d-label {
+  color: var(--color-muted);
+}
+.d-entity {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+  border: 1px solid var(--color-warn);
+}
+.d-relation {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-ok-soft);
+  color: var(--color-ok);
+  border: 1px solid var(--color-ok);
+  font: inherit;
+  cursor: pointer;
+}
+.d-relation:hover {
+  text-decoration: underline;
+}
+.d-note {
+  color: var(--color-muted);
+}
+.hc-channels {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  margin-right: var(--space-xs);
+}
+.chan {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: var(--text-2xs);
+  line-height: 1.6;
+  /* ★ 不许换行：flex 行里被压缩时「向量」会竖成两行（两个字一列），比不显示还难读 */
+  white-space: nowrap;
+  flex: 0 0 auto;
+  border: 1px solid var(--color-rule);
+  color: var(--color-ink-2);
+  background: var(--color-surface-2);
+}
+.chan.entity {
+  border-color: var(--color-warn);
+  color: var(--color-warn);
+  background: var(--color-warn-soft);
+}
+.chan.relation {
+  border-color: var(--color-ok);
+  color: var(--color-ok);
+  background: var(--color-ok-soft);
 }
 
 .cfg-modes {

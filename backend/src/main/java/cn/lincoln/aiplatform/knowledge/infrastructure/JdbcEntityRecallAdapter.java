@@ -42,15 +42,23 @@ public class JdbcEntityRecallAdapter implements EntityRecallPort {
 
   @Override
   public List<UUID> segmentsMentionedIn(UUID kbId, String question) {
+    return recall(kbId, question).segments();
+  }
+
+  @Override
+  public Recall recall(UUID kbId, String question) {
     if (kbId == null || question == null || question.isBlank()) {
-      return List.of();
+      return new Recall(List.of(), List.of());
     }
     // ★ 抽不出来 ⇒ 空列表，这是正常结果（问题里本来就没有机构名），不是错误。
     List<EntityRecognizer.Recognized> found = recognizer.recognize(kbId, question);
     if (found == null || found.isEmpty()) {
-      return List.of();
+      return new Recall(List.of(), List.of());
     }
     Set<UUID> segments = new LinkedHashSet<>();
+    // ★ 明细与召回同一次产出：界面要念「问句里认出了信息中心、运维科」，
+    //   另跑一遍换个识别器/换次截断就会和实际用的那批对不上。
+    List<Entity> entities = new ArrayList<>();
     int taken = 0;
     int hitEntities = 0;
     for (EntityRecognizer.Recognized r : found) {
@@ -82,15 +90,18 @@ public class JdbcEntityRecallAdapter implements EntityRecallPort {
         continue;
       }
       hitEntities++;
+      entities.add(new Entity(r.name(), r.type(), mentioned.size()));
       segments.addAll(mentioned);
     }
     if (segments.isEmpty()) {
-      return List.of();
+      // ★ 认出了实体、但它们在这个库里一段都没被提到 —— 这是「认出来了但没命中」，
+      //   与「一个都没认出来」是两件事，明细必须带出去，否则界面只能显示"没有"。
+      return new Recall(List.of(), List.copyOf(entities));
     }
     log.debug("#实体扩召回 命中 {} 个实体、{} 段（kb={}）", hitEntities, segments.size(), kbId);
     // ★ 按 id 升序：名次交给 RRF，不在这里预排（在这里排序会让"一路候选"偷偷带上权重）。
     List<UUID> ordered = new ArrayList<>(segments);
     ordered.sort(null);
-    return ordered;
+    return new Recall(ordered, List.copyOf(entities));
   }
 }

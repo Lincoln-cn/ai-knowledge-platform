@@ -295,7 +295,8 @@ public class RetrievalService {
           List.of(),
           elapsedMs(startedAt),
           new HitTestView.Trace(
-              1, 1, 0, 0, "没有可检索的知识库", false, 0, false, 1, HopStop.NOT_TRIGGERED.describe(), 0));
+              1, 1, 0, 0, "没有可检索的知识库", false, 0, false, 1, HopStop.NOT_TRIGGERED.describe(), 0),
+          new HitTestView.Detected(List.of(), List.of(), "没有可检索的知识库，两路扩召回都没跑"));
     }
 
     // ② 查询理解
@@ -345,6 +346,17 @@ public class RetrievalService {
     int degradeLevel = understood.degradeLevel();
     String degradeReason = understood.degradeReason();
 
+    // ★ 两路扩召回的明细与"跑了但空"的证据（命中测试的诊断块）。
+    //   与 perQuery 并行维护：perQuery 只装送去融合的段 id —— 明细进不了融合，也不该进。
+    //   ★ 失败原因单独记：现在的实现只写日志，界面上「这一路失败」与「这一路没有命中」
+    //     长得一模一样，而那正是本项目反复记账的静默失效形状。
+    List<EntityRecallPort.Entity> detectedEntities = new ArrayList<>();
+    List<RelationRecallPort.Relation> detectedRelations = new ArrayList<>();
+    Set<UUID> entityHits = new java.util.LinkedHashSet<>();
+    Set<UUID> relationHits = new java.util.LinkedHashSet<>();
+    String entityFailure = null;
+    String relationFailure = null;
+
     List<List<String>> plan = planPaths(understood.understanding());
     for (List<String> queries : plan) {
       List<List<UUID>> perQuery = new ArrayList<>();
@@ -385,8 +397,13 @@ public class RetrievalService {
         try {
           java.util.LinkedHashSet<UUID> byEntity = new java.util.LinkedHashSet<>();
           for (UUID kbId : scope.sharedKbIds()) {
-            byEntity.addAll(entityRecallPort.segmentsMentionedIn(kbId, request.question()));
+            // ★ 用 recall 而不是 segmentsMentionedIn：明细与召回必须是同一次产出，
+            //   否则界面显示"认出了 3 个"、实际只用了 2 个。
+            EntityRecallPort.Recall one = entityRecallPort.recall(kbId, request.question());
+            byEntity.addAll(one.segments());
+            detectedEntities.addAll(one.entities());
           }
+          entityHits.addAll(byEntity);
           if (!byEntity.isEmpty()) {
             perQuery.add(new java.util.ArrayList<>(byEntity));
             paths++;
@@ -394,6 +411,8 @@ public class RetrievalService {
         } catch (RuntimeException failure) {
           // ★ 扩召回失败不拖累整次检索：它是「多一路」，不是必经之路。
           //   但必须留痕 —— 静默失效正是本项目反复记账的形状。
+          //   自 0.9.9 起这条痕同时进回包（命中测试要能把它念出来）。
+          entityFailure = failure.toString();
           log.warn("实体扩召回失败，本次少一路候选：{}", failure.toString());
         }
       }
@@ -405,14 +424,18 @@ public class RetrievalService {
         try {
           java.util.LinkedHashSet<UUID> byRelation = new java.util.LinkedHashSet<>();
           for (UUID kbId : scope.sharedKbIds()) {
-            byRelation.addAll(relationRecallPort.segmentsWithRelations(kbId, request.question()));
+            RelationRecallPort.Recall one = relationRecallPort.recall(kbId, request.question());
+            byRelation.addAll(one.segments());
+            detectedRelations.addAll(one.relations());
           }
+          relationHits.addAll(byRelation);
           if (!byRelation.isEmpty()) {
             perQuery.add(new java.util.ArrayList<>(byRelation));
             paths++;
           }
         } catch (RuntimeException failure) {
           // ★ 与实体扩召回同口径：多一路不是必经之路，失败不拖累整次检索，但必须留痕。
+          relationFailure = failure.toString();
           log.warn("关系扩召回失败，本次少一路候选：{}", failure.toString());
         }
       }
@@ -578,6 +601,21 @@ public class RetrievalService {
         // 空壳条目会让引用编号与实际内容错位。
         continue;
       }
+      // ★ 渠道：向量 / 关键词来自两路分数表（HYBRID 模式下一条候选常常两路都有），
+      //   实体 / 关系来自扩召回的段集合。顺序固定 —— 那排徽标不该这次的次序与上次不同。
+      List<String> channels = new ArrayList<>(4);
+      if (vectorScores.containsKey(id)) {
+        channels.add("vector");
+      }
+      if (textScores.containsKey(id)) {
+        channels.add("text");
+      }
+      if (entityHits.contains(id)) {
+        channels.add("entity");
+      }
+      if (relationHits.contains(id)) {
+        channels.add("relation");
+      }
       items.add(
           new HitTestView.Item(
               rank++,
@@ -586,7 +624,8 @@ public class RetrievalService {
               card.docName(),
               card.kbName(),
               scores.getOrDefault(id, 0.0),
-              card.content()));
+              card.content(),
+              List.copyOf(channels)));
     }
     return new HitTestView(
         mode,
@@ -603,7 +642,47 @@ public class RetrievalService {
             hop.triggered(),
             hop.rounds(),
             hop.stopReason().describe(),
-            hop.newSegments()));
+            hop.newSegments()),
+        new HitTestView.Detected(
+            List.copyOf(detectedEntities),
+            List.copyOf(detectedRelations),
+            detectNote(detectedEntities, detectedRelations, entityFailure, relationFailure)));
+  }
+
+  /**
+   * 两路扩召回"为什么没有东西可念"的说明。
+   *
+   * <p>★ 四档刻意分开，因为它们在界面上的处置完全不同：
+   *
+   * <ul>
+   *   <li>失败 ⇒ 这是<strong>缺陷</strong>，要报出来（否则"少一路候选"永远没人知道）；
+   *   <li>问句里没有实体 ⇒ 正常，说明这一路本来就没有起点；
+   *   <li>认出实体但没有关系陈述 ⇒ 正常，但让人知道"该补语料"而不是"功能坏了"；
+   *   <li>有东西可念 ⇒ 返回 null，界面去念实体与关系本身。
+   * </ul>
+   */
+  static String detectNote(
+      List<EntityRecallPort.Entity> entities,
+      List<RelationRecallPort.Relation> relations,
+      String entityFailure,
+      String relationFailure) {
+    List<String> parts = new ArrayList<>(2);
+    if (entityFailure != null) {
+      parts.add("实体扩召回失败：" + entityFailure);
+    }
+    if (relationFailure != null) {
+      parts.add("关系扩召回失败：" + relationFailure);
+    }
+    if (!parts.isEmpty()) {
+      return String.join("；", parts) + " —— 本次少一路候选";
+    }
+    if (entities.isEmpty() && relations.isEmpty()) {
+      return "问句里没有识别到实体，两路扩召回都没有起点";
+    }
+    if (relations.isEmpty()) {
+      return "认出 " + entities.size() + " 个实体，但它们在这些文档里没有关系陈述（抽取后才有边，见知识库「实体与关系」）";
+    }
+    return null;
   }
 
   // ────────────────────────── 内部 ──────────────────────────

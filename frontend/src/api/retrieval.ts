@@ -63,6 +63,45 @@ export interface HitItem {
   kbName: string
   score: number
   content: string
+  /**
+   * 这一条是被哪几路召回的：`vector` / `text` / `entity` / `relation`。
+   *
+   * ★ 顺序由后端固定（向量 → 关键词 → 实体 → 关系），界面上那排徽标不该这次与上次次序不同。
+   * ★ 可选：老后端不返回 ⇒ 不画徽标，而不是画一排「未知」。
+   */
+  channels?: string[]
+}
+
+/** 问句里认出来的一个实体（后端 `EntityRecallPort.Entity`）。 */
+export interface DetectedEntity {
+  name: string
+  /** ORG / PERSON */
+  type: string
+  /** 这个实体在这个库里被多少段提到 */
+  mentions: number
+}
+
+/** 一条命中的关系陈述（后端 `RelationRecallPort.Relation`）。 */
+export interface DetectedRelation {
+  /** BELONGS_TO / CONTAINS / PART_OF / RESPONSIBLE_FOR / DEFINES / WORKS_AT / REFERENCES */
+  type: string
+  from: string
+  to: string
+  /** 这条关系是从哪一段读出来的 —— 点它要能回到原文 */
+  segmentId: string
+}
+
+/**
+ * 命中测试的「为什么命中」诊断块。
+ *
+ * ★ `note` 与 `entities/relations` 是**互补**的：有东西可念时 note 为 null，
+ * 没东西可念时 note 说清是哪一种（没认出实体 / 认出了没关系 / 某一路失败）。
+ * 三种情形在界面上的处置完全不同，压成一句「没有」就等于把缺陷藏起来。
+ */
+export interface HitTestDetected {
+  entities: DetectedEntity[]
+  relations: DetectedRelation[]
+  note: string | null
 }
 
 export interface HitTestRequest extends RetrievalParams {
@@ -108,6 +147,8 @@ export interface HitTestResult {
   elapsedMs: number
   /** 可选：老后端与老 mock 不返回，界面必须照常工作 */
   trace?: HitTestTrace
+  /** 可选：问句里认出了什么、命中了哪几条关系（0.9.9 起后端返回） */
+  detected?: HitTestDetected
 }
 
 /* ────────────────────────── 接口 ────────────────────────── */

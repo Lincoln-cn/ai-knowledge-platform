@@ -107,6 +107,14 @@ class RetrievalHitTestTest {
     assertThat(segmentIdsOf(hybridBody))
         .as("RRF 的可观测特征：两路都命中 ⇒ 总体排最前（即「在两种检索里都排得靠前的，总体排最前」）（回包：%s）", hybridBody)
         .containsExactly(f.segA(), f.segB());
+
+    // ★ 渠道：融合之后每条候选仍要说清"它是被哪一路捞上来的"。
+    //   没有这一列时，命中测试只能显示分数 —— 而分数相同、来源不同，正是排查
+    //   「为什么这条排前面」时最先要看的东西（`#370` 之后加的，见 ROADMAP §11.66）。
+    assertThat(channelsOf(hybridBody))
+        .as("混合模式下每条命中都该带渠道（回包：%s）", hybridBody)
+        .isNotEmpty()
+        .allSatisfy(channels -> assertThat(channels).isNotEmpty());
   }
 
   // ────────────────────────── 三模式都出结果（演示物） ──────────────────────────
@@ -474,6 +482,25 @@ class RetrievalHitTestTest {
   }
 
   /** 从回包里按出现顺序取 segmentId（断言次序，而不只是「有没有」）。 */
+  /** 每条命中的 `channels` 数组（融合之后仍要说清是哪一路捞上来的）。 */
+  private static List<List<String>> channelsOf(String responseBody) {
+    List<List<String>> all = new java.util.ArrayList<>();
+    Matcher m = Pattern.compile("\"channels\"\\s*:\\s*\\[([^\\]]*)\\]").matcher(responseBody);
+    while (m.find()) {
+      String inner = m.group(1).trim();
+      if (inner.isEmpty()) {
+        all.add(List.of());
+      } else {
+        all.add(
+            java.util.Arrays.stream(inner.split(","))
+                .map(String::trim)
+                .map(part -> part.replace("\"", ""))
+                .toList());
+      }
+    }
+    return all;
+  }
+
   private static List<String> segmentIdsOf(String responseBody) {
     Matcher m = Pattern.compile("\"segmentId\"\\s*:\\s*\"([0-9a-f-]{36})\"").matcher(responseBody);
     java.util.ArrayList<String> ids = new java.util.ArrayList<>();
