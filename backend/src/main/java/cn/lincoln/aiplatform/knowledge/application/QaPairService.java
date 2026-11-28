@@ -154,6 +154,7 @@ public class QaPairService {
                 item.question(),
                 item.answer(),
                 item.segmentId(),
+                item.directAnswer(),
                 item.classification(),
                 item.origin(),
                 item.sourceRef(),
@@ -203,6 +204,7 @@ public class QaPairService {
    * @param answer 答案 ★ 必填
    * @param classification 密级 ★ 必填且不得高于库上限
    * @param segmentId 出处（可空；有值时校验它属于 {@code kbId}）
+   * @param directAnswer 命中后是否直接作答（★ 缺省 false —— 直答是跳过生成的强动作，必须显式打开）
    * @param currentUserId 建档人（controller 从 JWT 取）
    * @return 落库后的那条
    */
@@ -213,11 +215,13 @@ public class QaPairService {
       String answer,
       ClassificationLevel classification,
       UUID segmentId,
+      boolean directAnswer,
       UUID currentUserId) {
     KnowledgeBaseView base = knowledgeBases.get(kbId);
     requireClassificationWithin(classification, base.maxClassification(), "问答对");
     ImportPair item =
-        new ImportPair(question, answer, segmentId, classification, QaPairOrigin.MANUAL, null);
+        new ImportPair(
+            question, answer, segmentId, directAnswer, classification, QaPairOrigin.MANUAL, null);
     verifySegmentOwnership(List.of(item), kbId);
     QaPair saved =
         pairs.save(
@@ -227,6 +231,7 @@ public class QaPairService {
                 item.question(),
                 item.answer(),
                 item.segmentId(),
+                item.directAnswer(),
                 item.classification(),
                 item.origin(),
                 item.sourceRef(),
@@ -250,6 +255,27 @@ public class QaPairService {
     } catch (IllegalArgumentException invalid) {
       throw new BusinessException(ErrorCode.BAD_REQUEST, invalid.getMessage(), "改成一个非空的问题再提交");
     }
+    return QaPairView.from(pairs.save(pair));
+  }
+
+  /**
+   * 切换「命中后是否直接作答」（{@code #78} 第二段：直答模式）。
+   *
+   * <p>★ 单独一个端点，<strong>不并进改名</strong>：改名是"换个说法"，切直答是"从这一刻起命中就跳过生成"。 混在一个 {@code PATCH}
+   * 里很容易出现"只想改个错字，结果顺手把这条设成了直答"，而那种改动<strong>没有任何地方会报错</strong>。
+   *
+   * <p>★ 权限与改名同一条（{@code knowledge:qa:edit}）：它不是"更危险的权限"，它是同一个人对同一条 数据的另一种用法 ——
+   * 真正的危险在于<b>默认值</b>（{@code false}），而不在于谁能改。
+   *
+   * @param pairId 问答对 id（不存在 / 已删 / 库不可见 ⇒ 404，同一段文案）
+   * @param directAnswer true = 命中即直答；false = 作为一路候选参与融合
+   * @param currentUserId 操作人
+   * @return 落库后的那条
+   */
+  @Transactional
+  public QaPairView switchDirectAnswer(UUID pairId, boolean directAnswer, UUID currentUserId) {
+    QaPair pair = requireVisible(pairId);
+    pair.switchDirectAnswer(directAnswer, currentUserId);
     return QaPairView.from(pairs.save(pair));
   }
 
@@ -378,6 +404,7 @@ public class QaPairService {
       String question,
       String answer,
       UUID segmentId,
+      boolean directAnswer,
       ClassificationLevel classification,
       QaPairOrigin origin,
       String sourceRef) {}

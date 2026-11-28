@@ -206,7 +206,13 @@ class QaPairRetrievalIsolationTest {
                         UUID.fromString(kbId),
                         List.of(
                             new ImportPair(
-                                question, answer, null, classification, QaPairOrigin.MANUAL, null)),
+                                question,
+                                answer,
+                                null,
+                                false,
+                                classification,
+                                QaPairOrigin.MANUAL,
+                                null)),
                         CURRENT_USER))
             .getFirst()
             .id();

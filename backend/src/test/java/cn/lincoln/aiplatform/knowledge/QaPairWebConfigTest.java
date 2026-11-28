@@ -69,7 +69,13 @@ class QaPairWebConfigTest {
             OWNER,
             () ->
                 qaPairs.create(
-                    kb, "出差住宿费上限是多少", "一晚不超过 600 元", ClassificationLevel.INTERNAL, null, OWNER));
+                    kb,
+                    "出差住宿费上限是多少",
+                    "一晚不超过 600 元",
+                    ClassificationLevel.INTERNAL,
+                    null,
+                    false,
+                    OWNER));
 
     QaPair reloaded =
         pairs
@@ -92,7 +98,9 @@ class QaPairWebConfigTest {
             () ->
                 as(
                     OWNER,
-                    () -> qaPairs.create(kb, "问题", "答案", ClassificationLevel.SECRET, null, OWNER)),
+                    () ->
+                        qaPairs.create(
+                            kb, "问题", "答案", ClassificationLevel.SECRET, null, false, OWNER)),
             BusinessException.class);
 
     assertThat(error).as("★★ 密级高于库上限必须被拦 —— 不拦就是一次**静默越权**（13 §6）").isNotNull();
@@ -107,7 +115,9 @@ class QaPairWebConfigTest {
     QaPairView created =
         as(
             OWNER,
-            () -> qaPairs.create(kb, "旧问题", "答案不变", ClassificationLevel.INTERNAL, null, OWNER));
+            () ->
+                qaPairs.create(
+                    kb, "旧问题", "答案不变", ClassificationLevel.INTERNAL, null, false, OWNER));
 
     as(OWNER, () -> qaPairs.rename(UUID.fromString(created.id()), "新问题", OWNER));
 
@@ -125,7 +135,9 @@ class QaPairWebConfigTest {
     QaPairView created =
         as(
             OWNER,
-            () -> qaPairs.create(kb, "要删的问题", "答案", ClassificationLevel.INTERNAL, null, OWNER));
+            () ->
+                qaPairs.create(
+                    kb, "要删的问题", "答案", ClassificationLevel.INTERNAL, null, false, OWNER));
     UUID id = UUID.fromString(created.id());
 
     runAs(OWNER, () -> qaPairs.delete(id, OWNER));
@@ -152,7 +164,9 @@ class QaPairWebConfigTest {
     QaPairView created =
         as(
             OWNER,
-            () -> qaPairs.create(kb, "别人的问题", "答案", ClassificationLevel.INTERNAL, null, OWNER));
+            () ->
+                qaPairs.create(
+                    kb, "别人的问题", "答案", ClassificationLevel.INTERNAL, null, false, OWNER));
     UUID id = UUID.fromString(created.id());
 
     BusinessException onRename =
@@ -182,8 +196,12 @@ class QaPairWebConfigTest {
   @Test
   void listReturnsWhatWasCreated() {
     UUID kb = seedKb(OWNER, "INTERNAL");
-    as(OWNER, () -> qaPairs.create(kb, "问题一", "答案一", ClassificationLevel.INTERNAL, null, OWNER));
-    as(OWNER, () -> qaPairs.create(kb, "问题二", "答案二", ClassificationLevel.INTERNAL, null, OWNER));
+    as(
+        OWNER,
+        () -> qaPairs.create(kb, "问题一", "答案一", ClassificationLevel.INTERNAL, null, false, OWNER));
+    as(
+        OWNER,
+        () -> qaPairs.create(kb, "问题二", "答案二", ClassificationLevel.INTERNAL, null, false, OWNER));
 
     PageResult<QaPairView> listed = as(OWNER, () -> qaPairs.list(kb, 1, 20));
 

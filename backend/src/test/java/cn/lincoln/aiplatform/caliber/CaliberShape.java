@@ -180,7 +180,9 @@ final class CaliberShape {
           // 0.9.8 可调参数声明（ai_model.param_schema）
           "modelcatalog/V117__modelcatalog_param_schema.sql",
           // 0.9.9 受控关系从四类扩到七类
-          "knowledge/V118__kb_relation_more_types.sql");
+          "knowledge/V118__kb_relation_more_types.sql",
+          // 0.9.9 问答对接进检索：直答开关 + 问句分词索引（#78）
+          "knowledge/V119__kb_qa_pair_direct_answer.sql");
 
   private CaliberShape() {}
 

@@ -62,6 +62,9 @@ class FeedbackPromotionAdapter implements FeedbackPromotionPort {
                 question,
                 answer,
                 null,
+                // ★ 赞踩沉淀出来的是「召回型」：它是"这条被认可了"的证据，
+                //   不是一份定稿答案 —— 直答必须由人显式打开（V119 文件头）
+                false,
                 ClassificationLevel.valueOf(classification),
                 QaPairOrigin.FEEDBACK,
                 sourceRef)),

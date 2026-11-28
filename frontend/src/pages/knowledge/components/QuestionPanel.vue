@@ -1,12 +1,14 @@
 <template>
   <div class="qa-panel">
-    <!-- ★★ 这一条必须显眼：本期检索侧一行不接（#78 的裁定）。
-         不写在界面上，用户建完会以为"检索已经用上了" —— 那是本仓最忌讳的静默期待。 -->
+    <!-- ★★ 这段文案改过一次，改的理由记在这里：
+         0.9.9 之前它写的是「当前版本检索还不会消费它」—— 那时候是实话，留着是为了不让用户
+         建完以为"检索已经用上了"。**现在问答对真接进检索了**，那段话就成了反向的误导
+         （用户会以为建了没用），所以必须换掉，而不是"顺手留着也无害"。 -->
     <div class="notice info">
-      <b>问答对是「问题 → 答案」的人工标定，用来补纯语义检索的召回不足。</b>
+      <b>问答对是「问题 → 答案」的人工标定，检索时会优先命中它。</b>
       <span class="micro">
-        ★ 当前版本<strong>检索还不会消费它</strong>（数据与配置先落地）。建好的问答对不会改变问答结果 ——
-        这一点在检索接入前会在界面上一直标着。
+        命中之后怎么用，看每行右侧的「回答方式」：<b>召回型</b> = 作为一路候选参与融合，仍由模型写答案；
+        <b>直答型</b> = 命中即原样返回，不再经过模型。默认召回型 —— 直答跳过生成，要显式打开。
       </span>
     </div>
 
@@ -47,6 +49,21 @@
       <el-table-column label="答案" min-width="280">
         <template #default="{ row }">
           <div class="a-text">{{ row.answer }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="回答方式" width="150">
+        <template #default="{ row }">
+          <!-- ★ 这不只是个标签：它决定命中之后走不走模型，所以要能就地切换 -->
+          <el-switch
+            :model-value="row.directAnswer"
+            :disabled="!canEdit"
+            size="small"
+            inline-prompt
+            active-text="直答"
+            inactive-text="召回"
+            @change="(v: string | number | boolean) => toggleDirectAnswer(row, Boolean(v))"
+          />
+          <div class="micro muted mode-hint">{{ row.directAnswer ? '命中即原样返回' : '参与融合后生成' }}</div>
         </template>
       </el-table-column>
       <el-table-column label="出处" width="120">
@@ -101,6 +118,13 @@
           </el-select>
           <div class="micro muted">不得高于所属知识库的密级上限</div>
         </el-form-item>
+        <el-form-item label="回答方式">
+          <el-switch v-model="form.directAnswer" inline-prompt active-text="直答" inactive-text="召回" />
+          <div class="micro muted">
+            召回型：命中后参与融合，仍由模型写答案。直答型：命中即把这段答案原样返回，<b>不经过模型</b> ——
+            只适合"答案已定稿、任何改写都是退步"的问法。
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button size="small" @click="createVisible = false">取消</el-button>
@@ -125,6 +149,10 @@
           <el-select v-model="batchClassification" style="width: 200px">
             <el-option v-for="c in CLASSIFICATIONS" :key="c" :label="CLASSIFICATION_LABELS[c]" :value="c" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="回答方式">
+          <el-switch v-model="batchDirectAnswer" inline-prompt active-text="直答" inactive-text="召回" />
+          <div class="micro muted">整批同一个回答方式；要分开设，导入后逐行切换。</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -155,6 +183,7 @@ import {
   deleteQaPair,
   listQaPairs,
   renameQaPair,
+  switchQaPairDirectAnswer,
   type QaPair,
   type QaPairClassification
 } from '@/api/qaPairs'
@@ -198,11 +227,13 @@ const renameText = ref('')
 const renameId = ref('')
 const batchText = ref('')
 const batchClassification = ref<QaPairClassification>('INTERNAL')
+const batchDirectAnswer = ref(false)
 const form = reactive<{
   question: string
   answer: string
   classification: QaPairClassification
-}>({ question: '', answer: '', classification: 'INTERNAL' })
+  directAnswer: boolean
+}>({ question: '', answer: '', classification: 'INTERNAL', directAnswer: false })
 
 /**
  * ★ 前端筛选只作用于**当前页**。全量搜索要后端支持 keyword —— 那是另一批的事，
@@ -235,6 +266,8 @@ function openCreate() {
   form.question = ''
   form.answer = ''
   form.classification = 'INTERNAL'
+  // ★ 每次都从「召回型」开始：直答不应因为上一次勾过就悄悄延续
+  form.directAnswer = false
   createVisible.value = true
 }
 
@@ -248,7 +281,8 @@ async function submitCreate() {
     await createQaPair(props.kbId, {
       question: form.question,
       answer: form.answer,
-      classification: form.classification
+      classification: form.classification,
+      directAnswer: form.directAnswer
     })
     ElMessage.success('已创建')
     createVisible.value = false
@@ -265,6 +299,7 @@ async function submitCreate() {
 function openBatch() {
   batchText.value = ''
   batchClassification.value = 'INTERNAL'
+  batchDirectAnswer.value = false
   batchVisible.value = true
 }
 
@@ -280,7 +315,8 @@ async function submitBatch() {
       //   这里不替用户猜"答案是什么"。
       question: at < 0 ? line : line.slice(0, at).trim(),
       answer: at < 0 ? '' : line.slice(at + 1).trim(),
-      classification: batchClassification.value
+      classification: batchClassification.value,
+      directAnswer: batchDirectAnswer.value
     }
   })
   if (!items.length) {
@@ -298,6 +334,36 @@ async function submitBatch() {
     ElMessage.error(err.hint ? `${err.message}（${err.hint}）` : err.message)
   } finally {
     saving.value = false
+  }
+}
+
+/**
+ * 切换「命中后是否直接作答」。
+ *
+ * ★ 打开时先确认一次：这一步的后果是"从此命中就跳过模型"，而它**没有回滚成本为零的撤销**
+ * （用户已经拿到的回答不会因为后来关掉而变回来）。关掉不再问 —— 往安全的一侧不需要确认。
+ */
+async function toggleDirectAnswer(row: QaPair, next: boolean) {
+  if (next) {
+    try {
+      await ElMessageBox.confirm(
+        `把「${row.question}」设为直答？\n\n命中时会把这段答案原样返回，不再融合其他候选、也不再经过模型改写。适合答案已定稿、任何改写都是退步的问法。`,
+        '确认改为直答',
+        { type: 'warning', confirmButtonText: '设为直答', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+  }
+  try {
+    await switchQaPairDirectAnswer(row.id, next)
+    ElMessage.success(next ? '已改为直答' : '已改为召回')
+    await fetchList()
+  } catch (e) {
+    const err = e as ApiError
+    ElMessage.error(err.hint ? `${err.message}（${err.hint}）` : err.message)
+    // ★ 失败时把开关拨回去：界面不能停在一个"看起来已经改了"的状态上
+    await fetchList()
   }
 }
 
@@ -379,5 +445,9 @@ onMounted(fetchList)
 }
 .mono {
   font-family: var(--font-mono, monospace);
+}
+.mode-hint {
+  margin-top: 2px;
+  line-height: 1.4;
 }
 </style>

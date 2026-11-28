@@ -9,10 +9,17 @@
  * ★ 应用配置里的 `quickQuestions`（开场白快捷问）**不是**问答对：
  * 它只是界面上几个可点的句子，不参与检索、不与分段关联。
  *
- * ## ★★ 本期检索侧一行不接（`#78` 的裁定）
+ * ## ★★ 它已经接进检索了（0.9.9，`#78` 第二段）
  *
- * 通过本文件写入的问答对**不会**被检索读到。★ 界面上必须把这条写出来，
- * 否则用户建完会以为"检索已经用上了"。
+ * 这里曾经写着「本期检索侧一行不接」—— **那句话已经过期**。现在问答对是检索的一路：
+ * 问句与标定问法分词后比对，命中即参与。命中之后怎么用它，由 `directAnswer` 决定：
+ *
+ * - `false`（默认）= **召回型**：作为一路候选参与 RRF 融合，由生成模型写答案 ——
+ *   问答对只是"这条更该被引用"的证据；
+ * - `true` = **直答型**：命中即**直接把 `answer` 当作回答返回**，不融合、不调模型。
+ *
+ * ★ 为什么默认是 `false`：直答跳过生成，一旦判错（问句相似但并非同一个问题），
+ * 用户会拿到一个语气笃定、内容不对的答案，**而且没有任何环节能纠正它**。
  *
  * ## ★ 与 `FR-03-12-4` 的偏离（已登记在设计册）
  *
@@ -40,9 +47,16 @@ export interface QaPair {
   answer: string
   /** 出处分段（可空：人工导入的问答对可以没有出处） */
   segmentId: string | null
+  /**
+   * 命中之后是否**直接作答**。
+   *
+   * `false` = 召回型（参与融合，生成模型写答案）；`true` = 直答型（命中即原样返回，不调模型）。
+   * ★ 默认 `false`：不勾这个框，问答对就只是个更好的候选。
+   */
+  directAnswer: boolean
   classification: QaPairClassification
   origin: QaPairOrigin
-  /** 命中计数。★ 本期恒为 0 —— 只有检索能写它，而检索侧这一期不接 */
+  /** 命中计数。★ **仍恒为 0**：检索这一期只读它、不写它（写回要动对话主链路的写路径） */
   hitCount: number
   createdAt: string
   updatedAt: string
@@ -65,6 +79,8 @@ export const createQaPair = (
     answer: string
     classification: QaPairClassification
     segmentId?: string | null
+    /** 命中后是否直接作答（缺省 false） */
+    directAnswer?: boolean
   }
 ) =>
   request<QaPair>({
@@ -87,6 +103,8 @@ export const batchCreateQaPairs = (
     answer: string
     classification: QaPairClassification
     segmentId?: string | null
+    /** 命中后是否直接作答（缺省 false） */
+    directAnswer?: boolean
   }>
 ) =>
   request<QaPair[]>({
@@ -103,6 +121,20 @@ export const renameQaPair = (id: string, question: string) =>
     url: '/qa-pairs/:id/question',
     path: { id },
     body: { question }
+  })
+
+/**
+ * 切换「命中后是否直接作答」。
+ *
+ * ★ 与改名分成两个入口：改名的后果是"换个说法"，切直答的后果是"命中即跳过生成"。
+ * 合成一个 `PATCH` 会出现"只想改个错字，顺手把这条设成了直答"。
+ */
+export const switchQaPairDirectAnswer = (id: string, directAnswer: boolean) =>
+  request<QaPair>({
+    method: 'PATCH',
+    url: '/qa-pairs/:id/direct-answer',
+    path: { id },
+    body: { directAnswer }
   })
 
 /** 删除（`FR-03-12-3`）—— 软删，幂等 */

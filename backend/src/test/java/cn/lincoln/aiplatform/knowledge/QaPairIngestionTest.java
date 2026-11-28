@@ -111,6 +111,7 @@ class QaPairIngestionTest {
                             "差旅住宿标准是多少？",
                             "一线城市每人每天不超过 500 元。",
                             UUID.fromString(segmentId),
+                            false,
                             ClassificationLevel.INTERNAL,
                             QaPairOrigin.MANUAL,
                             "import-batch-2026-10-13"),
@@ -118,6 +119,7 @@ class QaPairIngestionTest {
                             "年假怎么计算？",
                             "按工龄分档，详见《考勤制度》第四章。",
                             null,
+                            false,
                             ClassificationLevel.SECRET,
                             QaPairOrigin.CONVERSATION,
                             null)),
@@ -243,6 +245,7 @@ class QaPairIngestionTest {
                                     "机密问题",
                                     "机密答案",
                                     null,
+                                    false,
                                     ClassificationLevel.CONFIDENTIAL,
                                     QaPairOrigin.MANUAL,
                                     null)),
@@ -282,6 +285,7 @@ class QaPairIngestionTest {
                                     "A 库的问题",
                                     "答案",
                                     UUID.fromString(segmentOfB),
+                                    false,
                                     ClassificationLevel.INTERNAL,
                                     QaPairOrigin.MANUAL,
                                     null)),
@@ -300,7 +304,13 @@ class QaPairIngestionTest {
 
   private static ImportPair pair(String question) {
     return new ImportPair(
-        question, question + "的答案", null, ClassificationLevel.INTERNAL, QaPairOrigin.MANUAL, null);
+        question,
+        question + "的答案",
+        null,
+        false,
+        ClassificationLevel.INTERNAL,
+        QaPairOrigin.MANUAL,
+        null);
   }
 
   private Boolean successOf(String version) {

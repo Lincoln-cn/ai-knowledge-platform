@@ -84,6 +84,7 @@ public class QaPairController {
             body.answer(),
             body.classification(),
             body.segmentId(),
+            Boolean.TRUE.equals(body.directAnswer()),
             subjectOf(jwt)));
   }
 
@@ -113,6 +114,7 @@ public class QaPairController {
                             row.question(),
                             row.answer(),
                             row.segmentId(),
+                            Boolean.TRUE.equals(row.directAnswer()),
                             row.classification(),
                             // ★ 来源固定 MANUAL：从 web 手输的必然是人录入
                             cn.lincoln.aiplatform.knowledge.domain.QaPairOrigin.MANUAL,
@@ -133,6 +135,31 @@ public class QaPairController {
   public ApiResponse<QaPairView> rename(
       @PathVariable UUID id, @RequestBody RenameQaPairBody body, @AuthenticationPrincipal Jwt jwt) {
     return ApiResponse.ok(qaPairs.rename(id, body.question(), subjectOf(jwt)));
+  }
+
+  /**
+   * 切换「命中后是否直接作答」（{@code #78} 第二段）。
+   *
+   * <p>★ 与改名分成两个端点：改名的后果是"换个说法"，切直答的后果是"命中即跳过生成"。 合成一个 {@code PATCH} 会出现"只想改个错字，顺手把这条设成了直答"。
+   *
+   * @param id 问答对 id
+   * @param body 只带开关
+   * @param jwt 令牌
+   */
+  @PatchMapping("/qa-pairs/{id}/direct-answer")
+  @PreAuthorize("hasAuthority('knowledge:qa:edit')")
+  public ApiResponse<QaPairView> switchDirectAnswer(
+      @PathVariable UUID id,
+      @RequestBody SwitchDirectAnswerBody body,
+      @AuthenticationPrincipal Jwt jwt) {
+    if (body.directAnswer() == null) {
+      // ★ 缺字段不当作 false：那会让"忘了传"变成一次静默的关闭
+      throw new cn.lincoln.aiplatform.platform.domain.BusinessException(
+          cn.lincoln.aiplatform.platform.domain.ErrorCode.BAD_REQUEST,
+          "缺少 directAnswer",
+          "请显式给出 true 或 false");
+    }
+    return ApiResponse.ok(qaPairs.switchDirectAnswer(id, body.directAnswer(), subjectOf(jwt)));
   }
 
   /**
@@ -160,9 +187,14 @@ public class QaPairController {
    * @param answer 答案 ★ 必填
    * @param classification 密级 ★ 必填且 ≤ 库上限
    * @param segmentId 出处（可空）
+   * @param directAnswer 命中后是否直接作答（可空 ⇒ 视为 false —— 直答必须显式打开）
    */
   public record CreateQaPairBody(
-      String question, String answer, ClassificationLevel classification, UUID segmentId) {}
+      String question,
+      String answer,
+      ClassificationLevel classification,
+      UUID segmentId,
+      Boolean directAnswer) {}
 
   /**
    * 批量新建的请求体。
@@ -178,9 +210,14 @@ public class QaPairController {
      * @param answer 答案
      * @param classification 密级
      * @param segmentId 出处（可空）
+     * @param directAnswer 命中后是否直接作答（可空 ⇒ 视为 false）
      */
     public record Row(
-        String question, String answer, ClassificationLevel classification, UUID segmentId) {}
+        String question,
+        String answer,
+        ClassificationLevel classification,
+        UUID segmentId,
+        Boolean directAnswer) {}
   }
 
   /**
@@ -189,4 +226,11 @@ public class QaPairController {
    * @param question 新问题
    */
   public record RenameQaPairBody(String question) {}
+
+  /**
+   * 切换直答的请求体。
+   *
+   * @param directAnswer true = 命中即直答；false = 作为一路候选参与融合。★ 必填（缺字段不当 false）
+   */
+  public record SwitchDirectAnswerBody(Boolean directAnswer) {}
 }

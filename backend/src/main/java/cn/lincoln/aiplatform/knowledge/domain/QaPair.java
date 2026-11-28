@@ -19,18 +19,18 @@ import org.hibernate.type.SqlTypes;
  *
  * <h3>★★ 它是「留缝」，不是「已接入」—— 读这个类时请连着读这一段</h3>
  *
- * <p>本类落地的是<strong>数据层 + 一个最小的服务层入口</strong>（导入 / 列出），<strong>检索侧一行不接</strong>。
- * 这不是"还没写完"，而是<strong>这一批刻意不做</strong>：{@code 10 §7.4} 把问答对定为「B1 不达标时的
- * <strong>补救手段</strong>」（策略层唯一的确定性召回手段，但它是"结果指标不够时回机制二"的那一步， 不是前置条件），而它的数据来源（第 17 周的会话消息、第 18
- * 周的赞踩）现在还不存在。
- *
- * <p>★ 现在动的唯一理由是 {@code 04:235} 那句「晚做要<strong>补迁移</strong>」： 错过的是「表结构与文档 /
- * 分段同批迁移的便利」，<strong>不是数据</strong>。所以：
+ * <p>★ <strong>它已经从「数据层留缝」变成「检索真在用」了</strong>（0.9.9，{@code ROADMAP §11.7.3} 的判据 ③
+ * 「断言检索链路现在不消费它」在这一批被主动废止）。读这个类时请连着读下面两条：
  *
  * <ul>
- *   <li>凡是"将来接入时要用的东西" ⇒ 落<strong>字段 / 枚举</strong>（{@link #classification} · {@link #origin} ·
- *       {@link #hitCount} · {@link #segmentId}）；
- *   <li>凡是"实现" ⇒ <strong>一律不做</strong>（没有 {@code searchText}、没有向量列、没有全文索引列、 没有任何检索入口读到这张表）。
+ *   <li><strong>怎么命中</strong>：问句与 {@link #question} 都过 {@code chinese_zh} 分词（{@code V119} 的 {@code
+ *       question_tsv} 生成列），按词元集合的 F1 打分，过阈值才算命中。不做向量、不做语义近似 ——
+ *       问答对的价值就在"这句话的答案<strong>就是</strong>这一条"，语义泛化交给向量那一路去覆盖。
+ *   <li><strong>命中之后有两种用法</strong>：{@link #directAnswer} = {@code false}（默认）是召回型，作为一路候选参与
+ *       RRF，由生成模型写答案；{@code true} 是直答型，命中即<strong>直接把 {@link #answer}
+ *       作为回答</strong>返回，不融合、不调模型。两种模式的取舍写在 {@code V119} 的文件头。
+ *   <li><strong>仍然没有的东西</strong>：没有向量列（语义那条路由分段承担）、没有 {@code searchText}（问句本身就是检索对象）； <strong>命中计数
+ *       {@link #hitCount} 仍是 0</strong> —— 检索侧这一批只读它、不写它，写回是下一批的事（写回要动对话主链路的写路径，与"只读地接入一路召回"是两件事）。
  * </ul>
  *
  * <h3>★ 归属 = {@link #kbId}（不是 owner_id / visibility）</h3>
@@ -86,6 +86,22 @@ public class QaPair {
    */
   @Column(name = "segment_id")
   private UUID segmentId;
+
+  /**
+   * 命中之后是「仅供参考」还是「就是这个答案」。
+   *
+   * <p>★ {@code false}（默认）= <strong>召回型</strong>：与向量 / 全文 / 实体 / 关系并列成一路候选，走 RRF 融合， 命中后由生成模型写答案 ——
+   * 问答对只是"这条更该被引用"的证据。
+   *
+   * <p>★ {@code true} = <strong>直答型</strong>：命中即<strong>直接把 {@link #answer}
+   * 当回答返回</strong>，不融合、不调模型。用于"答案已定稿、任何改写都是退步"的场景。
+   *
+   * <p>★★ 为什么默认 {@code false}：直答是<strong>跳过生成</strong>的强动作 ——
+   * 一旦判错（问句相似但并非同一个问题），用户会拿到一个语气笃定、内容不对的答案，而且<strong>没有任何模型或检索环节能纠正它</strong>。默认成 false
+   * 意味着"不勾这个框，问答对就只是个更好的候选"；要变成直答必须有人显式勾选。与 {@link #classification}「NOT NULL 且没有默认值」是同一条思路。
+   */
+  @Column(name = "direct_answer", nullable = false)
+  private boolean directAnswer;
 
   /** 密级。★ 冗余列 + 谓词，见类注释。 */
   @Enumerated(EnumType.STRING)
@@ -160,6 +176,7 @@ public class QaPair {
    * @param id 主键（由用例层生成 —— 应用侧的时间有序 UUID，与其它聚合根同口径）
    * @param kbId 归属（所属知识库）★ 必填
    * @param segmentId 命中来源（可空；有值时调用方必须已校验它属于 {@code kbId}）
+   * @param directAnswer 命中后是否直接作答（★ 从 false 开始，见字段注释）
    * @param classification 密级 ★ 必填，无默认值
    * @param origin 来源 ★ 必填 —— 缺了它，"这条凭什么可信"就没有答案
    * @param sourceRef 来源定位串（可空）
@@ -171,6 +188,7 @@ public class QaPair {
       String question,
       String answer,
       UUID segmentId,
+      boolean directAnswer,
       ClassificationLevel classification,
       QaPairOrigin origin,
       String sourceRef,
@@ -198,6 +216,7 @@ public class QaPair {
     this.question = question.trim();
     this.answer = answer.trim();
     this.segmentId = segmentId;
+    this.directAnswer = directAnswer;
     this.classification = classification;
     this.origin = origin;
     this.sourceRef = sourceRef == null || sourceRef.isBlank() ? null : sourceRef.trim();
@@ -248,6 +267,21 @@ public class QaPair {
   /**
    * @return 是否已软删
    */
+  /**
+   * 切换"命中后是否直接作答"。
+   *
+   * <p>★ 单独一个入口，<strong>不并进 {@link #rename}</strong>：这两件事的后果完全不同 ——
+   * 改名是"换个说法"，切直答是"从这一刻起，命中就跳过生成"。混进一个 {@code update(question, directAnswer)}
+   * 很容易出现"只想改个错字，结果顺手把这问答对设成了直答"，而那种改动<strong>没有任何地方会报错</strong>。
+   *
+   * @param directAnswer true = 直答，false = 召回型
+   * @param by 操作人
+   */
+  public void switchDirectAnswer(boolean directAnswer, UUID by) {
+    this.directAnswer = directAnswer;
+    this.updatedBy = by;
+  }
+
   public boolean deleted() {
     return deletedAt != null;
   }
@@ -272,6 +306,11 @@ public class QaPair {
 
   public UUID segmentId() {
     return segmentId;
+  }
+
+  /** 命中之后是否直接作为回答返回（{@code false} = 参与融合的普通候选）。 */
+  public boolean directAnswer() {
+    return directAnswer;
   }
 
   public ClassificationLevel classification() {
