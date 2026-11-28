@@ -576,11 +576,6 @@ watch([() => view.value, () => graph.value], async () => {
             <span class="micro muted"> 条</span>
           </template>
         </el-table-column>
-        <el-table-column label="来源" width="150">
-          <template #default="{ row }">
-            <span class="micro muted">{{ row.source || '—' }}</span>
-          </template>
-        </el-table-column>
         <el-table-column width="120">
           <template #header>
             <span class="col-head">
