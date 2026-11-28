@@ -53,6 +53,9 @@ public class EntityExtractionService {
    * <p>★ 用虚拟线程而不是固定线程池：抽取是 IO（读库）+ CPU（前向）混合，且一次可能同时有多个 文档在上传。固定池在并发上传时会排队，而排队会让"抽取延迟"随上传量线性变长 ——
    * 这正是 {@code 文档入库} 不该付出的代价。
    */
+  /** 规则层实体的置信度。比模型低：规则靠后缀与标记词，召回稳但精度不如 NER； 用同一个数值会让"这条是模型认的"与"这条是猜的"在界面上分不出来。 */
+  private static final double RULE_CONFIDENCE = 0.6;
+
   private final ExecutorService extractionExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
   /** 已提交、未完成的任务数 —— 关停时要能等它们跑完。 */
@@ -168,7 +171,8 @@ public class EntityExtractionService {
         }
         // ★ 必须把 kbId 传下去：词表在 kb_entity_dict 里是 per-库的（#328），
         //   不带库标识就只能吃全局默认表 —— 那样数据库里配的字典一个字都不生效。
-        List<EntityRecognizer.Recognized> found = recognizer.recognize(kbId, text);
+        List<EntityRecognizer.Recognized> found =
+            mergeRuleEntities(recognizer.recognize(kbId, text), text, kbId);
         // 关系用同一个识别器抽（接口给了 default 空实现，所以不是所有实现都有关系）
         // ★ 把本次识别到的实体一起传下去：规则层要靠它认人名（WORKS_AT 的左端）
         List<EntityRecognizer.Relation> relations = recognizer.relations(text, found);
@@ -278,6 +282,41 @@ public class EntityExtractionService {
       log.warn("#实体抽取 失败，本次不写实体（kb={}, 段数={}）：{}", kbId, segments.size(), e.toString());
       return 0;
     }
+  }
+
+  /**
+   * 规则层抽到的实体也并进来。
+   *
+   * <p>★ 这是 2026-11-28 才发现的一个断点：此前只有 {@code recognizer.recognize} 的产出被写进 {@code kb_entity}，而 {@link
+   * EntityExtractor#extract} 抽到的职责（{@code MISSION}）、带书名号的文书、带引号的术语
+   * **从来只用于关系引擎内部判端、不落库**。后果很具体：新加一类实体，图谱上看不到它；而它作为关系右端时 「找不到实体 id」—— 关系引擎认得、库里没有，两边对不上。
+   *
+   * <p>字典按库取（`kb_entity_dict` 是 per-库的，见 #328），所以这里每次都重新构造一个抽取器：字典可以被管理员
+   * 随时改，缓存会让"改完不生效"变成新的静默故障，而一次构造只是编译几个正则。
+   */
+  private List<EntityRecognizer.Recognized> mergeRuleEntities(
+      List<EntityRecognizer.Recognized> found, String text, UUID kbId) {
+    List<EntityRecognizer.Recognized> base = found == null ? List.of() : found;
+    EntityExtractor.Dictionary dict = dictionaryPort.dictionaryOf(kbId);
+    // ★ 契约说这个端口「绝不返回 null」，但测试替身未必守 —— 一个 null 会在这里炸成 NPE，
+    //   而外层 catch 把它读成「抽取失败、本次写了 0 个实体」，症状与「没有可抽的东西」一模一样。
+    if (dict == null || dict.orgSuffixes().isEmpty()) {
+      // 库里没配机构后缀 ⇒ 规则层什么都抽不出来，{@link EntityExtractor} 的机构正则会退化成空模式。
+      return base;
+    }
+    Set<String> have = new LinkedHashSet<>();
+    for (EntityRecognizer.Recognized r : base) {
+      if (r != null && r.name() != null && r.type() != null) {
+        have.add(r.type() + "\u0000" + r.name());
+      }
+    }
+    List<EntityRecognizer.Recognized> out = new ArrayList<>(base);
+    for (EntityExtractor.Candidate c : new EntityExtractor(dict).extract(text)) {
+      if (have.add(c.type() + "\u0000" + c.name())) {
+        out.add(new EntityRecognizer.Recognized(c.type(), c.name(), RULE_CONFIDENCE));
+      }
+    }
+    return out;
   }
 
   /** 某个库的字典（透出去给探针/测试查"这个库配了什么"）。 */

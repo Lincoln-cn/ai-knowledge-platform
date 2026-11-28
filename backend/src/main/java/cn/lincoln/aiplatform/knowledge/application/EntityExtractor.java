@@ -76,20 +76,59 @@ public final class EntityExtractor {
 
   private static final Shape ORG_TO_ORG = new Shape(Set.of("ORG"), Set.of("ORG"));
 
+  /**
+   * 职责：动宾短语里的宾语（"财政部主管全国企业会计工作" ⇒ "全国企业会计工作"）。
+   *
+   * <p>★ 为什么要把职责立成一类实体，而不是让关系右端直接吃动宾短语：{@link #relations} 的右端必须是 {@link #extract}
+   * 认得出来的实体，否则「负责固定资产的购置」这种整句都会被当成右端 —— 那是规则抽取 最容易出的错（见类注释第 2 条）。先立成实体，关系引擎一行都不用改，而且职责本身也是知识库里要能查到的
+   * 东西（"这个部门都管哪些事"就是这个查询）。
+   *
+   * <p>★ 真实语料读数（20 篇法规、17.6 万字）：机构名后面跟的绝大多数是「应当 / 可以」（66 / 10 次）， 「负责」只有 5 次 ——
+   * 法规是义务规范，不是组织关系网。所以要能从这类材料里抽出东西，靠的是 「机构 + 动词 + 宾语」这一侧，而不是给标记词表加词。
+   */
+  private static final String MISSION = "MISSION";
+
   private static final Map<String, Shape> SHAPES =
       Map.of(
-          "BELONGS_TO", ORG_TO_ORG,
-          "CONTAINS", ORG_TO_ORG,
-          "PART_OF", ORG_TO_ORG,
-          "RESPONSIBLE_FOR", new Shape(Set.of("ORG", "PERSON"), Set.of("ORG", "PERSON")),
-          "DEFINES", new Shape(Set.of("ORG", "TERM"), Set.of("TERM")),
-          "WORKS_AT", new Shape(Set.of("PERSON"), Set.of("ORG")),
-          "REFERENCES", new Shape(Set.of("ORG", "DOC"), Set.of("DOC")));
+          "BELONGS_TO",
+          ORG_TO_ORG,
+          "CONTAINS",
+          ORG_TO_ORG,
+          "PART_OF",
+          ORG_TO_ORG,
+          "RESPONSIBLE_FOR",
+          new Shape(Set.of("ORG", "PERSON"), Set.of("ORG", "PERSON", MISSION)),
+          "DEFINES",
+          new Shape(Set.of("ORG", "TERM"), Set.of("TERM")),
+          "WORKS_AT",
+          new Shape(Set.of("PERSON"), Set.of("ORG")),
+          "REFERENCES",
+          new Shape(Set.of("ORG", "DOC"), Set.of("DOC")));
 
   private static final Pattern DOC = Pattern.compile("《([^《》]{2,40})》");
 
   /** 人员：职务词在名字后面（"张伟经理"这种中式写法）。★ 职务词可配（见字典的 `PERSON_TITLE`）。 */
   private static final Pattern PERSON_TAIL = Pattern.compile("([\\u4e00-\\u9fa5]{2,4}(%s))");
+
+  /** 职责动词 → 抽它后面的宾语。这套词表来自真实语料的动词分布（管理 419 / 监督 230 / 组织 158 / 履行 139 / 负责 134 / 制定 130 …）。 */
+  private static final Pattern MISSION_TAIL =
+      Pattern.compile(
+          "(?:负责|主管|管理|监督|指导|组织|实施|审批|审核|备案|制定|发布|执行|承担|履行|领导|统筹|协调|检查|考核|认定|处理)"
+              + "([\\u4e00-\\u9fa5]{2,20})");
+
+  /** 宾语在句读处收住 —— 这样断开的是完整的宾语（"负责安全生产工作。其他" ⇒ "安全生产工作"）。 */
+  private static final String MISSION_HARD_STOP = "，。；：、（）()";
+
+  /** 在虚词处断开说明后面还有中心词，取到的只是定语（"负责固定资产的购置" ⇒ "固定资产" 是定语， 真正的事是"购置"）。这类直接跳过 —— 宁可少一条，不要拿一个定语当职责。 */
+  private static final String MISSION_SOFT_STOP = "的了和与或等";
+
+  /** 宾语里出现这些词 ⇒ 它是机构不是职责（"管理部门根据本法…" 里的"管理部门"）。 */
+  private static final Set<String> MISSION_ORG_WORDS =
+      Set.of("部门", "机关", "单位", "委员会", "机构", "政府", "公司", "中心", "办公室", "管理局", "法院", "检察院");
+
+  /** 这些泛词单独成词时不是职责（"承担责任" / "履行义务" / "负责工作"）。 */
+  private static final Set<String> MISSION_VAGUE =
+      Set.of("责任", "机制", "行为", "作用", "职责", "义务", "权利", "规定", "办法", "制度", "标准", "工作");
 
   /** 术语：带引号的专有说法（"三重一大"）。 */
   private static final Pattern TERM = Pattern.compile("[\"\\u201c]([^\"\\u201d]{2,16})[\"\\u201d]");
@@ -180,6 +219,7 @@ public final class EntityExtractor {
       collect(person, "PERSON", text, seen, result);
     }
     collect(TERM, "TERM", text, seen, result);
+    collectMission(text, seen, result);
     return List.copyOf(result);
   }
 
@@ -194,6 +234,47 @@ public final class EntityExtractor {
       // 去重键带类型：同名既可能是机构也可能是术语，混在一起会把两类合成一条
       if (seen.add(type + ":" + name)) {
         out.add(new Candidate(type, name));
+      }
+    }
+  }
+
+  /**
+   * 抽职责：动宾短语里的宾语，切成实体。
+   *
+   * <p>三道过滤都来自真实语料的读数：① 宾语里带机构词的是机构（"管理部门"）② 泛词不是职责 （"承担责任"）③ 切完不足 2 个字或超过 18 个字的不当成词（那是半句话）。
+   */
+  private void collectMission(String text, Set<String> seen, List<Candidate> out) {
+    Matcher matcher = MISSION_TAIL.matcher(text);
+    while (matcher.find()) {
+      String tail = matcher.group(1);
+      int cut = tail.length();
+      boolean truncated = false;
+      for (int i = 0; i < tail.length(); i++) {
+        char c = tail.charAt(i);
+        if (MISSION_HARD_STOP.indexOf(c) >= 0) {
+          cut = i;
+          break;
+        }
+        if (MISSION_SOFT_STOP.indexOf(c) >= 0) {
+          truncated = true;
+          break;
+        }
+      }
+      if (truncated) {
+        continue;
+      }
+      String name = tail.substring(0, cut).strip();
+      if (name.length() < 2 || name.length() > 18) {
+        continue;
+      }
+      if (MISSION_VAGUE.contains(name)) {
+        continue;
+      }
+      if (MISSION_ORG_WORDS.stream().anyMatch(name::contains)) {
+        continue;
+      }
+      if (seen.add(MISSION + ":" + name)) {
+        out.add(new Candidate(MISSION, name));
       }
     }
   }

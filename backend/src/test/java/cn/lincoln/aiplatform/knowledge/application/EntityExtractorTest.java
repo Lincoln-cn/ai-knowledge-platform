@@ -37,6 +37,36 @@ class EntityExtractorTest {
   private final EntityExtractor extractor = new EntityExtractor(dict());
 
   @Test
+  @DisplayName("职责是动宾短语的宾语，并且能与机构连成一条边")
+  void missionIsTheObjectAfterADutyVerb() {
+    String text = "财务资产部负责全面预算管理。";
+
+    List<Candidate> got = extractor.extract(text);
+
+    assertThat(got).contains(new Candidate("MISSION", "全面预算管理"));
+    assertThat(extractor.relations(text))
+        .contains(new Relation("RESPONSIBLE_FOR", "财务资产部", "全面预算管理"));
+  }
+
+  @Test
+  @DisplayName("动宾短语的宾语是机构时不算职责 —— 「管理部门根据本法」里的「管理部门」是机构")
+  void missionRejectsOrganisationLikeObjects() {
+    List<Candidate> got = extractor.extract("管理部门根据本法和有关法律制定细则。");
+
+    // 这句话里"制定细则"是一个真职责，所以不能断言"一条 MISSION 都没有"；
+    // 要钉住的是"管理部门"不被当成职责。
+    assertThat(got).extracting(Candidate::name).doesNotContain("管理部门");
+  }
+
+  @Test
+  @DisplayName("泛词不算职责 —— 「承担责任」「履行义务」不是在说这个机构管什么")
+  void missionRejectsVagueObjects() {
+    List<Candidate> got = extractor.extract("赔偿责任由上市公司承担，并履行相应义务。");
+
+    assertThat(got).extracting(Candidate::name).doesNotContain("责任", "义务");
+  }
+
+  @Test
   @DisplayName("机构名按后缀抽出来，且不跨虚词吞并")
   void extractsOrganizationNames() {
     List<Candidate> got = extractor.extract("固定资产的归口管理部门是财务资产部。信息技术中心负责运维。");

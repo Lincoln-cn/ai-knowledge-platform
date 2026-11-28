@@ -227,7 +227,13 @@ const CHANNEL_LABELS: Record<string, string> = {
 }
 const channelLabel = (c: string) => CHANNEL_LABELS[c] ?? c
 
-const ENTITY_TYPE_LABELS: Record<string, string> = { ORG: '组织', PERSON: '人名', DOC: '文档', TERM: '术语' }
+const ENTITY_TYPE_LABELS: Record<string, string> = {
+  ORG: '组织',
+  PERSON: '人名',
+  DOC: '文档',
+  TERM: '术语',
+  MISSION: '职责'
+}
 const entityTypeLabel = (t: string) => ENTITY_TYPE_LABELS[t] ?? t
 
 const RELATION_LABELS: Record<string, string> = {
