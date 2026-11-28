@@ -63,7 +63,7 @@ class RerankWiringTest {
             new SegmentSearchPort.Scored(S3, 0.7)));
     RecordingRerank rerank = new RecordingRerank(List.of(S3, S1, S2));
     RetrievalService service =
-        service(search, rerank, new RerankProperties(true, 3, "x", "y", false, 5, 5));
+        service(search, rerank, new RerankProperties(true, 3, "x", "y", false, 5, 5, 512));
 
     HitTestView view = service.hitTest(query());
 
@@ -96,7 +96,7 @@ class RerankWiringTest {
             new SegmentSearchPort.Scored(S3, 0.7)));
     RecordingRerank rerank = new RecordingRerank(List.of(S3, S1, S2));
     RetrievalService service =
-        service(search, rerank, new RerankProperties(false, 3, "x", "y", false, 5, 5));
+        service(search, rerank, new RerankProperties(false, 3, "x", "y", false, 5, 5, 512));
 
     HitTestView view = service.hitTest(query());
 
@@ -183,7 +183,7 @@ class RerankWiringTest {
         new FakeMultiHop(),
         new RetrievalBudgetProperties(5000, 5000, 0.6, true, true),
         RerankPort.noop(),
-        new RerankProperties(false, 3, "x", "y", false, 5, 5),
+        new RerankProperties(false, 3, "x", "y", false, 5, 5, 512),
         ListwiseRerankPort.noop(),
         (kbId, question) -> java.util.List.of(),
         relationRecall,
@@ -231,7 +231,7 @@ class RerankWiringTest {
         service(
             search,
             RerankPort.noop(),
-            new RerankProperties(false, 3, "x", "y", false, 5, 5),
+            new RerankProperties(false, 3, "x", "y", false, 5, 5, 512),
             listwise);
 
     HitTestView view = service.hitTest(queryWithListwise(Boolean.TRUE));
@@ -263,7 +263,7 @@ class RerankWiringTest {
         service(
             search,
             RerankPort.noop(),
-            new RerankProperties(false, 3, "x", "y", true, 5, 5),
+            new RerankProperties(false, 3, "x", "y", true, 5, 5, 512),
             listwise);
 
     HitTestView view = service.hitTest(queryWithListwise(Boolean.FALSE));

@@ -18,7 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 class RerankStatusServiceTest {
 
   private static RerankProperties props(boolean enabled, String modelPath, String tokenizerPath) {
-    return new RerankProperties(enabled, 10, modelPath, tokenizerPath, false, 5, 5);
+    return new RerankProperties(enabled, 10, modelPath, tokenizerPath, false, 5, 5, 512);
   }
 
   @Test

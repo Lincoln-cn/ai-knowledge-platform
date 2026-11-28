@@ -15,6 +15,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *   <tr><td>{@code enabled}</td><td>{@code false}</td><td>总开关；默认关，理由见下</td></tr>
  *   <tr><td>{@code top-k}</td><td>{@code 5}</td><td>★ 只重排前 topK 个（离线实测，见 {@link RerankPort}）</td></tr>
  *   <tr><td>{@code model-path}</td><td>{@code models/bge-reranker-base/model.onnx}</td><td>ONNX 模型（约 1GB，不进仓库）</td></tr>
+ *   <tr><td>{@code max-length}</td><td>{@code 512}</td><td>单条候选截断的 token 数（2026-11-28 起可配）</td></tr>
  *   <tr><td>{@code tokenizer-path}</td><td>{@code models/bge-reranker-base/tokenizer.json}</td><td>分词器</td></tr>
  * </table>
  *
@@ -61,6 +62,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param tokenizerPath tokenizer.json 路径
  * @param listwiseEnabled 是否在 cross-encoder 之后再做一次 LLM listwise（默认关，见类注释）
  * @param listwiseTopK 交给 listwise 的候选数（默认 5；只排 1 个等于没排）
+ * @param maxLength 单条候选截断到多少个 token（默认 512）
  * @param forwardBatch 单次前向的条数（<b>0 = 用窗口大小</b>，即整个窗口一次算完；默认 5 与历史行为一致）。 ★ 0.8.1
  *     实测批大小的差落在噪声内，**默认值不改**，读数与理由见 {@code application.yml} 该键的注释
  */
@@ -72,7 +74,8 @@ public record RerankProperties(
     @DefaultValue("models/bge-reranker-base/tokenizer.json") String tokenizerPath,
     @DefaultValue("false") boolean listwiseEnabled,
     @DefaultValue("5") int listwiseTopK,
-    @DefaultValue("5") int forwardBatch) {
+    @DefaultValue("5") int forwardBatch,
+    @DefaultValue("512") int maxLength) {
 
   /**
    * 全默认值实例 —— 给"重排与被测行为无关"的测试夹具用。
@@ -87,7 +90,8 @@ public record RerankProperties(
         "models/bge-reranker-base/tokenizer.json",
         false,
         5,
-        5);
+        5,
+        512);
   }
 
   /**
@@ -111,6 +115,10 @@ public record RerankProperties(
     }
     Objects.requireNonNull(modelPath, "app.retrieval.rerank.model-path 不许为空");
     Objects.requireNonNull(tokenizerPath, "app.retrieval.rerank.tokenizer-path 不许为空");
+    if (maxLength < 32) {
+      throw new IllegalArgumentException(
+          "app.retrieval.rerank.max-length 必须 ≥ 32（再短就把整段话截成一个词了）：实际 " + maxLength);
+    }
     if (forwardBatch < 0) {
       throw new IllegalArgumentException(
           "app.retrieval.rerank.forward-batch 必须 ≥ 0（0 = 一次前向算完整个窗口）：实际 " + forwardBatch);

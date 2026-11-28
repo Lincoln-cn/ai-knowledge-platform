@@ -87,13 +87,30 @@ public class OnnxRerankerAdapter implements RerankPort {
   }
 
   /** 模型的最大输入长度（超过截断）：{@code bge-reranker-base} 是 512。 */
-  private static final int MAX_LENGTH = 512;
+  /**
+   * 截断上限的兜底值。
+   *
+   * <p>★ 2026-11-28 起真正生效的是 {@link RerankProperties#maxLength()}（每个实例可以不一样），
+   * 这里只剩"配置里没给"时的兜底。留成常量而不是散落的字面量，是为了 grep 得到。
+   */
+  private static final int DEFAULT_MAX_LENGTH = 512;
 
   private static final String INPUT_IDS = "input_ids";
   private static final String ATTENTION_MASK = "attention_mask";
   private static final String TOKEN_TYPE_IDS = "token_type_ids";
 
   private final RerankProperties properties;
+
+  /**
+   * 单条候选截断的 token 数。
+   *
+   * <p>★ 兜底而不是抛：这个值只影响"算得快还是算得全"，取值非法时退化成历史行为 （512）比让整次检索失败要好 —— 但 {@link RerankProperties}
+   * 的构造器已经拒了小于 32 的值， 走到兜底只可能是"没配"。
+   */
+  private int maxLength() {
+    int configured = properties.maxLength();
+    return configured >= 32 ? configured : DEFAULT_MAX_LENGTH;
+  }
 
   /** 已警告过的原因键（同一个原因只打一次 warn，见类注释）。 */
   private final Set<String> warnedReasons = ConcurrentHashMap.newKeySet();
@@ -201,7 +218,7 @@ public class OnnxRerankerAdapter implements RerankPort {
         HuggingFaceTokenizer tokenizer =
             HuggingFaceTokenizer.builder()
                 .optTokenizerPath(tokenizerPath)
-                .optMaxLength(MAX_LENGTH)
+                .optMaxLength(maxLength())
                 .optTruncation(true)
                 .optAddSpecialTokens(true)
                 .optPadding(false)
@@ -294,9 +311,14 @@ public class OnnxRerankerAdapter implements RerankPort {
     return scores;
   }
 
-  /** 防御性截断：tokenizer 已按 512 截断，这里再兜一层（导出形状不同也不至于炸）。 */
-  private static long[] clamp(long[] values) {
-    return values.length > MAX_LENGTH ? Arrays.copyOf(values, MAX_LENGTH) : values;
+  /**
+   * 防御性截断：tokenizer 已按 {@link #maxLength()} 截断，这里再兜一层（导出形状不同也不至于炸）。
+   *
+   * <p>★ 非 static：截断上限现在是每个实例的配置（{@code app.retrieval.rerank.max-length}）， 静态方法读不到它。
+   */
+  private long[] clamp(long[] values) {
+    int maxLength = maxLength();
+    return values.length > maxLength ? Arrays.copyOf(values, maxLength) : values;
   }
 
   /** 批内补齐到 {@code seqLen}：补 0（pad_id = 0）。 */

@@ -194,6 +194,10 @@ app:
       #   ★★ 窗口才是那个旋钮：窗口 5 只能修「第 1 条指向错文档」（doc_top1 93→100），B1/B3 一动不动，
       #      因为答案段不在前 5、重排看不到它；窗口 10 才把 B1 与 B3 一起拉起来（30 条：70.00% vs 63.33%）。
       top-k: ${RETRIEVAL_RERANK_TOP_K:10}
+      # ★ 单条候选截断的 token 数（2026-11-28 起可配，默认 512 = 模型上限）。
+      #   它是「重排占 45~62% 耗时」这条读数上的第一个旋钮：截到 256 大约省一半前向计算，
+      #   代价是长条文会被砍掉尾巴。改它必须重跑语料对照 B3，别只看耗时。
+      max-length: ${RETRIEVAL_RERANK_MAX_LENGTH:512}
       # 模型文件**不进仓库**（`models/*` 被 .gitignore 忽略），落盘步骤见 `models/README.md`
       model-path: ${RETRIEVAL_RERANK_MODEL_PATH:models/bge-reranker-base/model.onnx}
       tokenizer-path: ${RETRIEVAL_RERANK_TOKENIZER_PATH:models/bge-reranker-base/tokenizer.json}
