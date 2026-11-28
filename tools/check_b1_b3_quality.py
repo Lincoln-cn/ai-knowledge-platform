@@ -16,6 +16,22 @@
   这是引用准确率的**弱化代理**：真正的 B3 要看"引用段落是否支撑那句话"，
   合成语料的锚点句是整段唯一的答案句，所以"该段被召回且排第一"可以当近似。
 
+这条读数测的是哪条链路（#378 判据 3）
+----------------------------------
+测的是**检索策略**：脚本打 `/retrieval/test`，后端走
+`RetrievalService.retrieve(SegSpec)` —— 与对话链路（`ChatService.retrieve`）**同一段代码**
+（#378 收口之前不是：那时命中测试四路、对话两路，这条读数测的根本不是真实问答链路）。
+
+仍不覆盖三件事，读数字的时候别忘了：
+
+1. **会话附件域**：脚本不带 `conversationId`，所以会话域那一支（只走全文、不吃向量阈值）没被测到；
+2. **生成阶段**：B2（答案可用率）与 B4（首字延迟）不在这里，这里只有检索；
+3. **直答型问答对的短路**：`hitTest` 会忽略 `Outcome.directAnswer`（它要的是候选列表），
+   而对话链路命中直答时不调模型 —— 那一条由 `ChatQaRouteTest` 钉。
+
+★ 所以 B1/B3 报数字时必须同时写这两行：**"检索策略 = 对话链路同一段代码"** 与
+**"不含会话域 / 不含生成 / 不含直答短路"**。只写一个百分号，读的人无法判断它代表什么。
+
 两种匹配
 --------
 `exact`（子串原样）、`loose`（去掉空白、全角半角归一后包含）、`core`（再剥掉锚点句的模板前缀）。
@@ -329,6 +345,13 @@ def stage_eval(token: str, kb_id: str, args: argparse.Namespace) -> int:
     if args.limit:
         qa = qa[: args.limit]
     print(f"  · 问题 {len(qa)} 条 · 模式 {args.mode} · 改写 {args.query_count} 条 · topN {args.topn} · 阈值 {args.threshold}")
+    # ★ 每次跑都念一遍"这条读数代表哪条链路"（同文件头那三行，理由见 docstring）：
+    #   一个百分号脱离"测的是谁"就没法解释，而人会只把百分号抄进台账。
+    print(
+        "  · 链路 = 检索策略（/retrieval/test → RetrievalService.retrieve），与对话链路同一段代码；"
+        "不含会话附件域 / 不含生成阶段 / 不含直答短路",
+        flush=True,
+    )
 
     records: list[dict] = []
     started = time.time()
