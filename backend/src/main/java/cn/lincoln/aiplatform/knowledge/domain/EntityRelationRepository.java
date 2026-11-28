@@ -114,6 +114,21 @@ public interface EntityRelationRepository {
   List<RelationRow> listOf(UUID kbId, int limit);
 
   /**
+   * 分页列关系（界面上「关系」页签用）。
+   *
+   * <p>★ 与 {@link #listOf} 的分工同 {@code EntityRepository#pageOf}：{@code listOf} 给图谱
+   * （要全貌、有上限），这个给表格（要翻页、有界）。关系条数在真实库里会到几千，一次给完 既画不动也读不完。
+   *
+   * @param kbId 知识库 id（{@code null} 返回空列表）
+   * @param offset 跳过多少行（负数按 0）
+   * @param limit 取多少行（{@code <=0} 用默认 50，上限 500）
+   */
+  List<RelationRow> pageOf(UUID kbId, int offset, int limit);
+
+  /** 一个库的关系总数（分页控件要它才能算页数）。 */
+  long countOf(UUID kbId);
+
+  /**
    * 这些实体参与的关系（带两端名字与类型），按最近创建的在前。
    *
    * <p>★ 与 {@link #segmentIdsOf} 的分工：那个只回段 id 给检索侧融合（检索不关心关系长什么样）；

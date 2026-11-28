@@ -95,12 +95,36 @@ const entityGraphSample = (kbId: string) => {
     nodes,
     edges,
     truncated: false,
-    totalEntities: nodes.length,
+    // mock 里"有关系的实体"就是全部节点（样例本来就只给了有边的那几个）
+    totalEntities: nodes.length + 3,
     totalRelations: edges.length,
-    entityLimit: 500,
+    involvedEntities: nodes.length,
     relationLimit: 2000,
     kbId
   }
+}
+
+/** 关系表格的一行：把边的 id 换成两端名字与类型（与后端 RelationRowView 同形状）。 */
+const relationRowsOf = (kbId: string) => {
+  const sample = entityGraphSample(kbId)
+  const byId = new Map(sample.nodes.map((n) => [n.id, n]))
+  return sample.edges.map((e) => {
+    const from = byId.get(e.from)
+    const to = byId.get(e.to)
+    return {
+      id: e.id,
+      type: e.type,
+      fromId: e.from,
+      fromName: from?.name ?? '（已合并的实体）',
+      fromType: from?.type ?? 'OTHER',
+      toId: e.to,
+      toName: to?.name ?? '（已合并的实体）',
+      toType: to?.type ?? 'OTHER',
+      documentId: e.documentId,
+      segmentId: e.segmentId,
+      confidence: e.confidence
+    }
+  })
 }
 
 export const knowledgeRoutes: MockRoute[] = [
@@ -325,6 +349,44 @@ export const knowledgeRoutes: MockRoute[] = [
       // 可见性走与其它读端点同一个判定：看不见的库一律 404（不是"返回空"）
       findKb(path.kbId, token)
       return entityGraphSample(path.kbId)
+    }
+  ],
+  [
+    'GET',
+    '/knowledge-bases/:kbId/entities',
+    ({ path, query, token }) => {
+      findKb(path.kbId, token)
+      const type = String(query.type ?? '')
+      const keyword = String(query.keyword ?? '')
+      const page = Math.max(Number(query.page ?? 1) || 1, 1)
+      const size = Math.min(Math.max(Number(query.size ?? 50) || 50, 1), 500)
+      // 过滤在"数据层"做，再切页 —— 与真后端一致：total 是满足条件的总数
+      const all = entityGraphSample(path.kbId).nodes.filter(
+        (n) =>
+          (!type || n.type === type) && (!keyword || n.name.includes(keyword))
+      )
+      return {
+        list: all.slice((page - 1) * size, page * size),
+        total: all.length,
+        page,
+        size
+      }
+    }
+  ],
+  [
+    'GET',
+    '/knowledge-bases/:kbId/relations',
+    ({ path, query, token }) => {
+      findKb(path.kbId, token)
+      const page = Math.max(Number(query.page ?? 1) || 1, 1)
+      const size = Math.min(Math.max(Number(query.size ?? 50) || 50, 1), 500)
+      const all = relationRowsOf(path.kbId)
+      return {
+        list: all.slice((page - 1) * size, page * size),
+        total: all.length,
+        page,
+        size
+      }
     }
   ]
 ]

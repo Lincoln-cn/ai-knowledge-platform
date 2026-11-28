@@ -16,7 +16,15 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
-import { getEntityGraph, type EntityGraph, type EntityGraphEdge, type EntityGraphNode } from '@/api/knowledge'
+import {
+  getEntities,
+  getEntityGraph,
+  getRelations,
+  type EntityGraph,
+  type EntityGraphEdge,
+  type EntityGraphNode,
+  type RelationRow
+} from '@/api/knowledge'
 
 const props = defineProps<{ kbId: string }>()
 const emit = defineEmits<{ (e: 'goto-segment', documentId: string): void }>()
@@ -33,7 +41,12 @@ const totalRelations = computed(() => graph.value?.totalRelations ?? 0)
 
 /** 实体类型：只把已知的两个翻成中文，其余原样显示（不猜）。 */
 const typeLabel = (t: string) =>
-  ({ ORG: '组织', PERSON: '人名' } as Record<string, string>)[t] || t || '未标类型'
+  ({ ORG: '组织', PERSON: '人名', MISSION: '职责', DOC: '文书', TERM: '术语', OTHER: '其他' } as Record<
+    string,
+    string
+  >)[t] ||
+  t ||
+  '未标类型'
 
 /** 关系类型：与后端 `chk_kb_relation_type` 的七类一一对应（0.9.9 从四类扩到七类）。 */
 const RELATION_LABEL: Record<string, string> = {
@@ -82,21 +95,96 @@ const legendGroups = computed(() => {
   return all.filter((g) => seen.has(g.key))
 })
 
+/** 图上画了几个实体（= 有关系的实体数）与"库里没有关系的实体有多少"。 */
+const involvedCount = computed(() => nodes.value.length)
+const noEdgeCount = computed(() => Math.max(0, totalEntities.value - involvedCount.value))
+
+const typeOfNode = (id: string) => nodes.value.find((n) => n.id === id)?.type || ''
+
 const nameOf = computed(() => {
   const map = new Map<string, string>()
   for (const n of nodes.value) map.set(n.id, n.name)
   return (id: string) => map.get(id) || '（不在本页实体里）'
 })
 
-/** 每个实体的边数 —— 与「被多少段提到」是两个数，见文件头。 */
-const degreeOf = computed(() => {
-  const map = new Map<string, number>()
-  for (const e of edges.value) {
-    map.set(e.from, (map.get(e.from) || 0) + 1)
-    map.set(e.to, (map.get(e.to) || 0) + 1)
+/* ───────────────────── 两个表格的分页 ─────────────────────
+ * ★ 2026-11-29 用户原话：「库里一共 1408 个实体，这一页只取了前 500 个…… 页面上需要分页」。
+ *   分页必须在库里做：一次全取再让浏览器切页，等于把「库里有多少」变成「浏览器一次能吃多少」。
+ * ★ 实体与关系各有一份页码/页大小 —— 合用一个会让"翻关系的时候实体表也跳页"。
+ */
+const entityPage = ref(1)
+const entitySize = ref(50)
+const entityType = ref('')
+const entityKeyword = ref('')
+const entityRows = ref<EntityGraphNode[]>([])
+const entityTotal = ref(0)
+const entityLoading = ref(false)
+
+const relationPage = ref(1)
+const relationSize = ref(50)
+const relationRows = ref<RelationRow[]>([])
+const relationTotal = ref(0)
+const relationLoading = ref(false)
+
+/** 实体类型下拉：与抽取器产出的类型一致（MISSION 是 2026-11-28 新加的「职责」）。 */
+const ENTITY_TYPE_OPTIONS = [
+  { value: '', label: '全部类型' },
+  { value: 'ORG', label: '组织' },
+  { value: 'PERSON', label: '人名' },
+  { value: 'MISSION', label: '职责' },
+  { value: 'DOC', label: '文书' },
+  { value: 'TERM', label: '术语' }
+]
+
+/** 关系数：从图谱拿到的那份边统计（图谱一次拉全量边，≤2000 条）。 */
+const degreeById = ref(new Map<string, number>())
+
+const loadEntities = async () => {
+  entityLoading.value = true
+  try {
+    const page = await getEntities(props.kbId, {
+      page: entityPage.value,
+      size: entitySize.value,
+      type: entityType.value || undefined,
+      keyword: entityKeyword.value || undefined
+    })
+    entityRows.value = page.list
+    entityTotal.value = page.total
+  } catch (e) {
+    ElMessage.error((e as Error).message || '加载实体失败')
+    entityRows.value = []
+    entityTotal.value = 0
+  } finally {
+    entityLoading.value = false
   }
-  return (id: string) => map.get(id) || 0
-})
+}
+
+const loadRelations = async () => {
+  relationLoading.value = true
+  try {
+    const page = await getRelations(props.kbId, {
+      page: relationPage.value,
+      size: relationSize.value
+    })
+    relationRows.value = page.list
+    relationTotal.value = page.total
+  } catch (e) {
+    ElMessage.error((e as Error).message || '加载关系失败')
+    relationRows.value = []
+    relationTotal.value = 0
+  } finally {
+    relationLoading.value = false
+  }
+}
+
+/** 换筛选条件要回到第 1 页 —— 否则会停在"第 7 页，共 2 页"这种空页上。 */
+const onEntityFilterChanged = () => {
+  entityPage.value = 1
+  loadEntities()
+}
+
+/** 每个实体的边数 —— 与「被多少段提到」是两个数，见文件头。 */
+const degreeOf = (id: string) => degreeById.value.get(id) || 0
 
 /* ───────────────────── 图谱（echarts graph） ─────────────────────
  * ★ 2026-11-28 从手写 SVG 换成 echarts graph：用户原话「渲染的有点生硬」。
@@ -293,6 +381,15 @@ const onChartClick = (raw: unknown) => {
 
 const resize = () => chart?.resize()
 
+/** 关系表格行的「看原文」：行是 RelationRow（带 documentId），与图上的边形状不同。 */
+const gotoRelation = (r: RelationRow) => {
+  if (!r.documentId) {
+    ElMessage.warning('这条关系没有取证位置（存量回填那批没有段落），回不到原文')
+    return
+  }
+  emit('goto-segment', r.documentId)
+}
+
 const gotoSource = (e: EntityGraphEdge) => {
   if (!e.documentId) {
     ElMessage.warning('这条边没有取证位置（存量回填那批没有段落），回不到原文')
@@ -306,7 +403,14 @@ const gotoSource = (e: EntityGraphEdge) => {
 const load = async () => {
   loading.value = true
   try {
+    // ★ 图谱先到：它的边要用来自两个表格的「关系数」列，晚到会让那一列先显示 0 再跳数。
     graph.value = await getEntityGraph(props.kbId)
+    const degree = new Map<string, number>()
+    for (const e of graph.value.edges) {
+      degree.set(e.from, (degree.get(e.from) || 0) + 1)
+      degree.set(e.to, (degree.get(e.to) || 0) + 1)
+    }
+    degreeById.value = degree
     selectedNode.value = ''
     selectedEdge.value = null
   } catch (e) {
@@ -315,6 +419,7 @@ const load = async () => {
   } finally {
     loading.value = false
   }
+  await Promise.all([loadEntities(), loadRelations()])
 }
 
 onMounted(() => {
@@ -391,9 +496,31 @@ watch([() => view.value, () => graph.value], async () => {
     </p>
 
     <template v-else>
+      <div v-if="view === 'entities'" class="filters">
+        <el-select v-model="entityType" class="f-type" @change="onEntityFilterChanged">
+          <el-option
+            v-for="o in ENTITY_TYPE_OPTIONS"
+            :key="o.value"
+            :label="o.label"
+            :value="o.value"
+          />
+        </el-select>
+        <el-input
+          v-model="entityKeyword"
+          class="f-kw"
+          placeholder="按名字搜，比如「公司」"
+          clearable
+          @keyup.enter="onEntityFilterChanged"
+          @clear="onEntityFilterChanged"
+        />
+        <button type="button" class="mini" @click="onEntityFilterChanged">筛选</button>
+        <span class="micro muted">共 {{ entityTotal }} 个实体</span>
+      </div>
+
       <el-table
         v-if="view === 'entities'"
-        :data="nodes"
+        v-loading="entityLoading"
+        :data="entityRows"
         size="small"
         class="tbl"
         empty-text="没有实体 —— 点「刷新」重新读一次；文档还没摄取完时这里是空的"
@@ -428,24 +555,55 @@ watch([() => view.value, () => graph.value], async () => {
         </el-table-column>
       </el-table>
 
+      <el-pagination
+        v-if="view === 'entities' && entityTotal > entitySize"
+        v-model:current-page="entityPage"
+        v-model:page-size="entitySize"
+        class="pager"
+        layout="prev, pager, next, sizes, total"
+        :page-sizes="[20, 50, 100, 200]"
+        :total="Number(entityTotal)"
+        @current-change="loadEntities"
+        @size-change="onEntityFilterChanged"
+      />
+
       <el-table
         v-else-if="view === 'relations'"
-        :data="edges"
+        v-loading="relationLoading"
+        :data="relationRows"
         size="small"
         class="tbl"
         empty-text="还没有关系 —— 关系靠标记词规则抽取，点「刷新」重读；文档里没有「隶属 / 包含 / 属于 / 负责 / 任职 / 依据 / 定义」这类说法时，这里本来就该是空的"
       >
-        <el-table-column label="关系" min-width="320">
+        <el-table-column label="这条关系" min-width="420">
           <template #default="{ row }">
-            <b>{{ nameOf(row.from) }}</b>
-            <span class="rel">{{ relationLabel(row.type) }}</span>
-            <b>{{ nameOf(row.to) }}</b>
+            <!--
+              ★ 2026-11-29 重做：原来是「门内部」「负责」「财政部」「查看这一段原文」挤在一行，
+                三个信息（左端 / 关系 / 右端）没有层次，读起来像四个并列的词。
+                现在把关系做成中间的一条带箭头的通道，两端各自带类型标签 —— 一眼能看出方向。
+            -->
+            <div class="rel-line">
+              <span class="rel-end">
+                <span class="kind sm">{{ typeLabel(row.fromType) }}</span>
+                <b>{{ row.fromName }}</b>
+              </span>
+              <span class="rel-arrow">
+                <span class="rel" :class="groupOf(row.type)">{{ relationLabel(row.type) }}</span>
+                <i class="arrow" :class="groupOf(row.type)" />
+              </span>
+              <span class="rel-end">
+                <span class="kind sm">{{ typeLabel(row.toType) }}</span>
+                <b>{{ row.toName }}</b>
+              </span>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="取证" width="160">
+        <el-table-column label="原文出处" width="150">
           <template #default="{ row }">
-            <el-button v-if="row.segmentId" link size="small" @click="gotoSource(row)">看原文</el-button>
-            <span v-else class="micro muted">无取证位置</span>
+            <el-button v-if="row.segmentId" link size="small" @click="gotoRelation(row)">
+              查看这一段原文
+            </el-button>
+            <span v-else class="micro muted">没有取证位置</span>
           </template>
         </el-table-column>
         <el-table-column label="置信度" width="90">
@@ -455,10 +613,28 @@ watch([() => view.value, () => graph.value], async () => {
         </el-table-column>
       </el-table>
 
+      <el-pagination
+        v-if="view === 'relations' && relationTotal > relationSize"
+        v-model:current-page="relationPage"
+        v-model:page-size="relationSize"
+        class="pager"
+        layout="prev, pager, next, sizes, total"
+        :page-sizes="[20, 50, 100, 200]"
+        :total="Number(relationTotal)"
+        @current-change="loadRelations"
+        @size-change="loadRelations"
+      />
+
       <div v-else class="graph-wrap">
         <p class="micro muted graph-hint">
-          点一个实体看它的关系（相邻的会高亮）；点一条边看它是从哪一段读出来的。图上可以滚轮缩放、拖动平移。
-          <span v-if="hiddenCount">（图里只画了前 {{ drawn.length }} 个实体，另有 {{ hiddenCount }} 个在「实体」视图里）</span>
+          图上画的是<b>有关系</b>的实体：{{ involvedCount }} 个实体、{{ edges.length }} 条边。
+          库里共 {{ totalEntities }} 个实体
+          <template v-if="noEdgeCount">
+            ，另有 {{ noEdgeCount }} 个没有任何关系（关系靠标记词规则抽取，抽不到就没有边 ——
+            它们在「实体」页签里，按「关系数 = 0」能找到）
+          </template>
+          。
+          <span v-if="hiddenCount">图上最多画 {{ MAX_DRAWN }} 个点，其余 {{ hiddenCount }} 个在表格里。</span>
         </p>
         <p v-if="legendGroups.length" class="legend">
           <span class="micro muted">线色</span>
@@ -471,21 +647,37 @@ watch([() => view.value, () => graph.value], async () => {
 
 
         <div v-if="selectedEdge" class="pick">
-          <b>{{ nameOf(selectedEdge.from) }}</b>
-          <span class="rel">{{ relationLabel(selectedEdge.type) }}</span>
-          <b>{{ nameOf(selectedEdge.to) }}</b>
+          <span class="rel-end">
+            <span class="kind sm">{{ typeLabel(typeOfNode(selectedEdge.from)) }}</span>
+            <b>{{ nameOf(selectedEdge.from) }}</b>
+          </span>
+          <span class="rel-arrow">
+            <span class="rel" :class="groupOf(selectedEdge.type)">
+              {{ relationLabel(selectedEdge.type) }}
+            </span>
+            <i class="arrow" :class="groupOf(selectedEdge.type)" />
+          </span>
+          <span class="rel-end">
+            <span class="kind sm">{{ typeLabel(typeOfNode(selectedEdge.to)) }}</span>
+            <b>{{ nameOf(selectedEdge.to) }}</b>
+          </span>
           <el-button v-if="selectedEdge.segmentId" link size="small" @click="gotoSource(selectedEdge)">
-            看这一段原文
+            查看这一段原文
           </el-button>
           <span v-else class="micro muted">这条边没有取证位置（存量回填那批没有段落）</span>
         </div>
         <div v-else-if="selectedNode" class="pick">
-          <b>{{ nameOf(selectedNode) }}</b>
-          <span class="micro muted">
-            · 被 {{ nodes.find((n) => n.id === selectedNode)?.mentions || 0 }} 段提到
-            · {{ relatedEdges.length }} 条关系
+          <span class="rel-end">
+            <span class="kind sm">{{ typeLabel(typeOfNode(selectedNode)) }}</span>
+            <b>{{ nameOf(selectedNode) }}</b>
           </span>
-          <span v-if="!relatedEdges.length" class="micro muted">（没有关系不等于不重要 —— 见上方说明）</span>
+          <span class="micro muted">
+            被 {{ nodes.find((n) => n.id === selectedNode)?.mentions || 0 }} 段提到 ·
+            {{ relatedEdges.length }} 条关系
+          </span>
+          <span v-if="!relatedEdges.length" class="micro muted">
+            （没有关系不等于不重要 —— 见上方说明）
+          </span>
         </div>
       </div>
     </template>
@@ -557,9 +749,16 @@ watch([() => view.value, () => graph.value], async () => {
   width: 100%;
 }
 .kind {
+  display: inline-block;
   margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-xs);
   font-size: var(--text-2xs);
-  color: var(--color-ink-2);
+  line-height: 1.5;
+  color: var(--color-muted);
+  background: var(--color-surface-2);
+  /* 不加 nowrap：名字很长时宁可让徽标掉到下一行，也不要它压住名字 */
 }
 .num {
   font-variant-numeric: tabular-nums;
@@ -634,4 +833,112 @@ watch([() => view.value, () => graph.value], async () => {
   border-radius: var(--radius-sm, 4px);
   font-size: var(--text-xs);
 }
+
+/* ── 两个表格的分页与筛选（2026-11-29） ── */
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.f-type {
+  width: 132px;
+}
+
+.f-kw {
+  width: 220px;
+}
+
+.mini {
+  padding: 4px 12px;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.mini:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+/* ── 关系行：左端 / 关系 / 右端，三段各自成块（原来是四个词挤一行） ── */
+.rel-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rel-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.rel-end b {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.rel-arrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.arrow {
+  position: relative;
+  display: inline-block;
+  width: 26px;
+  height: 1px;
+  background: var(--color-rule-strong);
+}
+
+.arrow::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: -3px;
+  border-left: 5px solid var(--color-rule-strong);
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+}
+
+.arrow.duty {
+  background: var(--color-accent);
+}
+
+.arrow.duty::after {
+  border-left-color: var(--color-accent);
+}
+
+.arrow.document {
+  background: var(--color-ok);
+}
+
+.arrow.document::after {
+  border-left-color: var(--color-ok);
+}
+
+.kind.sm {
+  padding: 0 4px;
+  font-size: var(--text-2xs);
+}
+
 </style>

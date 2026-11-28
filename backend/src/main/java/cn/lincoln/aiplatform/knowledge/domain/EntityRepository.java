@@ -37,6 +37,30 @@ public interface EntityRepository {
    */
   List<Entity> listOf(UUID kbId);
 
+  /**
+   * 分页列实体（界面上「实体」页签用）。
+   *
+   * <p>★ 为什么不能像以前那样一次取全量：真实语料库里一个 20 篇法规的库能抽出 1400+ 个实体，
+   * 一次全取再在界面上切页，等于把「库里有多少」变成了「浏览器一次能吃多少」。分页必须在库里做。
+   *
+   * <p>★ 与 {@link #listOf} 的分工：那个是「一个库的实体全量」，消费方是图谱与统计（要有全貌才能算
+   * 精度/去重）；这个是「翻到第几页」，消费方是表格。两者都存在是因为它们的上限不同 —— 一个要求完整、一个要求有界。
+   *
+   * @param kbId 知识库 id（{@code null} 返回空列表）
+   * @param type 只看某一类（{@code null} 或空串表示不限）
+   * @param keyword 实体名包含（{@code null} 或空串表示不限，<b>区分大小写地不区分</b>：用 ilike）
+   * @param offset 跳过多少行（负数按 0）
+   * @param limit 取多少行（{@code <=0} 用默认 50，上限 500）
+   */
+  List<Entity> pageOf(UUID kbId, String type, String keyword, int offset, int limit);
+
+  /**
+   * 满足 {@link #pageOf} 过滤条件的总行数（分页控件要它才能算页数）。
+   *
+   * <p>★ 参数必须与 {@code pageOf} 完全一致 —— 不一致会出现「总数说 3 页、翻到第 3 页是空的」这种 最难查的一类分页 bug。
+   */
+  long countMatching(UUID kbId, String type, String keyword);
+
   /** 一条已入库的实体。 */
   record Entity(UUID id, String type, String name, String source, double confidence) {}
 

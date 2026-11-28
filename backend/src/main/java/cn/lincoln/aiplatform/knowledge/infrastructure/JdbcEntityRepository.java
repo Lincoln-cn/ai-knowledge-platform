@@ -2,6 +2,7 @@ package cn.lincoln.aiplatform.knowledge.infrastructure;
 
 import cn.lincoln.aiplatform.knowledge.domain.EntityRepository;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -18,6 +19,11 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class JdbcEntityRepository implements EntityRepository {
+
+  /** 分页缺省与上限：一页 50 行是"看得清又不卡"的经验值，500 是"再怎么翻也不该一次给超过这个数"。 */
+  private static final int DEFAULT_PAGE_SIZE = 50;
+
+  private static final int MAX_PAGE_SIZE = 500;
 
   private final JdbcTemplate jdbc;
 
@@ -87,6 +93,76 @@ public class JdbcEntityRepository implements EntityRepository {
                 rs.getString(4),
                 rs.getDouble(5)),
         kbId);
+  }
+
+  @Override
+  public List<Entity> pageOf(UUID kbId, String type, String keyword, int offset, int limit) {
+    if (kbId == null) {
+      return List.of();
+    }
+    int size = limit <= 0 ? DEFAULT_PAGE_SIZE : Math.min(limit, MAX_PAGE_SIZE);
+    int skip = Math.max(offset, 0);
+    // ★ 排序按"被多少段提到"降序，不是按类型名。按类型名排的第一页会全是 1 段提到、
+    // 0 条关系的文书（DOC 在字母序最前），那是这一页最难看的开头 —— 分页器翻十页
+    // 也翻不到真正重要的东西。
+    StringBuilder sql =
+        new StringBuilder(
+            "select e.id, e.type, e.name, e.source, e.confidence from kb_entity e"
+                + " left join (select entity_id, count(*) as c from kb_entity_mention"
+                + "            where kb_id = ? group by entity_id) m on m.entity_id = e.id"
+                + " where e.kb_id = ? and e.deleted_at is null and e.merged_into is null");
+    List<Object> args = new ArrayList<>();
+    args.add(kbId);
+    args.add(kbId);
+    appendFilters(sql, args, type, keyword);
+    sql.append(" order by coalesce(m.c, 0) desc, e.type, e.name offset ? limit ?");
+    args.add(skip);
+    args.add(size);
+    return jdbc.query(
+        sql.toString(),
+        (rs, i) ->
+            new Entity(
+                rs.getObject(1, java.util.UUID.class),
+                rs.getString(2),
+                rs.getString(3),
+                rs.getString(4),
+                rs.getDouble(5)),
+        args.toArray());
+  }
+
+  @Override
+  public long countMatching(UUID kbId, String type, String keyword) {
+    if (kbId == null) {
+      return 0;
+    }
+    StringBuilder sql =
+        new StringBuilder(
+            "select count(*) from kb_entity e"
+                + " where e.kb_id = ? and e.deleted_at is null and e.merged_into is null");
+    List<Object> args = new ArrayList<>();
+    args.add(kbId);
+    appendFilters(sql, args, type, keyword);
+    Long n = jdbc.queryForObject(sql.toString(), Long.class, args.toArray());
+    return n == null ? 0 : n;
+  }
+
+  /**
+   * 过滤条件只写一处。
+   *
+   * <p>★ 为什么抽出来：{@code pageOf} 与 {@code countMatching} 的过滤条件必须**逐字一致**， 否则会出现"总数说有 3 页、翻到第 3
+   * 页是空的"—— 这类分页 bug 只在一部分关键字下复现，最难查。
+   */
+  private static void appendFilters(
+      StringBuilder sql, List<Object> args, String type, String keyword) {
+    if (type != null && !type.isBlank()) {
+      sql.append(" and e.type = ?");
+      args.add(type.trim());
+    }
+    if (keyword != null && !keyword.isBlank()) {
+      // ilike：用户搜"公司"要能搜到"公司法"，也要能搜到"中国石油天然气集团公司"。
+      sql.append(" and e.name ilike ?");
+      args.add("%" + keyword.trim() + "%");
+    }
   }
 
   @Override

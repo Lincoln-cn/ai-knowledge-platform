@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 /** {@link EntityRelationRepository} 的 JDBC 实现。 */
@@ -17,6 +18,11 @@ public class JdbcEntityRelationRepository implements EntityRelationRepository {
   private final JdbcTemplate jdbc;
 
   /** 默认一次列多少条关系（图谱一次画几千条边已经读不动了）。 */
+  /** 分页缺省与上限（与 {@code JdbcEntityRepository} 同值 —— 两个页签的翻页手感要一致）。 */
+  private static final int DEFAULT_PAGE_SIZE = 50;
+
+  private static final int MAX_PAGE_SIZE = 500;
+
   private static final int DEFAULT_LIST_LIMIT = 2000;
 
   /** 关系列表的硬上限：这个口子是给人看图的，不是导出工具。 */
@@ -25,6 +31,22 @@ public class JdbcEntityRelationRepository implements EntityRelationRepository {
   public JdbcEntityRelationRepository(JdbcTemplate jdbc) {
     this.jdbc = jdbc;
   }
+
+  /** 关系行的映射：{@code listOf} 与 {@code pageOf} 各写一份，迟早会漏加一列。 */
+  private static final RowMapper<RelationRow> RELATION_ROW =
+      (rs, i) ->
+          new RelationRow(
+              rs.getObject("id", UUID.class),
+              rs.getString("type"),
+              rs.getObject("from_entity", UUID.class),
+              rs.getString("from_name"),
+              rs.getString("from_type"),
+              rs.getObject("to_entity", UUID.class),
+              rs.getString("to_name"),
+              rs.getString("to_type"),
+              rs.getObject("document_id", UUID.class),
+              rs.getObject("segment_id", UUID.class),
+              rs.getDouble("confidence"));
 
   @Override
   public int insertAll(UUID kbId, List<Candidate> relations) {
@@ -117,21 +139,43 @@ public class JdbcEntityRelationRepository implements EntityRelationRepository {
          order by r.created_at desc, r.id
          limit ?
         """,
-        (rs, i) ->
-            new RelationRow(
-                rs.getObject("id", UUID.class),
-                rs.getString("type"),
-                rs.getObject("from_entity", UUID.class),
-                rs.getString("from_name"),
-                rs.getString("from_type"),
-                rs.getObject("to_entity", UUID.class),
-                rs.getString("to_name"),
-                rs.getString("to_type"),
-                rs.getObject("document_id", UUID.class),
-                rs.getObject("segment_id", UUID.class),
-                rs.getDouble("confidence")),
+        RELATION_ROW,
         kbId,
         capped);
+  }
+
+  @Override
+  public List<RelationRow> pageOf(UUID kbId, int offset, int limit) {
+    if (kbId == null) {
+      return List.of();
+    }
+    int size = limit <= 0 ? DEFAULT_PAGE_SIZE : Math.min(limit, MAX_PAGE_SIZE);
+    return jdbc.query(
+        """
+        select r.id, r.type, r.from_entity, r.to_entity, r.document_id, r.segment_id, r.confidence,
+               f.name as from_name, f.type as from_type,
+               t.name as to_name, t.type as to_type
+          from kb_relation r
+          join kb_entity f on f.id = r.from_entity
+          join kb_entity t on t.id = r.to_entity
+         where r.kb_id = ?
+         order by r.created_at desc, r.id
+         offset ? limit ?
+        """,
+        RELATION_ROW,
+        kbId,
+        Math.max(offset, 0),
+        size);
+  }
+
+  @Override
+  public long countOf(UUID kbId) {
+    if (kbId == null) {
+      return 0;
+    }
+    Long n =
+        jdbc.queryForObject("select count(*) from kb_relation where kb_id = ?", Long.class, kbId);
+    return n == null ? 0 : n;
   }
 
   @Override

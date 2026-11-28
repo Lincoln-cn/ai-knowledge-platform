@@ -181,29 +181,63 @@ export interface EntityGraphEdge {
 }
 
 export interface EntityGraph {
+  /** 只含「出现在关系里」的实体 —— 图里不会有孤立的点，每个点都至少连着一条边 */
   nodes: EntityGraphNode[]
   edges: EntityGraphEdge[]
-  /** 实体被截断（超过上限）。界面必须提示「只画了一部分」，否则会读成「库里没有」 */
   truncated: boolean
   totalEntities: number
   totalRelations: number
-  entityLimit: number
+  /** 图上实际画了几个节点（与 totalEntities 的差 = 没有任何关系的实体有多少） */
+  involvedEntities: number
   relationLimit: number
 }
 
+/** 关系表格的一行：两端名字与类型都带上，每一行能独立念出来「谁 —什么关系→ 谁」。 */
+export interface RelationRow {
+  id: string
+  type: string
+  fromId: string
+  fromName: string
+  fromType: string
+  toId: string
+  toName: string
+  toType: string
+  documentId: string | null
+  segmentId: string | null
+  confidence: number
+}
+
 /**
- * 一次取齐实体、关系与图谱。
+ * 图谱。
  *
- * ★ 不拆成三个端点：三样是同一个面板的三个视图，分开请求会变成两份可能不一致的快照
- * （实体列表里没有的实体，关系里却有指向它的边）。
+ * ★ 2026-11-29 与实体/关系表格拆开：以前一次取齐三样，在 1400 实体的真实库里只能是"截断 + 靠文案补"。
+ * 现在图谱只取有边的实体（天然有界），表格各自分页。
  */
-export const getEntityGraph = (
-  kbId: string,
-  query: { entityLimit?: number; relationLimit?: number } = {}
-) =>
+export const getEntityGraph = (kbId: string, query: { relationLimit?: number } = {}) =>
   request<EntityGraph>({
     method: 'GET',
     url: '/knowledge-bases/:kbId/entity-graph',
+    path: { kbId },
+    query
+  })
+
+/** 实体表格的一页（库里分页 + 类型筛选 + 名字搜索）。 */
+export const getEntities = (
+  kbId: string,
+  query: { page?: number; size?: number; type?: string; keyword?: string } = {}
+) =>
+  request<PageResult<EntityGraphNode>>({
+    method: 'GET',
+    url: '/knowledge-bases/:kbId/entities',
+    path: { kbId },
+    query
+  })
+
+/** 关系表格的一页。 */
+export const getRelations = (kbId: string, query: { page?: number; size?: number } = {}) =>
+  request<PageResult<RelationRow>>({
+    method: 'GET',
+    url: '/knowledge-bases/:kbId/relations',
     path: { kbId },
     query
   })
