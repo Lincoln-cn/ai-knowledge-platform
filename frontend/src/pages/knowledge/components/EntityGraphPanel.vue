@@ -468,16 +468,15 @@ watch([() => view.value, () => graph.value], async () => {
       </div>
       <div class="views">
         <button type="button" class="view-btn" :class="{ on: view === 'entities' }" @click="view = 'entities'">
-          实体 {{ nodes.length }}
+          实体 {{ entityTotal }}
         </button>
         <button
           type="button"
           class="view-btn"
           :class="{ on: view === 'relations' }"
-          :title="`库里共 ${totalRelations} 条关系，这一页取了 ${edges.length} 条`"
           @click="view = 'relations'"
         >
-          关系 {{ edges.length }}
+          关系 {{ relationTotal }}
         </button>
         <button type="button" class="view-btn" :class="{ on: view === 'graph' }" @click="view = 'graph'">
           图谱
@@ -487,8 +486,8 @@ watch([() => view.value, () => graph.value], async () => {
     </header>
 
     <p v-if="truncated" class="notice warn">
-      库里一共 {{ totalEntities }} 个实体，这一页只取了前 {{ nodes.length }} 个（按被提及的段数排序）：
-      图里没有的实体不代表库里没有。
+      库里一共 {{ totalRelations }} 条关系，图上只画了前 {{ edges.length }} 条（上限
+      {{ graph?.relationLimit }} 条）：剩下的在「关系」页签里翻页看。
     </p>
 
     <p v-if="!loading && !nodes.length" class="empty">
@@ -523,6 +522,7 @@ watch([() => view.value, () => graph.value], async () => {
         :data="entityRows"
         size="small"
         class="tbl"
+        height="440"
         empty-text="没有实体 —— 点「刷新」重新读一次；文档还没摄取完时这里是空的"
       >
         <el-table-column label="实体" min-width="200">
@@ -568,11 +568,12 @@ watch([() => view.value, () => graph.value], async () => {
       />
 
       <el-table
-        v-else-if="view === 'relations'"
+        v-if="view === 'relations'"
         v-loading="relationLoading"
         :data="relationRows"
         size="small"
         class="tbl"
+        height="440"
         empty-text="还没有关系 —— 关系靠标记词规则抽取，点「刷新」重读；文档里没有「隶属 / 包含 / 属于 / 负责 / 任职 / 依据 / 定义」这类说法时，这里本来就该是空的"
       >
         <el-table-column label="这条关系" min-width="420">
@@ -625,7 +626,7 @@ watch([() => view.value, () => graph.value], async () => {
         @size-change="loadRelations"
       />
 
-      <div v-else class="graph-wrap">
+      <div v-if="view === 'graph'" class="graph-wrap">
         <p class="micro muted graph-hint">
           图上画的是<b>有关系</b>的实体：{{ involvedCount }} 个实体、{{ edges.length }} 条边。
           库里共 {{ totalEntities }} 个实体

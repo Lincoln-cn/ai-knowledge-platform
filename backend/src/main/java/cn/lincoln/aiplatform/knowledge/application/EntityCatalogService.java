@@ -77,6 +77,9 @@ public class EntityCatalogService {
       byId.put(e.id(), e);
     }
 
+    // ★ 先取总数再取行：`truncated` 要的是"库里有 2500 条、图只画了 2000 条"，
+    //   不是"这一页返回了几条" —— 拿 rows.size() 与 rows.size() 比永远为假（0.9.9 就是那样）。
+    long relTotal = relations.countOf(kbId);
     List<EntityRelationRepository.RelationRow> rows = relations.listOf(kbId, relationCap);
     List<EdgeView> edges =
         rows.stream()
@@ -117,7 +120,13 @@ public class EntityCatalogService {
     }
     nodes.sort(Comparator.<NodeView>comparingInt(n -> -n.mentions()).thenComparing(NodeView::name));
     return new GraphView(
-        nodes, edges, false, byId.size(), rows.size(), involved.size(), relationCap);
+        nodes,
+        edges,
+        relTotal > rows.size(),
+        byId.size(),
+        (int) relTotal,
+        involved.size(),
+        relationCap);
   }
 
   /**
