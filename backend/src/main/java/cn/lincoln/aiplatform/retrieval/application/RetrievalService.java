@@ -303,7 +303,14 @@ public class RetrievalService {
     //   ★ 第 17 周起这一步解析的是**域**（13 §11.3 的三支绑定值），不再只是"一组库 id"：
     //     命中测试没有会话（conversationId = null），且个人库按 13 §11.4 的默认**不参与**
     //     （「加上我的资料」开关是契约上的可选字段，随问答链路那一批接）。
-    RetrievalScope scope = segmentSearch.retrievalScope(request.kbIds(), null, false);
+    // ★ 调用方可以带着**已解析的域**进来（对话侧要传含会话附件的那一支）；不传才在这里解析。
+    //   为什么不能一律在这里解析：会话域的三个绑定值来自三个地方，其中 ownerId 只能从当前范围取 ——
+    //   而「用谁的身份检索会话附件」是 ChatService 已经回答过的问题，重答一遍就可能答得不一样。
+    RetrievalScope scope =
+        request.scope() != null
+            ? request.scope()
+            : segmentSearch.retrievalScope(
+                request.kbIds(), request.conversationId(), request.includePersonal());
     if (scope.isEmpty()) {
       // ★ 这里是"没有可检索的范围"，不是"没命中" —— 但对外都返空列表：
       //   区别只该出现在日志/埋点里，不该变成"这个库存在但你看不见"这种信息泄露。

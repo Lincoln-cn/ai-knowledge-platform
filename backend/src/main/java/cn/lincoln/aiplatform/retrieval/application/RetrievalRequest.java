@@ -1,6 +1,7 @@
 package cn.lincoln.aiplatform.retrieval.application;
 
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
+import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import java.util.List;
 import java.util.UUID;
 
@@ -40,7 +41,8 @@ public record RetrievalRequest(
     Boolean rerankListwise,
     UUID conversationId,
     boolean includePersonal,
-    ThresholdPolicy thresholdPolicy) {
+    ThresholdPolicy thresholdPolicy,
+    RetrievalScope scope) {
 
   /**
    * 阈值用在哪一步。
@@ -80,7 +82,8 @@ public record RetrievalRequest(
         request.rerankListwise(),
         null,
         false,
-        ThresholdPolicy.HIT_TEST);
+        ThresholdPolicy.HIT_TEST,
+        null);
   }
 
   public RetrievalMode modeOrDefault() {

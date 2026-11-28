@@ -63,6 +63,8 @@ class RetrievalRequestTest {
     assertThat(request.conversationId()).isNull();
     assertThat(request.includePersonal()).isFalse();
     assertThat(request.thresholdPolicy()).isEqualTo(RetrievalRequest.ThresholdPolicy.HIT_TEST);
+    // ★ 命中测试不带域进来：域由 retrieve 自己按 kbIds 解析（对话侧才需要传"已解析的那一支"）
+    assertThat(request.scope()).isNull();
   }
 
   @Test
