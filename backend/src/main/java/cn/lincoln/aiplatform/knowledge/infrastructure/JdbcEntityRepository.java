@@ -115,7 +115,11 @@ public class JdbcEntityRepository implements EntityRepository {
     args.add(kbId);
     args.add(kbId);
     appendFilters(sql, args, type, keyword);
-    sql.append(" order by coalesce(m.c, 0) desc, e.type, e.name offset ? limit ?");
+    // ★ 次序：被提得多的在前；同样多时**置信度高的在前**（2026-11-29 用户要求），
+    // 最后按名字兜底 —— 少了最后一个键，同段数同置信度的行顺序由数据库自由决定，
+    // 翻页时同一条会忽前忽后。
+    sql.append(
+        " order by coalesce(m.c, 0) desc, e.confidence desc, e.type, e.name offset ? limit ?");
     args.add(skip);
     args.add(size);
     return jdbc.query(

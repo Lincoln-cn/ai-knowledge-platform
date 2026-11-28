@@ -72,6 +72,7 @@ public class EntityCatalogService {
   public GraphView graph(UUID kbId, int relationLimit) {
     int relationCap = relationLimit <= 0 ? DEFAULT_RELATION_LIMIT : relationLimit;
     Map<UUID, Integer> counts = mentions.countsOf(kbId);
+    Map<UUID, Integer> docs = mentions.documentsOf(kbId);
     Map<UUID, EntityRepository.Entity> byId = new LinkedHashMap<>();
     for (EntityRepository.Entity e : entities.listOf(kbId)) {
       byId.put(e.id(), e);
@@ -116,7 +117,8 @@ public class EntityCatalogService {
               e.type(),
               e.source(),
               e.confidence(),
-              counts.getOrDefault(e.id(), 0)));
+              counts.getOrDefault(e.id(), 0),
+              docs.getOrDefault(e.id(), 0)));
     }
     nodes.sort(Comparator.<NodeView>comparingInt(n -> -n.mentions()).thenComparing(NodeView::name));
     return new GraphView(
@@ -143,6 +145,7 @@ public class EntityCatalogService {
     int pageSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
     long total = entities.countMatching(kbId, type, keyword);
     Map<UUID, Integer> counts = mentions.countsOf(kbId);
+    Map<UUID, Integer> docs = mentions.documentsOf(kbId);
     List<NodeView> items =
         entities.pageOf(kbId, type, keyword, (pageNo - 1) * pageSize, pageSize).stream()
             .map(
@@ -153,7 +156,8 @@ public class EntityCatalogService {
                         e.type(),
                         e.source(),
                         e.confidence(),
-                        counts.getOrDefault(e.id(), 0)))
+                        counts.getOrDefault(e.id(), 0),
+                        docs.getOrDefault(e.id(), 0)))
             .toList();
     return new PageView<>(items, total, pageNo, pageSize);
   }
@@ -196,7 +200,13 @@ public class EntityCatalogService {
    * 段提到而没有任何关系（关系靠标记词规则，抽不到就没有边）。 界面上两个数要分开显示，否则"0 条边"会被读成"这个实体不重要"。
    */
   public record NodeView(
-      UUID id, String name, String type, String source, double confidence, int mentions) {}
+      UUID id,
+      String name,
+      String type,
+      String source,
+      double confidence,
+      int mentions,
+      int documents) {}
 
   /**
    * 图上的一条边。

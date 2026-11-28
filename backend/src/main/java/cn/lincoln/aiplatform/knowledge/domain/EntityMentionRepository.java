@@ -36,6 +36,17 @@ public interface EntityMentionRepository {
    */
   java.util.Map<UUID, Integer> countsOf(UUID kbId);
 
+  /**
+   * 每个实体分布在多少篇文档里（跨文档数）。
+   *
+   * <p>★ 为什么它比「被多少段提到」更能说明问题：一段里重复出现只记一次（唯一键是 {@code (entity_id,
+   * segment_id)}），所以段数只回答"散得有多开"，而跨文档数回答 "这个名字是不是真的指一个东西" —— 出现在 6 篇不同法规里的「财政部」几乎不可能是
+   * 抽取噪声，而只在一段里出现一次的「可以并处」几乎一定是。
+   *
+   * @param kbId 知识库 id（{@code null} 返回空 map）
+   */
+  java.util.Map<UUID, Integer> documentsOf(UUID kbId);
+
   /** 一条待写入的关联。 */
   record Mention(UUID entityId, UUID kbId, UUID documentId, UUID segmentId) {}
 }

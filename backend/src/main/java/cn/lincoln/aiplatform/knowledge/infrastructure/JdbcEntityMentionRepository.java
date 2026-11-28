@@ -76,4 +76,20 @@ public class JdbcEntityMentionRepository implements EntityMentionRepository {
         kbId);
     return out;
   }
+
+  @Override
+  public Map<UUID, Integer> documentsOf(UUID kbId) {
+    if (kbId == null) {
+      return Map.of();
+    }
+    Map<UUID, Integer> out = new LinkedHashMap<>();
+    jdbc.query(
+        "select entity_id, count(distinct document_id) as n from kb_entity_mention"
+            + " where kb_id = ? group by entity_id",
+        (java.sql.ResultSet rs) -> {
+          out.put(rs.getObject("entity_id", UUID.class), rs.getInt("n"));
+        },
+        kbId);
+    return out;
+  }
 }

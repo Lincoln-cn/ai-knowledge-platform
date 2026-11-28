@@ -167,6 +167,8 @@ export interface EntityGraphNode {
   source: string
   confidence: number
   mentions: number
+  /** 分布在多少篇文档里。★ 比 `mentions` 更能说明"这个名字是不是真的指一个东西" */
+  documents: number
 }
 
 /** 图上的一条边。`segmentId` 是取证位置 —— 没有它，这条边就回不到原文那一段。 */

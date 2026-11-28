@@ -61,6 +61,21 @@ const RELATION_LABEL: Record<string, string> = {
 const relationLabel = (t: string) => RELATION_LABEL[t] || t
 
 /**
+ * 「置信度」这一列到底在说什么（2026-11-29 用户要求细化并加 tooltip）。
+ *
+ * ★ 它是**来源档位**，不是模型概率：三档分别是 NER 模型认出机构（0.90）、
+ *   NER 模型认出人名（0.65，人名没有后缀可核对，低一档）、标记词规则抽出（0.60）。
+ *   模型 logits 只取了最大类、没有做 softmax，所以这些数不是"把握有多大"。
+ *   真正可核对的是「被多少段提到」与「跨多少篇文档」两列。
+ */
+const sourceLabel = (c: number) => {
+  if (c >= 0.9) return '模型 · 机构'
+  if (c >= 0.65) return '模型 · 人名'
+  if (c >= 0.6) return '规则'
+  return c.toFixed(2)
+}
+
+/**
  * 图上不画常驻的边标签，改成「按语义分组着色 + 图例 + 悬停/点击看名字」。
  *
  * ★ 2026-11-28 用户反馈两件事，都是常驻边标签带来的：
@@ -531,10 +546,28 @@ watch([() => view.value, () => graph.value], async () => {
             <span class="kind">{{ typeLabel(row.type) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="被多少段提到" width="140">
+        <el-table-column width="170">
+          <template #header>
+            <span class="col-head">
+              被提到
+              <el-tooltip placement="top" :show-after="120">
+                <template #content>
+                  左边是<b>段数</b>、右边是<b>跨文档数</b>。<br />
+                  同一段里重复出现只记一次（唯一键去重），所以段数回答"散得有多开"；<br />
+                  跨文档数回答"这个名字是不是真的指一个东西" ——<br />
+                  出现在 6 篇法规里的「财政部」几乎不可能是噪声，<br />
+                  而只在 1 段里出现的「可以并处」几乎一定是。
+                </template>
+                <span class="q">?</span>
+              </el-tooltip>
+            </span>
+          </template>
           <template #default="{ row }">
             <span class="num">{{ row.mentions }}</span>
             <span class="micro muted"> 段</span>
+            <span class="sep">·</span>
+            <span class="num">{{ row.documents }}</span>
+            <span class="micro muted"> 篇</span>
           </template>
         </el-table-column>
         <el-table-column label="关系数" width="110">
@@ -548,9 +581,25 @@ watch([() => view.value, () => graph.value], async () => {
             <span class="micro muted">{{ row.source || '—' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="置信度" width="90">
+        <el-table-column width="120">
+          <template #header>
+            <span class="col-head">
+              来源
+              <el-tooltip placement="top" :show-after="120">
+                <template #content>
+                  这是<b>来源档位</b>，不是模型概率：<br />
+                  · 0.90 = NER 模型认出<b>机构</b><br />
+                  · 0.65 = NER 模型认出<b>人名</b>（人名没有后缀可核对，故意低一档）<br />
+                  · 0.60 = <b>标记词规则</b>抽出（"负责 / 隶属"两侧的名字）<br />
+                  模型的 logits 直接取了最大类、没算概率，<br />
+                  所以别把它当"把握有多大"读 —— 可核对的是左边两列。
+                </template>
+                <span class="q">?</span>
+              </el-tooltip>
+            </span>
+          </template>
           <template #default="{ row }">
-            <span class="micro muted">{{ Number(row.confidence).toFixed(2) }}</span>
+            <span class="micro muted">{{ sourceLabel(Number(row.confidence)) }}</span>
           </template>
         </el-table-column>
       </el-table>
@@ -940,6 +989,32 @@ watch([() => view.value, () => graph.value], async () => {
 .kind.sm {
   padding: 0 4px;
   font-size: var(--text-2xs);
+}
+
+/* 列头里的问号：小、不抢眼，指上去才说清这个数是怎么来的 */
+.col-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.q {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  line-height: 1;
+  color: var(--color-muted);
+  cursor: help;
+}
+
+.sep {
+  margin: 0 4px;
+  color: var(--color-faint);
 }
 
 </style>

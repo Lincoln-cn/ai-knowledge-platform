@@ -47,11 +47,11 @@ const createRequestIdToKbId = new Map<string, string>()
  */
 const entityGraphSample = (kbId: string) => {
   const nodes = [
-    { id: 'eg-1', name: '财务资产部', type: 'ORG', source: 'RULE', confidence: 1, mentions: 6 },
-    { id: 'eg-2', name: '综合部', type: 'ORG', source: 'RULE', confidence: 1, mentions: 4 },
-    { id: 'eg-3', name: '预算科', type: 'ORG', source: 'RULE', confidence: 1, mentions: 3 },
-    { id: 'eg-4', name: '张伟', type: 'PERSON', source: 'MODEL', confidence: 0.98, mentions: 2 },
-    { id: 'eg-5', name: '采购中心', type: 'ORG', source: 'RULE', confidence: 1, mentions: 1 }
+    { id: 'eg-1', name: '财务资产部', type: 'ORG', source: 'RULE', confidence: 1, mentions: 6, documents: 3 },
+    { id: 'eg-2', name: '综合部', type: 'ORG', source: 'RULE', confidence: 1, mentions: 4, documents: 2 },
+    { id: 'eg-3', name: '预算科', type: 'ORG', source: 'RULE', confidence: 1, mentions: 3, documents: 2 },
+    { id: 'eg-4', name: '张伟', type: 'PERSON', source: 'MODEL', confidence: 0.98, mentions: 2, documents: 1 },
+    { id: 'eg-5', name: '采购中心', type: 'ORG', source: 'RULE', confidence: 1, mentions: 1, documents: 1 }
   ]
   const edges = [
     {
