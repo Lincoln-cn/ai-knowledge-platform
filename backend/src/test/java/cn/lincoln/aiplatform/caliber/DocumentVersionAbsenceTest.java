@@ -217,7 +217,11 @@ class DocumentVersionAbsenceTest {
                 "docName: String",
                 "kbName: String",
                 "score: double",
-                "content: String"));
+                "content: String",
+                // ★ `channels` 是 0.9.9 加的「这条候选被哪几路捞上来」（#378 收口时补的），
+                //   与"来自哪一版"无关 —— 加它的时候顺手又核了一遍：这一列存的是 vector/text/entity/relation/qa
+                //   五个固定字面量，没有任何版本含义。
+                "channels: List"));
 
     assertThat(CaliberShape.instanceFields(card))
         .as(

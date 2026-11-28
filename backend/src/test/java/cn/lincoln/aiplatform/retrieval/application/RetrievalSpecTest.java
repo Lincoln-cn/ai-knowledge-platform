@@ -3,20 +3,22 @@ package cn.lincoln.aiplatform.retrieval.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
+import cn.lincoln.aiplatform.platform.retrieval.SegmentRetrievalPort;
+import cn.lincoln.aiplatform.platform.retrieval.SegmentRetrievalPort.Spec;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link RetrievalRequest} 的形状判据。
+ * {@link SegmentRetrievalPort.Spec} 的形状判据。
  *
- * <p>★ 为什么值得写：{@link RetrievalRequest#of} 是"命中测试的请求翻成检索请求"的唯一入口，它有 12 个字段 —— 漏搬一个（最典型的是 {@code
+ * <p>★ 为什么值得写：{@link RetrievalService#specOf} 是"命中测试的请求翻成检索请求"的唯一入口，它有 12 个字段 —— 漏搬一个（最典型的是 {@code
  * rerankListwise}，它决定这一批要不要多花 3 秒调 LLM）不会有任何编译错误， 只会让"我在界面上下拉选了 listwise、结果没生效"变成一件永远查不出来的事。
  *
  * <p>★ 所以这里的每条断言都在问同一个问题：<strong>这个字段是不是原样过去了</strong>。
  */
-class RetrievalRequestTest {
+class RetrievalSpecTest {
 
   private static HitTestQuery fullQuery() {
     return new HitTestQuery(
@@ -38,7 +40,7 @@ class RetrievalRequestTest {
   @DisplayName("命中测试的十二个字段全部原样翻过去（漏一个都是静默失效）")
   void everyFieldOfHitTestQueryIsCarriedOver() {
     HitTestQuery query = fullQuery();
-    RetrievalRequest request = RetrievalRequest.of(query);
+    Spec request = RetrievalService.specOf(query);
 
     assertThat(request.mode()).isEqualTo("FULLTEXT");
     assertThat(request.threshold()).isEqualTo(0.85);
@@ -58,11 +60,11 @@ class RetrievalRequestTest {
   @Test
   @DisplayName("命中测试没有会话、不并个人库、阈值只做入口参数")
   void hitTestRequestHasNoConversationAndDoesNotFilterAfterwards() {
-    RetrievalRequest request = RetrievalRequest.of(fullQuery());
+    Spec request = RetrievalService.specOf(fullQuery());
 
     assertThat(request.conversationId()).isNull();
     assertThat(request.includePersonal()).isFalse();
-    assertThat(request.thresholdPolicy()).isEqualTo(RetrievalRequest.ThresholdPolicy.HIT_TEST);
+    assertThat(request.thresholdPolicy()).isEqualTo(SegmentRetrievalPort.ThresholdPolicy.HIT_TEST);
     // ★ 命中测试不带域进来：域由 retrieve 自己按 kbIds 解析（对话侧才需要传"已解析的那一支"）
     assertThat(request.scope()).isNull();
   }
@@ -70,8 +72,8 @@ class RetrievalRequestTest {
   @Test
   @DisplayName("缺省值与 HitTestQuery 逐字一致（两边默认值不同 = 演示时好用、部署后不一样）")
   void defaultsMatchTheContract() {
-    RetrievalRequest request =
-        RetrievalRequest.of(
+    Spec request =
+        RetrievalService.specOf(
             new HitTestQuery(null, null, null, null, null, "问", null, null, null, null, null));
 
     assertThat(request.modeOrDefault()).isEqualTo(RetrievalMode.HYBRID);

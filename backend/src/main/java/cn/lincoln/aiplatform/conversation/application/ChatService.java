@@ -23,10 +23,12 @@ import cn.lincoln.aiplatform.platform.retrieval.QueryUnderstandingPort.SubQuesti
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
+import cn.lincoln.aiplatform.platform.retrieval.SegmentRetrievalPort;
+import cn.lincoln.aiplatform.platform.retrieval.SegmentRetrievalPort.Outcome;
+import cn.lincoln.aiplatform.platform.retrieval.SegmentRetrievalPort.Ranked;
+import cn.lincoln.aiplatform.platform.retrieval.SegmentRetrievalPort.Spec;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.retrieval.SourceLabels;
-import cn.lincoln.aiplatform.retrieval.application.RetrievalRequest;
-import cn.lincoln.aiplatform.retrieval.application.RetrievalService;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -250,7 +252,7 @@ public class ChatService {
    *
    * <p>★ 走 setter 注入而不是构造器参数：本类的两个构造器已被多处测试直接 {@code new}， 加一个参数就要全改，而"这一路可选"是它的定义，不是它的编译期属性。
    */
-  private RetrievalService retrievalService;
+  private SegmentRetrievalPort retrievalService;
 
   /**
    * 检索服务（`#378` 收口之后，对话与命中测试走的是同一段策略）。
@@ -259,7 +261,7 @@ public class ChatService {
    * #retrieve} 会显式报错，不会静默成"零引用"。
    */
   @Autowired(required = false)
-  public void setRetrievalService(RetrievalService retrievalService) {
+  public void setRetrievalService(SegmentRetrievalPort retrievalService) {
     this.retrievalService = retrievalService;
   }
 
@@ -1650,9 +1652,9 @@ public class ChatService {
       //   走的都是它 —— 这是 `#378` 的收口点（此前对话自己写了一份两路策略，命中测试四路，
       //   两边读数不可比）。这里只负责三件**对话特有**的事：把域与身份交进去、把阈值按域分档、
       //   把排名翻成引用。
-      RetrievalService.Outcome outcome =
+      Outcome outcome =
           retrievalService.retrieve(
-              new RetrievalRequest(
+              new Spec(
                   retrieval.mode().name(),
                   retrieval.threshold(),
                   retrieval.topN(),
@@ -1667,7 +1669,7 @@ public class ChatService {
                   retrieval.rerankListwise(),
                   conversationId,
                   false,
-                  RetrievalRequest.ThresholdPolicy.CONVERSATION,
+                  SegmentRetrievalPort.ThresholdPolicy.CONVERSATION,
                   scope));
       // ★★ 直答（`#78`）：命中即答案 —— 不参与融合、不调模型、也不进引用清单。
       //   引用为空是对的：答案本身就是问答对，没有"第几条分段"可指。
@@ -1684,7 +1686,7 @@ public class ChatService {
             "本次回答直接取自知识库问答对（标定问法：「" + direct.question() + "」），未调用模型。",
             new DirectAnswer(direct.id(), direct.question(), direct.answer(), direct.score()));
       }
-      List<RetrievalService.Ranked> ranked = outcome.hits();
+      List<Ranked> ranked = outcome.hits();
       if (ranked.isEmpty()) {
         // ★ 检索确实跑了、也确实一条都没命中 —— 与"没检索"必须能分开，否则用户没法判断
         //   该去补知识库，还是该去查开关/权限。
@@ -1704,7 +1706,7 @@ public class ChatService {
       scoreById = new LinkedHashMap<>();
       int droppedByThreshold = 0;
       int conversationScopedKept = 0;
-      for (RetrievalService.Ranked hit : ranked) {
+      for (Ranked hit : ranked) {
         if (ordered.size() >= retrievalLimit) {
           break;
         }

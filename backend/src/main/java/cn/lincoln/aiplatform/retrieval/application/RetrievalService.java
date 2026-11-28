@@ -16,6 +16,10 @@ import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
 import cn.lincoln.aiplatform.platform.retrieval.Rrf;
 import cn.lincoln.aiplatform.platform.retrieval.RrfQuotaJoiner;
+import cn.lincoln.aiplatform.platform.retrieval.SegmentRetrievalPort;
+import cn.lincoln.aiplatform.platform.retrieval.SegmentRetrievalPort.Outcome;
+import cn.lincoln.aiplatform.platform.retrieval.SegmentRetrievalPort.Ranked;
+import cn.lincoln.aiplatform.platform.retrieval.SegmentRetrievalPort.Spec;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.retrieval.domain.HopDecision;
 import cn.lincoln.aiplatform.retrieval.domain.HopStop;
@@ -86,7 +90,7 @@ import org.springframework.transaction.annotation.Transactional;
  * {@code degradeRate} 上记一笔）。
  */
 @Service
-public class RetrievalService {
+public class RetrievalService implements SegmentRetrievalPort {
 
   private static final Logger log = LoggerFactory.getLogger(RetrievalService.class);
 
@@ -294,8 +298,23 @@ public class RetrievalService {
         null);
   }
 
+  /** 端口实现：只交出"排好序的分段 + 那条直答"，trace / detected 留在 {@link #detailed} 里。 */
   @Transactional(readOnly = true)
-  public Outcome retrieve(RetrievalRequest request) {
+  @Override
+  public Outcome retrieve(Spec request) {
+    Detailed detailed = detailed(request);
+    return new Outcome(detailed.hits(), detailed.directAnswer());
+  }
+
+  /**
+   * 一次检索的完整产出（含命中测试要的 trace / detected / 降级档）。
+   *
+   * <p>★ 它<strong>不</strong>对外：端口 {@link SegmentRetrievalPort.Outcome} 只给"排名 + 直答"，因为 trace /
+   * detected 回答的是"检索为什么长这样"，那是检索模块自己的事，不该长进跨模块的形状里。
+   *
+   * <p>★ 形参叫 {@code request} 不叫 {@code spec}：类型换了、名字不换，方法体一行都不用改 —— 搬迁本身已经够危险了。
+   */
+  private Detailed detailed(Spec request) {
     long startedAt = System.nanoTime();
     RetrievalMode mode = request.modeOrDefault();
 
@@ -314,7 +333,7 @@ public class RetrievalService {
     if (scope.isEmpty()) {
       // ★ 这里是"没有可检索的范围"，不是"没命中" —— 但对外都返空列表：
       //   区别只该出现在日志/埋点里，不该变成"这个库存在但你看不见"这种信息泄露。
-      return new Outcome(
+      return new Detailed(
           List.of(),
           mode,
           elapsedMs(startedAt),
@@ -684,7 +703,7 @@ public class RetrievalService {
       }
       ranked.add(new Ranked(id, card, scores.getOrDefault(id, 0.0), List.copyOf(channels)));
     }
-    return new Outcome(
+    return new Detailed(
         ranked,
         mode,
         elapsedMs(startedAt),
@@ -723,7 +742,7 @@ public class RetrievalService {
   @Transactional(readOnly = true)
   public HitTestView hitTest(HitTestQuery request) {
     validate(request);
-    Outcome outcome = retrieve(RetrievalRequest.of(request));
+    Detailed outcome = detailed(specOf(request));
     List<HitTestView.Item> items = new ArrayList<>(outcome.hits().size());
     int rank = 1;
     for (Ranked hit : outcome.hits()) {
@@ -743,14 +762,14 @@ public class RetrievalService {
   }
 
   /**
-   * 一次检索的产出（不区分调用方）。
+   * 一次检索的完整产出（含命中测试要的解释性字段）。
    *
-   * <p>★ 只返回"排名 + 卡片"，不返回 {@link HitTestView.Item}：{@code Item} 是命中测试的展示形状（带序号），对话侧要的是 {@code
-   * SourceRef}（带文档 id / 库 id / 密级）。两种形状都从 {@link Ranked} 翻，谁也别想替对方定形状。
+   * <p>★ 它和端口上的 {@link SegmentRetrievalPort.Outcome} 是两个东西，各有各的理由：端口那个只有"哪些分段 + 那条直答"，
+   * 因为对话只要结果；这个多了 mode / 耗时 / trace / detected，因为命中测试要回答"为什么长这样"。
    *
    * @param hits 已排序、已截到 topN
    */
-  public record Outcome(
+  private record Detailed(
       List<Ranked> hits,
       RetrievalMode mode,
       long elapsedMs,
@@ -758,9 +777,33 @@ public class RetrievalService {
       HitTestView.Detected detected,
       QaRecallPort.Match directAnswer) {}
 
-  /** 一条命中的候选人：分段 + 展示卡片 + 分数 + 它是被哪几路捞上来的。 */
-  public record Ranked(
-      UUID segmentId, SegmentSearchPort.Card card, double score, List<String> channels) {}
+  /**
+   * 命中测试的请求 → 检索规格。
+   *
+   * <p>★ 命中测试没有会话、个人库不参与、阈值只做向量入口参数 —— 这三条差别就是全部差别，其余字段逐个照抄。
+   *
+   * <p>★ 字段逐个列而不是 {@code new Spec(request.mode(), request.threshold(), ...)} 一行到底，是为了让"漏了一个" 在 diff
+   * 里看得见：多一个 {@code null} 不会有编译错误，只会让"选了 listwise 却没生效"永远查不出来。
+   */
+  static Spec specOf(HitTestQuery request) {
+    return new Spec(
+        request.mode(),
+        request.threshold(),
+        request.topN(),
+        request.noRefStrategy(),
+        request.kbIds(),
+        request.question(),
+        request.queryCount(),
+        request.decomposeEnabled(),
+        request.maxSubQuestions(),
+        request.multiHopEnabled(),
+        request.maxHops(),
+        request.rerankListwise(),
+        null,
+        false,
+        SegmentRetrievalPort.ThresholdPolicy.HIT_TEST,
+        null);
+  }
 
   /**
    * 两路扩召回"为什么没有东西可念"的说明。
@@ -864,7 +907,7 @@ public class RetrievalService {
    * @return 触发与否、轮次、停止原因、第 2 轮的排名（送进配额合并）、新增分段数、以及"该记 D1 吗"
    */
   private HopRun runMultiHop(
-      RetrievalRequest request,
+      Spec request,
       RetrievalMode mode,
       RetrievalScope scope,
       int candidateLimit,
