@@ -17,6 +17,7 @@ import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
 import cn.lincoln.aiplatform.platform.model.ModelEgressPort;
 import cn.lincoln.aiplatform.platform.retrieval.HopDeciderPort;
 import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
+import cn.lincoln.aiplatform.platform.retrieval.QaRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.QueryUnderstandingPort;
 import cn.lincoln.aiplatform.platform.retrieval.QueryUnderstandingPort.SubQuestion;
 import cn.lincoln.aiplatform.platform.retrieval.RecallFusion;
@@ -137,6 +138,13 @@ public class ChatService {
   private static final int RETRIEVAL_OVERFETCH = 3;
 
   /**
+   * 第五路（问答对）一次最多取几条候选。
+   *
+   * <p>★ 它不是一个独立的召回通道，而是「给已有候选补几条」—— 取大了会把与问句只是部分重合的 问答对也塞进融合，反而挤掉真正的分段命中。
+   */
+  private static final int QA_ROUTE_LIMIT = 5;
+
+  /**
    * 指代消解的「对话上文」取最近几条消息（{@code #297}）。
    *
    * <p>★ 2 轮 = 问 / 答 各 2 条（{@code 10 §3.4.3} 同口径）：上文是给<strong>改写</strong>用的，不是给模型的对话记忆 —— 更早的轮次对"它
@@ -236,6 +244,13 @@ public class ChatService {
    * 把两格加进 {@code RetrievalParams} 并把判定接在这里，才让那个开关真的对问答生效。
    */
   private final HopDeciderPort multiHop;
+
+  /**
+   * 第五路：问答对（0.9.9）。{@code null} = 这一路没接（脱离容器构造的测试就是这样）。
+   *
+   * <p>★ 走 setter 注入而不是构造器参数：本类的两个构造器已被多处测试直接 {@code new}， 加一个参数就要全改，而"这一路可选"是它的定义，不是它的编译期属性。
+   */
+  private QaRecallPort qaRecallPort;
 
   /**
    * 「猜你想问」的并行开关（`#285`）。
@@ -384,6 +399,16 @@ public class ChatService {
   @Autowired(required = false)
   public void setConversationAttachments(ConversationAttachmentPort conversationAttachments) {
     this.conversationAttachments = conversationAttachments;
+  }
+
+  /**
+   * 注入问答对召回（0.9.9 第五路）。
+   *
+   * <p>★ {@code required = false}：脱离容器构造的测试拿不到它 ⇒ 这一路直接空转， 而那正是改造前的行为。
+   */
+  @Autowired(required = false)
+  public void setQaRecall(QaRecallPort qaRecallPort) {
+    this.qaRecallPort = qaRecallPort;
   }
 
   /**
@@ -1636,6 +1661,10 @@ public class ChatService {
       //   最高分 < 阈值，或命中数 < HOP_MIN_HITS。★ 它是"要么更好、要么什么都没发生" ——
       //   判定失败 / 没有下一查询 / 下一轮零命中，全部用已有结果继续（`§3.4.6`）。
       hits = withMultiHop(question, scope, fetchLimit, retrieval, hits);
+      // ★★ 第五路（问答对，0.9.9）：挂在知识库上的问答对，有出处的那部分作为一路候选参与融合。
+      //   没有出处的那部分进不了融合（RRF 按段排名合并，没段就没有名次），它们由直答支负责，
+      //   见 #78。
+      hits = withQaRoute(question, scope, retrieval, hits);
       if (hits.isEmpty()) {
         // ★ 检索确实跑了、也确实一条都没命中 —— 与"没检索"必须能分开，否则用户没法判断
         //   该去补知识库，还是该去查开关/权限。
@@ -2093,6 +2122,55 @@ public class ChatService {
    * @param firstHits 首轮命中（已按分数排序）
    * @return 合并后的命中（首轮顺序优先，新命中追加在后）
    */
+  /**
+   * 第五路：问答对（0.9.9）。
+   *
+   * <p>★ 为什么是「一路候选」而不是「先查问答对、查到就直接返回」：问答对与分段是同一批内容的两种载体，
+   * 谁更贴题只能由同一次融合来判（否则问答对会被无条件置顶，而它可能只是一句泛泛的标定问法）。
+   *
+   * <p>★ 为什么只收<b>有出处</b>的那部分：融合的输入是「段 + 分」，没有出处的问答对给不出段， 硬塞进去只能编一个段 id。它们不是被丢了 ——
+   * 直答型由短路支负责，召回型只能作为答案候选 （#78 的裁定）。
+   *
+   * <p>★ 会话域不吃这一路：问答对挂在知识库上，会话附件没有问答对；{@link QaRecallPort.Query} 的入参是知识库 id
+   * 集合，会话域传进去只能是空集，而空集在实现里是「一条都不给」 （不是「全部可见」）。
+   *
+   * <p>★ 失败只 warn：这一路是补强，不是主干。它挂掉时本轮必须照常给全文/向量那几路的结果。
+   */
+  private List<SegmentSearchPort.Scored> withQaRoute(
+      String question,
+      RetrievalScope scope,
+      RetrievalParams retrieval,
+      List<SegmentSearchPort.Scored> hits) {
+    if (qaRecallPort == null || scope.hasConversationScope()) {
+      return hits;
+    }
+    try {
+      List<QaRecallPort.Match> matches =
+          qaRecallPort.recall(
+              new QaRecallPort.Query(
+                  question, scope.sharedKbIds(), retrieval.threshold(), QA_ROUTE_LIMIT));
+      Map<UUID, Double> bySegment = new LinkedHashMap<>();
+      for (QaRecallPort.Match match : matches) {
+        if (match.segmentId() == null) {
+          continue;
+        }
+        bySegment.merge(match.segmentId(), match.score(), Math::max);
+      }
+      if (bySegment.isEmpty()) {
+        return hits;
+      }
+      log.info("问答对扩召回：命中 {} 条，其中 {} 条挂了出处分段，作为一路候选参与融合", matches.size(), bySegment.size());
+      List<SegmentSearchPort.Scored> route =
+          bySegment.entrySet().stream()
+              .map(entry -> new SegmentSearchPort.Scored(entry.getKey(), entry.getValue()))
+              .toList();
+      return RecallFusion.fuse(hits, route);
+    } catch (RuntimeException failure) {
+      log.warn("问答对扩召回失败，本轮少一路候选：{}", failure.toString());
+      return hits;
+    }
+  }
+
   private List<SegmentSearchPort.Scored> withMultiHop(
       String question,
       RetrievalScope scope,
