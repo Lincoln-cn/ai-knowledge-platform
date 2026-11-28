@@ -39,7 +39,8 @@ class EffectiveRetrievalListwiseTest {
    * policyResolver}（后者为 null 时回落到平台默认值）。
    */
   private static ChatService service() {
-    return new ChatService(null, null, null, null, null, null, null, null);
+    return ChatServiceRetrieval.wire(
+        new ChatService(null, null, null, null, null, null, null, null));
   }
 
   private static ChatTurnWriter.PreparedTurn turn(

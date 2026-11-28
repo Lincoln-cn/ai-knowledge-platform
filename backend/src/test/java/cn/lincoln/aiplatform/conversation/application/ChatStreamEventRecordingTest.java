@@ -684,15 +684,16 @@ class ChatStreamEventRecordingTest {
      */
     private Fixture(SegmentSearchPort search, AccessScopePort scope) {
       this.chatService =
-          new ChatService(
-              store,
-              search,
-              scope,
-              new StreamDispatcher(model),
-              stopSignal,
-              PROPERTIES,
-              UNRESTRICTED_EGRESS,
-              null);
+          ChatServiceRetrieval.wire(
+              new ChatService(
+                  store,
+                  search,
+                  scope,
+                  new StreamDispatcher(model),
+                  stopSignal,
+                  PROPERTIES,
+                  UNRESTRICTED_EGRESS,
+                  null));
     }
 
     private ChatService chatService() {
@@ -1217,7 +1218,17 @@ class ChatStreamEventRecordingTest {
       throw new UnsupportedOperationException("本类不做两路同谓词");
     }
 
+    /**
+     * ★ 检索现在走 {@code RetrievalService}，它在出结果前会做一次「域感知的可见性复核」。
+     *
+     * <p>这个假端口的可见性由 {@code retrievalScope} / {@code visibleKbIds} 决定，复核这一步对它恒真。
+     * 不补这个方法的话默认实现会<strong>明确抛</strong>（那是为了防生产实现静默丢候选）， 而抛出来在对话侧表现为「零引用」，看起来像"检索坏了"。
+     */
     @Override
+    public Set<UUID> visibleAmong(Collection<UUID> candidateIds, RetrievalScope scope) {
+      return Set.copyOf(candidateIds);
+    }
+
     public List<Card> load(Collection<UUID> segmentIds) {
       throw new UnsupportedOperationException("零命中时没有展示信息要取");
     }
@@ -1318,7 +1329,17 @@ class ChatStreamEventRecordingTest {
       return List.of(new Scored(SEGMENT_ID, 0.9));
     }
 
+    /**
+     * ★ 检索现在走 {@code RetrievalService}，它在出结果前会做一次「域感知的可见性复核」。
+     *
+     * <p>这个假端口的可见性由 {@code retrievalScope} / {@code visibleKbIds} 决定，复核这一步对它恒真。
+     * 不补这个方法的话默认实现会<strong>明确抛</strong>（那是为了防生产实现静默丢候选）， 而抛出来在对话侧表现为「零引用」，看起来像"检索坏了"。
+     */
     @Override
+    public Set<UUID> visibleAmong(Collection<UUID> candidateIds, RetrievalScope scope) {
+      return Set.copyOf(candidateIds);
+    }
+
     public List<Card> load(Collection<UUID> segmentIds) {
       List<Card> cards = new ArrayList<>();
       for (UUID id : segmentIds) {

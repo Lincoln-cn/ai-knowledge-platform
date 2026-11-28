@@ -20,13 +20,13 @@ import cn.lincoln.aiplatform.platform.retrieval.NoRefStrategy;
 import cn.lincoln.aiplatform.platform.retrieval.QaRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.QueryUnderstandingPort;
 import cn.lincoln.aiplatform.platform.retrieval.QueryUnderstandingPort.SubQuestion;
-import cn.lincoln.aiplatform.platform.retrieval.RecallFusion;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalMode;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalParams;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalScope;
-import cn.lincoln.aiplatform.platform.retrieval.RrfQuotaJoiner;
 import cn.lincoln.aiplatform.platform.retrieval.SegmentSearchPort;
 import cn.lincoln.aiplatform.platform.retrieval.SourceLabels;
+import cn.lincoln.aiplatform.retrieval.application.RetrievalRequest;
+import cn.lincoln.aiplatform.retrieval.application.RetrievalService;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -250,7 +250,18 @@ public class ChatService {
    *
    * <p>★ 走 setter 注入而不是构造器参数：本类的两个构造器已被多处测试直接 {@code new}， 加一个参数就要全改，而"这一路可选"是它的定义，不是它的编译期属性。
    */
-  private QaRecallPort qaRecallPort;
+  private RetrievalService retrievalService;
+
+  /**
+   * 检索服务（`#378` 收口之后，对话与命中测试走的是同一段策略）。
+   *
+   * <p>★ 走 setter 而不是构造器参数：两个构造器已被多处测试直接 {@code new}，加参数就得全改； 而那些测试里只有一部分真的走到检索。未装配时 {@link
+   * #retrieve} 会显式报错，不会静默成"零引用"。
+   */
+  @Autowired(required = false)
+  public void setRetrievalService(RetrievalService retrievalService) {
+    this.retrievalService = retrievalService;
+  }
 
   /**
    * 「猜你想问」的并行开关（`#285`）。
@@ -399,16 +410,6 @@ public class ChatService {
   @Autowired(required = false)
   public void setConversationAttachments(ConversationAttachmentPort conversationAttachments) {
     this.conversationAttachments = conversationAttachments;
-  }
-
-  /**
-   * 注入问答对召回（0.9.9 第五路）。
-   *
-   * <p>★ {@code required = false}：脱离容器构造的测试拿不到它 ⇒ 这一路直接空转， 而那正是改造前的行为。
-   */
-  @Autowired(required = false)
-  public void setQaRecall(QaRecallPort qaRecallPort) {
-    this.qaRecallPort = qaRecallPort;
   }
 
   /**
@@ -1528,6 +1529,12 @@ public class ChatService {
       UUID modelId,
       RetrievalParams retrieval,
       String recentContext) {
+    if (retrievalService == null) {
+      // ★★ 装配缺失要**立刻可见**，而不是被下面那层 catch 变成"零引用 + 一条 warn"。
+      //   “检索跑完了但没命中”与“根本没跑”长得一样，是项目头号病（silent-failure）的形状。
+      throw new IllegalStateException(
+          "RetrievalService 未装配 —— 生产路径由 Spring 注入，测试里请显式 setRetrievalService");
+    }
     // ★★ 召回开关（通用问答）：未启用 ⇒ 一条都不检索，直接返回空。
     //
     //   为什么要有这一条：`requestedKbIds` 为空时会走 `RetrievalScope.shared` 支
@@ -1639,84 +1646,46 @@ public class ChatService {
         return RetrievalOutcome.empty(
             "取不到当前模型允许处理的密级上限，无法判定哪些内容能发出去，本轮按零引用处理（这是保护性的）。" + "请管理员检查模型的供应商配置是否完整。");
       }
-      List<SegmentSearchPort.Scored> hits;
-      int fetchLimit = retrievalLimit * RETRIEVAL_OVERFETCH;
-      // ★★ 查询理解（`#297`）：检索前先把问题改写 / 拆成子问题，按"子问题 × 查询"多路检索再融合。
-      //
-      //   ★ `queryCount=0`（或服务未装配）⇒ 一次 LLM 都不调，走旧 `switch`，行为与今天逐字一致 ——
-      //     这是判据 2（反证）的那一侧：改写日志零条、命中集合与改前逐条相同。
-      //   ★ 预算传 `0` = 用 `RetrievalBudgetProperties` 的配置（与检索测试页同一个来源，不另开配置键）。
-      //   ★ 多跳判定（`withMultiHop`）发生在改写**之后**：先有改写后的命中，再判"答够了没有"（`#283` 口径不变）。
-      if (retrieval.queryCount() > 0 && queryUnderstanding != null) {
-        QueryUnderstandingPort.Result outcome =
-            queryUnderstanding.understand(
-                question,
-                retrieval.queryCount(),
-                retrieval.decomposeEnabled(),
-                retrieval.maxSubQuestions(),
-                0,
-                recentContext);
-        // ★ 判据 1/3 的读数就在这条日志里：它必须同时出现**原句**与**改写后的子问题 × 查询**，
-        //   否则"指代消解有没有拿上下文"根本无从核对（`#297` 的现象之一就是无从核对）。
-        log.info(
-            "查询理解改写（#297）：原句「{}」→ {}（D{}，耗时 {}ms）",
-            question,
-            describePaths(outcome.subQuestions()),
-            outcome.degradeLevel(),
-            outcome.elapsedMs());
-        hits = retrieveUnderstood(outcome.subQuestions(), question, scope, fetchLimit, retrieval);
-      } else {
-        switch (retrieval.mode()) {
-          case VECTOR -> {
-            hits = vectorHits(question, scope, fetchLimit);
-          }
-          case HYBRID -> {
-            // ★ 两路并跑：全文那一路仍是主干，向量那一路只作补充。
-            //   向量路失败（RuntimeException）⇒ log.warn 后回退全文那一路，不许把整轮打死；
-            //   全文路失败仍走外层 catch ⇒ 零引用（VECTOR 模式的失败同理）。
-            List<SegmentSearchPort.Scored> fullTextHits =
-                segmentSearch.fullText(
-                    new SegmentSearchPort.TextQuery(question, scope, fetchLimit));
-            List<SegmentSearchPort.Scored> vectorHitsList;
-            try {
-              vectorHitsList = vectorHits(question, scope, fetchLimit);
-            } catch (RuntimeException vectorFailure) {
-              log.warn("混合检索的向量一路失败，本轮只用全文那一路继续：{}", vectorFailure.getMessage());
-              vectorHitsList = List.of();
-            }
-            hits =
-                vectorHitsList.isEmpty() ? fullTextHits : fuseHybrid(fullTextHits, vectorHitsList);
-          }
-          case FULLTEXT -> {
-            hits =
-                segmentSearch.fullText(
-                    new SegmentSearchPort.TextQuery(question, scope, fetchLimit));
-          }
-          default -> throw new IllegalArgumentException("未知的检索模式：" + retrieval.mode());
-        }
-      }
-      // ★★ 多跳再检一轮（`#283`）。规则触发（与 `RetrievalService` 同口径 `§3.4.2`）：
-      //   最高分 < 阈值，或命中数 < HOP_MIN_HITS。★ 它是"要么更好、要么什么都没发生" ——
-      //   判定失败 / 没有下一查询 / 下一轮零命中，全部用已有结果继续（`§3.4.6`）。
-      hits = withMultiHop(question, scope, fetchLimit, retrieval, hits);
-      // ★★ 第五路（问答对，0.9.9）：挂在知识库上的问答对，有出处的那部分作为一路候选参与融合。
-      //   没有出处的那部分进不了融合（RRF 按段排名合并，没段就没有名次），它们由直答支负责，
-      //   见 #78。
-      QaRoute qa = withQaRoute(question, scope, retrieval, hits);
-      hits = qa.hits();
-      if (qa.directAnswer() != null) {
-        // ★★ 直答（#78）：命中即答案 —— 不参与融合、不调模型、也不进引用清单。
-        //   引用为空是对的：答案本身就是问答对，没有"第几条分段"可指。
-        DirectAnswer direct = qa.directAnswer();
+      // ★★ 检索策略只有一处（`RetrievalService.retrieve`）：命中测试页、工作流检索节点、对话
+      //   走的都是它 —— 这是 `#378` 的收口点（此前对话自己写了一份两路策略，命中测试四路，
+      //   两边读数不可比）。这里只负责三件**对话特有**的事：把域与身份交进去、把阈值按域分档、
+      //   把排名翻成引用。
+      RetrievalService.Outcome outcome =
+          retrievalService.retrieve(
+              new RetrievalRequest(
+                  retrieval.mode().name(),
+                  retrieval.threshold(),
+                  retrieval.topN(),
+                  retrieval.noRefStrategy().name(),
+                  List.copyOf(effectiveKbIds),
+                  question,
+                  retrieval.queryCount(),
+                  retrieval.decomposeEnabled(),
+                  retrieval.maxSubQuestions(),
+                  retrieval.multiHopEnabled(),
+                  retrieval.maxHops(),
+                  retrieval.rerankListwise(),
+                  conversationId,
+                  false,
+                  RetrievalRequest.ThresholdPolicy.CONVERSATION,
+                  scope));
+      // ★★ 直答（`#78`）：命中即答案 —— 不参与融合、不调模型、也不进引用清单。
+      //   引用为空是对的：答案本身就是问答对，没有"第几条分段"可指。
+      //   ★ 它排在"零命中早退"之前：被标成直答的问答对常常没有出处分段（手工录入的本就没有），
+      //     先走"没有相关内容"那条，这个开关就永远不会生效。
+      if (outcome.directAnswer() != null) {
+        QaRecallPort.Match direct = outcome.directAnswer();
         log.info(
             "问答对直答命中：标定问法「{}」（score {}），本轮跳过融合与模型调用（会话 {}）",
             direct.question(),
             direct.score(),
             conversationId);
         return RetrievalOutcome.direct(
-            "本次回答直接取自知识库问答对（标定问法：「" + direct.question() + "」），未调用模型。", direct);
+            "本次回答直接取自知识库问答对（标定问法：「" + direct.question() + "」），未调用模型。",
+            new DirectAnswer(direct.id(), direct.question(), direct.answer(), direct.score()));
       }
-      if (hits.isEmpty()) {
+      List<RetrievalService.Ranked> ranked = outcome.hits();
+      if (ranked.isEmpty()) {
         // ★ 检索确实跑了、也确实一条都没命中 —— 与"没检索"必须能分开，否则用户没法判断
         //   该去补知识库，还是该去查开关/权限。
         // ★★ 但"没命中"还有一个更常见、更容易误导用户的成因（`#358`）：附件根本没进来
@@ -1725,51 +1694,24 @@ public class ChatService {
         return RetrievalOutcome.empty(
             noHitNotice(conversationId, hasAttachments, "检索跑完了，但知识库里没有与这个问题相关的内容。"));
       }
-      // ★★ 阈值过滤的**顺序**在 `#187` 收口时改过，两步各有理由：
-      //   ① 先收候选（去重 + 超采样上限），**不**在这一步做阈值；
-      //   ② 先 load 卡片，再按"这条属于哪个域"决定阈值要不要对它生效。
-      //   ★ 顺序原来是"边收边按阈值丢、丢完再 load"，那样在过滤那一刻**不知道**这条是不是会话域
-      //     （`Scored` 只有 `segmentId` 与 `score`，不带域标记），于是只能对所有命中一律用向量阈值 ——
-      //     代价见下面那段。
-      List<UUID> candidates = new ArrayList<>(Math.min(hits.size(), fetchLimit));
-      Map<UUID, Double> scoreOfCandidate = new LinkedHashMap<>();
-      for (SegmentSearchPort.Scored hit : hits) {
-        if (candidates.size() >= fetchLimit) {
-          break;
-        }
-        // ★ 去重（同一分段可能被多个词元命中）
-        if (scoreOfCandidate.containsKey(hit.segmentId())) {
-          continue;
-        }
-        candidates.add(hit.segmentId());
-        scoreOfCandidate.put(hit.segmentId(), hit.score());
-      }
-      if (candidates.isEmpty()) {
-        // 走到这里只有一种可能：hits 里有分段 id 但全部重复（去重后为空）。仍按"没有相关内容"处置。
-        return RetrievalOutcome.empty(
-            noHitNotice(conversationId, hasAttachments, "检索跑完了，但知识库里没有与这个问题相关的内容。"));
-      }
+      // ★★ 阈值过滤的**顺序**（`#187` 的判据，搬到这里时逐条保留）：
+      //   ① 候选已经是"排好序的排名"，这里只**按域**决定阈值要不要对它生效；
+      //   ② 判据是 `card.kbId() == null`（会话域没有库行）—— 与下面组装引用时**同一个判据**，
+      //      而且**不许兜底**：兜一个假 kbId 就把"知识库引用 vs 会话域引用"这条结构性判据抹掉了。
+      //   ★ 这一点现在比原来更省事：`Ranked` 自带卡片，不必再回头 `load` 一遍。
       cards = new LinkedHashMap<>();
-      for (SegmentSearchPort.Card card : segmentSearch.load(candidates)) {
-        cards.put(card.segmentId(), card);
-      }
       ordered = new ArrayList<>(retrievalLimit);
       scoreById = new LinkedHashMap<>();
       int droppedByThreshold = 0;
       int conversationScopedKept = 0;
-      for (UUID candidateId : candidates) {
+      for (RetrievalService.Ranked hit : ranked) {
         if (ordered.size() >= retrievalLimit) {
           break;
         }
-        SegmentSearchPort.Card candidateCard = cards.get(candidateId);
-        // ★★ 会话域的判据就是 `kbId == null`（会话域没有库行）—— 与下面组装那段**同一个判据**，
-        //   而且**不许兜底**：兜一个假 kbId 就把"知识库引用 vs 会话域引用"这条结构性判据抹掉了。
+        SegmentSearchPort.Card candidateCard = hit.card();
         boolean conversationScoped = candidateCard != null && candidateCard.kbId() == null;
-        double score = scoreOfCandidate.getOrDefault(candidateId, 0.0);
-        // ★★ 准确度阈值：低于下限的命中直接丢弃。
-        //
-        //   实测那个答非所问的案例里，5 条命中**全是 0.25 分** —— 那是"沾一点边就算命中"的分数，
-        //   而模型会把它们当事实复述。阈值是这里唯一的拦截点：它必须在**进 prompt 之前**生效，
+        double score = hit.score();
+        // ★★ 准确度阈值：低于下限的命中直接丢弃。它必须在**进 prompt 之前**生效，
         //   否则"低分引用"仍会污染上下文（界面上的引用列表反而不是主要危害）。
         //
         //   ★★ 例外：**会话域不吃这个阈值**。会话域只走全文一路
@@ -1784,8 +1726,9 @@ public class ChatService {
         if (conversationScoped) {
           conversationScopedKept++;
         }
-        ordered.add(candidateId);
-        scoreById.put(candidateId, score);
+        cards.put(hit.segmentId(), candidateCard);
+        ordered.add(hit.segmentId());
+        scoreById.put(hit.segmentId(), score);
       }
       if (conversationScopedKept > 0) {
         // ★ 留痕（不许静默）：会话域留了几条、阈值另外丢了几条 —— "附件到底参与了没有"要能从日志读出来
@@ -1803,7 +1746,7 @@ public class ChatService {
                 ? "命中的分段都低于准确度阈值（"
                     + threshold
                     + "），已全部丢弃 —— 本轮命中 "
-                    + hits.size()
+                    + ranked.size()
                     + " 条，丢弃 "
                     + droppedByThreshold
                     + " 条。知识库里可能只有沾边的内容，也可能阈值定得偏高（管理员可在「设置 → 通用问答」里调）。"
@@ -2050,103 +1993,6 @@ public class ChatService {
     return context.toString();
   }
 
-  /**
-   * 把改写结果渲染成日志可核对的一行（{@code #297}）：子问题 × 查询。
-   *
-   * <p>★ 判据 1 / 3 的读数就靠它：日志里必须同时出现<strong>原句</strong>（调用点打）与这里渲染的改写结果，
-   * 否则"改写结果是不是原句"、"指代消解有没有拿上下文"都无从核对（{@code #297} 的现象之一就是无从核对）。
-   */
-  private static String describePaths(List<SubQuestion> subs) {
-    StringBuilder rendered = new StringBuilder("[");
-    for (int i = 0; i < subs.size(); i++) {
-      SubQuestion sub = subs.get(i);
-      if (i > 0) {
-        rendered.append("；");
-      }
-      rendered.append("子问题 ").append(i + 1).append("「").append(sub.question()).append("」");
-      rendered.append(" = ").append(sub.queries());
-    }
-    return rendered.append(']').toString();
-  }
-
-  /**
-   * 多路检索（{@code #297}）：按「子问题 × 查询」召回 → 子问题内 RRF 融合 → 子问题间配额合并。
-   *
-   * <h3>★ 口径三条</h3>
-   *
-   * <ol>
-   *   <li><strong>子问题之间不许用一个全局 RRF 排名</strong>（{@code 10 §3.3.3}）：否则问题 A 的高分查询会把 B 的名额挤光 ⇒
-   *       "问了两件事只答一件"是<strong>功能没做到</strong>。⇒ 走 {@link RrfQuotaJoiner}（保底配额 + 全局分数补足）。
-   *   <li>子问题<strong>内</strong>多查询用 {@link #fuseHybrid(List)}（k=60 RRF，主序 = RRF 分，展示分 =
-   *       各路最大原始分，{@code #293} 口径）。
-   *   <li><strong>要么更好、要么什么都没发生</strong>（与 {@code #283} 多跳同一条纪律）：某一路召回失败只记 warn 并当空； 改写后全空 ⇒
-   *       退回<strong>原始问题</strong>单路召回；原始问题也零命中 ⇒ 空列表（调用方按"零命中"继续）。
-   * </ol>
-   *
-   * <p>★ 融合顺序 = {@link RrfQuotaJoiner.Result#selected()} 的顺序（子问题配额优先，全局 RRF 分只作补足）；
-   * 展示分取"该分段在各路中的最大原始分"（{@code Math::max} 归并，与 {@link #fuseHybrid} 同一口径）。
-   *
-   * @param understanding 改写结果（子问题 × 查询）
-   * @param question 原始问题（兜底那一路用）
-   * @return 排好序的命中；改写后与原句都零命中则空列表
-   */
-  private List<SegmentSearchPort.Scored> retrieveUnderstood(
-      List<SubQuestion> subQuestions,
-      String question,
-      RetrievalScope scope,
-      int fetchLimit,
-      RetrievalParams retrieval) {
-    List<List<SegmentSearchPort.Scored>> fusedByUnit = new ArrayList<>(subQuestions.size());
-    java.util.Map<UUID, SegmentSearchPort.Scored> scoreOf = new java.util.LinkedHashMap<>();
-    for (SubQuestion sub : subQuestions) {
-      List<List<SegmentSearchPort.Scored>> perQuery = new ArrayList<>(sub.queries().size());
-      for (String query : sub.queries()) {
-        try {
-          perQuery.add(searchOnce(query, scope, fetchLimit, retrieval));
-        } catch (RuntimeException pathFailed) {
-          // ★ 一路失败只废这一路：查询理解的价值就是"多路"，一路异常把整轮打死等于白改写
-          log.warn("查询理解的一路召回失败（查询「{}」），这一路按空处理：{}", query, pathFailed.getMessage());
-          perQuery.add(List.of());
-        }
-      }
-      List<SegmentSearchPort.Scored> fused =
-          perQuery.isEmpty()
-              ? List.of()
-              : (perQuery.size() == 1 ? perQuery.getFirst() : fuseHybrid(perQuery));
-      fusedByUnit.add(fused);
-      for (SegmentSearchPort.Scored hit : fused) {
-        // ★ 同一分段在多路里都出现时取分大的那条（与 fuseHybrid 的 displayScore 同一口径）
-        scoreOf.merge(
-            hit.segmentId(),
-            hit,
-            (kept, challenger) -> kept.score() >= challenger.score() ? kept : challenger);
-      }
-    }
-    // ── 子问题间配额合并（保底名额 + 全局 RRF 分补足；★ 不许全局 RRF 排名，10 §3.3.3）──
-    List<RrfQuotaJoiner.Unit> units = new ArrayList<>(fusedByUnit.size());
-    for (int i = 0; i < fusedByUnit.size(); i++) {
-      List<UUID> rankedIds =
-          fusedByUnit.get(i).stream().map(SegmentSearchPort.Scored::segmentId).toList();
-      units.add(new RrfQuotaJoiner.Unit(i, rankedIds));
-    }
-    RrfQuotaJoiner.Result joined = RrfQuotaJoiner.join(units, retrieval.topN());
-    List<SegmentSearchPort.Scored> hits = new ArrayList<>(joined.selected().size());
-    for (UUID id : joined.selected()) {
-      SegmentSearchPort.Scored hit = scoreOf.get(id);
-      if (hit != null) {
-        hits.add(hit);
-      }
-    }
-    // ★ 兜底：改写后的全部路都空 ⇒ 退回原始问题单路召回。
-    //   ★ 与 RetrievalService 的 ⑤b（只在 totalQueries > 1 时兜）相比这里更宽：本轮的命中
-    //     是"零引用继续"的唯一来源，改写把召回改没了是最坏的降级形状 —— 原句再试一次要么有货、要么什么都没发生。
-    if (hits.isEmpty()) {
-      log.warn("查询理解改写后的 {} 路召回全空，退回原始问题单路召回（原句「{}」）", totalQueries(subQuestions), question);
-      hits = searchOnce(question, scope, fetchLimit, retrieval);
-    }
-    return hits;
-  }
-
   /** 改写后一共几条检索查询（全是子问题的查询数之和，用于日志读数）。 */
   private static int totalQueries(List<SubQuestion> subQuestions) {
     int total = 0;
@@ -2154,148 +2000,6 @@ public class ChatService {
       total += sub.queries().size();
     }
     return total;
-  }
-
-  /**
-   * 多跳迭代的最小实现（{@code #283}）：规则触发 → 判定 → 再检一轮 → 合并去重。
-   *
-   * <h3>★ 它必须"要么答得更好，要么什么都没发生"</h3>
-   *
-   * <p>{@code 10 §3.4.6} 列了三种失败：判定调用失败 / 下一轮检索失败 / 下一轮零新增。 三条的处置全是<strong>用已有结果继续</strong> ——
-   * 一次都不该让整轮问答失败，因为多跳是补救手段、不是主路。
-   *
-   * <p>★ 触发条件是<strong>规则判定</strong>（不额外调模型）：首轮最高分低于阈值，或命中数少于 {@value #HOP_MIN_HITS}（与 {@code
-   * RetrievalService.HOP_MIN_HITS} 同值）。判"够不够"才是模型那一次调用。
-   *
-   * <p>★★ 为什么这段要写在这里而不是复用 {@code RetrievalService.runMultiHop}：那条链与 {@code HitTestQuery} / 子问题配额 /
-   * {@code HopRun} 强耦合，而问答链路的召回是自己实现的 （{@code switch (retrieval.mode())} 三路 + {@code
-   * fuseHybrid}）。把它硬塞进来会把命中测试的一整套 记账类型拖进对话链路。⇒ 这里只保留 {@code §3.4.2} 的规则触发与 {@code §3.4.6} 的三条兜底。
-   *
-   * @param firstHits 首轮命中（已按分数排序）
-   * @return 合并后的命中（首轮顺序优先，新命中追加在后）
-   */
-  /**
-   * 第五路：问答对（0.9.9）。
-   *
-   * <p>★ 为什么是「一路候选」而不是「先查问答对、查到就直接返回」：问答对与分段是同一批内容的两种载体，
-   * 谁更贴题只能由同一次融合来判（否则问答对会被无条件置顶，而它可能只是一句泛泛的标定问法）。
-   *
-   * <p>★ 为什么只收<b>有出处</b>的那部分：融合的输入是「段 + 分」，没有出处的问答对给不出段， 硬塞进去只能编一个段 id。它们不是被丢了 ——
-   * 直答型由短路支负责，召回型只能作为答案候选 （#78 的裁定）。
-   *
-   * <p>★ 会话域不吃这一路：问答对挂在知识库上，会话附件没有问答对；{@link QaRecallPort.Query} 的入参是知识库 id
-   * 集合，会话域传进去只能是空集，而空集在实现里是「一条都不给」 （不是「全部可见」）。
-   *
-   * <p>★ 失败只 warn：这一路是补强，不是主干。它挂掉时本轮必须照常给全文/向量那几路的结果。
-   */
-  private record QaRoute(List<SegmentSearchPort.Scored> hits, DirectAnswer directAnswer) {}
-
-  private QaRoute withQaRoute(
-      String question,
-      RetrievalScope scope,
-      RetrievalParams retrieval,
-      List<SegmentSearchPort.Scored> hits) {
-    if (qaRecallPort == null || scope.hasConversationScope()) {
-      return new QaRoute(hits, null);
-    }
-    try {
-      List<QaRecallPort.Match> matches =
-          qaRecallPort.recall(
-              new QaRecallPort.Query(
-                  question, scope.sharedKbIds(), retrieval.threshold(), QA_ROUTE_LIMIT));
-      // ★ 直答型先挑出来：它一命中就跳过融合与模型，所以必须在"有没有候选"之前决定。
-      //   多条命中取分最高的那条 —— 其余条数在日志里说清楚（"另外还有 N 条相近问答对"），
-      //   不静默只留一条。
-      DirectAnswer direct =
-          matches.stream()
-              .filter(QaRecallPort.Match::directAnswer)
-              .max(java.util.Comparator.comparingDouble(QaRecallPort.Match::score))
-              .map(
-                  match ->
-                      new DirectAnswer(match.id(), match.question(), match.answer(), match.score()))
-              .orElse(null);
-      Map<UUID, Double> bySegment = new LinkedHashMap<>();
-      for (QaRecallPort.Match match : matches) {
-        if (match.segmentId() == null) {
-          continue;
-        }
-        bySegment.merge(match.segmentId(), match.score(), Math::max);
-      }
-      if (bySegment.isEmpty()) {
-        return new QaRoute(hits, direct);
-      }
-      log.info("问答对扩召回：命中 {} 条，其中 {} 条挂了出处分段，作为一路候选参与融合", matches.size(), bySegment.size());
-      List<SegmentSearchPort.Scored> route =
-          bySegment.entrySet().stream()
-              .map(entry -> new SegmentSearchPort.Scored(entry.getKey(), entry.getValue()))
-              .toList();
-      return new QaRoute(RecallFusion.fuse(hits, route), direct);
-    } catch (RuntimeException failure) {
-      log.warn("问答对扩召回失败，本轮少一路候选：{}", failure.toString());
-      return new QaRoute(hits, null);
-    }
-  }
-
-  private List<SegmentSearchPort.Scored> withMultiHop(
-      String question,
-      RetrievalScope scope,
-      int fetchLimit,
-      RetrievalParams retrieval,
-      List<SegmentSearchPort.Scored> firstHits) {
-    if (multiHop == null || !retrieval.multiHopEnabled()) {
-      return firstHits;
-    }
-    double best = firstHits.isEmpty() ? 0.0 : firstHits.get(0).score();
-    boolean triggered = firstHits.size() < HOP_MIN_HITS || best < retrieval.threshold();
-    if (!triggered) {
-      log.info("多跳已开，但首轮命中充分（{} 条，最高分 {}）⇒ 不再检一轮", firstHits.size(), best);
-      return firstHits;
-    }
-    LinkedHashMap<UUID, Double> merged = new LinkedHashMap<>();
-    firstHits.forEach(hit -> merged.putIfAbsent(hit.segmentId(), hit.score()));
-    int maxHops = Math.max(1, retrieval.maxHops());
-    for (int round = 1; round < maxHops; round++) {
-      String nextQuery;
-      try {
-        List<SegmentSearchPort.Card> cards = segmentSearch.load(merged.keySet());
-        HopDeciderPort.Result outcome = multiHop.decide(question, cards, 0L);
-        if (!outcome.usable()) {
-          log.info("多跳判定不可用（{}）⇒ 用已有 {} 条结果继续", outcome.failure(), merged.size());
-          break;
-        }
-        if (outcome.sufficient()) {
-          log.info("多跳判定：已有命中已足够 ⇒ 不再检一轮（共 {} 条）", merged.size());
-          break;
-        }
-        if (!outcome.hasNextQuery()) {
-          log.info("多跳判定：需要更多信息但没给出下一查询 ⇒ 用已有 {} 条结果继续", merged.size());
-          break;
-        }
-        nextQuery = outcome.nextQuery();
-      } catch (RuntimeException failure) {
-        // §3.4.6：判定失败 ⇒ 用已有结果生成（不抛，免得"开了多跳反而更容易失败"）
-        log.warn("多跳判定调用失败，用已有 {} 条结果继续：{}", merged.size(), failure.getMessage());
-        break;
-      }
-      List<SegmentSearchPort.Scored> more;
-      try {
-        more = searchOnce(nextQuery, scope, fetchLimit, retrieval);
-      } catch (RuntimeException failure) {
-        log.warn("多跳第 {} 轮的检索失败，用已有 {} 条结果继续：{}", round + 1, merged.size(), failure.getMessage());
-        break;
-      }
-      int before = merged.size();
-      more.forEach(hit -> merged.putIfAbsent(hit.segmentId(), hit.score()));
-      int added = merged.size() - before;
-      log.info("多跳第 {} 轮：「{}」带来 {} 条新分段（累计 {} 条）", round + 1, nextQuery, added, merged.size());
-      if (added == 0) {
-        // §3.4.6 第三条：下一轮零新增 ⇒ 停止（再问下去只会更贵）
-        break;
-      }
-    }
-    return merged.entrySet().stream()
-        .map(e -> new SegmentSearchPort.Scored(e.getKey(), e.getValue()))
-        .toList();
   }
 
   /**
@@ -2346,138 +2050,6 @@ public class ChatService {
       return "";
     }
     return text.length() <= max ? text : text.substring(0, max);
-  }
-
-  /** 按检索模式跑一次召回（{@code withMultiHop} 用；与 {@code retrieve} 的三路同口径）。 */
-  private List<SegmentSearchPort.Scored> searchOnce(
-      String query, RetrievalScope scope, int fetchLimit, RetrievalParams retrieval) {
-    return switch (retrieval.mode()) {
-      case VECTOR -> vectorHits(query, scope, fetchLimit);
-      case FULLTEXT ->
-          segmentSearch.fullText(new SegmentSearchPort.TextQuery(query, scope, fetchLimit));
-      case HYBRID -> {
-        List<SegmentSearchPort.Scored> fullTextHits =
-            segmentSearch.fullText(new SegmentSearchPort.TextQuery(query, scope, fetchLimit));
-        List<SegmentSearchPort.Scored> vectorHitsList;
-        try {
-          vectorHitsList = vectorHits(query, scope, fetchLimit);
-        } catch (RuntimeException vectorFailure) {
-          log.warn("多跳的混合检索里向量一路失败，只用全文那一路：{}", vectorFailure.getMessage());
-          vectorHitsList = List.of();
-        }
-        yield vectorHitsList.isEmpty() ? fullTextHits : fuseHybrid(fullTextHits, vectorHitsList);
-      }
-    };
-  }
-
-  /**
-   * 向量检索一路（{@code #185}）：把问题按知识库各自的向量模型分组向量化，再逐组向量检索、RRF 融合。
-   *
-   * @param question 用户问题
-   * @param scope 检索范围（会话附件部分不参与向量检索，见方法内说明）
-   * @param limit 每组的召回上限
-   * @return 按融合顺序排列的命中（display score = 该分段在各模型下的最大相似度）
-   */
-  private List<SegmentSearchPort.Scored> vectorHits(
-      String question, RetrievalScope scope, int limit) {
-    if (embeddingPort == null) {
-      // ★ 不静默退回全文：模式是 VECTOR 就必须走向量，缺依赖要让外层 catch 走零引用并留日志。
-      throw new IllegalStateException("检索模式为 VECTOR，但 EmbeddingPort 未装配");
-    }
-    if (scope.hasConversationScope()) {
-      // ★ 问答链路的 conversationId 每轮都有值（不代表有附件）。向量查询只能按知识库的模型/维度表走，
-      //   把 CONVERSATION 分段混进来会拿错模型；这里显式收窄并在下面留痕，不静默。
-      //   混合模式的会话附件仍由全文一路覆盖；纯向量模式只检索知识库 —— 界面说明与这里同口径。
-      log.info("向量检索只查知识库：本轮会话附件不参与向量一路");
-    }
-    RetrievalScope vectorScope = scope.withoutConversation();
-    Map<UUID, UUID> modelByKb = segmentSearch.embeddingModelByKb(vectorScope.kbIdsWithModelRows());
-    if (modelByKb.isEmpty()) {
-      throw new IllegalStateException("这些知识库没有可用的向量模型");
-    }
-    // 按向量模型分组：同一模型的库共用一次向量化 + 一次检索。
-    Map<UUID, List<UUID>> kbIdsByModel = new LinkedHashMap<>();
-    modelByKb.forEach(
-        (kbId, modelId) -> kbIdsByModel.computeIfAbsent(modelId, k -> new ArrayList<>()).add(kbId));
-    List<List<SegmentSearchPort.Scored>> rankedPerModel = new ArrayList<>(kbIdsByModel.size());
-    for (Map.Entry<UUID, List<UUID>> group : kbIdsByModel.entrySet()) {
-      UUID modelId = group.getKey();
-      // ★ 按模型分组隔离失败：一个向量模型没加载不该让其它模型的库也一起零引用。
-      //   失败组 log.warn 后跳过；全部失败才抛，由外层统一落成"零引用 + 可读日志"。
-      try {
-        List<float[]> embedded = embeddingPort.embed(modelId, List.of(question));
-        if (embedded == null || embedded.isEmpty()) {
-          throw new IllegalStateException("向量模型未返回问题的向量：" + modelId);
-        }
-        float[] vector = embedded.getFirst();
-        if (vector == null || vector.length == 0) {
-          throw new IllegalStateException("向量模型返回了空向量：" + modelId);
-        }
-        rankedPerModel.add(
-            segmentSearch.vectorSearch(
-                new SegmentSearchPort.VectorQuery(
-                    vector.length,
-                    vector,
-                    vectorScope.withinShared(group.getValue()),
-                    limit,
-                    modelId)));
-      } catch (RuntimeException groupFailure) {
-        log.warn("向量模型 {} 的分组检索失败，跳过该组：{}", modelId, groupFailure.getMessage());
-      }
-    }
-    if (rankedPerModel.isEmpty()) {
-      throw new IllegalStateException("所有向量模型分组都检索失败");
-    }
-    if (rankedPerModel.size() == 1) {
-      // 单组保持该组顺序。
-      return rankedPerModel.getFirst();
-    }
-    return fuseHybrid(rankedPerModel);
-  }
-
-  /**
-   * 两路（或多组）命中的本地融合（{@code #185}，主序 {@code #293} 试过换成 min-rank，**已回退**）。
-   *
-   * <p>★ 刻意<b>不</b> import {@code retrieval} 模块的 {@code Rrf}：那是平台内部参考实现，问答链路与它 不该产生模块耦合。
-   * 但两处的**口径必须一致** —— 改这里就同时改 {@code Rrf}，反之亦然。
-   *
-   * <h3>★★ 主序为什么是这个分数（{@code #293} 试过并回退）</h3>
-   *
-   * <p>RRF 的公式 {@code score(d) = Σ 1/(k + rank_i(d))}（k=60）有一个反直觉的后果： <b>"一路第 1、另一路没有" 只得 {@code
-   * 1/61 ≈ 0.0164}，而 "两路都第 5" 得 {@code 2/65 ≈ 0.0308}</b> ——
-   * 前者几乎只有后者的一半。当向量路对某条问句<b>没有区分度</b>时（长段、专有名词密集）， 它不是"补充"，而是<b>把全文路的正确排序稀释掉</b>。
-   *
-   * <p>实测（干净语料库 195 条里 {@code rank_core=0} 的 21 条，逐条跑三模式）： {@code SYN-004-2} 全文第 1 → 融合第 8；{@code
-   * SYN-054-3} 全文第 1 → 融合第 11； {@code SYN-032-2} 向量第 1 → 融合第 14。反例 5/21。读数见 {@code docs/ROADMAP.md
-   * §11.10.93}。
-   *
-   * <p>⇒ 试过把主序换成 <b>{@code min(rank)}</b>（一条分段在任一路排得越靠前，融合后就越靠前）：局部反例确实 5→4 条。 <b>但全量 195
-   * 条上它是亏的</b>：B1 前 5 core 86.2% → 87.2%（+2 条），B3 第 1 条 59.5% → 57.9%（−3 条）； {@code rank_core} 分布
-   * 1:116→113 · 2..5:49→55 · 0:21→19 —— 抬上来的是 {@code 2..5}，而**掉出第 1 的比进去的多**。
-   *
-   * <p>★ 机制：min-rank 抬上来的正是"某一路排第一、另一路没中"的段，而这类段多数是**别的文档的错段** （{@code §11.10.92}
-   * 已证明"只含实体名、不含答案词"的段恰是错的候选）。 于是它拿**已达标的 B1**（门槛 70%）去换**还差 22 点的 B3**（门槛 80%）——方向错了。
-   *
-   * <p>⇒ 融合稀释的病<b>仍然真实</b>，但改主序不是它的解：池子里没有正确的段，怎么排都没用。 下一步在**召回层**。见 {@code #293} 与 {@code ROADMAP
-   * §11.10.94}。
-   *
-   * <p>★ 融合后的 {@code score} 仍取该分段在各路中的<strong>最大原始分</strong>（用于阈值判定与界面展示）。
-   */
-  private static List<SegmentSearchPort.Scored> fuseHybrid(
-      List<SegmentSearchPort.Scored> routeA, List<SegmentSearchPort.Scored> routeB) {
-    return RecallFusion.fuse(routeA, routeB);
-  }
-
-  /**
-   * 多路融合（子问题内多查询、多向量模型两条都会走到这里）。
-   *
-   * <p>★ <strong>实现已收口到 {@link RecallFusion}</strong>（{@code #378} 那一批）：这里此前有一份自实现的 RRF， 与 {@code
-   * RetrievalService} 用的 {@link Rrf} 是两份代码、同一条口径。两份各改一处的风险已经真实发作过
-   * ——"命中测试四路召回、真实对话只有两路"就是它的后果。现在只留一次委托，改融合规则只改一处。
-   */
-  private static List<SegmentSearchPort.Scored> fuseHybrid(
-      List<List<SegmentSearchPort.Scored>> routes) {
-    return RecallFusion.fuse(routes);
   }
 
   /**

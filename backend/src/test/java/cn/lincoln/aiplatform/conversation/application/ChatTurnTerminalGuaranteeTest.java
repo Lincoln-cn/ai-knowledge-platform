@@ -125,19 +125,20 @@ class ChatTurnTerminalGuaranteeTest {
   }
 
   private static ChatService chatService(ChatTurnStore store, SegmentSearchPort search) {
-    return new ChatService(
-        store,
-        search,
-        new KnownScope(),
-        (modelId, prompt, timeout, callback) -> {
-          callback.onChunk("差旅住宿标准为每人每天500元。");
-          callback.onUsage(120, 40);
-          callback.onEnd(ChatStreamPort.End.COMPLETE, null);
-        },
-        new ChatStopSignal(),
-        PROPERTIES,
-        UNRESTRICTED_EGRESS,
-        null);
+    return ChatServiceRetrieval.wire(
+        new ChatService(
+            store,
+            search,
+            new KnownScope(),
+            (modelId, prompt, timeout, callback) -> {
+              callback.onChunk("差旅住宿标准为每人每天500元。");
+              callback.onUsage(120, 40);
+              callback.onEnd(ChatStreamPort.End.COMPLETE, null);
+            },
+            new ChatStopSignal(),
+            PROPERTIES,
+            UNRESTRICTED_EGRESS,
+            null));
   }
 
   // ────────────────────────── 替身 ──────────────────────────
@@ -163,7 +164,17 @@ class ChatTurnTerminalGuaranteeTest {
       return List.of();
     }
 
+    /**
+     * ★ 检索现在走 {@code RetrievalService}，它在出结果前会做一次「域感知的可见性复核」。
+     *
+     * <p>这个假端口的可见性由 {@code retrievalScope} / {@code visibleKbIds} 决定，复核这一步对它恒真。
+     * 不补这个方法的话默认实现会<strong>明确抛</strong>（那是为了防生产实现静默丢候选）， 而抛出来在对话侧表现为「零引用」，看起来像"检索坏了"。
+     */
     @Override
+    public Set<UUID> visibleAmong(Collection<UUID> candidateIds, RetrievalScope scope) {
+      return Set.copyOf(candidateIds);
+    }
+
     public List<Card> load(Collection<UUID> segmentIds) {
       throw new UnsupportedOperationException("零命中时没有展示信息要取");
     }

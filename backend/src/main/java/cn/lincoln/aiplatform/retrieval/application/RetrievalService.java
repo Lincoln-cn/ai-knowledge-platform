@@ -1020,16 +1020,26 @@ public class RetrievalService {
       Map<UUID, Double> textScores) {
     List<UUID> vectorIds = List.of();
     if (mode != RetrievalMode.FULLTEXT) {
-      List<SegmentSearchPort.Scored> hits = vectorSearch(query, scope, candidateLimit);
-      for (SegmentSearchPort.Scored hit : hits) {
-        vectorScores.merge(hit.segmentId(), hit.score(), Math::max);
+      try {
+        List<SegmentSearchPort.Scored> hits = vectorSearch(query, scope, candidateLimit);
+        for (SegmentSearchPort.Scored hit : hits) {
+          vectorScores.merge(hit.segmentId(), hit.score(), Math::max);
+        }
+        // ★ 阈值只作用于向量路，且要在融合之前（见类注释：阈值是相似度，不是名次）
+        vectorIds =
+            hits.stream()
+                .filter(hit -> hit.score() >= threshold)
+                .map(SegmentSearchPort.Scored::segmentId)
+                .toList();
+      } catch (RuntimeException vectorFailure) {
+        // ★ 混合模式下"向量坏了"不等于"这一轮没有答案"：全文那一路还是要跑（原先对话链路就是这么做的，
+        //   改造前那句注释是「向量路失败，本轮只用全文」）。★ 纯向量模式不能这样兜底 —— 那时没有第二路，
+        //   兜底会得到"零引用"，而零引用在界面上与"知识库里没有相关内容"长得一样。
+        if (mode == RetrievalMode.VECTOR) {
+          throw vectorFailure;
+        }
+        log.warn("向量那一路失败，本查询只用全文：{}", vectorFailure.getMessage());
       }
-      // ★ 阈值只作用于向量路，且要在融合之前（见类注释：阈值是相似度，不是名次）
-      vectorIds =
-          hits.stream()
-              .filter(hit -> hit.score() >= threshold)
-              .map(SegmentSearchPort.Scored::segmentId)
-              .toList();
     }
 
     List<UUID> textIds = List.of();
@@ -1083,15 +1093,20 @@ public class RetrievalService {
   List<SegmentSearchPort.Scored> vectorSearch(String question, RetrievalScope scope, int limit) {
     // ★★ 会话域的向量路边界（本批唯一的一处声明，见方法注释）：
     //   · 常量说"当前**不**收会话域"（放开它的触发条件写在 RetrievalScope#CONVERSATION_SCOPE_IN_VECTOR_PATH）；
-    //   · 判定说"这一批域里确实有会话临时，所以拒绝"。
-    //   两件事分开写：谁把常量改成 true，这条判定就自动不再拦人（那时按方法注释删掉本段）。
+    //   · 判定说"这一批域里确实有会话临时，所以把它摘掉再查"。
+    //   两件事分开写：谁把常量改成 true，这条判定就自动不再生效。
+    //
+    // ★★ 为什么是「摘掉」而不是「拒绝」（2026-11-28 改的，原先是抛 400）：问答链路的 conversationId
+    //   **每一轮都有值** —— 它只说明"这是一次会话内提问"，不代表本轮带了附件。按"拒绝"处理会把
+    //   每一轮带会话 id 的问答整体变成零引用（#378 收口时实测：9 条对话测试一起红，原因却与它们无关）。
+    //   摘掉之后会话附件仍由**全文一路**覆盖（`10 §4.1` 的口径：混合模式里会话附件走全文），
+    //   而这条日志不能省 —— 少了它，"附件少看见了几条"与"确实没命中"在日志里长得一模一样。
+    RetrievalScope working = scope;
     if (!RetrievalScope.CONVERSATION_SCOPE_IN_VECTOR_PATH && scope.hasConversationScope()) {
-      throw new BusinessException(
-          ErrorCode.BAD_REQUEST,
-          "会话附件暂不参与向量检索（它的向量模型 = 平台默认，那一格今天无处解析）",
-          "会话内的检索请用全文模式；向量/混合模式覆盖会话附件随「平台默认向量模型」那一批开放");
+      log.info("向量检索只查知识库：本轮会话附件不参与向量一路（会话 {}）", scope.conversationId());
+      working = scope.withoutConversation();
     }
-    Map<UUID, UUID> modelByKb = segmentSearch.embeddingModelByKb(scope.kbIdsWithModelRows());
+    Map<UUID, UUID> modelByKb = segmentSearch.embeddingModelByKb(working.kbIdsWithModelRows());
     if (modelByKb.isEmpty()) {
       throw new BusinessException(
           ErrorCode.BAD_REQUEST, "这些知识库没有可用的向量模型，无法做向量检索", "请确认已绑定向量模型并已加载");
@@ -1108,16 +1123,22 @@ public class RetrievalService {
 
     List<List<UUID>> rankedPerModel = new ArrayList<>();
     Map<UUID, Double> similarity = new HashMap<>();
-    BusinessException lastFailure = null;
+    RuntimeException lastFailure = null;
     for (Map.Entry<UUID, List<UUID>> group : kbIdsByModel.entrySet()) {
       try {
         List<SegmentSearchPort.Scored> hits =
-            searchWithinOneModel(group.getKey(), group.getValue(), scope, question, limit);
+            searchWithinOneModel(group.getKey(), group.getValue(), working, question, limit);
         rankedPerModel.add(ids(hits));
         for (SegmentSearchPort.Scored hit : hits) {
           similarity.merge(hit.segmentId(), hit.score(), Math::max);
         }
-      } catch (BusinessException failure) {
+      } catch (RuntimeException failure) {
+        // ★ 一条坏引用不该打死整次检索。开发库实测：有库绑的向量模型已被删除 ⇒ 早先的写法
+        //   把 NOT_FOUND 直接抛出去，命中测试页整页点不动 —— 而那是**演示路径**。
+        //   ⇒ 跳过这一组、把原因写进日志（不是静默丢弃），其余照常检。
+        //   ★ 抓的是 RuntimeException 而不是 BusinessException：模型未加载 / 返回空向量 /
+        //   维度对不上这三类都在这里被抛出，而它们同样只该打死"这一组"。
+        lastFailure = failure;
         // ★ 一条坏引用不该打死整次检索。开发库实测：有库绑的向量模型已被删除 ⇒ 早先的写法
         //   把 NOT_FOUND 直接抛出去，命中测试页整页点不动 —— 而那是**演示路径**。
         //   ⇒ 跳过这一组、把原因写进日志（不是静默丢弃），其余照常检。

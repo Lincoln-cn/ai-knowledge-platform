@@ -513,6 +513,7 @@ class AppRetrievalParamsTest {
             ChatStreamProperties.defaults(),
             UNRESTRICTED_EGRESS,
             null);
+    ChatServiceRetrieval.wire(service);
     AtomicInteger embeddingCalls = new AtomicInteger();
     if (wireEmbeddingPort) {
       service.setEmbeddingPort(
@@ -703,7 +704,17 @@ class AppRetrievalParamsTest {
       return fullTextHits;
     }
 
+    /**
+     * ★ 检索现在走 {@code RetrievalService}，它在出结果前会做一次「域感知的可见性复核」。
+     *
+     * <p>这个假端口的可见性由 {@code retrievalScope} / {@code visibleKbIds} 决定，复核这一步对它恒真。
+     * 不补这个方法的话默认实现会<strong>明确抛</strong>（那是为了防生产实现静默丢候选）， 而抛出来在对话侧表现为「零引用」，看起来像"检索坏了"。
+     */
     @Override
+    public Set<UUID> visibleAmong(Collection<UUID> candidateIds, RetrievalScope scope) {
+      return Set.copyOf(candidateIds);
+    }
+
     public List<Card> load(Collection<UUID> segmentIds) {
       return segmentIds.stream()
           .map(
