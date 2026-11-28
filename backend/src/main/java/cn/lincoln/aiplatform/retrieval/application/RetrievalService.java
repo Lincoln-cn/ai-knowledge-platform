@@ -455,6 +455,13 @@ public class RetrievalService implements SegmentRetrievalPort {
       //   ③ 三路扩召回不在这里再拆一层 —— 实测它们一共 0.17 秒（见 StageTimer 的读数），
       //      为这点收益多一层线程与日志交织不值得。
       //   ★ 顺序仍然保留：下面按 running 的下标顺序 join，perQuery 的次序与串行版逐位一致。
+      // ★ 只有一条查询时不派发（2026-11-28 补）。
+      //   并行只在 N ≥ 2 时有收益；而单条派发会多借一条连接、多包一层 CompletionException。
+      //   ★★ 更要紧的是**连接换了**：调用方若处在一个还没提交的事务里（测试方法上的 @Transactional 就是），
+      //   它刚写进去的行在新连接上看不到 —— `ConversationAttachmentRetrievalHttpTest` 就是这么红的：
+      //   附件在同一事务里注册、检索却在虚拟线程的新连接上查，于是"刚上传的附件查不到"。
+      //   收紧到"单条走主线程"之后，单路的行为与并行之前逐位一致。
+      boolean parallel = queries.size() > 1;
       List<CompletableFuture<List<UUID>>> running = new ArrayList<>(queries.size());
       for (String query : queries) {
         // ★ 派发前检查余量（10 §6.2 第 6 项）—— 耗尽就用已拿到的结果继续，不是失败。
@@ -471,6 +478,20 @@ public class RetrievalService implements SegmentRetrievalPort {
           break;
         }
         pathsAttempted++;
+        if (!parallel) {
+          perQuery.add(
+              retrieveOneQuery(
+                  query,
+                  mode,
+                  scope,
+                  candidateLimit,
+                  request.thresholdOrDefault(),
+                  vectorScores,
+                  textScores,
+                  timer));
+          paths++;
+          continue;
+        }
         running.add(
             CompletableFuture.supplyAsync(
                 () -> {

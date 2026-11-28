@@ -88,7 +88,11 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
       "app.security.captcha.enabled=false",
       "app.files.root=target/test-files-187",
       "app.chat.heartbeat-interval-ms=300",
-      "app.chat.idle-timeout-ms=2000",
+      // ★ 2026-11-28 改 2000 → 30000：闲置超时的时钟从 Run 构造起算 ⇒ **检索耗时也在这个预算里**
+      //   （ChatService 那段 javadoc 写明"检索耗时早就在这个预算里"）。检索接上四路扩召回 + 重排此后
+      //   在测试容器里要跑几秒，2 秒会把"附件检索到了"判成"生成超时"——那是阈值过期，不是链路坏了。
+      //   本类验的是附件能不能被检索到，不是闲置超时；闲置超时另有专门的判据。
+      "app.chat.idle-timeout-ms=30000",
       "app.chat.flush-interval-ms=60",
       "app.chat.flush-chars=200"
     })
