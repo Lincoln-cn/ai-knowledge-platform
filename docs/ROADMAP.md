@@ -2162,6 +2162,7 @@ B1 95.5% / B3 89.9% 与「实体扩召回关 87.18% → 开 92.31%」都是同�
 | ③ 问答对召回 | `ac33b098` | `QaRecallPort` + `JdbcQaRecallAdapter`：命中判定用**词元 F1**，不用 `plainto_tsquery` |
 | ④ 抽 `RetrievalRequest` | `5c2e0568` `2a5c16d8` `e1d8830d` | `RetrievalService.retrieve(RetrievalRequest)`；`hitTest` 退化薄适配器；`Outcome` 带 `directAnswer` |
 | ⑤ 对话改调 | `21abe84c` | `ChatService.retrieve` 整段替换，删自身 302 行策略 |
+| ⑥ 搬端口 | `aac7a3d4` | 跨模块那一格从 `retrieval.application.RetrievalService` 搬成 `platform/retrieval/SegmentRetrievalPort`（**不开 `@NamedInterface`**，见下节） |
 
 **三处语义差异（收口时才暴露的，都是"两处各写一份"留下的）**：
 
@@ -2182,9 +2183,34 @@ B1 95.5% / B3 89.9% 与「实体扩召回关 87.18% → 开 92.31%」都是同�
 - `AppRetrievalParamsTest` 19/19 · `RetrievalVectorScopeBoundaryTest` 4/4 · `RetrievalDomainScopeTest` 9/9
 - `WorkflowSearchAdapterTest` 3/3 · `ChatStreamHttpTest` 11/11 · `RegenerateTurnTest` 8/8
 - `ConversationAttachmentRetrievalHttpTest` 1/1 · `ChatQaRouteTest` 3/3 · `RecallFusionTest` 5/5
-- `QaRecallTest` 5/5 · `RetrievalRequestTest` 3/3 · `RetrievalDetectedNoteTest` 4/4
+- `QaRecallTest` 5/5 · `RetrievalSpecTest` 3/3 · `RetrievalDetectedNoteTest` 4/4 · `ModuleBoundaryTest` 4/4
 - 三条 grep 断言，`conversation` 包内**零命中**：`segmentSearch.fullText` / `segmentSearch.vectorSearch` /
   `queryUnderstanding.understand`（前两条正是"两处各写一份"的形状，第三条是"改写只在一边发生"的形状）
+
+**★ 收口之后架构闸门红了一次，处置是"搬端口"而不是"开注解"**：
+
+第 ⑤ 步让 `conversation` 直接依赖了 `retrieval.application.RetrievalService`（模块内未暴露的类型），
+`ModuleBoundaryTest` 报 `Module 'conversation' depends on non-exposed type …`。
+
+把它开成 `@NamedInterface` 是最短路径、闸门立刻变绿 —— 但项目里有明确的反面教训：
+`platform/retrieval/EntityRecallPort.java:13`、`HopDeciderPort.java:17`、`QueryUnderstandingPort.java:17`、
+`platform/assistant/AppBindingPort.java:18` 四处 javadoc 写着同一句「**搬端口而不是给实现开
+`@NamedInterface`** —— 后者的读数是闸门绿了，前者才是依赖方向真的合法」，
+`assistant/application/AiChatNodeExecutor.java:24` 记着「后来不得不把实现类开成 `@NamedInterface`」。
+（全项目 `grep NamedInterface` 至今零使用。）
+
+所以第 ⑥ 步把那一格搬进 `platform/retrieval/SegmentRetrievalPort`：**一个方法**
+`Outcome retrieve(Spec spec)`，`Spec` 16 字段与 `HitTestQuery` 同名同义（搬运时方法体一行不用改），
+`Outcome` 只有 `List<Ranked> hits` + `QaRecallPort.Match directAnswer` 两个分量 ——
+命中测试要的 `trace`/`detected`/`degradeLevel` 回答的是"检索为什么长这样"，不是"结果是什么"，
+留在模块内部。`RetrievalService` 因此拆成 `retrieve(Spec)`（端口实现，薄包装）与
+`detailed(Spec)`（原来那套完整流程）。
+
+同批还修了一条**早就过期**的断言：口径闸门里 `DocumentVersionAbsenceTest` 钉的
+`HitTestView.Item` 精确字段集合缺 `channels: List` —— 那是第 ③ 步（`39b1938e`）加的，
+只是 `cn.lincoln.aiplatform.caliber.*Test` 不在架构闸门的通配符覆盖范围里，一直没人跑到它。
+★ "断言过期"与"产品坏了"读数完全一样，区分它们只能回到"这条断言本来想守什么"（这里它守的是
+"引用里没有版本维度"，而 `channels` 是渠道不是版本）。
 
 **遗留**：
 
