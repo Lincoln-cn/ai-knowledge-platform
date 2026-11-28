@@ -94,6 +94,34 @@ class ChatQaRouteTest {
     assertThat(segments).as("★ 但全文那一路照常（撤掉一路不该把整轮打空）").contains(SEGMENT_TEXT.toString());
   }
 
+  /**
+   * ★★ 个人库里的问答对也要扩得到（2026-11-28 第二次修）。
+   *
+   * <p>用户自己建的库是 {@code PRIVATE} + {@code owner_id = 自己} ⇒ 走 {@code personalKbId} 那一支。 三路扩召回曾经只遍历
+   * {@code sharedKbIds()}，于是「给自己库建的问答对」在对话里一条都扩不到， 而命中测试（传显式 kbIds，被归成共用库）查得到 —— 同一句问话两个入口两个结果。
+   */
+  @Test
+  void personalKnowledgeBaseIsRecalledToo() {
+    RecordingStore store = new RecordingStore();
+    ChatService chatService =
+        newChatService(
+            store,
+            new FixedQaPort(SEGMENT_QA),
+            (modelId, prompt, timeout, callback) -> {
+              callback.onChunk("预算事项由财务资产部统一受理。");
+              callback.onUsage(120, 40);
+              callback.onEnd(ChatStreamPort.End.COMPLETE, null);
+            },
+            true);
+    RecordingSink sink = new RecordingSink();
+
+    chatService.streamTurn(store.prepare(null, null, QUESTION, UUID.randomUUID()), QUESTION, sink);
+
+    assertThat(sink.referenceSegments())
+        .as("★★ 个人库里的出处分段也必须进 refs —— 这一条红了就是扩召回又只查了共用库")
+        .contains(SEGMENT_QA.toString());
+  }
+
   @Test
   void directAnswerIsReturnedAsIsWithoutCallingTheModel() {
     RecordingStore store = new RecordingStore();
@@ -129,10 +157,15 @@ class ChatQaRouteTest {
 
   private static ChatService newChatService(
       RecordingStore store, QaRecallPort qaRecallPort, ChatStreamPort model) {
+    return newChatService(store, qaRecallPort, model, false);
+  }
+
+  private static ChatService newChatService(
+      RecordingStore store, QaRecallPort qaRecallPort, ChatStreamPort model, boolean personalOnly) {
     ChatService chatService =
         new ChatService(
             store,
-            new FixedSearchPort(),
+            new FixedSearchPort(personalOnly),
             new KnownScope(),
             model,
             new ChatStopSignal(),
@@ -186,6 +219,16 @@ class ChatQaRouteTest {
    */
   private static final class FixedSearchPort implements SegmentSearchPort {
 
+    private final boolean personalOnly;
+
+    private FixedSearchPort() {
+      this(false);
+    }
+
+    private FixedSearchPort(boolean personalOnly) {
+      this.personalOnly = personalOnly;
+    }
+
     @Override
     public RetrievalScope retrievalScope(
         Collection<UUID> requested, UUID conversationId, boolean includePersonal) {
@@ -193,6 +236,10 @@ class ChatQaRouteTest {
       //   这里曾经恒返回"只有共用库域"的 scope ⇒ 生产代码里 `!scope.hasConversationScope()`
       //   在测试里恒真，三路扩召回（实体 / 关系 / 问答对）在**真实问答里一次都没跑过**，
       //   而下面几条判据一直绿。漏洞是 0.9.9 用真栈的 scripts/qa_direct_check.py 抓出来的。
+      if (personalOnly) {
+        // 个人库形态：共用户一支是空的，库落在 personalKbId 上。
+        return new RetrievalScope(List.of(), KB_ID, conversationId, SCOPE_OWNER);
+      }
       return conversationId == null
           ? RetrievalScope.shared(List.of(KB_ID))
           : new RetrievalScope(List.of(KB_ID), null, conversationId, SCOPE_OWNER);

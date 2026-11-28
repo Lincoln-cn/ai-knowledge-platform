@@ -443,7 +443,7 @@ public class RetrievalService implements SegmentRetrievalPort {
       if (!scope.isEmpty()) {
         try {
           java.util.LinkedHashSet<UUID> byEntity = new java.util.LinkedHashSet<>();
-          for (UUID kbId : scope.sharedKbIds()) {
+          for (UUID kbId : scope.kbIdsWithModelRows()) {
             // ★ 用 recall 而不是 segmentsMentionedIn：明细与召回必须是同一次产出，
             //   否则界面显示"认出了 3 个"、实际只用了 2 个。
             EntityRecallPort.Recall one = entityRecallPort.recall(kbId, request.question());
@@ -470,7 +470,7 @@ public class RetrievalService implements SegmentRetrievalPort {
       if (!scope.isEmpty()) {
         try {
           java.util.LinkedHashSet<UUID> byRelation = new java.util.LinkedHashSet<>();
-          for (UUID kbId : scope.sharedKbIds()) {
+          for (UUID kbId : scope.kbIdsWithModelRows()) {
             RelationRecallPort.Recall one = relationRecallPort.recall(kbId, request.question());
             byRelation.addAll(one.segments());
             detectedRelations.addAll(one.relations());
@@ -491,15 +491,20 @@ public class RetrievalService implements SegmentRetrievalPort {
       //   （0.9.9 修）。它读的是 `conversationId != null`，而对话链路每一轮都带着会话 id ——
       //   于是这三路在**真实问答里一次都没跑过**，只有命中测试（不带会话 id）跑得起来。
       //   这正是 #378 那个形态在扩召回这一格上的重演：闸门绿着、产品没做那件事。
-      //   三路都只遍历 `scope.sharedKbIds()`（共用库 + 个人库，**不含会话域**）——
+      //   三路遍历的都是 `scope.kbIdsWithModelRows()`（共用库 + 个人库，**不含会话域**）——
       //   "会话附件不参与扩召回"已经由域本身保证，不需要拿会话 id 再挡一道。
+      //   ★ 个人库必须在内（2026-11-28 第二次修）：原先三路只遍历 `sharedKbIds()`，
+      //     而用户自己建的库是 PRIVATE + owner_id = 自己 ⇒ 走 personalKbId 那一支，
+      //     于是"给自己库建的问答对/实体关系"在对话里一条都扩不到 —— 命中测试却查得到
+      //     （它传的是显式 kbIds，被归成共用库）。同一句问话两个入口两个结果，
+      //     与 #378 是同一个形状：口径对不上，读数就不可比。
       if (!scope.isEmpty() && qaRecallPort != null) {
         try {
           List<QaRecallPort.Match> matches =
               qaRecallPort.recall(
                   new QaRecallPort.Query(
                       request.question(),
-                      scope.sharedKbIds(),
+                      scope.kbIdsWithModelRows(),
                       request.thresholdOrDefault(),
                       QA_DETAIL_LIMIT));
           java.util.LinkedHashSet<UUID> byQa = new java.util.LinkedHashSet<>();
