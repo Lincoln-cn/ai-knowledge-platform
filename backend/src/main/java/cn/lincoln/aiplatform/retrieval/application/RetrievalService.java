@@ -295,10 +295,9 @@ public class RetrievalService {
   }
 
   @Transactional(readOnly = true)
-  public HitTestView hitTest(HitTestQuery request) {
+  public Outcome retrieve(RetrievalRequest request) {
     long startedAt = System.nanoTime();
     RetrievalMode mode = request.modeOrDefault();
-    validate(request);
 
     // ① 可见范围：看不见的库既不进检索、也不给"存在性"信号（07 §3.3 硬规矩 1）
     //   ★ 第 17 周起这一步解析的是**域**（13 §11.3 的三支绑定值），不再只是"一组库 id"：
@@ -308,9 +307,9 @@ public class RetrievalService {
     if (scope.isEmpty()) {
       // ★ 这里是"没有可检索的范围"，不是"没命中" —— 但对外都返空列表：
       //   区别只该出现在日志/埋点里，不该变成"这个库存在但你看不见"这种信息泄露。
-      return new HitTestView(
-          mode,
+      return new Outcome(
           List.of(),
+          mode,
           elapsedMs(startedAt),
           new HitTestView.Trace(
               1, 1, 0, 0, "没有可检索的知识库", false, 0, false, 1, HopStop.NOT_TRIGGERED.describe(), 0),
@@ -640,8 +639,7 @@ public class RetrievalService {
               request.question(), finalIds, rerankTexts, engine.listwiseTopK());
     }
 
-    List<HitTestView.Item> items = new ArrayList<>(finalIds.size());
-    int rank = 1;
+    List<Ranked> ranked = new ArrayList<>(finalIds.size());
     for (UUID id : finalIds) {
       SegmentSearchPort.Card card = cards.get(id);
       if (card == null) {
@@ -650,8 +648,8 @@ public class RetrievalService {
         continue;
       }
       // ★ 渠道：向量 / 关键词来自两路分数表（HYBRID 模式下一条候选常常两路都有），
-      //   实体 / 关系来自扩召回的段集合。顺序固定 —— 那排徽标不该这次的次序与上次不同。
-      List<String> channels = new ArrayList<>(4);
+      //   实体 / 关系 / 问答对来自扩召回的段集合。顺序固定 —— 那排徽标不该这次的次序与上次不同。
+      List<String> channels = new ArrayList<>(5);
       if (vectorScores.containsKey(id)) {
         channels.add("vector");
       }
@@ -667,20 +665,11 @@ public class RetrievalService {
       if (qaHits.contains(id)) {
         channels.add("qa");
       }
-      items.add(
-          new HitTestView.Item(
-              rank++,
-              id,
-              card.title(),
-              card.docName(),
-              card.kbName(),
-              scores.getOrDefault(id, 0.0),
-              card.content(),
-              List.copyOf(channels)));
+      ranked.add(new Ranked(id, card, scores.getOrDefault(id, 0.0), List.copyOf(channels)));
     }
-    return new HitTestView(
+    return new Outcome(
+        ranked,
         mode,
-        items,
         elapsedMs(startedAt),
         new HitTestView.Trace(
             understood.understanding().subQuestionCount(),
@@ -706,6 +695,53 @@ public class RetrievalService {
                 relationFailure,
                 qaFailure)));
   }
+
+  /**
+   * 命中测试：校验 + 检索 + 组视图。
+   *
+   * <p>★ 它现在只剩"把 {@link Outcome} 翻成 {@link HitTestView}"这一件事 —— 检索策略一行都不在这里（{@link #retrieve}）。这是
+   * `#378` 的收口点：同一个问句在命中测试与对话里走的是<strong>同一段</strong>代码。
+   */
+  @Transactional(readOnly = true)
+  public HitTestView hitTest(HitTestQuery request) {
+    validate(request);
+    Outcome outcome = retrieve(RetrievalRequest.of(request));
+    List<HitTestView.Item> items = new ArrayList<>(outcome.hits().size());
+    int rank = 1;
+    for (Ranked hit : outcome.hits()) {
+      items.add(
+          new HitTestView.Item(
+              rank++,
+              hit.segmentId(),
+              hit.card().title(),
+              hit.card().docName(),
+              hit.card().kbName(),
+              hit.score(),
+              hit.card().content(),
+              hit.channels()));
+    }
+    return new HitTestView(
+        outcome.mode(), items, outcome.elapsedMs(), outcome.trace(), outcome.detected());
+  }
+
+  /**
+   * 一次检索的产出（不区分调用方）。
+   *
+   * <p>★ 只返回"排名 + 卡片"，不返回 {@link HitTestView.Item}：{@code Item} 是命中测试的展示形状（带序号），对话侧要的是 {@code
+   * SourceRef}（带文档 id / 库 id / 密级）。两种形状都从 {@link Ranked} 翻，谁也别想替对方定形状。
+   *
+   * @param hits 已排序、已截到 topN
+   */
+  public record Outcome(
+      List<Ranked> hits,
+      RetrievalMode mode,
+      long elapsedMs,
+      HitTestView.Trace trace,
+      HitTestView.Detected detected) {}
+
+  /** 一条命中的候选人：分段 + 展示卡片 + 分数 + 它是被哪几路捞上来的。 */
+  public record Ranked(
+      UUID segmentId, SegmentSearchPort.Card card, double score, List<String> channels) {}
 
   /**
    * 两路扩召回"为什么没有东西可念"的说明。
@@ -809,7 +845,7 @@ public class RetrievalService {
    * @return 触发与否、轮次、停止原因、第 2 轮的排名（送进配额合并）、新增分段数、以及"该记 D1 吗"
    */
   private HopRun runMultiHop(
-      HitTestQuery request,
+      RetrievalRequest request,
       RetrievalMode mode,
       RetrievalScope scope,
       int candidateLimit,
