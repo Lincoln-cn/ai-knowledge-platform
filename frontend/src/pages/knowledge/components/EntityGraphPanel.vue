@@ -178,6 +178,21 @@ const renderGraph = () => {
   const surface = cssColor('--color-surface')
   const maxMentions = Math.max(1, ...drawn.value.map((n) => n.mentions))
 
+  // ★ 同一对实体之间可以有多条边（「包含」与「隶属」会在同一对节点上并存 —— 见 #379 的存量问题）。
+  //   echarts 的 graph 对同 source/target 的多条 link 不做避让：curveness 一样就完全重叠，
+  //   图上只剩最后画的那条 —— 于是「关系 5 条」的库在图上只看得见 2 根线（用户 2026-11-28 报的
+  //   「图谱的数据和关系的数据对不上」就是这个）。按序号分到两侧、幅度逐级加大，才能看出
+  //   「这两点之间有几件事」。
+  const pairSeen = new Map<string, number>()
+  const curvenessOf = (from: string, to: string): number => {
+    const key = from <= to ? `${from}|${to}` : `${to}|${from}`
+    const k = pairSeen.get(key) ?? 0
+    pairSeen.set(key, k + 1)
+    const base = 0.14
+    const level = k >> 1
+    return (k % 2 === 0 ? 1 : -1) * (base + level * 0.2)
+  }
+
   chart.setOption(
     {
       tooltip: {
@@ -200,8 +215,9 @@ const renderGraph = () => {
           type: 'graph',
           layout: 'circular',
           circular: { rotateLabel: false },
-          // circular 会把环铺满容器；节点只有几个时贴边太散，默认缩一点留白更匀。
-          zoom: 1,
+          // circular 会把环铺满容器 ⇒ 上下两个节点的标签贴在容器边缘，同对节点的外侧弧线
+          // 还会越过边界被裁掉。缩到 0.85 把这一圈留白换回来。
+          zoom: 0.85,
           roam: true,
           draggable: false,
           selectedMode: false,
@@ -243,7 +259,12 @@ const renderGraph = () => {
             source: e.from,
             target: e.to,
             type: e.type,
-            lineStyle: { color: lineColorOf(e.type), width: 1.4, curveness: 0.08, opacity: 0.9 }
+            lineStyle: {
+              color: lineColorOf(e.type),
+              width: 1.4,
+              curveness: curvenessOf(e.from, e.to),
+              opacity: 0.9
+            }
           })),
           labelLayout: { hideOverlap: true },
           edgeSymbol: ['none', 'arrow'],
@@ -312,6 +333,14 @@ watch([() => view.value, () => graph.value], async () => {
   if (view.value !== 'graph') return
   await nextTick()
   if (!graphEl.value) return
+  // ★ 图谱这块是 `v-if` 里的一块容器：切走时 DOM 被销毁，切回来是**新**的节点。
+  //   而 echarts 实例仍拿着旧的、已脱离文档的那个 —— 此后 setOption/resize 都作用在它身上，
+  //   容器里一个 canvas 都没有，看起来就是「第二次进图谱不显示」（实测：容器 1267x438 在，
+  //   canvas 数量 0）。判据只能是"实例的 DOM 还是不是眼前这个容器"。
+  if (chart && chart.getDom() !== graphEl.value) {
+    chart.dispose()
+    chart = null
+  }
   if (!chart) {
     chart = echarts.init(graphEl.value)
     chart.on('click', onChartClick)
