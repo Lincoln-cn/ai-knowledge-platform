@@ -2,7 +2,10 @@ package cn.lincoln.aiplatform.conversation.application;
 
 import cn.lincoln.aiplatform.platform.model.ChatPort;
 import cn.lincoln.aiplatform.platform.model.EmbeddingPort;
+import cn.lincoln.aiplatform.platform.retrieval.EntityRecallPort;
+import cn.lincoln.aiplatform.platform.retrieval.ListwiseRerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.QaRecallPort;
+import cn.lincoln.aiplatform.platform.retrieval.RelationRecallPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankPort;
 import cn.lincoln.aiplatform.platform.retrieval.RerankProperties;
 import cn.lincoln.aiplatform.platform.retrieval.RetrievalBudgetProperties;
@@ -58,6 +61,36 @@ public final class ChatServiceRetrieval {
     RetrievalService built = build(service);
     attachQa(built, qa);
     service.setRetrievalService(built);
+    return service;
+  }
+
+  /**
+   * 接上检索服务，并给两路扩召回（实体 / 关系）挂上给定的端口。
+   *
+   * <p>★ 为什么走 11 参构造器而不是再照 {@link #attachQa} 那样反射塞字段：这两个端口是 {@code final}、 由构造器确定 ——
+   * 生产路径本来就是"装进去就不许换"，测试沿用它比绕过它更接近真相。
+   *
+   * @param service 被测的对话服务
+   * @param entity 实体扩召回端口
+   * @param relation 关系扩召回端口
+   * @return 同一个实例
+   */
+  public static ChatService wireWithRecall(
+      ChatService service, EntityRecallPort entity, RelationRecallPort relation) {
+    service.setRetrievalService(
+        new RetrievalService(
+            field(service, "segmentSearch", SegmentSearchPort.class),
+            lazyEmbedding(service),
+            null,
+            new MultiHopService(new SilentChat()),
+            new RetrievalBudgetProperties(5000, 5000, 0.6, false, false),
+            RerankPort.noop(),
+            RerankProperties.defaults(),
+            ListwiseRerankPort.noop(),
+            entity,
+            relation,
+            // ★ 不接配置表：判据只看候选从哪来，不该被数据库连接拖进来
+            null));
     return service;
   }
 
